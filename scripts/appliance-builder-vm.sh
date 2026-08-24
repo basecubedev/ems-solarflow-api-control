@@ -3,6 +3,7 @@
 # Provision a disposable builder VM and build the real A/B images in it.
 #
 #   scripts/appliance-builder-vm.sh --profile rpi5 [--profile rpi4]...
+#                                   [--variant ab|single]
 #                                   [--output DIR] [--cache DIR] [--keep]
 #                                   [--memory MB] [--disk SIZE] [--build-id ID]
 #                                   [--release-gate]
@@ -40,6 +41,10 @@ KEEP=0
 BUILD_ID=""
 RELEASE_GATE=0
 PROFILES=()
+# Which image the requested profiles are built as. One variant per run: the two
+# are separate artefacts with separate authorities, and a run that produced
+# both would have to say which of them its verdict is about.
+VARIANT=ab
 
 usage() { sed -n '3,20p' "$0"; }
 
@@ -52,6 +57,8 @@ not_run() {
 while [ $# -gt 0 ]; do
     case "$1" in
         --profile) PROFILES+=("${2:?--profile needs rpi4 or rpi5}"); shift 2 ;;
+        --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
+        --variant=*) VARIANT=${1#*=} ;;
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --cache) CACHE=${2:?--cache needs a directory}; shift 2 ;;
         --memory) MEMORY=${2:?--memory needs a size in MB}; shift 2 ;;
@@ -65,6 +72,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ "${#PROFILES[@]}" -gt 0 ] || { echo "at least one --profile is required" >&2; exit 2; }
+case "$VARIANT" in
+    ab|single) ;;
+    *) echo "unknown variant: $VARIANT" >&2; exit 2 ;;
+esac
 
 for tool in qemu-system-x86_64 qemu-img ssh scp ssh-keygen curl git; do
     command -v "$tool" >/dev/null 2>&1 || not_run "$tool is missing" "${tool}_unavailable"
@@ -239,7 +250,10 @@ status=0
 if [ "$RELEASE_GATE" -eq 1 ]; then
     echo
     echo "== running the release gates =="
-    gate_args=""
+    # The variant belongs here as much as in the build branch: the gate list
+    # itself differs between the two, so a run that did not pass it on would
+    # quietly measure the A/B gates against whatever was asked for.
+    gate_args="--variant $VARIANT"
     for profile in "${PROFILES[@]}"; do gate_args="$gate_args --profile $profile"; done
     # The source-bundle gate checks a bundle against the git tree it came from,
     # so it is made in the guest from the guest's own clone.
@@ -254,10 +268,11 @@ if [ "$RELEASE_GATE" -eq 1 ]; then
 else
 for profile in "${PROFILES[@]}"; do
     echo
-    echo "== building $profile =="
-    build_args="--profile $profile --rpi-image-gen /build/rpi-image-gen --output /build/dist"
+    echo "== building $profile ($VARIANT) =="
+    build_args="--profile $profile --variant $VARIANT"
+    build_args="$build_args --rpi-image-gen /build/rpi-image-gen --output /build/dist"
     build_args="$build_args --builder-environment /build/builder-environment.json"
-    [ -n "$BUILD_ID" ] && build_args="$build_args --build-id ${BUILD_ID}-${profile}"
+    [ -n "$BUILD_ID" ] && build_args="$build_args --build-id ${BUILD_ID}-${profile}-${VARIANT}"
     # Five of upstream's declared binaries — mkfs.btrfs, veritysetup, mkdosfs,
     # mke2fs, fdisk — live in /usr/sbin, which Debian keeps off a non-root
     # PATH. Without them the dependency probe reports the generator as

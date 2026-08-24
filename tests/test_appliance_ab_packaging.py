@@ -33,6 +33,7 @@ SCRIPTS = ROOT / "scripts"
 AB_UNITS = ("ems-appliance-persistence.service", "ems-appliance-ab-health.service")
 BUILD_SCRIPTS = (
     "appliance-build-rpi-ab-image.sh",
+    "appliance-build-rpi-single-image.sh",
     "appliance-build-rpi-ab-update.sh",
     "appliance-inspect-rpi-ab-image.sh",
     "appliance-test-ab-layout.sh",
@@ -384,9 +385,7 @@ def test_a_build_that_could_not_happen_is_never_reported_as_a_pass(name):
     assert "required_tool_missing" in text
 
 
-@pytest.mark.parametrize(
-    "name", ["appliance-build-rpi-ab-image.sh", "appliance-build-rpi-ab-update.sh"]
-)
+@pytest.mark.parametrize("name", [*BUILD_SCRIPTS, "appliance-build-rpi-ab-update.sh"])
 def test_no_build_script_publishes_anything(name):
     text = read(SCRIPTS / name)
 

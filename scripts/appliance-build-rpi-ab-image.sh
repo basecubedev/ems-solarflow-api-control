@@ -1,9 +1,16 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Build the fail-safe A/B appliance image with Raspberry Pi's rpi-image-gen.
+# Build an appliance image with Raspberry Pi's rpi-image-gen.
 #
-#   scripts/appliance-build-rpi-ab-image.sh --profile rpi4|rpi5 [--output DIR]
+#   scripts/appliance-build-rpi-ab-image.sh --profile rpi4|rpi5
+#                                           [--variant ab|single] [--output DIR]
 #                                           [--build-id ID] [--rpi-image-gen DIR]
+#
+# The name is historical: this builds either image variant. One implementation
+# rather than two scripts, because what differs between them is two guards and
+# a layer name, while what is the same is every proof a release is signed on --
+# and two copies of that is how the security-relevant half comes to differ.
+# scripts/appliance-build-rpi-single-image.sh is the single-slot entry point.
 #
 # One artefact per board. The device layer selects the kernel and firmware, so
 # a Pi 5 image is not a Pi 4 image and neither may claim to be the other.
@@ -23,11 +30,9 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 IMAGE_DIR="$ROOT/packaging/appliance/image"
 LOCK="$IMAGE_DIR/rpi-image-gen.lock"
 PROFILE=rpi5
-# This script builds the A/B image. The single-slot image is a different
-# product with a different post-build gate set, so it has its own script; the
-# name is here rather than spelled into the config path and the artefact name
-# separately, because those two disagreeing is how an image gets published
-# under the other variant's name.
+# Named once rather than spelled into the config path and the artefact name
+# separately: those two disagreeing is how an image gets published under the
+# other variant's name.
 VARIANT=ab
 OUTPUT="$ROOT/dist"
 BUILD_ID=""
@@ -54,6 +59,8 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --profile) PROFILE=${2:?--profile needs rpi4 or rpi5}; shift 2 ;;
         --profile=*) PROFILE=${1#*=}; shift ;;
+        --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
+        --variant=*) VARIANT=${1#*=}; shift ;;
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --output=*) OUTPUT=${1#*=}; shift ;;
         --build-id) BUILD_ID=${2:?--build-id needs a value}; shift 2 ;;
@@ -87,6 +94,22 @@ except build_authority.BuildAuthorityError as error:
 PY
 
 [ -f "$LOCK" ] || fail "$LOCK is missing" lock_missing
+
+# Refused here rather than resolved into a missing path, so an unknown variant
+# is a wrong command line and not a build that quietly did nothing.
+case "$VARIANT" in
+    ab|single) ;;
+    *) echo "unknown variant: $VARIANT" >&2; usage >&2; exit 2 ;;
+esac
+IMAGE_LAYER=$(PYTHONPATH="$ROOT" python3 - "$VARIANT" <<'PY'
+import sys
+
+from appliance import image_variants
+
+print(image_variants.variant(sys.argv[1]).image_layer)
+PY
+) || fail "the image variant could not be resolved" hardware_profile_unknown
+
 CONFIG="$IMAGE_DIR/profiles/${PROFILE}-${VARIANT}.yaml"
 [ -f "$CONFIG" ] || fail "there is no build profile for $PROFILE" hardware_profile_unknown
 [ -z "$ENVIRONMENT" ] || [ -f "$ENVIRONMENT" ] \
@@ -116,16 +139,22 @@ esac
 
 # An image whose shared binds are generated but never activated loses every
 # write at the next slot switch, silently. That has to fail the build.
-set +e
-"$ROOT/scripts/appliance-verify-slot-mounts.sh" --rpi-image-gen "$GENERATOR" >&2
-mounts=$?
-set -e
-case $mounts in
-    0) ;;
-    1) fail "the generated persistence units are incomplete" persistence_units_incomplete ;;
-    *) not_run "the slot-shared generator could not be verified on this host" \
-               persistence_units_unverified ;;
-esac
+#
+# Only the A/B image has binds to lose. The single-slot image has one root and
+# no generator that would produce them, so this gate has nothing to check --
+# and running it there would prove something about a mechanism that is absent.
+if [ "$VARIANT" = ab ]; then
+    set +e
+    "$ROOT/scripts/appliance-verify-slot-mounts.sh" --rpi-image-gen "$GENERATOR" >&2
+    mounts=$?
+    set -e
+    case $mounts in
+        0) ;;
+        1) fail "the generated persistence units are incomplete" persistence_units_incomplete ;;
+        *) not_run "the slot-shared generator could not be verified on this host" \
+                   persistence_units_unverified ;;
+    esac
+fi
 
 VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
 [ -n "$VERSION" ] || fail "cannot read APPLIANCE_VERSION" version_unreadable
@@ -235,7 +264,7 @@ SOURCE_FORM=$(echo "$SOURCE" | sed -n 's/^FORM=//p')
 GENERATOR_REVISION=$(echo "$SOURCE" | sed -n 's/^REVISION=//p')
 SOURCE_TREE=$(echo "$SOURCE" | sed -n 's/^TREE=//p')
 
-echo "== building the A/B image =="
+echo "== building the $VARIANT image =="
 # -S makes packaging/appliance/image the source root, so the project's config
 # and layer are found beside upstream's. Overrides are passed after --, which
 # is how rpi-image-gen takes build-time variables.
@@ -282,9 +311,15 @@ xz -T0 -6 -k -c "$OUTPUT/$NAME.img" > "$OUTPUT/$NAME.img.xz" \
     || fail "the image could not be compressed" output_unusable
 ( cd "$OUTPUT" && sha256sum "$NAME.img.xz" > "$NAME.img.xz.sha256" )
 
+# The update archive is the A/B transport: a whole slot, staged and trial
+# booted. The single-slot image has no such transport at all -- it is patched
+# by apt -- so an archive found beside it would be an artefact nothing can
+# install, and collecting it would put one in the release directory.
 UPDATE=""
-[ -f "$IMAGE_DIR_NAME/update.tar.zst" ] && UPDATE="$IMAGE_DIR_NAME/update.tar.zst"
-[ -n "$UPDATE" ] && cp "$UPDATE" "$OUTPUT/$NAME.update.tar.zst"
+if [ "$VARIANT" = ab ]; then
+    [ -f "$IMAGE_DIR_NAME/update.tar.zst" ] && UPDATE="$IMAGE_DIR_NAME/update.tar.zst"
+    [ -n "$UPDATE" ] && cp "$UPDATE" "$OUTPUT/$NAME.update.tar.zst"
+fi
 
 echo "== proving both source trees are still the ones that were read =="
 # A build takes long enough that either tree can be edited while it runs. The
@@ -396,7 +431,8 @@ cat > "$OUTPUT/$NAME.build.json" <<JSON
   "device_layer": "$DEVICE_LAYER",
   "compatible_board_classes": $BOARD_CLASSES,
   "hardware_profile": "$PROFILE",
-  "image_layer": "image-rota",
+  "image_variant": "$VARIANT",
+  "image_layer": "$IMAGE_LAYER",
   "rpi_image_gen_revision": "$GENERATOR_REVISION",
   "rpi_image_gen_source_form": "$SOURCE_FORM",
   "rpi_image_gen_source_tree": "$SOURCE_TREE",

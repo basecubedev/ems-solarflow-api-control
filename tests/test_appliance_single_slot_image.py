@@ -259,3 +259,85 @@ def test_a_single_slot_artefact_can_never_be_confused_with_an_ab_one(board):
     assert single.variant.slug == "single"
     assert single.artifact_basename("0.1.0") != paired.artifact_basename("0.1.0")
     assert single.artifact_basename("0.1.0").endswith(f"{board}-arm64-single")
+
+
+# --- how it is built ---------------------------------------------------------
+
+SCRIPTS = ROOT / "scripts"
+BUILDER = SCRIPTS / "appliance-build-rpi-ab-image.sh"
+SINGLE_BUILDER = SCRIPTS / "appliance-build-rpi-single-image.sh"
+
+
+def test_the_single_slot_entry_point_is_not_a_second_implementation():
+    """Everything a release is signed on lives in one script.
+
+    Two copies of the source proofs, the ambiguous-artefact refusal and the NOT
+    RUN discipline is how the security-relevant half of one of them comes to
+    differ from the other without anyone noticing.
+    """
+
+    script = text(SINGLE_BUILDER)
+
+    assert "--variant single" in script
+    assert "appliance-build-rpi-ab-image.sh" in script
+    for owned_by_the_builder in ("assert_buildable", "sha256sum", "build_authority"):
+        assert owned_by_the_builder not in script, owned_by_the_builder
+
+
+def test_the_builder_refuses_a_variant_it_does_not_know():
+    """Refused as a wrong command line, not resolved into a missing path."""
+
+    script = text(BUILDER)
+
+    assert "unknown variant: $VARIANT" in script
+    assert "profiles/${PROFILE}-${VARIANT}.yaml" in script
+
+
+def test_the_slot_mount_gate_runs_only_where_there_are_slots():
+    """Running it here would prove something about an absent mechanism."""
+
+    script = text(BUILDER)
+    guarded = script.split('if [ "$VARIANT" = ab ]; then', 1)
+
+    assert len(guarded) == 2
+    assert "appliance-verify-slot-mounts.sh" in guarded[1].split("fi", 1)[0]
+
+
+def test_no_update_archive_is_collected_for_an_image_that_cannot_install_one():
+    script = text(BUILDER)
+    block = script.split("UPDATE=\"\"", 1)[1].split("echo", 1)[0]
+
+    assert 'if [ "$VARIANT" = ab ]; then' in block
+    assert "update.tar.zst" in block
+
+
+def test_the_build_metadata_names_the_variant_and_its_layer():
+    script = text(BUILDER)
+
+    assert '"image_variant": "$VARIANT"' in script
+    assert '"image_layer": "$IMAGE_LAYER"' in script
+    assert '"image_layer": "image-rota"' not in script
+
+
+def test_the_builder_vm_builds_one_variant_per_run():
+    """Two artefacts with two authorities; a run has to say which it is."""
+
+    script = text(SCRIPTS / "appliance-builder-vm.sh")
+
+    assert "unknown variant: $VARIANT" in script
+    assert "${BUILD_ID}-${profile}-${VARIANT}" in script
+
+
+@pytest.mark.parametrize("branch,marker", [
+    ("build", "build_args=\"--profile $profile --variant $VARIANT\""),
+    ("gate", "gate_args=\"--variant $VARIANT\""),
+])
+def test_both_of_the_builder_vms_branches_pass_the_variant_on(branch, marker):
+    """The VM either builds or runs the gates, and both have to be told.
+
+    The gate branch did not pass it on at first, so asking for a single-slot
+    release gate would have measured the A/B gate list instead -- silently,
+    because every gate in that list exists and most of them would have run.
+    """
+
+    assert marker in text(SCRIPTS / "appliance-builder-vm.sh"), branch
