@@ -638,7 +638,7 @@ authority: the browser can influence none of them.
 
 | Setting | Default | What it decides |
 |---|---|---|
-| `os_release_keyring` | `/etc/ems-appliance-manager/os-release-keyring.gpg` | The trust anchor. **No package ships a key here** — a trust anchor the device brings itself is one whoever shipped the device controls. Until an operator installs one, every artefact is refused and the manager reports it as an unmet readiness prerequisite rather than failing at install time |
+| `os_release_keyring` | `/etc/ems-appliance-manager/os-release-keyring.gpg` | The trust anchor. The package ships the project's own release keyring here, deliberately **not** as a conffile: it is a trust anchor rather than a setting, so a local edit must not survive an upgrade that rotates the key. An operator building their own images replaces it. With no keyring at all, every artefact is refused and the manager reports an unmet readiness prerequisite rather than failing at install time |
 | `os_release_dir` | `/var/lib/ems-appliance-os-update/releases` | Where verified releases live. A shared path, so it survives a slot switch |
 | `os_release_index_url` | empty | An `https` index naming downloadable releases. The index is never trusted: it may only name candidates, and what is installed is decided by the signature |
 | `allow_unsigned_os_artifacts` | `false` | A development-bench escape hatch reachable from the root CLI only. It is never a release-gate pass, is recorded as a distinct verification state, and the browser can never reach it |
@@ -646,6 +646,34 @@ authority: the browser can influence none of them.
 Verification uses `gpgv` against that keyring alone — not the invoking user's
 keyring, and not a keyserver. A release signed by a key the keyring does not
 hold is refused with the same finality as an unsigned one.
+
+### One identity, two keys
+
+The release identity is a primary key that only certifies, and a subkey that
+only signs. Releases are signed by the subkey; the primary never leaves the
+maintainer's machine.
+
+What that buys is a rotation that costs nothing in the field. The appliance
+pins the **primary's** fingerprint, and `gpg` reports that one for a subkey
+signature — field 12 of `VALIDSIG`, which
+`appliance/os_releases.py:valid_signature_fingerprints` reads deliberately
+instead of field 3. So a leaked signing subkey is revoked and replaced with the
+primary, and **no appliance needs a new keyring**. A leaked *primary* would
+need one, on every device, by package update — which is why it is not the key
+that travels.
+
+Two consequences worth stating, because both are easy to get wrong:
+
+- **The shipped keyring must contain the subkey's public half.** `gpgv`
+  verifies with the signing key's material, not the primary's. A keyring
+  exported before the subkey existed refuses every release, on an appliance
+  whose slot root is read-only and cannot be repaired afterwards.
+  `tests/test_appliance_packaging.py` pins this.
+- **Neither key expires.** An expired key produces `EXPKEYSIG`, which this
+  verifier refuses — and it does so for *every signature the key ever made*,
+  not only new ones. An expiry date would therefore be a fleet-wide cliff on a
+  forgotten calendar entry rather than a safety net. Rotation is by revocation,
+  which is deliberate.
 
 
 ## What is deliberately absent
