@@ -3,6 +3,7 @@
 # The gates a real A/B OS release has to pass, in order. Nothing is published.
 #
 #   scripts/appliance-release-gates.sh [--mode builder|production]
+#                                      [--variant ab|single]
 #                                      [--rpi-image-gen DIR] [--output DIR]
 #                                      [--profile rpi4|rpi5]... [--fetch]
 #                                      [--sign-key KEYID] [--source-bundle FILE]
@@ -62,6 +63,9 @@ KEYRING=${EMS_APPLIANCE_OS_KEYRING:-}
 FINGERPRINTS=${EMS_APPLIANCE_OS_TRUSTED_FINGERPRINTS:-}
 FETCH=no
 MODE=builder
+# One variant per run: the gate list itself differs between them, and a single
+# verdict covering both would be a verdict about neither.
+VARIANT=ab
 CROSSCHECK=no
 ALLOW_NOT_RUN=no
 FAILURES=0
@@ -77,7 +81,23 @@ usage() {
 # deliberately absent: an unsigned rehearsal is legitimate, and the builder is
 # the wrong place for a production key. In production mode the signature gates
 # are exactly what the verdict is about.
+# Whether a gate exists for the variant being built at all. A gate this image
+# does not have cannot be required of it, and that is stated rather than
+# inferred from the fact that those gates are currently reported NOT
+# APPLICABLE: if that ever became NOT RUN, a release would otherwise start
+# failing on the absence of an archive this variant never produces.
+applies_to_variant() {
+    [ "$VARIANT" = ab ] && return 0
+    case "$1" in
+        slot-mounts) return 1 ;;
+        inspect-update-*|describe-*) return 1 ;;
+        sign-*|verify-signature-*|crosscheck-*) return 1 ;;
+    esac
+    return 0
+}
+
 required_gate() {
+    applies_to_variant "$1" || return 1
     case "$MODE" in
         builder)
             case "$1" in
@@ -157,6 +177,8 @@ while [ $# -gt 0 ]; do
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --output=*) OUTPUT=${1#*=}; shift ;;
         --profile) PROFILES="$PROFILES ${2:?--profile needs rpi4 or rpi5}"; shift 2 ;;
+        --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
+        --variant=*) VARIANT=${1#*=}; shift ;;
         --profile=*) PROFILES="$PROFILES ${1#*=}"; shift ;;
         --sign-key) SIGN_KEY=${2:?--sign-key needs a key id}; shift 2 ;;
         --sign-key=*) SIGN_KEY=${1#*=}; shift ;;
@@ -179,6 +201,11 @@ done
 case "$MODE" in
     builder|production) ;;
     *) echo "--mode is builder or production, not $MODE" >&2; exit 2 ;;
+esac
+
+case "$VARIANT" in
+    ab|single) ;;
+    *) echo "--variant is ab or single, not $VARIANT" >&2; exit 2 ;;
 esac
 
 [ -n "$PROFILES" ] || PROFILES="rpi4 rpi5"
@@ -207,19 +234,25 @@ GENERATOR_ARGS=""
 
 # shellcheck disable=SC2086
 gate source-authority sh "$ROOT/scripts/appliance-check-rpi-image-gen.sh" $GENERATOR_ARGS
-# shellcheck disable=SC2086
-gate slot-mounts sh "$ROOT/scripts/appliance-verify-slot-mounts.sh" $GENERATOR_ARGS
+if [ "$VARIANT" = ab ]; then
+    # shellcheck disable=SC2086
+    gate slot-mounts sh "$ROOT/scripts/appliance-verify-slot-mounts.sh" $GENERATOR_ARGS
+else
+    # Named rather than omitted. A gate list that silently gets shorter is one
+    # nobody can tell apart from a gate list that was passed.
+    report slot-mounts "NOT APPLICABLE (this image has one root and no binds)"
+fi
 
 VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
 
 for profile in $PROFILES; do
-    NAME="ems-solarflow-appliance-${VERSION}-${profile}-arm64-ab"
+    NAME="ems-solarflow-appliance-${VERSION}-${profile}-arm64-${VARIANT}"
     AUTHORITY="$OUTPUT/$NAME.build-authority.json"
 
     if [ "$MODE" = builder ]; then
         # shellcheck disable=SC2086
         gate "build-$profile" sh "$ROOT/scripts/appliance-build-rpi-ab-image.sh" \
-            --profile "$profile" --output "$OUTPUT" $GENERATOR_ARGS
+            --profile "$profile" --variant "$VARIANT" --output "$OUTPUT" $GENERATOR_ARGS
     else
         # A production run consumes what a builder run proved. It never builds:
         # a release that rebuilt its own artefacts could not be the one the
@@ -247,13 +280,23 @@ PY
     if [ -f "$OUTPUT/$NAME.img" ]; then
         gate_json "inspect-image-$profile" "image-inspection-$profile.json" \
             sh "$ROOT/scripts/appliance-inspect-rpi-ab-image.sh" --json \
+            --variant "$VARIANT" \
             --appliance-version "$VERSION" --build-id "$BUILD_ID" \
             "$OUTPUT/$NAME.img"
     else
         report "inspect-image-$profile" "NOT RUN (no image was built)"
     fi
 
-    if [ -f "$OUTPUT/$NAME.update.tar.zst" ] && [ -f "$AUTHORITY" ]; then
+    if [ "$VARIANT" != ab ]; then
+        # There is no update archive, so there is nothing to describe, nothing
+        # to sign and nothing for a second decoder to disagree about. This
+        # variant is patched by apt, and its OS updates carry no signature
+        # because they carry no artefact of this project's making.
+        for absent in "describe-$profile" "sign-$profile" "inspect-update-$profile" \
+                      "crosscheck-$profile"; do
+            report "$absent" "NOT APPLICABLE (this image has no update archive)"
+        done
+    elif [ -f "$OUTPUT/$NAME.update.tar.zst" ] && [ -f "$AUTHORITY" ]; then
         if [ -n "$SIGN_KEY" ]; then
             gate "sign-$profile" sh "$ROOT/scripts/appliance-build-rpi-ab-update.sh" \
                 --profile "$profile" --output "$OUTPUT" \
@@ -294,7 +337,7 @@ PY
         report "describe-$profile" "NOT RUN (no build authority and update artefact)"
     fi
 
-    if [ "$CROSSCHECK" = yes ] || [ "$MODE" = production ]; then
+    if [ "$VARIANT" = ab ] && { [ "$CROSSCHECK" = yes ] || [ "$MODE" = production ]; }; then
         if [ -f "$OUTPUT/$NAME.update.tar.zst" ]; then
             gate "crosscheck-$profile" sh "$ROOT/scripts/appliance-crosscheck-sparse.sh" \
                 --report "$OUTPUT/reports/sparse-crosscheck-$profile.json" \

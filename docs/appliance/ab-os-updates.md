@@ -8,6 +8,15 @@ The decision to build on the native Raspberry Pi `tryboot` mechanism rather than
 on a third-party update framework is recorded in
 [adr/ab-native-tryboot.md](adr/ab-native-tryboot.md).
 
+**This is one of two answers.** The appliance also ships a single-slot image
+with one writable root, whose operating system is patched with `apt` and which
+has no slot to fall back to. Nothing in this document applies to it: it has no
+slots, no update archive, no trial boot and no signing key, and the runtime
+refuses every mutating A/B plan there with a reason. Why both exist, and which
+one an owner should flash, is in
+[adr/single-slot-image-variant.md](adr/single-slot-image-variant.md) and
+[installation.md](installation.md).
+
 
 ## What a fallback cannot cover on its own
 
@@ -88,6 +97,11 @@ profiles/rpi4-ab.yaml   device layer rpi4   board class pi4
 ems-solarflow-appliance-<version>-rpi5-arm64-ab.img
 ems-solarflow-appliance-<version>-rpi4-arm64-ab.img
 ```
+
+The build keeps the raw image -- the build authority binds its digest -- and
+publishes it compressed beside it as `.img.xz` with its own checksum. The raw
+form is 16.5 GiB and mostly empty; compressed it is roughly 500 MB, and Imager
+and balenaEtcher write the compressed file straight to a card.
 
 Each signed manifest carries the `device_layer` it was built from and only the
 board classes that layer is for. At runtime the appliance normalises

@@ -181,15 +181,29 @@ def test_the_shipped_configuration_names_every_os_release_key_the_code_reads():
         assert shipped_value(key) == default
 
 
-def test_the_shipped_configuration_ships_no_default_release_source():
-    """An appliance with no configured index must say so, not guess a host."""
+def test_the_code_never_guesses_a_release_source_but_the_package_declares_one():
+    """Two different questions, and only one of them changed.
+
+    The code default stays empty: an appliance assembled by somebody else, or
+    running a hand-written configuration, must say it has no transport rather
+    than invent a host to fetch from. That is not a guess the software gets to
+    make.
+
+    The shipped configuration is not a guess -- it is this project naming its
+    own distribution point, and it has to be in the image before the image is
+    flashed. On an A/B appliance /etc lives on a read-only slot root, so an
+    operator cannot add the URL afterwards; an image published without it could
+    never receive an OS update, exactly like one published without the keyring.
+    """
 
     conf = SHIPPED_CONFIG.read_text(encoding="utf-8")
+    configured = re.search(r"^os_release_index_url\s*=\s*(\S+)$", conf, re.M)
 
-    assert re.search(r"^os_release_index_url\s*=\s*$", conf, re.M), (
-        "os_release_index_url must be present and empty in the shipped configuration"
-    )
     assert appliance_config.DEFAULT_OS_RELEASE_INDEX_URL == ""
+    assert configured, "the shipped configuration names no release source"
+    assert configured.group(1).startswith(
+        "https://github.com/basecubedev/ems-solarflow-api-control/"
+    ), configured.group(1)
 
 
 # --- Admin's transition record, which the appliance reads but never owns ------

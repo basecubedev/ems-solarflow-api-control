@@ -17,6 +17,8 @@ the device ``/persistent`` is mounted from rather than against its own existence
 
 from dataclasses import dataclass
 
+from appliance import image_variants
+
 PERSISTENT_SCHEMA_VERSION = 3
 
 PERSISTENT_MOUNTPOINT = "/persistent"
@@ -140,6 +142,10 @@ UPSTREAM_SHARED_PATHS = (
 )
 
 STATE_OK = "ok"
+# Not a weaker "ok". The check did not pass; it did not apply, because the
+# image says it has no persistent partition to share. Kept distinct from
+# STATE_OK so no report can claim a contract was verified that never existed.
+STATE_NOT_APPLICABLE = "persistence_not_applicable"
 STATE_MISSING = "persistence_missing"
 STATE_IDENTITY_MISMATCH = "persistence_identity_mismatch"
 STATE_OPTIONS_UNEXPECTED = "persistence_options_unexpected"
@@ -162,7 +168,7 @@ class PersistenceReport:
 
     @property
     def ok(self):
-        return self.state == STATE_OK and not self.problems
+        return self.state in (STATE_OK, STATE_NOT_APPLICABLE) and not self.problems
 
     def to_dict(self):
         return {
@@ -280,6 +286,16 @@ def verify(status, mounts, *, schema_version=PERSISTENT_SCHEMA_VERSION):
 
     manifest = status.manifest
     if manifest is None:
+        variant = image_variants.variant_of_build_marker(status.os_build)
+        if variant is not None and not variant.has_ab_layout:
+            return PersistenceReport(
+                state=STATE_NOT_APPLICABLE,
+                mounted=False,
+                mountpoint="",
+                source="",
+                expected_source="",
+                schema_version=schema_version,
+            )
         return PersistenceReport(
             state=STATE_MISSING,
             mounted=False,

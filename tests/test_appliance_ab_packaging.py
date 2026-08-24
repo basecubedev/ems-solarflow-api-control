@@ -33,6 +33,7 @@ SCRIPTS = ROOT / "scripts"
 AB_UNITS = ("ems-appliance-persistence.service", "ems-appliance-ab-health.service")
 BUILD_SCRIPTS = (
     "appliance-build-rpi-ab-image.sh",
+    "appliance-build-rpi-single-image.sh",
     "appliance-build-rpi-ab-update.sh",
     "appliance-inspect-rpi-ab-image.sh",
     "appliance-test-ab-layout.sh",
@@ -56,30 +57,57 @@ def directives(text, key):
 # --- the units ---------------------------------------------------------------
 
 
-# Both markers exist only on an A/B image: the layout descriptor is written into
-# the shared configuration, the build marker into each slot root. Either makes a
-# unit inert on a single-slot appliance, and the persistence verifier
-# deliberately uses the second one -- the first lives inside a bind it exists to
-# verify, so a skipped bind would silently skip the verifier too.
-AB_ONLY_MARKERS = (
-    "/etc/ems-appliance-manager/ab-layout.json",
-    "/etc/ems-appliance-os-build",
+# The layout descriptor is written only by the A/B image, so a unit conditioned
+# on it cannot run anywhere else. The build marker is different: every appliance
+# image writes it, including the single-slot one, so it does not make anything
+# inert -- it says which image this is.
+AB_LAYOUT_MARKER = "/etc/ems-appliance-manager/ab-layout.json"
+OS_BUILD_MARKER = "/etc/ems-appliance-os-build"
+
+# Conditioned on the descriptor, and therefore genuinely inert off an A/B image.
+LAYOUT_GATED_UNITS = (
+    "ems-appliance-ab-health.service",
+    "ems-appliance-host-identity.service",
+    "ems-appliance-slot-bootstrap.service",
+    "ems-appliance-grow-persistent.service",
 )
 
 
-@pytest.mark.parametrize("unit", AB_UNITS)
-def test_every_ab_unit_is_inert_without_an_ab_layout(unit):
-    """The same package installs on a single-slot appliance and does nothing."""
-
-    text = read(SYSTEMD / unit)
-    conditions = [
+def conditions_of(unit):
+    return [
         line.split("=", 1)[1]
-        for line in text.splitlines()
+        for line in read(SYSTEMD / unit).splitlines()
         if line.startswith("ConditionPathExists=")
     ]
 
+
+@pytest.mark.parametrize("unit", LAYOUT_GATED_UNITS)
+def test_every_layout_gated_unit_is_inert_without_an_ab_layout(unit):
+    """The same package installs on a single-slot appliance and does nothing."""
+
+    conditions = conditions_of(unit)
+
     assert conditions, f"{unit} would run on a single-slot appliance"
-    assert any(path in AB_ONLY_MARKERS for path in conditions), conditions
+    assert AB_LAYOUT_MARKER in conditions, conditions
+
+
+def test_the_persistence_unit_is_anchored_on_the_build_marker_instead():
+    """Deliberately not the layout descriptor, and not inert as a result.
+
+    The descriptor lives under /etc/ems-appliance-manager, one of the binds this
+    unit exists to verify: a skipped bind would take the descriptor with it, the
+    condition would read false, and the one unit that fails closed would quietly
+    skip -- exactly when it is needed.
+
+    The price is that a single-slot *image* writes that marker too, so the unit
+    runs there. Nothing in the unit file can tell the two apart; the answer comes
+    from appliance/ab_persistence.py, which reads the variant the marker names.
+    """
+
+    conditions = conditions_of("ems-appliance-persistence.service")
+
+    assert conditions == [OS_BUILD_MARKER]
+    assert AB_LAYOUT_MARKER not in conditions
 
 
 @pytest.mark.parametrize("unit", AB_UNITS)
@@ -357,9 +385,7 @@ def test_a_build_that_could_not_happen_is_never_reported_as_a_pass(name):
     assert "required_tool_missing" in text
 
 
-@pytest.mark.parametrize(
-    "name", ["appliance-build-rpi-ab-image.sh", "appliance-build-rpi-ab-update.sh"]
-)
+@pytest.mark.parametrize("name", [*BUILD_SCRIPTS, "appliance-build-rpi-ab-update.sh"])
 def test_no_build_script_publishes_anything(name):
     text = read(SCRIPTS / name)
 

@@ -619,6 +619,68 @@ def _ab_persistent(args, attribute):
     }.get(attribute)
 
 
+def command_image_variant(args):
+    """Which appliance image this host was flashed from, if any.
+
+    Read from the build marker the image writes, and only a value the variant
+    table recognises is printed. A host installed from the .deb onto somebody
+    else's Raspberry Pi OS has no marker and gets an error, which is the answer
+    the first-boot growth helper needs: this project repartitions media it
+    imaged and nothing else.
+    """
+
+    from appliance import ab_layout, image_variants
+
+    services = _ab_services(args)
+    if services is None:
+        return EXIT_ERROR
+    variant = image_variants.variant_of_build_marker(services.ab_probe.os_build())
+    if variant is None:
+        print("error: this host carries no appliance image build marker", file=sys.stderr)
+        return EXIT_ERROR
+    print(variant.slug)
+    return EXIT_OK
+
+
+def command_root_geometry(args):
+    """Where the root partition ends and where the medium it lives on ends.
+
+    The single-slot image sizes its root at build time; the medium an operator
+    flashed it onto is whatever they had. The growth helper decides from this
+    whether there is anything to claim, so an unreadable geometry is an error
+    and never an empty answer.
+    """
+
+    from appliance import ab_geometry
+
+    services = _ab_services(args)
+    if services is None:
+        return EXIT_ERROR
+    try:
+        partitions = services.ab_probe.block_partitions()
+    except Exception as error:
+        print(f"error: {getattr(error, 'message', error)}", file=sys.stderr)
+        return EXIT_ERROR
+    # Asked of the block layer rather than resolved out of /proc: the mount
+    # source is whatever string was passed to mount, and on this image that is
+    # a by-slot alias rather than the kernel name sysfs is keyed by.
+    root = next((item for item in partitions if item.mountpoint == "/"), None)
+    if root is None:
+        print("error: the block layer reports no partition mounted at /", file=sys.stderr)
+        return EXIT_ERROR
+    try:
+        geometry = ab_geometry.read_geometry(root.path, sysfs=args.sysfs)
+    except ab_geometry.GeometryError as error:
+        print(f"error: {error.code}: {error.message}", file=sys.stderr)
+        return EXIT_ERROR
+    if args.json:
+        _print(geometry.to_dict(), True)
+    else:
+        for line in geometry.to_lines():
+            print(line)
+    return EXIT_OK
+
+
 def _print_ab_persistent(args, attribute):
     value = _ab_persistent(args, attribute)
     if value is None:
@@ -903,6 +965,11 @@ def build_parser():
     )
     backup_account.set_defaults(handler=command_backup_account)
 
+    subparsers.add_parser(
+        "image-variant", parents=[shared],
+        help="print which appliance image this host was flashed from",
+    ).set_defaults(handler=command_image_variant)
+
     ab = subparsers.add_parser(
         "ab", parents=[shared], help="fail-safe A/B operating-system updates"
     )
@@ -951,6 +1018,11 @@ def build_parser():
     ab_commands.add_parser(
         "slot-bootstrap", parents=[shared], help="rebuild this slot's container runtime"
     ).set_defaults(handler=command_ab_slot_bootstrap)
+    root_geometry = ab_commands.add_parser(
+        "root-geometry", parents=[shared], help="print the root partition's real end and the disk's"
+    )
+    root_geometry.add_argument("--sysfs", default="/sys")
+    root_geometry.set_defaults(handler=command_root_geometry)
     trial_health = ab_commands.add_parser(
         "trial-health", parents=[shared], help="verify a trial boot and optionally commit it"
     )

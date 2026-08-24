@@ -127,6 +127,7 @@ installed by any manifest in this repository.
 | `ImageMagick` | host install (`convert`) | ImageMagick | Trims and measures captured documentation screenshots | ❌ | ❌ | https://github.com/ImageMagick/ImageMagick |
 | `Pillow` | host install (verified 12.2.0) | MIT-CMU | Renders the optional install demo animation (`docs/demo/build_install_demo.py`); see the License Notes below | ❌ | ❌ | https://github.com/python-pillow/Pillow |
 | `DejaVu fonts` | host install | Bitstream-Vera AND Public-Domain | Glyphs for the install demo animation when present on the host | ❌ | ❌ | https://github.com/dejavu-fonts/dejavu-fonts |
+| `xz-utils` | host install | GPL-2.0-or-later AND Public-Domain (liblzma) | Compresses the published appliance image (`scripts/appliance-build-rpi-ab-image.sh`) | ❌ | ❌ | https://github.com/tukaani-project/xz |
 
 ### GitHub Actions
 
@@ -153,7 +154,7 @@ upstream `dist/` output.
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream | Files |
 |---|---|---|---|:---:|:---:|---|---|
 | `uPlot` | 1.6.31 | MIT | Canvas charts on the Dashboard History and Analytics tabs | ✅ | ✅ | https://github.com/leeoniya/uPlot | `dashboard/static/uPlot.iife.min.js`, `dashboard/static/uPlot.min.css`, `dashboard/static/uPlot.LICENSE` |
-| `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Twelve upstream files copied verbatim as the A/B image contract the appliance is built against | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (twelve files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
+| `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Seventeen upstream files copied verbatim as the image contract the appliance is built against — the A/B layout (`image-rota`) and the single-slot one (`image-rpios`) | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (seventeen files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
 
 Provenance, verified on 2026-08-04 against the upstream `1.6.31` tag:
 
@@ -208,6 +209,40 @@ AGPL-3.0-or-later and are not third-party components.
 
 `influxdb:2.7` and `influxdb:2.9` are InfluxDB 2.x OSS, which is MIT-licensed.
 InfluxDB 3.x is licensed differently; this project does not use it.
+
+## Appliance Package Dependencies
+
+The Debian packages `ems-appliance-manager` declares in its `Depends:` field.
+The `.deb` does not ship them — apt installs them from Debian — but the A/B
+appliance image does: it is a Debian Trixie root filesystem with this set
+installed into both slots.
+
+As with the container base images, this inventory documents the declared set
+and not the thousands of packages a Debian root pulls in. Each build writes the
+image's complete package manifest into the image itself and its digest into the
+build marker, so the exact set of any published image is recoverable from the
+artefact rather than from this table.
+
+The generator that assembles that root filesystem, `rpi-image-gen`, is listed
+under Vendored Components above.
+
+| Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
+|---|---|---|---|:---:|:---:|---|
+| `python3` | `>=3.9` (Trixie ships 3.13) | PSF-2.0 | The manager, the agent and every appliance CLI | ✅ | ✅ | https://github.com/python/cpython |
+| `systemd` | Trixie | LGPL-2.1-or-later AND mixed | Unit lifecycle, the socket boundary, slot-shared mount generators | ✅ | ✅ | https://github.com/systemd/systemd |
+| `adduser` | Trixie | GPL-2.0-or-later | Creates the unprivileged web account and the backup account | ❌ | ✅ | https://salsa.debian.org/debian/adduser |
+| `acl` | Trixie | LGPL-2.1-or-later AND GPL-2.0-or-later | Named-user grants on the export root | ✅ | ✅ | https://git.savannah.nongnu.org/cgit/acl.git |
+| `iproute2` | Trixie | GPL-2.0-or-later | Address and link state for the network page | ✅ | ✅ | https://git.kernel.org/pub/scm/network/iproute2/iproute2.git |
+| `procps` | Trixie | GPL-2.0-or-later AND LGPL-2.0-or-later | Process and memory facts for diagnostics | ✅ | ✅ | https://gitlab.com/procps-ng/procps |
+| `util-linux` | Trixie | mixed (GPL-2.0-or-later, LGPL-2.1-or-later, BSD-3-Clause) | Block device and partition inspection for the A/B layout | ✅ | ✅ | https://github.com/util-linux/util-linux |
+| `mount` | Trixie | GPL-2.0-or-later | Slot and shared-path mount state | ✅ | ✅ | https://github.com/util-linux/util-linux |
+| `ca-certificates` | Trixie | GPL-2.0-or-later AND MPL-2.0 (certificate data) | TLS trust for release fetches and container pulls | ✅ | ✅ | https://salsa.debian.org/debian/ca-certificates |
+| `passwd` | Trixie | BSD-3-Clause AND GPL-2.0-or-later | Account and shell management for the confined backup account | ❌ | ✅ | https://github.com/shadow-maint/shadow |
+| `zstd` | Trixie | BSD-3-Clause OR GPL-2.0-only | Reads the `update.tar.zst` OS update archive | ✅ | ✅ | https://github.com/facebook/zstd |
+| `gpgv` | Trixie | GPL-3.0-or-later | Verifies the detached signature over each release manifest | ✅ | ✅ | https://github.com/gpg/gnupg |
+| `openssh-client` | Trixie | BSD-3-Clause AND mixed | Host key material and the forced SFTP command policy | ✅ | ✅ | https://github.com/openssh/openssh-portable |
+| `cloud-guest-utils` | Trixie | GPL-3.0-or-later | `growpart` grows the persistent partition on first boot | ✅ | ✅ | https://github.com/canonical/cloud-utils |
+| `e2fsprogs` | Trixie | GPL-2.0-only AND LGPL-2.0-only (libext2fs) | `resize2fs` and `dumpe2fs` for the persistent filesystem | ✅ | ✅ | https://github.com/tytso/e2fsprogs |
 
 ## Optional Platform Dependencies
 

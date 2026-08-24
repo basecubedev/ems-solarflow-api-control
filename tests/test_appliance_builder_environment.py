@@ -66,6 +66,7 @@ def authority_with(environment, tmp_path):
             revision="c" * 40, tree_sha256="sha256:" + "d" * 64
         ),
         profile="rpi5",
+        variant="ab",
         build_id="20260809120000",
         image=build_authority.Artefact(
             path=str(artefact), sha256=build_authority.file_sha256(artefact)

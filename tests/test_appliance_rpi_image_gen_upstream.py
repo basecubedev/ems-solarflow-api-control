@@ -114,6 +114,51 @@ def test_image_rota_accepts_only_the_pi4_and_pi5_device_classes(lock):
     assert "regex:^(cm4|pi4|cm5|pi5)$" in text
 
 
+def test_the_lock_pins_the_single_slot_image_layer_upstream_actually_ships(lock):
+    pinned = lock.layer("single")
+    text = upstream.read(upstream.IMAGE_RPIOS)
+
+    assert upstream.layer_field(text, "Name") == pinned.name
+    assert upstream.layer_field(text, "Version") == pinned.version
+    assert tuple(upstream.layer_list(text, "Requires")) == ("image-base", "rpi-storage-binder")
+
+
+def test_the_lock_and_the_variant_table_name_the_same_image_layers(lock):
+    """Two files, one fact, and a test so they cannot drift apart.
+
+    The lock stays self-describing because it is the artefact that gets
+    reviewed; the variant table stays authoritative for the runtime because it
+    is what a booted appliance can read. Neither may quietly become wrong.
+    """
+
+    from appliance import image_variants
+
+    assert set(lock.image_layers) == set(image_variants.VARIANTS)
+    for slug, variant in image_variants.VARIANTS.items():
+        assert lock.layer(slug).name == variant.image_layer, slug
+
+
+def test_the_single_slot_root_is_writable_and_named_by_slot():
+    """What makes apt possible, read out of upstream's own bytes.
+
+    The A/B image mounts its root read-only, which is why it cannot be patched
+    in place. image-rpios writes the opposite fstab, and points the kernel at
+    the same by-slot name its udev rules create.
+    """
+
+    setup = upstream.read(upstream.IMAGE_RPIOS_SETUP)
+    rules = upstream.read(upstream.IMAGE_RPIOS_SLOT_RULES)
+
+    assert "/dev/disk/by-slot/system  /  ext4 rw," in setup
+    assert "root=/dev/disk/by-slot/system" in setup
+    assert 'ENV{ID_FS_LABEL}=="ROOT", SYMLINK+="disk/by-slot/system"' in rules
+
+
+def test_upstream_single_slot_config_selects_image_rpios():
+    payload = yaml.safe_load(upstream.read(upstream.UPSTREAM_SINGLE_CONFIG))
+    assert payload["image"]["layer"] == "image-rpios"
+
+
 def test_upstream_exposes_the_trixie_docker_layer_and_its_capability():
     trixie = upstream.read("layer/app-container/docker/engine-trixie.yaml")
     assert upstream.layer_field(trixie, "Name") == "docker-debian-trixie"
@@ -149,9 +194,24 @@ def test_the_update_members_are_android_sparse_images():
 # --- the project's build configuration --------------------------------------
 
 
-def test_the_project_declares_one_profile_per_supported_board():
+def test_the_project_declares_one_profile_per_supported_board_and_variant():
+    """Every board is offered in both shapes, and nothing else is offered.
+
+    A board that exists in only one variant is the failure this pins: an owner
+    told the appliance supports their Pi finds no image of the kind they were
+    told to flash.
+    """
+
+    from appliance import image_variants
+
+    expected = {
+        f"{board}-{variant.profile_suffix}"
+        for board in rpi_image_gen.HARDWARE_PROFILES
+        for variant in image_variants.VARIANTS.values()
+    }
     names = {path.stem for path in PROFILE_DIR.glob("*.yaml")} if PROFILE_DIR.is_dir() else set()
-    assert names == {"rpi4-ab", "rpi5-ab"}
+
+    assert names == expected
 
 
 def test_every_project_device_layer_resolves_upstream():
@@ -174,7 +234,8 @@ def test_the_project_layer_requires_layers_upstream_defines():
     """``X-Env-Layer-Requires`` names layers, and every one must exist."""
 
     upstream_names = set(upstream_device_layers().values())
-    upstream_names.add(upstream.layer_field(upstream.read(upstream.IMAGE_ROTA), "Name"))
+    for relative in (upstream.IMAGE_ROTA, upstream.IMAGE_RPIOS):
+        upstream_names.add(upstream.layer_field(upstream.read(relative), "Name"))
     for relative in upstream.DOCKER_LAYERS:
         upstream_names.add(upstream.layer_field(upstream.read(relative), "Name"))
 
@@ -382,8 +443,8 @@ def test_the_real_upstream_loader_resolves_every_project_profile(upstream_toolin
         data = upstream.load_config(source, config_loader, path)
         profile = rpi_image_gen.read_profile(path)
         assert data["device"]["layer"] == profile.device_layer, path.name
-        assert data["image"]["layer"] == "image-rota", path.name
-        assert data["layer"]["app"] == "ems-appliance", path.name
+        assert data["image"]["layer"] == profile.variant.image_layer, path.name
+        assert data["layer"]["app"] == profile.variant.app_layer, path.name
         # Inherited through the chain, never restated per profile.
         assert data["image"]["rootfs_type"] == "ext4", path.name
 
@@ -402,16 +463,25 @@ def test_the_real_upstream_layer_manager_knows_every_layer_the_project_names(
     assert unknown == []
 
 
-def test_the_project_layer_loads_and_its_dependencies_resolve(upstream_tooling):
-    """The project layer, loaded by upstream beside upstream's own."""
+@pytest.mark.parametrize("layer", ["ems-appliance", "ems-appliance-single"])
+def test_the_project_layer_loads_and_its_dependencies_resolve(upstream_tooling, layer):
+    """Each project layer, loaded by upstream beside upstream's own.
+
+    Not a formality. The metadata block above METAEND is parsed as DEB822, so a
+    line that is neither a field nor a space-indented continuation of one fails
+    the entire layer to load -- and the failure upstream reports is "Layer
+    'ems-appliance-single' not found", which reads like a missing file rather
+    than an unparseable one. The single-slot layer's first real build ended
+    exactly there, four seconds in, on an explanatory paragraph.
+    """
 
     source, (_config_loader, layer_manager) = upstream_tooling
     manager = upstream.layer_index(
         source, layer_manager, extra_paths=[IMAGE_DIR / "layer"]
     )
 
-    assert manager.resolve_layer_name("ems-appliance")
-    satisfied, problems = manager.check_dependencies("ems-appliance")
+    assert manager.resolve_layer_name(layer), f"upstream cannot load {layer}"
+    satisfied, problems = manager.check_dependencies(layer)
     blocking = [item for item in problems if "missing required dependency" in item]
     assert blocking == [], blocking
     assert satisfied or not blocking

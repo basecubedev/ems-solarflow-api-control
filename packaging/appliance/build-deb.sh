@@ -81,10 +81,17 @@ install -m 0644 "$PACKAGING/systemd/ems-appliance-grow-persistent.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0755 "$PACKAGING/bin/grow-persistent.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/grow-persistent.sh"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-grow-root.service" \
+        "$STAGE/usr/lib/systemd/system/"
+install -m 0755 "$PACKAGING/bin/grow-root.sh" \
+        "$STAGE/usr/lib/ems-appliance-manager/grow-root.sh"
 install -m 0644 "$PACKAGING/tmpfiles/ems-appliance-manager.conf" "$STAGE/usr/lib/tmpfiles.d/"
 install -m 0644 "$PACKAGING/logrotate/ems-appliance-manager" "$STAGE/etc/logrotate.d/"
 install -m 0644 "$PACKAGING/config/appliance.conf" "$STAGE/etc/ems-appliance-manager/"
 install -m 0644 "$PACKAGING/config/allowed-images.conf" "$STAGE/etc/ems-appliance-manager/"
+# Deliberately not a conffile: it is the trust anchor for OS updates, not a
+# setting, and a local edit must not survive an upgrade that rotates the key.
+install -m 0644 "$PACKAGING/config/os-release-keyring.gpg" "$STAGE/etc/ems-appliance-manager/"
 
 for document in architecture installation admin-recovery os-updates ab-os-updates \
                 ab-hardware-validation ab-persistence-contract ssh-backup-access \

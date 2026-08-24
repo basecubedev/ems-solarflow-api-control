@@ -2,8 +2,11 @@
 [Unit]
 Description=EMS SolarFlow Appliance shared persistent state
 Documentation=file:///usr/share/doc/ems-appliance-manager/ab-persistence-contract.md
-# The unit ships in every slot but only applies to an A/B image; a single-slot
-# appliance keeps its ordinary root filesystem and this never runs there.
+# The unit ships in every slot but only applies to an A/B image. On a host that
+# never carried one it is condition-skipped; on a single-slot *image*, which
+# writes the build marker below for provenance, it runs and reports that no
+# persistence contract applies -- see appliance/ab_persistence.py, which reads
+# the variant that marker names and fails closed unless it says so positively.
 #
 # Anchored on the slot-local build marker, deliberately not on the layout
 # descriptor: that descriptor lives under /etc/ems-appliance-manager, which is
@@ -25,7 +28,7 @@ ConditionPathExists=/etc/ems-appliance-os-build
 RequiresMountsFor=/persistent
 After=local-fs.target
 # Upstream's generator writes one .mount unit per declared path and links
-# exactly one of them into local-fs.target, so five of the six binds would
+# exactly one of them into local-fs.target, so six of the seven binds would
 # never be activated. The image ships the missing .wants links, and this
 # pulls the same mounts in through systemd's own path dependency, so the
 # verification below cannot run before the mounts it is verifying.

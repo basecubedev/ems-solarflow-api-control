@@ -45,6 +45,16 @@ DOCKER_LAYERS = (
 IMAGE_ROTA = "image/gpt/ab_userdata/image.yaml"
 UPSTREAM_AB_CONFIG = "config/trixie-minbase-ab.yaml"
 
+# The non-A/B counterparts: one MBR boot partition, one root, and the udev
+# rules that give that root the /dev/disk/by-slot/system name the kernel
+# command line and fstab are written against.
+IMAGE_RPIOS = "image/mbr/simple_dual/image.yaml"
+IMAGE_RPIOS_SETUP = "image/mbr/simple_dual/setup.sh"
+IMAGE_RPIOS_SLOT_RULES = (
+    "image/mbr/simple_dual/device/rootfs-overlay/etc/udev/rules.d/99-rpi-05-image.rules"
+)
+UPSTREAM_SINGLE_CONFIG = "config/trixie-minbase.yaml"
+
 SOURCE_ENV = "EMS_RPI_IMAGE_GEN"
 
 

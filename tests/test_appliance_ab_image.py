@@ -321,14 +321,10 @@ def test_the_summary_is_json_serialisable(image):
 
 
 UNITS = ("ems-appliance-ab-health", "ems-appliance-slot-bootstrap")
-SHARED_MOUNTS = (
-    r"etc-ems\x2dappliance\x2dmanager.mount",
-    r"etc-NetworkManager-system\x2dconnections.mount",
-    r"opt-ems\x2dsolarflow.mount",
-    r"var-lib-ems\x2dappliance\x2dmanager.mount",
-    r"var-lib-ems\x2dappliance\x2dos\x2dupdate.mount",
-    r"var-log-ems\x2dappliance\x2dmanager.mount",
-)
+# What a correctly built root activates, taken from the contract rather than
+# typed out again: the hand-written copy this replaced was one short, so the
+# fixture built an image the inspector was also not checking for.
+SHARED_MOUNTS = ab_image.SHARED_ACTIVATIONS
 
 
 def build_root(base):

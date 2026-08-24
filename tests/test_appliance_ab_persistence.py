@@ -17,6 +17,7 @@ import pytest
 
 from appliance import ab_persistence
 from tests.helpers.appliance_ab import (
+    DEFAULT_OS_BUILD,
     DEVICE,
     PERSIST_MOUNT,
     SLOT_PREFIX,
@@ -436,3 +437,108 @@ def test_the_verifier_is_not_gated_on_a_file_inside_what_it_verifies():
         for shared in ab_persistence.SHARED_PATHS:
             assert not path.startswith(shared.target.rstrip("/") + "/"), path
             assert path != shared.target, path
+
+
+# --- the image that has no persistence contract ------------------------------
+#
+# A single-slot image ships one writable root and no persistent partition, so
+# there is nothing here for it to prove. It still writes the build marker the
+# whole product reads for provenance, and that marker is what the unit's
+# ConditionPathExists= is anchored on -- so without a positive answer here the
+# verifier would refuse the boot of an image that is working exactly as built.
+
+
+def test_a_single_slot_image_is_not_asked_to_prove_a_persistence_contract(host):
+    host.remove_layout_manifest()
+    host.write_os_build(dict(DEFAULT_OS_BUILD) | {"image_layer": "image-rpios"})
+
+    report = verify(host)
+
+    assert report.ok is True
+    assert report.state == ab_persistence.STATE_NOT_APPLICABLE
+    assert report.problems == ()
+
+
+def test_an_ab_image_that_lost_its_layout_descriptor_still_fails_closed(host):
+    """The descriptor lives inside a bind this unit verifies.
+
+    Losing it is precisely the failure the unit exists to catch, so the marker
+    naming an A/B image must not be softened by the single-slot answer above.
+    """
+
+    host.remove_layout_manifest()
+    host.write_os_build(dict(DEFAULT_OS_BUILD) | {"image_layer": "image-rota"})
+
+    report = verify(host)
+
+    assert report.ok is False
+    assert report.state == ab_persistence.STATE_MISSING
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        DEFAULT_OS_BUILD,
+        dict(DEFAULT_OS_BUILD) | {"image_layer": ""},
+        dict(DEFAULT_OS_BUILD) | {"image_layer": "image-somethingelse"},
+    ],
+    ids=["field-absent", "field-empty", "layer-unknown"],
+)
+def test_a_marker_that_does_not_name_a_known_image_fails_closed(host, marker):
+    """Only a positive, recognised statement may lift the check.
+
+    A marker written before this field was read says nothing about slots, and
+    an appliance that says nothing is the one that most needs verifying.
+    """
+
+    host.remove_layout_manifest()
+    host.write_os_build(marker)
+
+    report = verify(host)
+
+    assert report.ok is False
+    assert report.state == ab_persistence.STATE_MISSING
+
+
+def test_a_host_with_no_build_marker_at_all_fails_closed(host):
+    host.remove_layout_manifest()
+    (host.root / "etc/ems-appliance-os-build").unlink()
+
+    report = verify(host)
+
+    assert report.ok is False
+    assert report.state == ab_persistence.STATE_MISSING
+
+
+def test_every_shared_path_has_an_activation_the_inspector_checks():
+    """The inspector's list was written by hand and was one short.
+
+    /var/lib/ems-backup was missing from it, so an image that shipped without
+    that .wants link passed inspection: the bind would never have been
+    activated, and every backup written to it would have been lost at the first
+    slot switch. The list is derived now, and this is what keeps it derived.
+    """
+
+    from appliance import ab_image
+
+    expected = {shared.target for shared in ab_persistence.SHARED_PATHS}
+
+    assert len(ab_image.SHARED_ACTIVATIONS) == len(expected)
+    assert "var-lib-ems\\x2dbackup.mount" in ab_image.SHARED_ACTIVATIONS
+
+
+def test_the_shipped_image_activates_exactly_the_paths_the_contract_declares():
+    """Derivation is only useful if it matches the bytes the image carries."""
+
+    from pathlib import Path
+
+    from appliance import ab_image
+
+    overlay = (
+        Path(__file__).resolve().parents[1]
+        / "packaging/appliance/image/layer/ems-appliance.rootfs-overlay"
+        / ab_image.SHARED_ACTIVATION_DIRECTORY
+    )
+    shipped = sorted(entry.name for entry in overlay.iterdir())
+
+    assert shipped == sorted(ab_image.SHARED_ACTIVATIONS)

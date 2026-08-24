@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from appliance import ab_filesystems, ab_image
+from appliance import ab_filesystems, ab_image, ab_persistence
 from appliance.ab_image import FAIL, PASS
 
 pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
@@ -136,14 +136,10 @@ def populate_root(
         "Version=1\n"
         + "".join(
             f"Path={path}\n"
-            for path in (
-                "/opt/ems-solarflow",
-                "/var/lib/ems-appliance-manager",
-                "/var/log/ems-appliance-manager",
-                "/etc/ems-appliance-manager",
-                "/var/lib/ems-appliance-os-update",
-                "/etc/NetworkManager/system-connections",
-            )
+            # From the contract, not typed out again: this fixture used to
+            # declare six of the seven and matched an inspector that was also
+            # only checking six.
+            for path in (entry.target for entry in ab_persistence.SHARED_PATHS)
         )
     )
 

@@ -537,7 +537,17 @@ def discover(probe):
             drift=(exc.message,),
         )
     if manifest is None:
-        return LayoutStatus(mode=MODE_SINGLE_SLOT, ab_supported=False, reason=REASON_NOT_PRESENT)
+        # The build marker travels with the root filesystem rather than with a
+        # slot, so it is the one thing that still says what this image is once
+        # there is no layout descriptor to read. The persistence verifier needs
+        # that answer to tell a single-slot image apart from an A/B image that
+        # lost its descriptor.
+        return LayoutStatus(
+            mode=MODE_SINGLE_SLOT,
+            ab_supported=False,
+            reason=REASON_NOT_PRESENT,
+            os_build=probe.os_build(),
+        )
 
     try:
         partitions = probe.block_partitions()

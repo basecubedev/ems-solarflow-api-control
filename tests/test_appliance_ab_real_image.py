@@ -127,7 +127,8 @@ def test_the_upstream_contract_is_pinned_to_an_exact_revision():
 
     assert lock["repository"].endswith("rpi-image-gen")
     assert re.fullmatch(r"[0-9a-f]{40}", lock["commit"])
-    assert lock["image_layer"] == "image-rota"
+    assert lock["image_layers"]["ab"]["name"] == "image-rota"
+    assert lock["image_layers"]["single"]["name"] == "image-rpios"
     assert lock["shared_slot_mechanism"] == "slot-shared"
 
 

@@ -20,6 +20,8 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
+from appliance import image_variants
+
 LOCK_NAME = "rpi-image-gen.lock"
 SOURCE_IDENTITY_NAME = ".rpi-image-gen-source.json"
 
@@ -76,20 +78,12 @@ class HardwareProfile:
     compatible_board_classes: tuple
     description: str
 
-    @property
-    def artifact_suffix(self):
-        return f"{self.name}-arm64-ab"
-
-    def artifact_basename(self, version):
-        return f"ems-solarflow-appliance-{version}-{self.artifact_suffix}"
-
     def to_dict(self):
         return {
             "name": self.name,
             "device_layer": self.device_layer,
             "device_class": self.device_class,
             "compatible_board_classes": list(self.compatible_board_classes),
-            "artifact_suffix": self.artifact_suffix,
             "description": self.description,
         }
 
@@ -147,14 +141,22 @@ class ImageGenError(Exception):
 
 
 @dataclass(frozen=True)
+class LockedLayer:
+    """One upstream image layer, as the lock pins it."""
+
+    slug: str
+    name: str
+    path: str
+    version: str
+
+
+@dataclass(frozen=True)
 class Lock:
     repository: str
     release: str
     commit: str
     executable: str
-    image_layer: str
-    image_layer_version: str
-    image_layer_path: str
+    image_layers: dict
     shared_slot_mechanism: str
     shared_slot_conf_dir: str
     shared_root: str
@@ -172,6 +174,34 @@ class Lock:
     update_member_format: str = ""
     tree_sha256: str = ""
     tarball: dict = None
+
+    def layer(self, slug):
+        """The pinned upstream image layer one variant is built from.
+
+        Both variants are declared in the lock rather than derived from
+        ``image_variants``: the lock is the file that gets reviewed, and a
+        contract test keeps the two from disagreeing.
+        """
+
+        entry = self.image_layers[slug]
+        return LockedLayer(
+            slug=slug,
+            name=str(entry["name"]),
+            path=str(entry["path"]),
+            version=str(entry["version"]),
+        )
+
+    @property
+    def image_layer(self):
+        return self.layer(image_variants.VARIANT_AB).name
+
+    @property
+    def image_layer_version(self):
+        return self.layer(image_variants.VARIANT_AB).version
+
+    @property
+    def image_layer_path(self):
+        return self.layer(image_variants.VARIANT_AB).path
 
     def to_dict(self):
         return {
@@ -206,9 +236,14 @@ def read_lock(path=None):
             commit=str(payload["commit"]),
             tree_sha256=str(payload.get("tree_sha256") or ""),
             executable=str(payload["executable"]),
-            image_layer=str(payload["image_layer"]),
-            image_layer_version=str(payload["image_layer_version"]),
-            image_layer_path=str(payload["image_layer_path"]),
+            image_layers={
+                str(slug): {
+                    "name": str(entry["name"]),
+                    "path": str(entry["path"]),
+                    "version": str(entry["version"]),
+                }
+                for slug, entry in dict(payload["image_layers"]).items()
+            },
             shared_slot_mechanism=str(payload["shared_slot_mechanism"]),
             shared_slot_conf_dir=str(payload["shared_slot_conf_dir"]),
             shared_root=str(payload["shared_root"]),
@@ -258,11 +293,22 @@ def file_sha256(path, *, chunk=1024 * 1024):
 
 @dataclass(frozen=True)
 class BuildProfile:
-    """One rpi-image-gen config this project builds, and what it is for."""
+    """One rpi-image-gen config this project builds, and what it is for.
+
+    A profile is a board *and* a variant. The board comes from its own device
+    layer; the variant comes from the shared config it includes, because that
+    is where the upstream image layer is named -- and naming it twice is how
+    two files come to disagree about which image they build.
+    """
 
     path: Path
     hardware: HardwareProfile
+    variant: object
     image_name: str
+
+    @property
+    def artifact_suffix(self):
+        return self.variant.artifact_suffix(self.hardware.name)
 
     @property
     def name(self):
@@ -281,13 +327,15 @@ class BuildProfile:
         return self.hardware.compatible_board_classes
 
     def artifact_basename(self, version):
-        return self.hardware.artifact_basename(version)
+        return f"ems-solarflow-appliance-{version}-{self.artifact_suffix}"
 
     def to_dict(self):
         return {
             "name": self.name,
             "config": str(self.path),
             "image_name": self.image_name,
+            "variant": self.variant.slug,
+            "artifact_suffix": self.artifact_suffix,
             **self.hardware.to_dict(),
         }
 
@@ -341,8 +389,41 @@ def read_profile(path):
             f"{target.name} selects device layer {layer!r}, which this project has no profile for",
         )
     return BuildProfile(
-        path=target, hardware=hardware, image_name=values.get("image.name", "")
+        path=target,
+        hardware=hardware,
+        variant=_profile_variant(target, values),
+        image_name=values.get("image.name", ""),
     )
+
+
+def _profile_variant(target, values):
+    """Which image this profile builds, read from the config it includes.
+
+    The profile itself names only a board. The image layer is one level up, in
+    the shared config, which is also the file that has to be right for the
+    build to be the image it claims -- so that is where the answer is taken
+    from, and an unrecognised one is refused rather than defaulted.
+    """
+
+    included = values.get("include.file", "")
+    if not included:
+        raise ImageGenError("profile_invalid", f"{target.name} includes no shared configuration")
+    shared = (target.parent / included).resolve()
+    try:
+        text = shared.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ImageGenError(
+            "profile_unreadable", f"{target.name} includes {included}, which could not be read: {exc}"
+        )
+    layer = _config_values(text).get("image.layer", "")
+    variant = image_variants.variant_of_image_layer(layer)
+    if variant is None:
+        raise ImageGenError(
+            "profile_variant_unknown",
+            f"{shared.name} builds image layer {layer or 'nothing'!r}, "
+            "which this project has no image variant for",
+        )
+    return variant
 
 
 def profiles(directory=None):
@@ -726,26 +807,35 @@ def probe_checkout(
             )
         )
 
-    layer = root / lock.image_layer_path
-    if layer.is_file():
+    # Every variant this project can build, not only the one being built now:
+    # a checkout that could not build the other image is a checkout this
+    # project is not pinned to, and finding that out at release time is late.
+    for slug in sorted(lock.image_layers):
+        pinned = lock.layer(slug)
+        layer = root / pinned.path
+        if not layer.is_file():
+            findings.append(
+                Finding(f"image_layer:{slug}", FAIL, f"{pinned.path} is missing")
+            )
+            findings.append(
+                Finding(f"image_layer_version:{slug}", NOT_RUN, "the layer file is missing")
+            )
+            continue
         name, version = layer_metadata(layer.read_text(encoding="utf-8", errors="replace"))
         findings.append(
             Finding(
-                "image_layer",
-                PASS if name == lock.image_layer else FAIL,
-                f"{name or 'unnamed'} (expected {lock.image_layer})",
+                f"image_layer:{slug}",
+                PASS if name == pinned.name else FAIL,
+                f"{name or 'unnamed'} (expected {pinned.name})",
             )
         )
         findings.append(
             Finding(
-                "image_layer_version",
-                PASS if version == lock.image_layer_version else FAIL,
-                f"{version or 'unversioned'} (expected {lock.image_layer_version})",
+                f"image_layer_version:{slug}",
+                PASS if version == pinned.version else FAIL,
+                f"{version or 'unversioned'} (expected {pinned.version})",
             )
         )
-    else:
-        findings.append(Finding("image_layer", FAIL, f"{lock.image_layer_path} is missing"))
-        findings.append(Finding("image_layer_version", NOT_RUN, "the layer file is missing"))
 
     findings.append(_shared_slot_finding(root, lock))
     findings.append(_update_finding(root, lock))

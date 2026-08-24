@@ -1128,8 +1128,14 @@
     var fallback = abState.last_fallback;
 
     if (ab.mode === "single_slot") {
-      return { tone: "warn", label: "Single-slot appliance",
-        hint: "This installation has one root filesystem. A/B updates need an A/B image." };
+      /* A supported shape working as designed, not a degraded A/B one: this is
+         either a package installation on an existing system or a single-slot
+         appliance image, and both are patched with apt on purpose. What it
+         genuinely does not have is a slot to fall back to, and that is what
+         the hint says instead of calling the appliance incomplete. */
+      return { tone: "ok", label: "Single-slot appliance",
+        hint: "One root filesystem, patched with apt. There is no second slot to fall back "
+          + "to, so keep a backup." };
     }
     if ((ab.drift || []).length || !ab.ab_supported) {
       return { tone: "bad", label: "Manual action required",
@@ -1495,8 +1501,11 @@
     }));
     main.appendChild(el("p", { class: "section-hint", "data-test": "ab-single-slot" }, [
       el("span", {
-        text: "This appliance has a single root filesystem. Fail-safe A/B OS image updates require "
-          + "reinstalling onto an A/B-capable appliance image."
+        text: "This appliance has a single root filesystem and is patched with apt. That is a "
+          + "supported shape, not a missing feature — but there is no second slot to fall back "
+          + "to, so a failed OS upgrade is recovered by reflashing and restoring a backup. "
+          + "Fail-safe rollback needs an A/B-capable appliance image, which no installation is "
+          + "converted to in place."
       })
     ]));
 

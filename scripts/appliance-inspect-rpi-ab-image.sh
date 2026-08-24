@@ -1,11 +1,16 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Check a built A/B appliance image against the declared layout, without booting.
+# Check a built appliance image against its declared layout, without booting.
 #
-#   scripts/appliance-inspect-rpi-ab-image.sh [--json] [--compare other.img]
+#   scripts/appliance-inspect-rpi-ab-image.sh [--json] [--variant ab|single]
+#                                             [--compare other.img]
 #                                             [--appliance-version V] [--build-id ID]
 #                                             [--architecture ARCH]
 #                                             [--no-contents] [--mount] <image.img>
+#
+# The variant is stated, never sniffed. Deciding it from what the file happens
+# to contain would let an image be judged by the contract it already satisfies
+# rather than the one it was built to.
 #
 # The inspector reads the GPT, the filesystem structures and the files inside
 # them straight out of the image file: no loop device, no mount, no root.
@@ -40,6 +45,7 @@ MOUNT_A=""
 MOUNT_B=""
 MOUNT_BOOT=""
 CONTENTS=1
+VARIANT=ab
 APPLIANCE_VERSION=""
 BUILD_ID=""
 # Both profiles build one architecture; a release that changes that has to say so.
@@ -54,6 +60,8 @@ while [ $# -gt 0 ]; do
         --json) FORMAT=json; shift ;;
         --mount) MOUNT=1; shift ;;
         --no-contents) CONTENTS=0; shift ;;
+        --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
+        --variant=*) VARIANT=${1#*=}; shift ;;
         --compare) COMPARE=${2:?--compare needs a second image}; shift 2 ;;
         --compare=*) COMPARE=${1#*=}; shift ;;
         --appliance-version) APPLIANCE_VERSION=${2:?--appliance-version needs a value}; shift 2 ;;
@@ -69,6 +77,10 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$IMAGE" ] || { usage >&2; exit 2; }
+case "$VARIANT" in
+    ab|single) ;;
+    *) echo "unknown variant: $VARIANT" >&2; usage >&2; exit 2 ;;
+esac
 command -v python3 >/dev/null 2>&1 || {
     echo "appliance-inspect-rpi-ab-image: python3 is not installed" >&2
     echo "RESULT: NOT RUN (required_tool_missing)" >&2
@@ -142,7 +154,8 @@ fi
 
 EMS_APPLIANCE_VERSION="$APPLIANCE_VERSION" EMS_BUILD_ID="$BUILD_ID" EMS_CONTENTS="$CONTENTS" \
 EMS_ARCHITECTURE="$ARCHITECTURE" \
-PYTHONPATH="$ROOT" python3 - "$IMAGE" "$FORMAT" "$COMPARE" "$MOUNT_A" "$MOUNT_B" "$MOUNT_BOOT" <<'PY'
+PYTHONPATH="$ROOT" python3 - "$IMAGE" "$FORMAT" "$COMPARE" "$MOUNT_A" "$MOUNT_B" "$MOUNT_BOOT" \
+    "$VARIANT" <<'PY'
 import json
 import os
 import shutil
@@ -151,9 +164,10 @@ import sys
 
 from appliance import ab_image
 
-image_path, output_format, compare, mount_a, mount_b, mount_boot = sys.argv[1:7]
+image_path, output_format, compare, mount_a, mount_b, mount_boot, variant = sys.argv[1:8]
 findings = ab_image.inspect(
     image_path,
+    variant=variant,
     appliance_version=os.environ.get("EMS_APPLIANCE_VERSION") or "",
     build_id=os.environ.get("EMS_BUILD_ID") or "",
     architecture=os.environ.get("EMS_ARCHITECTURE") or "",
@@ -194,9 +208,23 @@ def independent_gpt_oracle(path):
     return ab_image.Finding("gpt_independent_oracle", ab_image.PASS, "sgdisk found no problems")
 
 
-findings.append(independent_gpt_oracle(image_path))
+if variant == "ab":
+    findings.append(independent_gpt_oracle(image_path))
+else:
+    # sgdisk verifies a GPT. Pointing it at an MBR image would answer a
+    # question this image does not pose, and its answer would be about the
+    # protective entry a GPT tool expects to find rather than about anything
+    # this build produced.
+    findings.append(
+        ab_image.Finding(
+            "gpt_independent_oracle",
+            ab_image.NOT_RUN,
+            "a single-slot image carries no GPT to cross-check",
+            mandatory=False,
+        )
+    )
 
-if mount_a and mount_b:
+if variant == "ab" and mount_a and mount_b:
     findings = [f for f in findings if f.check not in ab_image.UNMOUNTED_CHECKS]
     findings.extend(
         ab_image.inspect_mounted(

@@ -276,6 +276,17 @@ first boot of an A/B appliance. It runs after the persistent mounts and before
 persistence verification, sshd and NetworkManager, and the image makes
 `ssh.service` `Requires=` it.
 
+**Only on an A/B image.** No appliance image ships host keys — a private key in
+a public artefact is compromised whether or not anything reads it — but only
+the A/B image needs a producer of its own. Debian ships `sshd-keygen.service`
+enabled, gated on `ConditionFirstBoot=yes` and `ConditionPathIsReadWrite=/etc/ssh`,
+and that second condition is false on a read-only slot root: that is the gap
+this unit fills. On the single-slot image the root is writable, the condition
+holds, and Debian's own unit makes the pair on first boot. The single-slot
+image therefore ships neither this unit's `ssh.service` drop-in nor the
+`sshd_config.d` snippet that points sshd at the persistent partition, because
+there is no persistent partition to point it at.
+
 It is idempotent by construction: an existing key is validated and left
 byte-for-byte as it is, and only an absent type is created. A new key is written
 under a staging name, fsynced and renamed into place, so a crash leaves nothing
