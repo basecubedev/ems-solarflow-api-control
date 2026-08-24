@@ -154,7 +154,7 @@ upstream `dist/` output.
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream | Files |
 |---|---|---|---|:---:|:---:|---|---|
 | `uPlot` | 1.6.31 | MIT | Canvas charts on the Dashboard History and Analytics tabs | ✅ | ✅ | https://github.com/leeoniya/uPlot | `dashboard/static/uPlot.iife.min.js`, `dashboard/static/uPlot.min.css`, `dashboard/static/uPlot.LICENSE` |
-| `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Twelve upstream files copied verbatim as the A/B image contract the appliance is built against | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (twelve files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
+| `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Seventeen upstream files copied verbatim as the image contract the appliance is built against — the A/B layout (`image-rota`) and the single-slot one (`image-rpios`) | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (seventeen files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
 
 Provenance, verified on 2026-08-04 against the upstream `1.6.31` tag:
 

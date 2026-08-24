@@ -763,8 +763,11 @@ def test_the_flashing_guide_names_the_files_the_build_produces():
     ).read_text(encoding="utf-8")
 
     assert '"$NAME.img.xz" > "$NAME.img.xz.sha256"' in build
+    # Both variants are published, so a reader who chose either finds the name
+    # they are looking for rather than only the one the page happened to use.
     assert "-arm64-ab.img.xz" in guide
-    assert "-arm64-ab.img.xz.sha256" in guide
+    assert "-arm64-single.img.xz" in guide
+    assert ".img.xz.sha256" in guide
     # The digest has to cover the file that was downloaded: a checksum over the
     # raw image cannot verify the compressed one it was published as.
     assert ".img.sha256" not in guide.replace(".img.xz.sha256", "")

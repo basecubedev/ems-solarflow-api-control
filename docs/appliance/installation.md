@@ -39,7 +39,7 @@ provide, and a Pi 3 boot ROM reads neither. See
 evidence, and [../user/hardware-requirements.md](../user/hardware-requirements.md)
 for what a Pi 3 can and cannot be used for.
 
-## Two installation shapes
+## Three installation shapes
 
 ```text
 Single-slot installation
@@ -47,19 +47,50 @@ Single-slot installation
   → classic package updates
   → a major OS generation change requires re-imaging
 
+Single-slot appliance image
+  ems-solarflow-appliance-<version>-<rpi4|rpi5>-arm64-single.img.xz, flashed
+  → one writable root, patched by apt
+  → the Manager updates as a .deb
+  → no slot to fall back to: recovery is reflash plus backup restore
+
 A/B appliance image
-  ems-solarflow-appliance-<version>-<rpi4|rpi5>-arm64-ab.img.xz, flashed to the medium
+  ems-solarflow-appliance-<version>-<rpi4|rpi5>-arm64-ab.img.xz, flashed
   → image-based fail-safe host updates
   → the inactive slot is staged, trial-booted, health-checked
   → commit, or automatic fallback to the previous slot
 ```
 
-**An existing single-slot installation is never converted in place.** Moving to
-A/B means flashing an A/B appliance image and restoring an EMS backup onto it;
-the appliance does not resize, move or repartition a running installation's
-storage, and no such action is reachable from the browser or the agent. Single-
-slot installations stay fully supported. See
-[ab-os-updates.md](ab-os-updates.md).
+### Which image
+
+Both images are the same appliance. They differ only in how the operating
+system underneath it is patched, and that choice cannot be changed later
+without reflashing — so it is worth one minute now.
+
+| | Single-slot image | A/B image |
+|---|---|---|
+| OS security patches | `apt`, minutes, a few MB | a rebuilt image, ~877 MB written per update |
+| Failed OS update | recover by hand: reflash and restore a backup | automatic rollback to the previous slot |
+| Card wear | ordinary | a full slot rewritten per OS release |
+| Card space | the whole medium is one root | two fixed slots plus a shared partition |
+| Physical access needed after a bad update | yes | no |
+
+Take the **A/B image** if the appliance will be somewhere you would rather not
+have to reach — a cellar, a meter cabinet, another building. That is what it is
+for, and it is the default recommendation.
+
+Take the **single-slot image** if you would rather patch weekly with `apt` than
+write most of a gigabyte to an SD card for every OS release, and you can get to
+the machine if something goes wrong.
+
+**An installation is never converted in place** — not a `.deb` installation
+into either image, and not one image into the other. The partition tables are not
+different sizes of the same thing; they are different table types with
+different partition counts. Moving means flashing the other image and restoring
+an EMS backup onto it. The appliance does not resize, move or repartition a
+running installation's storage, and no such action is reachable from the
+browser or the agent. All three shapes stay fully supported. See
+[ab-os-updates.md](ab-os-updates.md) and
+[adr/single-slot-image-variant.md](adr/single-slot-image-variant.md).
 
 ## Install
 

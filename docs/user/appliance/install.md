@@ -35,17 +35,36 @@ Not under **Packages** in the sidebar. That holds the EMS and Admin container
 images, which the appliance downloads by itself once it runs; you never fetch
 those by hand.
 
-Two files belong together:
+**Two images, and the choice is worth a minute.** They are the same appliance.
+They differ in how the operating system underneath it gets its security
+updates, and you cannot switch later without flashing again.
 
-| Board | File |
-| --- | --- |
-| Raspberry Pi 5 | `ems-solarflow-appliance-<version>-rpi5-arm64-ab.img.xz` |
-| Raspberry Pi 4 | `ems-solarflow-appliance-<version>-rpi4-arm64-ab.img.xz` |
+| | `-ab` | `-single` |
+| --- | --- | --- |
+| OS updates | a new image, written to the spare half of the card | `apt`, like an ordinary Raspberry Pi |
+| If an update goes wrong | it starts the previous version by itself | you flash the card again and restore a backup |
+| Needs you at the machine | no | yes, if something breaks |
+| Card wear | high — most of a gigabyte per update | low |
+
+Take **`-ab`** if the appliance will live somewhere you would rather not have
+to crawl to: a cellar, a meter cabinet, a different building. It is the one
+that repairs itself, and it is the recommended choice.
+
+Take **`-single`** if you can reach the machine, and you would rather patch
+often and cheaply than rewrite most of a gigabyte to the card every time.
+
+Either way, two files belong together:
+
+| Board | Self-repairing image | apt-updated image |
+| --- | --- | --- |
+| Raspberry Pi 5 | `ems-solarflow-appliance-<version>-rpi5-arm64-ab.img.xz` | `…-rpi5-arm64-single.img.xz` |
+| Raspberry Pi 4 | `ems-solarflow-appliance-<version>-rpi4-arm64-ab.img.xz` | `…-rpi4-arm64-single.img.xz` |
 
 Download the `.img.xz` **and** the `.img.xz.sha256` file beside it. The second
-one is how you check the first arrived intact. The download is roughly 500 MB
-and expands to 16.5 GiB on the card. Both Imager and balenaEtcher expand it
-while they write, so **do not unpack it yourself.**
+one is how you check the first arrived intact. The `-ab` download is roughly
+500 MB and expands to 16.5 GiB on the card; the `-single` one is smaller
+because it holds one copy of the system instead of two. Both Imager and
+balenaEtcher expand it while they write, so **do not unpack it yourself.**
 
 Not sure which board you have? The Pi 5 has a fan connector next to the USB-C
 socket and two camera ports. If in doubt, the model is printed on the board
@@ -59,20 +78,20 @@ ways that look like broken hardware. This step takes ten seconds.
 **Windows** (PowerShell, in the download folder):
 
 ```powershell
-Get-FileHash ems-solarflow-appliance-*-arm64-ab.img.xz -Algorithm SHA256
-Get-Content ems-solarflow-appliance-*-arm64-ab.img.xz.sha256
+Get-FileHash ems-solarflow-appliance-*.img.xz -Algorithm SHA256
+Get-Content ems-solarflow-appliance-*.img.xz.sha256
 ```
 
 **macOS**:
 
 ```bash
-shasum -a 256 -c ems-solarflow-appliance-*-arm64-ab.img.xz.sha256
+shasum -a 256 -c ems-solarflow-appliance-*.img.xz.sha256
 ```
 
 **Linux**:
 
 ```bash
-sha256sum -c ems-solarflow-appliance-*-arm64-ab.img.xz.sha256
+sha256sum -c ems-solarflow-appliance-*.img.xz.sha256
 ```
 
 macOS and Linux print `OK` when it matches. On Windows, compare the two lines
@@ -111,7 +130,7 @@ result. You need 16.5 GiB of free space for the unpacked file.
 | | |
 | --- | --- |
 | Windows | [7-Zip](https://www.7-zip.org/): right-click the file, **7-Zip → Extract Here** |
-| macOS, Linux | `xz -d ems-solarflow-appliance-<version>-<rpi4\|rpi5>-arm64-ab.img.xz` |
+| macOS, Linux | `xz -d ems-solarflow-appliance-<version>-<rpi4\|rpi5>-arm64-<ab\|single>.img.xz` |
 
 Note that the `.sha256` file covers the **compressed** download, so check it
 before unpacking — afterwards it no longer matches anything you have.
@@ -131,7 +150,7 @@ plugs. It is the whole disk (`/dev/sdX`, `/dev/mmcblk0`), never a partition
 (`/dev/sdX1`). Unmount anything the desktop auto-mounted, then:
 
 ```bash
-IMG=ems-solarflow-appliance-<version>-<rpi4|rpi5>-arm64-ab.img.xz
+IMG=ems-solarflow-appliance-<version>-<rpi4|rpi5>-arm64-<ab|single>.img.xz
 xz -dc "$IMG" | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
 sudo sync
 ```

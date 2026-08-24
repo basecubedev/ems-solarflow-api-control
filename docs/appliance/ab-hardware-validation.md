@@ -619,3 +619,36 @@ The simulated tiers are not a substitute for any of the NOT RUN rows.
 The code-level scope is closed: every gate that does not require a builder host
 or a physical board has been run and passed. What remains is a real image build
 on a suitable builder, and then this table.
+
+## Single-slot image variant
+
+A second image variant exists — one writable root, patched by `apt`, no slots
+(see [adr/single-slot-image-variant.md](adr/single-slot-image-variant.md)).
+Nothing about it has been confirmed on physical hardware. Every case below is
+`NOT RUN`, and none of them is made true by the A/B results above: a different
+partition table, a different boot device and a writable root are exactly the
+things a physical boot has to answer for.
+
+| Case | Status | Evidence |
+|---|---|---|
+| `image-rpios` + `rpi4`/`rpi5` + `docker-debian-trixie` resolves and builds | NOT RUN | no build attempted |
+| The built image boots on a Pi 4 | NOT RUN | needs a Pi 4 or Pi 5; the available board is a Pi 3B+ |
+| The built image boots on a Pi 5 | NOT RUN | as above |
+| The root is genuinely writable when `ems-appliance-agent` starts | NOT RUN | needs a booted guest |
+| `ems-appliance-persistence.service` reports *not applicable* rather than failing | NOT RUN | the offline verdict is covered by `tests/test_appliance_ab_persistence.py`; the booted one is not |
+| The agent and the web service actually come up | NOT RUN | needs a booted guest |
+| Debian's `sshd-keygen.service` produces the host keys on first boot | NOT RUN | the unit ships enabled with `ConditionPathIsReadWrite=/etc/ssh`, read out of the built rpi5 rootfs; that it fires is unproven |
+| `apt full-upgrade` completes on the booted image | NOT RUN | the source-level refusal is lifted; that a real upgrade completes is a different claim |
+| The root partition grows to the medium on first boot | NOT RUN | not implemented yet |
+
+What *is* established, and how:
+
+- The partition table, the boot device name and the writable root are asserted
+  against a real image built with `mkfs.ext4`/`mkfs.vfat` in
+  `tests/test_appliance_single_slot_image_contents.py` — the inspector reads
+  the image without mounting it, and a read-only root fails there.
+- That upstream's `image-rpios` writes an `rw` root and points the kernel at
+  `/dev/disk/by-slot/system` is asserted against the pinned upstream bytes in
+  `tests/test_appliance_rpi_image_gen_upstream.py`.
+
+Neither is a boot. Do not upgrade any row above without the evidence it names.
