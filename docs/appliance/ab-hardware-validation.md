@@ -624,15 +624,18 @@ on a suitable builder, and then this table.
 
 A second image variant exists — one writable root, patched by `apt`, no slots
 (see [adr/single-slot-image-variant.md](adr/single-slot-image-variant.md)).
-Nothing about it has been confirmed on physical hardware. Every case below is
-`NOT RUN`, and none of them is made true by the A/B results above: a different
-partition table, a different boot device and a writable root are exactly the
-things a physical boot has to answer for.
+It builds, and the artefacts it produces satisfy their contract. **Nothing
+about it has been confirmed on physical hardware**, and none of the A/B results
+above make that true either: a different partition table, a different boot
+device and a writable root are exactly the things a physical boot has to
+answer for.
 
 | Case | Status | Evidence |
 |---|---|---|
-| `image-rpios` + `rpi5` + `docker-debian-trixie` resolves and builds | **PASS** | built twice in the builder VM on 2026-08-23, from `51ae1d0` and again from `a4d4947`; `RESULT: PASS (built ems-solarflow-appliance-0.1.0-rpi5-arm64-single.img)`, 28m12s for the first |
-| The built image satisfies the single-slot contract | **PASS** | `appliance-inspect-rpi-ab-image.sh --variant single` on the `a4d4947` artefact: 30 pass, 0 fail, 11 NOT RUN (all optional, each with its reason) |
+| `image-rpios` + `docker-debian-trixie` resolves and builds, **rpi5** | **PASS** | built three times in the builder VM on 2026-08-23/24; 28m12s for the first |
+| the same, **rpi4** | **PASS** | built by the release-gate run of 2026-08-24 |
+| The built images satisfy the single-slot contract | **PASS** | recorded by that gate run: rpi4 and rpi5 each 30 pass, 0 fail, 11 NOT RUN, **no mandatory check unanswered** |
+| The single-slot release gates pass end to end | **PASS** | `appliance-release-gates.sh --variant single --profile rpi5 --profile rpi4`: `RESULT: PASS (builder qualification, 0 optional gate(s) NOT RUN)`. The slot-mount gate and every update-archive gate report NOT APPLICABLE with their reason rather than being dropped |
 | The first-boot growth unit ships, is enabled, and its program is there | **PASS** | same artefact: the unit is linked into `multi-user.target.wants`, and `/usr/lib/ems-appliance-manager/grow-root.sh` is in the image |
 | `image-rpios` + `rpi4` builds | NOT RUN | only rpi5 has been built |
 | The built image boots on a Pi 4 | NOT RUN | needs a Pi 4 or Pi 5; the available board is a Pi 3B+ |
@@ -642,9 +645,31 @@ things a physical boot has to answer for.
 | The agent and the web service actually come up | NOT RUN | needs a booted guest |
 | Debian's `sshd-keygen.service` produces the host keys on first boot | NOT RUN | the unit ships enabled with `ConditionPathIsReadWrite=/etc/ssh`, read out of the built rpi5 rootfs; that it fires is unproven |
 | `apt full-upgrade` completes on the booted image | NOT RUN | the source-level refusal is lifted; that a real upgrade completes is a different claim |
-| The root partition grows to the medium on first boot | NOT RUN | the transaction is covered by `tests/test_appliance_grow_root.py` against a fake medium; growing a **mounted** MBR root with real `growpart` and online `resize2fs` is not |
+| The root partition grows to the medium on first boot | NOT RUN | the transaction is covered by `tests/test_appliance_grow_root.py` against a fake medium; the real-tool tier skips on this host (the container cannot open the loop device's partition nodes), and growing the filesystem the script runs from needs hardware regardless |
 
-### What the first real build produced
+### The A/B path after the shared build scripts were changed
+
+The single-slot variant was added by teaching the *existing* builder, gate
+runner and finalizer about variants rather than by copying them, so the A/B
+image is now built by code that was edited. Re-proven on 2026-08-24 in the
+builder VM:
+
+`appliance-release-gates.sh --variant ab --profile rpi5 --profile rpi4` →
+`RESULT: PASS (builder qualification, 4 optional gate(s) NOT RUN)`.
+
+Both boards: `build`, `inspect-image`, `describe` and `inspect-update` PASS,
+plus `source-authority`, `slot-mounts` and `source-bundle`. The recorded image
+inspections are **96 pass, 0 fail, 0 NOT RUN** per board — a fuller inspection
+than this workstation can produce, because the builder guest has `gdisk` and
+the independent GPT oracle therefore runs there.
+
+The four NOT RUN are environmental, and both kinds are optional in builder
+mode: `sign-*` has no `--sign-key`, which is deliberate — a disposable builder
+guest is the wrong place for a production key — and `crosscheck-*` reports
+`external_decoder_unavailable`, because the guest has no Docker to run a second
+sparse decoder in.
+
+### What the real builds produced
 
 | | single-slot | A/B, for comparison |
 |---|---|---|
@@ -679,12 +704,26 @@ What *is* established without hardware, and how:
 Neither is a boot. Do not upgrade any row above without the evidence it names.
 
 The root growth deserves naming separately, because it is the one thing here
-that *writes to a partition table*. Its A/B twin grows a partition that is
-mounted too, and has been exercised against real `growpart` and `resize2fs` on
-a loop device — but on a GPT, and not on the filesystem the script is itself
-running from. Until a real single-slot image has booted and grown its own root,
-that step is unproven, and a single-slot appliance simply uses the root the
-build sized.
+that *writes to a partition table*, and because an earlier revision of this
+document overstated what backs it.
+
+**Neither variant's growth has been proven against real partitioning tools on
+this host.** `tests/test_appliance_grow_persistent_real.py` exists for exactly
+that and is the A/B twin's real-tool tier, but all seven of its cases *skip*
+here: the disposable container cannot open the loop device's partition nodes
+(`/dev/loopNpM: Can't open blockdev`), so `growpart` and `resize2fs` are never
+reached. No release report records that tier passing either — the
+"Transactional persistent growth — PASS" row further down describes the unit
+tier, whose partitioning tools are fakes.
+
+What *is* proven for both is the transaction around those tools: every failure
+mode leaves no marker, so the next boot retries rather than recording a card as
+finished that never grew. What is not proven is the tools themselves doing what
+the transaction assumes — and for the root that includes the part no loop
+device would answer anyway, growing the filesystem the script is running from.
+
+Until a real single-slot image has booted and grown its own root, that step is
+unproven, and a single-slot appliance simply uses the root the build sized.
 
 What is proven without hardware: the helper refuses any medium that does not
 *positively* say it was flashed from a single-slot appliance image, so a `.deb`

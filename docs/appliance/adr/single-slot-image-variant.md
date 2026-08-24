@@ -42,7 +42,7 @@ Build and publish **two** image variants from one source tree:
 | partition table | GPT, six partitions | MBR, boot + root |
 | root filesystem | read-only, per slot | writable |
 | kernel command line | `root=/dev/disk/by-slot/active/system ro` | `root=/dev/disk/by-slot/system rw` |
-| OS patches | signed image rebuild | `apt`, unattended |
+| OS patches | signed image rebuild | `apt` (unattended only if the operator enables `automatic_security_updates`, which defaults to false) |
 | Manager patches | slot update, ~877 MB | `.deb`, ~350 KB |
 | failure recovery | trial boot, automatic rollback | none |
 | signing key | required | not needed at all |
