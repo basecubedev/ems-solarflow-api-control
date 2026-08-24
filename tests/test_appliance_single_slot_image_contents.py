@@ -45,7 +45,11 @@ CMDLINE = (
     "console=serial0,115200 root=/dev/disk/by-slot/system rootfstype=ext4 rw fsck.repair=yes"
 )
 
-SINGLE_UNITS = ("ems-appliance-agent.service", "ems-appliance-web.service")
+SINGLE_UNITS = (
+    "ems-appliance-agent.service",
+    "ems-appliance-web.service",
+    "ems-appliance-grow-root.service",
+)
 
 
 def populate_single_root(base, *, fstab=FSTAB, units=SINGLE_UNITS, layout_descriptor=False):
@@ -72,8 +76,16 @@ def populate_single_root(base, *, fstab=FSTAB, units=SINGLE_UNITS, layout_descri
     units_dir = base / ab_image.UNIT_DIRECTORY
     units_dir.mkdir(parents=True, exist_ok=True)
     for unit in units:
-        (units_dir / unit).write_text("[Unit]\n")
+        # A unit that names the program it runs, so the image check that the
+        # program exists has something real to look for.
+        program = {
+            "ems-appliance-grow-root.service": "/usr/lib/ems-appliance-manager/grow-root.sh",
+        }.get(unit, "/usr/bin/ems-appliance")
+        (units_dir / unit).write_text(f"[Unit]\n[Service]\nExecStart={program}\n")
         (wants / unit).symlink_to(f"/usr/lib/systemd/system/{unit}")
+    helper = base / "usr/lib/ems-appliance-manager/grow-root.sh"
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    helper.write_text("#!/bin/sh\n")
     return base
 
 
@@ -289,6 +301,7 @@ def test_the_units_a_single_slot_host_can_run_are_the_ones_required(single_image
 
     assert findings["agent_service_enabled:root"].result == PASS
     assert findings["web_service_enabled:root"].result == PASS
+    assert findings["grow_root_service_enabled:root"].result == PASS
     for check in ("health_service_enabled:root", "persistence_service_enabled:root"):
         assert check not in findings
 
@@ -355,3 +368,39 @@ def test_a_single_slot_image_inspected_as_ab_is_refused(single_image):
 
     assert findings[0].result == FAIL
     assert "GPT" in findings[0].detail
+
+
+@requires_mkfs
+def test_an_enabled_unit_whose_program_is_absent_is_a_failure(tmp_path):
+    """"Installed and enabled" is true of a unit that cannot run.
+
+    The growth unit is the first one in this project whose ExecStart is a file
+    of its own rather than the appliance binary, so an image that enabled it
+    without shipping the script would have failed on the first boot and
+    nowhere earlier.
+    """
+
+    root_tree = tmp_path / "root"
+    populate_single_root(root_tree)
+    # The unit stays enabled and keeps naming its program; only the program is
+    # gone -- which is exactly the image a packaging mistake would produce.
+    (root_tree / "usr/lib/ems-appliance-manager/grow-root.sh").unlink()
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, "kernel8.img": b"k",
+         "initramfs8": b"i", "bcm2712-rpi-5-b.dtb": b"d"},
+    )
+    image = assemble_mbr(tmp_path / "appliance.img", boot, root)
+
+    findings = by_check(contents(image))
+
+    assert findings["unit_programs_present:root"].result == FAIL
+    assert "grow-root.sh" in findings["unit_programs_present:root"].detail
+
+
+@requires_mkfs
+def test_a_unit_whose_program_is_present_passes(single_image):
+    findings = by_check(contents(single_image))
+
+    assert findings["unit_programs_present:root"].result == PASS

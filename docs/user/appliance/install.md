@@ -62,9 +62,10 @@ Either way, two files belong together:
 
 Download the `.img.xz` **and** the `.img.xz.sha256` file beside it. The second
 one is how you check the first arrived intact. The `-ab` download is roughly
-500 MB and expands to 16.5 GiB on the card; the `-single` one is smaller
-because it holds one copy of the system instead of two. Both Imager and
-balenaEtcher expand it while they write, so **do not unpack it yourself.**
+490 MB and expands to 16.5 GiB on the card; the `-single` one is about 240 MB
+and expands to 8.3 GiB, because it holds one copy of the system instead of two.
+Both Imager and balenaEtcher expand it while they write, so **do not unpack it
+yourself.**
 
 Not sure which board you have? The Pi 5 has a fan connector next to the USB-C
 socket and two camera ports. If in doubt, the model is printed on the board

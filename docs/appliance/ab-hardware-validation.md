@@ -631,7 +631,10 @@ things a physical boot has to answer for.
 
 | Case | Status | Evidence |
 |---|---|---|
-| `image-rpios` + `rpi4`/`rpi5` + `docker-debian-trixie` resolves and builds | NOT RUN | no build attempted |
+| `image-rpios` + `rpi5` + `docker-debian-trixie` resolves and builds | **PASS** | built twice in the builder VM on 2026-08-23, from `51ae1d0` and again from `a4d4947`; `RESULT: PASS (built ems-solarflow-appliance-0.1.0-rpi5-arm64-single.img)`, 28m12s for the first |
+| The built image satisfies the single-slot contract | **PASS** | `appliance-inspect-rpi-ab-image.sh --variant single` on the `a4d4947` artefact: 30 pass, 0 fail, 11 NOT RUN (all optional, each with its reason) |
+| The first-boot growth unit ships, is enabled, and its program is there | **PASS** | same artefact: the unit is linked into `multi-user.target.wants`, and `/usr/lib/ems-appliance-manager/grow-root.sh` is in the image |
+| `image-rpios` + `rpi4` builds | NOT RUN | only rpi5 has been built |
 | The built image boots on a Pi 4 | NOT RUN | needs a Pi 4 or Pi 5; the available board is a Pi 3B+ |
 | The built image boots on a Pi 5 | NOT RUN | as above |
 | The root is genuinely writable when `ems-appliance-agent` starts | NOT RUN | needs a booted guest |
@@ -641,10 +644,32 @@ things a physical boot has to answer for.
 | `apt full-upgrade` completes on the booted image | NOT RUN | the source-level refusal is lifted; that a real upgrade completes is a different claim |
 | The root partition grows to the medium on first boot | NOT RUN | the transaction is covered by `tests/test_appliance_grow_root.py` against a fake medium; growing a **mounted** MBR root with real `growpart` and online `resize2fs` is not |
 
-What *is* established, and how:
+### What the first real build produced
+
+| | single-slot | A/B, for comparison |
+|---|---|---|
+| `.img` | 8,866,758,656 B (8.26 GiB) | 17,758,703,616 B (16.5 GiB) |
+| `.img.xz` | 254,230,972 B (242 MB) | 509,381,124 B (486 MB) |
+| build time | 28m12s | — |
+
+Read off that artefact, not inferred:
+
+- `root=/dev/disk/by-slot/system` on the kernel command line, with `rw` and
+  without `ro`. This is the composition that could not be checked any other
+  way: the appliance layer appends `rw` during customize, and upstream's own
+  `setup.sh` rewrites the `root=` token afterwards at image assembly. Both
+  survived.
+- `/etc/fstab` mounts `/` `rw,relatime,errors=remount-ro,commit=30`.
+- No `ab-layout.json`, so the runtime discovers a single slot.
+- `ems-appliance-agent.service` and `ems-appliance-web.service` installed and
+  enabled; no host private key shipped.
+- The root carries its own dpkg database — unlike an A/B slot root, where
+  `/var` is bound per slot.
+
+What *is* established without hardware, and how:
 
 - The partition table, the boot device name and the writable root are asserted
-  against a real image built with `mkfs.ext4`/`mkfs.vfat` in
+  against a synthetic image built with `mkfs.ext4`/`mkfs.vfat` in
   `tests/test_appliance_single_slot_image_contents.py` — the inspector reads
   the image without mounting it, and a read-only root fails there.
 - That upstream's `image-rpios` writes an `rw` root and points the kernel at

@@ -507,6 +507,10 @@ ROOT_UNITS = {
 SINGLE_SLOT_UNITS = {
     "agent_service_enabled": "ems-appliance-agent.service",
     "web_service_enabled": "ems-appliance-web.service",
+    # The medium an owner flashed is whatever they had; the root the build
+    # sized is 8 GiB. Without this the rest of the card is unreachable on the
+    # one variant whose whole point is that everything writes to that root.
+    "grow_root_service_enabled": "ems-appliance-grow-root.service",
 }
 
 ROOT_EXPECTATIONS = {
@@ -686,6 +690,35 @@ def _fstab_root_mode(reader, *, readonly):
     return False, "the root's fstab has no entry for /"
 
 
+def _missing_exec_paths(reader, unit):
+    """Absolute programs a unit's Exec* lines name that the image does not hold.
+
+    systemd allows a leading ``-``, ``+``, ``!`` or ``@`` on the command, and a
+    relative first word is a systemd special rather than a path, so only an
+    absolute one is a claim about a file this image must carry.
+    """
+
+    missing = []
+    try:
+        text = reader.read_text(f"{UNIT_DIRECTORY}/{unit}")
+    except ab_filesystems.FilesystemError:
+        return [f"{unit} could not be read"]
+    for line in text.splitlines():
+        key, separator, value = line.partition("=")
+        if not separator or not key.strip().startswith("Exec"):
+            continue
+        command = value.strip().split()
+        if not command:
+            continue
+        program = command[0].lstrip("-+!@:")
+        if not program.startswith("/"):
+            continue
+        relative = program.lstrip("/")
+        if not (reader.is_file(relative) or reader.is_symlink(relative)):
+            missing.append(f"{unit} runs {program}, which the image does not carry")
+    return missing
+
+
 def _root_content_findings(label, reader, *, appliance_version, build_id, architecture,
                            expectations=None):
     expectations = expectations or ROOT_EXPECTATIONS[image_variants.VARIANT_AB]
@@ -855,6 +888,7 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
         skip("persistence_configuration", reason)
         skip("shared_activations", reason)
 
+    unrunnable = []
     for check, unit in expectations.units.items():
         present = reader.is_file(f"{UNIT_DIRECTORY}/{unit}")
         enabled = reader.is_symlink(f"{WANTS_DIRECTORY}/{unit}")
@@ -865,6 +899,17 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
             if present and enabled
             else ("installed but not enabled" if present else "not installed"),
         )
+        if present:
+            unrunnable.extend(_missing_exec_paths(reader, unit))
+
+    # An enabled unit whose ExecStart is not in the image fails on the first
+    # boot and nowhere earlier. "Installed and enabled" was the whole answer
+    # before, and it is true of a unit that cannot run.
+    record(
+        "unit_programs_present",
+        not unrunnable,
+        "; ".join(unrunnable) if unrunnable else "every enabled unit has its program",
+    )
 
     if expectations.slot_generators:
         missing_generators = [name for name in SLOT_GENERATORS if not reader.exists(name)]
