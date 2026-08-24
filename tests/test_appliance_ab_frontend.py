@@ -89,6 +89,23 @@ def test_a_single_slot_appliance_is_named_as_one():
 
 
 @requires_node
+def test_a_single_slot_appliance_is_not_presented_as_a_degraded_one():
+    """It is a supported shape, patched with apt on purpose.
+
+    Both the package installation and the single-slot appliance image reach
+    this state deliberately. Colouring it as a warning tells an owner something
+    is wrong with an appliance that is working exactly as chosen; what is worth
+    saying is the one thing it really does not have.
+    """
+
+    result = lifecycle(ab(mode="single_slot", ab_supported=False))
+
+    assert result["tone"] == "ok"
+    assert "no second slot to fall back to" in result["hint"]
+    assert "keep a backup" in result["hint"]
+
+
+@requires_node
 def test_a_proven_idle_appliance_is_ready():
     result = lifecycle(ab())
 

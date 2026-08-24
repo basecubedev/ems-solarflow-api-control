@@ -8,6 +8,15 @@ The decision to build on the native Raspberry Pi `tryboot` mechanism rather than
 on a third-party update framework is recorded in
 [adr/ab-native-tryboot.md](adr/ab-native-tryboot.md).
 
+**This is one of two answers.** The appliance also ships a single-slot image
+with one writable root, whose operating system is patched with `apt` and which
+has no slot to fall back to. Nothing in this document applies to it: it has no
+slots, no update archive, no trial boot and no signing key, and the runtime
+refuses every mutating A/B plan there with a reason. Why both exist, and which
+one an owner should flash, is in
+[adr/single-slot-image-variant.md](adr/single-slot-image-variant.md) and
+[installation.md](installation.md).
+
 
 ## What a fallback cannot cover on its own
 

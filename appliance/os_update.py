@@ -681,8 +681,9 @@ class OsUpdateService:
                 {
                     "code": "ab_layout_not_present",
                     "message": (
-                        "this appliance has a single root filesystem; A/B OS updates require "
-                        "reinstalling onto an A/B-capable appliance image"
+                        "this appliance has a single root filesystem; its operating system "
+                        "is patched with apt, and A/B OS updates need an appliance flashed "
+                        "from an A/B image"
                     ),
                 }
             )

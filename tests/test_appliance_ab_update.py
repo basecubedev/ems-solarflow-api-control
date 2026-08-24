@@ -112,7 +112,14 @@ def blocker_codes(payload):
     return {entry["code"] for entry in payload["blockers"]}
 
 
-def test_a_single_slot_appliance_is_told_to_re_image(tmp_path, releases):
+def test_a_single_slot_appliance_is_told_what_does_patch_it(tmp_path, releases):
+    """Refusing is half an answer. The other half is the path that works here.
+
+    Every shape that reaches this blocker -- the package installation and the
+    single-slot appliance image alike -- is patched with apt, so the message
+    names that rather than only what it is not.
+    """
+
     host = ApplianceAbHost(tmp_path)
     host.remove_layout_manifest()
     service = build_ab_service(tmp_path, host, releases)
@@ -120,7 +127,9 @@ def test_a_single_slot_appliance_is_told_to_re_image(tmp_path, releases):
     _operation, payload = plan(service)
 
     assert "ab_layout_not_present" in blocker_codes(payload)
-    assert any("A/B-capable appliance image" in e["message"] for e in payload["blockers"])
+    messages = [entry["message"] for entry in payload["blockers"]]
+    assert any("patched with apt" in message for message in messages), messages
+    assert any("flashed from an A/B image" in message for message in messages), messages
 
 
 def test_layout_drift_blocks_the_confirmation(tmp_path, host, releases):
