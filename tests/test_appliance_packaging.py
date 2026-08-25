@@ -9,7 +9,9 @@ the host configuration are checked here rather than described in prose only.
 import configparser
 import os
 import re
+import shutil
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -756,3 +758,33 @@ def test_the_package_ships_the_keyring_os_updates_are_verified_against():
 
     build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
     assert "os-release-keyring.gpg" in build, "the keyring is never installed"
+
+
+@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg reads the keyring")
+def test_the_shipped_keyring_carries_the_key_that_actually_signs():
+    """gpgv verifies with the *signing* key's public half, not the primary's.
+
+    Releases are signed by a subkey so the primary can stay offline, and the
+    appliance pins the primary's fingerprint -- gpg reports that one for a
+    subkey signature, so the pin keeps working. What does not keep working is
+    verification against a keyring exported before the subkey existed: it
+    carries no material for the key that made the signature, and every release
+    is refused on an appliance that cannot be repaired afterwards.
+    """
+
+    keyring = PACKAGING / "config" / "os-release-keyring.gpg"
+    listing = subprocess.run(
+        ["gpg", "--show-keys", "--with-colons", str(keyring)],
+        capture_output=True, text=True, check=False,
+    ).stdout
+
+    primaries = [line for line in listing.splitlines() if line.startswith("pub:")]
+    signing_subkeys = [
+        line for line in listing.splitlines()
+        if line.startswith("sub:") and "s" in line.split(":")[11]
+    ]
+
+    assert len(primaries) == 1, "the keyring must name exactly one release identity"
+    assert signing_subkeys, (
+        "the keyring carries no signing subkey; a release signed by one could not be verified"
+    )

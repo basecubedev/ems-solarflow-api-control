@@ -9,6 +9,7 @@
 #                                      [--sign-key KEYID] [--source-bundle FILE]
 #                                      [--keyring FILE] [--trusted-fingerprint FPR]...
 #                                      [--crosscheck]
+#                                      [--builder-environment FILE]
 #
 # There are two different questions here, and one verdict used to answer both.
 #
@@ -59,6 +60,7 @@ GENERATOR=${EMS_RPI_IMAGE_GEN:-}
 PROFILES=""
 SIGN_KEY=${EMS_APPLIANCE_OS_SIGN_KEY:-}
 SOURCE_BUNDLE=""
+BUILDER_ENVIRONMENT=""
 KEYRING=${EMS_APPLIANCE_OS_KEYRING:-}
 FINGERPRINTS=${EMS_APPLIANCE_OS_TRUSTED_FINGERPRINTS:-}
 FETCH=no
@@ -184,6 +186,8 @@ while [ $# -gt 0 ]; do
         --sign-key=*) SIGN_KEY=${1#*=}; shift ;;
         --source-bundle) SOURCE_BUNDLE=${2:?--source-bundle needs a file}; shift 2 ;;
         --source-bundle=*) SOURCE_BUNDLE=${1#*=}; shift ;;
+        --builder-environment) BUILDER_ENVIRONMENT=${2:?--builder-environment needs a file}; shift 2 ;;
+        --builder-environment=*) BUILDER_ENVIRONMENT=${1#*=}; shift ;;
         --keyring) KEYRING=${2:?--keyring needs a file}; shift 2 ;;
         --keyring=*) KEYRING=${1#*=}; shift ;;
         --trusted-fingerprint)
@@ -231,6 +235,9 @@ fi
 
 GENERATOR_ARGS=""
 [ -n "$GENERATOR" ] && GENERATOR_ARGS="--rpi-image-gen $GENERATOR"
+BUILDER_ENVIRONMENT_ARG=""
+[ -n "$BUILDER_ENVIRONMENT" ] && \
+    BUILDER_ENVIRONMENT_ARG="--builder-environment $BUILDER_ENVIRONMENT"
 
 # shellcheck disable=SC2086
 gate source-authority sh "$ROOT/scripts/appliance-check-rpi-image-gen.sh" $GENERATOR_ARGS
@@ -251,8 +258,16 @@ for profile in $PROFILES; do
 
     if [ "$MODE" = builder ]; then
         # shellcheck disable=SC2086
+        # The builder environment belongs to the artefact, not to the run that
+        # happened to produce it. Without it the build authority records an
+        # empty environment, which is refused at signing time by
+        # require_environment -- so the gate would pass, the build would report
+        # completed, and the release would fail hours later on an artefact that
+        # can never be signed. Committed evidence shows exactly that shape:
+        # reports/appliance/2026-08-11-head/build-authority-rpi5-1.json.
         gate "build-$profile" sh "$ROOT/scripts/appliance-build-rpi-ab-image.sh" \
-            --profile "$profile" --variant "$VARIANT" --output "$OUTPUT" $GENERATOR_ARGS
+            --profile "$profile" --variant "$VARIANT" --output "$OUTPUT" \
+            $BUILDER_ENVIRONMENT_ARG $GENERATOR_ARGS
     else
         # A production run consumes what a builder run proved. It never builds:
         # a release that rebuilt its own artefacts could not be the one the

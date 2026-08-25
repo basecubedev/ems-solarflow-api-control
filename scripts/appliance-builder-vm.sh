@@ -58,7 +58,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --profile) PROFILES+=("${2:?--profile needs rpi4 or rpi5}"); shift 2 ;;
         --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
-        --variant=*) VARIANT=${1#*=} ;;
+        --variant=*) VARIANT=${1#*=}; shift ;;
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --cache) CACHE=${2:?--cache needs a directory}; shift 2 ;;
         --memory) MEMORY=${2:?--memory needs a size in MB}; shift 2 ;;
@@ -263,6 +263,7 @@ if [ "$RELEASE_GATE" -eq 1 ]; then
        ./scripts/appliance-create-source-bundle.sh --output /build/source-bundle.tar.gz >/dev/null
        time ./scripts/appliance-release-gates.sh --rpi-image-gen /build/rpi-image-gen \
             --output /build/dist --source-bundle /build/source-bundle.tar.gz \
+            --builder-environment /build/builder-environment.json \
             --crosscheck $gate_args" \
         || status=$?
 else
