@@ -45,11 +45,7 @@ CMDLINE = (
     "console=serial0,115200 root=/dev/disk/by-slot/system rootfstype=ext4 rw fsck.repair=yes"
 )
 
-SINGLE_UNITS = (
-    "ems-appliance-agent.service",
-    "ems-appliance-web.service",
-    "ems-appliance-grow-root.service",
-)
+SINGLE_UNITS = tuple(sorted(ab_image.SINGLE_SLOT_UNITS.values()))
 
 
 def populate_single_root(base, *, fstab=FSTAB, units=SINGLE_UNITS, layout_descriptor=False):

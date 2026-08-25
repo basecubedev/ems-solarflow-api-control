@@ -77,6 +77,42 @@ A layer declares a shared path by dropping a `.conf` file into
 `.mount` unit per declared path, binding `/persistent/shared/<path>` over
 `<path>`.
 
+### The image seeds every shared path, on every boot
+
+Before the binds activate, upstream's `rpi-persistent-shared-init` walks the
+same declared paths and runs, for each one:
+
+```sh
+rsync -av --checksum "<path>/" "/persistent/shared<path>/"
+```
+
+The source is the booting slot's own read-only root, because the bind that
+would hide it is not up yet. Upstream documents this as the OTA delivery
+mechanism: a new release ships new shared data simply by including it in the
+rootfs. There is no `--delete` and no run-once guard — it is a plain `oneshot`
+that runs at every boot.
+
+Two consequences the appliance has to design around, not inherit:
+
+**A file the image ships into a shared path always wins.** `--checksum`
+transfers exactly the files that differ, and an operator's edit is the
+difference. The appliance therefore ships `appliance.conf` and
+`allowed-images.conf` as templates under `/usr/share/ems-appliance-manager`,
+and `ems-appliance-config-seed.service` creates whichever is missing after the
+binds are proven. Nothing under `/etc/ems-appliance-manager` may have a
+packaged copy in the slot root unless it is meant to track the running slot —
+today `ab-layout.json` and `os-release-keyring.gpg`, both deliberately. The
+`timezone` file has always been safe from this for the same reason, by
+accident of never having been packaged.
+
+**A value the image stamps into a shared path cannot describe the partition.**
+It is re-written from the booting slot every boot, so comparing it against a
+constant compiled into that same slot compares a number with itself. This is
+why the layout descriptor's `persistent_schema_version` cannot be the record of
+what schema the persistent partition actually holds — see
+[The schema version is a one-way door](#the-schema-version-is-a-one-way-door),
+which describes a protection this mechanism dissolves.
+
 ### Upstream generates every mount and activates one
 
 Run against the pinned generator, six declared paths produce six `.mount` units

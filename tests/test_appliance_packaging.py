@@ -64,10 +64,19 @@ def test_maintainer_scripts_are_executable_shell():
         assert script.read_text(encoding="utf-8").startswith("#!/bin/sh"), name
 
 
-def test_configuration_files_are_marked_as_conffiles():
+def test_operator_configuration_is_not_a_conffile_on_a_shared_path():
+    """dpkg's conffile machinery cannot defend a file under a shared bind.
+
+    Upstream re-seeds every declared shared path from the booting slot's own
+    root at each boot, so a packaged copy under /etc/ems-appliance-manager wins
+    over the operator's edit however dpkg marked it. These two are shipped as
+    templates instead and seeded once; see tests/test_appliance_config_seed.py.
+    """
+
     conffiles = (PACKAGING / "debian" / "conffiles").read_text(encoding="utf-8").split()
-    assert "/etc/ems-appliance-manager/appliance.conf" in conffiles
-    assert "/etc/ems-appliance-manager/allowed-images.conf" in conffiles
+
+    assert "/etc/ems-appliance-manager/appliance.conf" not in conffiles
+    assert "/etc/ems-appliance-manager/allowed-images.conf" not in conffiles
 
 
 def test_the_build_script_produces_a_checksum_and_asks_for_a_signature():

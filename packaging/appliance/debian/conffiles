@@ -1,3 +1,1 @@
-/etc/ems-appliance-manager/appliance.conf
-/etc/ems-appliance-manager/allowed-images.conf
 /etc/logrotate.d/ems-appliance-manager

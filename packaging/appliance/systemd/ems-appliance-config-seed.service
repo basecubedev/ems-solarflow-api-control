@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow Appliance operator configuration
+Documentation=file:///usr/share/doc/ems-appliance-manager/ab-persistence-contract.md
+# Seeds /etc/ems-appliance-manager from the packaged templates, and only ever
+# creates what is absent. It runs on every boot because that is indistinguishable
+# from running once: a file that exists is never read, compared or rewritten.
+After=local-fs.target ems-appliance-persistence.service
+# Requires=, not Before=: ordering alone would still let this write into the
+# read-only slot root's fallback copy of /etc/ems-appliance-manager when the
+# shared bind was skipped, seeding a file the next slot switch discards.
+Requires=ems-appliance-persistence.service
+RequiresMountsFor=/etc/ems-appliance-manager
+Before=ems-appliance-agent.service ems-appliance-web.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+ExecStart=/usr/bin/ems-appliance seed-config --quiet
+# host-paths.env is derived from the file seeded above and lives on the same
+# shared path, so the image must not carry a copy that would be pushed over a
+# changed one at every boot. It is written here instead, and only when it
+# stopped agreeing -- which on an unchanged appliance is never.
+ExecStart=/usr/bin/ems-appliance host-config --apply --if-drifted --quiet
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

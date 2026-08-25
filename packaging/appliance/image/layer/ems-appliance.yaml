@@ -205,8 +205,17 @@ mmdebstrap:
          --layout-id "$IGconf_emsappliance_layout_id" \
          --output /etc/ems-appliance-manager/ab-layout.json
 
+    # The package generates this from appliance.conf, and it lands under
+    # /etc/ems-appliance-manager, which is a shared bind. A copy in the slot
+    # root would be pushed over the running appliance's own at every boot by
+    # upstream's seeding, reverting a changed install or export root.
+    # ems-appliance-config-seed.service writes it after the binds instead.
+    - |-
+      set -eu
+      rm -f "$1/etc/ems-appliance-manager/host-paths.env"
+
     - $BDEBSTRAP_HOOKS/enable-units "$1" ems-appliance-agent.service \
         ems-appliance-web.service ems-appliance-host-identity.service \
-        ems-appliance-persistence.service \
+        ems-appliance-persistence.service ems-appliance-config-seed.service \
         ems-appliance-ab-health.service ems-appliance-slot-bootstrap.service \
         ems-appliance-grow-persistent.service

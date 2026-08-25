@@ -86,6 +86,7 @@ is refused as `invalid_request` before any handler runs.
 | `paths.py` | The canonical appliance layout, the web/agent state split and path-boundary validation |
 | `migration.py` | Idempotent migration from the previous shared state layout |
 | `config.py` | `/etc` host configuration and the image allowlist |
+| `config_seed.py` | Creates the operator-owned configuration files that are missing, once |
 | `validation.py` | Every typed input validator and its stable error code |
 | `redaction.py` | Secret redaction and log bounding |
 | `protocol.py` | The fixed agent operation allowlist |

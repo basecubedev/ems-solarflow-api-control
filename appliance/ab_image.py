@@ -489,6 +489,21 @@ PACKAGE_NAME = "ems-appliance-manager"
 DPKG_STATUS = "var/lib/dpkg/status"
 BUILD_MARKER = "etc/ems-appliance-os-build"
 LAYOUT_DESCRIPTOR = "etc/ems-appliance-manager/ab-layout.json"
+
+# Files that belong to whoever runs the appliance. Upstream's boot-time seeding
+# pushes the slot root's copy of every shared path over the shared one on every
+# boot, so a packaged copy of one of these under /etc is an operator edit that
+# silently reverts at the next reboot. The image must carry them only as
+# templates, and ems-appliance-config-seed.service creates what is missing.
+OPERATOR_CONFIG = ("appliance.conf", "allowed-images.conf")
+OPERATOR_CONFIG_DIR = "etc/ems-appliance-manager"
+OPERATOR_TEMPLATE_DIR = "usr/share/ems-appliance-manager"
+
+# Generated from the operator's configuration and stored beside it, so the same
+# boot-time push applies: a copy in an A/B slot root reverts a changed install
+# or export root at every reboot. The single-slot root has no shared bind and no
+# seeding, so its copy is the appliance's own and stays.
+DERIVED_ON_SHARED = ("host-paths.env",)
 SLOT_SHARED_CONF = "etc/rpi-image-gen/slot-shared.d/50-ems-appliance.conf"
 UNIT_DIRECTORY = "usr/lib/systemd/system"
 SYSTEM_ROOTS = ("system_a", "system_b")
@@ -499,6 +514,7 @@ ROOT_UNITS = {
     "slot_bootstrap_service_enabled": "ems-appliance-slot-bootstrap.service",
     "persistence_service_enabled": "ems-appliance-persistence.service",
     "host_identity_service_enabled": "ems-appliance-host-identity.service",
+    "config_seed_service_enabled": "ems-appliance-config-seed.service",
 }
 
 # The units a single-slot root must carry enabled. It has no slot to bootstrap,
@@ -511,6 +527,7 @@ SINGLE_SLOT_UNITS = {
     # sized is 8 GiB. Without this the rest of the card is unreachable on the
     # one variant whose whole point is that everything writes to that root.
     "grow_root_service_enabled": "ems-appliance-grow-root.service",
+    "config_seed_service_enabled": "ems-appliance-config-seed.service",
 }
 
 ROOT_EXPECTATIONS = {
@@ -830,6 +847,43 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
             if present
             else "no layout descriptor, as a single-slot image requires",
         )
+
+    shipped = sorted(
+        name for name in OPERATOR_CONFIG if reader.is_file(f"{OPERATOR_CONFIG_DIR}/{name}")
+    )
+    record(
+        "operator_config_not_shipped",
+        not shipped,
+        f"{', '.join(shipped)} would be reverted at every reboot"
+        if shipped
+        else "no packaged copy of an operator-owned file under a shared path",
+    )
+    if expectations.shared_persistence:
+        derived = sorted(
+            name for name in DERIVED_ON_SHARED if reader.is_file(f"{OPERATOR_CONFIG_DIR}/{name}")
+        )
+        record(
+            "derived_config_not_shipped",
+            not derived,
+            f"{', '.join(derived)} would revert a changed host path at every reboot"
+            if derived
+            else "nothing generated from the operator's configuration is baked into the slot",
+        )
+    else:
+        skip(
+            "derived_config_not_shipped",
+            "a single-slot root carries no shared bind for one to be pushed over",
+        )
+    absent = sorted(
+        name for name in OPERATOR_CONFIG if not reader.is_file(f"{OPERATOR_TEMPLATE_DIR}/{name}")
+    )
+    record(
+        "operator_config_templates",
+        not absent,
+        f"{OPERATOR_TEMPLATE_DIR} is missing {', '.join(absent)}"
+        if absent
+        else f"{len(OPERATOR_CONFIG)} templates to seed a fresh appliance from",
+    )
 
     # Where the mount mode is actually enforced. The kernel command line decides
     # the initial mount; systemd-remount-fs then applies this line, so a root

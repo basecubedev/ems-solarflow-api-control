@@ -29,11 +29,20 @@ ENV_EXPORT_ROOT = "EMS_APPLIANCE_EXPORT_ROOT"
 ENV_BACKUP_USER = "EMS_APPLIANCE_BACKUP_USER"
 ENV_EXPORT_STATUS_FILE = "EMS_APPLIANCE_EXPORT_STATUS_FILE"
 ENV_PACKAGE_LIBDIR = "EMS_APPLIANCE_LIBDIR"
+ENV_PACKAGE_DATADIR = "EMS_APPLIANCE_DATADIR"
 
 # Where the package puts the shell helpers it ships. The maintainer scripts and
 # the Python side must name the same directory, or a helper the appliance offers
 # to run is one that is not there.
 DEFAULT_PACKAGE_LIBDIR = "/usr/lib/ems-appliance-manager"
+
+# Where the package puts the configuration templates it ships. Deliberately not
+# /etc: every declared shared path is re-seeded from the booting slot's own root
+# by upstream's rpi-persistent-shared-init, on every boot and with no --delete,
+# so a packaged copy of an operator-owned file under /etc/ems-appliance-manager
+# overwrites the operator's edit at the next reboot. A template that lives here
+# has no copy in the shared path and therefore nothing to overwrite it with.
+DEFAULT_PACKAGE_DATADIR = "/usr/share/ems-appliance-manager"
 
 # Host paths are configured, never requested. The same character policy applies
 # in Python, in the packaged shell tooling and in the generated systemd drop-in,
@@ -55,6 +64,17 @@ def package_helper(name):
 
     libdir = os.environ.get(ENV_PACKAGE_LIBDIR) or DEFAULT_PACKAGE_LIBDIR
     return Path(libdir) / name
+
+
+def packaged_template(name):
+    """Absolute path of a configuration template this package ships.
+
+    The template is the package's copy and is never read as configuration: it
+    is what an absent operator file is seeded from, once.
+    """
+
+    datadir = os.environ.get(ENV_PACKAGE_DATADIR) or DEFAULT_PACKAGE_DATADIR
+    return Path(datadir) / name
 
 
 class PathBoundaryError(Exception):

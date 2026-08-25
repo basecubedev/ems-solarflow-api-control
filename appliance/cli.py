@@ -267,6 +267,53 @@ def command_verify_install(args):
     return EXIT_OK if report["ok"] else EXIT_ERROR
 
 
+def command_seed_config(args):
+    """Create the operator-owned configuration files this appliance is missing."""
+
+    from appliance.config_seed import SEEDED, TEMPLATE_MISSING, seed_config
+
+    paths = resolve_paths()
+    if os.geteuid() != 0:
+        print("error: seeding the configuration needs root", file=sys.stderr)
+        return EXIT_ERROR
+    results = seed_config(paths)
+    payload = {
+        "ok": all(item.ok for item in results),
+        "files": [
+            {
+                "name": item.name,
+                "outcome": item.outcome,
+                "target": item.target,
+                "detail": item.detail,
+            }
+            for item in results
+        ],
+    }
+    if args.json:
+        _print(payload, True)
+    elif not args.quiet or not payload["ok"]:
+        for item in results:
+            if item.outcome == SEEDED or not args.quiet:
+                print(f"{item.outcome:16} {item.target}" + (f"  {item.detail}" if item.detail else ""))
+    for item in results:
+        if item.outcome == TEMPLATE_MISSING:
+            print(f"error: {item.name}: {item.detail}", file=sys.stderr)
+    return EXIT_OK if payload["ok"] else EXIT_ERROR
+
+
+def _host_paths_drifted(paths, config):
+    """Whether the generated environment file still says what the config says.
+
+    Cheap enough to run at every boot, which is the point: the file is derived,
+    lives on a shared path, and is regenerated only when it stopped agreeing.
+    """
+
+    from appliance.host_config import environment_values, host_paths_file, read_environment
+
+    recorded = read_environment(host_paths_file(paths))
+    return any(recorded.get(key) != value for key, value in environment_values(paths, config).items())
+
+
 def command_host_config(args):
     """Show — or regenerate — the derived host-path files."""
 
@@ -283,6 +330,10 @@ def command_host_config(args):
     runner = CommandRunner()
     if not args.apply:
         _print(describe(paths, config, runner=runner), args.json)
+        return EXIT_OK
+    if getattr(args, "if_drifted", False) and not _host_paths_drifted(paths, config):
+        if not args.quiet:
+            _print({"applied": False, "reason": "no_drift"}, args.json)
         return EXIT_OK
     if os.geteuid() != 0:
         print("error: writing the host configuration needs root", file=sys.stderr)
@@ -927,6 +978,14 @@ def build_parser():
     )
     verify.set_defaults(handler=command_verify_install)
 
+    seed = subparsers.add_parser(
+        "seed-config",
+        parents=[shared],
+        help="create the operator-owned configuration files that are missing",
+    )
+    seed.add_argument("--quiet", action="store_true", help="print only what was created")
+    seed.set_defaults(handler=command_seed_config)
+
     host_config = subparsers.add_parser(
         "host-config", parents=[shared], help="show or regenerate the derived host-path files"
     )
@@ -935,6 +994,13 @@ def build_parser():
         action="store_true",
         help="write the environment file and the export path-unit drop-in (root only)",
     )
+    host_config.add_argument(
+        "--if-drifted",
+        dest="if_drifted",
+        action="store_true",
+        help="apply only when the generated files stopped agreeing with the configuration",
+    )
+    host_config.add_argument("--quiet", action="store_true", help="print only what changed")
     host_config.set_defaults(handler=command_host_config)
 
     backup_access = subparsers.add_parser(

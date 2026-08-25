@@ -20,7 +20,7 @@ STATE_DIR=/var/lib/ems-appliance-manager
 LOG_DIR=/var/log/ems-appliance-manager
 CONFIG_DIR=/etc/ems-appliance-manager
 TMPFILES=/usr/lib/tmpfiles.d/ems-appliance-manager.conf
-UNITS="ems-appliance-agent.service ems-appliance-web.service ems-appliance-export.service ems-appliance-export.path"
+UNITS="ems-appliance-config-seed.service ems-appliance-agent.service ems-appliance-web.service ems-appliance-export.service ems-appliance-export.path"
 # A/B units ship in every slot and are gated by ConditionPathExists, so a
 # single-slot appliance installs them and never activates them. Four are gated
 # on the layout manifest below; the persistence unit is gated on the build
@@ -124,6 +124,17 @@ case "$1" in
         # both copies and only warns; a move that did not arrive is fatal.
         /usr/bin/ems-appliance migrate-state --quiet \
             || fail "state migration failed; run 'ems-appliance migrate-state' and resolve the reported findings"
+
+        # Operator configuration is seeded on a live host only. In an image
+        # chroot /etc/ems-appliance-manager is the slot root rather than the
+        # shared bind, and a file seeded there is one upstream's boot-time
+        # rsync would push back over the operator's edit at every reboot --
+        # which is the whole reason these templates left /etc. On hardware the
+        # seeding belongs to ems-appliance-config-seed.service, after the binds.
+        if live_system; then
+            /usr/bin/ems-appliance seed-config --quiet \
+                || fail "the operator configuration could not be seeded"
+        fi
 
         # One host-path contract for Python, the export script and the path
         # unit. Everything below already depends on it.

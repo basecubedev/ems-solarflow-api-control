@@ -41,6 +41,7 @@ install -d "$STAGE/etc/ssh/sshd_config.d"
 install -d "$STAGE/usr/lib/ems-appliance-manager"
 install -d "$STAGE/usr/bin"
 install -d "$STAGE/usr/share/doc/ems-appliance-manager"
+install -d "$STAGE/usr/share/ems-appliance-manager"
 
 # Python package (no build artefacts, no tests).
 for file in "$ROOT"/appliance/*.py; do
@@ -71,6 +72,8 @@ install -m 0644 "$PACKAGING/systemd/ems-appliance-backup-access-disable.service"
 # on a single-slot host; both carry ConditionPathExists on the layout manifest.
 install -m 0644 "$PACKAGING/systemd/ems-appliance-persistence.service" \
         "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-config-seed.service" \
+        "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-host-identity.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-ab-health.service" \
@@ -87,8 +90,14 @@ install -m 0755 "$PACKAGING/bin/grow-root.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/grow-root.sh"
 install -m 0644 "$PACKAGING/tmpfiles/ems-appliance-manager.conf" "$STAGE/usr/lib/tmpfiles.d/"
 install -m 0644 "$PACKAGING/logrotate/ems-appliance-manager" "$STAGE/etc/logrotate.d/"
-install -m 0644 "$PACKAGING/config/appliance.conf" "$STAGE/etc/ems-appliance-manager/"
-install -m 0644 "$PACKAGING/config/allowed-images.conf" "$STAGE/etc/ems-appliance-manager/"
+# Templates, not conffiles, and deliberately not under /etc. Every declared
+# shared path is re-seeded from the booting slot's own root by upstream's
+# rpi-persistent-shared-init -- every boot, rsync --checksum, no --delete -- so a
+# packaged copy under /etc/ems-appliance-manager overwrites the operator's edit
+# at the next reboot. ems-appliance-config-seed.service creates what is missing
+# from these, once, after the shared binds are proven.
+install -m 0644 "$PACKAGING/config/appliance.conf" "$STAGE/usr/share/ems-appliance-manager/"
+install -m 0644 "$PACKAGING/config/allowed-images.conf" "$STAGE/usr/share/ems-appliance-manager/"
 # Deliberately not a conffile: it is the trust anchor for OS updates, not a
 # setting, and a local edit must not survive an upgrade that rotates the key.
 install -m 0644 "$PACKAGING/config/os-release-keyring.gpg" "$STAGE/etc/ems-appliance-manager/"

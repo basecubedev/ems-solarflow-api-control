@@ -47,12 +47,10 @@ requires_mkfs = pytest.mark.skipif(
     reason="mkfs.ext4, mkfs.vfat and mcopy are required to build real filesystems",
 )
 
-UNITS = (
-    "ems-appliance-ab-health.service",
-    "ems-appliance-slot-bootstrap.service",
-    "ems-appliance-persistence.service",
-    "ems-appliance-host-identity.service",
-)
+# From the inspector's own expectations, not typed out again: a hand-copied
+# list is how this fixture came to declare six of seven shared activations
+# while matching an inspector that only checked six.
+UNITS = tuple(sorted(ab_image.ROOT_UNITS.values()))
 
 AUTOBOOT = """[all]
 tryboot_a_b=1
@@ -129,6 +127,11 @@ def populate_root(
     (base / "etc/ems-appliance-manager/ab-layout.json").write_text(
         json.dumps({"schema_version": 2, "layout_id": "ems-appliance-rota-v1"})
     )
+
+    templates = base / ab_image.OPERATOR_TEMPLATE_DIR
+    templates.mkdir(parents=True)
+    for name in ab_image.OPERATOR_CONFIG:
+        (templates / name).write_text(f"# {name}\n")
 
     shared = base / "etc/rpi-image-gen/slot-shared.d"
     shared.mkdir(parents=True)
