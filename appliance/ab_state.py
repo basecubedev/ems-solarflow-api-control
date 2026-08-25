@@ -19,6 +19,7 @@ import json
 import os
 import time
 from dataclasses import asdict, dataclass, field
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
 AB_STATE_SCHEMA_VERSION = 1
@@ -80,9 +81,26 @@ class SlotRecord:
     rootfs_digest: str = ""
     committed_at: float = 0.0
     health: dict = field(default_factory=dict)
+    # What the manager on that slot implements. Empty on a record written before
+    # this was kept, which is a rollback whose safety cannot be proven rather
+    # than one known to be unsafe -- the two are reported differently.
+    state_schemas: dict = field(default_factory=dict)
 
     def to_dict(self):
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, entry):
+        """Build from a stored entry, ignoring fields this version never knew.
+
+        A newer manager may have recorded more than this one reads. Refusing the
+        whole record over an unfamiliar key would turn a forward-compatible
+        addition into a lost known-good slot, which is the one thing this record
+        exists to prevent losing.
+        """
+
+        fields = {item.name for item in dataclass_fields(cls)}
+        return cls(**{key: value for key, value in entry.items() if key in fields})
 
 
 @dataclass
@@ -94,7 +112,7 @@ class SlotHistory:
 
     def record(self, name):
         entry = self.slots.get(name)
-        return SlotRecord(**entry) if entry else None
+        return SlotRecord.from_dict(entry) if entry else None
 
     def to_dict(self):
         return {

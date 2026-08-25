@@ -1236,6 +1236,27 @@
      nothing more: the signature over the release manifest is what decides
      whether the download may be kept, so nothing here is presented as
      trustworthy. */
+  function releaseLabel(entry) {
+    // What an operator picks a release by. The index is never trusted for a
+    // decision, but choosing between several published releases needs something
+    // to choose by, and a column of identifiers is not it. Falls back to the
+    // identifier when the index says nothing, which is what it used to show.
+    var described = entry.described || entry;
+    var version = described.release_version;
+    if (!version) {
+      return entry.release_id;
+    }
+    var parts = [version];
+    var day = String(described.created_at || "").slice(0, 10);
+    if (day) {
+      parts.push(day);
+    }
+    if (described.board) {
+      parts.push(described.board);
+    }
+    return parts.join(" · ");
+  }
+
   function renderAbSources(sources, ab) {
     if (sources === null || sources === undefined) {
       return el("p", { class: "control-stage-subtitle", text: "Reading the release index\u2026" });
@@ -1261,12 +1282,13 @@
         text: "The release index offers nothing this appliance does not already have." });
     }
     return el("div", {}, [
-      el("div", { class: "control-stage-actions" }, offered.slice(0, 5).map(function (entry) {
+      el("div", { class: "control-stage-actions" }, offered.map(function (entry) {
         return el("button", {
           type: "button", class: "primary-button compact",
           "data-test": "ab-plan-fetch",
           "data-release": entry.release_id,
-          text: "Download " + entry.release_id,
+          title: entry.release_id,
+          text: "Download " + releaseLabel(entry),
           disabled: !ab.may_mutate,
           onclick: function () {
             planOperation({
@@ -1420,12 +1442,13 @@
     var installable = releases.filter(function (release) { return release.signed; });
     stages.push(stage(nextStep(), "OS image update", "Staged into the inactive slot, then trial-booted", [
       installable.length
-        ? el("div", { class: "control-stage-actions" }, installable.slice(0, 5).map(function (release) {
+        ? el("div", { class: "control-stage-actions" }, installable.map(function (release) {
             return el("button", {
               type: "button", class: "primary-button compact",
               "data-test": "ab-plan-update",
               "data-release": release.release_id,
-              text: "Plan " + release.release_version,
+              title: release.release_id,
+              text: "Plan " + releaseLabel(release),
               disabled: !ab.may_mutate || !readiness.ready,
               onclick: function () {
                 planOperation({

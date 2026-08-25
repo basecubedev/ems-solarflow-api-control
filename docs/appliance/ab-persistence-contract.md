@@ -110,8 +110,8 @@ It is re-written from the booting slot every boot, so comparing it against a
 constant compiled into that same slot compares a number with itself. This is
 why the layout descriptor's `persistent_schema_version` cannot be the record of
 what schema the persistent partition actually holds — see
-[The schema version is a one-way door](#the-schema-version-is-a-one-way-door),
-which describes a protection this mechanism dissolves.
+[What the partition holds](#what-the-partition-holds-and-what-only-looks-like-it),
+which is where that record lives.
 
 ### Upstream generates every mount and activates one
 
@@ -224,17 +224,52 @@ Every important path is exactly one of:
 
 All of `/opt/ems-solarflow` is one shared path.
 
-## The schema version is a one-way door
+## What the partition holds, and what only looks like it
 
-`ab_persistence.PERSISTENT_SCHEMA_VERSION` is compared strictly against the
-`persistent_schema_version` the running image declares. An appliance whose
-manager implements a newer schema than its image reports
-`persistence_identity_mismatch`, which withholds `persistence_ready` and blocks
-the very update that would reconcile the two.
+This section used to describe `PERSISTENT_SCHEMA_VERSION` as a one-way door:
+compared strictly against the number the running image declares, refusing an
+appliance whose manager had moved ahead of its image. That protection did not
+exist. The number it compared against lives in the layout descriptor under
+`/etc/ems-appliance-manager`, which is a shared path, and upstream re-seeds
+every shared path from the booting slot before the binds activate. Both operands
+came out of the same image, so the comparison could only ever agree with itself
+— it passes at 2 and it passes at 3, in both directions.
 
-Adding or removing a shared path therefore changes this number, and doing so
-after a release needs a migration path. Version 3 added `/var/lib/ems-backup`
-before any image shipped, which is the only moment such a change is free.
+The document was also wrong about the history. It said version 3 added
+`/var/lib/ems-backup` "before any image shipped, which is the only moment such a
+change is free". Eight schema-2 images were built before that, three of them as
+signed, attested release kits. None reached a device, which is the only sense in
+which nothing had shipped — and it is not the sense that makes a schema change
+free.
+
+**The record that can answer** is `appliance/persistent_state.py`. It lives
+outside `/persistent/shared` and outside `/persistent/slots`, so nothing
+re-seeds it and no slot switch replaces it, and it names every versioned format
+the appliance keeps on a shared path rather than one number. The shared-path
+count is not the only thing a step back can cross: the pending trial record, the
+runtime record, the backup-ownership formats and the operation records all carry
+their own versions and move independently.
+
+**Where each answer is given** follows from what refusing costs:
+
+| Where | Finding | Answer |
+|---|---|---|
+| Update plan | the artifact's manager could not read this state | refuse, before anything is written |
+| Rollback plan | the recorded slot's manager could not read this state | refuse; a slot recorded before the schemas were kept warns instead |
+| Trial boot | this slot cannot read this state | fail the gate, so the firmware falls back to the slot that worked |
+| Committed slot | this slot cannot read this state | report it; refusing would stop the agent and the web service |
+
+The last row is the reason the strict comparison moved out of the fail-closed
+path. Every unit that can write appliance state `Requires=` the persistence
+verification, so a refusal there is an appliance with no agent and no web UI —
+and therefore no way off the slot being complained about except physical access.
+
+Adding or removing a shared path still changes `PERSISTENT_SCHEMA_VERSION`, and
+a release declares both what its manager implements and the oldest it can read,
+per axis. Two axes are declared readable from 1 deliberately: a larger set of
+shared paths subsumes a smaller one, and the descriptor is re-seeded from the
+running slot at every boot. Declaring them as strictly as a stored record format
+would refuse the upgrade that ships the bump.
 
 ### Appliance
 

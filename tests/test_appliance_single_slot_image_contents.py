@@ -14,7 +14,6 @@ must never read as a clean A/B inspection, and the other way round.
 
 import json
 import struct
-from pathlib import Path
 
 import pytest
 

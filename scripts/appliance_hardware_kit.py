@@ -46,11 +46,19 @@ import shutil
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-from appliance import build_authority, media_sizing, release_trust, runtime_gates  # noqa: E402
+from appliance import (  # noqa: E402
+    build_authority,
+    media_sizing,
+    release_inputs,
+    release_trust,
+    runtime_gates,
+)
 from appliance.release_inputs import gate_passed, inspection_passed  # noqa: E402
 
+BUILDER_LOCK_NAME = "base-images.lock.json"
 KIT_VERSION = 2
 AUTHORITY_SUFFIX = ".build-authority.json"
 
@@ -102,6 +110,11 @@ def parse_args(argv):
     parser.add_argument("--source-parity", default="")
     parser.add_argument("--profile", action="append", default=[])
     parser.add_argument("--checklist", default="")
+    parser.add_argument(
+        "--builder-lock",
+        default=str(ROOT / "packaging" / "appliance" / "vm" / "base-images.lock.json"),
+        help="release policy for the machine an image may be assembled on",
+    )
     parser.add_argument("--development-kit", action="store_true")
     return parser.parse_args(argv)
 
@@ -395,11 +408,20 @@ def main(argv=None):
             )
             continue
         authority_path, authority = authorities[profile]
-        records.append(
-            assemble_profile(
-                profile, authority_path, authority, args, reports, output / profile
-            )
+        record = assemble_profile(
+            profile, authority_path, authority, args, reports, output / profile
         )
+        # Completeness -- what require_environment asks -- is whether the fields
+        # are filled in, not whether release policy approves the machine they
+        # describe. Without this a kit assembled outside the finalizer reached
+        # physical_ready with the lock never consulted once.
+        approval = list(
+            release_inputs.verify_builder_environment(authority, lock=args.builder_lock)
+        )
+        record["builder_environment_problems"] = approval
+        record.setdefault("problems", [])
+        record["problems"] = list(record["problems"]) + approval
+        records.append(record)
 
     gate_ok, gate_detail = (False, "no release gate report was passed to the kit")
     if args.gate_report:
@@ -471,6 +493,14 @@ def main(argv=None):
     if checklist and checklist.is_file():
         shutil.copy2(checklist, output / "validation-checklist.md")
 
+    # The kit travels to a machine that has no repository, and the verifier is
+    # built to distrust the manifest's own summary of what it checked. So the
+    # policy the builders were judged against travels with it and is re-applied
+    # there, rather than being taken on the kit's word.
+    builder_lock = Path(args.builder_lock)
+    if builder_lock.is_file():
+        shutil.copy2(builder_lock, output / BUILDER_LOCK_NAME)
+
     leaked = scan_for_private_keys(output)
     if leaked:
         print("appliance-hardware-kit: private key material in the kit:", file=sys.stderr)
@@ -507,6 +537,8 @@ def main(argv=None):
             ),
             "runtime_required_gates_pass": gates_ok,
             "release_not_stale": attestation_ok,
+            "builder_environment_approved": bool(records)
+            and all(not record.get("builder_environment_problems", ["unchecked"]) for record in records),
         }
     )
     ready = verdict.ready and not problems and not args.development_kit

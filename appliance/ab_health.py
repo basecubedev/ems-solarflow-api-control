@@ -21,7 +21,7 @@ healthy update, so nothing here requires internet reachability.
 import time
 from dataclasses import dataclass, field
 
-from appliance import ab_bootstrap, ab_layout, ab_persistence
+from appliance import ab_bootstrap, ab_layout, ab_persistence, persistent_state
 from appliance.ab_boot import SelectorError, SelectorTransaction
 from appliance.hostprobe import uptime_seconds
 from appliance.ab_state import FallbackRecord, SlotRecord
@@ -226,15 +226,7 @@ class TrialHealthService:
                 detail="; ".join(persistence.problems) or "every shared path is backed by /persistent",
             )
         )
-        checks.append(
-            Gate(
-                "persistent_schema",
-                layout.manifest is not None
-                and layout.manifest.persistent_schema_version
-                <= ab_persistence.PERSISTENT_SCHEMA_VERSION,
-                detail="the persistent schema is one this appliance implements",
-            )
-        )
+        checks.append(self._state_schema_gate(persistence))
 
         checks.append(self._ab_state_gate(persistence))
         checks.append(self._machine_identity_gate(layout))
@@ -253,6 +245,41 @@ class TrialHealthService:
         checks.extend(self._service_gates())
         checks.extend(self._application_gates(pending))
         return checks
+
+    def _state_schema_gate(self, persistence):
+        """Whether the manager on this slot can read the state on the partition.
+
+        This gate used to compare the layout descriptor's schema against this
+        manager's own constant. Both come out of the same image -- upstream
+        re-seeds the descriptor from the booting slot before the binds activate
+        -- so it compared a number with itself and could not fail. The record on
+        the persistent partition is the operand that does not travel with the
+        slot, so it is the one that can answer.
+
+        Fatal here, and deliberately only here. A failed trial gate rolls the
+        appliance back to the slot that was working, which is the safe end of a
+        step that should not have been taken. The same finding on a committed
+        slot is reported instead: refusing there would stop the agent and the
+        web service, leaving no way off the slot being complained about.
+        """
+
+        if not persistence.mounted or not persistence.mountpoint:
+            return Gate(
+                "state_schema",
+                False,
+                detail="there is no persistent partition to read a state schema from",
+            )
+        stamp = persistent_state.read_stamp(
+            persistent_state.resolve(self.probe.root, persistence.mountpoint)
+        )
+        if stamp.unreadable:
+            return Gate("state_schema", False, detail=stamp.unreadable)
+        verdict = persistent_state.compare(stamp)
+        return Gate(
+            "state_schema",
+            verdict.compatible,
+            detail=verdict.detail or "this slot implements the state formats on the partition",
+        )
 
     def _ab_state_gate(self, persistence):
         """The trial record has to live where both slots can read it.
@@ -608,6 +635,7 @@ class TrialHealthService:
             rootfs_digest=pending.rootfs_digest,
             committed_at=self._time(),
             health=report.to_dict(),
+            state_schemas=persistent_state.implemented_schemas(),
         )
         self.state.record_known_good(record, previous_slot=pending.source_slot)
         self.state.mark_committed(pending.operation_id)
@@ -720,6 +748,7 @@ def reconcile_boot(probe, state, selector_path, *, time_fn=None):
         rootfs_digest=pending.rootfs_digest,
         committed_at=now,
         health={"result": RESULT_HEALTHY, "reconciled_from": "boot_selector"},
+        state_schemas=persistent_state.implemented_schemas(),
     )
     state.record_known_good(record, previous_slot=pending.source_slot)
     state.mark_committed(pending.operation_id)

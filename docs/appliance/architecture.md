@@ -87,6 +87,7 @@ is refused as `invalid_request` before any handler runs.
 | `migration.py` | Idempotent migration from the previous shared state layout |
 | `config.py` | `/etc` host configuration and the image allowlist |
 | `config_seed.py` | Creates the operator-owned configuration files that are missing, once |
+| `persistent_state.py` | What formats the state on the persistent partition is written in |
 | `validation.py` | Every typed input validator and its stable error code |
 | `redaction.py` | Secret redaction and log bounding |
 | `protocol.py` | The fixed agent operation allowlist |

@@ -265,6 +265,23 @@ class ApplianceAbHost:
             (self.root / directory).mkdir(parents=True, exist_ok=True)
         self._write(MACHINE_ID_SOURCE, MACHINE_ID + "\n")
         self._write("etc/machine-id", MACHINE_ID + "\n")
+        self.seed_state_schema_record()
+        return self
+
+    def seed_state_schema_record(self, schemas=None):
+        """What the persistence unit stamps on this partition at every boot.
+
+        A partition with no record is undecidable, and the update planner
+        refuses everything on an undecidable appliance -- so a fixture without
+        this is not a clean appliance, it is one that has never booted.
+        """
+
+        from appliance import persistent_state
+
+        persistent_state.write_stamp(
+            str(self.root / "persistent"),
+            schemas=schemas or persistent_state.implemented_schemas(),
+        )
         return self
 
     def seed_host_identity(self):

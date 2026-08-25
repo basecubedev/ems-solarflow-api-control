@@ -99,6 +99,30 @@ offer.
 The list is produced by `OsUpdateService._readiness()`; the manager renders
 whatever that returns, so the two cannot drift.
 
+### Choosing which release to install
+
+The appliance fetches a release index over HTTPS and lists everything it offers
+that is not already present, newest first, labelled by version and date. Every
+published release stays listed, not only the latest one — a release that turns
+out to be bad is only recoverable if the one before it can still be reached.
+
+The index is a list of places to look and nothing more. It is never trusted: the
+appliance downloads the signed manifest each entry points at, verifies it
+against the release keyring, and decides from that. What the index says about a
+release exists so the choice can be labelled; it gates nothing.
+
+Choosing an older release is allowed, and refused when it would not be safe. The
+appliance keeps a record on its persistent partition of what formats its own
+state is written in, and a release declares what its manager implements and the
+oldest it can read. A release whose manager could not read the state already on
+the disk is blocked at plan time, before anything is written. The same check
+runs before a rollback: the slot being returned to must be able to read what is
+there now.
+
+An appliance that cannot say what its state is formatted as refuses every
+release rather than guessing. `ems-appliance ab verify-persistence` writes that
+record, and the persistence unit runs it at every boot.
+
 The update path is:
 
 ```text
@@ -136,6 +160,13 @@ broken active slot, and is labelled as recovery.
 slot — the one whose exact build and digests were written when it was promoted.
 It trial-boots that slot and commits it only when it proves itself, exactly like
 an update. There is no arbitrary historical image and no direct selector flip.
+
+A rollback is a step onto an older slot sharing this partition, so it is subject
+to the same state check as an older release: if the recorded slot's manager
+could not read what is on the persistent partition now, the plan is blocked. A
+slot promoted before that record was kept cannot answer, and is allowed with a
+warning rather than refused — it is the way back from a bad update, and an
+unprovable answer is not the same as an unsafe one.
 
 ### From the console
 

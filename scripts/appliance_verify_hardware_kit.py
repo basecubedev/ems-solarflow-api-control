@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from appliance import (  # noqa: E402
     build_authority,
     release_attestation,
+    release_inputs,
     release_trust,
     runtime_gates,
 )
@@ -46,6 +47,7 @@ CHECKSUMS = "KIT-SHA256SUMS"
 ATTESTATION = "release-attestation.json"
 SIGNATURE = "release-attestation.json.asc"
 GATE_REPORT = "release-gate-report.txt"
+BUILDER_LOCK_NAME = "base-images.lock.json"
 RUNTIME_GATES = "runtime-gates.json"
 SOURCE_AUTHORITY = "source-bundle-authority.json"
 SOURCE_PARITY = "source-bundle-parity.json"
@@ -145,6 +147,39 @@ def independent_inspections(kit, manifest):
     if not reports:
         return False, "the kit describes no build to inspect"
     return all(reports), "; ".join(problems) or "every mandatory inspection passed"
+
+
+def builder_environments_approved(kit, manifest):
+    """Re-derive builder approval from the kit's own copy of release policy.
+
+    The kit carries the lock so a machine with no repository can still ask the
+    question. Absent policy is not approval: a kit that cannot be checked is
+    reported unapproved rather than waved through.
+    """
+
+    lock = kit / BUILDER_LOCK_NAME
+    if not lock.is_file():
+        return False, [f"the kit carries no {BUILDER_LOCK_NAME}, so no builder can be approved"]
+
+    problems = []
+    checked = 0
+    dist, _reports, _prefixes, _located = build_locations(kit, manifest)
+    for profile, location in sorted(dist.items()):
+        candidates = sorted(location.glob("*.build-authority.json"))
+        if not candidates:
+            problems.append(f"{profile}: the kit carries no build authority")
+            continue
+        try:
+            authority = build_authority.read(candidates[0])
+        except build_authority.BuildAuthorityError as error:
+            problems.append(f"{profile}: {error.code}: {error.message}")
+            continue
+        checked += 1
+        problems.extend(
+            f"{profile}: {problem}"
+            for problem in release_inputs.verify_builder_environment(authority, lock=str(lock))
+        )
+    return bool(checked) and not problems, problems
 
 
 def build_locations(kit, manifest):
@@ -268,6 +303,12 @@ def main(argv=None):
     if attestation is not None and args.project_root:
         freshness = release_trust.freshness(attestation, root=args.project_root)
 
+    # Re-applied here from the kit's own copy of the policy, not read out of the
+    # manifest: a kit that claims an approved builder is exactly the claim this
+    # verifier exists to re-derive. A kit carrying no policy cannot be checked
+    # and is therefore not approved.
+    builder_approved, builder_problems = builder_environments_approved(kit, manifest)
+
     gate_ok_independent, gate_independent_detail = gate_passed(kit / GATE_REPORT)
     inspections_ok_independent, inspections_detail = independent_inspections(kit, manifest)
 
@@ -290,6 +331,7 @@ def main(argv=None):
             "runtime_required_gates_pass": gates_ok,
             "release_not_stale": not stale and (freshness is None or not freshness.stale),
             "hardware_kit_verified": not checksums and not leaked,
+            "builder_environment_approved": builder_approved,
         },
         required=release_trust.KIT_READINESS_INVARIANTS,
     )

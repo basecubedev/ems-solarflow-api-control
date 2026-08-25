@@ -7,6 +7,7 @@
 #          [--variant ab|single]
 #          --source-bundle FILE [--source-authority FILE] [--runtime-gates FILE]
 #          --package FILE [--builder-lock FILE] [--kit DIR] [--no-kit]
+#          [--index-base-url URL [--index-previous FILE] [--index-keep N]]
 #
 # The builder guest is disposable, runs as root, installs whatever the generator
 # declares and is thrown away afterwards. A production signing key has no
@@ -65,6 +66,13 @@ RUNTIME_GATES=""
 PACKAGE=""
 BUILDER_LOCK="$ROOT/packaging/appliance/vm/base-images.lock.json"
 BUILD_KIT=yes
+# The release index is only built when a base url says where these assets will
+# be published. Without one there is nowhere for its urls to point, and an index
+# of unreachable urls is worse than none: the appliance would refuse each entry
+# one at a time instead of reporting that no index is configured.
+INDEX_BASE_URL=""
+INDEX_PREVIOUS=""
+INDEX_KEEP=0
 
 usage() { sed -n '3,40p' "$0"; }
 
@@ -92,6 +100,12 @@ while [ $# -gt 0 ]; do
         --trusted-fingerprint=*) FINGERPRINTS="$FINGERPRINTS ${1#*=}"; shift ;;
         --dist) DIST=${2:?--dist needs a directory}; shift 2 ;;
         --dist=*) DIST=${1#*=}; shift ;;
+        --index-base-url) INDEX_BASE_URL=${2:?--index-base-url needs a url}; shift 2 ;;
+        --index-base-url=*) INDEX_BASE_URL=${1#*=}; shift ;;
+        --index-previous) INDEX_PREVIOUS=${2:?--index-previous needs a file}; shift 2 ;;
+        --index-previous=*) INDEX_PREVIOUS=${1#*=}; shift ;;
+        --index-keep) INDEX_KEEP=${2:?--index-keep needs a number}; shift 2 ;;
+        --index-keep=*) INDEX_KEEP=${1#*=}; shift ;;
         --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
         --variant=*) VARIANT=${1#*=}; shift ;;
         --profile) PROFILES="$PROFILES ${2:?--profile needs rpi4 or rpi5}"; shift 2 ;;
@@ -440,10 +454,36 @@ PYTHONPATH="$ROOT" python3 "$ROOT/scripts/appliance_release_result.py" \
     --dist "$DIST" --output "$DIST/release-result.json" \
     --markdown "$DIST/release-result.md" \
     --attestation "$ATTESTATION" --gate-report "$REPORT" \
-    --package "$PACKAGE" --project-root "$ROOT" \
+    --package "$PACKAGE" --project-root "$ROOT" --builder-lock "$BUILDER_LOCK" \
     $KIT_MANIFEST_ARG \
     $TRUST_ARGS $EVIDENCE_ARGS $RESULT_PROFILE_ARGS \
     || fail "the release result does not add up to a ready release" release_result_incomplete
+
+if [ -n "$INDEX_BASE_URL" ]; then
+    # Whether this variant has anything to index is the variant table's answer,
+    # not a suffix written out here. A single-slot image is patched by apt and
+    # has no second slot to write, so it publishes no update archive at all.
+    if PYTHONPATH="$ROOT" python3 -c "
+import sys
+from appliance import image_variants
+sys.exit(0 if image_variants.variant(sys.argv[1]).has_update_archive else 1)
+" "$VARIANT"; then
+        INDEX="$DIST/os-releases.json"
+        INDEX_ARGS=""
+        [ -n "$INDEX_PREVIOUS" ] && INDEX_ARGS="$INDEX_ARGS --previous $INDEX_PREVIOUS"
+        [ "$INDEX_KEEP" != 0 ] && INDEX_ARGS="$INDEX_ARGS --keep $INDEX_KEEP"
+        # After the gate and after the signature, never before: the index tells
+        # appliances where to fetch a release, so it must only ever name one
+        # that has already been proven and signed.
+        python3 "$ROOT/scripts/appliance-build-os-release-index.py" \
+            --base-url "$INDEX_BASE_URL" $INDEX_ARGS --output "$INDEX" \
+            "$DIST"/*-arm64-"$VARIANT".manifest.json \
+            || fail "the release index could not be built" release_index_failed
+        echo "release index:       $INDEX"
+    else
+        echo "no release index: the $VARIANT variant publishes no update archive"
+    fi
+fi
 
 echo
 echo "release gate report: $REPORT"

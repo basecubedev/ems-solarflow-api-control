@@ -207,15 +207,27 @@ def test_a_required_path_exposing_the_wrong_subtree_fails(host):
     assert any("exposes /appliance/lib" in problem for problem in report.problems)
 
 
-def test_an_image_declaring_another_persistent_schema_fails(host):
+def test_an_image_declaring_another_persistent_schema_is_reported_not_refused(host):
+    """A stale descriptor must not cost the appliance its agent and web service.
+
+    Both operands of this comparison normally come out of the same image, so it
+    compares a number with itself. It can differ only when upstream's seeding
+    did not run and the binds activated over the copy the other slot left — a
+    working appliance with a stale file, where refusing would remove the only
+    remote way to repair it. What the partition actually holds is answered by
+    the state record, which does not travel with the slot.
+    """
+
     from tests.helpers.appliance_ab import layout_manifest
 
     host.write_layout_manifest(layout_manifest() | {"persistent_schema_version": 7})
 
     report = verify(host)
 
-    assert report.ok is False
-    assert any("persistent schema 7" in problem for problem in report.problems)
+    assert report.ok is True
+    assert report.problems == ()
+    assert any("persistent schema 7" in warning for warning in report.warnings)
+    assert "persistent schema 7" in " ".join(report.to_dict()["warnings"])
 
 
 def test_a_host_without_a_layout_reports_missing_rather_than_ok(host):

@@ -38,6 +38,7 @@ import urllib.request
 from pathlib import Path
 
 from appliance import os_releases
+from appliance.version import version_key
 
 TYPE_OS_FETCH = "ab.fetch"
 
@@ -165,12 +166,51 @@ class HttpsFetcher:
         return f"sha256:{digest.hexdigest()}"
 
 
+# What an index entry may say about a release beyond where to fetch it. None of
+# it is trusted and none of it gates anything: it exists so an operator choosing
+# between several published releases has something to choose by, rather than a
+# column of opaque identifiers. The signed manifest remains the only authority,
+# and every one of these is replaced by the manifest's own value once verified.
+DESCRIPTION_FIELDS = ("release_version", "created_at", "build_id", "board", "variant")
+
+MAX_DESCRIPTION = 64
+
+
+def _description(entry):
+    """The entry's own account of itself, bounded and stringified."""
+
+    described = {}
+    for field in DESCRIPTION_FIELDS:
+        value = entry.get(field)
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            text = str(value).strip()
+            if text:
+                described[field] = text[:MAX_DESCRIPTION]
+    return described
+
+
+def sort_key(entry):
+    """Newest first, by what the entry claims, with the id as the tiebreak.
+
+    An index that says nothing about its releases still sorts deterministically;
+    it just sorts by identifier, which is the state this had before.
+    """
+
+    return (
+        version_key(entry.get("release_version") or ""),
+        str(entry.get("created_at") or ""),
+        str(entry.get("build_id") or ""),
+        str(entry.get("release_id") or ""),
+    )
+
+
 def parse_index(payload):
     """Candidate releases an index names. Nothing here is trusted.
 
     Every entry is checked for shape only — a release id this appliance would
     accept and three https URLs. What the entry claims about the release is
-    irrelevant, because the signed manifest is what decides.
+    irrelevant to whether it may be installed, because the signed manifest is
+    what decides; the claims are kept only so the choice can be labelled.
     """
 
     if not isinstance(payload, dict):
@@ -209,8 +249,10 @@ def parse_index(payload):
                 "manifest_url": manifest_url,
                 "signature_url": signature_url,
                 "archive_url": archive_url,
+                "described": _description(entry),
             }
         )
+    candidates.sort(key=lambda item: sort_key({**item, **item["described"]}), reverse=True)
     return candidates
 
 

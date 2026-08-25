@@ -165,6 +165,11 @@ class PersistenceReport:
     schema_version: int
     paths: tuple = ()
     problems: tuple = ()
+    # Findings that do not stop the appliance. Every unit that can write state
+    # Requires= this verification, so a problem here means no agent and no web
+    # service; anything that leaves the appliance usable and repairable belongs
+    # in this tuple instead.
+    warnings: tuple = ()
 
     @property
     def ok(self):
@@ -181,6 +186,7 @@ class PersistenceReport:
             "schema_version": self.schema_version,
             "paths": [dict(entry) for entry in self.paths],
             "problems": list(self.problems),
+            "warnings": list(self.warnings),
         }
 
 
@@ -347,9 +353,19 @@ def verify(status, mounts, *, schema_version=PERSISTENT_SCHEMA_VERSION):
             state = STATE_OPTIONS_UNEXPECTED if state == STATE_OK else state
             problems.append(f"{mountpoint} is mounted {option}")
 
+    warnings = []
     if manifest.persistent_schema_version != schema_version:
-        state = STATE_IDENTITY_MISMATCH if state == STATE_OK else state
-        problems.append(
+        # Reported, not fatal, and no longer the state authority. Both operands
+        # come out of the same image -- upstream re-seeds the descriptor from
+        # the booting slot before the binds activate -- so this normally
+        # compares a number with itself. It can differ only when that seeding
+        # did not run, because upstream's generated mounts merely Want= it, and
+        # the binds then activate over the shared copy the other slot left. That
+        # is a stale descriptor on a working appliance, and stopping the agent
+        # and the web service over it would take away the only remote way to
+        # repair it. What the partition actually holds is answered by
+        # appliance/persistent_state.py, which does not travel with the slot.
+        warnings.append(
             f"the image declares persistent schema {manifest.persistent_schema_version}, "
             f"this appliance implements {schema_version}"
         )
@@ -371,6 +387,7 @@ def verify(status, mounts, *, schema_version=PERSISTENT_SCHEMA_VERSION):
         schema_version=schema_version,
         paths=tuple(entries),
         problems=tuple(problems),
+        warnings=tuple(warnings),
     )
 
 

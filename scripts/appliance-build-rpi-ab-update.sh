@@ -253,7 +253,15 @@ import subprocess
 import sys
 import tempfile
 
-from appliance import ab_persistence, os_artifacts, os_releases, rpi_image_gen, sparse, version
+from appliance import (
+    ab_persistence,
+    os_artifacts,
+    os_releases,
+    persistent_state,
+    rpi_image_gen,
+    sparse,
+    version,
+)
 
 archive, manifest_path, release_version, build_id, name, profile_config = sys.argv[1:7]
 lock = rpi_image_gen.read_lock()
@@ -354,6 +362,13 @@ payload = {
     "layout_id": "ems-appliance-rota-v1",
     "slot_schema_version": 2,
     "persistent_schema_version": ab_persistence.PERSISTENT_SCHEMA_VERSION,
+    # What the manager inside this image writes, and the oldest it can read.
+    # The two legacy numbers above cannot express a step back on their own:
+    # they track the shared-path set, not the record formats stored on it.
+    "state_schemas": {
+        "implements": persistent_state.implemented_schemas(),
+        "reads": persistent_state.readable_floors(),
+    },
     "archive": {
         "name": f"{name}.tar.zst",
         "digest": f"sha256:{archive_digest.hexdigest()}",

@@ -35,6 +35,7 @@ from appliance import (
     media_sizing,
     os_artifacts,
     os_releases,
+    persistent_state,
     rpi_image_gen,
     sparse,
 )
@@ -519,6 +520,24 @@ class OsUpdateService:
             )
         return self._plan_recorded_slot(operation, layout, record)
 
+    def _recorded_state_schemas(self):
+        """What this appliance's persistent state is formatted as, or None.
+
+        None means undecidable, and every caller treats undecidable as a
+        refusal: an appliance that cannot say what its state is cannot be told
+        that an artifact is safe for it.
+        """
+
+        report = ab_persistence.verify(ab_layout.discover(self.probe), self.probe.mounts())
+        if report.state != ab_persistence.STATE_OK or not report.mountpoint:
+            return None
+        stamp = persistent_state.read_stamp(
+            persistent_state.resolve(self.probe.root, report.mountpoint)
+        )
+        if stamp.unreadable or not stamp.present:
+            return None
+        return dict(stamp.schemas)
+
     def _plan(self, operation, layout, release, *, kind, repair=False):
         blockers = self._preconditions(layout, operation, release=release)
         board = self._board()
@@ -527,7 +546,7 @@ class OsUpdateService:
             layout=layout.manifest,
             board=board,
             appliance_version=self.appliance_version,
-            persistent_schema_version=ab_persistence.PERSISTENT_SCHEMA_VERSION,
+            state_schemas=self._recorded_state_schemas(),
             current_build_id=str(layout.os_build.get("build_id") or ""),
             repair=repair,
         )
@@ -598,6 +617,51 @@ class OsUpdateService:
         )
         return plan.to_dict()
 
+    def _rollback_state_problems(self, record):
+        """Whether the slot being rolled back to can read today's state.
+
+        A rollback is by construction a step onto an older slot sharing this
+        partition -- the same crossing an older release would make, and until
+        now the only one that ran no compatibility check at all. Hardening the
+        update path alone would have left this as the softer route to the same
+        failure.
+
+        A record written before the schemas were kept cannot answer, and that is
+        reported as a warning rather than a refusal: this is the deliberate
+        rollback, the operator's way back from a bad update, and stranding them
+        on the strength of a missing field would cost more than it protects.
+        """
+
+        declared = dict(getattr(record, "state_schemas", None) or {})
+        if not declared:
+            return []
+        recorded = self._recorded_state_schemas()
+        if recorded is None:
+            return [
+                {
+                    "code": "state_schemas_unrecorded",
+                    "message": (
+                        "this appliance has no record of what its persistent state is "
+                        "formatted as, so the recorded slot cannot be proven able to read it"
+                    ),
+                }
+            ]
+        behind = sorted(
+            name for name, value in recorded.items() if value > declared.get(name, 0)
+        )
+        if not behind:
+            return []
+        named = ", ".join(f"{name} {recorded[name]}>{declared.get(name, 0)}" for name in behind)
+        return [
+            {
+                "code": "rollback_target_state_schema_too_old",
+                "message": (
+                    f"slot {record.slot} runs a manager that implements {named}; this "
+                    "appliance's state has moved on and that slot could not read it"
+                ),
+            }
+        ]
+
     def _plan_recorded_slot(self, operation, layout, record):
         """A rollback plan: the target is a slot, not a downloadable artifact."""
 
@@ -612,6 +676,7 @@ class OsUpdateService:
                     ),
                 }
             )
+        blockers.extend(self._rollback_state_problems(record))
         # An OS rollback is not an application rollback: the appliance keeps the
         # deployment it has, and the older slot has to rebuild exactly that one.
         deployment = self._capture_deployment(blockers)

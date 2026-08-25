@@ -204,6 +204,46 @@ def test_a_shared_path_that_fell_back_to_the_rootfs_fails_the_trial(host, state)
     assert "persistent_paths" in failed_gates(report)
 
 
+def test_a_trial_slot_that_cannot_read_this_partition_fails_the_trial(host, state):
+    """The step back is stopped where stopping it is safe.
+
+    A failed trial gate rolls the appliance back to the slot that was working.
+    The same finding on a committed slot is reported instead, because refusing
+    there would stop the agent and the web service and leave no way off it.
+    """
+
+    from appliance import persistent_state
+
+    state.set_pending(pending())
+    newer = {k: v + 1 for k, v in persistent_state.implemented_schemas().items()}
+    host.seed_state_schema_record(newer)
+
+    report = service(host, state).evaluate()
+
+    assert report.result == RESULT_UNHEALTHY
+    assert "state_schema" in failed_gates(report)
+
+
+def test_a_trial_slot_that_matches_the_partition_passes_that_gate(host, state):
+    state.set_pending(pending())
+
+    report = service(host, state).evaluate()
+
+    assert "state_schema" not in failed_gates(report)
+
+
+def test_an_unreadable_state_record_fails_the_trial_rather_than_being_ignored(host, state):
+    from appliance import persistent_state
+
+    state.set_pending(pending())
+    target = persistent_state.stamp_path(host.root / "persistent")
+    target.write_text("{not json", encoding="utf-8")
+
+    report = service(host, state).evaluate()
+
+    assert "state_schema" in failed_gates(report)
+
+
 def test_a_lost_ems_installation_fails_the_trial(host, state):
     state.set_pending(pending())
     (host.root / "opt/ems-solarflow/config").rmdir()

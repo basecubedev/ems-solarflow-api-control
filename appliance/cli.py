@@ -560,13 +560,49 @@ def command_ab_verify_persistence(args):
         return EXIT_ERROR
     layout = ab_layout.discover(services.ab_probe)
     report = ab_persistence.verify(layout, services.ab_probe.mounts())
+    payload = report.to_dict()
+    if report.ok and report.state == ab_persistence.STATE_OK:
+        payload["state_schema"] = _reconcile_state_schema(
+            report, layout, root=services.ab_probe.root
+        )
     if not args.quiet:
-        _print(report.to_dict(), args.json)
+        _print(payload, args.json)
     if not report.ok:
         for problem in report.problems:
             print(f"error: {problem}", file=sys.stderr)
         return EXIT_ERROR
+    reconciliation = payload.get("state_schema") or {}
+    if reconciliation and not reconciliation.get("compatible", True):
+        # Reported, never fatal. Every unit that can write appliance state
+        # Requires= this one, so failing here would leave a rolled-back
+        # appliance with no agent and no web UI -- unreachable, and therefore
+        # unable to roll forward out of the very state being complained about.
+        # The refusal belongs where it can act: the update planner.
+        print(f"warning: {reconciliation.get('detail')}", file=sys.stderr)
     return EXIT_OK
+
+
+def _reconcile_state_schema(report, layout, *, root="/"):
+    """Record what schemas the state on this partition is written at."""
+
+    from datetime import datetime, timezone
+
+    from appliance import persistent_state
+    from appliance.version import APPLIANCE_VERSION
+
+    build = getattr(layout, "os_build", None) or {}
+    try:
+        verdict, stamp = persistent_state.reconcile(
+            persistent_state.resolve(root, report.mountpoint),
+            written_by={
+                "appliance_version": APPLIANCE_VERSION,
+                "build_id": str(build.get("build_id") or ""),
+            },
+            written_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+    except persistent_state.PersistentStateError as exc:
+        return {"outcome": exc.code, "compatible": True, "detail": exc.message}
+    return {**verdict.to_dict(), "stamp": stamp.to_dict()}
 
 
 def command_host_identity(args):
@@ -680,7 +716,7 @@ def command_image_variant(args):
     imaged and nothing else.
     """
 
-    from appliance import ab_layout, image_variants
+    from appliance import image_variants
 
     services = _ab_services(args)
     if services is None:

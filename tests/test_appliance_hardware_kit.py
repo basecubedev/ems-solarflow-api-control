@@ -35,12 +35,31 @@ VERSION = "0.1.0"
 BUILD_ID = "20260809120000"
 
 
+def approved_builder():
+    """The lock row a release-grade builder has to match, read not restated.
+
+    The fixture used to describe a machine release policy would refuse -- a
+    made-up digest and a kernel with no `-cloud-` flavour. Nothing noticed,
+    because builder approval was enforced in one script that these tests do not
+    reach. A fixture that could not be signed in production is not a fixture for
+    a release that is ready.
+    """
+
+    import json
+
+    lock = json.loads(
+        (ROOT / "packaging/appliance/vm/base-images.lock.json").read_text(encoding="utf-8")
+    )
+    return lock["images"]["builder"]
+
+
 def environment():
+    builder = approved_builder()
     return build_authority.BuilderEnvironment(
-        base_image_lock_id="builder:debian-13-genericcloud-amd64-20260803-2559.qcow2",
-        base_image_sha512="7" * 128,
+        base_image_lock_id=f"builder:{builder['filename']}",
+        base_image_sha512=builder["sha512"],
         os_release="debian 13",
-        kernel="Linux 6.12.43+deb13-amd64",
+        kernel="Linux 6.12.100+deb13-cloud-amd64",
         architecture="x86_64",
         python_version="Python 3.13.5",
         podman_version="podman version 5.4.2",

@@ -215,13 +215,29 @@ class BuilderEnvironment:
         return any(getattr(self, name) for name in ENVIRONMENT_REQUIRED)
 
     def missing(self):
-        return tuple(name for name in ENVIRONMENT_REQUIRED if not getattr(self, name))
+        """Required facts this record does not actually carry.
+
+        Stripped, because a field holding a space satisfied a truth test and
+        counted as recorded — which is a supply-chain fact this appliance would
+        have signed on the strength of one whitespace character.
+        """
+
+        return tuple(
+            name for name in ENVIRONMENT_REQUIRED if not str(getattr(self, name) or "").strip()
+        )
 
 
 def parse_environment(payload):
     if not isinstance(payload, dict):
         raise BuildAuthorityError(UNREADABLE, "the builder environment is not an object")
     version = payload.get("schema_version", ENVIRONMENT_SCHEMA_VERSION)
+    # `True == 1` and `1.0 == 1` in Python, so equality alone accepts a boolean
+    # and a float as schema 1. A version is a whole number or it is not a
+    # version.
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise BuildAuthorityError(
+            UNREADABLE, f"builder environment schema {version!r} is not a version number"
+        )
     if version != ENVIRONMENT_SCHEMA_VERSION:
         raise BuildAuthorityError(
             UNSUPPORTED,
@@ -232,6 +248,14 @@ def parse_environment(payload):
     if not isinstance(packages, list):
         raise BuildAuthorityError(UNREADABLE, "critical_packages is not a list")
     return BuilderEnvironment(
+        # Passed through, not defaulted. The constructor took the class default,
+        # so a record's own version was discarded on every parse. Inert while
+        # one schema exists; the moment the constant moves, every committed
+        # record re-serialises under the new version, its canonical hash stops
+        # matching what was recorded, and all release evidence fails to parse at
+        # once -- with the pressure fix being to delete the very comparison that
+        # binds an authority to the environment that produced it.
+        schema_version=version,
         base_image_lock_id=str(payload.get("base_image_lock_id") or ""),
         base_image_sha512=str(payload.get("base_image_sha512") or ""),
         os_release=str(payload.get("os_release") or ""),

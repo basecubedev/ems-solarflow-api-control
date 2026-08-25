@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from appliance.sparse import ENCODING_ANDROID_SPARSE, ENCODING_RAW
+from appliance.version import version_key
 
 # Format 2 added the sparse authority: a member carries its encoded and its
 # expanded identity separately. A format 1 manifest cannot be upgraded here —
@@ -146,6 +147,12 @@ class OsRelease:
     members: dict = field(default_factory=dict)
     rpi_image_gen_revision: str = ""
     verified: str = VERIFIED_NONE
+    # What the manager inside this image writes, and the oldest it can read.
+    # Optional: a manifest built before this existed declares neither, and is
+    # judged on the two legacy numbers alone -- which is enough to refuse it as
+    # a step back, and not enough to prove it safe as one.
+    state_implements: dict = field(default_factory=dict)
+    state_reads: dict = field(default_factory=dict)
 
     @property
     def signed(self):
@@ -257,6 +264,53 @@ def _member(name, entry):
     )
 
 
+def _state_schemas(block):
+    """What the image declares it writes, and the oldest it can read.
+
+    Absent is allowed: manifests predate this block. Present but malformed is
+    not — the manifest is signed, so a broken block is a broken build, and
+    guessing at it would be guessing at what a downgrade is allowed to cross.
+    """
+
+    if block is None:
+        return {}, {}
+    if not isinstance(block, dict):
+        raise ReleaseError("release_manifest_invalid", "state_schemas is not an object")
+
+    parsed = {}
+    for key in ("implements", "reads"):
+        values = block.get(key)
+        if not isinstance(values, dict) or not values:
+            raise ReleaseError(
+                "release_manifest_invalid", f"state_schemas.{key} names no schemas"
+            )
+        clean = {}
+        for name, value in values.items():
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise ReleaseError(
+                    "release_manifest_invalid",
+                    f"state_schemas.{key}.{name} is not a schema number",
+                )
+            clean[str(name)] = int(value)
+        parsed[key] = clean
+
+    undeclared = sorted(set(parsed["reads"]) - set(parsed["implements"]))
+    if undeclared:
+        raise ReleaseError(
+            "release_manifest_invalid",
+            f"state_schemas.reads names {', '.join(undeclared)}, which it does not implement",
+        )
+    ahead = sorted(
+        name for name, value in parsed["reads"].items() if value > parsed["implements"][name]
+    )
+    if ahead:
+        raise ReleaseError(
+            "release_manifest_invalid",
+            f"state_schemas.reads is ahead of implements for {', '.join(ahead)}",
+        )
+    return parsed["implements"], parsed["reads"]
+
+
 def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
     """Turn manifest JSON into an ``OsRelease`` or refuse it."""
 
@@ -298,6 +352,8 @@ def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
         )
     members = {name: _member(name, entry) for name, entry in raw_members.items()}
 
+    implements, reads = _state_schemas(payload.get("state_schemas"))
+
     try:
         size = int(archive.get("size_bytes") or 0)
     except (TypeError, ValueError):
@@ -326,6 +382,8 @@ def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
         archive_size=size,
         members=members,
         verified=verified,
+        state_implements=implements,
+        state_reads=reads,
     )
 
 
@@ -563,7 +621,11 @@ class OsReleaseCatalogue:
                 releases.append(self._load(path))
             except ReleaseError:
                 continue
-        releases.sort(key=lambda item: (item.release_version, item.build_id), reverse=True)
+        # By version, not by the text of it: a string sort puts 0.9.0 above
+        # 0.10.0 and a release candidate level with its own final release.
+        releases.sort(
+            key=lambda item: (version_key(item.release_version), item.build_id), reverse=True
+        )
         return releases
 
     def get(self, release_id):
@@ -598,13 +660,6 @@ class OsReleaseCatalogue:
 # --- compatibility -----------------------------------------------------------
 
 
-def _version_key(text):
-    parts = []
-    for chunk in str(text).lstrip("v").split("-", 1)[0].split("."):
-        parts.append(int(chunk) if chunk.isdigit() else 0)
-    while len(parts) < 3:
-        parts.append(0)
-    return tuple(parts[:3])
 
 
 def compatibility_problems(
@@ -613,7 +668,7 @@ def compatibility_problems(
     layout,
     board,
     appliance_version,
-    persistent_schema_version,
+    state_schemas=None,
     current_build_id="",
     repair=False,
     rollback=False,
@@ -686,17 +741,8 @@ def compatibility_problems(
                 ),
             }
         )
-    if release.persistent_schema_version > persistent_schema_version:
-        problems.append(
-            {
-                "code": "artifact_persistent_schema_too_new",
-                "message": (
-                    f"the artifact needs persistent schema {release.persistent_schema_version}, "
-                    f"this appliance implements {persistent_schema_version}"
-                ),
-            }
-        )
-    if _version_key(appliance_version) < _version_key(release.minimum_appliance_manager_version):
+    problems.extend(state_schema_problems(release, recorded=state_schemas))
+    if version_key(appliance_version) < version_key(release.minimum_appliance_manager_version):
         problems.append(
             {
                 "code": "appliance_manager_too_old",
@@ -720,6 +766,99 @@ def compatibility_problems(
     return problems
 
 
+LEGACY_STATE_AXES = {
+    "persistent_paths": "persistent_schema_version",
+    "slot_layout": "slot_schema_version",
+}
+
+
+def state_schema_problems(release, *, recorded):
+    """Whether the code in this artifact can read the state already on the disk.
+
+    ``recorded`` is what the persistent partition says it was last written by —
+    the one schema record in this system that does not come out of an image, and
+    therefore the only one that can answer the question at all. Every other
+    number is stamped into a slot and compared against a constant compiled into
+    that same slot.
+
+    Undecidable is refused. An appliance that cannot say what its state is
+    formatted as cannot be told that some artifact is safe for it.
+    """
+
+    if recorded is None:
+        return [
+            {
+                "code": "state_schemas_unrecorded",
+                "message": (
+                    "this appliance has no record of what its persistent state is formatted "
+                    "as, so no artifact can be proven able to read it; run "
+                    "'ems-appliance ab verify-persistence' and try again"
+                ),
+            }
+        ]
+
+    recorded = dict(recorded)
+    if not release.state_implements:
+        # A manifest from before the declaration existed. The two legacy numbers
+        # are enough to refuse a step back, and not enough to prove one safe:
+        # they say nothing about the record formats stored on the shared paths.
+        problems = []
+        for axis, attribute in LEGACY_STATE_AXES.items():
+            declared = getattr(release, attribute)
+            if recorded.get(axis, 0) > declared:
+                problems.append(
+                    {
+                        "code": "artifact_state_schema_too_old",
+                        "message": (
+                            f"this appliance's state is written at {axis} schema "
+                            f"{recorded[axis]}; the artifact's manager implements {declared} "
+                            "and could not read it"
+                        ),
+                    }
+                )
+        return problems
+
+    problems = []
+    for axis in sorted(recorded):
+        if axis not in release.state_implements:
+            problems.append(
+                {
+                    "code": "artifact_state_schema_undeclared",
+                    "message": (
+                        f"this appliance holds {axis} state; the artifact does not say "
+                        "whether its manager can read that format"
+                    ),
+                }
+            )
+            continue
+        implements = release.state_implements[axis]
+        if recorded[axis] > implements:
+            problems.append(
+                {
+                    "code": "artifact_state_schema_too_old",
+                    "message": (
+                        f"this appliance's state is written at {axis} schema {recorded[axis]}; "
+                        f"the artifact's manager implements {implements} and could not read it"
+                    ),
+                }
+            )
+            continue
+        floor = release.state_reads.get(axis, 1)
+        if recorded[axis] < floor:
+            problems.append(
+                {
+                    "code": "artifact_state_schema_unreadable",
+                    "message": (
+                        f"the artifact's manager reads {axis} schema {floor} or newer; this "
+                        f"appliance's state is written at {recorded[axis]}"
+                    ),
+                }
+            )
+    # An axis the artifact declares and this partition has no state for is not a
+    # problem: there is nothing of that format here to be incompatible with.
+    return problems
+
+
 def downgrade_problem(release, *, current_version, rollback=False):
     """A normal update never goes backwards; only a recorded rollback may."""
 
@@ -727,7 +866,7 @@ def downgrade_problem(release, *, current_version, rollback=False):
         return None
     if not current_version:
         return None
-    if _version_key(release.release_version) >= _version_key(current_version):
+    if version_key(release.release_version) >= version_key(current_version):
         return None
     return {
         "code": "artifact_older_than_current",

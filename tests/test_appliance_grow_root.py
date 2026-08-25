@@ -393,7 +393,6 @@ def test_the_variant_verb_answers_only_from_a_marker_it_recognises(tmp_path):
     """
 
     from tests.helpers.appliance_ab import ApplianceAbHost, DEFAULT_OS_BUILD
-    from appliance import cli
 
     host = ApplianceAbHost(tmp_path)
 

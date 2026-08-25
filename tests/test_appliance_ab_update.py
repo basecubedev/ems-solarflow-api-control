@@ -17,6 +17,7 @@ import pytest
 
 from appliance import ab_blocks, os_update
 from appliance.operations import STATE_FAILED_RECOVERABLE
+from appliance.ab_state import SlotRecord
 from appliance.os_update import AUTHORITY_FIELD, OsUpdateError, TYPE_OS_UPDATE
 from tests.helpers.appliance_ab import (
     DEVICE,
@@ -695,16 +696,90 @@ def test_a_manifest_naming_no_board_is_refused_rather_than_waved_through():
         release_version = "1.5.0"
         build_id = "b"
         persistent_schema_version = 1
+        slot_schema_version = 2
         minimum_appliance_manager_version = "0.1.0"
         os_release = "trixie"
         device_layer = "pi5"
+        state_implements = {}
+        state_reads = {}
 
     problems = os_releases.compatibility_problems(
         _Release(),
         layout=None,
         board="pi5",
         appliance_version="9.9.9",
-        persistent_schema_version=1,
+        state_schemas={"persistent_paths": 1},
     )
 
     assert any(p["code"] == "artifact_hardware_unspecified" for p in problems)
+
+
+# --- the rollback path -------------------------------------------------------
+#
+# A rollback is by construction a step onto an older slot sharing this
+# partition: the same crossing an older release would make, and until now the
+# only one that ran no compatibility check at all. Hardening the update path
+# alone would have left this as the softer route to the same failure.
+
+
+def rollback_plan(service, record):
+    """Plan the rollback onto ``record``'s slot, which must be the inactive one.
+
+    The host boots slot A, so B is the rollback target: B is recorded first,
+    then A becomes known-good with B as its previous.
+    """
+
+    service.state.record_known_good(record)
+    service.state.record_known_good(
+        SlotRecord(slot="A", release_version="1.5.0", build_id="a"),
+        previous_slot=record.slot,
+    )
+    active = service.operations.active()
+    if active is not None:
+        service.operations.cancel(active.operation_id)
+    operation = service.operations.create(TYPE_OS_UPDATE)
+    return service.plan_rollback(operation)
+
+
+def test_a_rollback_onto_a_slot_that_could_not_read_this_state_is_refused(service, host):
+    from appliance import persistent_state
+
+    behind = dict(persistent_state.implemented_schemas())
+    behind["ab_state"] -= 1
+    host.seed_state_schema_record(persistent_state.implemented_schemas())
+
+    payload = rollback_plan(
+        service,
+        SlotRecord(slot="B", release_version="1.4.0", build_id="b", state_schemas=behind),
+    )
+
+    assert "rollback_target_state_schema_too_old" in blocker_codes(payload)
+
+
+def test_a_rollback_onto_a_slot_that_matches_is_not_refused_for_that_reason(service, host):
+    from appliance import persistent_state
+
+    schemas = persistent_state.implemented_schemas()
+    host.seed_state_schema_record(schemas)
+
+    payload = rollback_plan(
+        service,
+        SlotRecord(slot="B", release_version="1.4.0", build_id="b", state_schemas=schemas),
+    )
+
+    assert "rollback_target_state_schema_too_old" not in blocker_codes(payload)
+
+
+def test_a_slot_recorded_before_the_schemas_were_kept_does_not_strand_the_operator(service):
+    """Unprovable is not unsafe, and this is the way back from a bad update.
+
+    Refusing every rollback recorded by an older manager would take away the
+    safety net on exactly the appliances most likely to need it.
+    """
+
+    payload = rollback_plan(
+        service, SlotRecord(slot="B", release_version="1.4.0", build_id="b")
+    )
+
+    assert "rollback_target_state_schema_too_old" not in blocker_codes(payload)
+    assert "state_schemas_unrecorded" not in blocker_codes(payload)

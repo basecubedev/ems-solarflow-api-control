@@ -22,7 +22,9 @@ from tests.helpers.appliance_ab_artifacts import (
     BOARD,
     BOOT,
     ROOT,
+    DEFAULT_MEMBERS,
     ReleaseDirectory,
+    build_manifest,
     digest_of,
 )
 
@@ -378,7 +380,7 @@ def problems(release, layout, **overrides):
         "layout": layout,
         "board": BOARD,
         "appliance_version": "0.9.0",
-        "persistent_schema_version": PERSISTENT_SCHEMA_VERSION,
+        "state_schemas": {"persistent_paths": PERSISTENT_SCHEMA_VERSION},
         "current_build_id": "20260801-1",
     }
     values.update(overrides)
@@ -421,11 +423,35 @@ def test_an_unknown_slot_schema_is_refused(releases, layout):
     assert "artifact_slot_schema_unknown" in problems(release, layout)
 
 
-def test_a_persistent_schema_this_appliance_does_not_implement_is_refused(releases, layout):
+def test_an_artifact_whose_manager_implements_a_newer_schema_is_not_refused(releases, layout):
+    """A forward update is what ships a schema bump; refusing it was the bug.
+
+    The old gate compared the artifact's number against the *running* manager's
+    constant, so every appliance refused every release built after a bump —
+    including the release that would have taught it the new format. The manager
+    doing the writing never has to implement the target's schema; the target
+    slot brings its own.
+    """
+
     release_id = releases.publish(manifest_overrides={"persistent_schema_version": 4})
     release = releases.catalogue().get(release_id)
 
-    assert "artifact_persistent_schema_too_new" in problems(release, layout)
+    assert problems(release, layout) == []
+
+
+def test_an_artifact_that_could_not_read_this_appliance_s_state_is_refused(releases, layout):
+    release_id = releases.publish(manifest_overrides={"persistent_schema_version": 2})
+    release = releases.catalogue().get(release_id)
+
+    codes = problems(release, layout, state_schemas={"persistent_paths": 3})
+
+    assert "artifact_state_schema_too_old" in codes
+
+
+def test_an_appliance_that_cannot_say_what_its_state_is_refuses_everything(releases, layout):
+    release = releases.catalogue().get(releases.publish())
+
+    assert problems(release, layout, state_schemas=None) == ["state_schemas_unrecorded"]
 
 
 def test_an_artifact_needing_a_newer_appliance_manager_is_refused(releases, layout):
@@ -490,3 +516,131 @@ def test_readiness_accepts_a_keyring_that_is_present(tmp_path):
     )
 
     assert services.os_update.status()["readiness"]["release_keyring_ready"] is True
+
+
+# --- state compatibility -----------------------------------------------------
+#
+# The question every rule below asks is one no gate could ask before: can the
+# code inside this artifact read the state already on this appliance's disk?
+# Until the partition carried its own record, both operands of every schema
+# comparison came out of the same image.
+
+
+def state_block(implements=None, reads=None):
+    from appliance import persistent_state
+
+    return {
+        "implements": implements or persistent_state.implemented_schemas(),
+        "reads": reads or persistent_state.readable_floors(),
+    }
+
+
+def test_a_release_that_declares_its_schemas_is_judged_on_all_of_them(releases, layout):
+    from appliance import persistent_state
+
+    release_id = releases.publish(manifest_overrides={"state_schemas": state_block()})
+    release = releases.catalogue().get(release_id)
+
+    assert problems(
+        release, layout, state_schemas=persistent_state.implemented_schemas()
+    ) == []
+
+
+def test_an_axis_the_artifact_never_mentions_is_refused_rather_than_assumed(releases, layout):
+    implements = {"persistent_paths": 3}
+    release_id = releases.publish(
+        manifest_overrides={"state_schemas": state_block(implements, implements)}
+    )
+    release = releases.catalogue().get(release_id)
+
+    codes = problems(
+        release, layout, state_schemas={"persistent_paths": 3, "ab_state": 1}
+    )
+
+    assert "artifact_state_schema_undeclared" in codes
+
+
+def test_an_artifact_whose_manager_cannot_read_this_state_is_refused(releases, layout):
+    implements = {"persistent_paths": 3, "ab_state": 1}
+    release_id = releases.publish(
+        manifest_overrides={"state_schemas": state_block(implements, implements)}
+    )
+    release = releases.catalogue().get(release_id)
+
+    codes = problems(
+        release, layout, state_schemas={"persistent_paths": 3, "ab_state": 2}
+    )
+
+    assert "artifact_state_schema_too_old" in codes
+
+
+def test_an_artifact_that_needs_newer_state_than_this_appliance_has_is_refused(releases, layout):
+    release_id = releases.publish(
+        manifest_overrides={
+            "state_schemas": state_block({"ab_state": 3}, {"ab_state": 3}),
+        }
+    )
+    release = releases.catalogue().get(release_id)
+
+    codes = problems(release, layout, state_schemas={"ab_state": 1})
+
+    assert "artifact_state_schema_unreadable" in codes
+
+
+def test_an_axis_this_appliance_holds_no_state_for_is_not_a_problem(releases, layout):
+    """There is nothing of that format here to be incompatible with."""
+
+    release_id = releases.publish(manifest_overrides={"state_schemas": state_block()})
+    release = releases.catalogue().get(release_id)
+
+    assert problems(release, layout, state_schemas={"persistent_paths": 3}) == []
+
+
+def test_the_upgrade_that_ships_a_schema_bump_is_not_refused(releases, layout):
+    """The regression guard.
+
+    A partition written at the old shared-path set, and a release whose manager
+    implements the new one. Declaring these axes as strictly as a stored record
+    format would refuse exactly this step — which is the one-directional gate's
+    defect, reintroduced from the other side.
+    """
+
+    from appliance import persistent_state
+
+    release_id = releases.publish(manifest_overrides={"state_schemas": state_block()})
+    release = releases.catalogue().get(release_id)
+    older = dict(persistent_state.implemented_schemas())
+    older["persistent_paths"] -= 1
+    older["slot_layout"] -= 1
+
+    assert problems(release, layout, state_schemas=older) == []
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "not-an-object",
+        {"implements": {}, "reads": {}},
+        {"implements": {"ab_state": 0}, "reads": {"ab_state": 1}},
+        {"implements": {"ab_state": "1"}, "reads": {"ab_state": 1}},
+        {"implements": {"ab_state": 1}, "reads": {"other": 1}},
+        {"implements": {"ab_state": 1}, "reads": {"ab_state": 2}},
+    ],
+)
+def test_a_malformed_declaration_is_a_broken_build_not_a_guess(block):
+    """The manifest is signed, so a broken block is a broken build.
+
+    Guessing at it would be guessing at what a step back is allowed to cross.
+    """
+
+    payload = build_manifest(
+        archive_digest=digest_of(b"x"),
+        archive_size=1,
+        members={name: dict(entry) for name, entry in DEFAULT_MEMBERS.items()},
+        state_schemas=block,
+    )
+
+    with pytest.raises(os_releases.ReleaseError) as caught:
+        os_releases.parse_manifest(payload)
+
+    assert caught.value.code == "release_manifest_invalid"

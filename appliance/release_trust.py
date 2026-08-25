@@ -420,6 +420,12 @@ READINESS_INVARIANTS = (
     "all_mandatory_inspections_pass",
     "runtime_required_gates_pass",
     "release_not_stale",
+    # Builder approval was enforced in exactly one place -- the finalizer's
+    # pre-signature refusal -- so a result assembled by any other route reached
+    # physical_ready without the lock ever being consulted. The hardware kit
+    # checks the environment for completeness, which asks whether the fields are
+    # filled in, not whether release policy approves the machine they describe.
+    "builder_environment_approved",
 )
 
 KIT_READINESS_INVARIANTS = READINESS_INVARIANTS + ("hardware_kit_verified",)
