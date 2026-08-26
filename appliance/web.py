@@ -611,6 +611,8 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             "/api/updates": ("updates.get", {}),
             "/api/ab": ("ab.status", {}),
             "/api/ab/sources": ("ab.sources", {}),
+            "/api/manager": ("manager.status", {}),
+            "/api/manager/sources": ("manager.sources", {}),
             "/api/ssh/keys": ("ssh.get", {}),
             "/api/backup": ("backup.get", {}),
             "/api/operations": ("operations.list", {}),
@@ -715,6 +717,12 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 "ab.plan_fetch",
                 lambda b: {"release_id": b.get("release_id")},
             ),
+            # Same rule for the manager package: a release id and nothing else.
+            "/api/manager/plan-update": (
+                "manager.plan_update",
+                lambda b: {"release_id": b.get("release_id")},
+            ),
+            "/api/manager/plan-revert": ("manager.plan_revert", lambda _: {}),
             "/api/ssh/enable": ("ssh.plan_service", lambda _: {"enabled": True}),
             "/api/ssh/disable": ("ssh.plan_service", lambda _: {"enabled": False}),
             "/api/ssh/keys": ("ssh.plan_key_add", self._key_fields),

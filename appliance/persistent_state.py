@@ -25,6 +25,7 @@ from appliance import (
     ab_state,
     backup_ownership,
     manager_retention,
+    manager_verify,
     operation_schema,
 )
 
@@ -67,6 +68,7 @@ def implemented_schemas():
         "operation_recovery": operation_schema.RECOVERY_SCHEMA_VERSION,
         "confirmed_authority": CONFIRMED_AUTHORITY_SCHEMA_VERSION,
         "manager_retention": manager_retention.RECORD_SCHEMA_VERSION,
+        "manager_verify": manager_verify.DEADLINE_SCHEMA_VERSION,
     }
 
 
@@ -97,6 +99,7 @@ def readable_floors():
     floors["persistent_paths"] = 1
     floors["slot_layout"] = 1
     floors["manager_retention"] = min(manager_retention.READABLE_RECORD_VERSIONS)
+    floors["manager_verify"] = min(manager_verify.READABLE_DEADLINE_VERSIONS)
 
     # Everything else is read with strict equality by the module that owns it.
     # The floor is what it implements, and that is deliberate: a release whose
@@ -190,6 +193,22 @@ def resolve(root, mountpoint):
     """
 
     return Path(root or "/") / str(mountpoint).lstrip("/")
+
+
+def record_mountpoint(paths, probe=None, *, root="/"):
+    """The one place this appliance's state schema record lives.
+
+    On an A/B host the persistent partition is the only thing a slot switch does
+    not replace, so the record belongs there. A package-managed host switches
+    nothing, and the manager's state directory is what an install has to
+    survive. Never both: two records would be two authorities for one fact.
+    """
+
+    if probe is not None:
+        report = ab_persistence.verify(ab_layout.discover(probe), probe.mounts())
+        if report.state == ab_persistence.STATE_OK and report.mountpoint:
+            return resolve(root, report.mountpoint)
+    return Path(paths.state_dir)
 
 
 def _schema_number(value):

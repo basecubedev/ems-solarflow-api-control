@@ -206,6 +206,24 @@ def test_the_code_never_guesses_a_release_source_but_the_package_declares_one():
     ), configured.group(1)
 
 
+def test_the_shipped_configuration_names_the_manager_package_source_too():
+    """Same question, same answer, for the package the console runs from.
+
+    The code default stays empty so an appliance nobody assembled here says it
+    has no transport, and the shipped configuration names this project's own
+    distribution point because /etc cannot be corrected after the flash.
+    """
+
+    conf = SHIPPED_CONFIG.read_text(encoding="utf-8")
+    configured = re.search(r"^manager_index_url\s*=\s*(\S+)$", conf, re.M)
+
+    assert appliance_config.DEFAULT_MANAGER_INDEX_URL == ""
+    assert configured, "the shipped configuration names no manager package source"
+    assert configured.group(1).startswith(
+        "https://github.com/basecubedev/ems-solarflow-api-control/"
+    ), configured.group(1)
+
+
 # --- Admin's transition record, which the appliance reads but never owns ------
 
 

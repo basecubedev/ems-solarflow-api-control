@@ -19,6 +19,7 @@ import threading
 
 from appliance import (
     admin_lifecycle,
+    manager_update,
     network,
     operation_schema,
     os_releases,
@@ -63,6 +64,8 @@ PLAN_TYPES = {
     "ab.plan_update": os_update.TYPE_OS_UPDATE,
     "ab.plan_rollback": os_update.TYPE_OS_ROLLBACK,
     "ab.plan_fetch": TYPE_OS_FETCH,
+    "manager.plan_update": manager_update.TYPE_MANAGER_UPDATE,
+    "manager.plan_revert": manager_update.TYPE_MANAGER_REVERT,
     "system.plan_reboot": "system.reboot",
     "system.plan_shutdown": "system.shutdown",
 }
@@ -84,6 +87,8 @@ AUDITED_PLANS = {
     os_update.TYPE_OS_UPDATE: "ab.update.plan",
     os_update.TYPE_OS_ROLLBACK: "ab.rollback.plan",
     TYPE_OS_FETCH: "ab.fetch.plan",
+    manager_update.TYPE_MANAGER_UPDATE: "manager.update.plan",
+    manager_update.TYPE_MANAGER_REVERT: "manager.revert.plan",
 }
 
 
@@ -115,6 +120,7 @@ SERVICE_ERRORS = (
     OperationError,
     support_archive.SupportArchiveError,
     timezone_config.TimezoneError,
+    manager_update.ManagerUpdateError,
     auth.AuthError,
 )
 
@@ -214,6 +220,10 @@ class AgentHandlers:
             return self._ab_status()
         if spec.name == "ab.sources":
             return self._require_fetch().index()
+        if spec.name == "manager.status":
+            return self._require_manager().status()
+        if spec.name == "manager.sources":
+            return self._require_manager().sources()
         if spec.name == "network.wifi.scan":
             return {"networks": self.services.network.scan()}
         if spec.name == "operations.list":
@@ -243,6 +253,7 @@ class AgentHandlers:
             ssh_service.SshServiceError,
             os_update.OsUpdateError,
             os_releases.ReleaseError,
+            manager_update.ManagerUpdateError,
             FetchError,
             ValidationError,
             OperationError,
@@ -328,6 +339,10 @@ class AgentHandlers:
             return self._require_ab().plan_rollback(operation)
         if name == "ab.plan_fetch":
             return self._require_fetch().plan_fetch(operation, args["release_id"])
+        if name == "manager.plan_update":
+            return self._require_manager().plan_update(operation, args["release_id"])
+        if name == "manager.plan_revert":
+            return self._require_manager().plan_revert(operation)
         if name in ("system.plan_reboot", "system.plan_shutdown"):
             return self._plan_power(operation, name)
         raise AgentError("unknown_operation", f"{name} has no planner")
@@ -444,6 +459,11 @@ class AgentHandlers:
             return services.timezone.execute
         if operation_type in (os_update.TYPE_OS_UPDATE, os_update.TYPE_OS_ROLLBACK):
             return self._execute_ab
+        if operation_type in (
+            manager_update.TYPE_MANAGER_UPDATE,
+            manager_update.TYPE_MANAGER_REVERT,
+        ):
+            return self._execute_manager
         if operation_type == TYPE_OS_FETCH:
             return self._execute_fetch
         if operation_type in ("system.reboot", "system.shutdown"):
@@ -459,6 +479,24 @@ class AgentHandlers:
                 "ab_unavailable", "this appliance has no A/B operating-system update service"
             )
         return service
+
+    def _require_manager(self):
+        service = getattr(self.services, "manager", None)
+        if service is None:
+            raise AgentError(
+                "manager_unavailable",
+                "this appliance has no Appliance Manager package update service",
+            )
+        return service
+
+    def _execute_manager(self, operation):
+        from appliance.operations import STATE_SUCCEEDED
+
+        result = self._require_manager().execute(operation)
+        self.services.operations.finish(
+            operation.operation_id, STATE_SUCCEEDED, result=result, stage=result.get("stage", "")
+        )
+        return result
 
     def _require_fetch(self):
         service = getattr(self.services, "os_fetch", None)

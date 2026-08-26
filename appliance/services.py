@@ -33,6 +33,8 @@ from appliance.auth import AuthStore, deployment_owner
 from appliance.network import NetworkService
 from appliance.timezone_config import TimezoneService
 from appliance.operations import OperationStore
+from appliance import persistent_state
+from appliance.manager_update import ManagerUpdateService
 from appliance.os_fetch import OsFetchService
 from appliance.os_releases import OsReleaseCatalogue, ReleaseSource
 from appliance.os_update import OsUpdateService
@@ -68,6 +70,7 @@ class ApplianceServices:
     operation_log: object
     os_update: object = None
     os_fetch: object = None
+    manager: object = None
     ab_probe: object = None
     ab_state: object = None
     ab_bootstrap: object = None
@@ -243,6 +246,23 @@ def build_services(
         time_fn=time_fn,
         operation_log=operation_log,
     )
+    # The manager's own state schema record. On an A/B appliance the persistent
+    # partition is the only thing a slot switch does not replace, so the record
+    # belongs there; on a package-managed host nothing switches and the state
+    # directory is what an install has to survive. One record either way.
+    manager = ManagerUpdateService(
+        paths=paths,
+        config=config,
+        verifier=os_update.catalogue.verifier,
+        probe=probe,
+        operations=operations,
+        runner=runner,
+        state_mountpoint=persistent_state.record_mountpoint(paths, ab_probe, root=root),
+        time_fn=time_fn,
+        operation_log=operation_log,
+        installed_version=APPLIANCE_VERSION,
+        architecture=host_architecture(),
+    )
     support = SupportArchiveService(
         paths=paths, config=config, status_service=status, operations=operations, time_fn=time_fn
     )
@@ -269,6 +289,7 @@ def build_services(
         operation_log=operation_log,
         os_update=os_update,
         os_fetch=os_fetch,
+        manager=manager,
         ab_probe=ab_probe,
         ab_state=ab_state,
         ab_bootstrap=ab_bootstrap,

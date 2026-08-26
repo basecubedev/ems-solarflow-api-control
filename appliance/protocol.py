@@ -157,6 +157,12 @@ READ_ONLY_OPERATIONS = (
     _spec("admin.releases", summary="Installable Admin versions"),
     _spec("ab.status", summary="A/B slot, persistence and OS release state"),
     _spec("ab.sources", summary="OS releases the configured index offers"),
+    _spec("manager.status", summary="Installed manager, what is kept, and any deadline"),
+    _spec(
+        "manager.sources",
+        summary="Appliance Manager packages the configured index offers",
+        timeout_seconds=IMAGE_OPERATION_TIMEOUT,
+    ),
 )
 
 MUTATING_OPERATIONS = (
@@ -312,6 +318,25 @@ MUTATING_OPERATIONS = (
         takes_lock=True,
         fields=(Field("release_id", KIND_OS_RELEASE_ID),),
         summary="Plan a download of a signed OS release",
+        timeout_seconds=IMAGE_OPERATION_TIMEOUT,
+    ),
+    # The browser names a release id and nothing else. Every URL, signing key
+    # and package path comes from the root-owned configuration or the signed
+    # manifest. Going backwards is a separate operation rather than a flag, so
+    # a revert can never be reached by mistyping an update.
+    _spec(
+        "manager.plan_update",
+        mutating=True,
+        takes_lock=True,
+        fields=(Field("release_id", KIND_OS_RELEASE_ID),),
+        summary="Plan an Appliance Manager package installation",
+        timeout_seconds=IMAGE_OPERATION_TIMEOUT,
+    ),
+    _spec(
+        "manager.plan_revert",
+        mutating=True,
+        takes_lock=True,
+        summary="Plan going back to the kept Appliance Manager package",
         timeout_seconds=IMAGE_OPERATION_TIMEOUT,
     ),
     _spec(

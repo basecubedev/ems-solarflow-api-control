@@ -215,6 +215,7 @@ def test_every_schema_constant_the_appliance_keeps_on_a_shared_path_has_an_axis(
         "operation_schema.RECOVERY_SCHEMA_VERSION",
         "os_update.CONFIRMED_AUTHORITY_SCHEMA_VERSION",
         "manager_retention.RECORD_SCHEMA_VERSION",
+        "manager_verify.DEADLINE_SCHEMA_VERSION",
     }
     # Not appliance state: these version a release's evidence, or this record's
     # own envelope. None of them is ever read back off the persistent partition

@@ -91,6 +91,9 @@ is refused as `invalid_request` before any handler runs.
 | `manager_retention.py` | The package that was running, kept so a revert has a target |
 | `manager_releases.py` | What a published manager package claims, and what may be believed |
 | `manager_install.py` | Hands a verified package to a unit that survives installing it |
+| `manager_verify.py` | The deadline that reverts a manager install nobody confirmed |
+| `manager_update.py` | Fetching, planning and applying a manager package on an operator's button |
+| `release_index.py` | Assembling and retaining a release index, for every artefact class |
 | `validation.py` | Every typed input validator and its stable error code |
 | `redaction.py` | Secret redaction and log bounding |
 | `protocol.py` | The fixed agent operation allowlist |

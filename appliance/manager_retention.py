@@ -13,12 +13,12 @@ import json
 import os
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 RECORD_NAME = "retention.json"
-RECORD_SCHEMA_VERSION = 1
-READABLE_RECORD_VERSIONS = (1,)
+RECORD_SCHEMA_VERSION = 2
+READABLE_RECORD_VERSIONS = (1, 2)
 
 CURRENT_NAME = "current.deb"
 PREVIOUS_NAME = "previous.deb"
@@ -43,6 +43,13 @@ class RetainedPackage:
     version: str = ""
     build_id: str = ""
     retained_at: str = ""
+    architecture: str = ""
+    # What this package's manager writes and the oldest it can read, copied from
+    # its verified manifest. A revert has no manifest left to consult, so a
+    # package that was not asked this question when it arrived cannot be asked
+    # it later.
+    state_implements: dict = field(default_factory=dict)
+    state_reads: dict = field(default_factory=dict)
 
     @property
     def present(self):
@@ -55,6 +62,11 @@ class RetainedPackage:
             "version": self.version,
             "build_id": self.build_id,
             "retained_at": self.retained_at,
+            "architecture": self.architecture,
+            "state_schemas": {
+                "implements": dict(self.state_implements),
+                "reads": dict(self.state_reads),
+            },
         }
 
 
@@ -86,15 +98,30 @@ def _record_path(paths):
     return Path(paths.packages_dir) / RECORD_NAME
 
 
+def _schemas(block):
+    if not isinstance(block, dict):
+        return {}
+    return {
+        str(name): int(value)
+        for name, value in block.items()
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 1
+    }
+
+
 def _package(payload):
     if not isinstance(payload, dict):
         return RetainedPackage()
+    schemas = payload.get("state_schemas")
+    schemas = schemas if isinstance(schemas, dict) else {}
     return RetainedPackage(
         path=str(payload.get("path") or ""),
         sha256=str(payload.get("sha256") or ""),
         version=str(payload.get("version") or ""),
         build_id=str(payload.get("build_id") or ""),
         retained_at=str(payload.get("retained_at") or ""),
+        architecture=str(payload.get("architecture") or ""),
+        state_implements=_schemas(schemas.get("implements")),
+        state_reads=_schemas(schemas.get("reads")),
     )
 
 
@@ -163,7 +190,19 @@ def _copy(source, target):
         raise RetentionError("retention_not_writable", f"{target} could not be written: {exc}")
 
 
-def retain(paths, archive, *, sha256, version, build_id="", retained_at="", rotate=True):
+def retain(
+    paths,
+    archive,
+    *,
+    sha256,
+    version,
+    build_id="",
+    retained_at="",
+    architecture="",
+    state_implements=None,
+    state_reads=None,
+    rotate=True,
+):
     """Keep ``archive`` as current, moving what was current to previous.
 
     ``rotate=False`` seeds the current slot without displacing anything — what an
@@ -197,6 +236,9 @@ def retain(paths, archive, *, sha256, version, build_id="", retained_at="", rota
             version=existing.current.version,
             build_id=existing.current.build_id,
             retained_at=existing.current.retained_at,
+            architecture=existing.current.architecture,
+            state_implements=dict(existing.current.state_implements),
+            state_reads=dict(existing.current.state_reads),
         )
 
     _copy(source, current_path)
@@ -206,6 +248,9 @@ def retain(paths, archive, *, sha256, version, build_id="", retained_at="", rota
         version=version,
         build_id=build_id,
         retained_at=retained_at,
+        architecture=architecture,
+        state_implements=dict(state_implements or {}),
+        state_reads=dict(state_reads or {}),
     )
     retention = Retention(current=current, previous=previous)
     _write_record(paths, retention)

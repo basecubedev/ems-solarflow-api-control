@@ -100,6 +100,30 @@ def read_outcome(paths):
     )
 
 
+def stage(paths, *, archive, version, build_id, sha256, requested_at=""):
+    """Name the archive the install unit is to unpack, and clear the last answer.
+
+    Separate from ``prepare`` because a revert has no manifest to prove anything
+    against: the archive it names was verified when it arrived and kept since.
+    """
+
+    _write(
+        request_path(paths),
+        {
+            "archive": str(archive),
+            "version": version,
+            "build_id": build_id,
+            "sha256": sha256,
+            "requested_at": requested_at,
+        },
+    )
+    try:
+        result_path(paths).unlink()
+    except FileNotFoundError:
+        pass
+    return request_path(paths)
+
+
 def prepare(paths, *, release, archive, state_schemas, verifier=None, manifest_path="",
             signature_path="", architecture="arm64", retained_at=""):
     """Prove the package may be installed, keep the outgoing one, and stage it.
@@ -144,22 +168,19 @@ def prepare(paths, *, release, archive, state_schemas, verifier=None, manifest_p
         version=release.version,
         build_id=release.build_id,
         retained_at=retained_at,
+        architecture=release.architecture,
+        state_implements=release.state_implements,
+        state_reads=release.state_reads,
     )
 
-    _write(
-        request_path(paths),
-        {
-            "archive": retention.current.path,
-            "version": release.version,
-            "build_id": release.build_id,
-            "sha256": release.artifact_digest,
-            "requested_at": retained_at,
-        },
+    stage(
+        paths,
+        archive=retention.current.path,
+        version=release.version,
+        build_id=release.build_id,
+        sha256=release.artifact_digest,
+        requested_at=retained_at,
     )
-    try:
-        result_path(paths).unlink()
-    except FileNotFoundError:
-        pass
     return retention
 
 

@@ -294,8 +294,22 @@ def test_the_ab_page_reuses_the_control_stage_family():
 
 
 def test_the_update_page_picks_exactly_one_mode():
+    # The function itself, brace-matched: the page has grown sections that are
+    # rendered on every appliance shape, and a slice that runs to the next
+    # function would count their early returns as this one's.
     source = app_source()
-    section = source[source.index("function renderUpdates") : source.index("function renderAbUpdates")]
+    start = source.index("function renderUpdates")
+    depth = 0
+    for index in range(start, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                section = source[start : index + 1]
+                break
+    else:
+        raise AssertionError("renderUpdates is not a closed function")
 
     assert "renderAbUpdates(main, ab)" in section
     assert "renderPackageUpdates(main, updates, ab)" in section

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow Appliance Manager install deadline
+Documentation=file:///usr/share/doc/ems-appliance-manager/os-updates.md
+
+[Timer]
+# A repeating tick rather than one shot at the deadline: the appliance may be
+# rebooted inside the window, and a one-shot timer a reboot cancels is a
+# deadline that never expires. The tick disarms itself once no deadline is
+# waiting, so the steady state is a stopped timer.
+OnBootSec=90
+OnActiveSec=60
+OnUnitActiveSec=60
+AccuracySec=15s
+
+[Install]
+# Armed with `systemctl enable --now`, which is what carries the deadline
+# across a reboot; the package itself never enables it.
+WantedBy=timers.target

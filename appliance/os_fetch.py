@@ -68,7 +68,7 @@ class FetchError(Exception):
         self.message = message
 
 
-def _https_url(value, *, label):
+def https_url(value, *, label):
     """An absolute https URL, or a refusal naming which one was not.
 
     http is refused rather than upgraded: an operator who configured a plain
@@ -97,7 +97,7 @@ class HttpsFetcher:
         self.timeout = timeout
 
     def _response(self, url, label):
-        request = urllib.request.Request(_https_url(url, label=label))
+        request = urllib.request.Request(https_url(url, label=label))
         try:
             return self._open(request, timeout=self.timeout)
         except urllib.error.HTTPError as exc:
@@ -233,9 +233,9 @@ def parse_index(payload):
             continue
         try:
             release_id = os_releases.validate_release_id(entry.get("release_id"))
-            manifest_url = _https_url(entry.get("manifest_url"), label="the manifest url")
-            signature_url = _https_url(entry.get("signature_url"), label="the signature url")
-            archive_url = _https_url(entry.get("archive_url"), label="the archive url")
+            manifest_url = https_url(entry.get("manifest_url"), label="the manifest url")
+            signature_url = https_url(entry.get("signature_url"), label="the signature url")
+            archive_url = https_url(entry.get("archive_url"), label="the archive url")
         except (FetchError, os_releases.ReleaseError):
             # A malformed entry is skipped, never repaired by guessing: the
             # index is a suggestion and one bad row does not poison the rest.
@@ -340,7 +340,7 @@ class OsFetchService:
 
         local = {release.release_id for release in self._local_releases()}
         try:
-            url = _https_url(self.config.os_release_index_url, label="the release index url")
+            url = https_url(self.config.os_release_index_url, label="the release index url")
         except FetchError as exc:
             return {"configured": False, "error": exc.code, "releases": [], "local": sorted(local)}
         try:
@@ -565,5 +565,6 @@ __all__ = [
     "HttpsFetcher",
     "OsFetchService",
     "TYPE_OS_FETCH",
+    "https_url",
     "parse_index",
 ]

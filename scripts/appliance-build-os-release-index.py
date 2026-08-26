@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from appliance import image_variants, os_fetch, os_releases  # noqa: E402
+from appliance import image_variants, os_releases, release_index  # noqa: E402
 
 DESCRIBED_FROM_MANIFEST = ("release_version", "created_at", "build_id")
 
@@ -79,47 +79,12 @@ def variant_of(release_id):
     raise SystemExit(f"{release_id}: names no image variant this project builds")
 
 
-def load_previous(path):
-    if not path:
-        return []
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    entries = payload.get("releases")
-    if not isinstance(entries, list):
-        raise SystemExit(f"{path}: no release list to carry forward")
-    return [entry for entry in entries if isinstance(entry, dict) and entry.get("release_id")]
-
-
 def build(manifests, *, base_url, previous=None, keep=0):
-    merged = {}
-    for entry in load_previous(previous):
-        merged[entry["release_id"]] = entry
-    minted = []
-    for manifest in manifests:
-        entry = entry_for(manifest, base_url)
-        # A rebuild of the same release replaces its entry rather than joining
-        # it: two rows under one identifier is an index that cannot be resolved.
-        merged[entry["release_id"]] = entry
-        minted.append(entry["release_id"])
-
-    releases = sorted(merged.values(), key=os_fetch.sort_key, reverse=True)
-    dropped = []
-    if keep and len(releases) > keep:
-        dropped = releases[keep:]
-        releases = releases[:keep]
-    # Retention sorts by version, and the release being published is not always
-    # the newest one -- a patch to an older line, or a rebuild, sorts below what
-    # is already listed. Dropping it here would publish an assets bundle no
-    # appliance can see, which reads as a release that silently did not happen.
-    published = {entry["release_id"] for entry in dropped} & set(minted)
-    if published:
-        raise SystemExit(
-            "--keep would drop the release this run just built: "
-            + ", ".join(sorted(published))
-        )
-    return (
-        {"format_version": os_fetch.INDEX_FORMAT_VERSION, "releases": releases},
-        dropped,
-    )
+    entries = [entry_for(manifest, base_url) for manifest in manifests]
+    try:
+        return release_index.assemble(entries, previous=previous or "", keep=keep)
+    except release_index.ReleaseIndexError as exc:
+        raise SystemExit(exc.message)
 
 
 def main(argv=None):
@@ -154,9 +119,10 @@ def main(argv=None):
 
     # Parsing it back is the check: an index the appliance would refuse, or one
     # whose entries it would silently skip, must not leave this script.
-    accepted = os_fetch.parse_index(index)
-    if len(accepted) != len(index["releases"]):
-        raise SystemExit("the appliance would drop entries from this index")
+    try:
+        release_index.verify(index)
+    except release_index.ReleaseIndexError as exc:
+        raise SystemExit(exc.message)
 
     text = json.dumps(index, indent=2, sort_keys=True) + "\n"
     if args.output == "-":

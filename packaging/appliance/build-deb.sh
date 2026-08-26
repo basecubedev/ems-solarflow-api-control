@@ -110,6 +110,15 @@ install -m 0644 "$PACKAGING/systemd/ems-appliance-manager-install.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0755 "$PACKAGING/bin/install-manager.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/install-manager.sh"
+# The deadline that reverts an install nobody confirmed. Neither unit is enabled
+# by the package: arming copies the reverter out of this tree first, so the
+# script that judges an install is the one shipped by the package it replaces.
+install -m 0644 "$PACKAGING/systemd/ems-appliance-manager-verify.service" \
+        "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-manager-verify.timer" \
+        "$STAGE/usr/lib/systemd/system/"
+install -m 0755 "$PACKAGING/bin/verify-manager.sh" \
+        "$STAGE/usr/lib/ems-appliance-manager/verify-manager.sh"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-host-identity.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-ab-health.service" \

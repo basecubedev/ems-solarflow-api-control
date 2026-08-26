@@ -1110,6 +1110,8 @@
     var updates = (state.data.status || {}).updates || {};
     var ab = updates.ab || {};
 
+    renderManagerUpdates(main);
+
     if (updates.update_mode === "ab_image" || ab.ab_supported) {
       renderAbUpdates(main, ab);
       return;
@@ -1307,6 +1309,219 @@
           + "check is discarded and never appears in the list above."
       })
     ]);
+  }
+
+  var MANAGER_DIRECTIONS = {
+    upgrade: "newer",
+    downgrade: "older",
+    reinstall: "same version",
+    revert: "the kept package"
+  };
+
+  var MANAGER_VERDICTS = {
+    confirmed: ["ok", "the install proved itself and the deadline was retired"],
+    reverted: ["warn", "the install did not prove itself in time, so the previous package was put back"],
+    revert_failed: ["bad", "the install did not prove itself and the previous package could not be installed either"],
+    revert_unavailable: ["bad", "the install did not prove itself and this appliance had kept no earlier package"]
+  };
+
+  function managerLabel(entry) {
+    var described = entry.described || entry;
+    var version = described.release_version;
+    if (!version) {
+      return entry.release_id;
+    }
+    var parts = [version];
+    var day = String(described.created_at || "").slice(0, 10);
+    if (day) {
+      parts.push(day);
+    }
+    var direction = MANAGER_DIRECTIONS[entry.direction];
+    if (direction) {
+      parts.push(direction);
+    }
+    return parts.join(" \u00b7 ");
+  }
+
+  /* Every enable/disable decision this section makes, in one place and derived
+     from the backend payload alone. A deadline in flight is the one state that
+     blocks both buttons: a second install would replace the package whose
+     verdict the appliance is still waiting for. */
+  function managerActions(manager) {
+    var verify = (manager || {}).verify || {};
+    var armed = verify.armed === true;
+    return {
+      armed: armed,
+      canUpdate: !armed,
+      canRevert: (manager || {}).can_revert === true && !armed
+    };
+  }
+
+  function renderManagerSources(sources, manager) {
+    if (sources === null || sources === undefined) {
+      return el("p", { class: "control-stage-subtitle", text: "Reading the package index\u2026" });
+    }
+    if (!sources.configured) {
+      return el("p", { class: "control-stage-subtitle", "data-test": "manager-sources-unconfigured",
+        text: "No manager package index is configured, so this appliance cannot download one. "
+          + "Set manager_index_url in appliance.conf, or install the package by hand." });
+    }
+    if (sources.error) {
+      return el("p", { class: "control-stage-subtitle", "data-test": "manager-sources-error" }, [
+        el("strong", { text: "The package index could not be read: " }),
+        el("span", { text: sources.error })
+      ]);
+    }
+    var offered = sources.releases || [];
+    if (!offered.length) {
+      return el("p", { class: "control-stage-subtitle", "data-test": "manager-sources-empty",
+        text: "The package index offers nothing." });
+    }
+    return el("div", {}, [
+      el("div", { class: "control-stage-actions" }, offered.map(function (entry) {
+        return el("button", {
+          type: "button", class: "primary-button compact",
+          "data-test": "manager-plan-update",
+          "data-release": entry.release_id,
+          "data-direction": entry.direction || "",
+          title: entry.release_id,
+          text: "Install " + managerLabel(entry),
+          disabled: !managerActions(manager).canUpdate,
+          onclick: function () {
+            planOperation({
+              endpoint: "/api/manager/plan-update",
+              body: { release_id: entry.release_id },
+              title: "Install the Appliance Manager package " + entry.release_id,
+              confirmLabel: "Install",
+              danger: entry.direction === "downgrade"
+            });
+          }
+        });
+      })),
+      el("p", {
+        class: "control-stage-subtitle",
+        text: "An older package installs as readily as a newer one: going back is the recovery "
+          + "this path provides. The size and digest come from the release manifest after its "
+          + "signature has been verified against this appliance's keyring."
+      })
+    ]);
+  }
+
+  /* The Appliance Manager is the package the console itself runs from, so it
+     is shown on every appliance -- A/B image-managed or single-slot. It never
+     updates on its own: an automatic update would distribute an untested
+     package to every appliance at once. */
+  function renderManagerUpdates(main) {
+    var manager = state.data.manager;
+    if (manager === undefined) {
+      state.data.manager = null;
+      loadInto("manager", "/api/manager");
+      manager = null;
+    }
+    if (manager === null) {
+      main.appendChild(el("h2", { class: "section-title", text: "Appliance Manager" }));
+      main.appendChild(el("p", { class: "section-hint", text: "Reading the manager state\u2026" }));
+      return;
+    }
+    if (manager.error) {
+      main.appendChild(el("h2", { class: "section-title", text: "Appliance Manager" }));
+      main.appendChild(el("p", { class: "empty-state", "data-test": "manager-unavailable" }, [
+        el("strong", { text: "The manager state is unavailable: " }),
+        el("span", { text: format(manager.error) })
+      ]));
+      return;
+    }
+
+    var retention = manager.retention || {};
+    var kept = retention.previous || {};
+    var verify = manager.verify || {};
+    var verdict = manager.verdict || {};
+
+    main.appendChild(el("h2", { class: "section-title", text: "Appliance Manager" }));
+    main.appendChild(el("p", {
+      class: "section-hint",
+      text: "The package this console runs from. It updates only when you ask it to, and the "
+        + "same control installs an older package as readily as a newer one."
+    }));
+
+    main.appendChild(el("div", { class: "card-grid" }, [
+      card("Installed", [
+        el("p", { class: "status-value", text: format(manager.installed_version) }),
+        fact("Package index", manager.configured ? "configured" : "not configured")
+      ], "manager-installed"),
+      card("Kept package", [
+        el("p", { class: "status-value" }, [
+          manager.can_revert ? tone("ok", format(kept.version)) : tone("warn", "none kept")
+        ]),
+        fact("Build", kept.build_id),
+        expert() ? fact("Digest", kept.sha256, { mono: true }) : null
+      ], "manager-kept"),
+      card("Last install", [
+        el("p", { class: "status-value" }, [
+          verify.armed
+            ? tone("warn", "waiting for the deadline")
+            : (verdict.settled
+                ? tone(MANAGER_VERDICTS[verdict.verdict] ? MANAGER_VERDICTS[verdict.verdict][0] : "warn",
+                       format(verdict.verdict))
+                : tone("ok", "nothing in flight"))
+        ]),
+        fact("Result", (manager.outcome || {}).outcome),
+        verify.armed ? fact("Expecting", verify.expected_version) : null
+      ], "manager-verify")
+    ]));
+
+    if (verify.armed) {
+      main.appendChild(el("p", { class: "empty-state", "data-test": "manager-deadline" }, [
+        el("strong", { text: "An install is being judged. " }),
+        el("span", {
+          text: "This appliance is waiting for " + format(verify.expected_version)
+            + " to prove itself. If no healthy result appears before the deadline, the previous "
+            + "package is installed again. Nothing else can be started until it settles."
+        })
+      ]));
+    } else if (verdict.settled && verdict.verdict !== "confirmed") {
+      main.appendChild(el("p", { class: "empty-state", "data-test": "manager-verdict" }, [
+        el("strong", { text: "The last manager install " }),
+        el("span", {
+          text: (MANAGER_VERDICTS[verdict.verdict] || ["warn", format(verdict.verdict)])[1] + "."
+        })
+      ]));
+    }
+
+    var sources = state.data.managerSources;
+    if (sources === undefined) {
+      state.data.managerSources = null;
+      loadInto("managerSources", "/api/manager/sources");
+    }
+
+    main.appendChild(el("div", { class: "stage-grid" }, [
+      stage(1, "Update the Appliance Manager", "Fetched over HTTPS, then verified against the appliance keyring", [
+        renderManagerSources(sources, manager)
+      ], "manager-stage-update"),
+      stage(2, "Go back to the kept package", "The package this appliance ran before the last install", [
+        el("div", { class: "control-stage-actions" }, [
+          el("button", {
+            type: "button", class: "ghost-button compact", "data-test": "manager-plan-revert",
+            text: "Reinstall " + (manager.can_revert ? format(kept.version) : "\u2014"),
+            disabled: !managerActions(manager).canRevert,
+            onclick: function () {
+              planOperation({
+                endpoint: "/api/manager/plan-revert", body: {},
+                title: "Go back to Appliance Manager " + format(kept.version),
+                confirmLabel: "Reinstall",
+                danger: true
+              });
+            }
+          })
+        ]),
+        el("p", {
+          class: "control-stage-subtitle",
+          text: "Every install arms a deadline first. If the new package does not report itself "
+            + "healthy in time, this happens by itself -- doing nothing does not confirm an "
+            + "install here."
+        })
+      ], "manager-stage-revert")
+    ]));
   }
 
   function renderAbUpdates(main, ab) {
