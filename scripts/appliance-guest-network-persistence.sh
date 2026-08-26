@@ -7,7 +7,7 @@
 # Run as root in a disposable Debian guest with a running systemd and the
 # package installed.
 #
-# /etc/NetworkManager/system-connections is one of the six shared paths bound
+# /etc/NetworkManager/system-connections is one of the shared paths bound
 # from the persistent partition, so it holds the profiles and credentials that
 # make the appliance reachable. Upstream's slot-shared generator guards each
 # bind with a condition and therefore fails open: with the persistent source
@@ -126,7 +126,7 @@ else
     skipped=$((skipped + 1))
     printf '  NOT RUN  a healthy slot: this guest cannot prove its persistence\n'
     ems-appliance ab verify-persistence 2>&1 | sed 's/^/    /' | head -12
-    echo "  prerequisite: a guest whose persistent partition and six shared binds"
+    echo "  prerequisite: a guest whose persistent partition and shared binds"
     echo "  are still the ones the A/B scenarios established"
 fi
 

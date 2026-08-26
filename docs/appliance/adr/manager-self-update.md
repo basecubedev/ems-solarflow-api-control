@@ -17,8 +17,9 @@ and no code had to run for it to happen. That property — *inaction is safe* �
 the reason the A/B design is worth its complexity.
 
 It is also the reason it cannot ship here. Building an A/B image needs KVM, and
-the free GitHub runners do not have it; on the paid runners that do, the
-four-image matrix is 8.33 GiB of real data per build. A release path that cannot
+the free GitHub runners do not have it; on the paid runners that do, the release
+matrix — five images since the Raspberry Pi 3 gained a single-slot artefact — is
+several gigabytes of real data per build. A release path that cannot
 run on the infrastructure this project has is not a release path.
 
 **`apt`** patches the OS in place on a single-slot appliance. It has never

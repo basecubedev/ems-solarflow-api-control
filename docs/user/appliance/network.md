@@ -31,13 +31,13 @@ written to the operation record, a log, or the state directory.
 
 The appliance answers to `ems-solarflow.local` by default.
 
-**On an appliance image the name cannot be changed.** The system area belongs to
-the running slot and is read-only, so a new name could not be written, and one
-that somehow stuck would be gone at the next system update. The manager refuses
-the change rather than accepting it and failing later.
+**On a two-slot appliance image the name cannot be changed.** The system area
+belongs to the running slot and is read-only, so a new name could not be
+written, and one that somehow stuck would be gone at the next system update. The
+manager refuses the change rather than accepting it and failing later.
 
-On a manager installed onto your own Raspberry Pi OS, the name can be changed
-normally.
+On a single-slot appliance image, and on a manager installed onto your own
+Raspberry Pi OS, the name can be changed normally — that root is writable.
 
 ## If the name does not resolve
 

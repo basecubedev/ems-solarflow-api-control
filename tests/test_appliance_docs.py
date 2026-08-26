@@ -667,12 +667,26 @@ def test_the_firmware_speaks_before_the_kernel_and_the_image_is_held_to_it():
 
 
 def test_the_partitions_the_guide_tells_people_to_open_are_the_ones_that_are_fat():
-    from appliance import ab_image
+    """Both card layouts, because a reader with the wrong one counts and stops.
 
-    readable = ("bootconfig", *ab_image.BOOT_PARTITIONS)
-    every = (*readable, *ab_image.SYSTEM_ROOTS, "persistent")
-    assert len(readable) == 3 and len(every) == 6
-    assert "Three of its six partitions are FAT" in flowed("recovery.md")
+    The FAT partitions are the ones a Windows or macOS machine opens without
+    extra software, and they are the whole point of the instruction. An A/B card
+    has three of them among six; a single-slot card has one of two.
+    """
+
+    from appliance import ab_image, image_variants
+
+    ab = ab_image.VARIANT_PARTITIONS[image_variants.VARIANT_AB]
+    ab_fat = ("bootconfig", *ab_image.VARIANT_BOOT_LABELS[image_variants.VARIANT_AB])
+    single = ab_image.VARIANT_PARTITIONS[image_variants.VARIANT_SINGLE]
+    single_fat = ab_image.VARIANT_BOOT_LABELS[image_variants.VARIANT_SINGLE]
+
+    # "persistent" is on the card but not in the image the inspector reads.
+    assert len(ab_fat) == 3 and len(ab) + 1 == 6
+    assert len(single_fat) == 1 and len(single) == 2
+    assert "three of six on a two-slot card, one of two on a single-slot one" in flowed(
+        "recovery.md"
+    )
 
 
 def test_the_files_the_guide_asks_for_are_files_the_image_check_reads():
@@ -727,11 +741,22 @@ def test_every_page_a_reader_lands_on_says_the_same_thing_about_the_appliance(pa
 
 
 def test_that_claim_is_the_tier_the_support_table_assigns_it():
+    """Every appliance row, not one of them.
+
+    The table gained rows as the second image variant and the Raspberry Pi 3
+    arrived. A single hard-coded row let the newer ones claim anything.
+    """
+
     setups = " ".join(
         (ROOT / "docs" / "user" / "supported-setups.md").read_text(encoding="utf-8").split()
     )
 
-    assert "Appliance image (Pi 4 / Pi 5) | **Reverse-engineered**" in setups
+    rows = [line for line in setups.split("|") if "Appliance image" in line]
+    assert len(rows) >= 3, "the table no longer distinguishes the two image shapes"
+
+    for row in rows:
+        offset = setups.index(row) + len(row)
+        assert setups[offset:].lstrip("| ").startswith("**Reverse-engineered**"), row
 
 
 def test_the_faq_points_at_the_console_account_without_making_it_the_normal_path():

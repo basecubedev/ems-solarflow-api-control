@@ -4,9 +4,13 @@ Start at the top and work down. Each step is safe to try.
 
 ## The web page does not load
 
-**Give it three minutes first.** The appliance reboots once during its first
-start, and again after a system update. A page that is missing for two minutes
-is usually a box that is coming back.
+**Give it three minutes first.** The first start has work to do before it
+answers — it grows the card to its full size, establishes the host identity and
+starts the containers. And after an operating-system update on a **two-slot**
+appliance the box reboots into its trial slot by itself; an `apt` update on a
+single-slot one asks you for the reboot when a kernel or firmware package was
+among the changes. A page that is missing for two minutes is usually a box that
+is coming back.
 
 Then, in order:
 
@@ -35,14 +39,15 @@ say what happened.
 
 ### Read the card on your computer
 
-Power the appliance off, take the card out, and put it in your computer. Three
-of its six partitions are FAT, so Windows, macOS and Linux all open them without
+Power the appliance off, take the card out, and put it in your computer. The
+partitions your computer can open are FAT — three of six on a two-slot card, one
+of two on a single-slot one — so Windows, macOS and Linux all read them without
 extra software. You may be asked to format the others — **say no**; that is only
 your computer failing to read Linux filesystems, not a damaged card.
 
 | File | What it tells you |
 | --- | --- |
-| `autoboot.txt` on the small first partition | which system slot the firmware was told to start, and whether a trial boot was pending |
+| `autoboot.txt` on the small first partition (two-slot cards only) | which system slot the firmware was told to start, and whether a trial boot was pending |
 | `cmdline.txt` on a `boot` partition | which root the kernel was asked to find |
 | `config.txt` beside it | the board settings the firmware applied |
 
@@ -63,16 +68,23 @@ port at **115200 baud, 8N1**:
 | --- | --- | --- |
 | Raspberry Pi 5 | the 3-pin **UART** connector next to the power socket | a JST-SH debug cable, the connector the board is designed for |
 | Raspberry Pi 4 | GPIO header: GND = pin 6, TXD = pin 8, RXD = pin 10 | the adapter's RX goes to the Pi's TX |
+| Raspberry Pi 3 / 3B+ | the same GPIO pins as the Pi 4 | the image sets `enable_uart=1`, which is what a Pi 3 needs for a usable console |
 
-Then power the appliance on and copy everything the terminal prints. A line
-beginning `FATAL: AB` is the A/B start-up refusing to guess which system to
-start, and it names exactly what it could not find.
+Then power the appliance on and copy everything the terminal prints. On a
+two-slot appliance a line beginning `FATAL: AB` is the start-up refusing to
+guess which system to boot, and it names exactly what it could not find.
 
-You cannot log in this way — there is no account to log in to. The line is for
-reading, which is also why leaving an adapter attached grants nobody anything.
+You can also log in on this line, with the same rescue account as at a keyboard.
+Anyone who can attach an adapter is already holding your appliance, which is the
+threshold this account was written for.
 
 If the boot never gets far enough to say anything, what is left is re-flashing
-the card, which does not erase your configuration and data. The paths are listed
+the card — and that **erases everything on it**, on either shape. The two-slot
+image is not only its two systems; it carries its own empty shared partition, so
+writing it back replaces your configuration, data and on-box backups with a
+fresh one. A backup you took earlier is what you restore from. (An operating
+system *update* is the opposite: it writes one slot and leaves the shared area
+alone. Updating and re-flashing are different operations.) The paths are listed
 in
 [network recovery](../../appliance/network-recovery.md#whether-you-have-a-shell-at-all).
 
@@ -91,11 +103,26 @@ stopped EMS means the box is fine and the application is not.
 
 ## An update failed
 
-You are already back where you started — that is what the second slot is for.
-The Updates page reports what happened and waits for you to acknowledge it.
+Read the reason before retrying, whichever kind it was. An update that failed
+because the card is full or the download was truncated will fail again the same
+way.
 
-Read the reason before retrying. An update that failed because the card is full
-or the download was truncated will fail again the same way.
+**An operating-system update on a two-slot appliance.** You are already back
+where you started — that is what the second slot is for. The Updates page
+reports what happened and waits for you to acknowledge it.
+
+**An operating-system update on a single-slot appliance.** There is no second
+slot, so nothing was undone. If the appliance still boots, the Updates page will
+say what failed and you can try again. If it does not, this page's
+[first section](#the-web-page-does-not-load) is the route — screen and keyboard
+first, reflash and restore last.
+
+**An Appliance Manager update.** The appliance puts the previous package back by
+itself when the new one does not report in on time, and the Appliance Manager
+card then says *reverted*. If it says *revert unavailable* or *revert failed*,
+it stopped and is waiting for you: sign in at the console and run
+`sudo ems-appliance rollback-manager`. See
+[Updates](updates.md#if-the-new-one-does-not-come-up).
 
 ## "The Admin console is replacing itself"
 
@@ -112,21 +139,24 @@ There is no email recovery and no reset button in the browser. There is a
 console login: sign in as `ems-rescue` at a keyboard and run
 `sudo ems-appliance password-reset`.
 
-If that is not available to you either, write the card again. Your EMS
-configuration is on the shared area and is **not** erased by re-flashing — but
-do take a [backup](backup.md) first if you can still reach the box at all.
+If that is not available to you either, write the card again — but understand
+what that costs: re-flashing replaces every partition on the card, on either
+shape, so your EMS configuration, data and on-box backups go with it. Take a
+[backup](backup.md) first if you can still reach the box at all. It is the only
+thing that comes back.
 
 ## What not to do
 
 - **Do not pull power to "reset" it.** Shut it down from the page.
-- **Do not install packages on it by hand.** The system area is read-only, and
-  anything that did stick would disappear at the next update.
+- **Do not install packages on it by hand.** On a two-slot appliance the system
+  area is read-only and anything that did stick would disappear at the next
+  update; on a single-slot one it stays, and it becomes yours to keep working.
 - **Do not run a second controller against the same inverter.** Two things
   writing an output limit is worse than either alone.
 
 ## Getting help
 
-Open an issue with: what you were doing, what the page said, and the model of
-your Pi. If the appliance is reachable, its **Support archive** collects the
+Open an issue with: what you were doing, what the page said, the model of your
+Pi and which of the two images you flashed. If the appliance is reachable, its **Support archive** collects the
 relevant logs and state with secrets redacted, and attaching that answers most
 questions in one round.

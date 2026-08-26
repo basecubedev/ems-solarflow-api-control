@@ -5,9 +5,9 @@
 #   scripts/appliance-create-source-bundle.sh [--output FILE] [--ref REF]
 #                                             [--prefix NAME] [--keep-invalid]
 #
-# Persistence activation depends on six symlinks tracked in git. A delivery path
+# Persistence activation depends on seven symlinks tracked in git. A delivery path
 # that flattens one into a regular file produces a tree that still builds,
-# generates six mount units, activates none of them, and loses every write to
+# generates seven mount units, activates none of them, and loses every write to
 # the shared paths at the next slot switch — silently, and only on hardware.
 # Both archives produced for previous independent reviews arrived that way.
 #

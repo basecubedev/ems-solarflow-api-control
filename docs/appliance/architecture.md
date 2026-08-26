@@ -14,7 +14,7 @@ backup format.
 
 | Layer | Owns |
 |---|---|
-| **Appliance Manager** | Raspberry Pi OS status, OS package updates, fail-safe A/B host image updates, host reboot/shutdown, network and WLAN state, hostname and mDNS, Docker service state, EMS Admin container installation/restart/version/reinstall/rollback, Admin image and container diagnostics, SSH service and public keys, storage and temperature, host logs, appliance-level recovery |
+| **Appliance Manager** | Raspberry Pi OS status, OS package updates, fail-safe A/B host image updates, its own replacement as a signed package, host reboot/shutdown, network and WLAN state, hostname and mDNS, Docker service state, EMS Admin container installation/restart/version/reinstall/rollback, Admin image and container diagnostics, SSH service and public keys, storage and temperature, host logs, appliance-level recovery |
 | **EMS Admin Console** | EMS configuration, device discovery, grid-meter and inverter configuration, control parameters, EMS runtime state, EMS diagnostics, EMS backup/restore semantics, Guided Setup, Guided Upgrade, application-level maintenance |
 | **EMS** | Energy-management logic, runtime control, device communication, configuration validation, EMS backup/restore logic, runtime safety and reconciliation |
 
@@ -25,16 +25,20 @@ grid-meter configuration, no duplicated EMS backup format, no unrestricted
 Docker container management, no unrestricted Docker image execution, **no
 repartitioning of a running installation** and no EEPROM firmware-slot writes.
 
-### Three rollbacks that are not the same thing
+### Four rollbacks that are not the same thing
 
 ```text
 Admin image rollback   Docker container   the previously running image digest
 EMS backup / restore   application data   EMS configuration, state and history
 OS A/B rollback        Raspberry Pi host  the previous known-good boot+root slot
+Manager package revert this console       the .deb that was running before it
 ```
 
 A/B is never used for Docker containers, and an OS rollback never restores EMS
-data. See [ab-os-updates.md](ab-os-updates.md).
+data. The fourth is the only one that exists on every appliance, A/B or not, and
+it is also the weakest: a deadline in software rather than a boot selector in
+firmware. See [ab-os-updates.md](ab-os-updates.md) and
+[adr/manager-self-update.md](adr/manager-self-update.md).
 
 ## Two host services
 
@@ -193,7 +197,7 @@ proxy may later add `/system` and `/admin` paths in front of both.
 - [console-recovery.md](console-recovery.md) — the rescue account, and getting back in when the appliance will not come up
 - [os-updates.md](os-updates.md) — OS updates and package recovery
 - [ab-os-updates.md](ab-os-updates.md) — fail-safe A/B host image updates
-- [ab-hardware-validation.md](ab-hardware-validation.md) — the physical A/B gate
+- [ab-hardware-validation.md](ab-hardware-validation.md) — the physical gate for both image shapes, and what remains NOT RUN
 - [ssh-backup-access.md](ssh-backup-access.md) — SSH keys and file backup access
 - [network-recovery.md](network-recovery.md) — WLAN, hostname and lockout recovery
 - [security-model.md](security-model.md) — the privilege boundary in detail

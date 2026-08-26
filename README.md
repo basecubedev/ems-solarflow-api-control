@@ -66,16 +66,21 @@ deployment does not double runtime RAM because only one slot is active at a time
 
 ## Get started
 
-### On a dedicated Raspberry Pi 4 or 5
+### On a dedicated Raspberry Pi
 
 The **appliance image** turns the board into a box that runs EMS and nothing
-else: flash one card, plug in Ethernet, power on. No shell to learn, no operating
-system to maintain, and A/B updates that roll themselves back if the new one does
-not come up.
+else: flash one card, plug in Ethernet, power on. No shell to learn and no
+operating system to maintain by hand.
 
-Needs a Pi 4 or a Pi 5 and a 32 GB card — a Pi 3 cannot boot it. The image is
-**not yet confirmed on physical hardware**; read what that means before you rely
-on one.
+It comes in two shapes. The **two-slot** image keeps a second copy of the system
+and rolls itself back when an update does not come up; it needs a Pi 4 or a Pi 5
+and a 32 GB card. The **single-slot** image is the same appliance with one root
+that `apt` patches in place, on a 16 GB card. It is built for the Pi 4 and Pi 5
+too, and it is the only shape a **Raspberry Pi 3 or 3B+** can boot — that board
+cannot start the two-slot layout.
+
+Neither image is **confirmed on physical hardware** yet; read what that means
+before you rely on one.
 
 [Flashing the card](docs/user/appliance/install.md) ·
 [First start](docs/user/appliance/first-start.md) ·

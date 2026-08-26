@@ -17,8 +17,8 @@ waiting.
 
 | | |
 | --- | --- |
-| **Board** | Raspberry Pi 4 **or** Raspberry Pi 5 — you need the image for *your* board, they are not interchangeable |
-| **Card** | 32 GB or larger, and a card reader for your computer |
+| **Board** | Raspberry Pi 3, 3B+, 4 **or** 5 — you need the image for *your* board, they are not interchangeable. A Pi 3 or 3B+ has one image rather than two; see below |
+| **Card** | 32 GB or larger for the `-ab` image, 16 GB or larger for `-single`, and a card reader for your computer |
 | **Cable** | Ethernet. The first start needs it; WLAN cannot be configured before the appliance runs |
 | **Power** | The official supply for your board |
 
@@ -59,6 +59,16 @@ Either way, two files belong together:
 | --- | --- | --- |
 | Raspberry Pi 5 | `ems-solarflow-appliance-<version>-rpi5-arm64-ab.img.xz` | `…-rpi5-arm64-single.img.xz` |
 | Raspberry Pi 4 | `ems-solarflow-appliance-<version>-rpi4-arm64-ab.img.xz` | `…-rpi4-arm64-single.img.xz` |
+| Raspberry Pi 3 / 3B+ | — | `…-rpi3-arm64-single.img.xz` |
+
+**A Raspberry Pi 3 has no choice to make**, and the reason is its boot ROM
+rather than its speed: the self-repairing image uses a partition layout and a
+boot selector that only Pi 4 and Pi 5 firmware can read. There is no `-ab` file
+for it and there will not be one. What that costs you is the `-single` column of
+the "if an update goes wrong" row above: an operating-system update that leaves
+the board unable to start is undone by you, at the machine. A Pi 3 also boots
+from its SD card and nothing else: booting from a USB SSD or an NVMe drive is a
+Pi 4 and Pi 5 arrangement, and no `rpi3` image is built for it.
 
 Download the `.img.xz` **and** the `.img.xz.sha256` file beside it. The second
 one is how you check the first arrived intact. The `-ab` download is roughly
@@ -68,7 +78,8 @@ Both Imager and balenaEtcher expand it while they write, so **do not unpack it
 yourself.**
 
 Not sure which board you have? The Pi 5 has a fan connector next to the USB-C
-socket and two camera ports. If in doubt, the model is printed on the board
+socket and two camera ports; a Pi 3 has a full-size HDMI socket and is powered
+over micro-USB rather than USB-C. If in doubt, the model is printed on the board
 itself, next to the GPIO pins.
 
 ## 2. Check the download
@@ -126,12 +137,13 @@ When Imager says it is done, eject the card.
 
 **If your tool cannot read `.xz`** — some older writers, including
 Win32DiskImager, only take a plain `.img` — unpack it first and write the
-result. You need 16.5 GiB of free space for the unpacked file.
+result. You need 16.5 GiB of free space for an unpacked `-ab` image, or 8.3 GiB
+for a `-single` one.
 
 | | |
 | --- | --- |
 | Windows | [7-Zip](https://www.7-zip.org/): right-click the file, **7-Zip → Extract Here** |
-| macOS, Linux | `xz -d ems-solarflow-appliance-<version>-<rpi4\|rpi5>-arm64-<ab\|single>.img.xz` |
+| macOS, Linux | `xz -d <the file you downloaded>.img.xz` |
 
 Note that the `.sha256` file covers the **compressed** download, so check it
 before unpacking — afterwards it no longer matches anything you have.
@@ -151,7 +163,7 @@ plugs. It is the whole disk (`/dev/sdX`, `/dev/mmcblk0`), never a partition
 (`/dev/sdX1`). Unmount anything the desktop auto-mounted, then:
 
 ```bash
-IMG=ems-solarflow-appliance-<version>-<rpi4|rpi5>-arm64-<ab|single>.img.xz
+IMG=<the file you downloaded>.img.xz   # the exact names are in the table above
 xz -dc "$IMG" | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
 sudo sync
 ```
@@ -197,6 +209,6 @@ Continue with [First start](first-start.md).
 | Imager reports a verification error | A failing card or reader. Try another card |
 | No activity LED at all | Power supply, or the card is not seated |
 | LED flickers, but nothing on the network after five minutes | The cable, or the switch port. Try another port |
-| It was on the network, then vanished | Normal during the first start — it reboots once. Wait two minutes |
+| It was on the network, then vanished | The first start brings services up in stages and the page appears only at the end. Wait two minutes |
 
 More in [When it stops working](recovery.md).

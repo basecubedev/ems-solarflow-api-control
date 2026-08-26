@@ -85,6 +85,7 @@ Every test module carries exactly one **execution level** and any number of
 | `backup_restore` | backup, restore and recovery workflows |
 | `system_build` | System Build and deployment transitions |
 | `documentation` | documentation, licensing and third-party inventory contracts |
+| `appliance` | Raspberry Pi Appliance Manager, its image and its packaging |
 
 `simulation`, `regression` and `mqtt_release` stay registered for the existing
 gates. Every marker lives in `pytest.ini` and `--strict-markers` is enabled, so
@@ -177,9 +178,10 @@ and the Admin upgrade/recovery journey.
 Gates: static checks, the full non-Docker Python suite, the
 `simulation and power_control` gate, the authority regressions, the security
 regressions, the System Build tier, the Docker-first tier, the full Chromium
-and Firefox Admin suites, the Admin replacement/recovery suite, the generated
-config template and a clean-working-tree check. The RC tier never deselects a
-known failure.
+and Firefox Admin suites, the Admin replacement/recovery suite, the Appliance
+Manager browser suite, the generated config template and a clean-working-tree
+check. `./scripts/test-rc.sh --list` prints them, and that list is the
+authority. The RC tier never deselects a known failure.
 
 ### Playwright groups
 
@@ -351,14 +353,33 @@ scripts/appliance-builder-vm.sh --profile rpi5 [--profile rpi4] --output DIR
 
 # The strict release gate, in that same guest — the only host it can pass on.
 scripts/appliance-builder-vm.sh --release-gate --profile rpi5 --profile rpi4 --output DIR
+
+# The single-slot variant, one variant per run. rpi3 has only this one.
+scripts/appliance-builder-vm.sh --variant single --profile rpi3 --output DIR
+scripts/appliance-builder-vm.sh --release-gate --variant single --profile rpi3 --output DIR
 ```
+
+`--variant` defaults to `ab`, and a run builds one variant: the two shapes have
+different layouts, different gates and different artefacts, so mixing them in a
+run would make a single verdict cover two products. `rpi3` accepts
+`--variant single` only — there is no A/B image for that board.
+
+A release is **five images**: `rpi4` and `rpi5` in both shapes, `rpi3` in the
+single-slot one. `appliance-builder-vm.sh` requires at least one `--profile`
+and exits 2 without one, so covering a variant through the VM wrapper means
+naming every profile. `scripts/appliance-release-gates.sh`, run directly, is the
+one that derives the list from `rpi_image_gen.HARDWARE_PROFILES` when
+`--profile` is omitted.
 
 The gate builds the images itself, so it needs the generator's prerequisites and
 cannot reach `RESULT: PASS` on a workstation that deliberately lacks them.
 `--release-gate` runs it where those prerequisites are, and brings the verdict
-and `dist/gates/` back out. The five mounted image checks stay NOT RUN inside
-the gate, because it runs unprivileged; answer them separately with
-`appliance-inspect-rpi-ab-image.sh --mount` as root in the same guest.
+and `dist/gates/` back out. The mounted image checks stay NOT RUN inside the
+gate, because it runs unprivileged; answer them separately with
+`appliance-inspect-rpi-ab-image.sh --mount` — and `--variant single` for a
+single-slot image — as root in the same guest. The inspector defaults to the A/B
+contract, so an unqualified run judges a single-slot image against a layout it
+does not have.
 
 Both need `qemu-system-x86_64`, `qemu-img`, a writable `/dev/kvm`, an ISO writer
 (`genisoimage` or `xorriso`) and network access to `cloud.debian.org`. The base
@@ -380,7 +401,7 @@ and a host key generation that could never succeed on a real appliance.
 ### What the guest tier deliberately does not claim
 
 `appliance-guest-ab-systemd.sh` assembles an A/B appliance inside the guest from
-upstream's own generators and udev rules, and proves the six shared binds, the
+upstream's own generators and udev rules, and proves every declared shared bind, the
 fail-open catch, the unit ordering, the failure propagation and the host
 identity. It does not produce a healthy A/B verdict, and says so: discovery
 anchors on `/proc/device-tree/chosen/bootloader/partition`, which the Raspberry

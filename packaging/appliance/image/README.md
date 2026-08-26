@@ -25,10 +25,10 @@ build host, and the revision it must be is pinned in `rpi-image-gen.lock`.
 
 ```text
 rpi-image-gen.lock   the exact upstream revision and the contract it must satisfy
-profiles/            one build profile per board and variant: rpi{4,5}-{ab,single}.yaml
+profiles/            one build profile per board and the shapes it can boot:
+                     rpi{4,5}-{ab,single}.yaml plus rpi3-single.yaml — five in all
 shared/              everything the profiles of one variant have in common
 layer/               the two project layers and their rootfs overlays
-assets/              files copied into the image verbatim
 ```
 
 ## One image per board
@@ -59,8 +59,11 @@ authority that names the other one.
 directories they live in and do not resolve. `image-rota` accepts device
 classes `cm4`, `pi4`, `cm5` and `pi5` only.
 
-At runtime the appliance normalises its device tree to one of those bounded
-board classes and refuses an artefact that does not list it. A board it
+Those are the classes `image-rota` accepts at **build** time. At **runtime** the
+appliance normalises its device tree against `rpi_image_gen.BOARD_CLASSES`,
+which is a wider set: it also resolves a Raspberry Pi 3 to `pi3` — single-slot
+only — and recognises `cm4` and `cm5` without shipping an image for either. The
+appliance refuses an artefact that does not list the class it resolved to. A board it
 cannot identify blocks the update with `hardware_not_supported` rather than
 being guessed at.
 
@@ -205,9 +208,9 @@ single byte is built.
 ## Source bundles have to be the tracked tree
 
 Persistence activation depends on symlinks tracked in git. An archive that
-flattens them into regular files produces a tree that still builds, generates
-six bind mounts, activates none of them, and discards every write to the shared
-paths at the next slot switch.
+flattens them into regular files produces a tree that still builds, generates a
+bind mount per declared shared path, activates none of them, and discards every
+write to the shared paths at the next slot switch.
 
 ```bash
 scripts/appliance-check-source-bundle.sh <bundle.tar>
@@ -255,9 +258,12 @@ scripts/appliance-check-rpi-image-gen.sh --rpi-image-gen ../rpi-image-gen
 # Prove every declared shared path is generated *and* activated.
 scripts/appliance-verify-slot-mounts.sh --rpi-image-gen ../rpi-image-gen
 
-# One artefact per board.
+# One artefact per board and shape. A release is five images.
 scripts/appliance-build-rpi-ab-image.sh --profile rpi5 --rpi-image-gen ../rpi-image-gen
 scripts/appliance-build-rpi-ab-image.sh --profile rpi4 --rpi-image-gen ../rpi-image-gen
+scripts/appliance-build-rpi-single-image.sh --profile rpi5 --rpi-image-gen ../rpi-image-gen
+scripts/appliance-build-rpi-single-image.sh --profile rpi4 --rpi-image-gen ../rpi-image-gen
+scripts/appliance-build-rpi-single-image.sh --profile rpi3 --rpi-image-gen ../rpi-image-gen
 
 # Describe and sign the update artefact the image build produced. The build
 # authority the image build wrote is what makes signing possible at all.

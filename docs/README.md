@@ -27,7 +27,7 @@ source-checkout path for development and contributing, not a normal user setup.
 | --- | --- | --- |
 | Admin Console | Most users | [Admin Console](user/admin-console.md) |
 | Docker Bootstrap | Shell-only Docker users | [Docker Bootstrap](user/docker-bootstrap.md) |
-| Appliance image | A Raspberry Pi 4 or 5 dedicated to EMS | [Appliance guides](user/appliance/index.md) |
+| Appliance image | A Raspberry Pi dedicated to EMS — two-slot on a Pi 4 or 5, single-slot from a Pi 3 up | [Appliance guides](user/appliance/index.md) |
 | Developer Setup | Developers and contributors only | [Developer Setup](developer/developer-setup.md) |
 
 ## User documentation
@@ -108,9 +108,9 @@ Docker daemon or EMS itself are unavailable. It never edits EMS configuration.
 | Installation | [appliance/installation.md](appliance/installation.md) | Supported Raspberry Pi models, the `.deb`, the layout and first-run setup. |
 | Admin recovery | [appliance/admin-recovery.md](appliance/admin-recovery.md) | Install, reinstall, repair and roll back the EMS Admin container. |
 | Console recovery | [appliance/console-recovery.md](appliance/console-recovery.md) | The rescue account and its documented password, and the order of attempts when the appliance will not come up. |
-| OS updates | [appliance/os-updates.md](appliance/os-updates.md) | Security updates, full updates and package-manager recovery. |
+| OS updates | [appliance/os-updates.md](appliance/os-updates.md) | Security updates, full updates, package-manager recovery, and the Appliance Manager's own signed-package update and its deadline. |
 | A/B OS updates | [appliance/ab-os-updates.md](appliance/ab-os-updates.md) | Fail-safe A/B host images: slots, persistence, tryboot, commit and fallback. |
-| A/B hardware gate | [appliance/ab-hardware-validation.md](appliance/ab-hardware-validation.md) | The physical Raspberry Pi cases A/B support is not claimed without. |
+| Hardware gate | [appliance/ab-hardware-validation.md](appliance/ab-hardware-validation.md) | The physical Raspberry Pi cases neither image shape is claimed without, and the authority on what is still NOT RUN. |
 | SSH and backup access | [appliance/ssh-backup-access.md](appliance/ssh-backup-access.md) | SSH keys and the read-only, chroot-confined `ems-backup` account. SFTP only — rsync and scp are refused. |
 | Network recovery | [appliance/network-recovery.md](appliance/network-recovery.md) | WLAN with automatic revert, hostname changes and lockout recovery. |
 | Security model | [appliance/security-model.md](appliance/security-model.md) | The privilege boundary, the operation allowlist and secret handling. |

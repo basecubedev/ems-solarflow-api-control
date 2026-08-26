@@ -223,7 +223,7 @@ cannot regress silently.
 |---|---|
 | Password hashing | PBKDF2-SHA256, 600 000 iterations, 32-byte salt |
 | Minimum length | none — see "One password, and what that costs" |
-| Default password | none — the first start must create one |
+| Default password | none for the browser — the first start must create one. The **console** rescue account is the other way round: `ems-rescue` ships with a documented password, and changing it is optional. See [console-recovery.md](console-recovery.md) |
 | Independence | none — one secret for the Appliance Manager, the Admin console and the dashboard, in one shared store |
 | Transport | **Plain HTTP on every interface.** The manager terminates no TLS and has no certificate; anyone who can reach the port sees the login page |
 | Session cookie | `HttpOnly`, `SameSite=Strict`, `Path=/`. The `Secure` attribute is set only when a reverse proxy in front of it terminates TLS — the appliance never does |
@@ -621,8 +621,10 @@ says otherwise.
 
 **No feature repartitions a running installation.** The command allowlist
 contains no partitioning or filesystem-creation tool, and the only partition
-change this project makes at all is growing the persistent partition on a
-freshly imaged medium during first boot, before any data exists.
+change this project makes at all happens on a freshly imaged medium during first
+boot, before any data exists: an A/B image grows its persistent partition, a
+single-slot image grows its root. Both are one-shot units that run once and are
+done.
 
 The audit trail carries the plan, the confirmation, the staging, the tryboot
 request, the trial boot, a health failure, the commit, an observed fallback and
@@ -658,6 +660,13 @@ The order of operations is identical for both, and it is the security property:
 an index may only name candidates, the detached signature decides whether the
 manifest may be believed, and only a verified manifest says what the artefact
 must hash to.
+
+**A third thing reaches a single-slot appliance and this keyring does not govern
+it.** `apt` installs from the Debian and Raspberry Pi archives against APT's own
+trusted keys — that is what patching that image *is*. It is a different trust
+anchor with a different owner, and no setting here strengthens or weakens it.
+The Appliance Manager package is deliberately not in any of those archives, so
+the two paths never decide the same question.
 
 ### Operating-system update trust
 

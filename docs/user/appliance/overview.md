@@ -2,18 +2,25 @@
 
 What the main page tells you, and what you can do from it.
 
-![The overview page with status tiles for system, network, Docker, Admin, updates and backup](../../assets/screenshots/appliance/appliance-overview.png)
+![The overview page with status tiles for the board, Docker, EMS Admin, EMS, updates and the network](../../assets/screenshots/appliance/appliance-overview.png)
 
 ## The tiles
 
+Six of them, in this order:
+
 | Tile | Reading it |
 | --- | --- |
-| **System** | Board model, uptime, temperature, memory. A temperature above 80 °C throttles the board; check ventilation |
-| **Network** | Address, connection, whether the `.local` name is being announced |
-| **Docker** | Whether the container engine is running, and which of the expected containers are up |
-| **Admin** | The EMS Admin Console: installed version, whether it is healthy. Says *not installed* until you install it |
-| **Updates** | Either package updates, or — on an appliance image — the A/B slot state |
-| **Backup** | Whether the read-only file export is active |
+| **Raspberry Pi** | Board model, operating system, uptime, temperature and free storage. A temperature above 80 °C throttles the board; check ventilation |
+| **Docker** | Whether the container engine is running. The containers themselves are the next two tiles |
+| **EMS Admin** | The EMS Admin Console: installed version, health, container state. Says *not installed* until you install it |
+| **EMS** | The EMS container itself: whether it is running |
+| **Updates** | How many security and other package updates are pending, and whether a reboot is required |
+| **Network** | Address, connectivity, active connection, whether the `.local` name is being announced |
+
+Two things are deliberately *not* here, because they belong to a page that can
+act on them: the slot state of a two-slot appliance and the Appliance Manager's
+own version are on **System Updates**, and the read-only file export is on
+**SSH & Backup Access**.
 
 A tile is never coloured alone. Every state also carries a word, so a colour you
 cannot distinguish is never the only signal.
@@ -60,9 +67,10 @@ anything — the same actions are available in both.
 The EMS is what tells your battery and inverter what to do, and they keep the
 last instruction until they get a new one. Whenever the appliance restarts —
 a reboot, a shutdown, an operating-system update — that instruction stays in
-force and nothing replaces it with a safe default. An OS update is the longest
-of these, because it also waits for the new system to prove itself and to bring
-the containers back.
+force and nothing replaces it with a safe default. An OS update on a two-slot
+appliance is the longest of these, because it also waits for the new system to
+prove itself and to bring the containers back; an `apt` update on a single-slot
+one is shorter, but a kernel among the packages still means a reboot.
 
 Nothing is damaged by this; the hardware simply carries on doing what it was
 last told. It is worth knowing before you start an update at a moment when the

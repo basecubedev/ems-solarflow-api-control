@@ -263,7 +263,7 @@ def test_the_resolved_device_path_is_accepted_as_well_as_the_slot_alias(host):
 
 
 def test_every_declared_path_has_an_activation_link_in_the_image():
-    """Upstream generates six mount units and activates one of them.
+    """Upstream generates seven mount units and activates one of them.
 
     The units themselves are correct; only the pull-in is missing, so the image
     ships the wants entries by name. systemd resolves a wants entry by its file

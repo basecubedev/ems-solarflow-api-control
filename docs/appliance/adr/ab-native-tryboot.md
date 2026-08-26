@@ -104,8 +104,10 @@ Nothing may silently switch architecture.
   dependency is explicit, is checked at layout-discovery time, and produces
   `unsupported` rather than a broken update button where it does not hold.
 - Anything that is not the host OS keeps its own mechanism: Docker images keep
-  digest-pinned image rollback, EMS data keeps backup/restore, EEPROM firmware
-  is reported read-only and never written here.
+  digest-pinned image rollback, EMS data keeps backup/restore, the Appliance
+  Manager keeps its own signed package and deadline
+  ([manager-self-update.md](manager-self-update.md), decided later), and EEPROM
+  firmware is reported read-only and never written here.
 - Until a physical Raspberry Pi has passed the cases in
   [../ab-hardware-validation.md](../ab-hardware-validation.md), A/B support is
   not claimed as complete.

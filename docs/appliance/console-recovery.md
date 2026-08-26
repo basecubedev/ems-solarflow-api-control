@@ -69,17 +69,31 @@ last update:
 sudo ems-appliance rollback-manager
 ```
 
-### 4. A serial console
+Check first whether the appliance already did it. An install through the manager
+arms a deadline before `dpkg` runs, and an install that never reports itself
+healthy is undone by that deadline on its own:
 
-A Pi that does not reach a login prompt shows why only here. Add to
-`cmdline.txt` on the boot partition, from any machine with a card reader:
-
-```text
-console=serial0,115200
+```bash
+systemctl status ems-appliance-manager-verify.timer
+cat /var/lib/ems-appliance-manager/agent/packages/verify-verdict.json
 ```
 
-Then connect a 3.3 V USB-serial adapter to GPIO 14 (TXD), 15 (RXD) and a ground
-pin, and open it at 115200 baud.
+`confirmed` means the install stands. `reverted` means it was already put back.
+`revert_unavailable` or `revert_failed` means the appliance stopped and is
+waiting for a person — you. An install done by hand with `dpkg` arms nothing, so
+there is no verdict at all and the command above is the only route.
+
+### 4. A serial console
+
+A Pi that does not reach a login prompt shows why only here. Both images already
+ship `console=serial0,115200` on the kernel command line and ask the firmware
+for the serial line as well, so there is nothing to prepare: connect a 3.3 V
+USB-serial adapter to GPIO 14 (TXD), 15 (RXD) and a ground pin, and open it at
+115200 baud. On a Raspberry Pi 5 use the dedicated 3-pin UART connector instead
+of the GPIO header.
+
+If a card was written by something other than these images, or `cmdline.txt` was
+edited, check that the line is still there before concluding the board is dead.
 
 ### 5. `init=/bin/sh`
 
@@ -106,6 +120,11 @@ Then remove `init=/bin/sh` from `cmdline.txt` again before the next boot.
 > On an A/B appliance the root is a read-only slot root by design, and the
 > remount above is what lets you edit it. On a single-slot appliance the root is
 > already writable.
+
+A serial console is a login as well as a log: the getty on that line accepts the
+same `ems-rescue` account as a keyboard does. Anyone who can clip an adapter
+onto the GPIO header is holding the appliance in their hands, which is the
+threshold this account is written for.
 
 ### 6. Re-flash
 

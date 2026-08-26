@@ -2,9 +2,13 @@
 
 ## Timezone
 
-The appliance host runs on UTC and stays there: `/etc/localtime` lives on the
-read-only slot root, so a host timezone could not survive a slot switch and
-`timedatectl` cannot write one at all on an A/B image.
+Both appliance images set the host to UTC and leave it there, and the container
+timezone below is the one that matters either way. On an A/B image the host zone
+is also *unchangeable*: `/etc/localtime` lives on the read-only slot root, so
+`timedatectl` cannot write one and a change could not survive a slot switch
+anyway. On a single-slot image `timedatectl` would work — nothing in the
+appliance offers it, because a host zone that only some appliances honour is
+worse than one nothing depends on.
 
 What the EMS actually needs is the zone its containers run in, because that is
 what decides when an hour-based control window opens — a winter midday charge
@@ -24,7 +28,7 @@ containers as `TZ` the next time the deployment starts.
 
 | Item | Supported |
 |---|---|
-| Hardware | Raspberry Pi 4, Raspberry Pi 5 — **reverse-engineered**: derived and tested in emulation, not confirmed on a physical board (see [the hardware gate](ab-hardware-validation.md)) |
+| Hardware | Raspberry Pi 4 and Raspberry Pi 5 in both image shapes; Raspberry Pi 3 and 3B+ in the single-slot shape only — all **reverse-engineered**: derived, built and inspected offline. No image of either shape has booted on a board, and the only emulated boot on record is the rpi5 A/B image's initramfs reaching its fail-closed branch (see [the hardware gate](ab-hardware-validation.md)) |
 | Operating system | Raspberry Pi OS 64-bit (Trixie). The appliance image is built from Trixie; the manager package also installs on Bookworm |
 | Architecture | `arm64` only |
 | Package | `ems-appliance-manager_<version>_arm64.deb` |
@@ -36,7 +40,8 @@ not a sizing decision that a future release could revisit cheaply: the image
 uses a GPT layout and the EEPROM boot selector that Pi 4 and Pi 5 firmware
 provide, and a Pi 3 boot ROM reads neither. They *are* built a **single-slot**
 image, which is an MBR and has no boot selector — but nobody has booted it on
-one yet. See [adr/raspberry-pi-3-ab-support.md](adr/raspberry-pi-3-ab-support.md)
+one yet. That board also boots from SD and nothing else: upstream's `rpi3`
+device layer accepts no USB or NVMe storage type, so no such artefact exists. See [adr/raspberry-pi-3-ab-support.md](adr/raspberry-pi-3-ab-support.md)
 for the evidence and where the line falls, and
 [../user/hardware-requirements.md](../user/hardware-requirements.md)
 for what a Pi 3 can and cannot be used for.
@@ -50,7 +55,7 @@ Single-slot installation
   → a major OS generation change requires re-imaging
 
 Single-slot appliance image
-  ems-solarflow-appliance-<version>-<rpi4|rpi5>-arm64-single.img.xz, flashed
+  ems-solarflow-appliance-<version>-<rpi3|rpi4|rpi5>-arm64-single.img.xz, flashed
   → one writable root, patched by apt
   → the Manager updates as a .deb
   → no slot to fall back to: recovery is reflash plus backup restore
@@ -101,14 +106,26 @@ Installing a `.deb` by hand still works and is what a development bench does.
 `sudo ems-appliance rollback-manager` reinstalls the package the appliance was
 running before the last update. That is a real procedure rather than a promise:
 the package that was running is copied to
-`/var/lib/ems-appliance-manager/packages/previous.deb` **before** the new one is
-unpacked, so there is a file to go back to. When there is none — a first
+`/var/lib/ems-appliance-manager/agent/packages/previous.deb` **before** the new
+one is unpacked, so there is a file to go back to. When there is none — a first
 install, or a manager that was never installed through this path — the command
 refuses and says so, instead of reporting a success that did nothing.
 
-Only the A/B image ships the Manager as part of the operating-system image,
-because there the root filesystem is read-only and `dpkg` could not write to it
-anyway.
+Both images carry the Manager inside the operating-system image, and the package
+path above is written without a shape check: nothing in `manager_update.py`,
+`manager_install.py` or `install-manager.sh` asks which image it is running on.
+On a single-slot appliance that is the normal way the Manager moves version. The
+manager package is in no APT repository on either shape.
+
+> **On an A/B appliance the package path is untested and the layout is against
+> it.** A slot root is mounted read-only, and `dpkg` has to replace files under
+> `/usr/lib/ems-appliance-manager`. The `apt` path already refuses on exactly
+> that ground — `packages.py` raises `read_only_root` after reading the real
+> mount state — and the manager path has no equivalent refusal, so it would
+> attempt the install and fail inside `dpkg` instead of before it. There the
+> Manager normally arrives with the slot image. Giving the manager path the same
+> `read_only_root` blocker the `apt` path has is the obvious fix and has not
+> been made; it is recorded here rather than glossed.
 
 **An installation is never converted in place** — not a `.deb` installation
 into either image, and not one image into the other. The partition tables are not
@@ -147,20 +164,46 @@ The package installs:
 /usr/lib/systemd/system/ems-appliance-backup-access-disable.service
 /usr/lib/systemd/system/ems-appliance-host-identity.service
 /usr/lib/systemd/system/ems-appliance-persistence.service
+/usr/lib/systemd/system/ems-appliance-config-seed.service
 /usr/lib/systemd/system/ems-appliance-ab-health.service
 /usr/lib/systemd/system/ems-appliance-slot-bootstrap.service
 /usr/lib/systemd/system/ems-appliance-grow-persistent.service
 /usr/lib/systemd/system/ems-appliance-grow-root.service
+/usr/lib/systemd/system/ems-appliance-manager-install.service
+/usr/lib/systemd/system/ems-appliance-manager-verify.service
+/usr/lib/systemd/system/ems-appliance-manager-verify.timer
 /usr/lib/ems-appliance-manager/setup-export-root.sh
 /usr/lib/ems-appliance-manager/backup-account.sh
+/usr/lib/ems-appliance-manager/rescue-account.sh
 /usr/lib/ems-appliance-manager/install-admin-console.sh
 /usr/lib/ems-appliance-manager/grow-persistent.sh
 /usr/lib/ems-appliance-manager/grow-root.sh
+/usr/lib/ems-appliance-manager/install-manager.sh
+/usr/lib/ems-appliance-manager/verify-manager.sh
 /usr/lib/tmpfiles.d/ems-appliance-manager.conf
 /etc/logrotate.d/ems-appliance-manager
-/etc/ems-appliance-manager/appliance.conf
-/etc/ems-appliance-manager/allowed-images.conf
+/etc/ems-appliance-manager/os-release-keyring.gpg
+/usr/share/ems-appliance-manager/appliance.conf        (template)
+/usr/share/ems-appliance-manager/allowed-images.conf   (template)
+/usr/share/ems-appliance-manager/rescue-password.hash
 ```
+
+The last three are **not** under `/etc` on purpose, and the reason belongs to the
+A/B shape: there, every declared shared path is re-seeded from the booting slot's
+own root on every boot, so a packaged copy at
+`/etc/ems-appliance-manager/appliance.conf` would overwrite an operator's edit at
+the next reboot. A single-slot root and a `.deb` on your own Raspberry Pi OS have
+no such bind — but the packaging rule is one rule for all three shapes, because
+two packaging layouts would be two things to get right. `ems-appliance-config-seed.service` creates what is missing from
+these templates, once, after the shared binds are proven. The keyring is the
+exception in the other direction: it is a trust anchor rather than a setting, so
+it *is* shipped under `/etc` and a local edit must not survive an upgrade that
+rotates the key.
+
+`verify-manager.sh` is the copy the package ships. The one that actually runs is
+a snapshot of it taken out of the **outgoing** package before an install, so the
+code judging an update is never code the update brought with it — see
+[os-updates.md](os-updates.md#what-happens-when-it-fails).
 
 Three further files are **generated** from `appliance.conf`, not shipped, so
 they always agree with the configured host paths:
@@ -431,9 +474,9 @@ dpkg --purge ems-appliance-manager
 ```
 
 This checks the package layout, the service accounts, the directory modes and
-that purge removes only appliance state. It is not a substitute for the
-Raspberry Pi 4 and Raspberry Pi 5 appliance tests; only the real hardware
-covers first boot, reboot persistence and the OS update path.
+that purge removes only appliance state. It is not a substitute for the appliance
+tests on a real board — a Pi 3, 4 or 5, whichever image it runs; only the
+hardware covers first boot, reboot persistence and the update paths.
 
 ## Appliance layout
 
@@ -443,6 +486,7 @@ covers first boot, reboot persistence and the OS update path.
   docker-compose.admin.yml     Admin service (when the Admin installer created it)
   .env.admin                   Admin image and tag
   config/config.json
+  config/dashboard-auth.json   the one shared password (0600, agent-owned)
   data/
   backups/
   admin/
@@ -452,12 +496,14 @@ covers first boot, reboot persistence and the OS update path.
 /etc/ems-appliance-manager/
   appliance.conf               host configuration, root-writable only
   allowed-images.conf          the image allowlist
+  os-release-keyring.gpg       the trust anchor for OS releases and manager packages
+  timezone                     the zone carried into the containers
 
 /var/lib/ems-appliance-manager/      root:ems-appliance 0750
   web/                               ems-appliance-web
-    auth/auth.json                   the appliance password (0600)
     sessions/
     ui-preferences/
+    state.json
   agent/                             root
     operations/                      durable operation records
     known-good/                      verified Admin history with digests
@@ -465,7 +511,9 @@ covers first boot, reboot persistence and the OS update path.
     package-state/
     recovery/
     ssh-keys/
-    packages/                        previous Appliance Manager package
+    support/                         generated support archives
+    packages/                        the retained Appliance Manager packages,
+                                     the armed reverter and the install deadline
 
 /var/log/ems-appliance-manager/      root:ems-appliance 0750
   web/appliance.log                  ems-appliance-web
@@ -509,8 +557,11 @@ sudo systemctl start ems-appliance-export.service
 `ems-appliance host-config` without `--apply` prints what is configured and
 whether the generated files still agree; `verify-install` fails on drift.
 
-The web service can read agent state through the shared group but cannot write
-it; it reaches privileged state through the agent API.
+The web service cannot read agent state at all: the agent tree is `root:root`
+`0700` and the web unit adds `InaccessiblePaths=` over it. The shared
+`ems-appliance` group grants one thing — reaching the agent socket — and it is
+not a read grant on anything. Privileged state is reached through the agent API
+alone.
 
 ### Upgrading from the previous shared layout
 
@@ -567,8 +618,9 @@ and login rate limiting.
 
 ## Reset the password locally
 
-Password recovery never depends on the EMS Admin. On the console, or over SSH as
-an already authorised host user:
+Password recovery never depends on the EMS Admin. At a keyboard and monitor as
+the shipped rescue account `ems-rescue`, or over SSH as an already authorised
+host user:
 
 ```bash
 sudo ems-appliance password-reset
@@ -610,7 +662,7 @@ updates. Its current version is visible in Settings.
 
 `sudo ems-appliance rollback-manager` reinstalls the package that was running
 before the current one, from
-`/var/lib/ems-appliance-manager/packages/previous.deb`.
+`/var/lib/ems-appliance-manager/agent/packages/previous.deb`.
 
 **It has something to reinstall only when the manager installed the update
 itself.** dpkg keeps no copy of the archive it unpacked and hands its

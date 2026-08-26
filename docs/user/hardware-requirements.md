@@ -49,26 +49,33 @@ How much you need depends on which shape you run:
 | Shape | Minimum | Why |
 |---|---|---|
 | Docker deployment | A few GB plus your history | The OS is already there; EMS adds containers and a database |
-| A/B appliance image | **32 GB** | Two complete system slots plus a shared data partition. A 16 GB card cannot hold the image at all, and the appliance refuses one below 30 GB rather than filling it and failing later |
+| A/B appliance image | **32 GB** | Two complete system slots plus a shared data partition. A 16 GB card cannot hold the image at all, and the supported floor is 30 GB. **Nothing checks this for you** — a card between the two flashes and then runs out of room later |
+| Single-slot appliance image | **16 GB** | One root filesystem, which grows into whatever is left. The supported floor is 14.5 GB, and nothing on the appliance enforces it either |
 
 ## Raspberry Pi compatibility
 
-EMS runs in two shapes, and they do not have the same hardware requirements.
+EMS runs in three shapes, and they do not have the same hardware requirements.
 
 | Shape | What it is | Hardware |
 |---|---|---|
 | Docker deployment | The normal install — Admin Console or Docker Bootstrap on an existing 64-bit OS | Any 64-bit machine that meets the memory table above |
 | A/B appliance image | A prepared image with two system slots, fail-safe host updates and automatic rollback | **Raspberry Pi 4 or Raspberry Pi 5 only** |
+| Single-slot appliance image | The same appliance with one writable root, patched by `apt` instead of by whole image | Raspberry Pi 3, 3B+, 4 or 5 |
+
+Both images are the same appliance and the same web interface. The difference is
+what happens to the operating system underneath, and it is decided when you
+flash: an A/B card can fall back to its previous system by itself, a single-slot
+card is patched in place and is recovered by hand.
 
 ### Which Raspberry Pi
 
-| Model | Docker deployment | A/B appliance image |
-|---|---|---|
-| Raspberry Pi 5 | Yes | Yes |
-| Raspberry Pi 4 (2 GB or more recommended) | Yes | Yes |
-| Raspberry Pi 3 / 3B+ | Not tested — see below | **No** |
-| Raspberry Pi Zero 2 W | Not tested — 512 MB, Wi-Fi only | **No** |
-| Raspberry Pi 2 and older | No — no 64-bit OS | No |
+| Model | Docker deployment | A/B appliance image | Single-slot appliance image |
+|---|---|---|---|
+| Raspberry Pi 5 | Yes | Yes | Yes |
+| Raspberry Pi 4 (2 GB or more recommended) | Yes | Yes | Yes |
+| Raspberry Pi 3 / 3B+ | Not tested — see below | **No** | Built for it, never booted on one — see below |
+| Raspberry Pi Zero 2 W | Not tested — 512 MB, Wi-Fi only | **No** | **No** — no image is built for it |
+| Raspberry Pi 2 and older | No — no 64-bit OS | No | No |
 
 Raspberry Pi OS 64-bit covers the Pi 3, 3B+, 3A+, 4, 400, 5, Zero 2 W and the
 Compute Modules, but not the Pi 2 or anything older. "Not tested" above means
@@ -78,15 +85,23 @@ has run EMS on one.
 ### Raspberry Pi 3 and 3B+
 
 **The A/B appliance image does not support the Pi 3 or 3B+, and support is not
-planned.** This is a boot-chain limit, not a performance judgement. The A/B
-image uses a GPT partition layout and the boot selector that the Pi 4 and Pi 5
-firmware read from EEPROM. A Pi 3 has no EEPROM bootloader and its boot ROM
-reads only an MBR partition table, so it cannot start this image at all. There
-is no setting that changes this.
+planned.** This is a boot-chain limit, not a performance judgement, and there
+are three of them:
+
+1. the upstream layer that builds the A/B layout refuses the `pi3` device class
+   outright;
+2. its first partition carries the boot selector and no second-stage bootloader,
+   which is what a Pi 3 boot ROM has to find there;
+3. the layout is GPT, and that ROM reads only an MBR.
+
+A Pi 4 or Pi 5 loads its bootloader from EEPROM and needs none of that. There is
+no setting that changes any of it.
 
 **The single-slot appliance image is built for it.** That image uses an MBR, and
 its boot partition is the ordinary firmware directory a Pi 3 boot ROM knows how
-to read, so none of the three reasons above applies. The full reasoning, and the
+to read, so none of the three reasons above applies. It boots from the SD card
+and only from there: the advice above about a USB SSD or an NVMe drive belongs
+to the Pi 4 and Pi 5, and no `rpi3` image is built for either. The full reasoning, and the
 line between the two answers, is in
 [the architecture decision record](../appliance/adr/raspberry-pi-3-ab-support.md).
 

@@ -4,7 +4,7 @@
 Persistence activation depends on symlinks tracked in git: each generated bind
 mount is activated by a link in ``local-fs.target.wants``. A delivery path that
 flattens a symlink into a regular file produces a tree that still builds, still
-generates six mount units, activates none of them, and loses every write to the
+generates seven mount units, activates none of them, and loses every write to the
 shared paths at the next slot switch. Silently, and only on hardware.
 
 So a bundle is compared against ``git ls-tree`` object by object — content, file

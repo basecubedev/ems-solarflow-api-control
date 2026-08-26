@@ -12,6 +12,8 @@
 | How do I add an SSH key? | [ssh-backup-access.md](ssh-backup-access.md) |
 | How do I back up files with rsync? | rsync is not available: the backup account is SFTP-only by design. Use the `sftp` commands in [ssh-backup-access.md](ssh-backup-access.md). |
 | How do I install OS updates? | [os-updates.md](os-updates.md) |
+| How do I update the Appliance Manager itself? | **System Updates → Appliance Manager**, never `apt` — see [os-updates.md](os-updates.md#updating-the-appliance-manager-itself). |
+| The console came back on the version I had before. Why? | A manager install that did not report itself healthy in time was undone by its own deadline; see [os-updates.md](os-updates.md#what-happens-when-it-fails). |
 | Does my appliance use A/B OS images? | `sudo ems-appliance ab status` — `mode=ab` or `mode=single_slot`. See [ab-os-updates.md](ab-os-updates.md). |
 | An OS update booted back into the old slot. Why? | The trial slot did not prove itself, so the one-shot trial boot expired. Nothing was changed and nothing is retried; see below. |
 | How do I recover access after a WLAN change? | [network-recovery.md](network-recovery.md) |
@@ -26,7 +28,18 @@ journalctl -u ems-appliance-web -n 200
 sudo ems-appliance status
 ```
 
-If the web service fails to start after a package upgrade:
+If the web service fails to start after a manager package upgrade, the appliance
+is already trying to undo it: the deadline armed before the install expires
+after fifteen minutes and reinstalls the previous package on its own. Check
+whether that happened before doing it by hand:
+
+```bash
+systemctl status ems-appliance-manager-verify.timer
+cat /var/lib/ems-appliance-manager/agent/packages/verify-verdict.json
+```
+
+If the verdict says `revert_unavailable` or `revert_failed`, or the deadline was
+never armed because the package was installed by hand, do it yourself:
 
 ```bash
 sudo ems-appliance rollback-manager
@@ -255,9 +268,11 @@ systemctl status ems-appliance-persistence.service
 sudo ems-appliance ab status
 ```
 
-- `mode=single_slot` — this is a normal installation. A/B host updates need an
-  A/B appliance image; see [installation.md](installation.md). There is no
-  in-place conversion.
+- `mode=single_slot` — this is a normal installation, and its OS updates are the
+  `apt` ones on the same page rather than nothing at all. A/B host updates need
+  an A/B appliance image; see [installation.md](installation.md). There is no
+  in-place conversion, and for a Raspberry Pi 3 there is no A/B image to convert
+  to.
 - `reason=layout_drift` — the signals that identify the slots disagree. The
   `drift` list names each disagreement. A/B mutation stays disabled until it is
   resolved, deliberately: writing to a partition nobody can identify is how an

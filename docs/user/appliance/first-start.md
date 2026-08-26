@@ -39,7 +39,8 @@ and changing it in any of the three changes it everywhere.
 Choose something you can find again. There is no email recovery. If it is lost,
 the way back is a keyboard at the appliance — sign in as `ems-rescue` and run
 `sudo ems-appliance password-reset` — and failing that, writing the card again.
-Your configuration and data survive re-flashing; the password does not.
+Re-flashing erases the whole card on either shape — configuration, data,
+on-box backups and the password alike — so keep a backup somewhere else.
 
 > The appliance serves plain HTTP on your local network. Anyone who can reach
 > port 8088 sees the login page, so a real password matters even at home.
@@ -66,7 +67,9 @@ Two things are worth doing now:
 ## What this page is not
 
 The appliance manager looks after the *box*: the operating system, the network,
-updates of the system image, backups of the whole installation. It does not
+operating-system updates — a new system image or `apt`, depending on which image
+you flashed — its own replacement as a signed package, and backups of the whole
+installation. It does not
 configure your inverter, your grid meter or your control settings — that is the
 Admin Console, on port 8090, once it is installed.
 
@@ -75,7 +78,7 @@ Admin Console, on port 8090, once it is installed.
 | What you see | What to try |
 | --- | --- |
 | The name does not resolve | Use the IP address from your router |
-| Connection refused on the address | Give it another two minutes; the first start reboots once |
+| Connection refused on the address | Give it another two minutes. The first start grows the card to its full size, sets up the host identity and pulls the containers up, and the page answers only once the web service is running |
 | The page loads but the password is rejected | The password is set once, on the very first visit. If someone already set one and it is unknown, see [When it stops working](recovery.md) |
 | Nothing on the network at all | [When it stops working](recovery.md) |
 
@@ -83,5 +86,5 @@ Admin Console, on port 8090, once it is installed.
 
 The password you set here is the same one you will use for the EMS Admin
 console and the dashboard. You set it once, and you can change it later from
-either side — in the appliance under **Access**, or on the EMS host with
+either side — in the appliance under **Settings → Appliance password**, or on the EMS host with
 `emsctl dashboard set-password`. There is no second password to remember.

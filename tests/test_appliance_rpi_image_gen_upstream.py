@@ -360,7 +360,7 @@ def test_the_pinned_generator_leaves_all_but_one_mount_unactivated(
     """Upstream links only the last generated mount into ``local-fs.target``.
 
     Its ``ln -sf`` sits outside both loops, so ``unit_name`` still holds the last
-    path of the last configuration file. Six declared paths produce six mount
+    path of the last configuration file. Seven declared paths produce seven mount
     units and one activation link; the five that are never activated fall back to
     the read-only root, silently, until the next slot switch discards everything
     written to them.

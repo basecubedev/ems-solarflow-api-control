@@ -56,7 +56,7 @@ Three user paths, all converging on the same standard `config/config.json`.
 | --- | --- | --- |
 | Admin Console | Most users | [admin-console.md](admin-console.md) |
 | Docker Bootstrap | Shell-only Docker users | [docker-bootstrap.md](docker-bootstrap.md) |
-| Appliance image | A Raspberry Pi 4 or 5 dedicated to EMS | [appliance/index.md](appliance/index.md) |
+| Appliance image | A Raspberry Pi dedicated to EMS — Pi 4 or 5 for the two-slot image, Pi 3, 3B+, 4 or 5 for the single-slot one | [appliance/index.md](appliance/index.md) |
 
 The appliance is a prepared image rather than an install onto an existing
 system. It is **not confirmed on physical hardware** — see

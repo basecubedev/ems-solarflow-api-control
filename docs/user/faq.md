@@ -81,20 +81,26 @@ the [Developer Setup guide](../developer/developer-setup.md).
 ### What is the appliance image?
 
 A ready-made Raspberry Pi system that runs EMS and nothing else: operating
-system, containers, an update mechanism that keeps a second copy of the system
-so a bad update can fall back, and a small web interface to drive all of it. You
-flash one card. See the [appliance guides](appliance/index.md).
+system, containers, an update mechanism and a small web interface to drive all
+of it. You flash one card.
+
+It comes in two shapes, chosen when you flash. The **two-slot** image keeps a
+second copy of the whole system so a bad operating-system update falls back by
+itself. The **single-slot** image has one root that `apt` patches in place —
+cheaper on the card, and the only shape a Raspberry Pi 3 can boot, but a bad
+update there is undone by you. See the [appliance guides](appliance/index.md).
 
 ### Which Raspberry Pi do I need?
 
 A Raspberry Pi 4 or 5 for the fail-safe two-slot image, and a card of 32 GB or
 larger. The images for the two boards are not interchangeable.
 
-A Raspberry Pi 3 or 3B+ is built the **single-slot** image instead — one root
-patched in place, 16 GB card — because the two-slot image needs a boot chain a
-Pi 3 does not have. Nobody has booted it on one yet, and 1 GB of RAM against
-Docker, EMS and InfluxDB is unmeasured. Anything older than a Pi 3 cannot run
-any of them.
+The **single-slot** image is built for the Pi 4 and Pi 5 as well, on a 16 GB
+card, and it is a legitimate choice on either — you take `apt` patching and give
+up the automatic fallback. On a **Raspberry Pi 3 or 3B+** it is the only choice,
+because the two-slot image needs a boot chain a Pi 3 does not have. Nobody has
+booted it on one yet, and 1 GB of RAM against Docker, EMS and InfluxDB is
+unmeasured. Anything older than a Pi 3 cannot run any of them.
 
 ### Has anyone run it on a real Pi?
 
@@ -118,14 +124,25 @@ called `ems-solarflow`. The first page asks you to choose a password. See
 
 ### Can I install other software on it?
 
-No. The card is managed as a whole, so anything installed by hand disappears at
-the next system update.
+No. On the two-slot image the system area is read-only and anything installed by
+hand disappears at the next system update. On the single-slot image it stays —
+`apt` is how that image is patched at all — but the appliance neither knows
+about it nor maintains it, and a package that breaks the box is yours to undo at
+the console.
 
 ### What happens if an OS update fails?
 
-The new system is written into a second slot and booted on trial. A trial that
-does not become healthy falls back to the slot that was working. Configuration
-and data live on a separate partition and survive both directions. See
+That depends on the image, and it is the main practical difference between them.
+
+On the **two-slot** image the new system is written into a second slot and
+booted on trial. A trial that does not become healthy falls back to the slot
+that was working. Configuration and data live on a separate partition and
+survive both directions.
+
+On the **single-slot** image there is no second slot and nothing is undone: an
+`apt` upgrade that breaks the boot is recovered at the console, and failing
+that, by flashing the card again and restoring a backup. Kernel and firmware
+upgrades are not held back there — installing updates installs them. See
 [Updates](appliance/updates.md).
 
 ### What happens if an Appliance Manager update fails?
@@ -144,18 +161,20 @@ it is written down in
 
 ### Where is my config on the appliance?
 
-Under `/opt/ems-solarflow`, on the shared partition that survives system
-updates. The normal way to reach it is the appliance's SSH backup export rather
+Under `/opt/ems-solarflow` — on the two-slot image that is the shared partition
+which survives system updates, on the single-slot image it is a directory on the
+one root. The normal way to reach it is the appliance's SSH backup export rather
 than a login. There *is* a console rescue account for when the appliance will
 not come up — see [When it stops working](appliance/recovery.md) — but it is a
 last resort, not the everyday path. See [Backups](appliance/backup.md).
 
 ### It does not come up at all. What now?
 
-Two things are readable without the network. Three of the card's six partitions
-are FAT, so any computer opens them and can show which slot the firmware chose.
-And the appliance narrates its whole start-up on a serial line, which is the
-only way to see *why* a boot failed. Both are in
+Two things are readable without the network. Some of the card's partitions are
+FAT — three of six on a two-slot card, one of two on a single-slot one — so any
+computer opens them, and on a two-slot card they show which slot the firmware
+chose. And the appliance narrates its whole start-up on a serial line, which is
+the only way to see *why* a boot failed. Both are in
 [When it stops working](appliance/recovery.md).
 
 ## Config and files

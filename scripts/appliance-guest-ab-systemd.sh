@@ -152,14 +152,19 @@ done
 /usr/bin/ems-appliance ab write-layout \
     --output /etc/ems-appliance-manager/ab-layout.json >/dev/null
 
+declared=0
 bound=0
 for path in $(shared_paths); do
+    declared=$((declared + 1))
     findmnt -no TARGET "$path" >/dev/null 2>&1 && bound=$((bound + 1))
 done
-if [ "$bound" -eq 6 ]; then
-    pass "all six shared paths are bound through upstream's generator"
+# Counted from the declaration rather than compared against a literal: the
+# declared set has grown before, and a hard-coded number turns that growth into
+# a failing check instead of a passing one.
+if [ "$declared" -gt 0 ] && [ "$bound" -eq "$declared" ]; then
+    pass "all $declared shared paths are bound through upstream's generator"
 else
-    fail "only $bound of 6 shared paths are bound"
+    fail "only $bound of $declared shared paths are bound"
 fi
 
 step "what a generic guest can and cannot answer"

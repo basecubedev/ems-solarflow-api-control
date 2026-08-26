@@ -1,10 +1,15 @@
-# A/B physical-hardware validation gate
+# Physical-hardware validation gate
 
 A/B operating-system support is **not complete** until a real Raspberry Pi has
 passed the cases below. Everything that can be proven without hardware — the
 state machine, the selector parser, the layout authority, the write failure
 matrix, the boot-flow simulator — is covered by the automated suites, and none
 of it substitutes for a physical boot.
+
+The document has since grown past A/B: the single-slot image variant, the
+Raspberry Pi 3 that can only run it, and the Appliance Manager's own package
+update each have their cases here too. The rule is the same for all of them —
+what has not been run is recorded as NOT RUN, and no claim outruns its evidence.
 
 Record every run in this file's results table with the board, the storage class,
 the image build ID and the date. A case that was not run is recorded as
@@ -71,7 +76,7 @@ would make it a statement about the release.
 | Read-only root write audit | **PASS** — 5 cases against a genuinely read-only root; nothing written outside the declared mutable set |
 | Full regression at this revision | **PASS** — 10 986 passed, 12 skipped, 0 failed (`pytest -m "not docker"`) |
 | Appliance browser E2E | **PASS** — 100 passed, Chromium and Firefox |
-| Physical Raspberry Pi | **NOT RUN** — no hardware |
+| Physical Raspberry Pi | **NOT RUN** — no board has booted either image. A Pi 3B+ is on hand, and it cannot boot the A/B image at all |
 | Physical readiness | **NOT READY** — at the release-build revision `physical_ready=true` with twelve invariants held and none unmet (`physical_tested=false`); the branch has since moved past that revision, and `release_not_stale` is one of those twelve, so the verdict does not carry to HEAD |
 <!-- CURRENT-RC-END -->
 
@@ -275,13 +280,20 @@ cases instead — see [Single-slot image variant](#single-slot-image-variant) an
 [adr/raspberry-pi-3-ab-support.md](adr/raspberry-pi-3-ab-support.md).
 
 ```text
-Raspberry Pi 4 and Raspberry Pi 5
-one microSD card, 32 GB or larger
-one USB SSD, 32 GB or larger
-one NVMe drive on a Pi 5 carrier, 32 GB or larger
-a switchable power supply for the power-cut cases
-a serial console (UART) — a Pi that will not boot shows why only here
-a second machine to re-image from
+for the A/B cases below:
+  Raspberry Pi 4 and Raspberry Pi 5
+  one microSD card, 32 GB or larger
+  one USB SSD, 32 GB or larger
+  one NVMe drive on a Pi 5 carrier, 32 GB or larger
+
+for the single-slot cases:
+  any of those boards, or a Raspberry Pi 3 / 3B+ — that board boots from SD only
+  one microSD card, 16 GB or larger
+
+for both:
+  a switchable power supply for the power-cut cases
+  a serial console (UART) — a Pi that will not boot shows why only here
+  a second machine to re-image from
 ```
 
 ### How the offline seed became usable
@@ -352,6 +364,13 @@ declared in `appliance/media_sizing.py`, recorded in every image's
 `minimum_media_bytes` build metadata, and measured in
 `reports/appliance/<run-id>/media-sizing.json`.
 
+The single-slot image is the other half of that heading and has its own numbers,
+declared in the same file: one 256 MiB boot partition and an 8 GiB root, about
+8.3 GiB written, growing into whatever the medium has. Its enforced floor is
+**14,500,000,000 bytes** — a nominal 16 GB card. Neither floor is derived from
+the other, and a caller that does not say which image it means gets the A/B
+answer, because that is the stricter of the two.
+
 The persistent partition is grown to fill the medium on first boot. That growth
 is a transaction: a card whose filesystem did not actually grow is retried on
 the next boot rather than marked as finished.
@@ -370,7 +389,7 @@ Pulling the plug on a `poweroff` is not the same test.
 | 0.2b | The same with `--profile rpi4` | PASS; a separate artefact, not the Pi 5 image relabelled |
 | 0.2c | `scripts/appliance-verify-slot-mounts.sh --rpi-image-gen <tree>` | PASS: every declared shared path is generated **and** activated |
 | 0.3 | `scripts/appliance-inspect-rpi-ab-image.sh <image>` | PASS: six partitions, image-rota labels, distinct identities |
-| 0.3b | The same inspection's content findings | PASS with **no** NOT RUN: the package and its exact version in both slot roots, the dpkg status, the layout descriptor, the build marker, the persistence configuration, the six shared activations, the four services, the slot generators, the machine-id policy, no shipped host key, the runtime helpers, both service drop-ins, the bootconfig `tryboot_a_b=1` selector, and `root=/dev/disk/by-slot/active/system` with a read-only root on **both** boot partitions. No mount and no root: the Pi 5 root filesystem uses 16 KiB ext4 blocks that no 4 KiB-page kernel will mount |
+| 0.3b | The same inspection's content findings | PASS with **no** NOT RUN: the package and its exact version in both slot roots, the dpkg status, the layout descriptor, the build marker, the persistence configuration, every declared shared activation (seven today), the four services, the slot generators, the machine-id policy, no shipped host key, the runtime helpers, both service drop-ins, the bootconfig `tryboot_a_b=1` selector, and `root=/dev/disk/by-slot/active/system` with a read-only root on **both** boot partitions. No mount and no root: the Pi 5 root filesystem uses 16 KiB ext4 blocks that no 4 KiB-page kernel will mount |
 | 0.3c | The GPT structures | PASS: primary and backup headers, both entry-array CRCs, partition ranges inside the disk, no overlap, and `sgdisk --verify` agreeing where gdisk is installed |
 | 0.3d | The slot pairing | PASS: `system_a` and `system_b` hash to the same payload with different PARTUUIDs, and so do `boot_a` and `boot_b` |
 | 0.4 | Build a second image and `--compare` it | No partition identity is reused between builds |
@@ -382,7 +401,7 @@ Pulling the plug on a `poweroff` is not the same test.
 | 0.10 | Append one byte to `update.tar.zst`, then sign with its build authority | FAIL `build_authority_mismatch` |
 | 0.11 | Edit any file under the generator's `config/`, `layer/` or `image/` and rebuild | FAIL `rpi_image_gen_source_modified` before `./rpi-image-gen build` runs |
 | 0.12 | `scripts/appliance-create-source-bundle.sh` for every source or review archive | PASS: the bundle self-verifies before it is handed over, and an archive that does not round-trip is deleted rather than delivered |
-| 0.12b | `scripts/appliance-check-source-bundle.sh <bundle>` on the delivered source archive | PASS: 0 missing, 0 wrong modes, 0 wrong symlink targets, 0 undeclared, 0 unsafe, 0 duplicate, 6 symlinks preserved |
+| 0.12b | `scripts/appliance-check-source-bundle.sh <bundle>` on the delivered source archive | PASS: 0 missing, 0 wrong modes, 0 wrong symlink targets, 0 undeclared, 0 unsafe, 0 duplicate, and as many symlinks preserved as `ab_persistence.SHARED_PATHS` declares (seven today) |
 | 0.13 | `scripts/appliance-release-gates.sh --mode builder --rpi-image-gen <tree>` | Builder qualification. Strict by default: `RESULT: PASS (builder qualification)` and exit 0 only when every required gate PASSed; a required gate that did not run is `RESULT: NOT RUN` and exit 3. It says of itself that it is not a release |
 | 0.13c | `scripts/appliance-finalize-rpi-release.sh --sign-key <key> --keyring <file> --trusted-fingerprint <fpr>` on the signing host | The trusted half: it verifies the build authority and its builder environment, signs, verifies the signature against the keyring and the trust policy, runs `--mode production` (which builds nothing and requires the signature, the full content inspection, the sparse cross-check and the source bundle), and assembles the kit. `RESULT: PASS (signed production release)` |
 | 0.13d | `scripts/appliance-hardware-validation-kit.sh --gate-report <report>` | PASS only with exactly one completed build per profile, a signed manifest, both inspection reports with nothing NOT RUN, and a gate report that says PASS. `--development-kit` reports INCOMPLETE and `physical_ready=false` |
@@ -638,7 +657,6 @@ answer for.
 | The built images satisfy the single-slot contract | **PASS** | recorded by that gate run: rpi4 and rpi5 each 30 pass, 0 fail, 11 NOT RUN, **no mandatory check unanswered** |
 | The single-slot release gates pass end to end | **PASS** | `appliance-release-gates.sh --variant single --profile rpi5 --profile rpi4`: `RESULT: PASS (builder qualification, 0 optional gate(s) NOT RUN)`. The slot-mount gate and every update-archive gate report NOT APPLICABLE with their reason rather than being dropped |
 | The first-boot growth unit ships, is enabled, and its program is there | **PASS** | same artefact: the unit is linked into `multi-user.target.wants`, and `/usr/lib/ems-appliance-manager/grow-root.sh` is in the image |
-| `image-rpios` + `rpi4` builds | NOT RUN | only rpi5 has been built |
 | `image-rpios` + `rpi3` builds | **PASS** | built twice in the builder VM on 2026-08-26, at project revisions `9be2fea` and `4d3baa2`; 28m26s and 28m10s; both `RESULT: PASS (built ems-solarflow-appliance-0.1.0-rpi3-arm64-single.img)` |
 | The built image satisfies the single-slot contract, **rpi3** | **PASS** | `appliance-inspect-rpi-ab-image.sh --variant single` on both: **33 pass, 0 fail, 12 NOT RUN, all twelve optional and each with its reason**. MBR with two partitions, `kernel8.img`, 20 device-tree blobs, `enable_uart=1`, the arm64 package installed and every enabled unit's program present |
 | The rescue account is in the flashed image | **PASS** | read out of the `4d3baa2` image's ext4 root: `ems-rescue`, uid 1001, shell `/bin/bash`, in the `sudo` group, and `/etc/shadow` holding exactly the shipped hash. `root` stays `*` |

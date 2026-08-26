@@ -45,7 +45,7 @@ boot-time write paths in a guest whose root really is read-only.
 ### The mutable set
 
 ```text
-persistent shared    the six declared paths, /home, /etc/machine-id, the journal
+persistent shared    the seven declared paths, /home, /etc/machine-id, the journal
 slot-local mutable   /var in its entirety (upstream's slot-perst generator)
 tmpfs / ephemeral    /run, /tmp
 forbidden            every other path on the slot root
@@ -115,7 +115,7 @@ which is where that record lives.
 
 ### Upstream generates every mount and activates one
 
-Run against the pinned generator, six declared paths produce six `.mount` units
+Run against the pinned generator, seven declared paths produce seven `.mount` units
 and exactly one `local-fs.target.wants` link: upstream's `ln -sf` sits outside
 both of its loops, so `unit_name` still holds the last path of the last
 configuration file. Splitting the declaration into one file per path does not
@@ -142,7 +142,7 @@ in a disposable mount namespace and compares what it wrote against what
 incomplete result, so a subtle upstream change becomes a build-time failure
 instead of an appliance that loses its state one update later.
 
-### The six links are the fragile part of a delivery
+### The seven links are the fragile part of a delivery
 
 The activation links are the only symlinks in this repository, and they point
 at `/run/systemd/generator/`, a directory that exists only inside a booted
@@ -150,14 +150,14 @@ appliance. On any other machine they are dangling by design, and that is what
 makes them easy to lose in transit rather than in git:
 
 ```text
-tar czf  archive.tar.gz tree/      6 links preserved
+tar czf  archive.tar.gz tree/      7 links preserved
 tar czhf archive.tar.gz tree/      0 links, "file removed before it could be
                                    read" per link — and exit status 0
 ```
 
 `--dereference` resolves each link, finds nothing at the far end, warns, skips
 it and still succeeds. A tree unpacked from such an archive builds, generates
-six mount units, activates none of them, and loses every write to the shared
+seven mount units, activates none of them, and loses every write to the shared
 paths at the next slot switch. Both archives produced for earlier independent
 reviews arrived in exactly that shape.
 
@@ -175,11 +175,13 @@ scripts/appliance-check-source-bundle.sh    the same check for an archive that
                                             arrived from somewhere else
 ```
 
-Both report `symlinks: 6 preserved`, and the tracked link names are asserted to
-be exactly the declared mount units, so six links activating the wrong six
-paths is a failure rather than a matching count. In a built image the same
-property is read back per slot as `shared_activations: 6 shared paths
-activated`.
+Both report `symlinks: N preserved`, where *N* is the number of paths
+`ab_persistence.SHARED_PATHS` declares — seven at the time of writing — and the
+tracked link names are asserted to be exactly the declared mount units, so seven
+links activating the wrong seven paths is a failure rather than a matching
+count. In a built image the same property is read back per slot as
+`shared_activations: N shared paths activated`. The count is not the contract;
+the names are, which is why neither check compares a number against a literal.
 
 ### Why the appliance still verifies
 

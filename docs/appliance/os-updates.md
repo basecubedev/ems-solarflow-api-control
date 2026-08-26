@@ -10,9 +10,12 @@ one of them:
 
 The mode is detected, never chosen: an appliance without an A/B layout reports
 `single_slot` and keeps the package-update behaviour described below. **The move
-to A/B requires physically re-imaging onto an A/B appliance image.** Nothing in
-the browser or the agent repartitions a running installation, and no feature to
-do so exists. See [ab-os-updates.md](ab-os-updates.md).
+to A/B requires physically re-imaging onto an A/B appliance image**, and on a
+Raspberry Pi 3 there is nothing to move to — that board has no A/B artefact and
+will not get one. Nothing in the browser or the agent repartitions a running
+installation, and no feature to do so exists. See
+[ab-os-updates.md](ab-os-updates.md) and
+[adr/raspberry-pi-3-ab-support.md](adr/raspberry-pi-3-ab-support.md).
 
 ## What the check reports
 

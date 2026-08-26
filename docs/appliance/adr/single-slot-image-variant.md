@@ -43,9 +43,10 @@ Build and publish **two** image variants from one source tree:
 | root filesystem | read-only, per slot | writable |
 | kernel command line | `root=/dev/disk/by-slot/active/system ro` | `root=/dev/disk/by-slot/system rw` |
 | OS patches | signed image rebuild | `apt` (unattended only if the operator enables `automatic_security_updates`, which defaults to false) |
-| Manager patches | slot update, ~877 MB | `.deb`, ~350 KB |
-| failure recovery | trial boot, automatic rollback | none |
-| signing key | required | not needed at all |
+| Manager patches | a signed `.deb`, ~350 KB, or with the slot image | a signed `.deb`, ~350 KB |
+| failed OS update | trial boot, automatic rollback | none — reflash and restore |
+| failed Manager update | the same `.deb` revert as `single`, or the slot rollback | a deadline reinstalls the previous package |
+| signing key | required | required for the Manager package; there is no OS release transport to sign |
 
 Neither replaces the other, and neither is a degraded form of the other. The
 A/B image remains the default recommendation for an appliance nobody will be
@@ -90,8 +91,11 @@ A/B layer, and a contract test keeps it that way:
   (`ConditionPathIsReadWrite=/etc/ssh`), which is why the A/B image needs its
   own producer onto the persistent partition. On a writable root that condition
   is true, the unit ships enabled, and it makes the pair on first boot.
-- **No update archive, and no signing key.** There is no OS release transport
-  to trust, so there is nothing to verify.
+- **No update archive.** There is no OS release transport to trust, so there is
+  nothing of that kind to verify. A signing key is still required, and this
+  variant did not remove that: the Appliance Manager package is verified against
+  the same keyring — see
+  [manager-self-update.md](manager-self-update.md), decided after this record.
 
 ## Consequences
 
@@ -118,9 +122,18 @@ has no slot to fall back to. The documented recovery is to reflash and restore
 a backup, and the installation guide says so before the download link, not
 after it.
 
-**Two artefacts per board.** Four images per release instead of two, four sets
-of release evidence, and a build-authority record that names the variant so an
-A/B authority can never vouch for a single-slot artefact.
+Two things have been added since, and neither changes that for the OS: a rescue
+account that ships with the image, so the console is a step before the reflash
+([console-recovery.md](../console-recovery.md)), and a package revert for the
+Appliance Manager alone ([manager-self-update.md](manager-self-update.md)).
+Neither covers a kernel that will not boot.
+
+**Two artefacts per board, where the board has two.** This decision made it four
+images per release; the Raspberry Pi 3 made it five, because that board has a
+single-slot artefact and no A/B one
+([raspberry-pi-3-ab-support.md](raspberry-pi-3-ab-support.md)). One set of
+release evidence per artefact, and a build-authority record that names the
+variant so an A/B authority can never vouch for a single-slot one.
 
 ## Alternatives considered
 

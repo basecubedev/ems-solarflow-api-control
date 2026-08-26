@@ -19,12 +19,16 @@ is no operation in the appliance that can turn on password authentication.
 
 ## The account across a slot switch
 
+This section is about the A/B image, where an OS update replaces the whole slot.
+A single-slot appliance has one root and no slot switch, so nothing here can
+happen to it: the account and its home are created once and stay.
+
 `/var/lib/ems-backup` is a shared path, so the key you deployed and the marker
 proving this package created the home both survive an OS update. They did not
 before: on a slot-local `/var` the next slot switch left a fresh home, and
 remote backup access with it.
 
-On an imaged appliance the account itself comes from the image — `/etc` is
+On an A/B appliance the account itself comes from the image — `/etc` is
 read-only and slot-local, so it cannot be created on the device. What the first
 boot establishes is the *ownership* of it, as `ExecStartPre` of
 `ems-appliance-export.service`, because the record binds the home's device and

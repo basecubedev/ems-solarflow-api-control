@@ -11,8 +11,10 @@ on a third-party update framework is recorded in
 **This is one of two answers.** The appliance also ships a single-slot image
 with one writable root, whose operating system is patched with `apt` and which
 has no slot to fall back to. Nothing in this document applies to it: it has no
-slots, no update archive, no trial boot and no signing key, and the runtime
-refuses every mutating A/B plan there with a reason. Why both exist, and which
+slots, no update archive and no trial boot, and the runtime refuses every
+mutating A/B plan there with a reason. It does carry the release keyring: the
+same trust anchor verifies the signed Appliance Manager package on either shape
+— see [security-model.md](security-model.md). Why both exist, and which
 one an owner should flash, is in
 [adr/single-slot-image-variant.md](adr/single-slot-image-variant.md) and
 [installation.md](installation.md).
@@ -44,17 +46,24 @@ falls back to one on its own.
 Plan an update for a time when that is acceptable. The plan states this before
 you confirm it, and the same is true of a reboot, a shutdown and a rollback.
 
-## Three rollbacks that are not the same thing
+## Four rollbacks that are not the same thing
 
-The appliance already had two rollback mechanisms before this one existed. They
-operate on different layers, recover from different failures, and none of them
-substitutes for another.
+The appliance already had two rollback mechanisms before this one existed, and
+has gained a fourth since. They operate on different layers, recover from
+different failures, and none of them substitutes for another.
 
 | Mechanism | Layer | What it restores | Owner |
 |---|---|---|---|
 | **Admin image rollback** | Docker container | The previously running Admin container from its recorded image digest | `admin_lifecycle.py`, see [admin-recovery.md](admin-recovery.md) |
 | **EMS backup / restore** | Application data | EMS configuration, runtime state and history from an EMS backup archive | EMS/Core and the Admin Console |
 | **OS A/B rollback** | Raspberry Pi host OS | The previous known-good boot and root filesystem slot | `appliance/os_update.py`, this document |
+| **Manager package revert** | The console itself | The `.deb` the appliance was running before its last manager update | `appliance/manager_verify.py`, see [os-updates.md](os-updates.md#what-happens-when-it-fails) |
+
+The fourth is the only one an appliance without an A/B layout has, and it is
+also the only one where **doing nothing commits rather than reverts** — a
+deadline in software standing in for a boot selector in firmware. That
+difference is the subject of
+[adr/manager-self-update.md](adr/manager-self-update.md).
 
 Consequences that must stay true in code, UI and documentation:
 
@@ -80,6 +89,7 @@ The A/B mechanism targets exactly this scope:
 
 ```text
 boards        Raspberry Pi 4 Model B and Raspberry Pi 5, as separate artefacts
+              (a Raspberry Pi 3 has no A/B artefact -- see below)
 os            Raspberry Pi OS Trixie, 64-bit
 architecture  arm64
 firmware      a bootloader that implements autoboot.txt and tryboot
@@ -121,8 +131,15 @@ Nothing outside that scope is claimed. In particular:
 
 - A storage class is never inferred from another. Passing on microSD says
   nothing about NVMe; see [ab-hardware-validation.md](ab-hardware-validation.md).
-- Raspberry Pi 3 and earlier are not targeted: the appliance is arm64-only and
-  the tryboot mechanism needs a current bootloader.
+- Raspberry Pi 3 and 3B+ are not targeted **by this mechanism**, and not because
+  of the instruction set: a Pi 3B+ is arm64. It is the layout it cannot read —
+  `image-rota` refuses the `pi3` device class, the first partition carries no
+  second-stage bootloader for a boot ROM that needs one, and the table is GPT.
+  That board is built the single-slot image instead, where the OS is patched by
+  `apt` and none of this applies; see
+  [adr/raspberry-pi-3-ab-support.md](adr/raspberry-pi-3-ab-support.md) and
+  [adr/single-slot-image-variant.md](adr/single-slot-image-variant.md).
+  Anything older than a Pi 3 is 32-bit and out of scope entirely.
 - Raspberry Pi Connect is not used. The appliance validates, stages, deploys and
   commits from its own host services; there is no cloud dependency in the update
   path.
@@ -237,25 +254,36 @@ Plain `http` is refused rather than upgraded, including after a redirect —
 being told that the configured URL is insecure is more useful than being
 quietly given a different one.
 
-### The keyring is not shipped with the appliance
+### The keyring, and whose key it is
 
-`os_release_keyring` points at `/etc/ems-appliance-manager/os-release-keyring.gpg`
-by default, and **no package puts a key there**. That is deliberate: a trust
-anchor an appliance ships with itself is one an attacker who ships appliances
-also controls. Until an operator installs the public key of whoever signs their
-releases, every artifact is refused.
+`os_release_keyring` points at `/etc/ems-appliance-manager/os-release-keyring.gpg`,
+and the package ships **this project's own release key** there. It is
+deliberately not a conffile: a trust anchor is not a setting, and a local edit
+must not survive an upgrade that rotates the key.
 
-The manager says so rather than letting an update fail at the last moment:
-**Release keyring** appears in the update-readiness list and is red until the
-file exists. Install it with the key you obtained out of band:
+That is the trade, stated rather than hidden: an appliance that trusts the key it
+came with trusts whoever shipped it. It buys an appliance that can install a
+signed release out of the box; it costs the property that a shipped trust anchor
+is one an attacker who ships appliances also controls. An operator who builds
+their own images replaces the file with their own public key, obtained out of
+band:
 
 ```bash
 sudo install -m 0644 release-key.gpg \
      /etc/ems-appliance-manager/os-release-keyring.gpg
 ```
 
-On an A/B appliance `/etc` belongs to the running slot, so this has to be
-repeated after a slot switch unless the key is baked into the image you build.
+With no keyring at all, every artefact is refused: **Release keyring** appears in
+the update-readiness list and is red until a file exists, rather than letting an
+update fail at the last moment.
+
+**A key replaced in place does not stick.** `/etc/ems-appliance-manager` is a
+shared bind, but the packaged keyring is one of the two files deliberately
+allowed to track the running slot, so upstream's per-boot re-seed copies the
+image's key back over yours at the next reboot — and on a `.deb` install `dpkg`
+replaces it outright, because it is not a conffile. An operator who signs their
+own releases bakes their key into the image they build. See
+[ab-persistence-contract.md](ab-persistence-contract.md#the-image-seeds-every-shared-path-on-every-boot).
 
 ### The clock comes first
 
@@ -593,7 +621,8 @@ reason         ab_layout_not_present
 
 The System Updates page then keeps its existing package-update behaviour and
 says that image-based host updates require re-imaging onto an A/B appliance
-image. There is no partial or disabled A/B control, and there is **no in-place
+image — which exists for a Pi 4 and a Pi 5 and does not exist for a Pi 3, so on
+that board the single-slot shape is the whole story. There is no partial or disabled A/B control, and there is **no in-place
 conversion**: the appliance never resizes, moves or repartitions a running
 installation's storage, and no such action is reachable from the browser or the
 agent. See [installation.md](installation.md).
