@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from appliance import manager_verify
+from appliance import paths as appliance_paths
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGING = ROOT / "packaging" / "appliance"
@@ -106,6 +107,42 @@ def test_the_unit_runs_the_snapshot_and_not_the_packaged_copy():
 
     assert manager_verify.REVERTER_NAME in unit
     assert "/usr/lib/ems-appliance-manager/verify-manager.sh" not in unit
+
+
+def installed_packages_dir():
+    """Where ``arm()`` puts the snapshot on an appliance the package installed."""
+
+    return appliance_paths.AppliancePaths(
+        install_root=Path(appliance_paths.DEFAULT_INSTALL_ROOT),
+        config_dir=Path(appliance_paths.DEFAULT_CONFIG_DIR),
+        state_dir=Path(appliance_paths.DEFAULT_STATE_DIR),
+        log_dir=Path(appliance_paths.DEFAULT_LOG_DIR),
+        runtime_dir=Path(appliance_paths.DEFAULT_RUNTIME_DIR),
+    ).packages_dir
+
+
+def test_the_unit_names_the_directory_arming_actually_writes_to():
+    """systemd cannot expand a variable in the program path, so the unit spells
+    it out -- and a spelled-out path is one that drifts silently. It named the
+    pre-split directory, which nothing has written to since ``packages_dir``
+    moved under ``agent/``: the timer would have run every minute, found no
+    reverter, and never undone anything."""
+
+    unit = (PACKAGING / "systemd" / "ems-appliance-manager-verify.service").read_text(
+        encoding="utf-8"
+    )
+    directory = str(installed_packages_dir())
+
+    assert f"ExecStart={directory}/{manager_verify.REVERTER_NAME} {directory}\n" in unit
+    assert f"{appliance_paths.DEFAULT_STATE_DIR}/packages/" not in unit, (
+        "that is the legacy directory migration.py moves away from"
+    )
+
+
+def test_the_reverter_falls_back_to_the_directory_it_is_installed_beside():
+    script = REVERTER.read_text(encoding="utf-8")
+
+    assert f":-{installed_packages_dir()}}}" in script
 
 
 def test_arming_starts_the_timer(paths, packaged):

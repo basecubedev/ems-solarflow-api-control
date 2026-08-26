@@ -7,7 +7,7 @@ change that cut you off see [network-recovery.md](network-recovery.md).
 
 ## What you have, before you need it
 
-**A rescue account, `ems-rescue`, with the password `ems-rescue`.** It is
+**A rescue account, `ems-rescue`, with the password `rescue-me`.** It is
 created by the Appliance Manager package on installation, it can become root
 with `sudo`, and it is the account you log in with at a keyboard and monitor or
 over a serial console.

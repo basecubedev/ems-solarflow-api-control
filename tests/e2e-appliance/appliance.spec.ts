@@ -741,3 +741,107 @@ test.describe("truthful host state @smoke", () => {
     await expect(row.locator(".tone")).toHaveClass(/tone-warn/);
   });
 });
+
+test.describe("appliance manager @smoke", () => {
+  test("a quiet appliance offers an update and has nothing to go back to", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "updates");
+
+    const card = page.locator('[data-test="manager-installed"]');
+    await expect(card).toBeVisible();
+    await expect(page.locator('[data-test="manager-kept"]')).toContainText("none kept");
+    await expect(page.locator('[data-test="manager-plan-revert"]')).toBeDisabled();
+  });
+
+  test("a kept package is offered as the way back", async ({ page, request }) => {
+    await resetAppliance(request, { manager_package_kept: true });
+    await signIn(page);
+    await openView(page, "updates");
+
+    await expect(page.locator('[data-test="manager-kept"]')).toContainText("0.1.0");
+    const revert = page.locator('[data-test="manager-plan-revert"]');
+    await expect(revert).toBeEnabled();
+    await expect(revert).toContainText("0.1.0");
+  });
+
+  test("a deadline in flight blocks both controls", async ({ page, request }) => {
+    // A second install would replace the package whose verdict the appliance is
+    // still waiting for.
+    await resetAppliance(request, { manager_package_kept: true, manager_deadline_armed: true });
+    await signIn(page);
+    await openView(page, "updates");
+
+    await expect(page.locator('[data-test="manager-deadline"]')).toContainText("being judged");
+    await expect(page.locator('[data-test="manager-deadline"]')).toContainText("0.3.0");
+    await expect(page.locator('[data-test="manager-plan-revert"]')).toBeDisabled();
+  });
+
+  test("a reverted install is reported rather than left silent", async ({ page, request }) => {
+    await resetAppliance(request, { manager_package_kept: true, manager_verdict: "reverted" });
+    await signIn(page);
+    await openView(page, "updates");
+
+    const verdict = page.locator('[data-test="manager-verdict"]');
+    await expect(verdict).toBeVisible();
+    await expect(verdict).toContainText("did not prove itself in time");
+  });
+
+  test("an appliance with no package index says so instead of offering nothing", async ({
+    page,
+  }) => {
+    await signIn(page);
+    await openView(page, "updates");
+
+    await expect(page.locator('[data-test="manager-sources-unconfigured"]')).toContainText(
+      "manager_index_url",
+    );
+  });
+
+  test("the revert plan states what it would put back before anything happens", async ({
+    page,
+    request,
+  }) => {
+    await resetAppliance(request, { manager_package_kept: true });
+    await signIn(page);
+    await openView(page, "updates");
+
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/manager/plan-revert")),
+      page.locator('[data-test="manager-plan-revert"]').click(),
+    ]);
+
+    const dialog = page.locator("#dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("0.1.0");
+  });
+});
+
+test.describe("console rescue account", () => {
+  test("the shipped password is reported without being demanded", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "access");
+
+    const card = page.locator('[data-test="rescue-account"]');
+    await expect(card).toContainText("ems-rescue");
+    await expect(card).toContainText("shipped password");
+    await expect(card).toContainText("sudo passwd ems-rescue");
+    // Reported, never demanded: there is no control that changes it.
+    await expect(card.locator("button")).toHaveCount(0);
+  });
+
+  test("a changed password is reported as changed", async ({ page, request }) => {
+    await resetAppliance(request, { rescue_password_changed: true });
+    await signIn(page);
+    await openView(page, "access");
+
+    await expect(page.locator('[data-test="rescue-account"]')).toContainText("changed");
+  });
+
+  test("an appliance without the account is not reported as secure", async ({ page, request }) => {
+    await resetAppliance(request, { rescue_account_absent: true });
+    await signIn(page);
+    await openView(page, "access");
+
+    await expect(page.locator('[data-test="rescue-account"]')).toContainText("not present");
+  });
+});

@@ -25,10 +25,12 @@ from appliance import paths as paths_module
 
 ACCOUNT = "ems-rescue"
 
-# Documented, and deliberately the same as the account name: a password an
-# operator has to look up in a panic is one they will not have. Changing it is
-# offered by the console and never required.
-DEFAULT_PASSWORD = "ems-rescue"
+# Documented, memorable, and deliberately *not* the account name. Making them
+# equal would put the password into every log line, status payload and support
+# archive that names the account, and would make "this archive carries no
+# password" a property nobody could test. Changing it is offered by the console
+# and never required.
+DEFAULT_PASSWORD = "rescue-me"
 
 HASH_FILE = "rescue-password.hash"
 

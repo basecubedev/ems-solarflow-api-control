@@ -272,3 +272,15 @@ def test_the_console_offers_the_change_and_does_not_demand_it():
     assert "public knowledge" in section
     # No button, no plan, no operation: the appliance never changes it for you.
     assert "planOperation" not in section
+
+
+def test_the_password_is_not_the_account_name():
+    """Equal would put the password into every payload that names the account.
+
+    A status field, a log line and a support archive all carry ``ems-rescue``
+    legitimately. If that string were also the password, "this archive carries
+    no password" would be a property nobody could test — and the console's own
+    status payload would be leaking one every time it rendered.
+    """
+
+    assert rescue_account.DEFAULT_PASSWORD != rescue_account.ACCOUNT

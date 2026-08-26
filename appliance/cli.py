@@ -8,6 +8,7 @@ the previously installed package.
 """
 
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -198,27 +199,45 @@ def command_operations(args):
 
 
 def command_rollback_manager(args):
-    """Reinstall the previously installed Appliance Manager package."""
+    """Reinstall the previously installed Appliance Manager package.
 
-    from appliance import manager_retention
+    The console half of one mutation, not a second one: staging goes through
+    ``manager_install.prepare_revert`` so the record this leaves behind is the
+    record the browser reads. What differs is only how the package is applied —
+    a person is at the keyboard here, so there is no unit and no deadline.
+    """
+
+    from appliance import manager_install, manager_releases, manager_retention
 
     paths = resolve_paths()
-    try:
-        target = manager_retention.revert_target(paths)
-    except manager_retention.RetentionError as exc:
-        print(f"error: {exc.message}", file=sys.stderr)
-        return EXIT_ERROR
     if os.geteuid() != 0:
         print("error: run this command as root", file=sys.stderr)
+        return EXIT_ERROR
+    try:
+        target, retention = manager_install.prepare_revert(
+            paths, retained_at=datetime.datetime.now(datetime.timezone.utc).isoformat()
+        )
+    except (manager_retention.RetentionError, manager_releases.ManagerReleaseError) as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
         return EXIT_ERROR
 
     from appliance.commands import CommandRunner
 
-    print(f"reinstalling {target.version or 'the retained package'} from {target.path}")
+    archive = retention.current.path
+    print(f"reinstalling {target.version or 'the retained package'} from {archive}")
     runner = CommandRunner()
-    result = runner.run("dpkg", ["--install", target.path], timeout=600)
+    # --force-confold: this runs without a tty, and the alternative to answering
+    # a conffile prompt is dpkg picking for the operator.
+    result = runner.run("dpkg", ["--force-confold", "--install", archive], timeout=600)
     print(result.stdout or result.stderr)
-    return EXIT_OK if result.ok else EXIT_ERROR
+    if not result.ok:
+        print(
+            "the package could not be installed; "
+            f"{retention.previous.path} is what this appliance was running",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    return EXIT_OK
 
 
 def command_migrate_state(args):

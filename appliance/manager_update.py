@@ -469,46 +469,13 @@ class ManagerUpdateService:
         except manager_retention.RetentionError as exc:
             raise ManagerUpdateError(exc.code, exc.message)
 
-        observed = os_releases.file_digest(target.path)
-        if observed != target.sha256:
-            raise ManagerUpdateError(
-                "manager_artifact_corrupt",
-                f"{Path(target.path).name} hashes to {observed}, this appliance recorded "
-                f"{target.sha256}",
-            )
-
-        recorded, verdict = self._state_schemas(claim=True)
+        _, verdict = self._state_schemas(claim=True)
         if verdict.outcome == persistent_state.STATE_BEHIND:
             raise ManagerUpdateError("state_schema_behind", verdict.detail)
 
         self._advance(operation, "staging_package")
-        # Retaining through a copy rather than naming previous.deb directly:
-        # rotation overwrites previous.deb with what is current, so an install
-        # that read from it would put back the very package it is leaving.
-        staging = self._packages_dir() / f"{STAGING_PREFIX}revert-{operation.operation_id}.deb"
-        shutil.copyfile(target.path, staging)
-        try:
-            retention = manager_retention.retain(
-                self.paths,
-                staging,
-                sha256=target.sha256,
-                version=target.version,
-                build_id=target.build_id,
-                retained_at=str(self._now()),
-                architecture=target.architecture,
-                state_implements=target.state_implements,
-                state_reads=target.state_reads,
-            )
-        finally:
-            staging.unlink(missing_ok=True)
-
-        manager_install.stage(
-            self.paths,
-            archive=retention.current.path,
-            version=target.version,
-            build_id=target.build_id,
-            sha256=target.sha256,
-            requested_at=str(self._now()),
+        _, retention = manager_install.prepare_revert(
+            self.paths, retained_at=str(self._now())
         )
         return self._arm_and_start(
             operation,

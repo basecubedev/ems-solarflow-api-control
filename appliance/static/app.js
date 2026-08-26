@@ -694,11 +694,17 @@
 
   function refresh() {
     if (!state.authenticated) return Promise.resolve();
+    /* The manager state joins the periodic refresh rather than being read once
+       when its page first rendered. Its verdict arrives *after* the operation
+       that started the install finished, so a card fetched once would still
+       report "nothing in flight" on an appliance that had already reverted. */
     return Promise.all([
       api("/api/status").catch(function (exc) { return { error: exc.code }; }),
+      api("/api/manager").catch(function (exc) { return { error: exc.code }; }),
       pollOperations()
     ]).then(function (results) {
       state.data.status = results[0];
+      state.data.manager = results[1];
       render();
       startPolling();
     });
@@ -1413,12 +1419,7 @@
      package to every appliance at once. */
   function renderManagerUpdates(main) {
     var manager = state.data.manager;
-    if (manager === undefined) {
-      state.data.manager = null;
-      loadInto("manager", "/api/manager");
-      manager = null;
-    }
-    if (manager === null) {
+    if (manager === undefined || manager === null) {
       main.appendChild(el("h2", { class: "section-title", text: "Appliance Manager" }));
       main.appendChild(el("p", { class: "section-hint", text: "Reading the manager state\u2026" }));
       return;

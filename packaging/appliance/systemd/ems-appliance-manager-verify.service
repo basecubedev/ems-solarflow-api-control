@@ -11,6 +11,6 @@ Type=oneshot
 User=root
 # The snapshot the outgoing package left behind, not the copy the package ships
 # under /usr/lib -- that one is replaced by the very install being judged.
-ExecStart=/var/lib/ems-appliance-manager/packages/verify-manager.armed.sh /var/lib/ems-appliance-manager/packages
+ExecStart=/var/lib/ems-appliance-manager/agent/packages/verify-manager.armed.sh /var/lib/ems-appliance-manager/agent/packages
 # A revert unpacks a package; it must not be cut off half way.
 TimeoutStartSec=600

@@ -21,7 +21,7 @@ Then, in order:
    Pulling power from a running appliance is how cards get corrupted.
 
 If none of that helps: **plug in a keyboard and a screen.** The appliance has a
-rescue account for exactly this — user `ems-rescue`, password `ems-rescue` — and
+rescue account for exactly this — user `ems-rescue`, password `rescue-me` — and
 it can become root with `sudo`. That password is written down here and in the
 source, so it is public knowledge: fine on a home network, and worth changing
 with `sudo passwd ems-rescue` if your appliance can be reached from outside one.

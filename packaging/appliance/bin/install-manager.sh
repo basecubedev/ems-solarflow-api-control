@@ -12,7 +12,9 @@
 #
 set -eu
 
-STATE=/var/lib/ems-appliance-manager/packages
+# What appliance/paths.py resolves packages_dir to, pinned to it by a test. The
+# pre-split path one level up is the one migration.py moves away from.
+STATE=/var/lib/ems-appliance-manager/agent/packages
 REQUEST="$STATE/install-request.json"
 RESULT="$STATE/install-result.json"
 PREVIOUS="$STATE/previous.deb"

@@ -10,6 +10,7 @@ package has shipped, so there is no history to be lenient towards.
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,6 +33,12 @@ REQUIRED_FIELDS = (
 
 VERIFIED_SIGNATURE = os_releases.VERIFIED_SIGNATURE
 VERIFIED_NONE = os_releases.VERIFIED_NONE
+
+# A build id names files: a staging copy while a revert is prepared, and the
+# assets a release publishes. Path separators, whitespace and control
+# characters are refused so it can only ever name one file beside its siblings.
+# The same shape build_authority.BUILD_ID_PATTERN enforces on a build record.
+BUILD_ID = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,95}\Z")
 
 
 class ManagerReleaseError(Exception):
@@ -173,6 +180,14 @@ def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
             f"version {version!r} uses a hyphen; a pre-release is spelled with ~",
         )
 
+    build_id = str(payload["build_id"]).strip()
+    if not BUILD_ID.match(build_id):
+        raise ManagerReleaseError(
+            "manager_manifest_invalid",
+            f"build id {build_id!r} is not an identifier: letters, digits, dot, dash and "
+            "underscore, at most 96 characters",
+        )
+
     artifact = payload["artifact"]
     if not isinstance(artifact, dict):
         raise ManagerReleaseError("manager_manifest_invalid", "the artifact is not an object")
@@ -197,7 +212,7 @@ def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
         release_id=os_releases.validate_release_id(release_id or payload["build_id"]),
         version=version,
         architecture=str(payload["architecture"]),
-        build_id=str(payload["build_id"]),
+        build_id=build_id,
         created_at=str(payload["created_at"]),
         project_revision=str(payload["project_revision"]),
         artifact_name=str(artifact.get("name") or ""),

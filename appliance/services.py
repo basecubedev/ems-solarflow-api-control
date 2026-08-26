@@ -263,6 +263,7 @@ def build_services(
         installed_version=APPLIANCE_VERSION,
         architecture=host_architecture(),
     )
+    status.manager = manager
     support = SupportArchiveService(
         paths=paths, config=config, status_service=status, operations=operations, time_fn=time_fn
     )

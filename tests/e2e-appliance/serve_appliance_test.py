@@ -50,6 +50,90 @@ class _OfflineAgent:
         return False
 
 
+def seed_rescue_account(root, *, changed=False, absent=False):
+    """The account state the console reports, as the host's own files say it."""
+
+    from appliance import rescue_account
+
+    etc = root / "etc"
+    etc.mkdir(parents=True, exist_ok=True)
+    if absent:
+        etc.joinpath("passwd").write_text("root:x:0:0:root:/root:/bin/bash\n", encoding="utf-8")
+        etc.joinpath("shadow").write_text("root:*:20000:0:99999:7:::\n", encoding="utf-8")
+        return
+    field = "$6$other$changed" if changed else rescue_account.default_hash()
+    etc.joinpath("passwd").write_text(
+        "root:x:0:0:root:/root:/bin/bash\n"
+        f"{rescue_account.ACCOUNT}:x:1001:1001::/home/{rescue_account.ACCOUNT}:/bin/bash\n",
+        encoding="utf-8",
+    )
+    etc.joinpath("shadow").write_text(
+        "root:*:20000:0:99999:7:::\n"
+        f"{rescue_account.ACCOUNT}:{field}:20000:0:99999:7:::\n",
+        encoding="utf-8",
+    )
+
+
+def seed_manager_state(services, *, kept=False, verdict="", armed=False):
+    """What the Appliance Manager card reports, written the way the host does."""
+
+    from appliance import manager_retention, manager_verify
+
+    packages = Path(services.paths.packages_dir)
+    packages.mkdir(parents=True, exist_ok=True)
+    for name in (manager_verify.VERDICT_NAME, manager_verify.DEADLINE_NAME):
+        packages.joinpath(name).unlink(missing_ok=True)
+    packages.joinpath(manager_retention.RECORD_NAME).unlink(missing_ok=True)
+    packages.joinpath(manager_retention.CURRENT_NAME).unlink(missing_ok=True)
+    packages.joinpath(manager_retention.PREVIOUS_NAME).unlink(missing_ok=True)
+
+    if kept:
+        staged = packages / ".seed.deb"
+        staged.write_bytes(b"the package that was running")
+        manager_retention.retain(
+            services.paths,
+            staged,
+            sha256="sha256:" + "a" * 64,
+            version="0.1.0",
+            build_id="20260801000000",
+            rotate=False,
+        )
+        # Rotate once so there is something to go back to, as an install does.
+        newer = packages / ".seed-newer.deb"
+        newer.write_bytes(b"the package that is running")
+        manager_retention.retain(
+            services.paths,
+            newer,
+            sha256="sha256:" + "b" * 64,
+            version="0.2.0",
+            build_id="20260826010000",
+        )
+        staged.unlink(missing_ok=True)
+        newer.unlink(missing_ok=True)
+    if verdict:
+        manager_verify.verdict_path(services.paths).write_text(
+            json.dumps(
+                {"verdict": verdict, "detail": "the deadline expired", "decided_at": "2026-08-26"}
+            ),
+            encoding="utf-8",
+        )
+    if armed:
+        manager_verify.deadline_path(services.paths).write_text(
+            json.dumps(
+                {
+                    "schema_version": manager_verify.DEADLINE_SCHEMA_VERSION,
+                    "expected_version": "0.3.0",
+                    "build_id": "20260901000000",
+                    "previous_path": str(packages / manager_retention.PREVIOUS_NAME),
+                    "armed_at": 1787000000,
+                    "deadline_epoch": 4000000000,
+                    "window_seconds": 900,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+
 def seed_host_files(root):
     (root / "etc").mkdir(parents=True, exist_ok=True)
     (root / "etc" / "os-release").write_text(OS_RELEASE, encoding="utf-8")
@@ -216,6 +300,18 @@ def main():
         if options.get("docker_missing"):
             host.tools.discard("docker")
             host.docker_running = False
+
+        seed_rescue_account(
+            root,
+            changed=bool(options.get("rescue_password_changed")),
+            absent=bool(options.get("rescue_account_absent")),
+        )
+        seed_manager_state(
+            services,
+            kept=bool(options.get("manager_package_kept")),
+            verdict=str(options.get("manager_verdict") or ""),
+            armed=bool(options.get("manager_deadline_armed")),
+        )
 
     seed_appliance_state({})
 

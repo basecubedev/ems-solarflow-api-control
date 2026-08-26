@@ -136,7 +136,31 @@ class SupportArchiveService:
         except Exception:
             members.append(("packages.json", "{}"))
         members.append(("ab-status.json", json.dumps(self._ab_state(), indent=2, sort_keys=True)))
+        members.append(
+            ("manager.json", json.dumps(self._manager_state(), indent=2, sort_keys=True))
+        )
         return members
+
+    def _manager_state(self):
+        """What the Appliance Manager package is, and what the last install did.
+
+        A support case about a failed manager update used to arrive with the
+        A/B slot state and nothing about the package this console runs from --
+        so the one question worth asking, which package is kept and what the
+        deadline decided, was the one the archive could not answer.
+
+        Digests, versions and build ids only. No archive content and no
+        password material: the rescue account contributes a verdict, never the
+        hash behind it.
+        """
+
+        service = getattr(self.status_service, "manager", None)
+        if service is None:
+            return {"error": "manager_unavailable"}
+        try:
+            return redact_mapping(service.status())
+        except Exception as exc:
+            return {"error": exc.__class__.__name__}
 
     def _ab_state(self):
         """Bounded A/B evidence: slots, selector, pending trial, digests.

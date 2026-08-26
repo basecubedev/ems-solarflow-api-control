@@ -11,15 +11,17 @@ tests/test_appliance_manager_install.py for the properties it defends.
 
 import json
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from appliance import manager_releases, manager_retention
+from appliance import manager_releases, manager_retention, os_releases
 
 INSTALL_UNIT = "ems-appliance-manager-install.service"
 
 REQUEST_NAME = "install-request.json"
+REVERT_STAGING_NAME = ".revert-staging.deb"
 RESULT_NAME = "install-result.json"
 
 OUTCOME_INSTALLED = "installed"
@@ -122,6 +124,58 @@ def stage(paths, *, archive, version, build_id, sha256, requested_at=""):
     except FileNotFoundError:
         pass
     return request_path(paths)
+
+
+def prepare_revert(paths, *, retained_at=""):
+    """Stage the kept package, rotating the record so both agree what is current.
+
+    The one owner of going back, for the browser and for the console command
+    alike. Two callers with their own arithmetic is how the record came to name
+    the package that was *running* as the one kept to return to.
+
+    Retaining through a copy rather than naming ``previous.deb`` directly:
+    rotation overwrites that file with what is current, so an install reading
+    from it would put back the very package it is leaving.
+    """
+
+    target = manager_retention.revert_target(paths)
+    observed = os_releases.file_digest(target.path)
+    if observed != target.sha256:
+        raise manager_releases.ManagerReleaseError(
+            "manager_artifact_corrupt",
+            f"{Path(target.path).name} hashes to {observed}, this appliance recorded "
+            f"{target.sha256}",
+        )
+
+    # A fixed name rather than one built from the record: only one revert runs
+    # at a time, and a path interpolated from a manifest field is a path a
+    # manifest can steer.
+    staging = Path(paths.packages_dir) / REVERT_STAGING_NAME
+    shutil.copyfile(target.path, staging)
+    try:
+        retention = manager_retention.retain(
+            paths,
+            staging,
+            sha256=target.sha256,
+            version=target.version,
+            build_id=target.build_id,
+            retained_at=retained_at,
+            architecture=target.architecture,
+            state_implements=target.state_implements,
+            state_reads=target.state_reads,
+        )
+    finally:
+        staging.unlink(missing_ok=True)
+
+    stage(
+        paths,
+        archive=retention.current.path,
+        version=target.version,
+        build_id=target.build_id,
+        sha256=target.sha256,
+        requested_at=retained_at,
+    )
+    return target, retention
 
 
 def prepare(paths, *, release, archive, state_schemas, verifier=None, manifest_path="",

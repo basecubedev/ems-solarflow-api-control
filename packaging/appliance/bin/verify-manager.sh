@@ -12,7 +12,7 @@
 # The state directory is a parameter so the unit says which one it operates on.
 set -eu
 
-STATE=${1:-/var/lib/ems-appliance-manager/packages}
+STATE=${1:-/var/lib/ems-appliance-manager/agent/packages}
 DEADLINE="$STATE/verify-deadline.json"
 VERDICT="$STATE/verify-verdict.json"
 PACKAGE=ems-appliance-manager

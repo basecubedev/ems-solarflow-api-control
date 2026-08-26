@@ -171,3 +171,35 @@ def test_no_dynamic_value_reaches_innerhtml():
     section = APP.split("function managerActions(", 1)[1].split("function renderAbUpdates(", 1)[0]
 
     assert "innerHTML" not in section
+
+
+# --- the card reports an outcome that arrives after the operation ------------
+
+
+def test_the_manager_state_is_refreshed_and_not_read_once():
+    """Its whole purpose is to report a verdict that lands later.
+
+    The install finishes as an operation the moment dpkg is started; whether it
+    stood or was reverted is decided minutes afterwards by the deadline. A card
+    fetched once when the page first rendered would still be showing "nothing in
+    flight" when the appliance had already put the previous package back.
+    """
+
+    body = extract("refresh")
+
+    assert '"/api/manager"' in body, "the live half belongs in the periodic refresh"
+
+
+def test_only_the_index_is_fetched_lazily():
+    """Reading a remote index on every poll would cost a network round trip."""
+
+    section = APP.split("function renderManagerUpdates(", 1)[1].split("\n  }", 1)[0]
+
+    assert 'loadInto("managerSources", "/api/manager/sources")' in section
+    assert 'loadInto("manager"' not in section
+
+
+def test_an_unfetched_state_renders_as_unknown_rather_than_as_quiet():
+    section = APP.split("function renderManagerUpdates(", 1)[1].split("\n  }", 1)[0]
+
+    assert "Reading the manager state" in section

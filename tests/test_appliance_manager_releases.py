@@ -274,3 +274,32 @@ def test_one_keyring_verifies_both_artefact_classes():
     assert "SignatureVerifier" not in source, (
         "the manager path must reuse the OS release verifier, not define a second one"
     )
+
+
+# --- an identifier that reaches a filesystem path ---------------------------
+
+
+def test_a_build_id_that_is_not_an_identifier_is_refused():
+    """It reaches a filesystem path, so it may not be free text.
+
+    ``prepare_revert`` and the release scripts both name files after it. A
+    signed manifest declaring ``../../tmp/escape`` would have staged a package
+    outside the directory this appliance keeps them in — behind a signature,
+    but this project validates identifiers rather than trusting the publisher
+    to have been careful.
+    """
+
+    for hostile in ("../../tmp/escape", "a/b", "with space", "", "-leading"):
+        with pytest.raises(manager_releases.ManagerReleaseError) as refusal:
+            manager_releases.parse_manifest(
+                manifest(build_id=hostile), release_id="ems-appliance-manager-0.2.0-arm64"
+            )
+        assert refusal.value.code == "manager_manifest_invalid", hostile
+
+
+def test_an_ordinary_build_id_is_accepted():
+    release = manager_releases.parse_manifest(
+        manifest(build_id="20260826010000"), release_id="ems-appliance-manager-0.2.0-arm64"
+    )
+
+    assert release.build_id == "20260826010000"
