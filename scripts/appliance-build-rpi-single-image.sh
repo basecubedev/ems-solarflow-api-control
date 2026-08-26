@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Build the single-slot appliance image: one writable root, patched by apt.
 #
-#   scripts/appliance-build-rpi-single-image.sh --profile rpi4|rpi5 [--output DIR]
+#   scripts/appliance-build-rpi-single-image.sh --profile rpi3|rpi4|rpi5 [--output DIR]
 #                                               [--build-id ID] [--rpi-image-gen DIR]
 #
 # A thin entry point, not a second implementation. Everything a release is

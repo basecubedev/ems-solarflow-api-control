@@ -68,6 +68,9 @@ mmdebstrap:
     - network-manager
     - openssh-server
     - systemd-timesyncd
+    # The rescue account has to be able to become root, or it is not a
+    # rescue: root is locked and there is no other way up from a console.
+    - sudo
   customize-hooks:
     # openssh-server's postinst generates a host key pair when it is installed,
     # and it is installed in the build chroot — so the image carried one, the

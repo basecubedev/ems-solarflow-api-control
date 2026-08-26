@@ -629,7 +629,37 @@ request, the trial boot, a health failure, the commit, an observed fallback and
 both rollback steps. It never carries signing material: the detail filter matches
 key material as a substring, so `signing_key` is dropped exactly like `key`.
 
-## Operating-system update trust
+## Update trust: one keyring, two artefact classes
+
+Two different things reach this appliance over HTTPS and both are installed only
+if a signature over their manifest verifies against the keyring this host was
+given:
+
+| Artefact | What it is | Where it goes |
+|---|---|---|
+| An **OS release** | a whole slot root plus its boot partition | the inactive A/B slot |
+| An **Appliance Manager package** | the `.deb` this console runs from | `dpkg`, on any shape of appliance |
+
+They share the trust anchor deliberately. A second keyring would be a second
+thing to rotate, a second thing to get wrong on a read-only slot root, and a
+second answer to "who may publish for this appliance" — and there is only one
+publisher. `appliance/manager_releases.py` reuses `os_releases`'s verifier and
+its keyring rather than declaring either again.
+
+What differs is what the verified manifest then says. An OS manifest describes
+partition members and the board they were built for; a package manifest
+describes one `.deb`, its digest and its size, and — unlike the OS manifest —
+is **required** to declare what state schemas its manager implements and the
+oldest it can read. That declaration is optional for an OS release only because
+artefacts were published before it existed; no manager package ever has been,
+so there is no history to be lenient towards.
+
+The order of operations is identical for both, and it is the security property:
+an index may only name candidates, the detached signature decides whether the
+manifest may be believed, and only a verified manifest says what the artefact
+must hash to.
+
+### Operating-system update trust
 
 An OS artefact is installed only if a signature over its manifest verifies
 against a keyring this host was given. Three settings in
@@ -641,13 +671,14 @@ authority: the browser can influence none of them.
 | `os_release_keyring` | `/etc/ems-appliance-manager/os-release-keyring.gpg` | The trust anchor. The package ships the project's own release keyring here, deliberately **not** as a conffile: it is a trust anchor rather than a setting, so a local edit must not survive an upgrade that rotates the key. An operator building their own images replaces it. With no keyring at all, every artefact is refused and the manager reports an unmet readiness prerequisite rather than failing at install time |
 | `os_release_dir` | `/var/lib/ems-appliance-os-update/releases` | Where verified releases live. A shared path, so it survives a slot switch |
 | `os_release_index_url` | empty | An `https` index naming downloadable releases. The index is never trusted: it may only name candidates, and what is installed is decided by the signature |
+| `manager_index_url` | empty | The same, for Appliance Manager packages, verified against the same keyring. Empty is a working state: the package can still be installed by hand |
 | `allow_unsigned_os_artifacts` | `false` | A development-bench escape hatch reachable from the root CLI only. It is never a release-gate pass, is recorded as a distinct verification state, and the browser can never reach it |
 
 Verification uses `gpgv` against that keyring alone — not the invoking user's
 keyring, and not a keyserver. A release signed by a key the keyring does not
 hold is refused with the same finality as an unsigned one.
 
-### One identity, two keys
+#### One identity, two keys
 
 The release identity is a primary key that only certifies, and a subkey that
 only signs. Releases are signed by the subkey; the primary never leaves the
@@ -674,6 +705,28 @@ Two consequences worth stating, because both are easy to get wrong:
   not only new ones. An expiry date would therefore be a fleet-wide cliff on a
   forgotten calendar entry rather than a safety net. Rotation is by revocation,
   which is deliberate.
+
+### Appliance Manager package trust
+
+Everything above applies unchanged. Three things are specific to a package:
+
+- **The refusals happen before `dpkg` runs.** Signature, digest, architecture
+  and state-schema compatibility are all decided while this project's Python is
+  still the code that started the process. Afterwards the module files under
+  `/usr/lib/ems-appliance-manager/appliance` are the *new* ones, so a decision
+  taken later would be taken by code nobody has proven yet.
+- **A published package is re-derivable.** `SOURCE_DATE_EPOCH` from the tagged
+  commit and a pinned compressor make two builds byte-identical, which is what
+  replaces the builder attestation an image carries. The manifest records both.
+- **Going backwards is allowed and going blind is not.** An older package
+  installs as readily as a newer one — it is the only recovery a single-slot
+  appliance has — but a package whose manager could not read the state already
+  on this appliance's disk is refused, whichever direction it moves.
+
+The install itself is described in
+[os-updates.md](os-updates.md#updating-the-appliance-manager-itself), and what
+it gives up relative to A/B in
+[adr/manager-self-update.md](adr/manager-self-update.md).
 
 
 ## What is deliberately absent

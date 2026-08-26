@@ -53,7 +53,25 @@ def test_package_version_matches_the_python_package_version():
 
 def test_supported_platforms_are_declared_in_one_place():
     assert SUPPORTED_ARCHITECTURES == ("arm64",)
-    assert SUPPORTED_PI_MODELS == ("Raspberry Pi 4", "Raspberry Pi 5")
+    assert SUPPORTED_PI_MODELS == (
+        "Raspberry Pi 3",
+        "Raspberry Pi 4",
+        "Raspberry Pi 5",
+    )
+
+
+def test_the_package_runs_on_boards_the_ab_image_cannot_boot():
+    """Two different questions with two different answers.
+
+    The package is arm64 Python and systemd units; the A/B image is a boot
+    chain. Merging the two lists would either refuse a Pi 3 the package runs on
+    perfectly well, or promise an A/B image it cannot start.
+    """
+
+    from appliance import rpi_image_gen
+
+    assert "Raspberry Pi 3" in SUPPORTED_PI_MODELS
+    assert "pi3" not in rpi_image_gen.INSTALLABLE_BOARD_CLASSES
 
 
 def test_maintainer_scripts_are_executable_shell():

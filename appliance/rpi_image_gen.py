@@ -70,13 +70,21 @@ class HardwareProfile:
     The compatible board classes are derived from the device layer rather than
     declared beside it, so an artefact cannot claim hardware its kernel and
     firmware were not built for.
+
+    ``variants`` is which image shapes this board has an artefact for, and it is
+    not always both: a Raspberry Pi 3 boots the single-slot image and cannot
+    boot the A/B one — see docs/appliance/adr/raspberry-pi-3-ab-support.md.
     """
 
     name: str
     device_layer: str
     device_class: str
     compatible_board_classes: tuple
+    variants: tuple
     description: str
+
+    def builds(self, variant):
+        return str(variant) in self.variants
 
     def to_dict(self):
         return {
@@ -84,16 +92,33 @@ class HardwareProfile:
             "device_layer": self.device_layer,
             "device_class": self.device_class,
             "compatible_board_classes": list(self.compatible_board_classes),
+            "variants": list(self.variants),
             "description": self.description,
         }
 
 
+BOTH_VARIANTS = (image_variants.VARIANT_AB, image_variants.VARIANT_SINGLE)
+
+
 HARDWARE_PROFILES = {
+    # Single-slot only, and the restriction is upstream's rather than a policy:
+    # image-rota refuses the pi3 device class, puts no second-stage bootloader
+    # on its first partition and builds a GPT the Pi 3 boot ROM cannot read.
+    # image-rpios has none of those three properties.
+    "rpi3": HardwareProfile(
+        name="rpi3",
+        device_layer="rpi3",
+        device_class="pi3",
+        compatible_board_classes=("pi3",),
+        variants=(image_variants.VARIANT_SINGLE,),
+        description="Raspberry Pi 3 Model B / B+",
+    ),
     "rpi4": HardwareProfile(
         name="rpi4",
         device_layer="rpi4",
         device_class="pi4",
         compatible_board_classes=("pi4",),
+        variants=BOTH_VARIANTS,
         description="Raspberry Pi 4 Model B",
     ),
     "rpi5": HardwareProfile(
@@ -101,6 +126,7 @@ HARDWARE_PROFILES = {
         device_layer="rpi5",
         device_class="pi5",
         compatible_board_classes=("pi5",),
+        variants=BOTH_VARIANTS,
         description="Raspberry Pi 5",
     ),
 }
@@ -110,6 +136,8 @@ HARDWARE_PROFILES = {
 # board must block an update rather than be guessed at: a Pi 4 kernel written to
 # a Pi 5 does not boot, and the appliance would be recoverable only by reflashing.
 BOARD_CLASSES = {
+    "raspberrypi,3-model-b": "pi3",
+    "raspberrypi,3-model-b-plus": "pi3",
     "raspberrypi,4-model-b": "pi4",
     "raspberrypi,400": "pi4",
     "raspberrypi,4-compute-module": "cm4",
@@ -119,11 +147,35 @@ BOARD_CLASSES = {
 
 BOARD_UNKNOWN = ""
 
+def _installable_board_classes():
+    """Boards with a profile whose variant actually ships an update archive.
+
+    Derived rather than listed, because two of the three ways a board can fail
+    this are easy to get wrong by hand: a Compute Module has no profile at all,
+    and a Raspberry Pi 3 has one whose image shape is patched by apt and
+    produces no update artefact to install.
+    """
+
+    return tuple(
+        sorted(
+            {
+                board
+                for profile in HARDWARE_PROFILES.values()
+                for board in profile.compatible_board_classes
+                if any(
+                    image_variants.variant(name).has_update_archive
+                    for name in profile.variants
+                )
+            }
+        )
+    )
+
+
 # The board classes this project actually ships an installable artefact for.
 # CM4 and CM5 are recognised so an operator is told what their appliance is,
 # rather than being told nothing — but there is no cm4 or cm5 build profile, so
 # reporting them as supported would promise an update that cannot be produced.
-INSTALLABLE_BOARD_CLASSES = ("pi4", "pi5")
+INSTALLABLE_BOARD_CLASSES = _installable_board_classes()
 
 # An arm64 image built on anything else needs the kernel to hand aarch64
 # binaries to an emulator. That registration is host-wide and belongs to the
@@ -466,15 +518,35 @@ def detect_board_class(root="/"):
     return board_class(raw)
 
 
-def board_is_installable(board):
-    """Is there an artefact this board could actually be updated with?
+def board_is_installable(board, *, variant=image_variants.VARIANT_AB):
+    """Is there an artefact of this shape this board could be updated with?
 
     Recognising a board and being able to update it are separate answers.
     Reporting a Compute Module as supported would offer an OS update that no
-    build profile can produce.
+    build profile can produce; reporting a single-slot appliance as supported
+    would offer one that no image variant produces, for any board.
     """
 
-    return str(board or "") in INSTALLABLE_BOARD_CLASSES
+    wanted = str(board or "")
+    if not wanted:
+        return False
+    for profile in HARDWARE_PROFILES.values():
+        if wanted in profile.compatible_board_classes and profile.builds(variant):
+            return image_variants.variant(variant).has_update_archive
+    return False
+
+
+def board_has_an_image(board):
+    """Is there any appliance image at all for this board?
+
+    Distinct from installability: a Raspberry Pi 3 has an image and no way to
+    be updated with one, and the difference is what an operator is told.
+    """
+
+    wanted = str(board or "")
+    return bool(wanted) and any(
+        wanted in profile.compatible_board_classes for profile in HARDWARE_PROFILES.values()
+    )
 
 
 # --- upstream host dependencies ---------------------------------------------

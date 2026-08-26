@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The single-slot appliance image for Raspberry Pi 3 Model B and B+.
+#
+#   rpi-image-gen build -c <abs>/profiles/rpi3-single.yaml -S packaging/appliance/image
+#
+# There is deliberately no rpi3-ab.yaml. The A/B layout refuses the pi3 device
+# class, puts no second-stage bootloader on its first partition and builds a
+# GPT the Pi 3 boot ROM cannot read; this layout has none of those properties.
+# See ../../../../docs/appliance/adr/raspberry-pi-3-ab-support.md.
+include:
+  file: ../shared/ems-appliance-single.yaml
+
+device:
+  layer: rpi3
+  # Upstream's rpi3 layer accepts sd and nothing else -- the board has no USB
+  # or NVMe boot path this project could offer.
+  storage_type: sd
+
+image:
+  name: ems-solarflow-appliance-rpi3-single

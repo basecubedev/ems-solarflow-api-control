@@ -270,7 +270,8 @@ nodes, which would test the forgery rather than the device.
 A Raspberry Pi 3 or 3B+ **cannot** stand in for either board. It is not a
 question of speed: the A/B image is GPT with an EEPROM-read boot selector, and a
 Pi 3 boot ROM reads neither, so it never reaches a bootloader and none of the
-cases below can be attempted on it. See
+cases below can be attempted on it. It is the board for the *single-slot*
+cases instead — see [Single-slot image variant](#single-slot-image-variant) and
 [adr/raspberry-pi-3-ab-support.md](adr/raspberry-pi-3-ab-support.md).
 
 ```text
@@ -331,7 +332,7 @@ declares, not the shape the running code writes. Without that, the update
 introducing the schema would be the one update that could never commit, and
 every retry would fail identically.
 
-### Minimum supported medium: 32 GB
+### Minimum supported medium: 32 GB (A/B), 16 GB (single-slot)
 
 Not a recommendation. The image is about **16.5 GiB** — two 4 GiB slot roots,
 two 256 MiB boot partitions, a bootconfig partition and an 8 GiB persistent
@@ -638,6 +639,12 @@ answer for.
 | The single-slot release gates pass end to end | **PASS** | `appliance-release-gates.sh --variant single --profile rpi5 --profile rpi4`: `RESULT: PASS (builder qualification, 0 optional gate(s) NOT RUN)`. The slot-mount gate and every update-archive gate report NOT APPLICABLE with their reason rather than being dropped |
 | The first-boot growth unit ships, is enabled, and its program is there | **PASS** | same artefact: the unit is linked into `multi-user.target.wants`, and `/usr/lib/ems-appliance-manager/grow-root.sh` is in the image |
 | `image-rpios` + `rpi4` builds | NOT RUN | only rpi5 has been built |
+| `image-rpios` + `rpi3` builds | **PASS** | built twice in the builder VM on 2026-08-26, at project revisions `9be2fea` and `4d3baa2`; 28m26s and 28m10s; both `RESULT: PASS (built ems-solarflow-appliance-0.1.0-rpi3-arm64-single.img)` |
+| The built image satisfies the single-slot contract, **rpi3** | **PASS** | `appliance-inspect-rpi-ab-image.sh --variant single` on both: **33 pass, 0 fail, 12 NOT RUN, all twelve optional and each with its reason**. MBR with two partitions, `kernel8.img`, 20 device-tree blobs, `enable_uart=1`, the arm64 package installed and every enabled unit's program present |
+| The rescue account is in the flashed image | **PASS** | read out of the `4d3baa2` image's ext4 root: `ems-rescue`, uid 1001, shell `/bin/bash`, in the `sudo` group, and `/etc/shadow` holding exactly the shipped hash. `root` stays `*` |
+| The manager's install and deadline units are in the flashed image | **PASS** | same image: `ems-appliance-manager-verify.service`, its `.timer`, `verify-manager.sh`, `rescue-account.sh` and `rescue-password.hash` are all present, and the timer is **not** enabled — arming is what enables it |
+| The built image boots on a Pi 3B+ | NOT RUN | the board is available and the maintainer's live test is planned; nothing has been attempted yet |
+| A Pi 3B+ runs Docker, Admin, EMS and InfluxDB in 1 GB of RAM | NOT RUN | **unmeasured**, and the memory table's "1 GB suffices" was written about other boards |
 | The built image boots on a Pi 4 | NOT RUN | needs a Pi 4 or Pi 5; the available board is a Pi 3B+ |
 | The built image boots on a Pi 5 | NOT RUN | as above |
 | The root is genuinely writable when `ems-appliance-agent` starts | NOT RUN | needs a booted guest |

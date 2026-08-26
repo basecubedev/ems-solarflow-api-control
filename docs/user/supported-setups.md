@@ -136,6 +136,7 @@ support above.
 | Component | Status |
 |---|---|
 | Appliance image (Pi 4 / Pi 5) | **Reverse-engineered** — built and exercised automatically, never confirmed on a physical Raspberry Pi |
+| Appliance image (Pi 3 / 3B+) | **Reverse-engineered** — the single-slot image only, built and inspected once on 2026-08-26; no Pi 3 has booted it, and 1 GB of RAM against Docker, EMS and InfluxDB is unmeasured. There is no two-slot image for this board and there will not be |
 
 Everything about it is tested without hardware: the package installs and its
 services start on a booted aarch64 guest under emulation, the A/B update

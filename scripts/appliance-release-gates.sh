@@ -178,7 +178,7 @@ while [ $# -gt 0 ]; do
         --rpi-image-gen=*) GENERATOR=${1#*=}; shift ;;
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --output=*) OUTPUT=${1#*=}; shift ;;
-        --profile) PROFILES="$PROFILES ${2:?--profile needs rpi4 or rpi5}"; shift 2 ;;
+        --profile) PROFILES="$PROFILES ${2:?--profile needs rpi3, rpi4 or rpi5}"; shift 2 ;;
         --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
         --variant=*) VARIANT=${1#*=}; shift ;;
         --profile=*) PROFILES="$PROFILES ${1#*=}"; shift ;;
@@ -212,7 +212,29 @@ case "$VARIANT" in
     *) echo "--variant is ab or single, not $VARIANT" >&2; exit 2 ;;
 esac
 
-[ -n "$PROFILES" ] || PROFILES="rpi4 rpi5"
+# Which boards build this shape, from the one table that knows. Listing them
+# here would let a release publish an incomplete matrix the moment a profile
+# gains or loses a variant.
+default_profiles() {
+    PYTHONPATH="$ROOT" python3 - "$1" <<'PY'
+import sys
+
+from appliance import rpi_image_gen
+
+print(
+    " ".join(
+        sorted(
+            profile.name
+            for profile in rpi_image_gen.HARDWARE_PROFILES.values()
+            if profile.builds(sys.argv[1])
+        )
+    )
+)
+PY
+}
+
+[ -n "$PROFILES" ] || PROFILES=$(default_profiles "$VARIANT") \
+    || fail "the profile list could not be resolved" hardware_profile_unknown
 mkdir -p "$OUTPUT/gates" "$OUTPUT/reports"
 
 for profile in $PROFILES; do

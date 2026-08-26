@@ -99,3 +99,74 @@ def test_the_hardware_checklist_states_the_minimum_medium():
 
     assert "32 GB" in text
     assert str(media_sizing.MINIMUM_MEDIA_BYTES) in text or "30,000,000,000" in text
+
+
+# --- the single-slot shape ---------------------------------------------------
+
+
+def test_the_single_slot_numbers_match_the_profile_that_declares_them():
+    """Read from the shared single-slot config, not restated here."""
+
+    import yaml
+
+    config = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[1]
+            / "packaging"
+            / "appliance"
+            / "image"
+            / "shared"
+            / "ems-appliance-single.yaml"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert config["image"]["boot_part_size"] == "256M"
+    assert config["image"]["root_part_size"] == "8G"
+    assert media_sizing.SINGLE_BOOT_PARTITION_BYTES == 256 * 1024 * 1024
+    assert media_sizing.SINGLE_ROOT_PARTITION_BYTES == 8 * GIB
+
+
+def test_a_single_slot_appliance_needs_a_smaller_card_than_an_ab_one():
+    """One root, one Docker store, no persistent partition, no staged update.
+
+    The 32 GB figure is about the A/B shape. Repeating it for an image with
+    half the partitions would tell an owner to buy a card the appliance has no
+    use for.
+    """
+
+    assert media_sizing.SINGLE_IMAGE_BYTES < media_sizing.IMAGE_BYTES
+    assert media_sizing.SINGLE_MINIMUM_MEDIA_BYTES < media_sizing.MINIMUM_MEDIA_BYTES
+
+
+def test_the_single_slot_policy_floor_clears_what_the_root_actually_needs():
+    """The policy is a card an owner can buy, above the computed requirement."""
+
+    assert (
+        media_sizing.SINGLE_RECOMMENDED_MEDIA_BYTES < media_sizing.SINGLE_MINIMUM_MEDIA_BYTES
+    )
+
+
+def test_a_16gb_card_holds_a_single_slot_image_and_not_an_ab_one():
+    marketed_16gb = 16 * 1000 * 1000 * 1000
+
+    assert media_sizing.media_is_supported(marketed_16gb, variant="single")
+    assert not media_sizing.media_is_supported(marketed_16gb, variant="ab")
+
+
+def test_a_caller_that_does_not_say_which_shape_gets_the_stricter_answer():
+    """Defaulting to the smaller floor would undersize an A/B appliance."""
+
+    assert not media_sizing.media_is_supported(16 * 1000 * 1000 * 1000)
+
+
+def test_an_unknown_shape_is_refused_rather_than_sized():
+    with pytest.raises(ValueError):
+        media_sizing.media_is_supported(64 * 1000 * 1000 * 1000, variant="tri-slot")
+
+
+def test_the_requirements_name_both_shapes():
+    by_variant = media_sizing.requirements()["by_variant"]
+
+    assert set(by_variant) == {"ab", "single"}
+    assert by_variant["ab"]["supported_media_label"] == "32 GB"
+    assert by_variant["single"]["supported_media_label"] == "16 GB"

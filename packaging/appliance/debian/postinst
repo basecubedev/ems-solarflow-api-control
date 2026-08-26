@@ -87,6 +87,12 @@ case "$1" in
         /usr/lib/ems-appliance-manager/backup-account.sh ensure \
             || fail "the backup account could not be prepared; see the message above"
 
+        # The way back in when the appliance itself will not come up. Created
+        # once, with a documented password, and never reset by a later install:
+        # changing it is the operator's choice and an upgrade must not undo it.
+        /usr/lib/ems-appliance-manager/rescue-account.sh \
+            || fail "the rescue account could not be prepared; see the message above"
+
         mkdir -p "$CONFIG_DIR" || fail "cannot create $CONFIG_DIR"
         chmod 0755 "$CONFIG_DIR"
 

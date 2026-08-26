@@ -57,7 +57,7 @@ fail() {
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --profile) PROFILE=${2:?--profile needs rpi4 or rpi5}; shift 2 ;;
+        --profile) PROFILE=${2:?--profile needs rpi3, rpi4 or rpi5}; shift 2 ;;
         --profile=*) PROFILE=${1#*=}; shift ;;
         --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
         --variant=*) VARIANT=${1#*=}; shift ;;
@@ -101,6 +101,20 @@ case "$VARIANT" in
     ab|single) ;;
     *) echo "unknown variant: $VARIANT" >&2; usage >&2; exit 2 ;;
 esac
+# Not every board has both shapes. A Raspberry Pi 3 boots the single-slot image
+# and cannot boot the A/B one, so the pair is refused at the identifier rather
+# than after a generator has produced a partial artefact tree.
+PYTHONPATH="$ROOT" python3 - "$PROFILE" "$VARIANT" <<'PY' || exit 2
+import sys
+
+from appliance import build_authority
+
+try:
+    build_authority.validate_profile_variant(sys.argv[1], sys.argv[2])
+except build_authority.BuildAuthorityError as error:
+    sys.exit(f"appliance-build-rpi-ab-image: {error.code}: {error.message}")
+PY
+
 IMAGE_LAYER=$(PYTHONPATH="$ROOT" python3 - "$VARIANT" <<'PY'
 import sys
 

@@ -34,9 +34,11 @@ Other boards and 32-bit systems are out of scope for this release.
 The **Raspberry Pi 3 and 3B+ cannot run the A/B appliance image**, and that is
 not a sizing decision that a future release could revisit cheaply: the image
 uses a GPT layout and the EEPROM boot selector that Pi 4 and Pi 5 firmware
-provide, and a Pi 3 boot ROM reads neither. See
-[adr/raspberry-pi-3-ab-support.md](adr/raspberry-pi-3-ab-support.md) for the
-evidence, and [../user/hardware-requirements.md](../user/hardware-requirements.md)
+provide, and a Pi 3 boot ROM reads neither. They *are* built a **single-slot**
+image, which is an MBR and has no boot selector — but nobody has booted it on
+one yet. See [adr/raspberry-pi-3-ab-support.md](adr/raspberry-pi-3-ab-support.md)
+for the evidence and where the line falls, and
+[../user/hardware-requirements.md](../user/hardware-requirements.md)
 for what a Pi 3 can and cannot be used for.
 
 ## Three installation shapes
@@ -87,16 +89,26 @@ the machine if something goes wrong.
 | | `.deb` on your own OS | Single-slot image | A/B image |
 |---|---|---|---|
 | Operating system | `apt` | `apt` | a signed image, trial-booted |
-| Appliance Manager | a new `.deb`, by hand | a new `.deb`, by hand | comes with the OS image |
+| Appliance Manager | **System Updates → Appliance Manager**, or a `.deb` by hand | the same | the same, or with the OS image |
 | Admin and EMS containers | the Admin console | the Admin console | the Admin console |
 
-The Manager is installed with `dpkg`, not from an APT repository, so `apt` does
-not offer it an upgrade on either of the first two shapes: you download the new
-`.deb`, check its checksum and install it, exactly as at first install.
-`sudo ems-appliance rollback-manager` reinstalls the previous one if a new
-package misbehaves. Only the A/B image ships the Manager as part of the
-operating-system image, because there the root filesystem is read-only and
-`dpkg` could not write to it anyway.
+The Manager is not in any APT repository, so `apt` does not offer it an upgrade.
+**System Updates → Appliance Manager** does: it fetches a signed package over
+HTTPS, verifies it against the keyring the appliance already ships, and installs
+it — see [os-updates.md](os-updates.md#updating-the-appliance-manager-itself).
+Installing a `.deb` by hand still works and is what a development bench does.
+
+`sudo ems-appliance rollback-manager` reinstalls the package the appliance was
+running before the last update. That is a real procedure rather than a promise:
+the package that was running is copied to
+`/var/lib/ems-appliance-manager/packages/previous.deb` **before** the new one is
+unpacked, so there is a file to go back to. When there is none — a first
+install, or a manager that was never installed through this path — the command
+refuses and says so, instead of reporting a success that did nothing.
+
+Only the A/B image ships the Manager as part of the operating-system image,
+because there the root filesystem is read-only and `dpkg` could not write to it
+anyway.
 
 **An installation is never converted in place** — not a `.deb` installation
 into either image, and not one image into the other. The partition tables are not

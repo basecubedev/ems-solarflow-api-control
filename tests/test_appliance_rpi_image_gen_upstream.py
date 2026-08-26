@@ -97,8 +97,8 @@ def test_the_contract_fixture_is_the_real_pinned_tree():
 # --- what upstream actually exposes -----------------------------------------
 
 
-def test_upstream_names_its_device_layers_rpi4_and_rpi5():
-    assert upstream_device_layers() == {"pi4": "rpi4", "pi5": "rpi5"}
+def test_upstream_names_its_device_layers_after_the_boards():
+    assert upstream_device_layers() == {"pi3": "rpi3", "pi4": "rpi4", "pi5": "rpi5"}
 
 
 def test_upstream_ab_config_selects_the_rpi5_device_layer():
@@ -194,20 +194,22 @@ def test_the_update_members_are_android_sparse_images():
 # --- the project's build configuration --------------------------------------
 
 
-def test_the_project_declares_one_profile_per_supported_board_and_variant():
-    """Every board is offered in both shapes, and nothing else is offered.
+def test_the_project_declares_one_profile_per_board_and_variant_it_claims():
+    """Every shape a board claims exists, and nothing beyond it is offered.
 
-    A board that exists in only one variant is the failure this pins: an owner
-    told the appliance supports their Pi finds no image of the kind they were
-    told to flash.
+    A board that claims a shape and has no profile for it is the failure this
+    pins: an owner told the appliance supports their Pi finds no image of the
+    kind they were told to flash. The claim is the profile's own ``variants``,
+    which is not both for every board -- a Raspberry Pi 3 cannot boot the A/B
+    image, so it does not offer one.
     """
 
     from appliance import image_variants
 
     expected = {
-        f"{board}-{variant.profile_suffix}"
-        for board in rpi_image_gen.HARDWARE_PROFILES
-        for variant in image_variants.VARIANTS.values()
+        f"{profile.name}-{image_variants.variant(name).profile_suffix}"
+        for profile in rpi_image_gen.HARDWARE_PROFILES.values()
+        for name in profile.variants
     }
     names = {path.stem for path in PROFILE_DIR.glob("*.yaml")} if PROFILE_DIR.is_dir() else set()
 
@@ -224,10 +226,19 @@ def test_every_project_device_layer_resolves_upstream():
         assert declared in available, f"{path.name} selects device layer {declared!r}"
 
 
-def test_every_project_profile_is_a_device_class_image_rota_accepts():
+def test_every_ab_profile_is_a_device_class_image_rota_accepts():
+    """Only the A/B profiles: image-rota is the layout that constrains this.
+
+    image-rpios states no rule on the device class at all, which is what lets
+    the single-slot image serve a board the A/B one refuses.
+    """
+
+    from appliance import image_variants
+
     for path in project_image_configs():
         profile = rpi_image_gen.read_profile(path)
-        assert profile.device_class in ROTA_DEVICE_CLASSES, path.name
+        if path.stem.endswith(f"-{image_variants.VARIANT_AB}"):
+            assert profile.device_class in ROTA_DEVICE_CLASSES, path.name
 
 
 def test_the_project_layer_requires_layers_upstream_defines():

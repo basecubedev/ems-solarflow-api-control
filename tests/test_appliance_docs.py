@@ -734,10 +734,21 @@ def test_that_claim_is_the_tier_the_support_table_assigns_it():
     assert "Appliance image (Pi 4 / Pi 5) | **Reverse-engineered**" in setups
 
 
-def test_the_faq_does_not_offer_a_login_the_image_has_no_account_for():
+def test_the_faq_points_at_the_console_account_without_making_it_the_normal_path():
+    """The image used to have no login at all; now it has exactly one.
+
+    Both failure modes are wrong: an FAQ that still says there is no account
+    sends an owner to re-flash a card they could have logged into, and one that
+    presents ``ems-rescue`` as the ordinary way in trains people to use a
+    password that is published in this repository.
+    """
+
     faq = " ".join(FAQ.read_text(encoding="utf-8").split())
 
-    assert "ships no login account" in faq
+    assert "ships no login account" not in faq
+    assert "console rescue account" in faq
+    assert "last resort, not the everyday path" in faq
+    assert "SSH backup export" in faq
 
 
 def test_the_faq_names_every_connection_a_device_can_be_reached_on():

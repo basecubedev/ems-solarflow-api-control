@@ -20,11 +20,18 @@ Then, in order:
 4. **Power-cycle it — but shut it down first if you can reach it at all.**
    Pulling power from a running appliance is how cards get corrupted.
 
-If none of that helps: **the appliance image ships no login account**, so a
-keyboard and screen give you a login prompt you cannot answer. That is
-deliberate — a shipped password is one every device shares.
+If none of that helps: **plug in a keyboard and a screen.** The appliance has a
+rescue account for exactly this — user `ems-rescue`, password `ems-rescue` — and
+it can become root with `sudo`. That password is written down here and in the
+source, so it is public knowledge: fine on a home network, and worth changing
+with `sudo passwd ems-rescue` if your appliance can be reached from outside one.
+The console reports which of the two it is; it does not insist.
 
-Two things are still readable, and between them they usually say what happened.
+The full order of attempts, down to reading the card in another computer, is in
+[the console recovery guide](../../appliance/console-recovery.md).
+
+Two things are also readable without logging in, and between them they usually
+say what happened.
 
 ### Read the card on your computer
 
@@ -101,10 +108,13 @@ state and you can remove it.
 
 ## The password is lost
 
-There is no email recovery, no reset button and no login account to fall back
-on. Write the card again. Your EMS configuration is on the shared area
-and is **not** erased by re-flashing — but do take a
-[backup](backup.md) first if you can still reach the box at all.
+There is no email recovery and no reset button in the browser. There is a
+console login: sign in as `ems-rescue` at a keyboard and run
+`sudo ems-appliance password-reset`.
+
+If that is not available to you either, write the card again. Your EMS
+configuration is on the shared area and is **not** erased by re-flashing — but
+do take a [backup](backup.md) first if you can still reach the box at all.
 
 ## What not to do
 

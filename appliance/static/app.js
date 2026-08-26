@@ -1991,6 +1991,22 @@
 
   /* ------------------------------------------------------------ Access */
 
+  /* Three states, and "unreadable" is one of them. The console reports which
+     one the appliance is in; it never demands a change and never renders a
+     state it could not read as one it could. */
+  function rescueState(rescue) {
+    if (!rescue || !rescue.present) {
+      return { tone: "warn", label: "not present", hint: "This appliance has no rescue account. A console login is the only way back in when the web console does not answer." };
+    }
+    if (rescue.unreadable || rescue.password_is_default === null) {
+      return { tone: "idle", label: "unknown", hint: "This appliance could not read whether the password is still the shipped one." };
+    }
+    if (rescue.password_is_default) {
+      return { tone: "warn", label: "shipped password", hint: "The password is the documented default, which is public knowledge. That is fine on a private network and a login for anyone who reaches this appliance from outside one. Change it with 'sudo passwd " + rescue.account + "' if that describes yours." };
+    }
+    return { tone: "ok", label: "changed", hint: "The password is no longer the shipped one." };
+  }
+
   function renderAccess(main) {
     var ssh = (state.data.status || {}).ssh || {};
     var backup = state.data.backup;
@@ -2014,6 +2030,7 @@
         fact("Unit state", (ssh.service || {}).active),
         fact("Password login", (hardening.passwordauthentication || {}).value || ssh.password_authentication)
       ], "ssh-service"),
+      rescueCard(),
       card("Backup account", [
         el("p", { class: "status-value", text: ((backup || {}).account || {}).name || "—" }),
         el("div", {}, [tone(((backup || {}).account || {}).exists ? "ok" : "warn",
@@ -2170,6 +2187,19 @@
     if (status === "configured") return "ok";
     if (status === "failed" || status === "unavailable" || status === "degraded") return "bad";
     return "warn";
+  }
+
+  function rescueCard() {
+    var rescue = (state.data.status || {}).system || {};
+    rescue = rescue.rescue || {};
+    var verdict = rescueState(rescue);
+    return card("Console rescue account", [
+      el("p", { class: "status-value", text: rescue.account || "ems-rescue" }),
+      el("div", {}, [tone(verdict.tone, verdict.label)]),
+      fact("Can log in", rescue.can_log_in),
+      expert() ? fact("Shell", rescue.shell) : null,
+      el("p", { class: "control-stage-subtitle", text: verdict.hint })
+    ], "rescue-account");
   }
 
   function renderKeyForm(ssh) {

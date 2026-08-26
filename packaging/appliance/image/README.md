@@ -40,13 +40,20 @@ layer and each artefact declares only the board class that layer is for:
 ```text
 profiles/rpi4-ab.yaml       device layer rpi4   class pi4   ...-rpi4-arm64-ab.img
 profiles/rpi5-ab.yaml       device layer rpi5   class pi5   ...-rpi5-arm64-ab.img
+profiles/rpi3-single.yaml   device layer rpi3   class pi3   ...-rpi3-arm64-single.img
 profiles/rpi4-single.yaml   device layer rpi4   class pi4   ...-rpi4-arm64-single.img
 profiles/rpi5-single.yaml   device layer rpi5   class pi5   ...-rpi5-arm64-single.img
 ```
 
-Four artefacts per release. Nothing is shared between a board's two variants
-except the source tree they were built from: they have separate build
-authorities, and a release refuses an authority that names the other one.
+Five artefacts per release, not six: a Raspberry Pi 3 has no A/B image and
+cannot boot one. Which shapes a board offers is the profile's own `variants`,
+and the build entry points refuse a pair no board can boot rather than
+producing a partial artefact tree — see
+[../../../docs/appliance/adr/raspberry-pi-3-ab-support.md](../../../docs/appliance/adr/raspberry-pi-3-ab-support.md).
+
+Nothing is shared between a board's variants except the source tree they were
+built from: they have separate build authorities, and a release refuses an
+authority that names the other one.
 
 `rpi4` and `rpi5` are upstream's layer **names**; `pi4` and `pi5` are only the
 directories they live in and do not resolve. `image-rota` accepts device

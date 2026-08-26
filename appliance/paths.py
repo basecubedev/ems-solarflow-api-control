@@ -66,6 +66,18 @@ def package_helper(name):
     return Path(libdir) / name
 
 
+def packaged_data(name):
+    """Absolute path of a file this package ships beside its code.
+
+    Never read as configuration and never edited in place: it is the package's
+    own copy, which is what makes it safe to keep off the shared paths upstream
+    re-seeds at every boot.
+    """
+
+    datadir = os.environ.get(ENV_PACKAGE_DATADIR) or DEFAULT_PACKAGE_DATADIR
+    return Path(datadir) / name
+
+
 def packaged_template(name):
     """Absolute path of a configuration template this package ships.
 
@@ -73,8 +85,7 @@ def packaged_template(name):
     is what an absent operator file is seeded from, once.
     """
 
-    datadir = os.environ.get(ENV_PACKAGE_DATADIR) or DEFAULT_PACKAGE_DATADIR
-    return Path(datadir) / name
+    return packaged_data(name)
 
 
 class PathBoundaryError(Exception):

@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Why the A/B appliance image has no Raspberry Pi 3 profile.
+"""Which appliance image a Raspberry Pi 3 gets, and which one it does not.
 
 A Pi 3B+ is an arm64 board, so "does it run 64-bit Linux" is not the question.
-The question is whether it can boot *this* image, and three independent facts
-say it cannot. Each one is checked here against the pinned upstream bytes or
-against this project's own code, so the decision cannot decay into a stale
-paragraph in an ADR while the build quietly grows a profile for it:
+The question is which of this project's two image shapes it can boot, and the
+answer differs between them for reasons that belong to the layout rather than
+to the board.
+
+The A/B image it cannot boot. Three independent facts say so, each checked here
+against the pinned upstream bytes so the decision cannot decay into a stale
+paragraph while the build quietly grows a profile for it:
 
 1. ``image-rota`` owns the A/B partition table, and its own metadata refuses the
    ``pi3`` device class.
@@ -14,8 +17,13 @@ paragraph in an ADR while the build quietly grows a profile for it:
    has to find a second-stage bootloader there.
 3. The layout is GPT, and the Pi 3 boot ROM reads only an MBR.
 
-A board this project ships no image for must also stay un-updatable rather than
-be guessed at, so the fail-closed half of the decision is checked too.
+The single-slot image has none of those three properties, and the same three
+checks are run against it to prove that rather than assume it: ``image-rpios``
+constrains no device class at all, its boot partition is the whole firmware
+directory, and its table is an MBR.
+
+So the board is recognised and gets one image, and the fail-closed half still
+holds: there is no A/B artefact for it, and nothing may offer one.
 
 See ``docs/appliance/adr/raspberry-pi-3-ab-support.md``.
 """
@@ -25,7 +33,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from appliance import build_authority, rpi_image_gen
+from appliance import build_authority, image_variants, rpi_image_gen
 from tests.helpers import upstream_rpi_image_gen as upstream
 
 pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
@@ -73,19 +81,24 @@ def test_image_rota_refuses_the_pi3_device_class():
     )
 
 
-def test_image_rota_accepts_every_device_class_the_project_builds():
-    """The control: the same rule, evaluated the same way, passes rpi4 and rpi5."""
+def test_image_rota_accepts_every_device_class_that_builds_an_ab_image():
+    """The control: the same rule, evaluated the same way, passes rpi4 and rpi5.
+
+    Restricted to the profiles that claim an A/B image, which is what makes the
+    refusal above a statement about pi3 rather than about the rule.
+    """
 
     rule = image_rota_device_class_rule()
     for profile in rpi_image_gen.HARDWARE_PROFILES.values():
-        assert upstream.rule_accepts(rule, profile.device_class), profile.name
+        if profile.builds(image_variants.VARIANT_AB):
+            assert upstream.rule_accepts(rule, profile.device_class), profile.name
 
 
 # --- 2. and 3. what the first partition is, and what a Pi 3 ROM needs ---------
 
 
-def genimage_block(name):
-    text = upstream.read("image/gpt/ab_userdata/genimage.cfg.in.ext4")
+def genimage_block(name, path="image/gpt/ab_userdata/genimage.cfg.in.ext4"):
+    text = upstream.read(path)
     return text.split(f"image {name} {{", 1)[1].split("\n}", 1)[0]
 
 
@@ -113,53 +126,132 @@ def test_the_partition_table_is_gpt():
     assert 'partition-table-type = "gpt"' in genimage_block("<IMAGE_NAME>.<IMAGE_SUFFIX>")
 
 
-# --- the project ships no Raspberry Pi 3 artefact ----------------------------
+# --- the same three questions, asked of the single-slot layout ---------------
 
 
-def test_the_project_ships_no_pi3_build_profile():
+def test_image_rpios_constrains_no_device_class_at_all():
+    """Finding 1 is image-rota's rule, not a property of the pi3 class."""
+
+    rules = upstream.var_requires_rules(upstream.read(upstream.IMAGE_RPIOS))
+
+    assert DEVICE_CLASS_VAR not in rules
+
+
+def test_the_single_slot_boot_partition_is_the_whole_firmware_directory():
+    """Finding 2 does not apply: this partition is where bootcode.bin lives.
+
+    The A/B layout builds its first partition from a file list holding only
+    autoboot.txt. This one mounts /boot/firmware into it, which is the
+    directory a Pi 3 boot ROM has to find a second-stage bootloader in.
+    """
+
+    boot = genimage_block("boot.vfat", upstream.IMAGE_RPIOS_GENIMAGE)
+
+    assert 'mountpoint = "/boot/firmware"' in boot
+    assert "file " not in boot
+
+
+def test_the_single_slot_partition_table_is_an_mbr():
+    """Finding 3 does not apply: the Pi 3 boot ROM reads exactly this."""
+
+    table = genimage_block("<IMAGE_NAME>.<IMAGE_SUFFIX>", upstream.IMAGE_RPIOS_GENIMAGE)
+
+    assert 'partition-table-type = "mbr"' in table
+    assert "partition-type = 0xC" in table, "the boot partition has to be FAT to the ROM"
+
+
+def test_the_pi3_and_pi4_device_layers_want_the_same_kernel():
+    """Not an assumption: both require upstream's generic 64-bit device base.
+
+    It is why one image shape can serve both, and why a Pi 5 -- which requires
+    rpi-linux-2712 instead -- cannot be treated the same way.
+    """
+
+    pi3 = upstream.layer_field(upstream.read(upstream.PI3_DEVICE_LAYER), "Requires")
+    pi4 = upstream.layer_field(upstream.read("device/pi4/device.yaml"), "Requires")
+
+    assert pi3 == pi4 == "rpi-generic64"
+
+
+# --- the project ships one Raspberry Pi 3 artefact, and only one -------------
+
+
+def test_the_project_ships_a_single_slot_pi3_profile_and_no_ab_one():
     declared = {path.stem for path in PROFILE_DIR.glob("*.yaml")}
-    assert not {name for name in declared if "rpi3" in name}
-    assert "rpi3" not in rpi_image_gen.HARDWARE_PROFILES
-    assert "rpi3" not in build_authority.PROFILES
+
+    assert "rpi3-single" in declared
+    assert "rpi3-ab" not in declared
+    assert rpi_image_gen.HARDWARE_PROFILES["rpi3"].variants == (
+        image_variants.VARIANT_SINGLE,
+    )
 
 
-def test_the_build_entry_points_refuse_a_pi3_profile_by_name():
+def test_the_build_entry_points_refuse_a_pi3_ab_build():
     """Refused at the identifier, before a generator or an output directory.
 
     All three release entry points — image build, update build and the release
-    gate — validate through here first, so a ``--profile rpi3`` stops with
-    ``build_identifier_invalid`` rather than producing a partial artefact tree
-    for a board that cannot boot it.
+    gate — validate through here first, so an A/B build for a board that cannot
+    boot one stops with ``build_identifier_invalid`` rather than producing a
+    partial artefact tree.
     """
 
+    assert build_authority.validate_profile("rpi3") == "rpi3"
+
     with pytest.raises(build_authority.BuildAuthorityError) as refusal:
-        build_authority.validate_profile("rpi3")
+        build_authority.validate_profile_variant("rpi3", image_variants.VARIANT_AB)
     assert refusal.value.code == build_authority.INVALID_IDENTIFIER
+
+    assert (
+        build_authority.validate_profile_variant("rpi3", image_variants.VARIANT_SINGLE)
+        == image_variants.VARIANT_SINGLE
+    )
     for supported in ("rpi4", "rpi5"):
-        assert build_authority.validate_profile(supported) == supported
+        for variant in image_variants.VARIANTS:
+            assert build_authority.validate_profile_variant(supported, variant) == variant
 
 
-def test_no_profile_selects_the_pi3_device_layer():
+def test_only_the_single_slot_profile_selects_the_pi3_device_layer():
     for path in sorted(PROFILE_DIR.glob("*.yaml")):
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-        assert (payload.get("device") or {}).get("layer") != "rpi3", path.name
+        if (payload.get("device") or {}).get("layer") == "rpi3":
+            assert path.stem == "rpi3-single", path.name
 
 
-# --- fail closed: an unsupported board is not a guessed one ------------------
+def test_the_two_profile_lists_name_the_same_hardware():
+    """One list of boards this project builds for, checked against the other."""
+
+    assert build_authority.PROFILES == tuple(sorted(rpi_image_gen.HARDWARE_PROFILES))
 
 
-def test_a_raspberry_pi_3_resolves_to_no_board_class():
+# --- fail closed: no A/B artefact is offered for a board that has none -------
+
+
+def test_a_raspberry_pi_3_is_recognised_as_the_board_it_is():
+    """It has an image now, so an operator is told what their appliance is."""
+
     for compatible in PI3_COMPATIBLES:
-        assert rpi_image_gen.board_class(compatible) == rpi_image_gen.BOARD_UNKNOWN
+        assert rpi_image_gen.board_class(compatible) == "pi3"
 
 
-def test_a_raspberry_pi_3_is_not_offered_an_os_update():
-    """The image that would be written is built for another SoC.
+def test_a_raspberry_pi_3_is_still_not_offered_an_os_update():
+    """The A/B image that would be written is built for another boot chain.
 
-    Guessing a class here would flash a Pi 4 or Pi 5 kernel and firmware onto a
-    Pi 3, which is recoverable only by re-imaging the medium.
+    A single-slot appliance has no update archive at all -- it is patched by
+    apt -- so this stays false for a Pi 4 on the single variant too. What
+    changed is the reason, not the answer.
     """
 
     for compatible in PI3_COMPATIBLES:
         board = rpi_image_gen.board_class(compatible)
         assert not rpi_image_gen.board_is_installable(board)
+        assert not rpi_image_gen.board_is_installable(
+            board, variant=image_variants.VARIANT_SINGLE
+        )
+    assert rpi_image_gen.board_is_installable("pi4")
+    assert not rpi_image_gen.board_is_installable("pi4", variant=image_variants.VARIANT_SINGLE)
+
+
+def test_a_pi3_is_told_it_has_no_ab_image_rather_than_no_profile():
+    """Two different facts, and the older message was about to become wrong."""
+
+    assert rpi_image_gen.INSTALLABLE_BOARD_CLASSES == ("pi4", "pi5")

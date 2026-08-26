@@ -31,12 +31,15 @@ PERSIST_GENERATOR = (
     "system-generators/slot-perst-generator"
 )
 
-DEVICE_LAYERS = ("device/pi4/device.yaml", "device/pi5/device.yaml")
+DEVICE_LAYERS = (
+    "device/pi3/device.yaml",
+    "device/pi4/device.yaml",
+    "device/pi5/device.yaml",
+)
 
-# Upstream defines a Raspberry Pi 3 board layer, but image-rota does not accept
-# its device class. It is kept out of DEVICE_LAYERS — which means "the layers
-# this project builds from" — and named separately so the refusal can be proven
-# against real pinned bytes rather than an absence.
+# Named separately as well, because image-rota does not accept its device class:
+# the Pi 3 builds only the single-slot image, and that refusal is proven against
+# real pinned bytes rather than an absence.
 PI3_DEVICE_LAYER = "device/pi3/device.yaml"
 DOCKER_LAYERS = (
     "layer/app-container/docker/engine-trixie.yaml",
@@ -49,6 +52,7 @@ UPSTREAM_AB_CONFIG = "config/trixie-minbase-ab.yaml"
 # rules that give that root the /dev/disk/by-slot/system name the kernel
 # command line and fstab are written against.
 IMAGE_RPIOS = "image/mbr/simple_dual/image.yaml"
+IMAGE_RPIOS_GENIMAGE = "image/mbr/simple_dual/genimage.cfg.in.ext4"
 IMAGE_RPIOS_SETUP = "image/mbr/simple_dual/setup.sh"
 IMAGE_RPIOS_SLOT_RULES = (
     "image/mbr/simple_dual/device/rootfs-overlay/etc/udev/rules.d/99-rpi-05-image.rules"

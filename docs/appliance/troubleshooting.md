@@ -7,6 +7,7 @@
 | What does the Appliance Manager manage? | The Raspberry Pi host: OS status and updates, reboot/shutdown, network and WLAN, hostname and mDNS, Docker service state, the EMS Admin container lifecycle, SSH access, storage and temperature, host logs, appliance recovery. See [architecture.md](architecture.md). |
 | What does the EMS Admin Console manage? | EMS configuration, device discovery, grid meter and inverters, control parameters, EMS runtime state, EMS diagnostics, EMS backup/restore, Guided Setup and Guided Upgrade. |
 | How do I recover a failed Admin update? | [admin-recovery.md](admin-recovery.md) — the appliance rolls back automatically; otherwise use Repair or *Install version → Previous known-good*. |
+| The appliance will not come up at all | [console-recovery.md](console-recovery.md) — log in as `ems-rescue` at a keyboard, then work down the list. |
 | How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — Expert mode, *Exact release tag*. |
 | How do I add an SSH key? | [ssh-backup-access.md](ssh-backup-access.md) |
 | How do I back up files with rsync? | rsync is not available: the backup account is SFTP-only by design. Use the `sftp` commands in [ssh-backup-access.md](ssh-backup-access.md). |

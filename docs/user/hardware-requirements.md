@@ -82,14 +82,20 @@ planned.** This is a boot-chain limit, not a performance judgement. The A/B
 image uses a GPT partition layout and the boot selector that the Pi 4 and Pi 5
 firmware read from EEPROM. A Pi 3 has no EEPROM bootloader and its boot ROM
 reads only an MBR partition table, so it cannot start this image at all. There
-is no setting that changes this. The full reasoning is in
+is no setting that changes this.
+
+**The single-slot appliance image is built for it.** That image uses an MBR, and
+its boot partition is the ordinary firmware directory a Pi 3 boot ROM knows how
+to read, so none of the three reasons above applies. The full reasoning, and the
+line between the two answers, is in
 [the architecture decision record](../appliance/adr/raspberry-pi-3-ab-support.md).
 
-The ordinary Docker deployment is a separate question. A Pi 3B+ is a 64-bit
-board and the containers exist for it, so there is no known reason it would not
-run — but it has 1 GB of RAM, four slower cores and 100 Mbit/s networking shared
-with USB, and **nobody has tested EMS on one**. It is not listed as supported.
-If you try it, InfluxDB is the first thing to leave out, and a
+**It has never been booted on a Pi 3, and it is not listed as supported.** The
+image is built and inspected; no board has started it. It is equally not tested
+what 1 GB of RAM does with Docker, Admin, EMS and InfluxDB together, or what
+100 Mbit/s Ethernet behind USB 2.0 does to a backup. "Built for it" and "known
+to work on it" are different claims, and only the first is being made. If you
+try it, InfluxDB is the first thing to leave out, and a
 [compatibility report](https://github.com/basecubedev/ems-solarflow-api-control/issues)
 would be genuinely useful.
 

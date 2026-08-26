@@ -8,7 +8,7 @@ down with it.
 
 import time
 
-from appliance import validation
+from appliance import rescue_account, validation
 from appliance.docker_backend import DAEMON_RUNNING
 from appliance.redaction import bounded_redacted_log
 from appliance.systemd import (
@@ -93,6 +93,10 @@ class StatusService:
             "services": self.systemd.unit_states(
                 (UNIT_APPLIANCE_WEB, UNIT_APPLIANCE_AGENT, UNIT_DOCKER)
             ),
+            # Reported, never demanded: the console says whether the rescue
+            # account still carries the shipped password so an operator can see
+            # the answer without going to look for it.
+            "rescue": rescue_account.state(getattr(self.probe, "root", "/")).to_dict(),
         }
 
     def docker_state(self):

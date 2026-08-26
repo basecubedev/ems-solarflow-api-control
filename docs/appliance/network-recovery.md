@@ -80,7 +80,7 @@ differ:
 | Shape | Console or SSH login |
 |---|---|
 | Manager package on your own Raspberry Pi OS | Yes — your own account, the one you set up when you installed the OS |
-| **A/B appliance image** | **No.** The image ships no login account, no default password and no authorized key, on purpose: a shipped credential is a credential every device shares |
+| **A/B appliance image** | **Console only.** `ems-rescue` with a documented password, for the case where nothing else answers — see [console-recovery.md](console-recovery.md). No SSH password login and no shipped authorized key: a shipped *key* is a credential every device shares, and unlike a console password it is reachable over the network |
 
 On an appliance image the recovery paths are therefore, in order:
 

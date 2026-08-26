@@ -92,6 +92,7 @@ is refused as `invalid_request` before any handler runs.
 | `manager_releases.py` | What a published manager package claims, and what may be believed |
 | `manager_install.py` | Hands a verified package to a unit that survives installing it |
 | `manager_verify.py` | The deadline that reverts a manager install nobody confirmed |
+| `rescue_account.py` | Whether the console rescue account still carries the shipped password |
 | `manager_update.py` | Fetching, planning and applying a manager package on an operator's button |
 | `release_index.py` | Assembling and retaining a release index, for every artefact class |
 | `validation.py` | Every typed input validator and its stable error code |
@@ -189,6 +190,7 @@ proxy may later add `/system` and `/admin` paths in front of both.
 
 - [installation.md](installation.md) — install, layout and first-run setup
 - [admin-recovery.md](admin-recovery.md) — Admin install, rollback and repair
+- [console-recovery.md](console-recovery.md) — the rescue account, and getting back in when the appliance will not come up
 - [os-updates.md](os-updates.md) — OS updates and package recovery
 - [ab-os-updates.md](ab-os-updates.md) — fail-safe A/B host image updates
 - [ab-hardware-validation.md](ab-hardware-validation.md) — the physical A/B gate

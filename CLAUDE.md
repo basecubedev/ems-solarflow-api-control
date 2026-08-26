@@ -170,9 +170,25 @@ Docker. It is not part of the EMS control loop and must not import from `ems/`.
 - Release trust (`release_trust.py`, `release_attestation.py`,
   `os_releases.py`) is fail-closed by design. Do not weaken a verification path
   to make a gate pass.
-- Not confirmed on physical hardware. `docs/appliance/ab-hardware-validation.md`
-  is the authority on what has and has not been proven; never upgrade a claim
-  there without the evidence it names.
+- The Appliance Manager updates itself as a signed `.deb`
+  (`manager_update.py`, `manager_releases.py`, `manager_retention.py`,
+  `manager_install.py`, `manager_verify.py`), never on a timer and always on an
+  operator's button, with an older package installable as readily as a newer
+  one. Three properties are not negotiable: `dpkg` runs from its own systemd
+  unit rather than the agent's cgroup, every refusal happens before it runs,
+  and the reverter is a copy taken out of the *outgoing* package. **Doing
+  nothing commits an install here** — under A/B it reverted — so the deadline
+  in `manager_verify.py` is the only thing standing in for that, and it is
+  software rather than firmware. Read
+  `docs/appliance/adr/manager-self-update.md` before touching any of it.
+- Two image shapes, and not every board has both: `image_variants.py` and
+  `rpi_image_gen.HARDWARE_PROFILES` are the one table. A Raspberry Pi 3 boots
+  the single-slot image and cannot boot the A/B one.
+- Not confirmed on physical hardware — no image of either shape has booted on a
+  board, and no appliance has installed a manager package over HTTPS.
+  `docs/appliance/ab-hardware-validation.md` is the authority on what has and
+  has not been proven; never upgrade a claim there without the evidence it
+  names.
 
 Compile check and tests:
 
@@ -291,7 +307,7 @@ Update the relevant doc when changing behavior described there.
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **ems-solarflow-api-control** (35060 symbols, 83060 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **ems-solarflow-api-control** (35470 symbols, 83822 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

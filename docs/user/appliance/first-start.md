@@ -36,9 +36,10 @@ password and no account name — one password protects the whole interface. It i
 the same password the EMS Admin console and the dashboard will ask for later,
 and changing it in any of the three changes it everywhere.
 
-Choose something you can find again. There is no email recovery, and the image
-ships no login account to fall back on — if it is lost, the way back is writing
-the card again. Your configuration and data survive that; the password does not.
+Choose something you can find again. There is no email recovery. If it is lost,
+the way back is a keyboard at the appliance — sign in as `ems-rescue` and run
+`sudo ems-appliance password-reset` — and failing that, writing the card again.
+Your configuration and data survive re-flashing; the password does not.
 
 > The appliance serves plain HTTP on your local network. Anyone who can reach
 > port 8088 sees the login page, so a real password matters even at home.

@@ -87,8 +87,14 @@ flash one card. See the [appliance guides](appliance/index.md).
 
 ### Which Raspberry Pi do I need?
 
-A Raspberry Pi 4 or 5, and a card of 32 GB or larger. The images for the two
-boards are not interchangeable, and a Pi 3 or older cannot run them at all.
+A Raspberry Pi 4 or 5 for the fail-safe two-slot image, and a card of 32 GB or
+larger. The images for the two boards are not interchangeable.
+
+A Raspberry Pi 3 or 3B+ is built the **single-slot** image instead — one root
+patched in place, 16 GB card — because the two-slot image needs a boot chain a
+Pi 3 does not have. Nobody has booted it on one yet, and 1 GB of RAM against
+Docker, EMS and InfluxDB is unmeasured. Anything older than a Pi 3 cannot run
+any of them.
 
 ### Has anyone run it on a real Pi?
 
@@ -122,12 +128,27 @@ does not become healthy falls back to the slot that was working. Configuration
 and data live on a separate partition and survive both directions. See
 [Updates](appliance/updates.md).
 
+### What happens if an Appliance Manager update fails?
+
+The appliance keeps the package it was running and arms a deadline before the
+new one is unpacked. If the new manager does not report itself healthy in time,
+the previous package is installed again by itself.
+
+That covers the Appliance Manager and nothing else. It does **not** cover the
+kernel, the firmware or the operating system: a single-slot appliance is
+patched in place and there is no second slot to fall back into. If a kernel
+upgrade leaves the board unable to boot, the way back is a keyboard at the
+console, and failing that, re-flashing the card. That is a deliberate trade and
+it is written down in
+[the decision record](../appliance/adr/manager-self-update.md).
+
 ### Where is my config on the appliance?
 
 Under `/opt/ems-solarflow`, on the shared partition that survives system
-updates. You reach it through the appliance's SSH backup export rather than by
-logging in — the image ships no login account. See
-[Backups](appliance/backup.md).
+updates. The normal way to reach it is the appliance's SSH backup export rather
+than a login. There *is* a console rescue account for when the appliance will
+not come up — see [When it stops working](appliance/recovery.md) — but it is a
+last resort, not the everyday path. See [Backups](appliance/backup.md).
 
 ### It does not come up at all. What now?
 

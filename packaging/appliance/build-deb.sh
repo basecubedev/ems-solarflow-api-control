@@ -89,6 +89,8 @@ install -m 0755 "$PACKAGING/bin/setup-export-root.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/setup-export-root.sh"
 install -m 0755 "$PACKAGING/bin/backup-account.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/backup-account.sh"
+install -m 0755 "$PACKAGING/bin/rescue-account.sh" \
+        "$STAGE/usr/lib/ems-appliance-manager/rescue-account.sh"
 # The project's own Admin installer, unmodified. It is what writes the Admin
 # compose and environment files on a host that has none, so it is the appliance's
 # bootstrap too rather than a second installer that would drift from it.
@@ -143,6 +145,11 @@ install -m 0644 "$PACKAGING/logrotate/ems-appliance-manager" "$STAGE/etc/logrota
 # from these, once, after the shared binds are proven.
 install -m 0644 "$PACKAGING/config/appliance.conf" "$STAGE/usr/share/ems-appliance-manager/"
 install -m 0644 "$PACKAGING/config/allowed-images.conf" "$STAGE/usr/share/ems-appliance-manager/"
+# The rescue password, as the one hash the postinst sets and the console
+# compares against. Declaring it twice would let "still the default" drift
+# away from what was actually written.
+install -m 0644 "$PACKAGING/config/rescue-password.hash" \
+        "$STAGE/usr/share/ems-appliance-manager/"
 # Deliberately not a conffile: it is the trust anchor for OS updates, not a
 # setting, and a local edit must not survive an upgrade that rotates the key.
 install -m 0644 "$PACKAGING/config/os-release-keyring.gpg" "$STAGE/etc/ems-appliance-manager/"
@@ -151,7 +158,7 @@ install -m 0644 "$PACKAGING/config/os-release-keyring.gpg" "$STAGE/etc/ems-appli
 # `[ -f ... ] &&`, which does not trip `set -e` because the test is not the last
 # command of the AND-list -- so a renamed document silently vanished from a
 # package that still reported success, taking its Documentation= URI with it.
-for document in architecture installation admin-recovery os-updates ab-os-updates \
+for document in architecture installation admin-recovery console-recovery os-updates ab-os-updates \
                 ab-hardware-validation ab-persistence-contract ssh-backup-access \
                 network-recovery security-model troubleshooting; do
     [ -f "$ROOT/docs/appliance/$document.md" ] || {

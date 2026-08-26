@@ -190,6 +190,78 @@ On an A/B appliance a major OS generation change arrives as a normal image
 update, because the whole root filesystem is replaced rather than upgraded in
 place.
 
+## Updating the Appliance Manager itself
+
+The Appliance Manager is the package this console runs from. It is neither of
+the two modes above: `apt` does not offer it, because it is not in any Debian
+archive this appliance trusts, and an A/B slot replacement carries whichever
+version the image was built with.
+
+**System Updates → Appliance Manager** is where it is updated, and only there.
+
+### What happens, in order
+
+1. The configured index (`manager_index_url` in `appliance.conf`) is fetched.
+   Nothing in it is trusted: an entry may name a candidate and three `https`
+   URLs, and that is all it is allowed to decide.
+2. The manifest and its detached signature are fetched, and the signature is
+   verified against the keyring the appliance already ships — the same one that
+   verifies an OS release. One trust anchor, two artefact classes.
+3. Only then is the manifest read as an authority: what the package is called,
+   how large it is and what it must hash to.
+4. The package is downloaded under exactly that declared size and hashed
+   against the verified manifest.
+5. Everything that can refuse has now refused: signature, digest, architecture,
+   and whether that package's manager can read the state already on this
+   appliance's disk. Refusals happen here, before dpkg runs, while the code
+   deciding is still the code that started.
+6. The running package is retained as `previous.deb`.
+7. A deadline is armed — see below.
+8. `dpkg` runs from its own systemd unit, not from the agent. The package's own
+   postinst restarts the agent and the web service, so the console is briefly
+   unreachable. That is expected.
+
+### Going backwards is not an error
+
+The same control installs an older package as readily as a newer one, and the
+plan says which direction it moves. This is deliberate: a single-slot appliance
+has no second slot, so reinstalling the previous package is the whole recovery.
+Refusing a downgrade would take it away.
+
+What *is* refused is a package whose manager could not read the state already
+written on this appliance — which is the question a version comparison was never
+able to answer.
+
+### What happens when it fails
+
+**Doing nothing does not confirm an install here.** Arming a deadline is what
+replaces the A/B property where an appliance that said nothing rebooted into the
+slot it came from.
+
+A repeating timer asks, once a minute, whether the package dpkg reports is the
+one the install promised and whether the agent and the web service are running.
+That gate is narrow and is not a functional test of the manager.
+
+| Outcome | What the appliance does |
+|---|---|
+| The gate passes | The deadline is retired and the install stands. |
+| The gate has not passed when the deadline expires | `previous.deb` is installed again, and the console reports *reverted*. |
+| There is no `previous.deb` | The console reports *revert unavailable*, and the appliance is left to a person. |
+| `dpkg` refuses the previous package too | The console reports *revert failed*. |
+
+The reverter is a copy taken out of the *outgoing* package before anything is
+unpacked, so the code deciding keep-or-undo is not code the install brought with
+it.
+
+This is weaker than what A/B provided, and the difference is written down rather
+than glossed: [adr/manager-self-update.md](adr/manager-self-update.md).
+
+### What it does not cover
+
+`previous.deb` covers the Appliance Manager. It does not cover the kernel, the
+firmware or the operating system — see
+[console-recovery.md](console-recovery.md).
+
 ## Reboot and shutdown
 
 **Overview → Power** offers *Restart Raspberry Pi* and *Shut down*. Before

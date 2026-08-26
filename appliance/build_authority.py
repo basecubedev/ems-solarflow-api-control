@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from appliance import image_variants
+from appliance import image_variants, rpi_image_gen
 
 # 2 binds the project's own tree. Schema 1 named only the generator's, so an
 # image built from a working tree with local appliance changes claimed the clean
@@ -44,7 +44,10 @@ FILE_MODE = 0o644
 
 SOURCE_FORMS = ("git", "tarball")
 
-PROFILES = ("rpi4", "rpi5")
+# The identifiers, kept equal to the hardware profiles by
+# tests/test_appliance_pi3_support.py rather than derived, so this module
+# stays a plain file reader that a release script can import cheaply.
+PROFILES = ("rpi3", "rpi4", "rpi5")
 
 # A build id names a directory (``build-<id>``) and travels through release
 # scripts as an argument. Path separators, whitespace and control characters
@@ -67,6 +70,31 @@ def validate_profile(profile):
             f"{profile!r} is not a supported profile ({', '.join(PROFILES)})",
         )
     return profile
+
+
+def validate_profile_variant(profile, variant):
+    """The image shapes this board has an artefact for, and nothing else.
+
+    Not every profile builds both. A Raspberry Pi 3 boots the single-slot image
+    and cannot boot the A/B one, so an ``rpi3`` A/B build is refused at the
+    identifier rather than producing a partial artefact tree for a board that
+    would never start it.
+    """
+
+    validate_profile(profile)
+    if variant not in image_variants.VARIANTS:
+        raise BuildAuthorityError(
+            INVALID_IDENTIFIER,
+            f"{variant!r} is not a supported image variant "
+            f"({', '.join(sorted(image_variants.VARIANTS))})",
+        )
+    supported = rpi_image_gen.HARDWARE_PROFILES[profile].variants
+    if variant not in supported:
+        raise BuildAuthorityError(
+            INVALID_IDENTIFIER,
+            f"{profile} has no {variant} image ({', '.join(supported)} only)",
+        )
+    return variant
 
 
 def validate_build_id(build_id):
@@ -492,6 +520,14 @@ def _common_problems(authority, *, profile, revision, build_id, variant="",
     if authority.variant not in image_variants.VARIANTS:
         problems.append(
             f"{INVALID_IDENTIFIER}: {authority.variant!r} is not a supported image variant"
+        )
+    elif authority.profile in PROFILES and not rpi_image_gen.HARDWARE_PROFILES[
+        authority.profile
+    ].builds(authority.variant):
+        # A record naming a pair no board can boot is not a build this project
+        # made, whatever else it says about itself.
+        problems.append(
+            f"{INVALID_IDENTIFIER}: {authority.profile} has no {authority.variant} image"
         )
     if not BUILD_ID_PATTERN.match(authority.build_id or ""):
         problems.append(
