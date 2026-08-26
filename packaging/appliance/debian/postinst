@@ -20,7 +20,12 @@ STATE_DIR=/var/lib/ems-appliance-manager
 LOG_DIR=/var/log/ems-appliance-manager
 CONFIG_DIR=/etc/ems-appliance-manager
 TMPFILES=/usr/lib/tmpfiles.d/ems-appliance-manager.conf
-UNITS="ems-appliance-config-seed.service ems-appliance-agent.service ems-appliance-web.service ems-appliance-export.service ems-appliance-export.path"
+# grow-root is gated on the build marker and on not having grown already, so a
+# host this project did not image never activates it. Without it here, a package
+# installed onto a plain Raspberry Pi OS never grows its root at all -- which is
+# the ordinary case once the manager ships as a package rather than inside an
+# image.
+UNITS="ems-appliance-config-seed.service ems-appliance-agent.service ems-appliance-web.service ems-appliance-export.service ems-appliance-export.path ems-appliance-grow-root.service"
 # A/B units ship in every slot and are gated by ConditionPathExists, so a
 # single-slot appliance installs them and never activates them. Four are gated
 # on the layout manifest below; the persistence unit is gated on the build

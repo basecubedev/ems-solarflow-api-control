@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow Appliance Manager package install
+Documentation=file:///usr/share/doc/ems-appliance-manager/installation.md
+# Deliberately not ordered against the agent or the web service. This unit
+# installs the package those two run from, and the package's own postinst
+# restarts them: an ordering edge here would put the installer back inside the
+# lifecycle it exists to stand outside of.
+
+[Service]
+Type=oneshot
+User=root
+# The whole point. `dpkg` used to run as a child of ems-appliance-agent.service,
+# and the postinst restarts that service -- systemd SIGTERMs the entire cgroup,
+# taking dpkg with it mid-configure. Its own cgroup is what lets the install
+# outlive the restart it causes.
+ExecStart=/usr/lib/ems-appliance-manager/install-manager.sh
+# An install that hangs must not hold the transient state forever; the verify
+# timer treats an absent verdict as a reason to go back.
+TimeoutStartSec=900
+# No RemainAfterExit: the agent reads the result file, not the unit's state, and
+# a unit that stays "active" after a completed install would make the next one
+# look like a no-op.

@@ -48,7 +48,8 @@ case "$1" in
                               ems-appliance-ab-health.service \
                               ems-appliance-slot-bootstrap.service \
                               ems-appliance-grow-persistent.service \
-                              ems-appliance-config-seed.service || true
+                              ems-appliance-config-seed.service \
+                              ems-appliance-grow-root.service || true
         fi
         # The export binds must go before the package does, or the mount points
         # survive as stale read-only views of EMS data.

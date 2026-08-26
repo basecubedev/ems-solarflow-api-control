@@ -200,14 +200,13 @@ def command_operations(args):
 def command_rollback_manager(args):
     """Reinstall the previously installed Appliance Manager package."""
 
+    from appliance import manager_retention
+
     paths = resolve_paths()
-    previous = paths.packages_dir / "previous.deb"
-    if not previous.is_file():
-        print(
-            "error: no previous Appliance Manager package is retained at "
-            f"{previous}; reinstall it with apt",
-            file=sys.stderr,
-        )
+    try:
+        target = manager_retention.revert_target(paths)
+    except manager_retention.RetentionError as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
         return EXIT_ERROR
     if os.geteuid() != 0:
         print("error: run this command as root", file=sys.stderr)
@@ -215,8 +214,9 @@ def command_rollback_manager(args):
 
     from appliance.commands import CommandRunner
 
+    print(f"reinstalling {target.version or 'the retained package'} from {target.path}")
     runner = CommandRunner()
-    result = runner.run("dpkg", ["--install", str(previous)], timeout=600)
+    result = runner.run("dpkg", ["--install", target.path], timeout=600)
     print(result.stdout or result.stderr)
     return EXIT_OK if result.ok else EXIT_ERROR
 

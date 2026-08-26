@@ -1,33 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """What formats the state on the persistent partition is written in.
 
-Every other schema number in this system is stamped into an image and then
-compared against a constant compiled into that same image. The layout descriptor
-looks like the exception — it lives on ``/persistent`` — but it does not survive
-as one: it sits under a declared shared path, and upstream's
-``rpi-persistent-shared-init`` rewrites every shared path from the booting slot's
-own root before the binds activate. So the number the running manager reads is
-the number its own image shipped, and the comparison is a number against itself.
-It passes at 2 and it passes at 3, in both directions, which is why no gate
-anywhere has ever been able to see a schema regression.
+Every other schema number is stamped into an image and compared against a
+constant compiled into that same image, so it can only agree with itself. This
+record lives outside ``/persistent/shared`` and ``/persistent/slots``, where
+nothing re-seeds it, and is therefore the one operand that does not travel with
+the slot.
 
-This record is the one that is not written from an image. It lives outside
-``/persistent/shared`` and outside ``/persistent/slots``, so nothing re-seeds it
-and no slot switch replaces it.
-
-It records more than one number on purpose. ``PERSISTENT_SCHEMA_VERSION`` tracks
-only the *set* of shared paths; the record formats stored on those paths carry
-their own versions and move independently, so a downgrade can cross any of them
-without that number changing at all. One number could not have expressed the
-step it is most needed for.
-
-Two rules keep the record honest. Values only ever rise, because a manager that
-is behind must never overwrite a newer format's claim with an older one. And an
-axis this manager has never heard of is preserved verbatim, because a temporary
-step back must not erase what a newer manager recorded — including its own
-envelope version, which is read through a window and never compared with ``!=``.
-A record that fails closed on an unfamiliar version would reproduce exactly the
-bug it exists to prevent.
+It names every format independently: the shared-path count is not the only thing
+a step back can cross. Values only rise, and an unknown axis is carried through,
+so an older manager cannot erase a newer one's claim.
 """
 
 import json
@@ -42,6 +24,7 @@ from appliance import (
     ab_persistence,
     ab_state,
     backup_ownership,
+    manager_retention,
     operation_schema,
 )
 
@@ -83,6 +66,7 @@ def implemented_schemas():
         "operation_authority": operation_schema.AUTHORITY_SCHEMA_VERSION,
         "operation_recovery": operation_schema.RECOVERY_SCHEMA_VERSION,
         "confirmed_authority": CONFIRMED_AUTHORITY_SCHEMA_VERSION,
+        "manager_retention": manager_retention.RECORD_SCHEMA_VERSION,
     }
 
 
@@ -112,6 +96,7 @@ def readable_floors():
     # defect the one-directional gate had, reintroduced from the other side.
     floors["persistent_paths"] = 1
     floors["slot_layout"] = 1
+    floors["manager_retention"] = min(manager_retention.READABLE_RECORD_VERSIONS)
 
     # Everything else is read with strict equality by the module that owns it.
     # The floor is what it implements, and that is deliberate: a release whose

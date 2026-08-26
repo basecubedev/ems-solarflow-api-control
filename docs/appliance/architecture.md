@@ -88,6 +88,9 @@ is refused as `invalid_request` before any handler runs.
 | `config.py` | `/etc` host configuration and the image allowlist |
 | `config_seed.py` | Creates the operator-owned configuration files that are missing, once |
 | `persistent_state.py` | What formats the state on the persistent partition is written in |
+| `manager_retention.py` | The package that was running, kept so a revert has a target |
+| `manager_releases.py` | What a published manager package claims, and what may be believed |
+| `manager_install.py` | Hands a verified package to a unit that survives installing it |
 | `validation.py` | Every typed input validator and its stable error code |
 | `redaction.py` | Secret redaction and log bounding |
 | `protocol.py` | The fixed agent operation allowlist |

@@ -593,11 +593,20 @@ journalctl -u ems-appliance-agent -n 200
 
 ## Appliance Manager self-update
 
-The Appliance Manager updates through its signed OS package, separately from
-Admin updates. Its current version is visible in Settings. Install a new
-package with `apt`; the previous package is retained under
-`/var/lib/ems-appliance-manager/packages/previous.deb` so
-`sudo ems-appliance rollback-manager` can put it back.
+The Appliance Manager updates through its signed package, separately from Admin
+updates. Its current version is visible in Settings.
+
+`sudo ems-appliance rollback-manager` reinstalls the package that was running
+before the current one, from
+`/var/lib/ems-appliance-manager/packages/previous.deb`.
+
+**It has something to reinstall only when the manager installed the update
+itself.** dpkg keeps no copy of the archive it unpacked and hands its
+maintainer scripts no path to it, so an update applied with `apt` or
+`dpkg --install` by hand leaves nothing behind to go back to, and the command
+says so rather than pretending otherwise. A freshly flashed appliance is in the
+same position until its first managed update: its manager arrived inside the
+image rather than through an install.
 
 ## Image integration
 

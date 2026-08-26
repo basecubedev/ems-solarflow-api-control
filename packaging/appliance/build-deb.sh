@@ -106,6 +106,10 @@ install -m 0644 "$PACKAGING/systemd/ems-appliance-persistence.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-config-seed.service" \
         "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-manager-install.service" \
+        "$STAGE/usr/lib/systemd/system/"
+install -m 0755 "$PACKAGING/bin/install-manager.sh" \
+        "$STAGE/usr/lib/ems-appliance-manager/install-manager.sh"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-host-identity.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-ab-health.service" \

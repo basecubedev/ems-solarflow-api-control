@@ -1,23 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Give an appliance its operator-owned configuration once, and never again.
 
-``appliance.conf`` and ``allowed-images.conf`` belong to whoever runs the
-appliance. They live under ``/etc/ems-appliance-manager``, which is a declared
-shared path, so an edit made on one slot is visible from the other and survives
-a slot switch.
+``appliance.conf`` and ``allowed-images.conf`` live on a declared shared path,
+which upstream re-seeds from the booting slot on every boot. A packaged copy
+there would overwrite an operator edit at the next reboot, so the package ships
+templates outside ``/etc`` and this seeds a missing file from one.
 
-What it does not survive, if the package ships its own copy to the same place,
-is a reboot. Upstream's ``rpi-persistent-shared-init`` runs before the shared
-binds are active and pushes the booting slot's own ``/etc`` into
-``/persistent/shared/etc`` with ``rsync -av --checksum`` — every boot, no
-``--delete``, and ``--checksum`` transfers precisely the files that differ. An
-operator's edit is the difference, so the packaged copy wins and the edit is
-gone. The appliance's ``timezone`` file has always been safe from this for the
-one reason that matters here: no slot root contains a copy of it.
-
-So the package ships templates outside ``/etc`` and this module seeds a missing
-file from one. Seeding is the only write: a file that exists is never touched,
-which is what makes running this on every boot the same as running it once.
+Seeding is the only write, which is what makes running it every boot equivalent
+to running it once.
 """
 
 import os
