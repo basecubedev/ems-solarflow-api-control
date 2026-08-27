@@ -88,8 +88,18 @@ esac
 if [ "$FORM" = git ]; then
     command -v git >/dev/null 2>&1 || not_run "git is not installed" required_tool_missing
     echo "== cloning $REPOSITORY at $COMMIT =="
-    git clone --quiet "$REPOSITORY" "$INTO" || fail "the clone failed" fetch_failed
-    git -C "$INTO" checkout --quiet "$COMMIT" \
+    # The same pinned umask as the extraction below, for the same reason and
+    # against the same defect. git writes a working tree with the caller's
+    # umask, so the same commit cloned at 0022 -- a CI runner, or root in a
+    # container -- carries 644/755 where a clone at 0002 carries 664/775, and
+    # the tree manifest records every mode. The pinned tree hash was recorded
+    # from an extraction at 0002, so a git clone anywhere else hashed to
+    # something else and the source authority reported the pinned upstream tree
+    # as modified. The tarball form was fixed for this; the clone beside it was
+    # not, and the nightly upstream tier failed on it on every runner.
+    ( umask 0002; git clone --quiet "$REPOSITORY" "$INTO" ) \
+        || fail "the clone failed" fetch_failed
+    ( umask 0002; git -C "$INTO" checkout --quiet "$COMMIT" ) \
         || fail "$COMMIT is not in the clone" source_unverified
     HEAD=$(git -C "$INTO" rev-parse HEAD)
     [ "$HEAD" = "$COMMIT" ] || fail "the checkout is at $HEAD, not $COMMIT" source_unverified

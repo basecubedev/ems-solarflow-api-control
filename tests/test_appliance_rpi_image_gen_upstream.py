@@ -20,6 +20,7 @@ import pytest
 import yaml
 
 from appliance import rpi_image_gen
+from appliance.image_shape import IMAGE
 from tests.helpers import upstream_rpi_image_gen as upstream
 
 pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
@@ -260,7 +261,7 @@ def upstream_tooling():
 
 
 def test_the_real_upstream_loader_resolves_every_project_profile(upstream_tooling):
-    """Include chain and all: profile → shared → upstream's own A/B config."""
+    """Include chain and all: profile → shared → upstream's own config."""
 
     source, (config_loader, _layer_manager) = upstream_tooling
 
@@ -268,8 +269,8 @@ def test_the_real_upstream_loader_resolves_every_project_profile(upstream_toolin
         data = upstream.load_config(source, config_loader, path)
         profile = rpi_image_gen.read_profile(path)
         assert data["device"]["layer"] == profile.device_layer, path.name
-        assert data["image"]["layer"] == profile.variant.image_layer, path.name
-        assert data["layer"]["app"] == profile.variant.app_layer, path.name
+        assert data["image"]["layer"] == IMAGE.image_layer, path.name
+        assert data["layer"]["app"] == IMAGE.app_layer, path.name
         # Inherited through the chain, never restated per profile.
         assert data["image"]["rootfs_type"] == "ext4", path.name
 
@@ -288,16 +289,16 @@ def test_the_real_upstream_layer_manager_knows_every_layer_the_project_names(
     assert unknown == []
 
 
-@pytest.mark.parametrize("layer", ["ems-appliance", "ems-appliance-single"])
+@pytest.mark.parametrize("layer", ["ems-appliance"])
 def test_the_project_layer_loads_and_its_dependencies_resolve(upstream_tooling, layer):
     """Each project layer, loaded by upstream beside upstream's own.
 
     Not a formality. The metadata block above METAEND is parsed as DEB822, so a
     line that is neither a field nor a space-indented continuation of one fails
     the entire layer to load -- and the failure upstream reports is "Layer
-    'ems-appliance-single' not found", which reads like a missing file rather
-    than an unparseable one. The single-slot layer's first real build ended
-    exactly there, four seconds in, on an explanatory paragraph.
+    'ems-appliance' not found", which reads like a missing file rather than an
+    unparseable one. The layer's first real build ended exactly there, four
+    seconds in, on an explanatory paragraph.
     """
 
     source, (_config_loader, layer_manager) = upstream_tooling

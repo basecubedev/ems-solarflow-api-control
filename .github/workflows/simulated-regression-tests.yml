@@ -94,8 +94,9 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       # Without these the filesystem fixtures fall back to hand-written
-      # superblocks, and the assertions about a written slot's filesystem
-      # become a round-trip of bytes the tests wrote themselves.
+      # superblocks, and what the image-content tests assert about a real ext4
+      # root and a real FAT boot partition becomes a round-trip of bytes the
+      # tests wrote themselves.
       - name: Install the filesystem tools the fixtures build with
         run: sudo apt-get install -y --no-install-recommends mtools e2fsprogs
 

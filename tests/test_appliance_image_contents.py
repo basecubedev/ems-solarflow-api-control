@@ -110,6 +110,7 @@ def by_check(findings):
 # --- the partition table -----------------------------------------------------
 
 
+@requires_mkfs
 def test_a_partition_of_an_unexpected_type_is_left_unnamed(tmp_path, single_image):
     """A wrong name would inspect one filesystem and answer for another."""
 

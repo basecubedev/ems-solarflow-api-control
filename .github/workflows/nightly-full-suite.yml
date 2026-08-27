@@ -41,6 +41,9 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
 
+      - name: Install the filesystem tools the fixtures build with
+        run: sudo apt-get install -y --no-install-recommends mtools e2fsprogs
+
       - name: Report the selected marker expression
         run: printf 'pytest -q -m "not docker" tests/\n'
 
@@ -188,10 +191,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
 
-      # The five upstream-tree tests skip unless something names a real tree, so
-      # nothing ever ran them: the contract the A/B image is built against was
-      # bound only by the release gates. The fetch verifies the tarball against
-      # the lock before extracting, so this job proves the pin too.
+      # The upstream-tree tests skip unless something names a real tree, so
+      # without this job nothing runs them and the contract the image is built
+      # against is bound only by the release gates. No count is stated here: the
+      # one that used to be went stale, and a comment that miscounts its own
+      # subject is worse than one that does not try.
+      #
+      # The form is deliberately not pinned. It resolves to a clone wherever git
+      # exists, which is every runner, and that is the half of the fetch whose
+      # umask went unpinned until 2026-08-27 -- this job is what found it, and
+      # naming the other form here would hide it again.
       - name: Fetch the pinned generator tree
         run: |
           scripts/appliance-fetch-rpi-image-gen.sh --into "$RUNNER_TEMP/rpi-image-gen"
