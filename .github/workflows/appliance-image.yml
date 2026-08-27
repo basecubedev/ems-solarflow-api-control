@@ -153,11 +153,16 @@ jobs:
       - name: Reclaim runner disk
         run: |
           set -euo pipefail
-          before="$(df -PB1 --output=avail / | tail -n1)"
+          # The free-space idiom is scripts/lib/workdir.sh's, which cannot be
+          # sourced here: this step runs before the checkout. -P and --output
+          # are mutually exclusive in coreutils, and a df that refuses to run is
+          # a step that fails on its first line.
+          avail() { df -PB1 "$1" | awk 'NR==2 {print $4}'; }
+          before="$(avail /)"
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
             /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/local/.ghcup || true
           sudo docker image prune --all --force >/dev/null 2>&1 || true
-          after="$(df -PB1 --output=avail / | tail -n1)"
+          after="$(avail /)"
           echo "reclaimed $(( (after - before) / 1024 / 1024 )) MiB on /"
           df -h / /mnt || true
 
@@ -185,7 +190,7 @@ jobs:
           done
           [ -n "${root}" ] || { echo "::error::no writable build root on this runner"; exit 1; }
 
-          avail="$(df -PB1 --output=avail "${root}" | tail -n1)"
+          avail="$(df -PB1 "${root}" | awk 'NR==2 {print $4}')"
           need=$((30 * 1024 * 1024 * 1024))
           if [ "${avail}" -lt "${need}" ]; then
             echo "::error::${root} has $(( avail / 1024 / 1024 / 1024 )) GiB free; the build needs 30 GiB"
