@@ -2,11 +2,7 @@
 [Unit]
 Description=EMS SolarFlow Appliance Manager web interface
 Documentation=file:///usr/share/doc/ems-appliance-manager/architecture.md
-After=network.target ems-appliance-agent.service ems-appliance-persistence.service
-Wants=ems-appliance-agent.service
-# Requires=, not Before= on the persistence unit: ordering alone would still
-# let the web service start against the read-only root's fallback copies.
-Requires=ems-appliance-persistence.service
+After=network.target ems-appliance-agent.service
 
 [Service]
 Type=simple

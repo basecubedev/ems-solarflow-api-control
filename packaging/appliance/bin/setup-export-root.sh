@@ -841,7 +841,7 @@ acl_manifest_uncommit() {
         fsync_path "$(dirname "$ACL_MANIFEST")" || true
         return 0
     fi
-    # Neither the previous manifest nor an empty slot could be restored. The new
+    # Neither the previous manifest nor an empty one could be restored. The new
     # one leaves the authoritative name under a name nothing reads, so no reader
     # can mistake it for the state of the host.
     if mv -f "$ACL_MANIFEST" "$ACL_MANIFEST.uncommitted" 2>/dev/null; then
@@ -877,9 +877,9 @@ acl_manifest_commit() {
 }
 
 # chown(2) and chmod(2) fail with EROFS on a read-only filesystem whether or not
-# they would change anything. The slot root is read-only on a booted appliance
-# and these directories are created by the image build, so the wanted state is
-# checked first and only a difference is written.
+# they would change anything, and a root that went read-only after a filesystem
+# error is exactly when this has to keep working. The wanted state is checked
+# first and only a difference is written.
 ensure_root_owned_directory() {
     ensure_target=$1
     ensure_label=$2

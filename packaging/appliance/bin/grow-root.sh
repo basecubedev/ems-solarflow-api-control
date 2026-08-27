@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Grow the root filesystem to the medium, once, on a freshly imaged card.
 #
-# The single-slot image sizes its root at build time; the medium an operator
-# flashed it onto is whatever they had. This is that variant's counterpart to
-# grow-persistent.sh, and it is deliberately its twin: measure, mutate, verify,
+# The image sizes its root at build time; the medium an operator flashed it
+# onto is whatever they had. The order is deliberate: measure, mutate, verify,
 # and only then record. A failure or a power cut leaves no marker, so the next
 # boot retries.
 #
@@ -13,11 +12,11 @@
 # docs/appliance/installation.md promises that this appliance never resizes,
 # moves or repartitions a running installation's storage. That promise is kept
 # here, by refusing to act without a positive statement that this medium was
-# written from a single-slot appliance image.
+# written from an appliance image.
 #
-# Like its twin it lives here rather than in the appliance modules on purpose:
-# no partitioning tool is reachable from the Python command runner, so no code
-# path that handles a request can repartition anything.
+# It lives here rather than in the appliance modules on purpose: no partitioning
+# tool is reachable from the Python command runner, so no code path that handles
+# a request can repartition anything.
 #
 # Exit status: 0 the medium is grown, already filled, or not ours to touch;
 # 1 it is ours, it is not grown, and the next boot has to try again.
@@ -38,12 +37,11 @@ fail() { echo "grow-root: $1" >&2; echo "RESULT: FAIL ($2)" >&2; exit 1; }
 
 [ -f "$MARKER" ] && exit 0
 
-# The one gate that keeps this off media this project did not write. Only the
-# variant table's own answer counts: no marker, an unreadable one, or one
-# naming any other image all leave the medium alone.
-VARIANT=$("$APPLIANCE" image-variant 2>/dev/null || true)
-[ "$VARIANT" = single ] || {
-    say "this medium was not written from a single-slot appliance image"
+# The one gate that keeps this off media this project did not write. Only a
+# positive answer counts: no marker, an unreadable one, or one naming any other
+# image all leave the medium alone.
+"$APPLIANCE" image-check >/dev/null 2>&1 || {
+    say "this medium was not written from an appliance image"
     exit 0
 }
 
@@ -55,7 +53,7 @@ trap 'rm -f "$GEOMETRY_FILE"' EXIT
 # another number. Refreshed after growpart, because the point of the second read
 # is to see whether the kernel adopted the new table at all.
 read_geometry() {
-    "$APPLIANCE" ab root-geometry > "$GEOMETRY_FILE" 2>/dev/null \
+    "$APPLIANCE" root-geometry > "$GEOMETRY_FILE" 2>/dev/null \
         || fail "the root partition geometry could not be measured" root_geometry_unknown
     GEOMETRY=$GEOMETRY_FILE
 }

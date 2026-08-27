@@ -28,7 +28,6 @@ class ImageShape:
 
     image_layer: str
     app_layer: str
-    profile_suffix: str
     root_device: str
     description: str
 
@@ -39,7 +38,6 @@ class ImageShape:
         return {
             "image_layer": self.image_layer,
             "app_layer": self.app_layer,
-            "profile_suffix": self.profile_suffix,
             "root_device": self.root_device,
             "description": self.description,
         }
@@ -47,8 +45,7 @@ class ImageShape:
 
 IMAGE = ImageShape(
     image_layer="image-rpios",
-    app_layer="ems-appliance-single",
-    profile_suffix="single",
+    app_layer="ems-appliance",
     root_device="/dev/disk/by-slot/system",
     description=(
         "One writable root filesystem, patched by apt. The operating system is "

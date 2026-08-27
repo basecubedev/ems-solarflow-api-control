@@ -102,10 +102,6 @@ install -m 0644 "$PACKAGING/systemd/ems-appliance-export.service" "$STAGE/usr/li
 install -m 0644 "$PACKAGING/systemd/ems-appliance-export.path" "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-backup-access-disable.service" \
         "$STAGE/usr/lib/systemd/system/"
-# The A/B units ship in every slot of an image-managed appliance and are inert
-# on a single-slot host; both carry ConditionPathExists on the layout manifest.
-install -m 0644 "$PACKAGING/systemd/ems-appliance-persistence.service" \
-        "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-config-seed.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-manager-install.service" \
@@ -121,28 +117,16 @@ install -m 0644 "$PACKAGING/systemd/ems-appliance-manager-verify.timer" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0755 "$PACKAGING/bin/verify-manager.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/verify-manager.sh"
-install -m 0644 "$PACKAGING/systemd/ems-appliance-host-identity.service" \
-        "$STAGE/usr/lib/systemd/system/"
-install -m 0644 "$PACKAGING/systemd/ems-appliance-ab-health.service" \
-        "$STAGE/usr/lib/systemd/system/"
-install -m 0644 "$PACKAGING/systemd/ems-appliance-slot-bootstrap.service" \
-        "$STAGE/usr/lib/systemd/system/"
-install -m 0644 "$PACKAGING/systemd/ems-appliance-grow-persistent.service" \
-        "$STAGE/usr/lib/systemd/system/"
-install -m 0755 "$PACKAGING/bin/grow-persistent.sh" \
-        "$STAGE/usr/lib/ems-appliance-manager/grow-persistent.sh"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-grow-root.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0755 "$PACKAGING/bin/grow-root.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/grow-root.sh"
 install -m 0644 "$PACKAGING/tmpfiles/ems-appliance-manager.conf" "$STAGE/usr/lib/tmpfiles.d/"
 install -m 0644 "$PACKAGING/logrotate/ems-appliance-manager" "$STAGE/etc/logrotate.d/"
-# Templates, not conffiles, and deliberately not under /etc. Every declared
-# shared path is re-seeded from the booting slot's own root by upstream's
-# rpi-persistent-shared-init -- every boot, rsync --checksum, no --delete -- so a
-# packaged copy under /etc/ems-appliance-manager overwrites the operator's edit
-# at the next reboot. ems-appliance-config-seed.service creates what is missing
-# from these, once, after the shared binds are proven.
+# Templates, not conffiles, and deliberately not under /etc: a packaged copy
+# under /etc/ems-appliance-manager would put an operator edit and a package file
+# at the same path, and dpkg is entitled to the second.
+# ems-appliance-config-seed.service creates what is missing from these, once.
 install -m 0644 "$PACKAGING/config/appliance.conf" "$STAGE/usr/share/ems-appliance-manager/"
 install -m 0644 "$PACKAGING/config/allowed-images.conf" "$STAGE/usr/share/ems-appliance-manager/"
 # The rescue password, as the one hash the postinst sets and the console
@@ -150,16 +134,17 @@ install -m 0644 "$PACKAGING/config/allowed-images.conf" "$STAGE/usr/share/ems-ap
 # away from what was actually written.
 install -m 0644 "$PACKAGING/config/rescue-password.hash" \
         "$STAGE/usr/share/ems-appliance-manager/"
-# Deliberately not a conffile: it is the trust anchor for OS updates, not a
-# setting, and a local edit must not survive an upgrade that rotates the key.
-install -m 0644 "$PACKAGING/config/os-release-keyring.gpg" "$STAGE/etc/ems-appliance-manager/"
+# Deliberately not a conffile: it is the trust anchor for every signed artifact
+# this appliance installs, not a setting, and a local edit must not survive an
+# upgrade that rotates the key.
+install -m 0644 "$PACKAGING/config/release-keyring.gpg" "$STAGE/etc/ems-appliance-manager/"
 
 # Named, and required. The previous form guarded each install with
 # `[ -f ... ] &&`, which does not trip `set -e` because the test is not the last
 # command of the AND-list -- so a renamed document silently vanished from a
 # package that still reported success, taking its Documentation= URI with it.
-for document in architecture installation admin-recovery console-recovery os-updates ab-os-updates \
-                ab-hardware-validation ab-persistence-contract ssh-backup-access \
+for document in architecture installation admin-recovery console-recovery os-updates \
+                hardware-validation ssh-backup-access \
                 network-recovery security-model troubleshooting; do
     [ -f "$ROOT/docs/appliance/$document.md" ] || {
         echo "build-deb: docs/appliance/$document.md is missing" >&2

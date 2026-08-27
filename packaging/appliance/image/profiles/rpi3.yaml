@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The appliance image for Raspberry Pi 3 Model B and B+.
+#
+#   rpi-image-gen build -c <abs>/profiles/rpi3.yaml -S packaging/appliance/image
+#
+# The oldest board this project images. image-rpios writes an MBR with a
+# second-stage bootloader on its first partition, which is what the Pi 3 boot
+# ROM can read.
+include:
+  file: ../shared/ems-appliance.yaml
+
+device:
+  layer: rpi3
+  # Upstream's rpi3 layer accepts sd and nothing else -- the board has no USB
+  # or NVMe boot path this project could offer.
+  storage_type: sd
+
+image:
+  name: ems-solarflow-appliance-rpi3

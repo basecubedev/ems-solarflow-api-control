@@ -147,7 +147,6 @@ class ImageGenError(Exception):
 class LockedLayer:
     """One upstream image layer, as the lock pins it."""
 
-    slug: str
     name: str
     path: str
     version: str
@@ -159,52 +158,15 @@ class Lock:
     release: str
     commit: str
     executable: str
-    image_layers: dict
-    shared_slot_mechanism: str
-    shared_slot_conf_dir: str
-    shared_root: str
-    persistent_mountpoint: str
+    image_layer: LockedLayer
     boot_mountpoint: str
-    bootconfig_mountpoint: str
-    machine_id_source: str
     slot_device_prefix: str
-    update_archive: str
-    update_members: tuple
     partition_labels: dict
     required_paths: tuple = ()
     refused_paths: tuple = ()
     host_dependencies_file: str = "depends"
-    update_member_format: str = ""
     tree_sha256: str = ""
     tarball: dict = None
-
-    def layer(self, slug):
-        """The pinned upstream image layer the image is built from.
-
-        Declared in the lock rather than derived from ``image_shape``: the lock
-        is the file that gets reviewed, and a contract test keeps the two from
-        disagreeing.
-        """
-
-        entry = self.image_layers[slug]
-        return LockedLayer(
-            slug=slug,
-            name=str(entry["name"]),
-            path=str(entry["path"]),
-            version=str(entry["version"]),
-        )
-
-    @property
-    def image_layer(self):
-        return self.layer(image_shape.IMAGE.profile_suffix).name
-
-    @property
-    def image_layer_version(self):
-        return self.layer(image_shape.IMAGE.profile_suffix).version
-
-    @property
-    def image_layer_path(self):
-        return self.layer(image_shape.IMAGE.profile_suffix).path
 
     def to_dict(self):
         return {
@@ -212,14 +174,8 @@ class Lock:
             "release": self.release,
             "commit": self.commit,
             "executable": self.executable,
-            "image_layer": self.image_layer,
-            "image_layer_version": self.image_layer_version,
-            "shared_slot_mechanism": self.shared_slot_mechanism,
-            "shared_root": self.shared_root,
-            "persistent_mountpoint": self.persistent_mountpoint,
-            "update_archive": self.update_archive,
-            "update_members": list(self.update_members),
-            "update_member_format": self.update_member_format,
+            "image_layer": self.image_layer.name,
+            "image_layer_version": self.image_layer.version,
             "tarball": dict(self.tarball or {}),
         }
 
@@ -233,35 +189,27 @@ def read_lock(path=None):
     except ValueError:
         raise ImageGenError("lock_invalid", "the rpi-image-gen lock is not valid JSON")
     try:
+        layer = dict(payload["image_layer"])
         return Lock(
             repository=str(payload["repository"]),
             release=str(payload["release"]),
             commit=str(payload["commit"]),
             tree_sha256=str(payload.get("tree_sha256") or ""),
             executable=str(payload["executable"]),
-            image_layers={
-                str(slug): {
-                    "name": str(entry["name"]),
-                    "path": str(entry["path"]),
-                    "version": str(entry["version"]),
-                }
-                for slug, entry in dict(payload["image_layers"]).items()
-            },
-            shared_slot_mechanism=str(payload["shared_slot_mechanism"]),
-            shared_slot_conf_dir=str(payload["shared_slot_conf_dir"]),
-            shared_root=str(payload["shared_root"]),
-            persistent_mountpoint=str(payload["persistent_mountpoint"]),
+            # Declared in the lock rather than derived from ``image_shape``: the
+            # lock is the file that gets reviewed, and a contract test keeps the
+            # two from disagreeing.
+            image_layer=LockedLayer(
+                name=str(layer["name"]),
+                path=str(layer["path"]),
+                version=str(layer["version"]),
+            ),
             boot_mountpoint=str(payload["boot_mountpoint"]),
-            bootconfig_mountpoint=str(payload["bootconfig_mountpoint"]),
-            machine_id_source=str(payload["machine_id_source"]),
             slot_device_prefix=str(payload["slot_device_prefix"]),
-            update_archive=str(payload["update_archive"]),
-            update_members=tuple(payload["update_members"]),
             partition_labels=dict(payload["partition_labels"]),
             required_paths=tuple(payload.get("required_paths") or ()),
             refused_paths=tuple(payload.get("refused_paths") or ()),
             host_dependencies_file=str(payload.get("host_dependencies_file") or "depends"),
-            update_member_format=str(payload.get("update_member_format") or ""),
             tarball=dict(payload["tarball"]),
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -692,8 +640,6 @@ def layer_metadata(text):
     return name, version
 
 
-
-
 @dataclass(frozen=True)
 class BuildHost:
     """Whether this host can cross-build the appliance image, and what is missing.
@@ -810,35 +756,28 @@ def probe_checkout(
             )
         )
 
-    for slug in sorted(lock.image_layers):
-        pinned = lock.layer(slug)
-        layer = root / pinned.path
-        if not layer.is_file():
-            findings.append(
-                Finding(f"image_layer:{slug}", FAIL, f"{pinned.path} is missing")
-            )
-            findings.append(
-                Finding(f"image_layer_version:{slug}", NOT_RUN, "the layer file is missing")
-            )
-            continue
+    pinned = lock.image_layer
+    layer = root / pinned.path
+    if not layer.is_file():
+        findings.append(Finding("image_layer", FAIL, f"{pinned.path} is missing"))
+        findings.append(Finding("image_layer_version", NOT_RUN, "the layer file is missing"))
+    else:
         name, version = layer_metadata(layer.read_text(encoding="utf-8", errors="replace"))
         findings.append(
             Finding(
-                f"image_layer:{slug}",
+                "image_layer",
                 PASS if name == pinned.name else FAIL,
                 f"{name or 'unnamed'} (expected {pinned.name})",
             )
         )
         findings.append(
             Finding(
-                f"image_layer_version:{slug}",
+                "image_layer_version",
                 PASS if version == pinned.version else FAIL,
                 f"{version or 'unversioned'} (expected {pinned.version})",
             )
         )
 
-    findings.append(_shared_slot_finding(root, lock))
-    findings.append(_update_finding(root, lock))
 
     identity, revision, identity_finding, digest, identity_reason = _source_identity(
         root, lock, runner=runner
@@ -1218,38 +1157,3 @@ def assert_buildable(directory, lock=None, *, which=None, package_query=AUTO_PAC
     return report
 
 
-def _shared_slot_finding(root, lock):
-    generator = (
-        root
-        / "image/gpt/ab_userdata/device/rootfs-overlay/usr/lib/systemd/system-generators"
-        / f"{lock.shared_slot_mechanism}-generator"
-    )
-    if not generator.is_file():
-        return Finding(
-            "shared_slot", FAIL, f"{lock.shared_slot_mechanism}-generator is missing"
-        )
-    text = generator.read_text(encoding="utf-8", errors="replace")
-    if lock.shared_slot_conf_dir not in text or lock.shared_root not in text:
-        return Finding(
-            "shared_slot",
-            FAIL,
-            f"the generator does not read {lock.shared_slot_conf_dir} into {lock.shared_root}",
-        )
-    return Finding("shared_slot", PASS, str(generator))
-
-
-def _update_finding(root, lock):
-    script = root / "image/gpt/ab_userdata/post-image.sh"
-    if not script.is_file():
-        return Finding("update_artifact", FAIL, "post-image.sh is missing")
-    text = script.read_text(encoding="utf-8", errors="replace")
-    if lock.update_archive not in text:
-        return Finding(
-            "update_artifact", FAIL, f"post-image.sh does not produce {lock.update_archive}"
-        )
-    missing = [name for name in lock.update_members if f"/{name}" not in text]
-    if missing:
-        return Finding(
-            "update_artifact", FAIL, f"the archive does not carry {', '.join(missing)}"
-        )
-    return Finding("update_artifact", PASS, f"{lock.update_archive} ({', '.join(lock.update_members)})")

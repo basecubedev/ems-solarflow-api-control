@@ -40,14 +40,9 @@ case "$1" in
             systemctl stop ems-appliance-agent.service || true
             systemctl stop ems-appliance-export.path || true
             # Every unit postinst enabled, or removal leaves dangling .wants
-            # symlinks behind for the A/B half.
+            # symlinks behind.
             systemctl disable ems-appliance-web.service ems-appliance-agent.service \
                               ems-appliance-export.service ems-appliance-export.path \
-                              ems-appliance-host-identity.service \
-                              ems-appliance-persistence.service \
-                              ems-appliance-ab-health.service \
-                              ems-appliance-slot-bootstrap.service \
-                              ems-appliance-grow-persistent.service \
                               ems-appliance-config-seed.service \
                               ems-appliance-grow-root.service || true
         fi

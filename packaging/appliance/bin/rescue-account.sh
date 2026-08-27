@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Create the console rescue account, once, and never touch it again.
 #
-# Run from the package's postinst. A single-slot appliance has no second slot
-# to fall back into and, without this, no login at all: no human account, root
-# locked, sulogin at rescue.target. An appliance whose automatic revert fails
-# was a re-flash.
+# Run from the package's postinst. Without this an imaged appliance has no
+# login at all: no human account, root locked, sulogin at rescue.target. An
+# appliance nobody can reach and nobody can log into was a re-flash.
 #
 # The password it sets is documented, and that is the trade: those credentials
 # are public knowledge. Changing them is the operator's choice, so an upgrade

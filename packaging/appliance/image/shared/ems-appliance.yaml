@@ -1,21 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Everything the single-slot appliance image is, except which board it is for.
+# Everything the appliance image is, except which board it is for.
 # The hardware profiles under ../profiles/ include this file and add exactly one
 # thing each: the upstream device layer.
 #
-# The counterpart of ../shared/ems-appliance-ab.yaml. That image has six
-# partitions it does not describe either -- image-rota owns them. This one has
-# two, and image-rpios owns them, but the sizes are stated here because on a
-# single-slot image the root is the whole appliance: the OS, Docker, the EMS
-# deployment, its data and its backups.
+# Two partitions, and image-rpios owns them -- but the sizes are stated here,
+# because the root is the whole appliance: the OS, Docker, the EMS deployment,
+# its data and its backups.
 #
 # Absolute sizes rather than upstream's 200%/300% defaults: what a percentage
 # means to genimage's sizing has not been verified by this project, and a
 # release's evidence has to be able to name the number. The tail of a larger
 # medium is claimed on first boot instead.
 #
-# See ../../../../docs/appliance/adr/single-slot-image-variant.md.
+# See ../../../../docs/appliance/adr/single-image-appliance.md.
 include:
   file: trixie-minbase.yaml
 
@@ -38,4 +36,4 @@ image:
   root_part_size: 8G
 
 layer:
-  app: ems-appliance-single
+  app: ems-appliance
