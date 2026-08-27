@@ -388,6 +388,35 @@ name. Flashing verifies no signature, so a CI build is enough for
 [../appliance/hardware-validation.md](../appliance/hardware-validation.md) and
 is not enough for a signed release.
 
+A build every board finished is published, by the workflow's fourth job, as a
+GitHub **prerelease** carrying the `.img.xz` and `.img.xz.sha256` per board, a
+combined `SHA256SUMS`, the Manager `.deb`, each image's build authority and
+builder environment, and the gate logs as `gate-evidence-<board>.zip`.
+[../user/appliance/install.md](../user/appliance/install.md) already sent
+operators to the Releases page for exactly those file names; an Actions artefact
+expires in thirty days, sits behind a sign-in wall and lives on a run page no
+operator will find, so until that job existed the page described a download
+nobody produced.
+
+Two properties of that job are load-bearing rather than stylistic, and
+`tests/test_appliance_image_workflow.py` asserts both. It publishes a
+**prerelease**: GitHub's `/releases/latest` alias skips one, and
+`packaging/appliance/config/appliance.conf` points every flashed appliance at
+`/releases/latest/download/manager-packages.json`. An unsigned build that took
+that alias would, the day a signed release exists, move the pointer off the
+working index and silence the Manager updater fleet-wide, as a
+`release_download_failed` an operator reads as a network fault. And the **tag is
+deliberately not a version** — `admin/releases.py` lists every non-draft release
+of this repository as an EMS system-build target and decides eligibility by
+parsing the tag, so a semver-shaped tag would offer operators a build whose
+container images do not exist. That test runs the tag template through
+`admin.releases.VERSION_PATTERN` rather than reading it.
+
+Signing is still refused here, and the workflow reads no repository secret at
+all. Publishing an unsigned build and signing one are different questions; the
+release page answers the first and says, in the gate runner's own words, that it
+is not the second.
+
 The Appliance Manager `.deb` is built by its own job in that workflow and
 uploaded separately. `packaging/appliance/build-deb.sh` is reproducible from
 `SOURCE_DATE_EPOCH` and a pinned compressor, so two builds of one commit are the

@@ -13,11 +13,21 @@ waiting.
 > nothing to download; the steps below are complete and the file names are the
 > ones a release carries. A local build writes the same names into `dist/`.
 
+> **Appliance images are published as *pre-releases*.** They are built by the
+> project's CI rather than in the approved builder environment that holds the
+> release key, so nothing you download carries a signature to check. Writing a
+> card verifies no signature either way — [step 2](#2-check-the-download) is the
+> check that exists, and it is the one that catches a bad download. What a
+> signature would add is proof of *who* built the file, which is a question a
+> checksum published beside the file cannot answer. The releases page also
+> carries EMS release candidates, marked pre-release for an unrelated reason;
+> the appliance images are the entries titled *Appliance image*.
+
 ## Before you start
 
 | | |
 | --- | --- |
-| **Board** | Raspberry Pi 3, 3B+, 4 **or** 5 — you need the image for *your* board, they are not interchangeable. A Pi 3 or 3B+ has one image rather than two; see below |
+| **Board** | Raspberry Pi 3, 3B+, 4 **or** 5 — you need the image for *your* board, they are not interchangeable. A Pi 3 or 3B+ boots from its card and nothing else; see below |
 | **Card** | 16 GB or larger, and a card reader for your computer |
 | **Cable** | Ethernet. The first start needs it; WLAN cannot be configured before the appliance runs |
 | **Power** | The official supply for your board |
@@ -28,8 +38,9 @@ Everything on the card is erased. There is no undo.
 
 **Where to get it.** On the project's
 [Releases page](https://github.com/basecubedev/ems-solarflow-api-control/releases),
-open the newest release and scroll to **Assets** — a collapsed list at the
-bottom of the release notes. The image files are there.
+open the newest entry **whose title starts with "Appliance image"** and scroll to
+**Assets** — a collapsed list at the bottom of the release notes. The image files
+are there. The page lists EMS releases too, and those carry no image.
 
 Not under **Packages** in the sidebar. That holds the EMS and Admin container
 images, which the appliance downloads by itself once it runs; you never fetch
