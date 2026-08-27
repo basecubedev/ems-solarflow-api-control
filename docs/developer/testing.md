@@ -298,6 +298,8 @@ The documentation-content ones carry the `documentation` marker, so
 - `tests/test_test_classification.py` — the marker registry, the documented
   tier selections and the pull-request group partition.
 - `tests/test_ci_workflow_docker_split.py` — how the CI groups are split.
+- `tests/test_ci_workflow_contexts.py`, `tests/test_ci_workflow_commands.py` —
+  that a workflow names its contexts where they exist and runs shell that runs.
 
 When you move or rename docs, update these tests (or the redirect stubs) so the
 links stay honest.
@@ -395,6 +397,15 @@ same bytes and an unattested builder is no objection to it.
 `rpi_image_gen.HARDWARE_PROFILES` in agreement: a board added to the table that
 CI cannot be asked to build fails that test rather than leaving a release one
 artefact short.
+
+A workflow's shell is not executed until the run that needs it, and the first
+dispatch of this one died on its opening line: `df -PB1 --output=avail /` is a
+combination coreutils refuses, which YAML parses and `bash -n` accepts.
+`tests/test_ci_workflow_commands.py` closes that class by running it —
+every `df` invocation in every workflow is executed here against a directory
+that exists, with each operand substituted, so the option list is the only thing
+under test. It also parses every shell step with `bash -n`, which is the cheap
+half and would not have caught this one.
 
 The gate builds the images itself, so it needs the generator's prerequisites and
 cannot reach `RESULT: PASS` on a workstation that deliberately lacks them.
