@@ -13,7 +13,12 @@
     "proves only that the two arrived together.",
     "scripts/appliance-guest-base-image.sh downloads to .part, verifies, renames",
     "atomically, and re-hashes a cached image before every boot. A role without",
-    "an entry, or a missing digest, is a failure and never a skipped check."
+    "an entry, or a missing digest, is a failure and never a skipped check.",
+    "kernel_pattern is what turns this row from a description into a check. The",
+    "-cloud- flavour belongs to the genericcloud image and to nothing else: no",
+    "developer workstation and no CI runner boots it, so a build authority",
+    "claiming this builder from somewhere else fails on the one field it cannot",
+    "reproduce by accident. Every recorded environment in reports/ matches it."
   ],
   "images": {
     "builder": {
@@ -30,7 +35,8 @@
       "sha512": "769562604ecaac26b661167891ef922f71f4d87d50a11423fc04e51444fda0d882c87996dd1181170d233627f4728e6722db2695c0ef753dad762c4ac4ed32e1",
       "checksum_source": "https://cloud.debian.org/images/cloud/trixie/20260803-2559/SHA512SUMS",
       "checksum_signature_source": "https://cloud.debian.org/images/cloud/trixie/20260803-2559/SHA512SUMS.sign",
-      "format": "qcow2"
+      "format": "qcow2",
+      "kernel_pattern": "Linux 6.12.*+deb13-cloud-amd64"
     },
     "smoke-amd64": {
       "comment": "Packaged-runtime guest: real systemd, real sshd, real Docker.",

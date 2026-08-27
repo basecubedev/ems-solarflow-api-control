@@ -37,7 +37,6 @@ REQUIRED_GATES = (
     "sftp",
     "package_lifecycle",
     "docker_reconstruction",
-    "networkmanager_fail_closed",
 )
 OPTIONAL_GATES = ("arm64_guest",)
 GATES = REQUIRED_GATES + OPTIONAL_GATES
@@ -60,12 +59,9 @@ GATE_SCOPES = {
         "own Admin, EMS or InfluxDB images, which are arm64 and run on hardware "
         "this gate does not have"
     ),
-    "networkmanager_fail_closed": (
-        "a WLAN change that loses connectivity reverts to the previous profile"
-    ),
     "arm64_guest": (
         "the package installs and its services start on a booted aarch64 guest "
-        "under emulation. Not a Raspberry Pi: no Pi firmware and no tryboot"
+        "under emulation. Not a Raspberry Pi: no Pi firmware"
     ),
 }
 

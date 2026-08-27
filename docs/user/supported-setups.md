@@ -135,19 +135,23 @@ support above.
 
 | Component | Status |
 |---|---|
-| Appliance image (Pi 4 / Pi 5) | **Reverse-engineered** — built and exercised automatically, never confirmed on a physical Raspberry Pi |
+| Appliance image (Pi 4 / Pi 5) | **Reverse-engineered** — built in the builder VM and inspected against its contract, and the release gates pass end to end for both boards. No board has booted it |
+| Appliance image (Pi 3 / 3B+) | **Reverse-engineered** — built twice on 2026-08-26 and inspected both times (33 checks pass, 0 fail); the release-gate run for this board was cut off before it produced a verdict. No Pi 3 has booted it, and 1 GB of RAM against Docker, EMS and InfluxDB is unmeasured |
 
 Everything about it is tested without hardware: the package installs and its
-services start on a booted aarch64 guest under emulation, the A/B update
-mechanism runs against a real Docker engine, the read-only system layout is
-audited, and the release gates declare what each of them proved. None of that is
-a Raspberry Pi.
+services start on a booted aarch64 guest under emulation, the update mechanism
+runs against a real Docker engine, the built image is unpacked and checked
+against its contract, and the release gates declare what each run proved. None
+of that is a Raspberry Pi.
 
 What only real hardware settles:
 
-- the firmware's one-shot trial boot, which the whole update path depends on
-- whether a slot reaches its health check inside the window on a real card
+- whether the image boots on a board at all — it has not
+- whether the first boot grows the root partition to fill a real card
 - behaviour when power is cut mid-update
+- whether a Pi 3's 1 GB of RAM carries Docker, Admin, EMS and InfluxDB together
+- whether an appliance can fetch and install a signed Appliance Manager package
+  over HTTPS from a real network
 - SD-card wear
 
 Until someone runs one and reports back, "hardware-ready" would be a claim

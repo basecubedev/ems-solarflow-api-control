@@ -67,8 +67,23 @@ class AgentClient:
         try:
             if timeout is not None:
                 connection.settimeout(timeout)
-            connection.sendall((json.dumps(payload) + "\n").encode("utf-8"))
-            raw = self._read_line(connection)
+            try:
+                connection.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+            except OSError as exc:
+                # The agent refuses an unauthorised peer before it reads the
+                # request, then closes. That close races this write: when it
+                # wins, the write takes EPIPE while the refusal is already in
+                # this socket's receive buffer, and giving up here reported "the
+                # agent closed the connection" instead of why it refused. A
+                # close does not discard what arrived before it, so the answer is
+                # still there to be read.
+                raw = self._read_line(connection)
+                if not raw:
+                    raise AgentUnavailableError(
+                        f"the appliance agent closed the connection: {exc}"
+                    )
+            else:
+                raw = self._read_line(connection)
         except OSError as exc:
             raise AgentUnavailableError(f"the appliance agent closed the connection: {exc}")
         finally:

@@ -13,15 +13,15 @@
 The kit used to be a filename glob: everything under ``dist`` matching
 ``*-rpi5-*`` was copied, whatever was hashed was recorded, and the result was
 PASS. Two builds in one output directory produced a kit holding an image from
-one and an update from the other, with a SHA256SUMS file that agreed with
-itself. A missing signature, a missing release-gate report and a build
-authority describing a different build were all invisible.
+one and a report from the other, with a SHA256SUMS file that agreed with
+itself. A missing release-gate report and a build authority describing a
+different build were both invisible.
 
 So the kit is assembled from authority instead. Each profile has exactly one
 completed BuildAuthority, and that record names the build the kit is allowed to
-carry: the image and the update are verified against the digests it recorded,
-the manifest against the archive it describes, and every artefact has to belong
-to that one build id. Anything else is a failure, not a smaller kit.
+carry: the image is verified against the digest it recorded, and every artefact
+has to belong to that one build id. Anything else is a failure, not a smaller
+kit.
 
 A kit copied the attestation's ``.asc`` beside it and never verified it, so the
 signature was a file the kit carried rather than a thing the kit knew. The
@@ -46,11 +46,19 @@ import shutil
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-from appliance import build_authority, media_sizing, release_trust, runtime_gates  # noqa: E402
+from appliance import (  # noqa: E402
+    build_authority,
+    media_sizing,
+    release_inputs,
+    release_trust,
+    runtime_gates,
+)
 from appliance.release_inputs import gate_passed, inspection_passed  # noqa: E402
 
+BUILDER_LOCK_NAME = "base-images.lock.json"
 KIT_VERSION = 2
 AUTHORITY_SUFFIX = ".build-authority.json"
 
@@ -102,6 +110,11 @@ def parse_args(argv):
     parser.add_argument("--source-parity", default="")
     parser.add_argument("--profile", action="append", default=[])
     parser.add_argument("--checklist", default="")
+    parser.add_argument(
+        "--builder-lock",
+        default=str(ROOT / "packaging" / "appliance" / "vm" / "base-images.lock.json"),
+        help="release policy for the machine an image may be assembled on",
+    )
     parser.add_argument("--development-kit", action="store_true")
     return parser.parse_args(argv)
 
@@ -146,15 +159,7 @@ def required_artefacts(dist, authority_path, authority, reports):
         "builder_environment": dist / f"{prefix}.builder-environment.json",
         "image": dist / f"{prefix}.img",
         "image_checksum": dist / f"{prefix}.img.sha256",
-        "update": dist / f"{prefix}.update.tar.zst",
-        "release_archive": dist / f"{prefix}.tar.zst",
-        "manifest": dist / f"{prefix}.manifest.json",
-        "signature": dist / f"{prefix}.manifest.json.asc",
         "image_inspection": reports / f"image-inspection-{profile}.json",
-        "update_inspection": reports / f"update-inspection-{profile}.json",
-        # The attestation binds it, so a kit that could not re-hash it could not
-        # verify itself away from the machine that assembled it.
-        "sparse_crosscheck": reports / f"sparse-crosscheck-{profile}.json",
     }
     return prefix, entries
 
@@ -164,7 +169,6 @@ def verify_build(authority, entries):
 
     problems = []
     image = entries["image"]
-    update = entries["update"]
 
     if image.is_file():
         problems.extend(
@@ -176,51 +180,6 @@ def verify_build(authority, entries):
                 require_environment=True,
             )
         )
-    if update.is_file():
-        problems.extend(
-            build_authority.verify_update(
-                authority,
-                update,
-                profile=authority.profile,
-                build_id=authority.build_id,
-                require_environment=True,
-            )
-        )
-
-    manifest_path = entries["manifest"]
-    if manifest_path.is_file():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except ValueError:
-            problems.append(f"{manifest_path.name} is not valid JSON")
-            manifest = {}
-        if manifest:
-            if str(manifest.get("build_id") or "") != authority.build_id:
-                problems.append(
-                    f"the manifest names build {manifest.get('build_id')!r}, the authority "
-                    f"names {authority.build_id!r}"
-                )
-            provenance = manifest.get("provenance") or {}
-            if not provenance.get("verified"):
-                problems.append("the manifest is a development artefact, not a release")
-            if provenance.get("build_authority_sha256") != authority.canonical_hash:
-                problems.append(
-                    "the manifest was not described from this build authority"
-                )
-            if (
-                provenance.get("builder_environment_sha256")
-                != authority.builder_environment_sha256
-            ):
-                problems.append("the manifest names a different builder environment")
-            archive = manifest.get("archive") or {}
-            published = entries["release_archive"]
-            if published.is_file() and archive.get("digest"):
-                observed = file_sha256(published)
-                if observed != archive["digest"]:
-                    problems.append(
-                        f"{published.name} hashes to {observed}, the manifest declares "
-                        f"{archive['digest']}"
-                    )
     return problems
 
 
@@ -323,7 +282,7 @@ def assemble_profile(profile, authority_path, authority, args, reports, target):
 
     problems.extend(verify_build(authority, entries))
 
-    for name in ("image_inspection", "update_inspection", "sparse_crosscheck"):
+    for name in ("image_inspection",):
         if entries[name].is_file():
             ok, detail = inspection_passed(entries[name])
             if not ok:
@@ -395,11 +354,20 @@ def main(argv=None):
             )
             continue
         authority_path, authority = authorities[profile]
-        records.append(
-            assemble_profile(
-                profile, authority_path, authority, args, reports, output / profile
-            )
+        record = assemble_profile(
+            profile, authority_path, authority, args, reports, output / profile
         )
+        # Completeness -- what require_environment asks -- is whether the fields
+        # are filled in, not whether release policy approves the machine they
+        # describe. Without this a kit assembled outside the finalizer reached
+        # physical_ready with the lock never consulted once.
+        approval = list(
+            release_inputs.verify_builder_environment(authority, lock=args.builder_lock)
+        )
+        record["builder_environment_problems"] = approval
+        record.setdefault("problems", [])
+        record["problems"] = list(record["problems"]) + approval
+        records.append(record)
 
     gate_ok, gate_detail = (False, "no release gate report was passed to the kit")
     if args.gate_report:
@@ -471,6 +439,14 @@ def main(argv=None):
     if checklist and checklist.is_file():
         shutil.copy2(checklist, output / "validation-checklist.md")
 
+    # The kit travels to a machine that has no repository, and the verifier is
+    # built to distrust the manifest's own summary of what it checked. So the
+    # policy the builders were judged against travels with it and is re-applied
+    # there, rather than being taken on the kit's word.
+    builder_lock = Path(args.builder_lock)
+    if builder_lock.is_file():
+        shutil.copy2(builder_lock, output / BUILDER_LOCK_NAME)
+
     leaked = scan_for_private_keys(output)
     if leaked:
         print("appliance-hardware-kit: private key material in the kit:", file=sys.stderr)
@@ -507,6 +483,8 @@ def main(argv=None):
             ),
             "runtime_required_gates_pass": gates_ok,
             "release_not_stale": attestation_ok,
+            "builder_environment_approved": bool(records)
+            and all(not record.get("builder_environment_problems", ["unchecked"]) for record in records),
         }
     )
     ready = verdict.ready and not problems and not args.development_kit

@@ -220,7 +220,7 @@ class DockerBackend:
         return result
 
     def save_image(self, reference, path):
-        """Write one image to a file, so another slot can load it without a WAN."""
+        """Write one image to a file, so it can be loaded again without a WAN."""
 
         result = self.runner.run(
             "docker", ["save", "-o", str(path), reference], timeout=max(self.timeout, 900)
@@ -313,8 +313,8 @@ def _repository_digest(reference, digests):
     """The digest of the repository that was asked about, not just the first.
 
     An image can carry repo digests for several repositories. Answering with
-    whichever came first would let a slot compare its Admin image against the
-    digest of something else that happens to share the layers.
+    whichever came first would compare the Admin image against the digest of
+    something else that happens to share the layers.
     """
 
     repository = str(reference).partition("@")[0].rpartition(":")[0] or (

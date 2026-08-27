@@ -29,8 +29,8 @@ pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.applianc
 
 ROOT = Path(__file__).resolve().parents[1]
 CAPTURE = ROOT / "scripts/appliance-capture-builder-environment.sh"
-BUILD_IMAGE = ROOT / "scripts/appliance-build-rpi-ab-image.sh"
-BUILD_UPDATE = ROOT / "scripts/appliance-build-rpi-ab-update.sh"
+BUILD_IMAGE = ROOT / "scripts/appliance-build-rpi-image.sh"
+BUILD_UPDATE = ROOT / "scripts/appliance-build-rpi-image.sh"
 
 
 def complete_environment(**overrides):
@@ -56,8 +56,6 @@ def complete_environment(**overrides):
 def authority_with(environment, tmp_path):
     artefact = tmp_path / "image.img"
     artefact.write_bytes(b"an image")
-    update = tmp_path / "update.tar.zst"
-    update.write_bytes(b"an update")
     return build_authority.BuildAuthority(
         builder=build_authority.Builder(
             source_form="git", revision="a" * 40, source_tree_sha256="sha256:" + "b" * 64
@@ -70,13 +68,10 @@ def authority_with(environment, tmp_path):
         image=build_authority.Artefact(
             path=str(artefact), sha256=build_authority.file_sha256(artefact)
         ),
-        update=build_authority.Artefact(
-            path=str(update), sha256=build_authority.file_sha256(update)
-        ),
         package_sha256="e" * 64,
         completed=True,
         environment=environment,
-    ), update
+    ), artefact
 
 
 @pytest.mark.parametrize("profile", ["rpi4", "rpi5"])
@@ -166,10 +161,10 @@ def test_an_environment_edited_after_the_build_is_detected(tmp_path):
 
 
 def test_production_signing_requires_a_complete_builder_environment(tmp_path):
-    authority, update = authority_with(build_authority.BuilderEnvironment(), tmp_path)
+    authority, image = authority_with(build_authority.BuilderEnvironment(), tmp_path)
 
-    unsigned = build_authority.verify_update(authority, update)
-    signing = build_authority.verify_update(authority, update, require_environment=True)
+    unsigned = build_authority.verify_image(authority, image)
+    signing = build_authority.verify_image(authority, image, require_environment=True)
 
     assert unsigned == ()
     assert any("builder environment" in problem for problem in signing)
@@ -178,34 +173,33 @@ def test_production_signing_requires_a_complete_builder_environment(tmp_path):
 @pytest.mark.parametrize("absent", build_authority.ENVIRONMENT_REQUIRED)
 def test_every_required_builder_identity_is_missing_loudly(tmp_path, absent):
     environment = complete_environment(**{absent: ""})
-    authority, update = authority_with(environment, tmp_path)
+    authority, image = authority_with(environment, tmp_path)
 
-    problems = build_authority.verify_update(authority, update, require_environment=True)
+    problems = build_authority.verify_image(authority, image, require_environment=True)
 
     assert any(absent in problem for problem in problems)
 
 
 def test_a_complete_environment_satisfies_production_signing(tmp_path):
-    authority, update = authority_with(complete_environment(), tmp_path)
+    authority, image = authority_with(complete_environment(), tmp_path)
 
-    assert build_authority.verify_update(authority, update, require_environment=True) == ()
+    assert build_authority.verify_image(authority, image, require_environment=True) == ()
 
 
 def test_an_authority_naming_an_unknown_profile_is_refused(tmp_path):
-    authority, update = authority_with(complete_environment(), tmp_path)
+    authority, image = authority_with(complete_environment(), tmp_path)
     authority = build_authority.BuildAuthority(
         builder=authority.builder,
         project=authority.project,
         profile="rpi6",
         build_id=authority.build_id,
         image=authority.image,
-        update=authority.update,
         package_sha256=authority.package_sha256,
         completed=True,
         environment=authority.environment,
     )
 
-    problems = build_authority.verify_update(authority, update)
+    problems = build_authority.verify_image(authority, image)
 
     assert any(build_authority.INVALID_IDENTIFIER in problem for problem in problems)
 

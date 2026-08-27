@@ -29,7 +29,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from appliance import commands, os_releases
+from appliance import commands, artifact_trust
 
 UNSIGNED = "release_attestation_unsigned"
 UNVERIFIED = "release_attestation_signature_invalid"
@@ -160,7 +160,7 @@ def verify_signature(document, policy, *, signature=None, runner=None):
             detail=unmet,
         )
 
-    verifier = os_releases.SignatureVerifier(
+    verifier = artifact_trust.SignatureVerifier(
         runner or commands.CommandRunner(),
         keyring=policy.keyring,
         fingerprints=policy.fingerprints,
@@ -185,7 +185,7 @@ def verify_signature(document, policy, *, signature=None, runner=None):
         )
     try:
         verifier.verify(document, signature)
-    except os_releases.ReleaseError as error:
+    except artifact_trust.ReleaseError as error:
         return SignatureVerdict(
             present=True,
             verified=True,
@@ -420,6 +420,12 @@ READINESS_INVARIANTS = (
     "all_mandatory_inspections_pass",
     "runtime_required_gates_pass",
     "release_not_stale",
+    # Builder approval was enforced in exactly one place -- the finalizer's
+    # pre-signature refusal -- so a result assembled by any other route reached
+    # physical_ready without the lock ever being consulted. The hardware kit
+    # checks the environment for completeness, which asks whether the fields are
+    # filled in, not whether release policy approves the machine they describe.
+    "builder_environment_approved",
 )
 
 KIT_READINESS_INVARIANTS = READINESS_INVARIANTS + ("hardware_kit_verified",)

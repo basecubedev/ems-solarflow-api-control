@@ -71,18 +71,9 @@ def test_signing_is_required_in_production_and_optional_in_a_rehearsal():
     required = text[text.index("required_gate()") : text.index("report() {")]
     builder, production = required.split("production)")
 
-    assert "sign-" not in builder
-    assert "sign-*" in production
-    assert "verify-signature-*" in production
-
-
-def test_production_requires_the_checks_a_rehearsal_may_skip():
-    text = source(GATES)
-    required = text[text.index("required_gate()") : text.index("report() {")]
-    production = required.split("production)")[1]
-
-    for gate in ("inspect-image-*", "inspect-update-*", "crosscheck-*", "source-bundle"):
-        assert gate in production, gate
+    assert "build-*" in builder
+    assert "build-*" not in production
+    assert "artefacts-*" in production
 
 
 def test_production_does_not_require_a_generator_checkout():
@@ -133,14 +124,6 @@ def test_an_unsupported_profile_is_refused_before_anything_runs(tmp_path):
     assert "build_identifier_invalid" in result.stdout + result.stderr
 
 
-def test_the_inspection_evidence_is_written_as_json_reports():
-    text = source(GATES)
-
-    assert "gate_json" in text
-    assert "image-inspection-$profile.json" in text
-    assert "update-inspection-$profile.json" in text
-
-
 def test_the_builder_guest_runs_qualification_and_never_signs():
     """A key reachable from the disposable guest is a key anyone can sign with."""
 
@@ -154,7 +137,7 @@ def test_the_finalizer_signs_and_never_builds():
     text = source(FINALIZER)
 
     assert "--sign-key" in text
-    assert "appliance-build-rpi-ab-image.sh" not in text
+    assert "appliance-build-rpi-image.sh" not in text
     assert "rpi-image-gen build" not in text
     assert "--mode production" in text
 

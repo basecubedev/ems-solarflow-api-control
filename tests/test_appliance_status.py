@@ -249,6 +249,74 @@ def test_support_archive_contains_a_manifest_and_no_secrets(tmp_path):
     assert "PRIVATE KEY" not in contents
 
 
+def test_the_support_archive_carries_the_manager_state_it_is_asked_about(tmp_path):
+    """A case about a failed manager update used to arrive without it.
+
+    The archive carried the A/B slot state and nothing about the package this
+    console runs from -- so the one question worth asking, "which package is
+    kept and what did the deadline decide", was the one it could not answer.
+    """
+
+    from appliance import manager_retention, manager_verify
+
+    services = appliance(tmp_path)
+    services.paths.packages_dir.mkdir(parents=True, exist_ok=True)
+    staged = tmp_path / "seed.deb"
+    staged.write_bytes(b"the package that was running")
+    manager_retention.retain(
+        services.paths, staged, sha256="sha256:" + "c" * 64, version="0.1.0", rotate=False
+    )
+    manager_verify.verdict_path(services.paths).write_text(
+        json.dumps({"verdict": manager_verify.VERDICT_REVERTED, "detail": "the deadline expired"}),
+        encoding="utf-8",
+    )
+
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "support.plan_archive"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    operation = services.operations.get(planned["operation"]["operation_id"])
+
+    with tarfile.open(operation.result["path"], "r:gz") as archive:
+        assert "manager.json" in archive.getnames()
+        payload = json.loads(archive.extractfile("manager.json").read().decode("utf-8"))
+
+    assert payload["retention"]["current"]["version"] == "0.1.0"
+    assert payload["verdict"]["verdict"] == manager_verify.VERDICT_REVERTED
+    assert "manager.json" in planned["plan"]["members"], "listed before it is created"
+
+
+def test_the_support_archive_carries_no_password_material(tmp_path):
+    """The rescue account's state is a verdict, never the hash behind it."""
+
+    from appliance import rescue_account
+
+    services = appliance(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "support.plan_archive"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    operation = services.operations.get(planned["operation"]["operation_id"])
+
+    with tarfile.open(operation.result["path"], "r:gz") as archive:
+        contents = b"".join(
+            archive.extractfile(name).read() for name in archive.getnames()
+        ).decode("utf-8", errors="replace")
+
+    assert "$6$" not in contents
+    assert rescue_account.DEFAULT_PASSWORD not in contents
+
+
 def test_a_full_persistent_partition_is_a_warning(tmp_path):
     """On an A/B appliance / is a read-only slot partition whose usage cannot
     move; everything that grows is on the persistent one, which was measured and

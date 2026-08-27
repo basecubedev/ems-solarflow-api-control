@@ -286,57 +286,28 @@ else
 fi
 check "verify-install still passes after a reinstall" /usr/bin/ems-appliance verify-install
 
-step "A/B units on a single-slot guest"
-# The same package installs on an ordinary host and on an A/B image. Here there
-# is no layout descriptor, so every A/B unit must be present and inert: a unit
-# that tried to verify a persistent partition that is not there would make the
-# package uninstallable on a normal Raspberry Pi.
-AB_LAYOUT=/etc/ems-appliance-manager/ab-layout.json
-check_not "this guest has no A/B layout" test -f "$AB_LAYOUT"
-for unit in ems-appliance-persistence.service ems-appliance-ab-health.service \
-            ems-appliance-slot-bootstrap.service ems-appliance-grow-persistent.service; do
-    check "$unit ships with the package" \
-        test -f "/usr/lib/systemd/system/$unit"
-    if systemctl is-active --quiet "$unit"; then
-        fail "$unit ran on a host with no A/B layout"
-    else
-        pass "$unit is inert without an A/B layout"
-    fi
-done
+step "the first-boot growth gate"
+# The same package installs on an ordinary Raspberry Pi OS and on an appliance
+# image. This guest is neither: it carries no build marker, so the growth helper
+# must refuse -- a helper that repartitioned a host it did not image would break
+# the one promise this appliance makes about somebody else's storage.
+check_not "this guest carries no appliance build marker" \
+    test -f /etc/ems-appliance-os-build
 check "the growth helper ships and is executable" \
-    test -x /usr/lib/ems-appliance-manager/grow-persistent.sh
-
-step "A/B command surface"
-if /usr/bin/ems-appliance ab status --json >/dev/null 2>&1; then
-    ab_mode=$(/usr/bin/ems-appliance ab status --json 2>/dev/null \
-        | sed -n 's/.*"mode"[^"]*"\([^"]*\)".*/\1/p' | head -n 1)
-    if [ "$ab_mode" = "single_slot" ]; then
-        pass "ab status reports single_slot on this guest"
-    else
-        fail "ab status reports '$ab_mode', expected single_slot"
-    fi
+    test -x /usr/lib/ems-appliance-manager/grow-root.sh
+if systemctl is-active --quiet ems-appliance-grow-root.service; then
+    fail "the growth service ran on a host with no build marker"
 else
-    pass "ab status needs the agent socket or root; not a single-slot failure"
+    pass "the growth service is inert without a build marker"
 fi
-check_not "ab mount-persistence no longer exists" \
-    /usr/bin/ems-appliance ab mount-persistence --help
-check "ab verify-persistence exists" \
-    sh -c '/usr/bin/ems-appliance ab --help 2>&1 | grep -q verify-persistence'
-check "ab slot-bootstrap exists" \
-    sh -c '/usr/bin/ems-appliance ab --help 2>&1 | grep -q slot-bootstrap'
+check_not "image-check refuses a host with no marker" \
+    /usr/bin/ems-appliance image-check
 
 step "host identity policy"
-# /etc/ssh as a whole is never shared between slots; only the appliance-owned
-# key directory is, and it is named by a drop-in rather than by moving the keys.
-check_not "the package does not share the whole /etc/ssh" \
-    grep -rq "^Path=/etc/ssh$" /etc/rpi-image-gen/slot-shared.d/
-if [ -f /etc/rpi-image-gen/slot-shared.d/50-ems-appliance.conf ]; then
-    check "the appliance declares its shared paths" \
-        grep -q "^Path=/var/lib/ems-appliance-manager$" \
-        /etc/rpi-image-gen/slot-shared.d/50-ems-appliance.conf
-else
-    pass "no slot-shared declaration on a single-slot guest (image-only)"
-fi
+# On a writable root Debian's own sshd-keygen.service makes the appliance's key
+# pair on first boot, so the package must not ship one of its own.
+check_not "the package ships no host key" \
+    sh -c 'dpkg -L ems-appliance-manager | grep -q ssh_host_'
 
 printf '\n'
 if [ "$failures" -eq 0 ]; then

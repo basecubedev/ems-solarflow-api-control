@@ -27,6 +27,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+
 # 2 binds the project's own tree. Schema 1 named only the generator's, so an
 # image built from a working tree with local appliance changes claimed the clean
 # revision it was branched from.
@@ -42,7 +43,10 @@ FILE_MODE = 0o644
 
 SOURCE_FORMS = ("git", "tarball")
 
-PROFILES = ("rpi4", "rpi5")
+# The identifiers, kept equal to the hardware profiles by
+# tests/test_appliance_pi3_support.py rather than derived, so this module
+# stays a plain file reader that a release script can import cheaply.
+PROFILES = ("rpi3", "rpi4", "rpi5")
 
 # A build id names a directory (``build-<id>``) and travels through release
 # scripts as an argument. Path separators, whitespace and control characters
@@ -213,13 +217,29 @@ class BuilderEnvironment:
         return any(getattr(self, name) for name in ENVIRONMENT_REQUIRED)
 
     def missing(self):
-        return tuple(name for name in ENVIRONMENT_REQUIRED if not getattr(self, name))
+        """Required facts this record does not actually carry.
+
+        Stripped, because a field holding a space satisfied a truth test and
+        counted as recorded — which is a supply-chain fact this appliance would
+        have signed on the strength of one whitespace character.
+        """
+
+        return tuple(
+            name for name in ENVIRONMENT_REQUIRED if not str(getattr(self, name) or "").strip()
+        )
 
 
 def parse_environment(payload):
     if not isinstance(payload, dict):
         raise BuildAuthorityError(UNREADABLE, "the builder environment is not an object")
     version = payload.get("schema_version", ENVIRONMENT_SCHEMA_VERSION)
+    # `True == 1` and `1.0 == 1` in Python, so equality alone accepts a boolean
+    # and a float as schema 1. A version is a whole number or it is not a
+    # version.
+    if not isinstance(version, int) or isinstance(version, bool):
+        raise BuildAuthorityError(
+            UNREADABLE, f"builder environment schema {version!r} is not a version number"
+        )
     if version != ENVIRONMENT_SCHEMA_VERSION:
         raise BuildAuthorityError(
             UNSUPPORTED,
@@ -230,6 +250,14 @@ def parse_environment(payload):
     if not isinstance(packages, list):
         raise BuildAuthorityError(UNREADABLE, "critical_packages is not a list")
     return BuilderEnvironment(
+        # Passed through, not defaulted. The constructor took the class default,
+        # so a record's own version was discarded on every parse. Inert while
+        # one schema exists; the moment the constant moves, every committed
+        # record re-serialises under the new version, its canonical hash stops
+        # matching what was recorded, and all release evidence fails to parse at
+        # once -- with the pressure fix being to delete the very comparison that
+        # binds an authority to the environment that produced it.
+        schema_version=version,
         base_image_lock_id=str(payload.get("base_image_lock_id") or ""),
         base_image_sha512=str(payload.get("base_image_sha512") or ""),
         os_release=str(payload.get("os_release") or ""),
@@ -263,7 +291,6 @@ class BuildAuthority:
     profile: str = ""
     build_id: str = ""
     image: Artefact = field(default_factory=Artefact)
-    update: Artefact = field(default_factory=Artefact)
     package_sha256: str = ""
     completed: bool = False
     environment: BuilderEnvironment = field(default_factory=BuilderEnvironment)
@@ -287,7 +314,6 @@ class BuildAuthority:
             "profile": self.profile,
             "build_id": self.build_id,
             "image": self.image.to_dict(),
-            "update": self.update.to_dict(),
             "package_sha256": self.package_sha256,
             "completed": self.completed,
         }
@@ -332,7 +358,6 @@ def parse(payload):
         profile=str(payload.get("profile") or ""),
         build_id=str(payload.get("build_id") or ""),
         image=_artefact(payload.get("image")),
-        update=_artefact(payload.get("update")),
         package_sha256=str(payload.get("package_sha256") or ""),
         completed=bool(payload.get("completed")),
         environment=environment,
@@ -370,7 +395,7 @@ def write(directory, authority):
 def prepare_output(root, *, build_id):
     """One build, one fresh directory. Stale artefacts cannot be inherited.
 
-    A reused directory is how yesterday's ``update.tar.zst`` ends up beside
+    A reused directory is how yesterday's artefact ends up beside
     today's metadata, which would let a release be signed for an artefact no
     completed build produced.
     """
@@ -400,19 +425,10 @@ def _artefact_problems(label, declared, path):
     return []
 
 
-def verify_update(authority, path, *, profile="", revision="", build_id="",
-                  require_environment=False):
-    """Is this artefact the one that completed build produced? Say why not."""
-
-    problems = list(_common_problems(authority, profile=profile, revision=revision,
-                                     build_id=build_id,
-                                     require_environment=require_environment))
-    problems.extend(_artefact_problems("update artefact", authority.update, path))
-    return tuple(problems)
-
-
 def verify_image(authority, path, *, profile="", revision="", build_id="",
                  require_environment=False):
+    """Is this artefact the one that completed build produced? Say why not."""
+
     problems = list(_common_problems(authority, profile=profile, revision=revision,
                                      build_id=build_id,
                                      require_environment=require_environment))
@@ -420,7 +436,8 @@ def verify_image(authority, path, *, profile="", revision="", build_id="",
     return tuple(problems)
 
 
-def _common_problems(authority, *, profile, revision, build_id, require_environment=False):
+def _common_problems(authority, *, profile, revision, build_id,
+                     require_environment=False):
     problems = []
     if require_environment:
         missing = authority.environment.missing()

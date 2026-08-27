@@ -71,11 +71,6 @@ test.describe("documentation captures @docs", () => {
     await page.screenshot({ path: `${SHOTS}/appliance-update-running.png`, fullPage: true });
   });
 
-  test("appliance-ab-slots", async ({ page }) => {
-    await signIn(page);
-    await openView(page, "updates");
-    await page.screenshot({ path: `${SHOTS}/appliance-ab-slots.png`, fullPage: true });
-  });
 
   test("appliance-network-wifi", async ({ page }) => {
     await signIn(page);

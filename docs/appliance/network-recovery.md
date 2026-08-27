@@ -27,10 +27,14 @@ plan with an automatic revert:
 
 Details that matter:
 
-- The **previous WLAN profile is never deleted**. When the new network does not
-  reach full connectivity within the configured timeout
+- The **previous WLAN profile is never deleted**. When the WLAN device does not
+  join the requested SSID and hold an address within the configured timeout
   (`wifi_revert_timeout_seconds`, 90 s by default), the appliance reactivates
-  it and reports `wifi_connection_failed` together with `reverted: true`.
+  it and reports `wifi_connection_failed` together with `reverted: true`. The
+  verdict is read off the WLAN device itself, deliberately never off
+  NetworkManager's host-wide connectivity value: with a cable plugged in that
+  value reads `full` whatever the radio did, and on a LAN without internet it
+  never reads `full` even when the join was perfect.
 - The passphrase is handed to `nmcli` on **stdin**, so it never appears in the
   host process table, in an operation record, in the audit log or in any log
   file.
@@ -74,13 +78,16 @@ If you can no longer reach the appliance:
 
 ### Whether you have a shell at all
 
-This matters more than the commands above, and the two installation shapes
-differ:
+This matters more than the commands above, and the three installation shapes do
+not all answer the same way:
 
 | Shape | Console or SSH login |
 |---|---|
 | Manager package on your own Raspberry Pi OS | Yes — your own account, the one you set up when you installed the OS |
-| **A/B appliance image** | **No.** The image ships no login account, no default password and no authorized key, on purpose: a shipped credential is a credential every device shares |
+| **Either appliance image** | **Console only.** `ems-rescue` with a documented password, for the case where nothing else answers — see [console-recovery.md](console-recovery.md). No SSH password login and no shipped authorized key: a shipped *key* is a credential every device shares, and unlike a console password it is reachable over the network |
+
+Both image shapes answer this identically. The rescue account comes from the
+package, not from the layout, and neither image accepts an SSH password.
 
 On an appliance image the recovery paths are therefore, in order:
 
@@ -93,8 +100,9 @@ On an appliance image the recovery paths are therefore, in order:
    `ems-backup`, which is chroot-confined, read-only and SFTP-only. What it buys
    is the ability to retrieve your configuration, data and backups from a box
    you can otherwise no longer reach, so step 4 costs you nothing.
-4. Re-flash. Configuration and data live on the shared partition and are not
-   erased by writing a new system image, but take a backup first if you can.
+4. Re-flash. This erases the card: writing the image back replaces the
+   operator's configuration, data and on-box backups with a fresh installation.
+   The backup in step 3 is not a convenience — it is the only copy.
 
 Step 3 is the one worth doing early. There is no way to add a key to a box you
 can no longer reach.

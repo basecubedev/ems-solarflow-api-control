@@ -411,6 +411,24 @@ def test_apt_is_refused_on_a_read_only_root(tmp_path, monkeypatch):
     assert any(b["code"] == "read_only_root" for b in blockers), blockers
 
 
+def test_apt_is_not_refused_on_a_writable_root(tmp_path):
+    """What makes the single-slot appliance image patchable at all.
+
+    The refusal is keyed on the real mount state rather than on which image
+    this is, so a writable root lifts it with no exception anywhere -- and this
+    is what would notice if that ever became a decision about the image
+    instead.
+    """
+
+    from tests.helpers.appliance import build_test_services
+
+    services = build_test_services(tmp_path)
+
+    blockers = services.packages._blockers(services.packages.check())
+
+    assert not any(b["code"] == "read_only_root" for b in blockers), blockers
+
+
 def test_the_disk_space_check_reads_the_probe_root_not_the_host(tmp_path):
     """These tests used to answer from the machine running them: a developer
     with a full /var saw the blocker, CI did not, and neither was testing the

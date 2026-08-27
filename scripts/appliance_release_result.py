@@ -39,7 +39,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from appliance import build_authority, media_sizing, release_trust, runtime_gates  # noqa: E402
+from appliance import (  # noqa: E402
+    build_authority,
+    media_sizing,
+    release_inputs,
+    release_trust,
+    runtime_gates,
+)
 
 SCHEMA_VERSION = 2
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +99,11 @@ def parse_args(argv):
     parser.add_argument("--keyring", default="")
     parser.add_argument("--trusted-fingerprint", action="append", default=[])
     parser.add_argument("--project-root", default=str(ROOT))
+    parser.add_argument(
+        "--builder-lock",
+        default=str(ROOT / "packaging" / "appliance" / "vm" / "base-images.lock.json"),
+        help="release policy for the machine an image may be assembled on",
+    )
     parser.add_argument("--profile", action="append", default=[])
     parser.add_argument("--run-id", default="")
     return parser.parse_args(argv)
@@ -172,13 +183,29 @@ def profiles_verified(entries, attestation, wanted):
     return described == set(wanted)
 
 
+def builder_environments_approved(entries):
+    """Every profile's builder is one release policy approves.
+
+    A profile whose authority could not be read has no environment to approve,
+    and an empty set of profiles is not an approval either: both are false, so
+    the invariant states what was established rather than what was not refused.
+    """
+
+    if not entries:
+        return False
+    return all(
+        "builder_environment_problems" in entry and not entry["builder_environment_problems"]
+        for entry in entries.values()
+    )
+
+
 def inspections_passed(entries):
     """Every mandatory inspection passed, with nothing mandatory left unrun."""
 
     if not entries:
         return False
     for entry in entries.values():
-        for name in ("image_inspection", "update_inspection", "sparse_crosscheck"):
+        for name in ("image_inspection",):
             record = entry.get(name, {})
             if record.get("result") != "pass" or record.get("mandatory_not_run"):
                 return False
@@ -210,7 +237,6 @@ def main(argv=None):
     }
 
     if args.source_authority and Path(args.source_authority).is_file():
-        from appliance import release_inputs
 
         try:
             source = release_inputs.read_source_bundle_authority(args.source_authority)
@@ -228,7 +254,6 @@ def main(argv=None):
             }
 
     if args.package and Path(args.package).is_file():
-        from appliance import release_inputs
 
         try:
             result["package"] = release_inputs.read_package(args.package).to_dict()
@@ -255,16 +280,23 @@ def main(argv=None):
                         "project_tree_sha256": authority.project.tree_sha256,
                         "builder_environment_sha256": authority.builder_environment_sha256,
                         "image_sha256": authority.image.sha256,
-                        "update_sha256": authority.update.sha256,
                         "package_sha256": authority.package_sha256,
                     }
                 )
                 image = dist / f"{prefix}.img"
                 if image.is_file():
                     entry["image_bytes"] = image.stat().st_size
-                update = dist / f"{prefix}.update.tar.zst"
-                if update.is_file():
-                    entry["update_bytes"] = update.stat().st_size
+                # Approval per profile, because each profile carries its own
+                # authority and its own environment. Recorded here rather than
+                # left to the finalizer's refusal: that refusal aborts the run
+                # it is part of, so any other route to a result -- a standalone
+                # kit, a re-derived result over an existing dist -- reached
+                # physical_ready with the lock never consulted.
+                entry["builder_environment_problems"] = list(
+                    release_inputs.verify_builder_environment(
+                        authority, lock=args.builder_lock
+                    )
+                )
                 if not result["builder"]:
                     result["builder"] = {
                         "base_image_lock_id": authority.environment.base_image_lock_id,
@@ -278,8 +310,6 @@ def main(argv=None):
 
         for name, path in (
             ("image_inspection", reports / f"image-inspection-{profile}.json"),
-            ("update_inspection", reports / f"update-inspection-{profile}.json"),
-            ("sparse_crosscheck", reports / f"sparse-crosscheck-{profile}.json"),
         ):
             counts = inspection_counts(path) if path.is_file() else None
             entry[name] = counts or {"result": "not_run"}
@@ -350,6 +380,7 @@ def main(argv=None):
         "all_mandatory_inspections_pass": inspections_passed(result["profiles"]),
         "runtime_required_gates_pass": result["runtime_gates"].get("result") == "pass",
         "release_not_stale": not result.get("freshness", {}).get("stale", True),
+        "builder_environment_approved": builder_environments_approved(result["profiles"]),
     }
     # A run that built no kit hands over no manifest, so requiring the kit
     # invariant would make --no-kit unable to produce a ready result at all
@@ -391,8 +422,8 @@ def render_markdown(result):
         f"Project: `{result['project'].get('revision', 'unknown')}`  ",
         f"Tree: `{result['project'].get('tree_sha256', 'unknown')}`",
         "",
-        "| Profile | Build | Image inspection | Update inspection | Sparse cross-check |",
-        "| --- | --- | --- | --- | --- |",
+        "| Profile | Build | Image inspection |",
+        "| --- | --- | --- |",
     ]
     for profile, entry in sorted(result["profiles"].items()):
         def cell(name):
@@ -406,8 +437,7 @@ def render_markdown(result):
 
         lines.append(
             f"| {profile} | `{entry.get('build_id', entry.get('error', '—'))}` | "
-            f"{cell('image_inspection')} | {cell('update_inspection')} | "
-            f"{cell('sparse_crosscheck')} |"
+            f"{cell('image_inspection')} |"
         )
     signature = result.get("release_attestation", {}).get("signature", {})
     gates = result.get("runtime_gates", {})

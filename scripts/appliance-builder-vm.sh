@@ -13,7 +13,7 @@
 # guest instead: the packages land in the guest, the guest is deleted, and the
 # only thing that comes back out is the dist directory.
 #
-# The build itself is the project's own scripts/appliance-build-rpi-ab-image.sh,
+# The build itself is the project's own scripts/appliance-build-rpi-image.sh,
 # run against the pinned generator, so the source-authority and post-build
 # re-verification are exactly the ones a release uses.
 #
@@ -65,7 +65,6 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ "${#PROFILES[@]}" -gt 0 ] || { echo "at least one --profile is required" >&2; exit 2; }
-
 for tool in qemu-system-x86_64 qemu-img ssh scp ssh-keygen curl git; do
     command -v "$tool" >/dev/null 2>&1 || not_run "$tool is missing" "${tool}_unavailable"
 done
@@ -201,8 +200,7 @@ b "set -eu
    git clone --quiet /root/source.bundle /build/source
    git -C /build/source checkout --quiet $REVISION
    /build/rpi-image-gen/install_deps.sh
-   apt-get install -y -qq qemu-user-static binfmt-support zstd gpgv gdisk \
-       android-sdk-libsparse-utils >/dev/null
+   apt-get install -y -qq qemu-user-static binfmt-support zstd xz-utils gpgv gdisk >/dev/null
    systemctl restart systemd-binfmt.service || true
    grep -q '^builder:' /etc/subuid || echo 'builder:100000:65536' >>/etc/subuid
    grep -q '^builder:' /etc/subgid || echo 'builder:100000:65536' >>/etc/subgid
@@ -249,13 +247,15 @@ if [ "$RELEASE_GATE" -eq 1 ]; then
        ./scripts/appliance-create-source-bundle.sh --output /build/source-bundle.tar.gz >/dev/null
        time ./scripts/appliance-release-gates.sh --rpi-image-gen /build/rpi-image-gen \
             --output /build/dist --source-bundle /build/source-bundle.tar.gz \
-            --crosscheck $gate_args" \
+            --builder-environment /build/builder-environment.json \
+            $gate_args" \
         || status=$?
 else
 for profile in "${PROFILES[@]}"; do
     echo
     echo "== building $profile =="
-    build_args="--profile $profile --rpi-image-gen /build/rpi-image-gen --output /build/dist"
+    build_args="--profile $profile"
+    build_args="$build_args --rpi-image-gen /build/rpi-image-gen --output /build/dist"
     build_args="$build_args --builder-environment /build/builder-environment.json"
     [ -n "$BUILD_ID" ] && build_args="$build_args --build-id ${BUILD_ID}-${profile}"
     # Five of upstream's declared binaries — mkfs.btrfs, veritysetup, mkdosfs,
@@ -264,19 +264,18 @@ for profile in "${PROFILES[@]}"; do
     # unusable, which is true of the shell and not of the machine.
     # shellcheck disable=SC2029
     u "export PATH=$GUEST_PATH
-       cd $SOURCE_DIR && time ./scripts/appliance-build-rpi-ab-image.sh $build_args" || status=$?
+       cd $SOURCE_DIR && time ./scripts/appliance-build-rpi-image.sh $build_args" || status=$?
 done
 fi
 
 echo
 echo "== collecting artefacts =="
 # The guest describes its own output before anything is copied, and the host
-# re-hashes what arrived against that description. A dropped 16 GiB image, a
-# full host disk and a complete build used to produce the same verdict.
+# re-hashes what arrived against that description. A dropped 8 GiB image, a full
+# host disk and a complete build used to produce the same verdict.
 #
-# The work root is deliberately not collected: /build/dist also holds a chroot
-# and the sparse copies of the image, and moving those over a slirp link takes
-# longer than the build did.
+# The work root is deliberately not collected: /build/dist also holds the build
+# chroot, and moving that over a slirp link takes longer than the build did.
 # shellcheck disable=SC2029
 b "python3 $SOURCE_DIR/scripts/appliance_builder_output.py describe \
        --dist /build/dist --output /build/output-manifest.json" \

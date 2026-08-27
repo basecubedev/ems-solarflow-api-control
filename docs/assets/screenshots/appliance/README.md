@@ -24,7 +24,6 @@ and in the RC tier ahead of a clean-tree check -- can never overwrite them.
 | `appliance-overview` | Status tiles and quick actions | [overview.md](../../../user/appliance/overview.md) |
 | `appliance-update-plan` | A confirmed-before-acting plan dialog | [updates.md](../../../user/appliance/updates.md) |
 | `appliance-update-running` | An operation in flight, with the stage banner | [updates.md](../../../user/appliance/updates.md) |
-| `appliance-ab-slots` | Slot state, trial status and update readiness | [updates.md](../../../user/appliance/updates.md) |
 | `appliance-network-wifi` | WLAN scan and the revert warning | [network.md](../../../user/appliance/network.md) |
 | `appliance-backup-access` | Backup account state and export paths | [backup.md](../../../user/appliance/backup.md) |
 | `appliance-recovery` | The Admin section, where most recovery starts | [recovery.md](../../../user/appliance/recovery.md) |

@@ -1239,7 +1239,7 @@ DOCKER_GID="$(getent group docker | cut -d: -f3)" \
 
 The container is designed for small Raspberry Pi deployments:
 
-- Pi 4 (2 GB): supported. Pi 4 (4 GB): comfortable. Pi 3: best-effort.
+- Pi 4 (2 GB): supported. Pi 4 (4 GB): comfortable. Pi 3 (1 GB): untested — the board is 64-bit and the containers exist for it, and nobody has measured Docker, Admin, EMS and InfluxDB together in that much memory. See [hardware-requirements.md](../user/hardware-requirements.md).
 - No permanent discovery daemon — a scan runs only on manual request and frees
   resources when it finishes.
 - Idle footprint targets well under 100 MB RSS; a scan raises usage only while

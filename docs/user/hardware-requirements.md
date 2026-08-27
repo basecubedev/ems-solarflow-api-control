@@ -49,7 +49,7 @@ How much you need depends on which shape you run:
 | Shape | Minimum | Why |
 |---|---|---|
 | Docker deployment | A few GB plus your history | The OS is already there; EMS adds containers and a database |
-| A/B appliance image | **32 GB** | Two complete system slots plus a shared data partition. A 16 GB card cannot hold the image at all, and the appliance refuses one below 30 GB rather than filling it and failing later |
+| Appliance image | **16 GB** | The image is about 8.25 GiB and grows into whatever is left on the card. The supported floor is 14.5 GB, and **nothing on the appliance enforces it** — a smaller card flashes and then runs out of room later |
 
 ## Raspberry Pi compatibility
 
@@ -58,16 +58,16 @@ EMS runs in two shapes, and they do not have the same hardware requirements.
 | Shape | What it is | Hardware |
 |---|---|---|
 | Docker deployment | The normal install — Admin Console or Docker Bootstrap on an existing 64-bit OS | Any 64-bit machine that meets the memory table above |
-| A/B appliance image | A prepared image with two system slots, fail-safe host updates and automatic rollback | **Raspberry Pi 4 or Raspberry Pi 5 only** |
+| Appliance image | A prepared image: one writable root, patched by `apt` | Raspberry Pi 3, 3B+, 4 or 5 |
 
 ### Which Raspberry Pi
 
-| Model | Docker deployment | A/B appliance image |
+| Model | Docker deployment | Appliance image |
 |---|---|---|
 | Raspberry Pi 5 | Yes | Yes |
 | Raspberry Pi 4 (2 GB or more recommended) | Yes | Yes |
-| Raspberry Pi 3 / 3B+ | Not tested — see below | **No** |
-| Raspberry Pi Zero 2 W | Not tested — 512 MB, Wi-Fi only | **No** |
+| Raspberry Pi 3 / 3B+ | Not tested — see below | Built for it, never booted on one — see below |
+| Raspberry Pi Zero 2 W | Not tested — 512 MB, Wi-Fi only | **No** — no image is built for it |
 | Raspberry Pi 2 and older | No — no 64-bit OS | No |
 
 Raspberry Pi OS 64-bit covers the Pi 3, 3B+, 3A+, 4, 400, 5, Zero 2 W and the
@@ -77,39 +77,23 @@ has run EMS on one.
 
 ### Raspberry Pi 3 and 3B+
 
-**The A/B appliance image does not support the Pi 3 or 3B+, and support is not
-planned.** This is a boot-chain limit, not a performance judgement. The A/B
-image uses a GPT partition layout and the boot selector that the Pi 4 and Pi 5
-firmware read from EEPROM. A Pi 3 has no EEPROM bootloader and its boot ROM
-reads only an MBR partition table, so it cannot start this image at all. There
-is no setting that changes this. The full reasoning is in
-[the architecture decision record](../appliance/adr/raspberry-pi-3-ab-support.md).
+**The appliance image is built for it.** It uses an MBR, and its boot partition
+is the ordinary firmware directory a Pi 3 boot ROM knows how to read. It boots
+from the SD card and only from there: the advice above about a USB SSD or an
+NVMe drive belongs to the Pi 4 and Pi 5.
 
-The ordinary Docker deployment is a separate question. A Pi 3B+ is a 64-bit
-board and the containers exist for it, so there is no known reason it would not
-run — but it has 1 GB of RAM, four slower cores and 100 Mbit/s networking shared
-with USB, and **nobody has tested EMS on one**. It is not listed as supported.
-If you try it, InfluxDB is the first thing to leave out, and a
+**It has never been booted on a Pi 3, and it is not listed as supported.** The
+image is built and inspected; no board has started it. It is equally not tested
+what 1 GB of RAM does with Docker, Admin, EMS and InfluxDB together, or what
+100 Mbit/s Ethernet behind USB 2.0 does to a backup. "Built for it" and "known
+to work on it" are different claims, and only the first is being made. If you
+try it, InfluxDB is the first thing to leave out, and a
 [compatibility report](https://github.com/basecubedev/ems-solarflow-api-control/issues)
 would be genuinely useful.
-
-## Does A/B need twice the memory?
-
-No. A/B gives you two system slots on the medium, but **only one slot runs at a
-time** — the other is a copy sitting on storage. Runtime memory is what one
-system needs, not two.
-
-The extra cost is storage, not memory. During an update the appliance does need
-more room and more work than usual, because it writes the new slot, prepares
-container images and reconstructs containers while the current system keeps
-running. Plan the medium for that, not the RAM.
-
-See [A/B OS updates](../appliance/ab-os-updates.md) for how slots, trial boots,
-commit and rollback work.
 
 ## Related
 
 - [Supported setups](supported-setups.md) — inverters, grid meters and connections
 - [Appliance installation](../appliance/installation.md) — the Raspberry Pi appliance
-- [A/B OS updates](../appliance/ab-os-updates.md) — slots, rollback and recovery
+- [Updates](appliance/updates.md) — how the operating system is patched, and what recovery is
 - [Troubleshooting](troubleshooting.md)

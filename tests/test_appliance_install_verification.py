@@ -565,62 +565,6 @@ def test_a_legacy_ownership_record_is_not_accepted_as_proof(tmp_path, monkeypatc
 # --- the A/B tool contract ----------------------------------------------------
 
 
-def test_verify_install_reports_every_ab_tool_it_needs():
-    from appliance import install_check
-
-    names = {item["check"] for item in install_check.check_ab_tools()}
-
-    for tool, _package, _purpose in install_check.AB_REQUIRED_TOOLS:
-        assert f"ab_tool:{tool}" in names
-    assert "ab_artifact_decoder" in names
-
-
-def test_a_missing_tool_names_the_package_that_provides_it(monkeypatch):
-    from appliance import install_check
-
-    monkeypatch.setattr(install_check, "_which", lambda tool: "" if tool == "zstd" else "/usr/bin/x")
-    checks = {item["check"]: item for item in install_check.check_ab_tools()}
-
-    assert checks["ab_tool:zstd"]["status"] == install_check.STATUS_FAILED
-    assert "install zstd" in checks["ab_tool:zstd"]["detail"]
-    assert checks["ab_artifact_decoder"]["status"] == install_check.STATUS_FAILED
-
-
-def test_the_sparse_decoder_needs_no_external_package():
-    """It is implemented in appliance/sparse.py, so it is always ready."""
-
-    from appliance import install_check
-
-    assert install_check.ab_decoder_state()["sparse_decoder_ready"] is True
-    assert not any(
-        "sparse" in package for _tool, package, _purpose in install_check.AB_REQUIRED_TOOLS
-    )
-
-
-def test_the_declared_package_dependencies_cover_every_required_ab_tool():
-    from appliance import install_check
-
-    control = _control_file().read_text(encoding="utf-8")
-    depends = control.split("Depends:", 1)[1].split("\nRecommends:", 1)[0]
-
-    for _tool, package, _purpose in install_check.AB_REQUIRED_TOOLS:
-        assert package in depends, package
-
-
-def test_the_optional_ab_tools_are_at_least_recommended():
-    """A package that became a hard dependency for another tool satisfies this
-    too: a stronger guarantee is not a missing weaker one."""
-
-    from appliance import install_check
-
-    control = _control_file().read_text(encoding="utf-8")
-    depends = control.split("Depends:", 1)[1].split("Recommends:", 1)[0]
-    recommends = control.split("Recommends:", 1)[1].split("\nHomepage:", 1)[0]
-
-    for _tool, package, _purpose in install_check.AB_OPTIONAL_TOOLS:
-        assert package in recommends or package in depends, package
-
-
 def _control_file():
     return Path(__file__).resolve().parents[1] / "packaging/appliance/debian/control"
 

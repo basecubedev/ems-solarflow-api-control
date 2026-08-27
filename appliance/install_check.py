@@ -36,29 +36,20 @@ OPTIONAL_FEATURES = (
     ("acl", "setfacl", "read-only export permissions"),
 )
 
-# Every external executable the A/B update path needs, and the Debian package
-# that provides it. No sparse decoder appears here: it is implemented in
-# appliance/sparse.py, so android-sdk-libsparse-utils is not required.
-AB_REQUIRED_TOOLS = (
-    ("zstd", "zstd", "reading a .tar.zst update artifact"),
+# Every external executable the appliance needs at runtime, and the package
+# that provides it.
+#
+# Two of these are what the first boot needs to claim the rest of the card, and
+# one is what every signed artifact is verified with. None of them is optional:
+# an appliance that cannot grow its root is an appliance with 8 GiB of a 32 GiB
+# card, and one that cannot run gpgv cannot update itself at all.
+REQUIRED_TOOLS = (
     ("gpgv", "gpgv", "verifying a release manifest signature"),
-    ("lsblk", "util-linux", "discovering the A/B layout"),
-    ("blkid", "util-linux", "proving a partition identity"),
-    ("findmnt", "util-linux", "proving what is mounted where"),
-    ("blockdev", "util-linux", "flushing a written partition"),
-    ("mount", "mount", "inspecting a written slot read-only"),
-    ("umount", "mount", "releasing an inspection mount"),
-    ("ssh-keygen", "openssh-client", "creating the persistent host identity"),
-    ("growpart", "cloud-guest-utils", "growing the persistent partition on first boot"),
-    ("resize2fs", "e2fsprogs", "growing the persistent filesystem into it"),
-    ("dumpe2fs", "e2fsprogs", "measuring the persistent filesystem before growing it"),
-)
-
-# Wanted for a filesystem check before an inspection mount, not required for
-# the update itself: a slot is proven by its digest and its mount either way.
-AB_OPTIONAL_TOOLS = (
-    ("fsck.vfat", "dosfstools", "checking a written boot filesystem"),
-    ("e2fsck", "e2fsprogs", "checking a written root filesystem"),
+    ("lsblk", "util-linux", "finding the partition mounted at /"),
+    ("ssh-keygen", "openssh-client", "issuing a backup access key"),
+    ("growpart", "cloud-guest-utils", "growing the root partition on first boot"),
+    ("resize2fs", "e2fsprogs", "growing the root filesystem into it"),
+    ("dumpe2fs", "e2fsprogs", "measuring the root filesystem before growing it"),
 )
 
 # systemd is not running inside an image-build chroot. Everything that does not
@@ -612,70 +603,22 @@ def check_optional_features():
     return checks
 
 
-def ab_decoder_state():
-    """Whether this appliance can read and write an OS update artifact.
+def check_host_tools():
+    """One check per required tool, so verify-install names what to install."""
 
-    ``ab_supported`` is about the disk; this is about the tools. They are kept
-    apart on purpose: an A/B appliance missing zstd can still boot, roll back and
-    report — it simply must not be offered an update it cannot decode.
-    """
-
-    missing = [
-        {"tool": tool, "package": package, "purpose": purpose}
-        for tool, package, purpose in AB_REQUIRED_TOOLS
-        if not _which(tool)
-    ]
-    degraded = [
-        {"tool": tool, "package": package, "purpose": purpose}
-        for tool, package, purpose in AB_OPTIONAL_TOOLS
-        if not _which(tool)
-    ]
-    return {
-        "artifact_decoder_ready": not any(entry["tool"] == "zstd" for entry in missing),
-        # Built in, so it is ready wherever the Appliance Manager itself is.
-        "sparse_decoder_ready": True,
-        "ready": not missing,
-        "missing": missing,
-        "degraded": degraded,
-        "packages": sorted({entry["package"] for entry in missing}),
-    }
-
-
-def check_ab_tools():
-    """One check per A/B tool, so verify-install names what to install."""
-
-    state = ab_decoder_state()
     checks = []
-    for tool, package, purpose in AB_REQUIRED_TOOLS:
+    for tool, package, purpose in REQUIRED_TOOLS:
         present = bool(_which(tool))
         checks.append(
             _check(
-                f"ab_tool:{tool}",
+                f"host_tool:{tool}",
                 STATUS_OK if present else STATUS_FAILED,
-                f"{tool} is available" if present else f"{tool} is missing; install {package} ({purpose})",
+                f"{tool} is available"
+                if present
+                else f"{tool} is missing; install {package} ({purpose})",
                 critical=False,
             )
         )
-    for tool, package, purpose in AB_OPTIONAL_TOOLS:
-        present = bool(_which(tool))
-        checks.append(
-            _check(
-                f"ab_tool:{tool}",
-                STATUS_OK if present else STATUS_UNAVAILABLE,
-                f"{tool} is available" if present else f"{tool} is not installed; {purpose} is skipped",
-                critical=False,
-            )
-        )
-    checks.append(
-        _check(
-            "ab_artifact_decoder",
-            STATUS_OK if state["artifact_decoder_ready"] else STATUS_FAILED,
-            "update artifacts can be decompressed and expanded"
-            if state["artifact_decoder_ready"]
-            else "zstd is missing, so a .tar.zst update artifact cannot be read",
-            critical=False,
-        )
-    )
     return checks
 
 
@@ -700,7 +643,7 @@ def verify_installation(paths=None, *, runner=None, live=None):
     checks.extend(check_export(paths, runner, live=live))
     checks.extend(check_backup_account(paths))
     checks.extend(check_optional_features())
-    checks.extend(check_ab_tools())
+    checks.extend(check_host_tools())
 
     failures = [item for item in checks if item["critical"] and item["status"] == STATUS_FAILED]
     return {

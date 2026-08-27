@@ -382,11 +382,11 @@ write_record() {
 }
 
 # --- the account the image carries ------------------------------------------
-# An imaged appliance has the account in a read-only /etc and the record and
-# marker proving it behind mounts that are empty on the first boot. This
-# slot-local declaration settles that one question -- whether the passwd entry
-# is the one the build wrote -- and no other; the home is still judged by
-# inspect_pre_existing_home. See docs/appliance/security-model.md.
+# An imaged appliance carries the account from the build, and the record and
+# marker proving it are created on the first boot. This declaration settles that
+# one question -- whether the passwd entry is the one the build wrote -- and no
+# other; the home is still judged by inspect_pre_existing_home. See
+# docs/appliance/security-model.md.
 
 origin_value() {
     marker_value "$1" "$ORIGIN"

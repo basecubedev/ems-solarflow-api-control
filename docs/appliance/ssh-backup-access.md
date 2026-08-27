@@ -17,20 +17,14 @@ PubkeyAuthentication   yes
 is no operation in the appliance that can turn on password authentication.
 **Disable SSH** stops and disables it.
 
-## The account across a slot switch
+## The account a flashed image carries
 
-`/var/lib/ems-backup` is a shared path, so the key you deployed and the marker
-proving this package created the home both survive an OS update. They did not
-before: on a slot-local `/var` the next slot switch left a fresh home, and
-remote backup access with it.
-
-On an imaged appliance the account itself comes from the image — `/etc` is
-read-only and slot-local, so it cannot be created on the device. What the first
-boot establishes is the *ownership* of it, as `ExecStartPre` of
-`ems-appliance-export.service`, because the record binds the home's device and
-inode and one written while the image was being built names a filesystem the
-device never sees. It does that from the slot-local origin declaration the image
-carries, under conditions described in
+The account itself comes from the image: the package's postinst runs in the
+build chroot, which is where it is created. What the first boot establishes is
+the *ownership* of it, as `ExecStartPre` of `ems-appliance-export.service`,
+because the record binds the home's device and inode and one written while the
+image was being built names a filesystem the device never sees. It does that
+from the origin declaration the image carries, under conditions described in
 [the security model](security-model.md#the-account-the-image-carries). If they
 are not all met the account stays unowned and backup access stays off, which is
 the same refusal any unproven account gets.

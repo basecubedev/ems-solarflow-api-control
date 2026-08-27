@@ -9,7 +9,9 @@ the host configuration are checked here rather than described in prose only.
 import configparser
 import os
 import re
+import shutil
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -51,7 +53,11 @@ def test_package_version_matches_the_python_package_version():
 
 def test_supported_platforms_are_declared_in_one_place():
     assert SUPPORTED_ARCHITECTURES == ("arm64",)
-    assert SUPPORTED_PI_MODELS == ("Raspberry Pi 4", "Raspberry Pi 5")
+    assert SUPPORTED_PI_MODELS == (
+        "Raspberry Pi 3",
+        "Raspberry Pi 4",
+        "Raspberry Pi 5",
+    )
 
 
 def test_maintainer_scripts_are_executable_shell():
@@ -62,10 +68,19 @@ def test_maintainer_scripts_are_executable_shell():
         assert script.read_text(encoding="utf-8").startswith("#!/bin/sh"), name
 
 
-def test_configuration_files_are_marked_as_conffiles():
+def test_operator_configuration_is_not_a_conffile_on_a_shared_path():
+    """dpkg's conffile machinery cannot defend a file under a shared bind.
+
+    Upstream re-seeds every declared shared path from the booting slot's own
+    root at each boot, so a packaged copy under /etc/ems-appliance-manager wins
+    over the operator's edit however dpkg marked it. These two are shipped as
+    templates instead and seeded once; see tests/test_appliance_config_seed.py.
+    """
+
     conffiles = (PACKAGING / "debian" / "conffiles").read_text(encoding="utf-8").split()
-    assert "/etc/ems-appliance-manager/appliance.conf" in conffiles
-    assert "/etc/ems-appliance-manager/allowed-images.conf" in conffiles
+
+    assert "/etc/ems-appliance-manager/appliance.conf" not in conffiles
+    assert "/etc/ems-appliance-manager/allowed-images.conf" not in conffiles
 
 
 def test_the_build_script_produces_a_checksum_and_asks_for_a_signature():
@@ -679,27 +694,6 @@ def test_the_root_cli_wrapper_keeps_the_callers_environment_off_sys_path():
     assert "${PYTHONPATH" not in wrapper
 
 
-def test_every_tool_the_growth_helper_runs_is_declared_and_checked():
-    """A first boot that cannot grow the medium is the one failure an operator
-    cannot see coming: the helper runs before anything is reachable."""
-
-    from appliance.install_check import AB_REQUIRED_TOOLS
-
-    control = (PACKAGING / "debian" / "control").read_text(encoding="utf-8")
-    checked = {tool for tool, _package, _purpose in AB_REQUIRED_TOOLS}
-    helper = (PACKAGING / "bin" / "grow-persistent.sh").read_text(encoding="utf-8")
-
-    for tool, package in (
-        ("growpart", "cloud-guest-utils"),
-        ("resize2fs", "e2fsprogs"),
-        ("dumpe2fs", "e2fsprogs"),
-    ):
-        assert tool in helper, f"{tool} is no longer used by the helper"
-        assert tool in checked, f"verify-install does not check {tool}"
-        depends = control.split("Depends:")[1].split("Recommends:")[0]
-        assert package in depends, f"{package} is not a dependency"
-
-
 def test_removal_disables_every_unit_installation_enabled():
     """A dangling .wants symlink is a unit systemd still tries to start."""
 
@@ -732,3 +726,57 @@ def test_a_shipped_etc_file_is_a_conffile():
     conffiles = (PACKAGING / "debian" / "conffiles").read_text(encoding="utf-8").split()
 
     assert "/etc/logrotate.d/ems-appliance-manager" in conffiles
+
+
+# --- the OS release transport ----------------------------------------------
+
+
+def test_the_package_ships_the_keyring_os_updates_are_verified_against():
+    """The public half has to be on the card before the card is flashed.
+
+    Verification is fail-closed: an appliance whose keyring is absent refuses
+    every release with ``release_keyring_missing``. That refusal is correct, but
+    it cannot be repaired afterwards on an A/B image -- the slot root is
+    read-only and apt is refused agent-side -- so an image flashed without this
+    file can never accept an OS update at all. The private half is not in this
+    repository and never will be.
+    """
+
+    keyring = PACKAGING / "config" / "release-keyring.gpg"
+
+    assert keyring.is_file(), "the package ships no release keyring"
+    assert keyring.stat().st_size > 0
+    assert b"PRIVATE KEY" not in keyring.read_bytes()
+
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+    assert "release-keyring.gpg" in build, "the keyring is never installed"
+
+
+@pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg reads the keyring")
+def test_the_shipped_keyring_carries_the_key_that_actually_signs():
+    """gpgv verifies with the *signing* key's public half, not the primary's.
+
+    Releases are signed by a subkey so the primary can stay offline, and the
+    appliance pins the primary's fingerprint -- gpg reports that one for a
+    subkey signature, so the pin keeps working. What does not keep working is
+    verification against a keyring exported before the subkey existed: it
+    carries no material for the key that made the signature, and every release
+    is refused on an appliance that cannot be repaired afterwards.
+    """
+
+    keyring = PACKAGING / "config" / "release-keyring.gpg"
+    listing = subprocess.run(
+        ["gpg", "--show-keys", "--with-colons", str(keyring)],
+        capture_output=True, text=True, check=False,
+    ).stdout
+
+    primaries = [line for line in listing.splitlines() if line.startswith("pub:")]
+    signing_subkeys = [
+        line for line in listing.splitlines()
+        if line.startswith("sub:") and "s" in line.split(":")[11]
+    ]
+
+    assert len(primaries) == 1, "the keyring must name exactly one release identity"
+    assert signing_subkeys, (
+        "the keyring carries no signing subkey; a release signed by one could not be verified"
+    )

@@ -135,54 +135,30 @@ class SupportArchiveService:
             members.append(("packages.json", json.dumps(packages, indent=2, sort_keys=True)))
         except Exception:
             members.append(("packages.json", "{}"))
-        members.append(("ab-status.json", json.dumps(self._ab_state(), indent=2, sort_keys=True)))
+        members.append(
+            ("manager.json", json.dumps(self._manager_state(), indent=2, sort_keys=True))
+        )
         return members
 
-    def _ab_state(self):
-        """Bounded A/B evidence: slots, selector, pending trial, digests.
+    def _manager_state(self):
+        """What the Appliance Manager package is, and what the last install did.
 
-        Digests and build ids are what makes a fallback diagnosable after the
-        fact. No signing material, no key path and no artifact content is ever
-        included, and the whole payload goes through the same redaction as the
-        rest of the archive.
+        A support case about a failed manager update has to arrive with the
+        package this console runs from: which package is kept and what the
+        deadline decided is the one question worth asking.
+
+        Digests, versions and build ids only. No archive content and no
+        password material: the rescue account contributes a verdict, never the
+        hash behind it.
         """
 
+        service = getattr(self.status_service, "manager", None)
+        if service is None:
+            return {"error": "manager_unavailable"}
         try:
-            payload = self.status_service.ab_state()
+            return redact_mapping(service.status())
         except Exception as exc:
             return {"error": exc.__class__.__name__}
-        state = payload.get("ab_state") or {}
-        return redact_mapping(
-            {
-                "mode": payload.get("mode"),
-                "ab_supported": payload.get("ab_supported"),
-                "reason": payload.get("reason"),
-                "active_slot": payload.get("active_slot"),
-                "inactive_slot": payload.get("inactive_slot"),
-                "tryboot": payload.get("tryboot"),
-                "selector": payload.get("selector"),
-                "drift": payload.get("drift"),
-                "layout_id": payload.get("layout_id"),
-                "os_build": payload.get("os_build"),
-                "persistence": (payload.get("persistence") or {}).get("state"),
-                "known_good_slot": state.get("known_good_slot"),
-                "previous_slot": state.get("previous_slot"),
-                "slots": state.get("slots"),
-                "pending_trial": state.get("pending_trial"),
-                "last_fallback": state.get("last_fallback"),
-                "releases": [
-                    {
-                        "release_id": item.get("release_id"),
-                        "release_version": item.get("release_version"),
-                        "build_id": item.get("build_id"),
-                        "archive_digest": item.get("archive_digest"),
-                        "signed": item.get("signed"),
-                    }
-                    for item in (payload.get("releases") or [])
-                ],
-            }
-        )
-
 
 def redact_bundle_text(text):
     return bounded_redacted_log(text, max_lines=MAX_LOG_LINES)["text"]

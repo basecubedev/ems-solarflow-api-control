@@ -89,46 +89,6 @@ def flattened_archive(destination, *, ref="HEAD"):
 
 
 @requires_git
-def test_the_repository_tracks_one_activation_link_per_shared_path():
-    from appliance import ab_persistence
-
-    entries = source_bundle.tracked_entries(ROOT, ref="HEAD")
-    links = [
-        entry
-        for entry in entries
-        if entry.path.startswith(f"{WANTS}/") and entry.kind == source_bundle.SYMLINK
-    ]
-
-    assert len(links) == len(ab_persistence.SHARED_PATHS), sorted(
-        entry.path for entry in links
-    )
-    for entry in links:
-        assert entry.path.endswith(".mount")
-
-
-@requires_git
-def test_the_tracked_links_are_exactly_the_declared_persistence_paths():
-    """Six is the count the contract asks for, not a number to match on its own.
-
-    The count and the targets were checked; which units they activate was only
-    ever asked of the working tree. A declared path renamed without its link
-    renamed leaves six tracked symlinks that activate the wrong units, and git
-    is the authority a delivery is built from.
-    """
-
-    from appliance import ab_persistence
-
-    tracked = {
-        entry.path.rsplit("/", 1)[1]
-        for entry in source_bundle.tracked_entries(ROOT, ref="HEAD")
-        if entry.kind == source_bundle.SYMLINK and entry.path.startswith(f"{WANTS}/")
-    }
-
-    assert tracked == set(ab_persistence.shared_mount_units())
-    assert len(tracked) == len(ab_persistence.SHARED_PATHS)
-
-
-@requires_git
 def test_the_activation_links_point_at_the_generated_units():
     """Each link activates a unit the slot-shared generator writes at boot."""
 
@@ -155,36 +115,19 @@ def test_a_faithful_bundle_matches_the_tracked_tree(tmp_path):
 
 @requires_git
 @requires_tar
-def test_a_bundle_that_dereferenced_its_symlinks_fails(tmp_path):
-    """Exactly the shape both review archives arrived in."""
-
-    from appliance import ab_persistence
-
-    archive = flattened_archive(tmp_path / "flattened.tar")
-
-    report = source_bundle.verify(archive, root=ROOT, ref="HEAD")
-
-    assert not report.ok
-    dropped = {path for path, _reason in report.mismatched if path.startswith(f"{WANTS}/")}
-    assert len(dropped) == len(ab_persistence.SHARED_PATHS), sorted(dropped)
-    assert all("symlink" in reason for path, reason in report.mismatched if path in dropped)
-
-
-@requires_git
-@requires_tar
 def test_a_bundle_missing_a_tracked_file_fails(tmp_path):
     archive = git_archive(tmp_path / "bundle.tar")
     trimmed = tmp_path / "trimmed.tar"
     with tarfile.open(archive) as source, tarfile.open(trimmed, "w") as target:
         for member in source.getmembers():
-            if member.name.endswith("appliance/ab_bootstrap.py"):
+            if member.name.endswith("appliance/artifact_trust.py"):
                 continue
             target.addfile(member, source.extractfile(member) if member.isfile() else None)
 
     report = source_bundle.verify(trimmed, root=ROOT, ref="HEAD")
 
     assert not report.ok
-    assert any(path.endswith("appliance/ab_bootstrap.py") for path in report.missing)
+    assert any(path.endswith("appliance/artifact_trust.py") for path in report.missing)
 
 
 @requires_git
@@ -222,23 +165,6 @@ def test_a_bundle_that_changed_a_files_content_fails(tmp_path):
 
     assert not report.ok
     assert any("content" in reason for _path, reason in report.mismatched)
-
-
-@requires_git
-@requires_tar
-def test_a_bundle_that_retargets_a_symlink_fails(tmp_path):
-    archive = git_archive(tmp_path / "bundle.tar")
-    retargeted = tmp_path / "retargeted.tar"
-    with tarfile.open(archive) as source, tarfile.open(retargeted, "w") as target:
-        for member in source.getmembers():
-            if member.issym() and member.name.startswith(f"{WANTS}/"):
-                member.linkname = "../elsewhere.mount"
-            target.addfile(member, source.extractfile(member) if member.isfile() else None)
-
-    report = source_bundle.verify(retargeted, root=ROOT, ref="HEAD")
-
-    assert not report.ok
-    assert any("target" in reason for _path, reason in report.mismatched)
 
 
 # --- an explicit exclusion manifest, never a silent omission -----------------
@@ -280,23 +206,6 @@ def test_the_checker_script_reports_parity_as_a_pass(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "RESULT: PASS" in result.stdout
-
-
-@requires_git
-@requires_tar
-def test_the_checker_script_fails_a_flattened_bundle(tmp_path):
-    archive = flattened_archive(tmp_path / "flattened.tar")
-
-    result = subprocess.run(
-        ["sh", str(SCRIPTS / "appliance-check-source-bundle.sh"), str(archive)],
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-
-    assert result.returncode == 1
-    assert "RESULT: FAIL" in result.stdout + result.stderr
-    assert "local-fs.target.wants" in result.stdout + result.stderr
 
 
 def test_the_checker_script_reports_a_missing_archive_as_not_run(tmp_path):

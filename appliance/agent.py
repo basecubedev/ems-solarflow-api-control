@@ -19,10 +19,10 @@ import threading
 
 from appliance import (
     admin_lifecycle,
+    manager_update,
     network,
     operation_schema,
-    os_releases,
-    os_update,
+    artifact_trust,
     packages,
     ssh_service,
     auth,
@@ -31,7 +31,7 @@ from appliance import (
     validation,
 )
 from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS
-from appliance.os_fetch import TYPE_OS_FETCH, FetchError
+from appliance.release_fetch import FetchError
 from appliance.operations import (
     STATE_FAILED_RECOVERABLE,
     STATE_FAILED_TERMINAL,
@@ -60,9 +60,8 @@ PLAN_TYPES = {
     "ssh.plan_key_remove": ssh_service.TYPE_SSH_KEY_REMOVE,
     "ssh.plan_revoke_all": ssh_service.TYPE_SSH_REVOKE_ALL,
     "support.plan_archive": support_archive.TYPE_SUPPORT_ARCHIVE,
-    "ab.plan_update": os_update.TYPE_OS_UPDATE,
-    "ab.plan_rollback": os_update.TYPE_OS_ROLLBACK,
-    "ab.plan_fetch": TYPE_OS_FETCH,
+    "manager.plan_update": manager_update.TYPE_MANAGER_UPDATE,
+    "manager.plan_revert": manager_update.TYPE_MANAGER_REVERT,
     "system.plan_reboot": "system.reboot",
     "system.plan_shutdown": "system.shutdown",
 }
@@ -81,9 +80,8 @@ AUDITED_PLANS = {
     ssh_service.TYPE_SSH_REVOKE_ALL: "ssh.keys_revoked",
     "system.reboot": "system.reboot",
     "system.shutdown": "system.shutdown",
-    os_update.TYPE_OS_UPDATE: "ab.update.plan",
-    os_update.TYPE_OS_ROLLBACK: "ab.rollback.plan",
-    TYPE_OS_FETCH: "ab.fetch.plan",
+    manager_update.TYPE_MANAGER_UPDATE: "manager.update.plan",
+    manager_update.TYPE_MANAGER_REVERT: "manager.revert.plan",
 }
 
 
@@ -115,6 +113,7 @@ SERVICE_ERRORS = (
     OperationError,
     support_archive.SupportArchiveError,
     timezone_config.TimezoneError,
+    manager_update.ManagerUpdateError,
     auth.AuthError,
 )
 
@@ -159,8 +158,6 @@ class AgentHandlers:
         if spec.name == "operations.acknowledge":
             record = self.services.operations.acknowledge(args["operation_id"])
             return {"operation": record.to_dict()}
-        if spec.name == "ab.acknowledge":
-            return self._acknowledge_ab(args)
         if spec.name == "audit.record_web_event":
             return self._record_web_event(args, actor=actor, source_ip=source_ip)
         return self._read_only(spec, args)
@@ -210,10 +207,10 @@ class AgentHandlers:
             return status.backup_state()
         if spec.name == "admin.releases":
             return self.services.admin.releases()
-        if spec.name == "ab.status":
-            return self._ab_status()
-        if spec.name == "ab.sources":
-            return self._require_fetch().index()
+        if spec.name == "manager.status":
+            return self._require_manager().status()
+        if spec.name == "manager.sources":
+            return self._require_manager().sources()
         if spec.name == "network.wifi.scan":
             return {"networks": self.services.network.scan()}
         if spec.name == "operations.list":
@@ -241,8 +238,8 @@ class AgentHandlers:
             packages.PackageError,
             network.NetworkError,
             ssh_service.SshServiceError,
-            os_update.OsUpdateError,
-            os_releases.ReleaseError,
+            artifact_trust.ReleaseError,
+            manager_update.ManagerUpdateError,
             FetchError,
             ValidationError,
             OperationError,
@@ -320,14 +317,10 @@ class AgentHandlers:
             return services.ssh.plan_revoke_all(operation, args["account"])
         if name == "support.plan_archive":
             return services.support.plan(operation)
-        if name == "ab.plan_update":
-            return self._require_ab().plan_update(
-                operation, args["release_id"], repair=args["repair"]
-            )
-        if name == "ab.plan_rollback":
-            return self._require_ab().plan_rollback(operation)
-        if name == "ab.plan_fetch":
-            return self._require_fetch().plan_fetch(operation, args["release_id"])
+        if name == "manager.plan_update":
+            return self._require_manager().plan_update(operation, args["release_id"])
+        if name == "manager.plan_revert":
+            return self._require_manager().plan_revert(operation)
         if name in ("system.plan_reboot", "system.plan_shutdown"):
             return self._plan_power(operation, name)
         raise AgentError("unknown_operation", f"{name} has no planner")
@@ -442,74 +435,35 @@ class AgentHandlers:
             return services.support.execute
         if operation_type == timezone_config.TYPE_TIMEZONE:
             return services.timezone.execute
-        if operation_type in (os_update.TYPE_OS_UPDATE, os_update.TYPE_OS_ROLLBACK):
-            return self._execute_ab
-        if operation_type == TYPE_OS_FETCH:
-            return self._execute_fetch
+        if operation_type in (
+            manager_update.TYPE_MANAGER_UPDATE,
+            manager_update.TYPE_MANAGER_REVERT,
+        ):
+            return self._execute_manager
         if operation_type in ("system.reboot", "system.shutdown"):
             return self._execute_power
         raise AgentError("unknown_operation_type", f"{operation_type} is not executable")
 
-    # --- A/B operating-system updates ------------------------------------
 
-    def _require_ab(self):
-        service = getattr(self.services, "os_update", None)
+
+    def _require_manager(self):
+        service = getattr(self.services, "manager", None)
         if service is None:
             raise AgentError(
-                "ab_unavailable", "this appliance has no A/B operating-system update service"
+                "manager_unavailable",
+                "this appliance has no Appliance Manager package update service",
             )
         return service
 
-    def _require_fetch(self):
-        service = getattr(self.services, "os_fetch", None)
-        if service is None:
-            raise AgentError(
-                "ab_unavailable", "this appliance has no OS release download service"
-            )
-        return service
-
-    def _execute_fetch(self, operation):
+    def _execute_manager(self, operation):
         from appliance.operations import STATE_SUCCEEDED
 
-        result = self._require_fetch().execute(operation)
-        self.services.operations.finish(
-            operation.operation_id, STATE_SUCCEEDED, result=result
-        )
-        return result
-
-    def _ab_status(self):
-        service = getattr(self.services, "os_update", None)
-        if service is None:
-            return {"mode": "unsupported", "ab_supported": False, "reason": "ab_unavailable"}
-        return service.status()
-
-    def _acknowledge_ab(self, args):
-        """Acknowledge an observed fallback in the shared A/B state.
-
-        This is not a second acknowledge of the operation record —
-        ``operations.acknowledge`` owns that. A fallback is classified on a later
-        boot, from the shared partition, and may outlive the operation record it
-        belongs to, so it is retired here. Nothing about it is retried:
-        acknowledging is what lets an operator plan the next attempt after the
-        inactive slot has been staged again.
-        """
-
-        state = getattr(self.services, "ab_state", None)
-        if state is None:
-            raise AgentError("ab_unavailable", "this appliance has no A/B state")
-        operation_id = args["operation_id"]
-        acknowledged = state.acknowledge_fallback(operation_id)
-        return {"acknowledged": acknowledged, "operation_id": operation_id}
-
-    def _execute_ab(self, operation):
-        from appliance.operations import STATE_SUCCEEDED
-
-        service = self._require_ab()
-        result = service.execute(operation)
+        result = self._require_manager().execute(operation)
         self.services.operations.finish(
             operation.operation_id, STATE_SUCCEEDED, result=result, stage=result.get("stage", "")
         )
         return result
+
 
     def _execute_power(self, operation):
         from appliance.operations import STATE_SUCCEEDED

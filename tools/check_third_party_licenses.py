@@ -44,6 +44,7 @@ GITHUB_ACTIONS = "GitHub Actions"
 VENDORED = "Vendored Components"
 BASE_IMAGES = "Container Base Images"
 OPTIONAL_PLATFORM = "Optional Platform Dependencies"
+APPLIANCE_PACKAGES = "Appliance Package Dependencies"
 
 # Sections whose tables describe components and therefore share one column
 # contract. "Generated Assets" is a different shape and is checked separately.
@@ -59,7 +60,10 @@ COMPONENT_SECTIONS = (
     VENDORED,
     BASE_IMAGES,
     OPTIONAL_PLATFORM,
+    APPLIANCE_PACKAGES,
 )
+
+APPLIANCE_CONTROL = "packaging/appliance/debian/control"
 
 PYTHON_RUNTIME_MANIFESTS = ("requirements.txt", "deploy/admin/requirements.txt")
 PYTHON_DEV_MANIFESTS = ("requirements-dev.txt",)
@@ -378,6 +382,43 @@ def _check_vendored(root, sections, problems):
             )
 
 
+def _appliance_dependencies(root):
+    """The Debian packages the appliance declares, from the control file itself.
+
+    Repeating the list here is how it drifts: cloud-guest-utils and e2fsprogs
+    were added to the package and reached neither the inventory nor the guest
+    the image tier builds.
+    """
+
+    control = Path(root) / APPLIANCE_CONTROL
+    if not control.is_file():
+        return []
+    field = re.search(r"^Depends:(.*?)(?=^\S)", control.read_text(encoding="utf-8"),
+                      re.MULTILINE | re.DOTALL)
+    if not field:
+        return []
+    names = []
+    for entry in field.group(1).replace("\n", " ").split(","):
+        parts = entry.strip().split()
+        if parts:
+            names.append(parts[0])
+    return names
+
+
+def _check_appliance(root, sections, problems):
+    section = sections.get(APPLIANCE_PACKAGES)
+    if section is None:
+        problems.append(f"missing section: {APPLIANCE_PACKAGES}")
+        return
+    documented = set(component_keys(section))
+    for name in _appliance_dependencies(root):
+        if name not in documented:
+            problems.append(
+                f"{APPLIANCE_PACKAGES}: {name} is declared in {APPLIANCE_CONTROL} "
+                "but not documented"
+            )
+
+
 def collect_problems(root=ROOT):
     """Return every inventory problem as a human-readable line."""
 
@@ -392,6 +433,7 @@ def collect_problems(root=ROOT):
     _check_python(root, sections, problems)
     _check_node(root, sections, problems)
     _check_vendored(root, sections, problems)
+    _check_appliance(root, sections, problems)
     return problems
 
 

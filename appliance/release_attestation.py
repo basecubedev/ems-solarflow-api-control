@@ -50,16 +50,11 @@ FAIL = "fail"
 # without it. A signature is absent from an unsigned rehearsal; nothing else is.
 PROFILE_ARTEFACTS = (
     ("image", True),
-    ("update", True),
     ("build_authority", True),
-    ("manifest", True),
-    ("signature", False),
 )
 
 PROFILE_REPORTS = (
     ("image_inspection", True),
-    ("update_inspection", True),
-    ("sparse_crosscheck", True),
     ("release_gate", True),
 )
 
@@ -148,18 +143,13 @@ class ReleaseAttestation:
 def _named_paths(dist, prefix):
     return {
         "image": dist / f"{prefix}.img",
-        "update": dist / f"{prefix}.update.tar.zst",
         "build_authority": dist / f"{prefix}.build-authority.json",
-        "manifest": dist / f"{prefix}.manifest.json",
-        "signature": dist / f"{prefix}.manifest.json.asc",
     }
 
 
 def _report_paths(reports, profile, gate_report):
     return {
         "image_inspection": Path(reports) / f"image-inspection-{profile}.json",
-        "update_inspection": Path(reports) / f"update-inspection-{profile}.json",
-        "sparse_crosscheck": Path(reports) / f"sparse-crosscheck-{profile}.json",
         "release_gate": Path(gate_report),
     }
 

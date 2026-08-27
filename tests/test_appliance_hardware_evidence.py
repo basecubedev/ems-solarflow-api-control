@@ -2,7 +2,7 @@
 """The helpers an operator runs on a real appliance, and what they may not do.
 
 These four scripts run on hardware that is mid-validation, often between a
-tryboot and a commit. A helper that wrote a block device, moved the selector or
+a first boot. A helper that wrote a block device, changed the boot order or
 restarted a service would change the state the operator is measuring, and the
 case would have to start again. So the read-only contract is asserted here
 rather than left to review.
@@ -21,8 +21,6 @@ pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 HELPERS = (
     "appliance-hardware-capture-baseline.sh",
-    "appliance-hardware-verify-slot.sh",
-    "appliance-hardware-verify-persistence.sh",
     "appliance-hardware-collect-evidence.sh",
 )
 
@@ -65,39 +63,6 @@ def test_a_helper_never_reads_a_private_key(name):
     for line in text.splitlines():
         if "ssh-keygen" in line:
             assert "-lf" in line, line
-
-
-def test_the_baseline_records_the_selector_it_is_arguing_about():
-    """A power-cut case with no copy of autoboot.txt proves nothing.
-
-    The runbook tells the operator to keep a raw copy of the selector after
-    every power-cut case, because a torn write to that one file is the whole
-    failure mode. The helper that exists to collect the evidence did not
-    collect it.
-    """
-
-    assert "autoboot.txt" in source("appliance-hardware-capture-baseline.sh")
-
-
-def test_the_selector_is_found_rather_than_assumed():
-    """The mountpoint differs between an appliance and a plain Pi OS image.
-
-    The candidates are asserted by name, and every one the loop iterates is
-    checked -- a substring window around the filename accepted any loop that
-    happened to mention one of them.
-    """
-
-    import re
-
-    text = source("appliance-hardware-capture-baseline.sh")
-    loop = re.search(r"for mountpoint in ([^;\n]+); do", text)
-
-    assert loop, "the selector is not searched for at all"
-    candidates = loop.group(1).split()
-
-    assert "/bootfs" in candidates, candidates
-    assert "/boot/firmware" in candidates, candidates
-    assert '[ -f "$mountpoint/autoboot.txt" ] || continue' in text
 
 
 @pytest.mark.parametrize("name", HELPERS)
@@ -149,7 +114,7 @@ def test_the_rc_status_block_cannot_quietly_go_stale():
     import subprocess
 
     root = Path(__file__).resolve().parents[1]
-    block = (root / "docs/appliance/ab-hardware-validation.md").read_text(encoding="utf-8")
+    block = (root / "docs/appliance/hardware-validation.md").read_text(encoding="utf-8")
     body = block.split("<!-- CURRENT-RC-BEGIN -->")[1].split("<!-- CURRENT-RC-END -->")[0]
 
     recorded = re.search(r"Release-build revision[^|]*\|\s*`([0-9a-f]{40})`", body)
@@ -182,7 +147,7 @@ def test_the_prose_above_the_block_cannot_contradict_it():
     import re
 
     root = Path(__file__).resolve().parents[1]
-    page = (root / "docs/appliance/ab-hardware-validation.md").read_text(encoding="utf-8")
+    page = (root / "docs/appliance/hardware-validation.md").read_text(encoding="utf-8")
     intro, _, rest = page.partition("<!-- CURRENT-RC-BEGIN -->")
     body = rest.split("<!-- CURRENT-RC-END -->")[0]
     stale = re.search(r"\|\s*Stale\s*\|\s*\*\*(True|False)\*\*", body)
@@ -201,7 +166,7 @@ def test_readiness_is_not_claimed_while_the_evidence_is_stale():
 
     root = Path(__file__).resolve().parents[1]
     body = (
-        (root / "docs/appliance/ab-hardware-validation.md")
+        (root / "docs/appliance/hardware-validation.md")
         .read_text(encoding="utf-8")
         .split("<!-- CURRENT-RC-BEGIN -->")[1]
         .split("<!-- CURRENT-RC-END -->")[0]

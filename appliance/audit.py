@@ -44,19 +44,6 @@ AUDITED_ACTIONS = (
     "system.reboot",
     "system.shutdown",
     "support.archive",
-    # A/B operating-system updates. The trail has to survive a slot switch, so
-    # it lives on the shared persistent partition like the rest of the log.
-    "ab.update.plan",
-    "ab.update.confirm",
-    "ab.update.stage_started",
-    "ab.update.stage_verified",
-    "ab.tryboot_requested",
-    "ab.trial_boot_started",
-    "ab.trial_health_failed",
-    "ab.commit",
-    "ab.fallback_observed",
-    "ab.rollback.plan",
-    "ab.rollback.commit",
 )
 
 # Matched as substrings, not exact names: a detail key called signing_key,

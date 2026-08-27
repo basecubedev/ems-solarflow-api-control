@@ -71,7 +71,6 @@ def test_the_minimum_set_the_task_specified_is_complete():
         "appliance-overview",
         "appliance-update-plan",
         "appliance-update-running",
-        "appliance-ab-slots",
         "appliance-network-wifi",
         "appliance-backup-access",
         "appliance-recovery",

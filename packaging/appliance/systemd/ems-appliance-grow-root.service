@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The image sizes its root at build time; the medium an operator flashed it
+# onto is whatever they had. This happens on a freshly imaged appliance before
+# any data exists -- never on a running installation.
+#
+# Anchored on the build marker: a .deb installation on somebody else's Raspberry
+# Pi OS has no marker, and the helper refuses without a positive statement that
+# this medium was written from an appliance image. That is what keeps this
+# appliance's promise never to repartition storage it did not write.
+[Unit]
+Description=EMS SolarFlow Appliance root filesystem growth
+Documentation=file:///usr/share/doc/ems-appliance-manager/installation.md
+ConditionPathExists=/etc/ems-appliance-os-build
+ConditionPathExists=!/var/lib/ems-appliance-manager/.root-grown
+# Ordinary dependencies: the root is already mounted when anything runs at
+# all, and ext4 grows online.
+After=local-fs.target
+Before=ems-appliance-agent.service ems-appliance-web.service docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/ems-appliance-manager/grow-root.sh
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

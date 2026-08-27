@@ -18,7 +18,6 @@ DEFAULT_STATE_DIR = "/var/lib/ems-appliance-manager"
 DEFAULT_LOG_DIR = "/var/log/ems-appliance-manager"
 DEFAULT_RUNTIME_DIR = "/run/ems-appliance-manager"
 DEFAULT_EXPORT_ROOT = "/srv/ems-appliance-export"
-DEFAULT_OS_UPDATE_DIR = "/var/lib/ems-appliance-os-update"
 
 ENV_INSTALL_ROOT = "EMS_APPLIANCE_INSTALL_ROOT"
 ENV_CONFIG_DIR = "EMS_APPLIANCE_CONFIG_DIR"
@@ -29,11 +28,18 @@ ENV_EXPORT_ROOT = "EMS_APPLIANCE_EXPORT_ROOT"
 ENV_BACKUP_USER = "EMS_APPLIANCE_BACKUP_USER"
 ENV_EXPORT_STATUS_FILE = "EMS_APPLIANCE_EXPORT_STATUS_FILE"
 ENV_PACKAGE_LIBDIR = "EMS_APPLIANCE_LIBDIR"
+ENV_PACKAGE_DATADIR = "EMS_APPLIANCE_DATADIR"
 
 # Where the package puts the shell helpers it ships. The maintainer scripts and
 # the Python side must name the same directory, or a helper the appliance offers
 # to run is one that is not there.
 DEFAULT_PACKAGE_LIBDIR = "/usr/lib/ems-appliance-manager"
+
+# Where the package puts the configuration templates it ships. Deliberately not
+# /etc: a packaged copy of an operator-owned file under /etc/ems-appliance-manager
+# would put an operator edit and a package file at the same path, and dpkg is
+# entitled to the second. A template that lives here has nothing to overwrite.
+DEFAULT_PACKAGE_DATADIR = "/usr/share/ems-appliance-manager"
 
 # Host paths are configured, never requested. The same character policy applies
 # in Python, in the packaged shell tooling and in the generated systemd drop-in,
@@ -55,6 +61,28 @@ def package_helper(name):
 
     libdir = os.environ.get(ENV_PACKAGE_LIBDIR) or DEFAULT_PACKAGE_LIBDIR
     return Path(libdir) / name
+
+
+def packaged_data(name):
+    """Absolute path of a file this package ships beside its code.
+
+    Never read as configuration and never edited in place: it is the package's
+    own copy, which is what makes it safe to keep off the shared paths upstream
+    re-seeds at every boot.
+    """
+
+    datadir = os.environ.get(ENV_PACKAGE_DATADIR) or DEFAULT_PACKAGE_DATADIR
+    return Path(datadir) / name
+
+
+def packaged_template(name):
+    """Absolute path of a configuration template this package ships.
+
+    The template is the package's copy and is never read as configuration: it
+    is what an absent operator file is seeded from, once.
+    """
+
+    return packaged_data(name)
 
 
 class PathBoundaryError(Exception):
@@ -244,11 +272,11 @@ class AppliancePaths:
 
     @property
     def timezone_file(self):
-        """The operator's chosen zone, on a shared path both slots see.
+        """The operator's chosen zone.
 
         Separate from appliance.conf, which is a packaged conffile an admin
         edits: a value set through the web UI must not rewrite the package's
-        own file, and must survive a slot switch.
+        own file.
         """
 
         return self.config_dir / "timezone"
@@ -273,9 +301,8 @@ class AppliancePaths:
 
         One secret for one local box: two stores produced two weak passwords
         rather than one strong one, and `emsctl dashboard set-password` only
-        ever changed half of it. Mode 0600 in the EMS deployment root, which is
-        a shared path, so it survives a slot switch -- and the unprivileged web
-        process cannot read it, which is why it asks the agent.
+        ever changed half of it. Mode 0600 in the EMS deployment root, and the
+        unprivileged web process cannot read it, which is why it asks the agent.
         """
 
         return self.install_root / "config" / "dashboard-auth.json"
@@ -338,17 +365,6 @@ class AppliancePaths:
     @property
     def packages_dir(self):
         return self.agent_state_dir / "packages"
-
-    @property
-    def os_update_dir(self):
-        """A/B state and staged artifacts, on the shared persistent partition.
-
-        Deliberately outside the agent state tree: both slots read it, and on an
-        A/B appliance it is a mount from /persist rather than part of the root
-        filesystem the update is about to replace.
-        """
-
-        return Path(DEFAULT_OS_UPDATE_DIR)
 
     @property
     def export_status_file(self):
@@ -596,8 +612,7 @@ def atomic_write(path, text, mode=0o640, *, owner_root=False):
     os.replace(tmp, target)
     # The rename itself is a directory operation: without flushing the parent,
     # a power cut can leave the entry pointing at nothing while the file's own
-    # bytes are already durable. ab_state.py and ab_bootstrap.py treat this as
-    # mandatory for their own writes; every caller here inherits it now.
+    # bytes are already durable.
     _sync_parent(target)
     return target
 
