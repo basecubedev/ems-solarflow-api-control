@@ -284,24 +284,18 @@ class PackageService:
     def _blockers(self, state):
         blockers = []
         if self._root_is_read_only():
-            # Keyed on the real mount state, not on which image this is, which
-            # is why a single-slot appliance image needs no exception here: its
-            # root is writable and the refusal simply does not fire.
-            #
-            # Where it does fire it is the A/B slot root, which belongs to the
-            # running slot: apt would fail partway through, and anything it did
-            # manage to write is discarded at the next slot switch. The UI hides
-            # the path; the refusal has to exist on this side of the socket too.
-            #
-            # The message says what was observed first and what it means second,
-            # because the observation is the part this code actually knows.
+            # Keyed on the real mount state rather than on anything this
+            # code believes about the host. The appliance image mounts its root
+            # writable, so this fires only when something made it read-only --
+            # an ext4 error remount is the usual one -- and apt would then fail
+            # partway through a transaction. The UI hides the path; the refusal
+            # has to exist on this side of the socket too.
             blockers.append(
                 {
                     "code": "read_only_root",
                     "message": (
                         "the root filesystem is mounted read-only, so apt cannot write to it; "
-                        "on an A/B image that is by design -- the root belongs to the running "
-                        "slot and host packages come with an OS update instead"
+                        "check the kernel log for a filesystem error that forced the remount"
                     ),
                 }
             )

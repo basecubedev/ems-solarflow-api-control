@@ -20,7 +20,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
-from appliance import image_variants
+from appliance import image_shape
 
 LOCK_NAME = "rpi-image-gen.lock"
 SOURCE_IDENTITY_NAME = ".rpi-image-gen-source.json"
@@ -62,29 +62,20 @@ AUTO_PACKAGE_QUERY = object()
 
 @dataclass(frozen=True)
 class HardwareProfile:
-    """One board this project builds a distinct A/B image for.
+    """One board this project builds a distinct image for.
 
-    ``device_layer`` is upstream's layer name — ``rpi5``, not the ``pi5``
+    ``device_layer`` is upstream's layer name -- ``rpi5``, not the ``pi5``
     directory it lives in. ``device_class`` is what that layer sets
-    ``IGconf_device_class`` to, and image-rota accepts only cm4, pi4, cm5, pi5.
-    The compatible board classes are derived from the device layer rather than
-    declared beside it, so an artefact cannot claim hardware its kernel and
-    firmware were not built for.
-
-    ``variants`` is which image shapes this board has an artefact for, and it is
-    not always both: a Raspberry Pi 3 boots the single-slot image and cannot
-    boot the A/B one — see docs/appliance/adr/raspberry-pi-3-ab-support.md.
+    ``IGconf_device_class`` to. The compatible board classes are derived from
+    the device layer rather than declared beside it, so an artefact cannot claim
+    hardware its kernel and firmware were not built for.
     """
 
     name: str
     device_layer: str
     device_class: str
     compatible_board_classes: tuple
-    variants: tuple
     description: str
-
-    def builds(self, variant):
-        return str(variant) in self.variants
 
     def to_dict(self):
         return {
@@ -92,25 +83,16 @@ class HardwareProfile:
             "device_layer": self.device_layer,
             "device_class": self.device_class,
             "compatible_board_classes": list(self.compatible_board_classes),
-            "variants": list(self.variants),
             "description": self.description,
         }
 
 
-BOTH_VARIANTS = (image_variants.VARIANT_AB, image_variants.VARIANT_SINGLE)
-
-
 HARDWARE_PROFILES = {
-    # Single-slot only, and the restriction is upstream's rather than a policy:
-    # image-rota refuses the pi3 device class, puts no second-stage bootloader
-    # on its first partition and builds a GPT the Pi 3 boot ROM cannot read.
-    # image-rpios has none of those three properties.
     "rpi3": HardwareProfile(
         name="rpi3",
         device_layer="rpi3",
         device_class="pi3",
         compatible_board_classes=("pi3",),
-        variants=(image_variants.VARIANT_SINGLE,),
         description="Raspberry Pi 3 Model B / B+",
     ),
     "rpi4": HardwareProfile(
@@ -118,7 +100,6 @@ HARDWARE_PROFILES = {
         device_layer="rpi4",
         device_class="pi4",
         compatible_board_classes=("pi4",),
-        variants=BOTH_VARIANTS,
         description="Raspberry Pi 4 Model B",
     ),
     "rpi5": HardwareProfile(
@@ -126,7 +107,6 @@ HARDWARE_PROFILES = {
         device_layer="rpi5",
         device_class="pi5",
         compatible_board_classes=("pi5",),
-        variants=BOTH_VARIANTS,
         description="Raspberry Pi 5",
     ),
 }
@@ -147,35 +127,6 @@ BOARD_CLASSES = {
 
 BOARD_UNKNOWN = ""
 
-def _installable_board_classes():
-    """Boards with a profile whose variant actually ships an update archive.
-
-    Derived rather than listed, because two of the three ways a board can fail
-    this are easy to get wrong by hand: a Compute Module has no profile at all,
-    and a Raspberry Pi 3 has one whose image shape is patched by apt and
-    produces no update artefact to install.
-    """
-
-    return tuple(
-        sorted(
-            {
-                board
-                for profile in HARDWARE_PROFILES.values()
-                for board in profile.compatible_board_classes
-                if any(
-                    image_variants.variant(name).has_update_archive
-                    for name in profile.variants
-                )
-            }
-        )
-    )
-
-
-# The board classes this project actually ships an installable artefact for.
-# CM4 and CM5 are recognised so an operator is told what their appliance is,
-# rather than being told nothing — but there is no cm4 or cm5 build profile, so
-# reporting them as supported would promise an update that cannot be produced.
-INSTALLABLE_BOARD_CLASSES = _installable_board_classes()
 
 # An arm64 image built on anything else needs the kernel to hand aarch64
 # binaries to an emulator. That registration is host-wide and belongs to the
@@ -228,11 +179,11 @@ class Lock:
     tarball: dict = None
 
     def layer(self, slug):
-        """The pinned upstream image layer one variant is built from.
+        """The pinned upstream image layer the image is built from.
 
-        Both variants are declared in the lock rather than derived from
-        ``image_variants``: the lock is the file that gets reviewed, and a
-        contract test keeps the two from disagreeing.
+        Declared in the lock rather than derived from ``image_shape``: the lock
+        is the file that gets reviewed, and a contract test keeps the two from
+        disagreeing.
         """
 
         entry = self.image_layers[slug]
@@ -245,15 +196,15 @@ class Lock:
 
     @property
     def image_layer(self):
-        return self.layer(image_variants.VARIANT_AB).name
+        return self.layer(image_shape.IMAGE.profile_suffix).name
 
     @property
     def image_layer_version(self):
-        return self.layer(image_variants.VARIANT_AB).version
+        return self.layer(image_shape.IMAGE.profile_suffix).version
 
     @property
     def image_layer_path(self):
-        return self.layer(image_variants.VARIANT_AB).path
+        return self.layer(image_shape.IMAGE.profile_suffix).path
 
     def to_dict(self):
         return {
@@ -347,20 +298,20 @@ def file_sha256(path, *, chunk=1024 * 1024):
 class BuildProfile:
     """One rpi-image-gen config this project builds, and what it is for.
 
-    A profile is a board *and* a variant. The board comes from its own device
-    layer; the variant comes from the shared config it includes, because that
-    is where the upstream image layer is named -- and naming it twice is how
-    two files come to disagree about which image they build.
+    A profile names a board. The image layer it is built from is one level up,
+    in the shared config it includes, because naming it twice is how two files
+    come to disagree about which image they build -- so that file is read and
+    checked rather than trusted.
     """
 
     path: Path
     hardware: HardwareProfile
-    variant: object
+    image_layer: str
     image_name: str
 
     @property
     def artifact_suffix(self):
-        return self.variant.artifact_suffix(self.hardware.name)
+        return image_shape.IMAGE.artifact_suffix(self.hardware.name)
 
     @property
     def name(self):
@@ -386,7 +337,6 @@ class BuildProfile:
             "name": self.name,
             "config": str(self.path),
             "image_name": self.image_name,
-            "variant": self.variant.slug,
             "artifact_suffix": self.artifact_suffix,
             **self.hardware.to_dict(),
         }
@@ -443,13 +393,13 @@ def read_profile(path):
     return BuildProfile(
         path=target,
         hardware=hardware,
-        variant=_profile_variant(target, values),
+        image_layer=_profile_image_layer(target, values),
         image_name=values.get("image.name", ""),
     )
 
 
-def _profile_variant(target, values):
-    """Which image this profile builds, read from the config it includes.
+def _profile_image_layer(target, values):
+    """The image layer this profile builds, read from the config it includes.
 
     The profile itself names only a board. The image layer is one level up, in
     the shared config, which is also the file that has to be right for the
@@ -468,14 +418,13 @@ def _profile_variant(target, values):
             "profile_unreadable", f"{target.name} includes {included}, which could not be read: {exc}"
         )
     layer = _config_values(text).get("image.layer", "")
-    variant = image_variants.variant_of_image_layer(layer)
-    if variant is None:
+    if not image_shape.image_layer_matches(layer):
         raise ImageGenError(
-            "profile_variant_unknown",
+            "profile_image_layer_unknown",
             f"{shared.name} builds image layer {layer or 'nothing'!r}, "
-            "which this project has no image variant for",
+            f"and this project builds {image_shape.IMAGE.image_layer}",
         )
-    return variant
+    return layer
 
 
 def profiles(directory=None):
@@ -516,24 +465,6 @@ def detect_board_class(root="/"):
     except (OSError, ValueError):
         return BOARD_UNKNOWN
     return board_class(raw)
-
-
-def board_is_installable(board, *, variant=image_variants.VARIANT_AB):
-    """Is there an artefact of this shape this board could be updated with?
-
-    Recognising a board and being able to update it are separate answers.
-    Reporting a Compute Module as supported would offer an OS update that no
-    build profile can produce; reporting a single-slot appliance as supported
-    would offer one that no image variant produces, for any board.
-    """
-
-    wanted = str(board or "")
-    if not wanted:
-        return False
-    for profile in HARDWARE_PROFILES.values():
-        if wanted in profile.compatible_board_classes and profile.builds(variant):
-            return image_variants.variant(variant).has_update_archive
-    return False
 
 
 def board_has_an_image(board):
@@ -879,9 +810,6 @@ def probe_checkout(
             )
         )
 
-    # Every variant this project can build, not only the one being built now:
-    # a checkout that could not build the other image is a checkout this
-    # project is not pinned to, and finding that out at release time is late.
     for slug in sorted(lock.image_layers):
         pinned = lock.layer(slug)
         layer = root / pinned.path

@@ -6,7 +6,7 @@ every appliance at once, and the revert this path provides has to be a decision
 somebody made. Going backwards is a first-class outcome for the same reason —
 it is the only recovery a single-slot appliance has.
 
-The fetch order is the one ``os_fetch`` established and is the security
+The fetch order is the one ``release_fetch`` established and is the security
 property: an index only names candidates, the detached signature decides
 whether the manifest may be believed, and only a verified manifest says what
 the archive must hash to.
@@ -24,8 +24,8 @@ from appliance import (
     manager_releases,
     manager_retention,
     manager_verify,
-    os_fetch,
-    os_releases,
+    release_fetch,
+    artifact_trust,
     persistent_state,
 )
 from appliance.version import version_key
@@ -96,7 +96,7 @@ class ManagerUpdateService:
         self.operations = operations
         self.runner = runner
         self.state_mountpoint = Path(state_mountpoint)
-        self.fetcher = fetcher or os_fetch.HttpsFetcher()
+        self.fetcher = fetcher or release_fetch.HttpsFetcher()
         self.installed_version = installed_version
         self.architecture = architecture
         self.reverter = reverter
@@ -158,18 +158,18 @@ class ManagerUpdateService:
             "installed_version": self.installed_version,
         }
         try:
-            url = os_fetch.https_url(
+            url = release_fetch.https_url(
                 self.config.manager_index_url, label="the manager package index url"
             )
-        except os_fetch.FetchError:
+        except release_fetch.FetchError:
             return listing
         listing["configured"] = True
         try:
             raw = self.fetcher.read(
-                url, label="the manager package index", max_bytes=os_fetch.MAX_INDEX_BYTES
+                url, label="the manager package index", max_bytes=release_fetch.MAX_INDEX_BYTES
             )
-            candidates = os_fetch.parse_index(json.loads(raw.decode("utf-8", errors="replace")))
-        except os_fetch.FetchError as exc:
+            candidates = release_fetch.parse_index(json.loads(raw.decode("utf-8", errors="replace")))
+        except release_fetch.FetchError as exc:
             listing["error"] = exc.code
             return listing
         except ValueError:
@@ -185,7 +185,7 @@ class ManagerUpdateService:
         return listing
 
     def _candidate(self, release_id):
-        wanted = os_releases.validate_release_id(release_id)
+        wanted = artifact_trust.validate_release_id(release_id)
         listing = self.sources()
         if not listing["configured"]:
             raise ManagerUpdateError(
@@ -382,12 +382,12 @@ class ManagerUpdateService:
         manifest_bytes = self.fetcher.read(
             candidate["manifest_url"],
             label="the package manifest",
-            max_bytes=os_releases.MAX_MANIFEST_BYTES,
+            max_bytes=artifact_trust.MAX_MANIFEST_BYTES,
         )
         signature_bytes = self.fetcher.read(
             candidate["signature_url"],
             label="the manifest signature",
-            max_bytes=os_fetch.MAX_SIGNATURE_BYTES,
+            max_bytes=release_fetch.MAX_SIGNATURE_BYTES,
         )
         manifest_path = staging / f"{candidate['release_id']}.manifest.json"
         signature_path = Path(str(manifest_path) + ".asc")

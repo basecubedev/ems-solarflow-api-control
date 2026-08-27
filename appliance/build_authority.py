@@ -27,7 +27,6 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from appliance import image_variants, rpi_image_gen
 
 # 2 binds the project's own tree. Schema 1 named only the generator's, so an
 # image built from a working tree with local appliance changes claimed the clean
@@ -70,31 +69,6 @@ def validate_profile(profile):
             f"{profile!r} is not a supported profile ({', '.join(PROFILES)})",
         )
     return profile
-
-
-def validate_profile_variant(profile, variant):
-    """The image shapes this board has an artefact for, and nothing else.
-
-    Not every profile builds both. A Raspberry Pi 3 boots the single-slot image
-    and cannot boot the A/B one, so an ``rpi3`` A/B build is refused at the
-    identifier rather than producing a partial artefact tree for a board that
-    would never start it.
-    """
-
-    validate_profile(profile)
-    if variant not in image_variants.VARIANTS:
-        raise BuildAuthorityError(
-            INVALID_IDENTIFIER,
-            f"{variant!r} is not a supported image variant "
-            f"({', '.join(sorted(image_variants.VARIANTS))})",
-        )
-    supported = rpi_image_gen.HARDWARE_PROFILES[profile].variants
-    if variant not in supported:
-        raise BuildAuthorityError(
-            INVALID_IDENTIFIER,
-            f"{profile} has no {variant} image ({', '.join(supported)} only)",
-        )
-    return variant
 
 
 def validate_build_id(build_id):
@@ -315,20 +289,8 @@ class BuildAuthority:
     builder: Builder = field(default_factory=Builder)
     project: Project = field(default_factory=Project)
     profile: str = ""
-    # Which image this build produced. Deliberately with no default that names
-    # a variant: an authority that does not say must fail verification, not be
-    # read as whichever one happens to be asking.
-    #
-    # Added without a schema bump on purpose. Every record written before it
-    # existed describes an A/B build and stays readable -- release evidence is
-    # a record of what was produced, and refusing to read it to make room for a
-    # field it could not have carried would be rewriting history to fit the
-    # code. What such a record can no longer do is vouch for an artefact: it
-    # says no variant, and no variant is not a supported one.
-    variant: str = ""
     build_id: str = ""
     image: Artefact = field(default_factory=Artefact)
-    update: Artefact = field(default_factory=Artefact)
     package_sha256: str = ""
     completed: bool = False
     environment: BuilderEnvironment = field(default_factory=BuilderEnvironment)
@@ -350,10 +312,8 @@ class BuildAuthority:
             "builder_environment_sha256": self.builder_environment_sha256,
             "project": self.project.to_dict(),
             "profile": self.profile,
-            "variant": self.variant,
             "build_id": self.build_id,
             "image": self.image.to_dict(),
-            "update": self.update.to_dict(),
             "package_sha256": self.package_sha256,
             "completed": self.completed,
         }
@@ -396,10 +356,8 @@ def parse(payload):
             tree_sha256=str(project.get("tree_sha256") or ""),
         ),
         profile=str(payload.get("profile") or ""),
-        variant=str(payload.get("variant") or ""),
         build_id=str(payload.get("build_id") or ""),
         image=_artefact(payload.get("image")),
-        update=_artefact(payload.get("update")),
         package_sha256=str(payload.get("package_sha256") or ""),
         completed=bool(payload.get("completed")),
         environment=environment,
@@ -467,27 +425,18 @@ def _artefact_problems(label, declared, path):
     return []
 
 
-def verify_update(authority, path, *, profile="", revision="", build_id="", variant="",
-                  require_environment=False):
+def verify_image(authority, path, *, profile="", revision="", build_id="",
+                 require_environment=False):
     """Is this artefact the one that completed build produced? Say why not."""
 
     problems = list(_common_problems(authority, profile=profile, revision=revision,
-                                     build_id=build_id, variant=variant,
-                                     require_environment=require_environment))
-    problems.extend(_artefact_problems("update artefact", authority.update, path))
-    return tuple(problems)
-
-
-def verify_image(authority, path, *, profile="", revision="", build_id="", variant="",
-                 require_environment=False):
-    problems = list(_common_problems(authority, profile=profile, revision=revision,
-                                     build_id=build_id, variant=variant,
+                                     build_id=build_id,
                                      require_environment=require_environment))
     problems.extend(_artefact_problems("image", authority.image, path))
     return tuple(problems)
 
 
-def _common_problems(authority, *, profile, revision, build_id, variant="",
+def _common_problems(authority, *, profile, revision, build_id,
                      require_environment=False):
     problems = []
     if require_environment:
@@ -517,18 +466,6 @@ def _common_problems(authority, *, profile, revision, build_id, variant="",
         problems.append(
             f"{INVALID_IDENTIFIER}: {authority.profile!r} is not a supported profile"
         )
-    if authority.variant not in image_variants.VARIANTS:
-        problems.append(
-            f"{INVALID_IDENTIFIER}: {authority.variant!r} is not a supported image variant"
-        )
-    elif authority.profile in PROFILES and not rpi_image_gen.HARDWARE_PROFILES[
-        authority.profile
-    ].builds(authority.variant):
-        # A record naming a pair no board can boot is not a build this project
-        # made, whatever else it says about itself.
-        problems.append(
-            f"{INVALID_IDENTIFIER}: {authority.profile} has no {authority.variant} image"
-        )
     if not BUILD_ID_PATTERN.match(authority.build_id or ""):
         problems.append(
             f"{INVALID_IDENTIFIER}: {authority.build_id!r} is not a usable build id"
@@ -537,14 +474,6 @@ def _common_problems(authority, *, profile, revision, build_id, variant="",
         problems.append(
             f"{MISMATCH}: the build authority names profile {authority.profile!r}, "
             f"this release is {profile!r}"
-        )
-    # Two images are built for the same board from the same tree, and only this
-    # tells them apart. Without it an A/B authority would vouch for a
-    # single-slot artefact -- same profile, same build, a different product.
-    if variant and authority.variant != variant:
-        problems.append(
-            f"{MISMATCH}: the build authority names variant {authority.variant!r}, "
-            f"this release is {variant!r}"
         )
     if revision and authority.builder.revision != revision:
         problems.append(

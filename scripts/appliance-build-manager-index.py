@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from appliance import manager_releases, os_releases, release_index  # noqa: E402
+from appliance import manager_releases, artifact_trust, release_index  # noqa: E402
 
 DESCRIBED_FROM_MANIFEST = (("release_version", "version"), ("created_at", "created_at"),
                            ("build_id", "build_id"))
@@ -40,7 +40,7 @@ def entry_for(manifest_path, base_url):
     release_id = stem[: -len(".manifest.json")]
     try:
         release = manager_releases.parse_manifest(payload, release_id=release_id)
-    except (manager_releases.ManagerReleaseError, os_releases.ReleaseError) as exc:
+    except (manager_releases.ManagerReleaseError, artifact_trust.ReleaseError) as exc:
         raise SystemExit(f"{manifest_path}: {getattr(exc, 'message', exc)}")
 
     prefix = base_url.rstrip("/")

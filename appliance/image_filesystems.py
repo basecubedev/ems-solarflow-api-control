@@ -2,7 +2,7 @@
 """Read an image's filesystems without mounting them.
 
 A release gate has to answer what is *inside* the image that will be flashed:
-which package version each slot root carries, whether the units are enabled,
+which package version the root carries, whether the units are enabled,
 whether a host key was shipped by accident. Mounting is how that is normally
 done, and it is not available here for two independent reasons.
 
@@ -85,7 +85,7 @@ class _Window:
 
 
 class Ext4Reader:
-    """Enough of ext4 to answer what a slot root contains.
+    """Enough of ext4 to answer what the image root contains.
 
     Block size is read from the superblock, so a 16 KiB filesystem is read the
     same way a 4 KiB one is. That is the whole point: the host kernel's page

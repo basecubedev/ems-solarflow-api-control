@@ -29,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from appliance import manager_releases, os_releases  # noqa: E402
+from appliance import manager_releases, artifact_trust  # noqa: E402
 
 REVISION = re.compile(r"^[0-9a-f]{40}$")
 
@@ -71,7 +71,7 @@ def manifest_for(package, *, revision, created_at, release_id=""):
         "project_revision": revision,
         "artifact": {
             "name": package.name,
-            "digest": os_releases.file_digest(package),
+            "digest": artifact_trust.file_digest(package),
             "size_bytes": package.stat().st_size,
         },
         "reproducibility": {

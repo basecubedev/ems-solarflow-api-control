@@ -29,7 +29,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from appliance import commands, os_releases
+from appliance import commands, artifact_trust
 
 UNSIGNED = "release_attestation_unsigned"
 UNVERIFIED = "release_attestation_signature_invalid"
@@ -160,7 +160,7 @@ def verify_signature(document, policy, *, signature=None, runner=None):
             detail=unmet,
         )
 
-    verifier = os_releases.SignatureVerifier(
+    verifier = artifact_trust.SignatureVerifier(
         runner or commands.CommandRunner(),
         keyring=policy.keyring,
         fingerprints=policy.fingerprints,
@@ -185,7 +185,7 @@ def verify_signature(document, policy, *, signature=None, runner=None):
         )
     try:
         verifier.verify(document, signature)
-    except os_releases.ReleaseError as error:
+    except artifact_trust.ReleaseError as error:
         return SignatureVerdict(
             present=True,
             verified=True,

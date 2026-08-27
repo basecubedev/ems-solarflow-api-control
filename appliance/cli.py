@@ -12,7 +12,6 @@ import datetime
 import json
 import os
 import sys
-from pathlib import Path
 
 from appliance.agent import AgentHandlers, AgentServer, operation_names
 from appliance.agent_client import AgentCallError, AgentClient, AgentUnavailableError, InProcessAgentClient
@@ -184,7 +183,6 @@ def _record_password_reset(paths):
         AuditLog(paths.audit_log).record("password.reset", user="root", target="cli")
     except OSError:
         print("warning: the password reset could not be written to the audit log", file=sys.stderr)
-
 
 
 def command_operations(args):
@@ -528,255 +526,72 @@ def _shared_flags():
     return shared
 
 
-# --- A/B operating-system updates -------------------------------------------
+# --- the booted host --------------------------------------------------------
 
 
-def _ab_services(args):
-    """The privileged A/B services. Root only: this path touches block devices."""
+def _block_probe(args):
+    """A read-only block probe, root only.
+
+    Deliberately not the whole service graph: both commands below run from the
+    first-boot growth helper, before anything else on this appliance is up.
+    """
 
     if os.geteuid() != 0:
         print("error: this command must run as root", file=sys.stderr)
         return None
-    return build_services(root=getattr(args, "root", "/") or "/")
+    from appliance.block_probe import BlockProbe
+    from appliance.commands import CommandRunner
+
+    return BlockProbe(root=getattr(args, "root", "/") or "/", runner=CommandRunner())
 
 
-def command_ab_status(args):
-    paths = resolve_paths()
-    try:
-        result = _client(paths, local=args.local).call("ab.status")
-    except (AgentUnavailableError, AgentCallError) as exc:
-        print(f"error: {exc.message}", file=sys.stderr)
-        return EXIT_UNAVAILABLE
-    _print(result if args.json else _ab_summary(result), args.json)
-    return EXIT_OK
+def command_image_check(args):
+    """Whether this host was flashed from an appliance image.
 
-
-def _ab_summary(status):
-    state = status.get("ab_state") or {}
-    selector = status.get("selector") or {}
-    return {
-        "mode": status.get("mode"),
-        "ab_supported": status.get("ab_supported"),
-        "reason": status.get("reason"),
-        "active_slot": status.get("active_slot"),
-        "inactive_slot": status.get("inactive_slot"),
-        "tryboot": status.get("tryboot"),
-        "known_good_slot": state.get("known_good_slot"),
-        "previous_slot": state.get("previous_slot"),
-        "default_boot_partition": selector.get("default_partition"),
-        "trial_boot_partition": selector.get("tryboot_partition"),
-        "pending_trial": bool(state.get("pending_trial")),
-        "persistence": (status.get("persistence") or {}).get("state"),
-        "drift": status.get("drift"),
-    }
-
-
-def command_ab_verify_persistence(args):
-    from appliance import ab_layout, ab_persistence
-
-    services = _ab_services(args)
-    if services is None:
-        return EXIT_ERROR
-    layout = ab_layout.discover(services.ab_probe)
-    report = ab_persistence.verify(layout, services.ab_probe.mounts())
-    payload = report.to_dict()
-    if report.ok and report.state == ab_persistence.STATE_OK:
-        payload["state_schema"] = _reconcile_state_schema(
-            report, layout, root=services.ab_probe.root
-        )
-    if not args.quiet:
-        _print(payload, args.json)
-    if not report.ok:
-        for problem in report.problems:
-            print(f"error: {problem}", file=sys.stderr)
-        return EXIT_ERROR
-    reconciliation = payload.get("state_schema") or {}
-    if reconciliation and not reconciliation.get("compatible", True):
-        # Reported, never fatal. Every unit that can write appliance state
-        # Requires= this one, so failing here would leave a rolled-back
-        # appliance with no agent and no web UI -- unreachable, and therefore
-        # unable to roll forward out of the very state being complained about.
-        # The refusal belongs where it can act: the update planner.
-        print(f"warning: {reconciliation.get('detail')}", file=sys.stderr)
-    return EXIT_OK
-
-
-def _reconcile_state_schema(report, layout, *, root="/"):
-    """Record what schemas the state on this partition is written at."""
-
-    from datetime import datetime, timezone
-
-    from appliance import persistent_state
-    from appliance.version import APPLIANCE_VERSION
-
-    build = getattr(layout, "os_build", None) or {}
-    try:
-        verdict, stamp = persistent_state.reconcile(
-            persistent_state.resolve(root, report.mountpoint),
-            written_by={
-                "appliance_version": APPLIANCE_VERSION,
-                "build_id": str(build.get("build_id") or ""),
-            },
-            written_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        )
-    except persistent_state.PersistentStateError as exc:
-        return {"outcome": exc.code, "compatible": True, "detail": exc.message}
-    return {**verdict.to_dict(), "stamp": stamp.to_dict()}
-
-
-def command_host_identity(args):
-    """Establish and prove the identity both slots share.
-
-    Idempotent: an existing host key is validated and left exactly as it is, so
-    the fingerprint an operator verified on first boot survives every slot
-    switch. Only public fingerprints are ever printed.
-    """
-
-    from appliance.host_identity import HostIdentityService
-
-    services = _ab_services(args)
-    if services is None:
-        return EXIT_ERROR
-    service = HostIdentityService(
-        runner=services.runner,
-        root=services.ab_probe.root,
-        persistent_mounts=services.ab_probe.mounts,
-    )
-    report = service.ensure() if args.ensure else service.verify()
-    payload = report.to_dict()
-    if report.ok:
-        # sshd has the last word: a configuration it refuses must not start.
-        sshd = service.validate_sshd()
-        payload["sshd_config"] = sshd.to_dict()
-        if not sshd.ok:
-            payload["ok"] = False
-            payload["problems"] = [*payload["problems"], sshd.detail]
-    if not args.quiet or not payload["ok"]:
-        _print(payload, args.json)
-    if not payload["ok"]:
-        for problem in payload.get("problems") or []:
-            print(f"error: {problem}", file=sys.stderr)
-        return EXIT_ERROR
-    return EXIT_OK
-
-
-def command_ab_write_layout(args):
-    """Write the layout descriptor into a rootfs being built.
-
-    Labels only. image-rota generates the partition identities per build, so a
-    descriptor that named them would be a second authority over the same disk.
-    """
-
-    from appliance import ab_layout, ab_persistence
-
-    descriptor = {
-        "schema_version": ab_layout.LAYOUT_SCHEMA_VERSION,
-        "layout_id": args.layout_id,
-        "slot_schema_version": ab_layout.LAYOUT_SCHEMA_VERSION,
-        "persistent_schema_version": ab_persistence.PERSISTENT_SCHEMA_VERSION,
-        "image_layer": "image-rota",
-        "image_layer_version": args.image_layer_version,
-        "slot_device_prefix": "/dev/disk/by-slot",
-        "bootconfig": {"label": "bootconfig", "fstype": "vfat"},
-        "persist": {"label": "persistent", "fstype": "ext4"},
-        "selector_mountpoint": "/bootfs",
-        "persist_mountpoint": ab_persistence.PERSISTENT_MOUNTPOINT,
-        "boot_mountpoint": "/boot/firmware",
-        "shared_root": ab_persistence.SHARED_ROOT,
-        "machine_id_source": ab_persistence.MACHINE_ID_SOURCE,
-        "slots": {
-            "A": {
-                "boot": {"label": "boot_a", "fstype": "vfat"},
-                "root": {"label": "system_a", "fstype": "ext4"},
-            },
-            "B": {
-                "boot": {"label": "boot_b", "fstype": "vfat"},
-                "root": {"label": "system_b", "fstype": "ext4"},
-            },
-        },
-    }
-    # Parsing it back is the check: the build fails rather than shipping a
-    # descriptor the runtime would reject as drift on first boot.
-    ab_layout.parse_layout_manifest(descriptor)
-    target = Path(args.output)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(descriptor, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(str(target))
-    return EXIT_OK
-
-
-def _ab_persistent(args, attribute):
-    """Read-only discovery for the one-shot growth unit. Nothing here mutates."""
-
-    from appliance import ab_layout
-
-    services = _ab_services(args)
-    if services is None:
-        return None
-    layout = ab_layout.discover(services.ab_probe)
-    if layout.persist_device is None or layout.manifest is None:
-        print("error: the persistent partition could not be identified", file=sys.stderr)
-        return None
-    return {
-        "device": layout.persist_device.path,
-        "disk": layout.persist_device.parent,
-        "number": layout.persist_device.number,
-        "mountpoint": layout.manifest.persist_mountpoint,
-    }.get(attribute)
-
-
-def command_image_variant(args):
-    """Which appliance image this host was flashed from, if any.
-
-    Read from the build marker the image writes, and only a value the variant
-    table recognises is printed. A host installed from the .deb onto somebody
+    Read from the build marker the image writes, and only a layer name this
+    project builds is accepted. A host installed from the .deb onto somebody
     else's Raspberry Pi OS has no marker and gets an error, which is the answer
     the first-boot growth helper needs: this project repartitions media it
     imaged and nothing else.
     """
 
-    from appliance import image_variants
+    from appliance.image_shape import IMAGE, marker_is_ours
 
-    services = _ab_services(args)
-    if services is None:
+    probe = _block_probe(args)
+    if probe is None:
         return EXIT_ERROR
-    variant = image_variants.variant_of_build_marker(services.ab_probe.os_build())
-    if variant is None:
+    if not marker_is_ours(probe.os_build()):
         print("error: this host carries no appliance image build marker", file=sys.stderr)
         return EXIT_ERROR
-    print(variant.slug)
+    print(IMAGE.image_layer)
     return EXIT_OK
 
 
 def command_root_geometry(args):
     """Where the root partition ends and where the medium it lives on ends.
 
-    The single-slot image sizes its root at build time; the medium an operator
-    flashed it onto is whatever they had. The growth helper decides from this
-    whether there is anything to claim, so an unreadable geometry is an error
-    and never an empty answer.
+    The image sizes its root at build time; the medium an operator flashed it
+    onto is whatever they had. The growth helper decides from this whether there
+    is anything to claim, so an unreadable geometry is an error and never an
+    empty answer.
     """
 
-    from appliance import ab_geometry
+    from appliance import partition_geometry
 
-    services = _ab_services(args)
-    if services is None:
+    probe = _block_probe(args)
+    if probe is None:
         return EXIT_ERROR
     try:
-        partitions = services.ab_probe.block_partitions()
+        root = probe.root_partition()
     except Exception as error:
         print(f"error: {getattr(error, 'message', error)}", file=sys.stderr)
         return EXIT_ERROR
-    # Asked of the block layer rather than resolved out of /proc: the mount
-    # source is whatever string was passed to mount, and on this image that is
-    # a by-slot alias rather than the kernel name sysfs is keyed by.
-    root = next((item for item in partitions if item.mountpoint == "/"), None)
     if root is None:
         print("error: the block layer reports no partition mounted at /", file=sys.stderr)
         return EXIT_ERROR
     try:
-        geometry = ab_geometry.read_geometry(root.path, sysfs=args.sysfs)
-    except ab_geometry.GeometryError as error:
+        geometry = partition_geometry.read_geometry(root.path, sysfs=args.sysfs)
+    except partition_geometry.GeometryError as error:
         print(f"error: {error.code}: {error.message}", file=sys.stderr)
         return EXIT_ERROR
     if args.json:
@@ -784,183 +599,6 @@ def command_root_geometry(args):
     else:
         for line in geometry.to_lines():
             print(line)
-    return EXIT_OK
-
-
-def _print_ab_persistent(args, attribute):
-    value = _ab_persistent(args, attribute)
-    if value is None:
-        return EXIT_ERROR
-    print(value)
-    return EXIT_OK
-
-
-def command_ab_persistent_device(args):
-    return _print_ab_persistent(args, "device")
-
-
-def command_ab_persistent_disk(args):
-    return _print_ab_persistent(args, "disk")
-
-
-def command_ab_persistent_partition_number(args):
-    return _print_ab_persistent(args, "number")
-
-
-def command_ab_persistent_geometry(args):
-    """Where the persistent partition ends and where its disk ends.
-
-    The growth helper decides whether a freshly imaged medium still has room
-    from this, so an unreadable geometry is an error and never an empty answer:
-    "the partition already fills the card" and "nobody could measure it" must
-    not reach that helper as the same result.
-    """
-
-    from appliance import ab_geometry
-
-    device = _ab_persistent(args, "device")
-    if device is None:
-        return EXIT_ERROR
-    try:
-        geometry = ab_geometry.read_geometry(device, sysfs=args.sysfs)
-    except ab_geometry.GeometryError as error:
-        print(f"error: {error.code}: {error.message}", file=sys.stderr)
-        return EXIT_ERROR
-    if args.json:
-        _print(geometry.to_dict(), True)
-    else:
-        for line in geometry.to_lines():
-            print(line)
-    return EXIT_OK
-
-
-def command_ab_slot_bootstrap(args):
-    """Rebuild this slot's container runtime from the shared record."""
-
-    services = _ab_services(args)
-    if services is None:
-        return EXIT_ERROR
-    if services.ab_bootstrap is None:
-        print("error: no runtime bootstrap is configured", file=sys.stderr)
-        return EXIT_ERROR
-    report = services.ab_bootstrap.reconstruct()
-    _print(report.to_dict(), args.json)
-    if not report.ok:
-        for problem in report.problems:
-            print(f"error: {problem}", file=sys.stderr)
-        return EXIT_ERROR
-    return EXIT_OK
-
-
-def report_unreadable_ab_state(exc, *, as_json):
-    """The designed verdict for a record nothing can read.
-
-    This command runs as a systemd unit on a headless box, so a traceback is a
-    failed unit with no verdict at all. Nothing here may guess which slot is
-    safe: an unreadable or schema-mismatched record becomes an operator's
-    decision, which is exactly what manual_action_required means.
-    """
-
-    from appliance import ab_health
-
-    _print(
-        {
-            "result": ab_health.RESULT_MANUAL_ACTION_REQUIRED,
-            "reasons": [exc.message],
-            "code": exc.code,
-        },
-        as_json,
-    )
-    print(f"the A/B state could not be read: {exc.message}", file=sys.stderr)
-    return EXIT_ERROR
-
-
-def command_ab_trial_health(args):
-    """The trial slot judging itself, run by ems-appliance-ab-health.service.
-
-    Only a booted target slot reaches a commit here, and only after every
-    required gate passed. Anything else records what it saw and steps aside.
-    """
-
-    from appliance import ab_health, ab_state
-    from appliance.ab_health import TrialHealthService
-
-    services = _ab_services(args)
-    if services is None:
-        return EXIT_ERROR
-    layout_manifest = services.ab_probe.manifest()
-    if layout_manifest is None:
-        print("this appliance has no A/B layout; nothing to verify")
-        return EXIT_OK
-
-    selector_path = (
-        services.ab_probe.root
-        / str(layout_manifest.selector_mountpoint).lstrip("/")
-        / "autoboot.txt"
-    )
-    verifier = TrialHealthService(
-        probe=services.ab_probe,
-        state=services.ab_state,
-        selector_path=selector_path,
-        runner=services.runner,
-        systemd=services.systemd,
-        docker=services.ab_docker_health,
-        runtime=services.ab_runtime,
-        # The gate compares the fingerprint the trial was planned against; the
-        # bootstrap service is what re-reads the files behind it.
-        bootstrap=services.ab_bootstrap,
-        install_check=lambda: services.status.overview().get("health", {}).get("level") != "error",
-        agent_socket=lambda: services.paths.agent_socket.exists(),
-        health_window_seconds=services.config.ab_health_window_seconds,
-    )
-    try:
-        report = verifier.evaluate_settled()
-    except (ab_health.AbHealthError, ab_state.AbStateError) as exc:
-        return report_unreadable_ab_state(exc, as_json=args.json)
-    _print(report.to_dict(), args.json)
-
-    if report.result == ab_health.RESULT_NOT_A_TRIAL:
-        # The selector first: an ordinary boot of the trial slot whose default
-        # already names it is a commit whose state write did not survive.
-        committed = ab_health.reconcile_boot(
-            services.ab_probe, services.ab_state, selector_path
-        )
-        if committed is not None:
-            services.audit.record("ab.commit", target=committed.slot, result="reconciled")
-            print(
-                f"reconciled: slot {committed.slot} is the boot default and is now recorded "
-                "as known-good",
-                file=sys.stderr,
-            )
-            return EXIT_OK
-        record = ab_health.classify_fallback(services.ab_probe, services.ab_state)
-        if record is not None:
-            services.audit.record(
-                "ab.fallback_observed", target=record.target_slot, operation_id=record.operation_id
-            )
-            print(f"fallback observed: slot {record.target_slot} did not commit", file=sys.stderr)
-        return EXIT_OK
-    if report.result == ab_health.RESULT_MANUAL_ACTION_REQUIRED:
-        services.audit.record(
-            "ab.trial_health_failed", target=report.slot, result="denied",
-            operation_id=report.operation_id,
-        )
-        print("error: this trial boot cannot be proven; manual action required", file=sys.stderr)
-        return EXIT_ERROR
-    if not report.healthy:
-        services.audit.record(
-            "ab.trial_health_failed", target=report.slot, result="failure",
-            operation_id=report.operation_id,
-        )
-        if args.commit:
-            verifier.abandon(report)
-        return EXIT_ERROR
-    if not args.commit:
-        return EXIT_OK
-
-    result = verifier.commit(report)
-    services.audit.record("ab.commit", target=result["slot"], operation_id=result["operation_id"])
-    _print(result, args.json)
     return EXIT_OK
 
 
@@ -1087,70 +725,16 @@ def build_parser():
     backup_account.set_defaults(handler=command_backup_account)
 
     subparsers.add_parser(
-        "image-variant", parents=[shared],
-        help="print which appliance image this host was flashed from",
-    ).set_defaults(handler=command_image_variant)
+        "image-check", parents=[shared],
+        help="print the image layer this host was flashed from, or fail",
+    ).set_defaults(handler=command_image_check)
 
-    ab = subparsers.add_parser(
-        "ab", parents=[shared], help="fail-safe A/B operating-system updates"
-    )
-    ab_commands = ab.add_subparsers(dest="ab_command", required=True)
-    ab_commands.add_parser(
-        "status", parents=[shared], help="slot, selector and persistence state"
-    ).set_defaults(handler=command_ab_status)
-    verify_persistence = ab_commands.add_parser(
-        "verify-persistence", parents=[shared], help="prove the shared state is really shared"
-    )
-    verify_persistence.add_argument("--quiet", action="store_true", help="report only failures")
-    verify_persistence.set_defaults(handler=command_ab_verify_persistence)
-    host_identity = subparsers.add_parser(
-        "host-identity",
-        parents=[shared],
-        help="establish and prove the persistent SSH host keys and machine identity",
-    )
-    host_identity.add_argument(
-        "--ensure", action="store_true", help="create anything missing, never regenerate"
-    )
-    host_identity.add_argument("--quiet", action="store_true", help="report only failures")
-    host_identity.set_defaults(handler=command_host_identity)
-    write_layout = ab_commands.add_parser(
-        "write-layout", parents=[shared], help="write the layout descriptor (image build)"
-    )
-    write_layout.add_argument("--layout-id", default="ems-appliance-rota-v1")
-    write_layout.add_argument("--image-layer-version", default="5.5.1")
-    write_layout.add_argument(
-        "--output", default="/etc/ems-appliance-manager/ab-layout.json"
-    )
-    write_layout.set_defaults(handler=command_ab_write_layout)
-    ab_commands.add_parser(
-        "persistent-device", parents=[shared], help="print the persistent partition device"
-    ).set_defaults(handler=command_ab_persistent_device)
-    ab_commands.add_parser(
-        "persistent-disk", parents=[shared], help="print the disk the layout lives on"
-    ).set_defaults(handler=command_ab_persistent_disk)
-    ab_commands.add_parser(
-        "persistent-partition-number", parents=[shared], help="print its partition number"
-    ).set_defaults(handler=command_ab_persistent_partition_number)
-    persistent_geometry = ab_commands.add_parser(
-        "persistent-geometry", parents=[shared], help="print its real start, end and disk end"
-    )
-    persistent_geometry.add_argument("--sysfs", default="/sys")
-    persistent_geometry.set_defaults(handler=command_ab_persistent_geometry)
-    ab_commands.add_parser(
-        "slot-bootstrap", parents=[shared], help="rebuild this slot's container runtime"
-    ).set_defaults(handler=command_ab_slot_bootstrap)
-    root_geometry = ab_commands.add_parser(
-        "root-geometry", parents=[shared], help="print the root partition's real end and the disk's"
+    root_geometry = subparsers.add_parser(
+        "root-geometry", parents=[shared],
+        help="print the root partition's real end and the disk's",
     )
     root_geometry.add_argument("--sysfs", default="/sys")
     root_geometry.set_defaults(handler=command_root_geometry)
-    trial_health = ab_commands.add_parser(
-        "trial-health", parents=[shared], help="verify a trial boot and optionally commit it"
-    )
-    trial_health.add_argument(
-        "--commit", action="store_true", help="commit this slot when every gate passes"
-    )
-    trial_health.set_defaults(handler=command_ab_trial_health)
 
     agent = subparsers.add_parser(
         "agent", parents=[shared], help="run the privileged agent (systemd entry point)"

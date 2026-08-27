@@ -14,7 +14,7 @@ recoverable if the one before it is still listed.
 import json
 from pathlib import Path
 
-from appliance import os_fetch
+from appliance import release_fetch
 
 
 class ReleaseIndexError(Exception):
@@ -50,7 +50,7 @@ def assemble(entries, *, previous="", keep=0):
         merged[entry["release_id"]] = entry
         minted.append(entry["release_id"])
 
-    releases = sorted(merged.values(), key=os_fetch.sort_key, reverse=True)
+    releases = sorted(merged.values(), key=release_fetch.sort_key, reverse=True)
     dropped = []
     if keep and len(releases) > keep:
         dropped = releases[keep:]
@@ -64,13 +64,13 @@ def assemble(entries, *, previous="", keep=0):
         raise ReleaseIndexError(
             "--keep would drop the release this run just built: " + ", ".join(sorted(published))
         )
-    return {"format_version": os_fetch.INDEX_FORMAT_VERSION, "releases": releases}, dropped
+    return {"format_version": release_fetch.INDEX_FORMAT_VERSION, "releases": releases}, dropped
 
 
 def verify(index):
     """Refuse an index the appliance would silently shrink."""
 
-    accepted = os_fetch.parse_index(index)
+    accepted = release_fetch.parse_index(index)
     if len(accepted) != len(index["releases"]):
         raise ReleaseIndexError("the appliance would drop entries from this index")
     return accepted

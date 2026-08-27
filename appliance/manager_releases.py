@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from appliance import os_releases, persistent_state
+from appliance import artifact_trust, persistent_state
 
 MANIFEST_FORMAT_VERSION = 1
 
@@ -31,8 +31,8 @@ REQUIRED_FIELDS = (
     "artifact",
 )
 
-VERIFIED_SIGNATURE = os_releases.VERIFIED_SIGNATURE
-VERIFIED_NONE = os_releases.VERIFIED_NONE
+VERIFIED_SIGNATURE = artifact_trust.VERIFIED_SIGNATURE
+VERIFIED_NONE = artifact_trust.VERIFIED_NONE
 
 # A build id names files: a staging copy while a revert is prepared, and the
 # assets a release publishes. Path separators, whitespace and control
@@ -199,7 +199,7 @@ def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
         raise ManagerReleaseError("manager_manifest_invalid", "the artifact size must be positive")
 
     digest = str(artifact.get("digest") or "")
-    if not os_releases.DIGEST.match(digest):
+    if not artifact_trust.DIGEST.match(digest):
         raise ManagerReleaseError(
             "manager_manifest_invalid", f"the artifact digest {digest!r} is not a sha256 digest"
         )
@@ -209,7 +209,7 @@ def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
     reproducibility = reproducibility if isinstance(reproducibility, dict) else {}
 
     return ManagerRelease(
-        release_id=os_releases.validate_release_id(release_id or payload["build_id"]),
+        release_id=artifact_trust.validate_release_id(release_id or payload["build_id"]),
         version=version,
         architecture=str(payload["architecture"]),
         build_id=build_id,
@@ -240,7 +240,7 @@ def read_manifest(path, *, release_id="", verified=VERIFIED_NONE):
 def verify_artifact(release, path):
     """The bytes on disk are the bytes the signed manifest names."""
 
-    observed = os_releases.file_digest(path)
+    observed = artifact_trust.file_digest(path)
     if observed != release.artifact_digest:
         raise ManagerReleaseError(
             "manager_artifact_corrupt",
@@ -277,7 +277,7 @@ def compatibility_problems(release, *, architecture, state_schemas):
                 ),
             }
         )
-    problems.extend(os_releases.state_schema_problems(release, recorded=state_schemas))
+    problems.extend(artifact_trust.state_schema_problems(release, recorded=state_schemas))
     return problems
 
 

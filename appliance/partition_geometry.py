@@ -2,16 +2,15 @@
 """Where a partition ends, and where the disk it lives on ends.
 
 The first-boot growth helper used to decide "this partition already fills the
-medium" from ``disk_bytes - partition_bytes <= slack``. For the *last* partition
-of an A/B image that ignores the whole occupied prefix — six image-rota
-partitions and roughly 17 GB of it — so a persistent partition that had already
-been grown to the end of a 32 GB card still looked several gigabytes short. A
-power cut between the partition growth and the marker therefore produced a medium
-that retried on every boot, was told the partition could not be grown, and failed
-the boot path forever.
+medium" from ``disk_bytes - partition_bytes <= slack``. That ignores everything
+occupying the disk ahead of the partition, so a root partition sitting behind a
+boot partition on a card that had already been grown still looked short by the
+size of the prefix. A power cut between the partition growth and the marker
+therefore produced a medium that retried on every boot, was told the partition
+could not be grown, and failed the boot path forever.
 
 So the question is answered from real geometry instead: the partition's start
-and length, the disk's length, and — where the GPT can be read — the last usable
+and length, the disk's length, and -- where a GPT can be read -- the last usable
 LBA the table itself declares. Tolerance covers partition alignment and, only
 when the table could not be read, the GPT backup structures at the end of the
 disk. Nothing here infers a size from another size.

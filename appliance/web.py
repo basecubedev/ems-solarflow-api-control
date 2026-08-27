@@ -609,8 +609,6 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             "/api/admin": ("admin.get", {}),
             "/api/admin/releases": ("admin.releases", {}),
             "/api/updates": ("updates.get", {}),
-            "/api/ab": ("ab.status", {}),
-            "/api/ab/sources": ("ab.sources", {}),
             "/api/manager": ("manager.status", {}),
             "/api/manager/sources": ("manager.sources", {}),
             "/api/ssh/keys": ("ssh.get", {}),
@@ -705,19 +703,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             "/api/admin/restart": ("admin.plan_lifecycle", lambda _: {"action": "restart"}),
             "/api/updates/plan": ("updates.plan", lambda b: {"scope": b.get("scope")}),
             "/api/updates/repair": ("updates.plan_repair", lambda b: {"action": b.get("action")}),
-            # The browser sends a release id and nothing else. Every device
-            # path, PARTUUID, URL, key and partition number comes from the
-            # root-owned configuration, the signed manifest or layout discovery.
-            "/api/ab/plan-update": (
-                "ab.plan_update",
-                lambda b: {"release_id": b.get("release_id"), "repair": bool(b.get("repair"))},
-            ),
-            "/api/ab/plan-rollback": ("ab.plan_rollback", lambda _: {}),
-            "/api/ab/plan-fetch": (
-                "ab.plan_fetch",
-                lambda b: {"release_id": b.get("release_id")},
-            ),
-            # Same rule for the manager package: a release id and nothing else.
+            # The browser sends a release id and nothing else. Every URL, key
+            # and package path comes from the root-owned configuration or the
+            # signed manifest.
             "/api/manager/plan-update": (
                 "manager.plan_update",
                 lambda b: {"release_id": b.get("release_id")},
@@ -750,18 +738,11 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         confirm_paths = (
             "/api/admin/execute-install",
             "/api/updates/install",
-            "/api/ab/execute",
             "/api/network/wifi/apply",
             "/api/operations/confirm",
         )
         if path in confirm_paths:
             return self._confirm(session, body)
-
-        if path == "/api/ab/acknowledge":
-            result = self._agent(
-                "ab.acknowledge", session, operation_id=body.get("operation_id")
-            )
-            return None if result is None else self._send(200, result)
 
         if path == "/api/operations/cancel":
             result = self._agent(

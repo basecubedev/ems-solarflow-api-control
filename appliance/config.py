@@ -47,19 +47,13 @@ DEFAULT_SESSION_ABSOLUTE_MAX = 43200
 DEFAULT_HEALTH_TIMEOUT = 120
 DEFAULT_WIFI_REVERT_TIMEOUT = 90
 DEFAULT_MIN_FREE_MB = 1024
-DEFAULT_OS_RELEASE_DIR = "/var/lib/ems-appliance-os-update/releases"
-DEFAULT_OS_RELEASE_KEYRING = "/etc/ems-appliance-manager/os-release-keyring.gpg"
-# Where signed OS releases are fetched from. Empty means this appliance has
-# no transport: releases must then be placed in os_release_dir by hand.
-DEFAULT_OS_RELEASE_INDEX_URL = ""
+# The keyring every signed artifact this appliance installs is verified
+# against. Root-owned, shipped with the package, and never reachable from
+# a request.
+DEFAULT_RELEASE_KEYRING = "/etc/ems-appliance-manager/release-keyring.gpg"
 # Where signed Appliance Manager packages are fetched from. Empty means the
 # manager can only be updated by hand, with dpkg, over SSH or at the console.
 DEFAULT_MANAGER_INDEX_URL = ""
-# Larger than every unit ordered before the health check can start
-# (persistence 120s + slot bootstrap 900s), or a healthy trial that simply took
-# a while to reconstruct its runtime is rolled back. A contract test holds this
-# against the shipped unit files.
-DEFAULT_AB_HEALTH_WINDOW = 1800
 
 
 class ConfigError(Exception):
@@ -107,14 +101,8 @@ class ApplianceConfig:
     supported_architectures: tuple = ("arm64",)
     automatic_security_updates: bool = False
     release_index_url: str = ""
-    os_release_dir: str = DEFAULT_OS_RELEASE_DIR
-    os_release_keyring: str = DEFAULT_OS_RELEASE_KEYRING
-    os_release_index_url: str = DEFAULT_OS_RELEASE_INDEX_URL
+    release_keyring: str = DEFAULT_RELEASE_KEYRING
     manager_index_url: str = DEFAULT_MANAGER_INDEX_URL
-    # A development bench may install an unsigned artifact from the root CLI.
-    # It is never a release-gate pass and the browser can never reach it.
-    allow_unsigned_os_artifacts: bool = False
-    ab_health_window_seconds: int = DEFAULT_AB_HEALTH_WINDOW
     images: AllowedImages = field(default_factory=AllowedImages)
 
     @property
@@ -313,13 +301,7 @@ def load_config(paths):
         supported_architectures=_as_tuple(values, "supported_architectures", ("arm64",)),
         automatic_security_updates=_as_bool(values, "automatic_security_updates", False),
         release_index_url=values.get("release_index_url") or "",
-        os_release_dir=values.get("os_release_dir") or DEFAULT_OS_RELEASE_DIR,
-        os_release_keyring=values.get("os_release_keyring") or DEFAULT_OS_RELEASE_KEYRING,
-        os_release_index_url=(values.get("os_release_index_url") or "").strip(),
+        release_keyring=values.get("release_keyring") or DEFAULT_RELEASE_KEYRING,
         manager_index_url=(values.get("manager_index_url") or "").strip(),
-        allow_unsigned_os_artifacts=_as_bool(values, "allow_unsigned_os_artifacts", False),
-        ab_health_window_seconds=_as_int(
-            values, "ab_health_window_seconds", DEFAULT_AB_HEALTH_WINDOW
-        ),
         images=images,
     )

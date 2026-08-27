@@ -16,7 +16,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from appliance import manager_releases, manager_retention, os_releases
+from appliance import manager_releases, manager_retention, artifact_trust
 
 INSTALL_UNIT = "ems-appliance-manager-install.service"
 
@@ -139,7 +139,7 @@ def prepare_revert(paths, *, retained_at=""):
     """
 
     target = manager_retention.revert_target(paths)
-    observed = os_releases.file_digest(target.path)
+    observed = artifact_trust.file_digest(target.path)
     if observed != target.sha256:
         raise manager_releases.ManagerReleaseError(
             "manager_artifact_corrupt",

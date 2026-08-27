@@ -49,7 +49,7 @@ KIND_SECRET = "secret"
 KIND_AUDIT_EVENT = "audit_event"
 KIND_AUDIT_RESULT = "audit_result"
 KIND_AUDIT_REASON = "audit_reason"
-KIND_OS_RELEASE_ID = "os_release_id"
+KIND_RELEASE_ID = "release_id"
 
 
 class ProtocolError(Exception):
@@ -155,8 +155,6 @@ READ_ONLY_OPERATIONS = (
         timeout_seconds=WIFI_OPERATION_TIMEOUT,
     ),
     _spec("admin.releases", summary="Installable Admin versions"),
-    _spec("ab.status", summary="A/B slot, persistence and OS release state"),
-    _spec("ab.sources", summary="OS releases the configured index offers"),
     _spec("manager.status", summary="Installed manager, what is kept, and any deadline"),
     _spec(
         "manager.sources",
@@ -289,37 +287,6 @@ MUTATING_OPERATIONS = (
         summary="Plan a support archive",
         timeout_seconds=SLOW_PROBE_TIMEOUT,
     ),
-    # The browser names a release and nothing else. Every device path, PARTUUID,
-    # download URL, signing key and partition number comes from the root-owned
-    # configuration, the signed manifest or verified layout discovery.
-    _spec(
-        "ab.plan_update",
-        mutating=True,
-        takes_lock=True,
-        fields=(
-            Field("release_id", KIND_OS_RELEASE_ID),
-            Field("repair", KIND_BOOL, required=False, default=False),
-        ),
-        summary="Plan an A/B operating-system update",
-        timeout_seconds=IMAGE_OPERATION_TIMEOUT,
-    ),
-    _spec(
-        "ab.plan_rollback",
-        mutating=True,
-        takes_lock=True,
-        summary="Plan a rollback to the previous known-good slot",
-    ),
-    # Same rule as the update: the browser names a release id and nothing else.
-    # The three URLs come from the configured index, and what they are allowed
-    # to deliver comes from the signature over the manifest.
-    _spec(
-        "ab.plan_fetch",
-        mutating=True,
-        takes_lock=True,
-        fields=(Field("release_id", KIND_OS_RELEASE_ID),),
-        summary="Plan a download of a signed OS release",
-        timeout_seconds=IMAGE_OPERATION_TIMEOUT,
-    ),
     # The browser names a release id and nothing else. Every URL, signing key
     # and package path comes from the root-owned configuration or the signed
     # manifest. Going backwards is a separate operation rather than a flag, so
@@ -328,7 +295,7 @@ MUTATING_OPERATIONS = (
         "manager.plan_update",
         mutating=True,
         takes_lock=True,
-        fields=(Field("release_id", KIND_OS_RELEASE_ID),),
+        fields=(Field("release_id", KIND_RELEASE_ID),),
         summary="Plan an Appliance Manager package installation",
         timeout_seconds=IMAGE_OPERATION_TIMEOUT,
     ),
@@ -338,12 +305,6 @@ MUTATING_OPERATIONS = (
         takes_lock=True,
         summary="Plan going back to the kept Appliance Manager package",
         timeout_seconds=IMAGE_OPERATION_TIMEOUT,
-    ),
-    _spec(
-        "ab.acknowledge",
-        mutating=True,
-        fields=(Field("operation_id", KIND_OPERATION_ID),),
-        summary="Acknowledge an A/B result or an observed fallback",
     ),
     # The web service owns authentication but not the audit trail: it may only
     # ask the agent to record one of a fixed set of events, with no free-form
@@ -458,8 +419,8 @@ def _coerce(field, value, context):
         return validation.validate_audit_result(value)
     if kind == KIND_AUDIT_REASON:
         return validation.validate_web_audit_reason(value)
-    if kind == KIND_OS_RELEASE_ID:
-        return validation.validate_os_release_id(value)
+    if kind == KIND_RELEASE_ID:
+        return validation.validate_release_id(value)
     raise ProtocolError("invalid_field_kind", f"unknown field kind {kind!r}", field=field.name)
 
 

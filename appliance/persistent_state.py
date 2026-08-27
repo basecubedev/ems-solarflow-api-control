@@ -1,15 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What formats the state on the persistent partition is written in.
+"""What formats the state this appliance keeps is written in.
 
-Every other schema number is stamped into an image and compared against a
-constant compiled into that same image, so it can only agree with itself. This
-record lives outside ``/persistent/shared`` and ``/persistent/slots``, where
-nothing re-seeds it, and is therefore the one operand that does not travel with
-the slot.
+Every other schema number is stamped into a package and compared against a
+constant compiled into that same package, so it can only agree with itself.
+This record lives on the appliance rather than in any package, and is therefore
+the one operand that does not travel with the Appliance Manager being installed.
 
-It names every format independently: the shared-path count is not the only thing
-a step back can cross. Values only rise, and an unknown axis is carried through,
-so an older manager cannot erase a newer one's claim.
+It names every format independently: one count is not the only thing a step
+back can cross. Values only rise, and an unknown axis is carried through, so an
+older manager cannot erase a newer one's claim.
 """
 
 import json
@@ -19,10 +18,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from appliance import (
-    ab_bootstrap,
-    ab_layout,
-    ab_persistence,
-    ab_state,
     backup_ownership,
     manager_retention,
     manager_verify,
@@ -32,33 +27,40 @@ from appliance import (
 STAMP_SCHEMA_VERSION = 1
 READABLE_STAMP_VERSIONS = (1,)
 
-# Deliberately a sibling of upstream's own directories rather than a child of
-# any of them: /persistent/shared is re-seeded from the slot on every boot,
-# /persistent/slots is per-slot by definition, and /persistent/common belongs to
-# upstream's machine-id handling.
 STAMP_DIRECTORY = "ems-appliance"
 STAMP_NAME = "state-schema.json"
 
-# Every versioned format the appliance keeps on a shared path, read from the
-# owning module rather than restated. A schema that moves without an axis moving
-# with it is a failing test, not a silent gap.
+# Every versioned format the appliance keeps, read from the owning module rather
+# than restated. A schema that moves without an axis moving with it is a failing
+# test, not a silent gap.
+
+# Formats this manager no longer writes, frozen at the last version that did.
+#
+# They cannot simply be dropped, and the reason is the whole point of this
+# module. `state_schema_problems` refuses any artifact that does not declare an
+# axis the appliance's own record names -- so an appliance stamped by a manager
+# that still had these would refuse every package built after they were removed,
+# and would refuse it before anything could be installed to fix that. Declaring
+# them keeps that door open. Declaring them at the last version that wrote them,
+# with a floor of 1, is also true: this manager reads any version of them,
+# because it reads none of them.
+#
+# Nothing may be added here. An axis is retired when the state it described is
+# gone, and what is gone does not acquire new formats.
+RETIRED_SCHEMAS = {
+    "persistent_paths": 3,
+    "slot_layout": 2,
+    "ab_state": 1,
+    "runtime_record": 4,
+    "confirmed_authority": 1,
+}
 
 
 def implemented_schemas():
-    """What the running Appliance Manager implements, by axis.
-
-    ``os_update`` is imported here rather than at module scope: it is a consumer
-    of this module, and the update planner has to be able to ask what this
-    partition holds without the two importing each other.
-    """
-
-    from appliance.os_update import CONFIRMED_AUTHORITY_SCHEMA_VERSION
+    """What the running Appliance Manager implements, by axis."""
 
     return {
-        "persistent_paths": ab_persistence.PERSISTENT_SCHEMA_VERSION,
-        "slot_layout": ab_layout.LAYOUT_SCHEMA_VERSION,
-        "ab_state": ab_state.AB_STATE_SCHEMA_VERSION,
-        "runtime_record": ab_bootstrap.RECORD_VERSION,
+        **RETIRED_SCHEMAS,
         "backup_ownership": backup_ownership.RECORD_SCHEMA_VERSION,
         "backup_account_origin": backup_ownership.ACCOUNT_ORIGIN_SCHEMA_VERSION,
         "backup_acl_manifest": backup_ownership.ACL_MANIFEST_SCHEMA_VERSION,
@@ -66,7 +68,6 @@ def implemented_schemas():
         "operations": operation_schema.OPERATION_SCHEMA_VERSION,
         "operation_authority": operation_schema.AUTHORITY_SCHEMA_VERSION,
         "operation_recovery": operation_schema.RECOVERY_SCHEMA_VERSION,
-        "confirmed_authority": CONFIRMED_AUTHORITY_SCHEMA_VERSION,
         "manager_retention": manager_retention.RECORD_SCHEMA_VERSION,
         "manager_verify": manager_verify.DEADLINE_SCHEMA_VERSION,
     }
@@ -76,37 +77,27 @@ def readable_floors():
     """The oldest schema this manager can still read, by axis.
 
     Most formats are read with strict equality, so their floor is what they
-    implement. Two carry a window and say so themselves: the runtime record
-    (``READABLE_RECORD_VERSIONS``) and the backup-ownership record (its legacy
-    version). Restating either here would let the window and the declaration
-    drift apart.
+    implement. The ones that carry a window say so themselves, and are read off
+    the module that owns the window rather than restated here.
     """
 
     floors = implemented_schemas()
 
-    # Two record formats carry a real window and declare it themselves.
-    # Restating either here would let the window and the declaration drift.
-    floors["runtime_record"] = min(ab_bootstrap.READABLE_RECORD_VERSIONS)
+    # One record format carries a real window and declares it itself. Restating
+    # it here would let the window and the declaration drift apart.
     floors["backup_ownership"] = backup_ownership.LEGACY_RECORD_SCHEMA_VERSION
-
-    # Two axes are structural rather than a stored format, and newer code copes
-    # with every older value by construction: a larger set of shared paths
-    # subsumes a smaller one (the missing directory is created), and the layout
-    # descriptor is re-seeded from the running slot at every boot, so a manager
-    # always meets its own. Declaring these as strictly as a record format would
-    # refuse the forward update that ships the very schema bump -- which is the
-    # defect the one-directional gate had, reintroduced from the other side.
-    floors["persistent_paths"] = 1
-    floors["slot_layout"] = 1
     floors["manager_retention"] = min(manager_retention.READABLE_RECORD_VERSIONS)
     floors["manager_verify"] = min(manager_verify.READABLE_DEADLINE_VERSIONS)
 
+    # A retired format is read at every version, because it is read at none.
+    for axis in RETIRED_SCHEMAS:
+        floors[axis] = 1
+
     # Everything else is read with strict equality by the module that owns it.
     # The floor is what it implements, and that is deliberate: a release whose
-    # manager cannot read the pending-trial record this appliance would write
-    # could never complete its own trial, so refusing it at plan time is the
-    # honest answer. Bumping one of those schemas means adding a read window
-    # first, not lowering this.
+    # manager cannot read a record this appliance would write could never use
+    # it, so refusing it at plan time is the honest answer. Bumping one of those
+    # schemas means adding a read window first, not lowering this.
     return floors
 
 
@@ -195,19 +186,14 @@ def resolve(root, mountpoint):
     return Path(root or "/") / str(mountpoint).lstrip("/")
 
 
-def record_mountpoint(paths, probe=None, *, root="/"):
+def record_mountpoint(paths):
     """The one place this appliance's state schema record lives.
 
-    On an A/B host the persistent partition is the only thing a slot switch does
-    not replace, so the record belongs there. A package-managed host switches
-    nothing, and the manager's state directory is what an install has to
-    survive. Never both: two records would be two authorities for one fact.
+    The manager's own state directory, because that is what an install has to
+    survive. One place and never two: two records would be two authorities for
+    one fact.
     """
 
-    if probe is not None:
-        report = ab_persistence.verify(ab_layout.discover(probe), probe.mounts())
-        if report.state == ab_persistence.STATE_OK and report.mountpoint:
-            return resolve(root, report.mountpoint)
     return Path(paths.state_dir)
 
 

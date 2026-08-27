@@ -35,24 +35,12 @@ EXECUTABLES = {
     "chage": ("/usr/bin/chage",),
     "ss": ("/usr/bin/ss", "/bin/ss"),
     "avahi-resolve": ("/usr/bin/avahi-resolve",),
-    # A/B layout discovery and the inactive-slot write. Every path these are
-    # given comes from the root-owned layout manifest, never from a request.
+    # Finding the partition mounted at /, so the first boot can grow it. The
+    # only argument this is ever given is a fixed column set.
     "lsblk": ("/usr/bin/lsblk", "/bin/lsblk"),
-    "blkid": ("/usr/sbin/blkid", "/sbin/blkid"),
-    "findmnt": ("/usr/bin/findmnt", "/bin/findmnt"),
-    "mount": ("/usr/bin/mount", "/bin/mount"),
-    "umount": ("/usr/bin/umount", "/bin/umount"),
-    "fsck.vfat": ("/usr/sbin/fsck.vfat", "/sbin/fsck.vfat"),
-    "e2fsck": ("/usr/sbin/e2fsck", "/sbin/e2fsck"),
-    "blockdev": ("/usr/sbin/blockdev", "/sbin/blockdev"),
-    # Update artifacts are .tar.zst. Python's tarfile gained zstd support in
-    # 3.14 and the appliance runs 3.13, so the archive is decompressed through
-    # this binary and read as a stream.
-    "zstd": ("/usr/bin/zstd", "/bin/zstd"),
-    # Detached-signature verification of an OS release manifest, against a
+    # Detached-signature verification of a release manifest, against a
     # root-owned keyring named by the host configuration. gpgv, not gpg: it is
-    # what the image installs, it needs no writable home on a read-only root,
-    # and it cannot fall back to a default keyring.
+    # what the image installs, and it cannot fall back to a default keyring.
     "gpgv": ("/usr/bin/gpgv",),
 }
 

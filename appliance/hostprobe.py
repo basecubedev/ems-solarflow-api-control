@@ -230,3 +230,15 @@ class HostProbe:
         if record["hostname"]:
             record["mdns"] = f"{record['hostname']}.local"
         return record
+
+
+def host_architecture(machine=None):
+    """This machine's OCI architecture name, or nothing if it has no mapping.
+
+    The Appliance Manager's own package index is per-architecture, so a release
+    that was built for another board must be refused before it is unpacked
+    rather than after.
+    """
+
+    known = {"aarch64": "arm64", "arm64": "arm64", "x86_64": "amd64", "amd64": "amd64"}
+    return known.get(machine if machine is not None else platform.machine(), "")
