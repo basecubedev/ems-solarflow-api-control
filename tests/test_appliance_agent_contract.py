@@ -421,6 +421,53 @@ def test_socket_refuses_a_peer_that_is_not_root_or_the_web_user(tmp_path, servic
         thread.join(timeout=5)
 
 
+def test_a_refusal_that_lost_the_write_race_is_still_delivered(tmp_path):
+    """The refusal is written before the request is read, so the close races the
+    caller's write. Here the race is decided rather than waited for: the agent
+    has already answered and closed before the client sends its first byte, so
+    ``sendall`` cannot win. What used to happen then was ``BrokenPipeError`` ->
+    "the appliance agent closed the connection", and the reason -- already
+    sitting in this socket's receive buffer -- was never read.
+    """
+
+    path = tmp_path / "agent.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    listener.listen(1)
+    answered = threading.Event()
+    refusal = {
+        "ok": False,
+        "error": {
+            "code": "peer_not_allowed",
+            "message": "this local user may not use the appliance agent",
+        },
+    }
+
+    def refuse_without_reading():
+        connection, _ = listener.accept()
+        connection.sendall(json.dumps(refusal).encode("utf-8") + b"\n")
+        connection.close()
+        answered.set()
+
+    def connect_after_the_agent_has_gone():
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.connect(str(path))
+        assert answered.wait(10), "the agent never answered"
+        return connection
+
+    server = threading.Thread(target=refuse_without_reading, daemon=True)
+    server.start()
+    try:
+        client = AgentClient(path, timeout=10, connect=connect_after_the_agent_has_gone)
+        with pytest.raises(AgentCallError) as excinfo:
+            client.call("status.get")
+
+        assert excinfo.value.code == "peer_not_allowed"
+    finally:
+        server.join(timeout=10)
+        listener.close()
+
+
 def test_socket_serves_an_allowed_peer(tmp_path, services):
     import os
 
