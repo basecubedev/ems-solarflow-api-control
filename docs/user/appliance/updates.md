@@ -64,6 +64,13 @@ Nothing here happens on a schedule. There is no automatic update, no nightly
 check that installs something, and no way for a newer version to arrive because
 time passed. It moves when you press the button.
 
+The list you are choosing from names **every version ever published**, not only
+newer ones. That is on purpose: installing an earlier package is the whole way
+back from a bad update, so the older entries stay listed for as long as they
+exist. How far back you can go is bounded by whether the older Manager can still
+read the state on your disk, and the plan says so before you confirm rather than
+after.
+
 ### Doing it
 
 1. Open **System Updates** and scroll to **Appliance Manager**.

@@ -606,17 +606,27 @@ are host authority: the browser can influence neither.
 | Setting | Default | What it decides |
 |---|---|---|
 | `release_keyring` | `/etc/ems-appliance-manager/release-keyring.gpg` | The trust anchor. The package ships the project's own release keyring here, deliberately **not** as a conffile: it is a trust anchor rather than a setting, so a local edit must not survive an upgrade that rotates the key. With no keyring at all, every artefact is refused rather than installed unverified |
-| `manager_index_url` | empty | An `https` index naming downloadable Appliance Manager packages. The index is never trusted: it may only name candidates, and what is installed is decided by the signature. Empty is a working state — the package can still be installed by hand |
+| `release_fingerprints` | empty in code, the release primary in the shipped file | The signer, on top of the keyring. A keyring can hold more keys than a release may be signed with, so "`gpg` said good" is not the same answer as "signed by us". Names the **primary**, because `gpg` reports that one for a subkey signature — which is what makes rotating a leaked subkey cost nothing in the field. Empty accepts any key the keyring holds |
+| `manager_index_url` | empty in code, this project's index in the shipped file | An `https` index naming downloadable Appliance Manager packages. The index is never trusted: it may only name candidates, and what is installed is decided by the signature. Empty is a working state — the package can still be installed by hand. Pinned to one release tag rather than the `/releases/latest` alias, because two products publish releases from this repository and a flashed appliance never gets the value corrected |
+
+Both settings have an empty code default and a filled-in shipped value, and the
+difference matters: an appliance nobody assembled here says it has no transport
+and trusts no particular signer, while the one this project flashes names both.
 
 Verification uses `gpgv` against that keyring alone — not the invoking user's
 keyring, and not a keyserver. A release signed by a key the keyring does not
-hold is refused with the same finality as an unsigned one.
+hold is refused with the same finality as an unsigned one, and so is one signed
+by a key the keyring holds but `release_fingerprints` does not name.
 
 #### One identity, two keys
 
-The release identity is a primary key that only certifies, and a subkey that
-only signs. Releases are signed by the subkey; the primary never leaves the
-maintainer's machine.
+The release identity is a primary key and a subkey that only signs
+(`caps=s`). Releases are signed by the subkey; the primary never leaves the
+maintainer's machine. That the primary is not *used* to sign is a practice
+rather than something its capabilities enforce — the shipped key carries `scSC`,
+so it could — and the release workflow makes the practice mechanical by naming
+the subkey with a trailing `!`, which is what stops `gpg` choosing a key of its
+own accord.
 
 What that buys is a rotation that costs nothing in the field. The appliance
 pins the **primary's** fingerprint, and `gpg` reports that one for a subkey

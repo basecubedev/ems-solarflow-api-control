@@ -13,6 +13,10 @@ waiting.
 > nothing to download; the steps below are complete and the file names are the
 > ones a release carries. A local build writes the same names into `dist/`.
 
+> **A new image is built every week**, so the card you flash comes up with a
+> current Debian instead of spending its first boot pulling months of updates.
+> Take the newest one; there is no reason to prefer an older.
+
 > **Appliance images are published as *pre-releases*.** They are built by the
 > project's CI rather than in the approved builder environment that holds the
 > release key, so nothing you download carries a signature to check. Writing a

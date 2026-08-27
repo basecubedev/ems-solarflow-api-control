@@ -51,6 +51,13 @@ DEFAULT_MIN_FREE_MB = 1024
 # against. Root-owned, shipped with the package, and never reachable from
 # a request.
 DEFAULT_RELEASE_KEYRING = "/etc/ems-appliance-manager/release-keyring.gpg"
+# The signer this appliance accepts, on top of the keyring. A keyring can hold
+# more keys than a release is allowed to be signed with, so "gpg said good" is
+# not the same answer as "signed by us". The release side has refused to
+# finalize without a fingerprint since it was written; the device had no way to
+# be told one, which left artifact_trust's fingerprint gate unarmed on every
+# appliance while the security model described it as armed.
+DEFAULT_RELEASE_FINGERPRINTS = ()
 # Where signed Appliance Manager packages are fetched from. Empty means the
 # manager can only be updated by hand, with dpkg, over SSH or at the console.
 DEFAULT_MANAGER_INDEX_URL = ""
@@ -102,6 +109,7 @@ class ApplianceConfig:
     automatic_security_updates: bool = False
     release_index_url: str = ""
     release_keyring: str = DEFAULT_RELEASE_KEYRING
+    release_fingerprints: tuple = DEFAULT_RELEASE_FINGERPRINTS
     manager_index_url: str = DEFAULT_MANAGER_INDEX_URL
     images: AllowedImages = field(default_factory=AllowedImages)
 
@@ -302,6 +310,10 @@ def load_config(paths):
         automatic_security_updates=_as_bool(values, "automatic_security_updates", False),
         release_index_url=values.get("release_index_url") or "",
         release_keyring=values.get("release_keyring") or DEFAULT_RELEASE_KEYRING,
+        release_fingerprints=tuple(
+            fingerprint.replace(" ", "").upper()
+            for fingerprint in _as_tuple(values, "release_fingerprints", ())
+        ),
         manager_index_url=(values.get("manager_index_url") or "").strip(),
         images=images,
     )

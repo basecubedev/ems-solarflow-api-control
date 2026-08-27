@@ -83,6 +83,12 @@ is updated here and nowhere else.
 
 **System Updates → Appliance Manager** is where it is updated, and only there.
 
+Where the packages come from is
+[manager-releases.md](manager-releases.md): each version is published at its own
+release tag, and one index — at a tag that never moves — names every version
+that was ever published, oldest included. That the old ones stay listed is not
+tidiness; it is what makes the paragraph below true.
+
 ### What happens, in order
 
 1. The configured index (`manager_index_url` in `appliance.conf`) is fetched.
