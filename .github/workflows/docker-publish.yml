@@ -73,6 +73,9 @@ jobs:
         run: |
           docker compose -f docker-compose.example.yml config
 
+      - name: Install the filesystem tools the fixtures build with
+        run: sudo apt-get install -y --no-install-recommends mtools e2fsprogs
+
       - name: Run full test suite (excludes real-Docker e2e, covered by CI workflow)
         run: |
           pytest -q -m "not docker" tests/
