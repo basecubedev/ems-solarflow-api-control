@@ -24,11 +24,11 @@ from appliance import (
     manager_retention,
     manager_update,
     manager_verify,
-    os_releases,
+    artifact_trust,
     persistent_state,
 )
 from appliance.agent import AgentHandlers
-from appliance.os_fetch import FetchError
+from appliance.release_fetch import FetchError
 from tests.helpers.appliance import build_test_services
 
 pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
@@ -117,7 +117,7 @@ class ScriptedVerifier:
     def verify(self, manifest_path, signature_path):
         self.calls.append(str(manifest_path))
         if not self.valid:
-            raise os_releases.ReleaseError(
+            raise artifact_trust.ReleaseError(
                 "release_signature_invalid", "the signature could not be verified"
             )
         return True

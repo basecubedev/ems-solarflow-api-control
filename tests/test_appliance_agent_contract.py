@@ -521,7 +521,7 @@ def test_a_planner_that_pulls_an_image_may_take_longer_than_the_default():
 
     from appliance.agent_client import DEFAULT_TIMEOUT, operation_timeout
 
-    for name in ("admin.plan_install", "admin.plan_rollback", "ab.plan_update", "ab.plan_fetch"):
+    for name in ("admin.plan_install", "admin.plan_rollback", "manager.plan_update"):
         assert operation_timeout(name) > DEFAULT_TIMEOUT, name
 
 

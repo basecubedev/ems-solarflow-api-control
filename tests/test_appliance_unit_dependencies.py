@@ -98,45 +98,6 @@ def test_every_documentation_uri_names_a_file_the_package_ships(path):
             )
 
 
-def test_the_units_that_will_outlive_the_ab_removal_are_known():
-    """The coupling this module exists for, written down while it is still true.
-
-    Five surviving units Require= the persistence unit and two order against it.
-    Cutting those edges is a precondition for deleting it, not a consequence
-    — and the same Requires= sits on NetworkManager in the image overlay, which
-    the package does not own and therefore cannot clean up.
-    """
-
-    persistence = "ems-appliance-persistence.service"
-    dependents = {
-        path.name: [d for d, name in declared_dependencies(path) if name == persistence]
-        for path in sorted(UNIT_DIR.glob("*"))
-        if path.name != persistence
-    }
-    requiring = {name: kinds for name, kinds in dependents.items() if "Requires" in kinds}
-
-    # Five, not the three the migration plan named: ab-health and
-    # slot-bootstrap require it too. The count is asserted because getting it
-    # wrong is exactly how one edge survives a removal.
-    assert set(requiring) == {
-        "ems-appliance-agent.service",
-        "ems-appliance-web.service",
-        "ems-appliance-config-seed.service",
-        "ems-appliance-ab-health.service",
-        "ems-appliance-slot-bootstrap.service",
-    }, requiring
-
-    overlay = (
-        PACKAGING
-        / "image/layer/ems-appliance.rootfs-overlay/etc/systemd/system"
-        / "NetworkManager.service.d/50-ems-appliance-persistence.conf"
-    )
-    assert f"Requires={persistence}" in overlay.read_text(encoding="utf-8"), (
-        "the image overlay no longer couples NetworkManager to persistence — if that "
-        "was deliberate, this assertion and the removal plan both need revisiting"
-    )
-
-
 def test_the_growth_unit_is_installed_and_removed_with_the_package():
     """A package on plain Raspberry Pi OS never grew its root without this."""
 

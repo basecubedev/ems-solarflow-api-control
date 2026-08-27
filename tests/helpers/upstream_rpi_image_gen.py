@@ -23,11 +23,9 @@ FIXTURE = ROOT / "tests" / "fixtures" / "rpi_image_gen"
 MANIFEST = FIXTURE / "source-manifest.json"
 
 SHARED_GENERATOR = (
-    "image/gpt/ab_userdata/device/rootfs-overlay/usr/lib/systemd/"
     "system-generators/slot-shared-generator"
 )
 PERSIST_GENERATOR = (
-    "image/gpt/ab_userdata/device/rootfs-overlay/usr/lib/systemd/"
     "system-generators/slot-perst-generator"
 )
 
@@ -45,7 +43,6 @@ DOCKER_LAYERS = (
     "layer/app-container/docker/engine-trixie.yaml",
     "layer/app-container/docker/engine-bookworm.yaml",
 )
-IMAGE_ROTA = "image/gpt/ab_userdata/image.yaml"
 UPSTREAM_AB_CONFIG = "config/trixie-minbase-ab.yaml"
 
 # The non-A/B counterparts: one MBR boot partition, one root, and the udev

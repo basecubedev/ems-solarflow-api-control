@@ -1,172 +1,88 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""How large a medium the appliance actually needs, and where that is written.
+"""How large a medium the appliance actually needs.
 
-The image is about 16.5 GiB. A card marketed as "16 GB" holds roughly 14.8 to
-15.9 GiB of addressable bytes, so it cannot hold the image at all — and nothing
-said so: no document, no build metadata and no preflight named a minimum.
-
-The requirement is not the image either. The persistent partition carries both
-slots' Docker stores, the seed archives an offline reconstruction is rebuilt
-from, a staged update, the EMS data and the operator's backups. Those are
-measured; the policy that follows from them is 32 GB.
+The image is the floor, not the requirement: what the root has to hold once the
+appliance is running is what decides the answer. The numbers here are the ones a
+release attestation carries and an installation checklist prints, so they are
+derived from the profile rather than typed out twice.
 """
 
-import json
 from pathlib import Path
 
 import pytest
 
 from appliance import media_sizing
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
-ROOT = Path(__file__).resolve().parents[1]
-PROFILE = ROOT / "packaging/appliance/image/shared/ems-appliance-ab.yaml"
-BUILD_SCRIPT = ROOT / "scripts/appliance-build-rpi-ab-image.sh"
-CHECKLIST = ROOT / "docs/appliance/ab-hardware-validation.md"
-
-GIB = 1024 * 1024 * 1024
+SHARED = (
+    Path(__file__).resolve().parents[1]
+    / "packaging" / "appliance" / "image" / "shared" / "ems-appliance.yaml"
+)
 
 
-def test_the_declared_partition_sizes_are_the_ones_the_image_is_built_with():
-    """If the profile changes, the sizing answer changes with it."""
+def test_the_partition_sizes_are_the_ones_the_profile_declares():
+    """A number that drifts from the profile sizes an image nobody builds."""
 
-    text = PROFILE.read_text(encoding="utf-8")
+    text = SHARED.read_text(encoding="utf-8")
 
-    assert "boot_part_size: 256M" in text
-    assert "system_part_size: 4G" in text
-    assert "data_part_size: 8G" in text
-    assert media_sizing.BOOT_PARTITION_BYTES == 256 * 1024 * 1024
-    assert media_sizing.SYSTEM_PARTITION_BYTES == 4 * GIB
-    assert media_sizing.PERSISTENT_PARTITION_BYTES == 8 * GIB
+    assert f"boot_part_size: {media_sizing.BOOT_PARTITION_BYTES // media_sizing.MIB}M" in text
+    assert f"root_part_size: {media_sizing.ROOT_PARTITION_BYTES // media_sizing.GIB}G" in text
 
 
-def test_the_image_does_not_fit_a_sixteen_gigabyte_card():
-    """The ambiguity the finding names, resolved with the actual numbers."""
-
-    marketed_16gb = 16 * 1000 * 1000 * 1000
-
-    assert media_sizing.IMAGE_BYTES > marketed_16gb
-    assert not media_sizing.media_is_supported(marketed_16gb)
-
-
-def test_a_thirty_two_gigabyte_card_is_supported_even_at_the_low_end():
-    """Vendors differ by a few percent; a genuine 32 GB card must pass."""
-
-    assert media_sizing.media_is_supported(30_500_000_000)
-    assert media_sizing.media_is_supported(32 * 1000 * 1000 * 1000)
-
-
-def test_the_measured_requirement_is_what_the_policy_rests_on():
-    requirements = media_sizing.requirements()
-    persistent = requirements["persistent_requirement"]
-
-    assert persistent["total_bytes"] > media_sizing.PERSISTENT_PARTITION_BYTES
-    assert requirements["recommended_media_bytes"] > 16 * 1000 * 1000 * 1000
-    assert requirements["recommended_media_bytes"] < media_sizing.MINIMUM_MEDIA_BYTES
-    assert requirements["supported_media_label"] == "32 GB"
-
-
-def test_every_component_of_the_requirement_is_named():
-    persistent = media_sizing.requirements()["persistent_requirement"]
-
-    assert set(persistent) == {
-        "docker_store_per_slot_bytes",
-        "docker_seed_bytes",
-        "update_staging_bytes",
-        "application_data_bytes",
-        "safety_margin_bytes",
-        "total_bytes",
-    }
-    assert persistent["update_staging_bytes"] > media_sizing.SYSTEM_PARTITION_BYTES
-
-
-def test_the_requirements_survive_json():
-    assert json.loads(json.dumps(media_sizing.requirements()))
-
-
-def test_the_build_metadata_records_the_minimum_medium():
-    """An image that cannot say what it needs cannot be flashed safely."""
-
-    text = BUILD_SCRIPT.read_text(encoding="utf-8")
-
-    assert "minimum_media_bytes" in text
-    assert "media_sizing.MINIMUM_MEDIA_BYTES" in text
-
-
-def test_the_hardware_checklist_states_the_minimum_medium():
-    text = CHECKLIST.read_text(encoding="utf-8")
-
-    assert "32 GB" in text
-    assert str(media_sizing.MINIMUM_MEDIA_BYTES) in text or "30,000,000,000" in text
-
-
-# --- the single-slot shape ---------------------------------------------------
-
-
-def test_the_single_slot_numbers_match_the_profile_that_declares_them():
-    """Read from the shared single-slot config, not restated here."""
-
-    import yaml
-
-    config = yaml.safe_load(
-        (
-            Path(__file__).resolve().parents[1]
-            / "packaging"
-            / "appliance"
-            / "image"
-            / "shared"
-            / "ems-appliance-single.yaml"
-        ).read_text(encoding="utf-8")
-    )
-
-    assert config["image"]["boot_part_size"] == "256M"
-    assert config["image"]["root_part_size"] == "8G"
-    assert media_sizing.SINGLE_BOOT_PARTITION_BYTES == 256 * 1024 * 1024
-    assert media_sizing.SINGLE_ROOT_PARTITION_BYTES == 8 * GIB
-
-
-def test_a_single_slot_appliance_needs_a_smaller_card_than_an_ab_one():
-    """One root, one Docker store, no persistent partition, no staged update.
-
-    The 32 GB figure is about the A/B shape. Repeating it for an image with
-    half the partitions would tell an owner to buy a card the appliance has no
-    use for.
-    """
-
-    assert media_sizing.SINGLE_IMAGE_BYTES < media_sizing.IMAGE_BYTES
-    assert media_sizing.SINGLE_MINIMUM_MEDIA_BYTES < media_sizing.MINIMUM_MEDIA_BYTES
-
-
-def test_the_single_slot_policy_floor_clears_what_the_root_actually_needs():
-    """The policy is a card an owner can buy, above the computed requirement."""
-
-    assert (
-        media_sizing.SINGLE_RECOMMENDED_MEDIA_BYTES < media_sizing.SINGLE_MINIMUM_MEDIA_BYTES
+def test_the_image_is_the_two_partitions_and_nothing_else():
+    assert media_sizing.IMAGE_BYTES == (
+        media_sizing.BOOT_PARTITION_BYTES + media_sizing.ROOT_PARTITION_BYTES
     )
 
 
-def test_a_16gb_card_holds_a_single_slot_image_and_not_an_ab_one():
-    marketed_16gb = 16 * 1000 * 1000 * 1000
-
-    assert media_sizing.media_is_supported(marketed_16gb, variant="single")
-    assert not media_sizing.media_is_supported(marketed_16gb, variant="ab")
-
-
-def test_a_caller_that_does_not_say_which_shape_gets_the_stricter_answer():
-    """Defaulting to the smaller floor would undersize an A/B appliance."""
-
-    assert not media_sizing.media_is_supported(16 * 1000 * 1000 * 1000)
+def test_the_recommendation_is_the_image_plus_what_the_root_grows_to_hold():
+    assert media_sizing.RECOMMENDED_MEDIA_BYTES == (
+        media_sizing.IMAGE_BYTES + media_sizing.ROOT_GROWTH_BYTES
+    )
+    assert media_sizing.ROOT_GROWTH_BYTES == (
+        media_sizing.DOCKER_STORE_BYTES
+        + media_sizing.APPLICATION_DATA_BYTES
+        + media_sizing.SAFETY_MARGIN_BYTES
+    )
 
 
-def test_an_unknown_shape_is_refused_rather_than_sized():
-    with pytest.raises(ValueError):
-        media_sizing.media_is_supported(64 * 1000 * 1000 * 1000, variant="tri-slot")
+def test_the_floor_sits_below_the_nominal_figure_so_a_genuine_card_passes():
+    """Media are marketed in decimal gigabytes and vendors differ by a percent
+    or two. A floor equal to the nominal figure refuses cards that are exactly
+    what they say they are."""
+
+    nominal = 16_000_000_000
+
+    assert media_sizing.MINIMUM_MEDIA_BYTES < nominal
+    assert media_sizing.media_is_supported(nominal) is True
 
 
-def test_the_requirements_name_both_shapes():
-    by_variant = media_sizing.requirements()["by_variant"]
+def test_a_card_below_the_floor_is_not_supported():
+    assert media_sizing.media_is_supported(media_sizing.MINIMUM_MEDIA_BYTES - 1) is False
+    assert media_sizing.media_is_supported(8_000_000_000) is False
 
-    assert set(by_variant) == {"ab", "single"}
-    assert by_variant["ab"]["supported_media_label"] == "32 GB"
-    assert by_variant["single"]["supported_media_label"] == "16 GB"
+
+def test_the_image_itself_fits_inside_the_floor():
+    """Otherwise the flash truncates, or fails, on a card the policy allows."""
+
+    assert media_sizing.IMAGE_BYTES < media_sizing.MINIMUM_MEDIA_BYTES
+
+
+def test_the_requirements_report_names_every_number_behind_the_policy():
+    report = media_sizing.requirements()
+
+    assert report["minimum_media_bytes"] == media_sizing.MINIMUM_MEDIA_BYTES
+    assert report["recommended_media_bytes"] == media_sizing.RECOMMENDED_MEDIA_BYTES
+    assert report["supported_media_label"] == media_sizing.SUPPORTED_MEDIA_LABEL
+    assert report["image_bytes"] == media_sizing.IMAGE_BYTES
+    assert report["partitions"]["boot_bytes"] == media_sizing.BOOT_PARTITION_BYTES
+    assert report["partitions"]["root_initial_bytes"] == media_sizing.ROOT_PARTITION_BYTES
+    assert report["root_growth"]["total_bytes"] == media_sizing.ROOT_GROWTH_BYTES
+
+
+def test_the_unsupported_reason_says_what_the_number_is_about():
+    reason = media_sizing.UNSUPPORTED_MEDIA_REASON
+
+    assert "8.25" in reason
+    assert "grow" in reason

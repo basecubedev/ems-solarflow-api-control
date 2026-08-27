@@ -120,8 +120,8 @@ def test_the_media_policy_travels_with_the_result(tmp_path):
 
     _result, payload = generate(dist, tmp_path)
 
-    assert payload["media"]["supported_media_label"] == "32 GB"
-    assert payload["media"]["minimum_media_bytes"] > 16_000_000_000
+    assert payload["media"]["supported_media_label"] == "16 GB"
+    assert payload["media"]["minimum_media_bytes"] > 14_000_000_000
 
 
 def test_the_markdown_is_generated_from_the_same_numbers(tmp_path):

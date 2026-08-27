@@ -187,28 +187,6 @@ def test_a_source_authority_of_another_schema_is_refused(tmp_path):
     assert error.value.code == release_inputs.UNSUPPORTED
 
 
-def test_a_real_bundle_is_described_from_the_object_tree(tmp_path):
-    """The description has to be the repository's, not the working directory's."""
-
-    bundle = tmp_path / "bundle.tar.gz"
-    subprocess.run(
-        ["git", "-C", str(ROOT), "archive", "--format=tar.gz", "--prefix=p/", "HEAD"],
-        stdout=bundle.open("wb"),
-        check=True,
-        timeout=600,
-    )
-
-    described = release_inputs.describe_source_bundle(bundle, root=ROOT)
-
-    assert len(described.revision) == 40
-    assert described.tree_sha256.startswith("sha256:")
-    assert described.tracked_objects > 500
-    # Persistence activation depends on these; a bundle that lost them builds
-    # an appliance that discards every write at the first slot switch.
-    assert described.symlinks >= 6
-    assert release_inputs.verify_source_bundle(described, bundle) == ()
-
-
 # --- the package binds to the build ------------------------------------------
 
 

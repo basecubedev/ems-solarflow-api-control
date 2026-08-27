@@ -59,38 +59,15 @@ def checkout(tmp_path, lock, **overrides):
     write(root, lock.executable, "#!/bin/bash\n", mode=0o755)
     write(root, "LICENSE", "upstream\n")
     write(root, "depends", "all:bash\nbuild:mmdebstrap\n")
-    for slug in sorted(lock.image_layers):
-        pinned = lock.layer(slug)
-        # Overrides without a slug still mean the A/B layer, which is what the
-        # refusal tests written before there was a second one are about.
-        suffix = "" if slug == "ab" else f"_{slug}"
-        write(
-            root,
-            pinned.path,
-            "# METABEGIN\n"
-            f"# X-Env-Layer-Name: {overrides.get(f'layer_name{suffix}', pinned.name)}\n"
-            f"# X-Env-Layer-Version: "
-            f"{overrides.get(f'layer_version{suffix}', pinned.version)}\n"
-            "# METAEND\n",
-        )
+    pinned = lock.image_layer
     write(
         root,
-        "image/gpt/ab_userdata/post-image.sh",
-        "upd=${1}/update\n"
-        "ln -sf ../system.sparse ${upd}/system\n"
-        "ln -sf ../boot.sparse ${upd}/boot\n"
-        "tar -I zstd -h -cf ${1}/update.tar.zst -- *\n",
+        pinned.path,
+        "# METABEGIN\n"
+        f"# X-Env-Layer-Name: {overrides.get('layer_name', pinned.name)}\n"
+        f"# X-Env-Layer-Version: {overrides.get('layer_version', pinned.version)}\n"
+        "# METAEND\n",
     )
-    write(root, "image/gpt/ab_userdata/genimage.cfg.in.ext4", "partition boot_a {}\n")
-    write(
-        root,
-        SHARED_GENERATOR,
-        f"CONF_DIR={lock.shared_slot_conf_dir}\nshared_path={lock.shared_root}$path\n",
-        mode=0o755,
-    )
-    write(root, PERSIST_GENERATOR, "#!/bin/sh\n", mode=0o755)
-    write(root, "layer/rpi/device/slot-mapper/bin/rpi-slot-label", "#!/bin/sh\n", mode=0o755)
-    write(root, "config/trixie-minbase-ab.yaml", "image:\n  layer: image-rota\n")
     write(root, "config/trixie-minbase.yaml", "image:\n  layer: image-rpios\n")
     write(root, "image/mbr/simple_dual/setup.sh", "#!/bin/bash\n", mode=0o755)
     write(root, "image/mbr/simple_dual/genimage.cfg.in.ext4", "partition root {}\n")
@@ -156,26 +133,6 @@ def failed(report):
 
 
 # --- the pinned lock ---------------------------------------------------------
-
-
-def test_the_lock_pins_an_exact_upstream_revision(lock):
-    assert lock.repository == "https://github.com/raspberrypi/rpi-image-gen"
-    assert lock.release == "v2.7.0"
-    assert len(lock.commit) == 40
-    assert lock.image_layer == "image-rota"
-    assert lock.shared_slot_mechanism == "slot-shared"
-
-
-def test_the_lock_records_the_real_update_artifact(lock):
-    assert lock.update_archive == "update.tar.zst"
-    assert lock.update_members == ("boot", "system")
-
-
-def test_the_lock_records_the_upstream_mountpoints(lock):
-    assert lock.persistent_mountpoint == "/persistent"
-    assert lock.shared_root == "/persistent/shared"
-    assert lock.bootconfig_mountpoint == "/bootfs"
-    assert lock.machine_id_source == "/persistent/common/etc/machine-id"
 
 
 def test_an_unreadable_lock_is_an_error(tmp_path):
@@ -258,93 +215,6 @@ def test_a_non_executable_generator_is_refused(tmp_path, lock):
     report = probe(root, lock)
 
     assert "executable" in failed(report)
-
-
-def test_a_checkout_without_image_rota_is_refused(tmp_path, lock):
-    report = probe(checkout(tmp_path, lock, layer_name="image-base"), lock)
-
-    assert not report.compatible
-    assert "image_layer:ab" in failed(report)
-
-
-def test_a_different_image_rota_version_is_refused(tmp_path, lock):
-    """A layout change upstream changes what this appliance is."""
-
-    report = probe(checkout(tmp_path, lock, layer_version="6.0.0"), lock)
-
-    assert not report.compatible
-    assert "image_layer_version:ab" in failed(report)
-
-
-def test_a_checkout_without_the_single_slot_image_layer_is_refused(tmp_path, lock):
-    """Both variants are verified, not only the one about to be built.
-
-    A checkout that could not build the other image is a checkout this project
-    is not pinned to, and finding that out at release time is late.
-    """
-
-    report = probe(checkout(tmp_path, lock, layer_name_single="image-base"), lock)
-
-    assert not report.compatible
-    assert "image_layer:single" in failed(report)
-
-
-def test_a_different_single_slot_layer_version_is_refused(tmp_path, lock):
-    report = probe(checkout(tmp_path, lock, layer_version_single="9.9.9"), lock)
-
-    assert not report.compatible
-    assert "image_layer_version:single" in failed(report)
-
-
-def test_a_missing_single_slot_layer_file_is_never_reported_as_a_pass(tmp_path, lock):
-    root = checkout(tmp_path, lock)
-    (root / lock.layer("single").path).unlink()
-
-    report = probe(root, lock)
-
-    assert not report.compatible
-    assert "image_layer:single" in failed(report)
-
-
-def test_a_checkout_without_the_shared_slot_generator_is_refused(tmp_path, lock):
-    root = checkout(tmp_path, lock)
-    (root / SHARED_GENERATOR).unlink()
-
-    report = probe(root, lock)
-
-    assert not report.compatible
-    assert "shared_slot" in failed(report)
-
-
-def test_a_shared_slot_generator_with_another_contract_is_refused(tmp_path, lock):
-    root = checkout(tmp_path, lock)
-    write(root, SHARED_GENERATOR, "CONF_DIR=/etc/somewhere-else\n", mode=0o755)
-
-    report = probe(root, lock)
-
-    assert "shared_slot" in failed(report)
-
-
-def test_a_checkout_that_packs_other_update_members_is_refused(tmp_path, lock):
-    root = checkout(tmp_path, lock)
-    write(
-        root,
-        "image/gpt/ab_userdata/post-image.sh",
-        "ln -sf ../system.sparse ${upd}/rootfs\ntar -cf ${1}/update.tar.zst -- *\n",
-    )
-
-    report = probe(root, lock)
-
-    assert "update_artifact" in failed(report)
-
-
-def test_a_missing_required_path_is_refused(tmp_path, lock):
-    root = checkout(tmp_path, lock)
-    (root / "layer/rpi/device/slot-mapper/bin/rpi-slot-label").unlink()
-
-    report = probe(root, lock)
-
-    assert "path:layer/rpi/device/slot-mapper/bin/rpi-slot-label" in failed(report)
 
 
 # --- source identity ---------------------------------------------------------

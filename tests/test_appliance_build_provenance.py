@@ -73,12 +73,6 @@ def write(root, relative, text, *, mode=0o644):
     return path
 
 
-SHARED_GENERATOR = (
-    "image/gpt/ab_userdata/device/rootfs-overlay/usr/lib/systemd/"
-    "system-generators/slot-shared-generator"
-)
-
-
 def source_tree(tmp_path, lock, *, name="rpi-image-gen"):
     """Everything the pinned contract requires, with no identity written yet."""
 
@@ -86,35 +80,19 @@ def source_tree(tmp_path, lock, *, name="rpi-image-gen"):
     write(root, lock.executable, "#!/bin/bash\n", mode=0o755)
     write(root, "LICENSE", "upstream\n")
     write(root, lock.host_dependencies_file, "all:bash\nbuild:mmdebstrap\n")
-    for slug in sorted(lock.image_layers):
-        pinned = lock.layer(slug)
-        write(
-            root,
-            pinned.path,
-            "# METABEGIN\n"
-            f"# X-Env-Layer-Name: {pinned.name}\n"
-            f"# X-Env-Layer-Version: {pinned.version}\n"
-            "# METAEND\n",
-        )
+    pinned = lock.image_layer
     write(
         root,
-        "image/gpt/ab_userdata/post-image.sh",
-        "upd=${1}/update\n"
-        "ln -sf ../system.sparse ${upd}/system\n"
-        "ln -sf ../boot.sparse ${upd}/boot\n"
-        f"tar -I zstd -h -cf ${{1}}/{lock.update_archive} -- *\n",
-    )
-    write(
-        root,
-        SHARED_GENERATOR,
-        f"CONF_DIR={lock.shared_slot_conf_dir}\nshared_path={lock.shared_root}$path\n",
-        mode=0o755,
+        pinned.path,
+        "# METABEGIN\n"
+        f"# X-Env-Layer-Name: {pinned.name}\n"
+        f"# X-Env-Layer-Version: {pinned.version}\n"
+        "# METAEND\n",
     )
     for relative in lock.required_paths:
         target = root / relative
         if not target.exists():
             write(root, relative, "#!/bin/sh\n", mode=0o755)
-    write(root, "config/trixie-minbase-ab.yaml", "image:\n  layer: image-rota\n")
     write(root, "site/config_loader.py", "class ConfigLoader:\n    pass\n")
     return root
 
@@ -190,7 +168,7 @@ def test_a_clean_pinned_git_checkout_passes(tmp_path, lock):
 @requires_git
 def test_a_modified_tracked_file_is_refused(tmp_path, lock):
     root, pinned = git_source(tmp_path, lock)
-    (root / "config/trixie-minbase-ab.yaml").write_text("image:\n  layer: other\n")
+    (root / "config/trixie-minbase.yaml").write_text("image:\n  layer: other\n")
 
     report = probe(root, pinned)
 
@@ -202,8 +180,8 @@ def test_a_modified_tracked_file_is_refused(tmp_path, lock):
 @requires_git
 def test_a_staged_change_is_refused(tmp_path, lock):
     root, pinned = git_source(tmp_path, lock)
-    (root / "config/trixie-minbase-ab.yaml").write_text("image:\n  layer: other\n")
-    git(root, "add", "config/trixie-minbase-ab.yaml")
+    (root / "config/trixie-minbase.yaml").write_text("image:\n  layer: other\n")
+    git(root, "add", "config/trixie-minbase.yaml")
 
     report = probe(root, pinned)
 
@@ -294,7 +272,7 @@ def test_an_extracted_tarball_records_its_tree(tmp_path, lock):
 
 def test_a_build_input_edited_after_extraction_is_refused(tmp_path, lock):
     root = tarball_source(tmp_path, lock)
-    (root / "config/trixie-minbase-ab.yaml").write_text("image:\n  layer: other\n")
+    (root / "config/trixie-minbase.yaml").write_text("image:\n  layer: other\n")
 
     report = probe(root, lock)
 
@@ -313,7 +291,7 @@ def test_a_file_added_after_extraction_is_refused(tmp_path, lock):
 
 def test_a_file_removed_after_extraction_is_refused(tmp_path, lock):
     root = tarball_source(tmp_path, lock)
-    (root / "config/trixie-minbase-ab.yaml").unlink()
+    (root / "config/trixie-minbase.yaml").unlink()
 
     report = probe(root, lock)
 
@@ -331,7 +309,7 @@ def test_an_executable_bit_changed_after_extraction_is_refused(tmp_path, lock):
 
 def test_a_file_replaced_by_a_symlink_after_extraction_is_refused(tmp_path, lock):
     root = tarball_source(tmp_path, lock)
-    target = root / "config/trixie-minbase-ab.yaml"
+    target = root / "config/trixie-minbase.yaml"
     elsewhere = tmp_path / "elsewhere.yaml"
     elsewhere.write_text(target.read_text(), encoding="utf-8")
     target.unlink()
@@ -406,7 +384,7 @@ def test_the_tree_manifest_records_modes_and_symlink_targets(tmp_path, lock):
 def test_the_build_wrapper_revalidates_the_source_before_invoking_it(tmp_path, lock):
     root = tarball_source(tmp_path, lock)
     assert rpi_image_gen.assert_buildable(root, lock, which=satisfied) is not None
-    (root / "config/trixie-minbase-ab.yaml").write_text("image:\n  layer: other\n")
+    (root / "config/trixie-minbase.yaml").write_text("image:\n  layer: other\n")
 
     with pytest.raises(rpi_image_gen.ImageGenError) as excinfo:
         rpi_image_gen.assert_buildable(root, lock, which=satisfied)
@@ -428,7 +406,7 @@ def test_the_build_wrapper_revalidates_a_git_source_before_invoking_it(tmp_path,
 
 def test_the_check_script_reports_a_modified_tarball_tree_as_a_failure(tmp_path, lock):
     root = tarball_source(tmp_path, lock)
-    (root / "config/trixie-minbase-ab.yaml").write_text("image:\n  layer: other\n")
+    (root / "config/trixie-minbase.yaml").write_text("image:\n  layer: other\n")
 
     result = subprocess.run(
         ["sh", str(SCRIPTS / "appliance-check-rpi-image-gen.sh"), "--rpi-image-gen", str(root)],
@@ -453,7 +431,7 @@ def test_the_check_script_reports_a_modified_tarball_tree_as_a_failure(tmp_path,
 # --- finding 5: an artefact cannot claim a build it did not come from ---------
 
 
-def build_authority_payload(update, *, profile="rpi5", variant="ab",
+def build_authority_payload(update, *, profile="rpi5",
                             build_id="20260808-1", **overrides):
     payload = {
         "schema_version": build_authority.SCHEMA_VERSION,
@@ -463,169 +441,16 @@ def build_authority_payload(update, *, profile="rpi5", variant="ab",
             "source_tree_sha256": "sha256:" + "5" * 64,
         },
         "profile": profile,
-        "variant": variant,
         "project": {"revision": "a" * 40, "tree_sha256": "sha256:" + "6" * 64},
         "build_id": build_id,
         "completed": True,
-        "image": {"path": "", "sha256": ""},
-        "update": {
+        "image": {
             "path": str(update),
             "sha256": build_authority.file_sha256(update),
         },
     }
     payload.update(overrides)
     return payload
-
-
-def upstream_update(tmp_path):
-    """A structurally valid project update artefact that no builder produced."""
-
-    from tests.helpers import android_sparse
-
-    work = tmp_path / "work"
-    work.mkdir(parents=True, exist_ok=True)
-    for name in ("boot", "system"):
-        chunks = android_sparse.image_of(name.encode("utf-8") * 512, tail_blocks=4)
-        (work / name).write_bytes(android_sparse.build(chunks))
-    archive = tmp_path / "update.tar.zst"
-    subprocess.run(
-        ["tar", "-I", "zstd", "-cf", str(archive), "-C", str(work), "boot", "system"],
-        check=True,
-        timeout=300,
-    )
-    return archive
-
-
-def run_wrapper(output, update, *extra):
-    return subprocess.run(
-        [
-            "sh",
-            str(SCRIPTS / "appliance-build-rpi-ab-update.sh"),
-            "--output",
-            str(output),
-            "--update",
-            str(update),
-            "--build-id",
-            "20260808-1",
-            *extra,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-
-
-@requires_zstd
-def test_an_unproven_artefact_never_claims_the_pinned_generator(tmp_path, lock):
-    output = tmp_path / "out"
-    output.mkdir()
-    update = upstream_update(tmp_path)
-
-    result = run_wrapper(output, update)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    payload = json.loads(next(output.glob("*.manifest.json")).read_text(encoding="utf-8"))
-    assert payload["provenance"]["verified"] is False
-    assert payload["rpi_image_gen_revision"] != lock.commit
-    assert "development" in (result.stdout + result.stderr)
-
-
-@requires_zstd
-def test_an_unproven_artefact_cannot_be_signed(tmp_path):
-    output = tmp_path / "out"
-    output.mkdir()
-    update = upstream_update(tmp_path)
-
-    result = run_wrapper(output, update, "--sign-key", "0xDEADBEEF")
-
-    assert result.returncode == 1
-    assert "provenance_unverified" in result.stdout + result.stderr
-    assert not list(output.glob("*.asc"))
-
-
-@requires_zstd
-def test_a_proven_artefact_carries_the_builders_revision(tmp_path, lock):
-    output = tmp_path / "out"
-    output.mkdir()
-    update = upstream_update(tmp_path)
-    authority = output / build_authority.AUTHORITY_NAME
-    authority.write_text(
-        json.dumps(build_authority_payload(update)) + "\n", encoding="utf-8"
-    )
-
-    result = run_wrapper(output, update, "--build-authority", str(authority))
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    payload = json.loads(next(output.glob("*.manifest.json")).read_text(encoding="utf-8"))
-    assert payload["provenance"]["verified"] is True
-    assert payload["rpi_image_gen_revision"] == lock.commit
-    assert payload["provenance"]["build_authority_sha256"].startswith("sha256:")
-
-
-@requires_zstd
-def test_an_update_modified_after_the_build_authority_is_refused(tmp_path):
-    output = tmp_path / "out"
-    output.mkdir()
-    update = upstream_update(tmp_path)
-    authority = output / build_authority.AUTHORITY_NAME
-    authority.write_text(
-        json.dumps(build_authority_payload(update)) + "\n", encoding="utf-8"
-    )
-    with open(update, "ab") as handle:
-        handle.write(b"\x00")
-
-    result = run_wrapper(output, update, "--build-authority", str(authority))
-
-    assert result.returncode == 1
-    assert "build_authority_mismatch" in result.stdout + result.stderr
-
-
-@requires_zstd
-def test_a_build_authority_for_another_profile_is_refused(tmp_path):
-    output = tmp_path / "out"
-    output.mkdir()
-    update = upstream_update(tmp_path)
-    authority = output / build_authority.AUTHORITY_NAME
-    authority.write_text(
-        json.dumps(build_authority_payload(update, profile="rpi4")) + "\n", encoding="utf-8"
-    )
-
-    result = run_wrapper(output, update, "--profile", "rpi5", "--build-authority", str(authority))
-
-    assert result.returncode == 1
-    assert "build_authority_mismatch" in result.stdout + result.stderr
-
-
-@requires_zstd
-def test_a_build_authority_for_another_generator_revision_is_refused(tmp_path):
-    output = tmp_path / "out"
-    output.mkdir()
-    update = upstream_update(tmp_path)
-    payload = build_authority_payload(update)
-    payload["builder"]["revision"] = "0" * 40
-    authority = output / build_authority.AUTHORITY_NAME
-    authority.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-
-    result = run_wrapper(output, update, "--build-authority", str(authority))
-
-    assert result.returncode == 1
-    assert "build_authority_mismatch" in result.stdout + result.stderr
-
-
-@requires_zstd
-def test_an_incomplete_build_authority_is_refused(tmp_path):
-    output = tmp_path / "out"
-    output.mkdir()
-    update = upstream_update(tmp_path)
-    payload = build_authority_payload(update)
-    payload["completed"] = False
-    authority = output / build_authority.AUTHORITY_NAME
-    authority.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-
-    result = run_wrapper(output, update, "--build-authority", str(authority))
-
-    assert result.returncode == 1
-    assert "build_authority_incomplete" in result.stdout + result.stderr
 
 
 # --- phase 33: the build authority is itself hashed --------------------------
@@ -651,7 +476,7 @@ def test_a_build_authority_round_trips_through_its_own_reader(tmp_path):
 
     assert authority.schema_version == build_authority.SCHEMA_VERSION
     assert authority.builder.source_form == "tarball"
-    assert authority.update.sha256 == build_authority.file_sha256(update)
+    assert authority.image.sha256 == build_authority.file_sha256(update)
     assert authority.canonical_hash.startswith("sha256:")
 
 
@@ -691,7 +516,7 @@ def test_a_stale_artefact_cannot_be_signed_through_a_new_build(tmp_path):
     fresh.write_bytes(b"today")
     payload = build_authority_payload(fresh)
 
-    problems = build_authority.verify_update(
+    problems = build_authority.verify_image(
         build_authority.parse(payload),
         stale,
         profile="rpi5",
@@ -707,7 +532,7 @@ def test_a_completed_build_authority_accepts_its_own_artefact(tmp_path):
     update.write_bytes(b"today")
     payload = build_authority_payload(update)
 
-    problems = build_authority.verify_update(
+    problems = build_authority.verify_image(
         build_authority.parse(payload),
         update,
         profile="rpi5",
@@ -780,10 +605,8 @@ def test_the_release_gate_driver_names_the_gates_in_order(tmp_path):
 
     for gate in (
         "source-authority",
-        "slot-mounts",
         "build-$profile",
         "inspect-image-$profile",
-        "sign-$profile",
         "source-bundle",
     ):
         assert gate in text, gate
@@ -791,16 +614,9 @@ def test_the_release_gate_driver_names_the_gates_in_order(tmp_path):
     assert "no release is created" in text
 
 
-def test_the_release_gate_driver_never_signs_without_a_build_authority(tmp_path):
-    text = (SCRIPTS / "appliance-release-gates.sh").read_text(encoding="utf-8")
-
-    signing = text.split("if [ -n \"$SIGN_KEY\" ]; then")[1].split("else")[0]
-    assert "--build-authority" in signing
-
-
 # --- which file the build is allowed to call the image ------------------------
 
-BUILD_SCRIPT = ROOT / "scripts" / "appliance-build-rpi-ab-image.sh"
+BUILD_SCRIPT = ROOT / "scripts" / "appliance-build-rpi-image.sh"
 
 
 def test_the_image_is_taken_from_the_generators_output_directory():
@@ -856,36 +672,7 @@ def test_a_second_profile_does_not_overwrite_the_first_authority():
     assert '$NAME.build-authority.json' in script
 
 
-def test_the_release_scripts_look_for_the_same_authority_name():
-    """One name, or the gate silently signs against another board's build."""
-
-    root = BUILD_SCRIPT.parent
-    for script in ("appliance-release-gates.sh", "appliance-build-rpi-ab-update.sh"):
-        text = (root / script).read_text(encoding="utf-8")
-        assert "build-authority.json" in text, script
-        assert ".build-authority.json" in text, script
-
-
 UPDATE_SCRIPT = SCRIPTS / "appliance-build-rpi-ab-update.sh"
-
-
-def test_the_described_build_is_the_one_the_authority_names():
-    """Describing a build minted a competing id and then failed against it.
-
-    With no ``--build-id`` the update step stamped a fresh UTC timestamp and
-    then asked the build authority to confirm it, which the authority — naming
-    the build that actually ran — can never do. Every unsigned ``describe``
-    gate therefore failed with ``build_authority_mismatch`` unless the caller
-    happened to pass the same id twice, so the strict release gate could not
-    pass on its own default path. Found by running the real gate.
-    """
-
-    script = UPDATE_SCRIPT.read_text(encoding="utf-8")
-    discovered = script.index('"$OUTPUT/$NAME.build-authority.json"')
-    fallback = script.index("date -u +%Y%m%d%H%M%S")
-
-    assert discovered < fallback, "an id is invented before the authority is even located"
-    assert "build_id" in script[discovered:fallback], "the authority's id is never adopted"
 
 
 BUILDER_VM_SCRIPT = SCRIPTS / "appliance-builder-vm.sh"
@@ -940,22 +727,6 @@ def test_the_gate_logs_come_back_out_of_the_guest():
 UPDATE_INSPECTOR = SCRIPTS / "appliance-inspect-rpi-ab-update.sh"
 
 
-def test_the_update_inspector_expands_beside_the_artefact():
-    """Expanding a 4 GiB member into /tmp fails on an ordinary systemd host.
-
-    ``tempfile.TemporaryDirectory()`` lands in TMPDIR, and /tmp is a tmpfs
-    sized from RAM on any systemd default — 1.5 GiB on a 3 GiB builder. The
-    system member alone expands to 4 GiB, so the gate's own inspect step died
-    with ENOSPC on a machine with 60 GiB free. The directory holding the
-    archive just held a 16 GiB image, so it is the one place known to fit.
-    """
-
-    script = UPDATE_INSPECTOR.read_text(encoding="utf-8")
-    staging = script[script.index("TemporaryDirectory") : script.index("TemporaryDirectory") + 120]
-
-    assert "dir=" in staging, "the staging directory is wherever TMPDIR points"
-
-
 def test_a_tree_that_agrees_with_the_lock_and_was_then_modified_is_modified(tmp_path, lock):
     """The modification path stays reachable: the pin shadows it only for a tree
     that was never the pinned one to begin with."""
@@ -966,84 +737,9 @@ def test_a_tree_that_agrees_with_the_lock_and_was_then_modified_is_modified(tmp_
     recorded = rpi_image_gen.tree_digest(root)
     pinned = replace(lock, tree_sha256=recorded)
 
-    (root / "config/trixie-minbase-ab.yaml").write_text("image:\n  layer: other\n")
+    (root / "config/trixie-minbase.yaml").write_text("image:\n  layer: other\n")
     report = rpi_image_gen.probe_checkout(root, pinned, which=lambda tool: f"/usr/bin/{tool}")
 
     assert report.reason == rpi_image_gen.REASON_SOURCE_MODIFIED
 
 
-# --- which of two images this build was --------------------------------------
-#
-# Two variants are built for the same board, from the same tree, in the same
-# build. Everything else in the authority is identical between them, so this is
-# the only field that stops an A/B record vouching for a single-slot artefact.
-
-
-def authority_for(variant, **overrides):
-    from appliance import build_authority as ba
-
-    fields = {
-        "builder": ba.Builder(
-            source_form="tarball", revision="v2.7.0", source_tree_sha256="sha256:" + "a" * 64
-        ),
-        "project": ba.Project(revision="b" * 40, tree_sha256="sha256:" + "c" * 64),
-        "profile": "rpi5",
-        "variant": variant,
-        "build_id": "20260823-1",
-        "completed": True,
-    }
-    fields.update(overrides)
-    return ba.BuildAuthority(**fields)
-
-
-def test_an_authority_that_names_no_variant_is_refused():
-    """No default that names one: not saying must fail, not be assumed."""
-
-    problems = build_authority.verify_image(authority_for(""), Path("/nonexistent"))
-
-    assert any("is not a supported image variant" in problem for problem in problems)
-
-
-def test_an_authority_for_the_other_variant_cannot_vouch_for_this_release():
-    problems = build_authority.verify_image(
-        authority_for("ab"), Path("/nonexistent"), variant="single"
-    )
-
-    assert any(
-        "names variant 'ab', this release is 'single'" in problem for problem in problems
-    )
-
-
-def test_the_matching_variant_raises_no_variant_problem():
-    problems = build_authority.verify_image(
-        authority_for("single"), Path("/nonexistent"), variant="single"
-    )
-
-    assert not any("variant" in problem for problem in problems)
-
-
-def test_the_variant_is_covered_by_the_hash_that_identifies_the_record():
-    """A hash that ignored it would let one record be relabelled as the other."""
-
-    assert authority_for("ab").canonical_hash != authority_for("single").canonical_hash
-
-
-def test_a_record_from_before_the_variant_existed_still_reads_but_vouches_for_nothing():
-    """Release evidence is a record of what was produced, so it stays readable.
-
-    Refusing to parse it to make room for a field it could not have carried
-    would be rewriting history to fit the code. What it can no longer do is
-    stand behind an artefact: it names no variant, and no variant is not a
-    supported one.
-    """
-
-    payload = authority_for("ab").to_dict()
-    del payload["variant"]
-
-    authority = build_authority.parse(payload)
-
-    assert authority.variant == ""
-    assert any(
-        "is not a supported image variant" in problem
-        for problem in build_authority.verify_image(authority, Path("/nonexistent"))
-    )

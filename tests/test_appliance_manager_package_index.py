@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from appliance import manager_releases, os_fetch, persistent_state
+from appliance import manager_releases, release_fetch, persistent_state
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE = "https://example.invalid/releases/download/v1"
@@ -170,7 +170,7 @@ def test_the_appliance_reads_back_exactly_what_was_written(tmp_path):
         base_url=BASE,
     )
 
-    parsed = os_fetch.parse_index(index)
+    parsed = release_fetch.parse_index(index)
 
     assert [entry["release_id"] for entry in parsed] == [
         "ems-appliance-manager-0.2.0-arm64",

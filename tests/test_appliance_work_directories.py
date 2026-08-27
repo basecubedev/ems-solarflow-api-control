@@ -3,7 +3,7 @@
 
 Several of them defaulted to ``/tmp``, which is a tmpfs on many hosts -- 12G on
 the maintainer's. A builder VM growing to 60G plus collected artefacts, an 8.5G
-sparse crosscheck and 9.5G of firmware fixtures all landed there, filling RAM
+the image build and 9.5G of firmware fixtures all landed there, filling RAM
 rather than a disk. One of them went the other way and hardcoded the
 maintainer's own absolute path, which is a portability bug for everyone else.
 
@@ -24,10 +24,7 @@ LIBRARY = ROOT / "scripts" / "lib" / "workdir.sh"
 # Every script that stages more than a handful of megabytes.
 STAGING_SCRIPTS = (
     "appliance-builder-vm.sh",
-    "appliance-crosscheck-sparse.sh",
-    "appliance-test-ab-layout.sh",
-    "appliance-build-rpi-ab-image.sh",
-    "appliance-build-rpi-ab-update.sh",
+    "appliance-build-rpi-image.sh",
 )
 
 
@@ -96,7 +93,9 @@ def test_no_staging_script_hardcodes_a_maintainer_path(name):
 # The image build's work root is inside the release output directory and is
 # claimed through the build authority, so it is not scratch the resolver may
 # place. Its own finding is that it is never cleared, which is checked below.
-RESOLVER_SCRIPTS = tuple(name for name in STAGING_SCRIPTS if "ab-image" not in name)
+RESOLVER_SCRIPTS = tuple(
+    name for name in STAGING_SCRIPTS if name != "appliance-build-rpi-image.sh"
+)
 
 
 @pytest.mark.parametrize("name", RESOLVER_SCRIPTS)
@@ -118,7 +117,7 @@ def test_every_staging_script_cleans_up_on_the_failure_path_too(name):
 def test_a_finished_image_build_does_not_keep_its_fifteen_gigabytes():
     """Every artefact is copied out, so a successful build has no use for it."""
 
-    text = script("appliance-build-rpi-ab-image.sh")
+    text = script("appliance-build-rpi-image.sh")
 
     assert 'rm -rf "$WORK"' in text
 
@@ -127,7 +126,7 @@ def test_a_failed_image_build_keeps_the_tree_and_says_where():
     """It is the only place the failure can be examined -- but silently keeping
     it is how a dist directory grows by 15G per attempt."""
 
-    text = script("appliance-build-rpi-ab-image.sh")
+    text = script("appliance-build-rpi-image.sh")
 
     assert "kept for diagnosis" in text
     assert "du -sh" in text
@@ -183,7 +182,7 @@ def test_a_successful_build_is_not_failed_by_a_cleanup_it_cannot_finish(tmp_path
             "set -eu\n"
             f'WORK="{work}"\n'
             + _extract_shell_function(
-                "release_work_cleanup", "appliance-build-rpi-ab-image.sh"
+                "release_work_cleanup", "appliance-build-rpi-image.sh"
             )
             + "\ntrap release_work_cleanup EXIT\nexit 0\n",
             encoding="utf-8",
@@ -208,7 +207,7 @@ def test_the_build_publishes_a_compressed_image_with_its_own_checksum():
     download gets discarded as corrupt -- the defect the RC review recorded.
     """
 
-    text = script("appliance-build-rpi-ab-image.sh")
+    text = script("appliance-build-rpi-image.sh")
 
     assert "xz" in text, "the build produces no compressed image"
     assert '$NAME.img.xz.sha256' in text
@@ -224,7 +223,7 @@ def test_the_build_refuses_up_front_if_it_cannot_compress():
     rather than a failure it did not earn.
     """
 
-    text = script("appliance-build-rpi-ab-image.sh")
+    text = script("appliance-build-rpi-image.sh")
     preflight = text.split("cp \"$BUILT\"", 1)[0]
 
     assert 'command -v xz' in preflight, "xz is used but never verified up front"

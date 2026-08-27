@@ -66,7 +66,7 @@ class Harness:
 
     def __init__(self, tmp_path, *, disk_sectors=DISK_SECTORS,
                  start_sector=ROOT_START_SECTORS, sectors=IMAGED_SECTORS,
-                 filesystem=None, variant="single", disk_name="fakedisk"):
+                 filesystem=None, image_layer="image-rpios", disk_name="fakedisk"):
         self.tmp = tmp_path
         self.bin = tmp_path / "bin"
         self.bin.mkdir()
@@ -77,7 +77,7 @@ class Harness:
         self.calls = tmp_path / "calls.log"
         self.calls.write_text("")
         self.partition_name = Path(BLOCK_DEVICE).name
-        (self.state / "variant").write_text(variant)
+        (self.state / "image_layer").write_text(image_layer)
 
         self.sysfs = tmp_path / "sys"
         self.disk_dir = self.sysfs / "block" / disk_name
@@ -124,21 +124,24 @@ class Harness:
         # grown" itself would prove nothing about the calculation under test.
         self._tool(
             "ems-appliance",
-            f'if [ "$1" = image-variant ]; then\n'
-            f"  variant=$(cat {state}/variant)\n"
-            f'  [ -n "$variant" ] || exit 1\n'
-            f'  echo "$variant"\n'
+            f'if [ "$1" = image-check ]; then\n'
+            f"  layer=$(cat {state}/image_layer)\n"
+            # The production verb accepts one layer name and refuses every
+            # other answer; a stub that echoed whatever it was given would let
+            # this harness pass a gate the appliance would not.
+            f'  [ "$layer" = image-rpios ] || exit 1\n'
+            f'  echo "$layer"\n'
             f"  exit 0\n"
             f"fi\n"
-            f'case "$2" in\n'
+            f'case "$1" in\n'
             f"  root-geometry)\n"
             f"    device=$(cat {state}/device 2>/dev/null || echo {BLOCK_DEVICE})\n"
             f'    PYTHONPATH={ROOT} python3 -c "\n'
             f"import sys\n"
-            f"from appliance import ab_geometry\n"
+            f"from appliance import partition_geometry\n"
             f"try:\n"
-            f"    geometry = ab_geometry.read_geometry(sys.argv[1], sysfs=sys.argv[2])\n"
-            f"except ab_geometry.GeometryError as error:\n"
+            f"    geometry = partition_geometry.read_geometry(sys.argv[1], sysfs=sys.argv[2])\n"
+            f"except partition_geometry.GeometryError as error:\n"
             f"    sys.exit(error.code)\n"
             f"print(chr(10).join(geometry.to_lines()))\n"
             f'" "$device" {self.sysfs}\n'
@@ -177,8 +180,8 @@ class Harness:
     def stall_growpart(self):
         self._tool("growpart", "exit 0")
 
-    def says_variant(self, variant):
-        (self.state / "variant").write_text(variant)
+    def says_image_layer(self, layer):
+        (self.state / "image_layer").write_text(layer)
 
     def hide_the_partition(self):
         (self.state / "device").write_text("/dev/loop-does-not-exist")
@@ -215,8 +218,8 @@ def medium(tmp_path):
 # --- the medium this project did not write -----------------------------------
 
 
-@pytest.mark.parametrize("variant", ["ab", "", "something-else"])
-def test_a_medium_this_project_did_not_image_is_left_alone(tmp_path, variant):
+@pytest.mark.parametrize("image_layer", ["", "image-elsewhere"])
+def test_a_medium_this_project_did_not_image_is_left_alone(tmp_path, image_layer):
     """The .deb installs onto somebody else's Raspberry Pi OS.
 
     docs/appliance/installation.md promises that this appliance never resizes,
@@ -225,7 +228,7 @@ def test_a_medium_this_project_did_not_image_is_left_alone(tmp_path, variant):
     and one naming the other image all leave the medium untouched.
     """
 
-    host = Harness(tmp_path, variant=variant)
+    host = Harness(tmp_path, image_layer=image_layer)
 
     result = host.run()
 
@@ -365,7 +368,7 @@ def test_the_helper_never_ignores_the_result_of_a_growth_tool():
 
     text = SCRIPT.read_text(encoding="utf-8")
 
-    # The one `|| true` here is on the variant probe, where a failure means
+    # The one `|| true` here is on the image-check probe, where a failure means
     # "not our medium" and is answered by the check below it. Neither growth
     # tool may be invoked that way.
     for line in text.splitlines():
@@ -378,13 +381,13 @@ def test_the_helper_never_ignores_the_result_of_a_growth_tool():
 def test_the_helper_asks_for_a_positive_statement_rather_than_an_absence():
     text = SCRIPT.read_text(encoding="utf-8")
 
-    assert '[ "$VARIANT" = single ]' in text
+    assert '"$APPLIANCE" image-check' in text
 
 
 # --- the two answers the helper asks the appliance for ------------------------
 
 
-def test_the_variant_verb_answers_only_from_a_marker_it_recognises(tmp_path):
+def test_the_image_check_verb_answers_only_from_a_marker_it_recognises():
     """No marker, an empty field or an unknown layer must all be an error.
 
     The growth helper turns this answer into a decision to repartition, so
@@ -392,32 +395,28 @@ def test_the_variant_verb_answers_only_from_a_marker_it_recognises(tmp_path):
     it as the same thing.
     """
 
-    from tests.helpers.appliance_ab import ApplianceAbHost, DEFAULT_OS_BUILD
+    from appliance import image_shape
 
-    host = ApplianceAbHost(tmp_path)
-
+    base = {"build_id": "20260809120000", "release_version": "0.1.0"}
     for marker, expected in (
-        ({**DEFAULT_OS_BUILD, "image_layer": "image-rpios"}, "single"),
-        ({**DEFAULT_OS_BUILD, "image_layer": "image-rota"}, "ab"),
-        (DEFAULT_OS_BUILD, None),
-        ({**DEFAULT_OS_BUILD, "image_layer": ""}, None),
-        ({**DEFAULT_OS_BUILD, "image_layer": "image-elsewhere"}, None),
+        ({**base, "image_layer": "image-rpios"}, True),
+        ({**base, "image_layer": "image-rota"}, False),
+        (base, False),
+        ({**base, "image_layer": ""}, False),
+        ({**base, "image_layer": "image-elsewhere"}, False),
     ):
-        host.write_os_build(marker)
-        from appliance import image_variants
-
-        variant = image_variants.variant_of_build_marker(host.probe().os_build())
-        assert (variant.slug if variant else None) == expected, marker.get("image_layer")
+        assert image_shape.marker_is_ours(marker) is expected, marker.get("image_layer")
 
 
 def test_the_root_geometry_verb_asks_the_block_layer_which_partition_is_root():
     """Not /proc: the mount source is whatever string was passed to mount, and
-    on this image that is a by-slot alias rather than the kernel name sysfs is
-    keyed by."""
+    on this image that is an alias rather than the kernel name sysfs is keyed
+    by."""
 
     source = (ROOT / "appliance" / "cli.py").read_text(encoding="utf-8")
     body = source.split("def command_root_geometry", 1)[1].split("\ndef ", 1)[0]
+    probe = (ROOT / "appliance" / "block_probe.py").read_text(encoding="utf-8")
 
-    assert "block_partitions()" in body
-    assert 'item.mountpoint == "/"' in body
+    assert "root_partition()" in body
     assert "read_geometry" in body
+    assert 'item.mountpoint == "/"' in probe

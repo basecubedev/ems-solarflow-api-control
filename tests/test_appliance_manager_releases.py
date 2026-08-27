@@ -131,10 +131,11 @@ def test_an_artifact_that_cannot_be_checked_is_refused(artifact):
     ],
 )
 def test_a_package_that_cannot_say_what_it_reads_is_refused(block):
-    """Required here, unlike the OS manifest — no package has ever shipped.
+    """A package that cannot say what it reads is refused.
 
-    There is no history to be lenient towards, and leniency would mean taking a
-    package that cannot say whether it can read this appliance's state.
+    Leniency here would mean taking a package that cannot say whether it can
+    read this appliance's state, which is the one question a version number was
+    never able to answer.
     """
 
     with pytest.raises(manager_releases.ManagerReleaseError):
@@ -265,9 +266,9 @@ def test_the_manifest_round_trips_through_its_own_serialiser(tmp_path):
 def test_one_keyring_verifies_both_artefact_classes():
     """Two trust anchors would be two things to rotate, and one gets forgotten."""
 
-    from appliance import os_releases
+    from appliance import artifact_trust
 
-    assert manager_releases.VERIFIED_SIGNATURE == os_releases.VERIFIED_SIGNATURE
+    assert manager_releases.VERIFIED_SIGNATURE == artifact_trust.VERIFIED_SIGNATURE
     source = (
         __import__("pathlib").Path(manager_releases.__file__).read_text(encoding="utf-8")
     )

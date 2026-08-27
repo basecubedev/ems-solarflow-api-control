@@ -73,21 +73,19 @@ def environment():
 
 
 def build_dist(
-    tmp_path, *, profile="rpi5", variant="ab", build_id=BUILD_ID, signed=True,
+    tmp_path, *, profile="rpi5", build_id=BUILD_ID, signed=True,
     complete=True, project=None
 ):
     dist = tmp_path / "dist"
     reports = dist / "reports"
     reports.mkdir(parents=True, exist_ok=True)
-    prefix = f"ems-solarflow-appliance-{VERSION}-{profile}-arm64-{variant}"
+    prefix = f"ems-solarflow-appliance-{VERSION}-{profile}-arm64"
 
     image = dist / f"{prefix}.img"
     image.write_bytes(b"an appliance image" * 64)
-    update = dist / f"{prefix}.update.tar.zst"
-    update.write_bytes(b"an update artefact" * 32)
-    archive = dist / f"{prefix}.tar.zst"
-    archive.write_bytes(update.read_bytes())
-    (dist / f"{prefix}.img.sha256").write_text(f"{build_authority.file_sha256(image)[7:]}  {image.name}\n")
+    (dist / f"{prefix}.img.sha256").write_text(
+        f"{build_authority.file_sha256(image)[7:]}  {image.name}\n"
+    )
 
     authority = build_authority.BuildAuthority(
         builder=build_authority.Builder(
@@ -97,19 +95,15 @@ def build_dist(
             revision="c" * 40, tree_sha256="sha256:" + "d" * 64
         ),
         profile=profile,
-        variant=variant,
         build_id=build_id,
         image=build_authority.Artefact(
             path=str(image), sha256=build_authority.file_sha256(image)
-        ),
-        update=build_authority.Artefact(
-            path=str(update), sha256=build_authority.file_sha256(update)
         ),
         package_sha256="e" * 64,
         completed=complete,
         environment=environment(),
     )
-    (dist / f"{prefix}{build_authority.AUTHORITY_NAME and '.build-authority.json'}").write_text(
+    (dist / f"{prefix}.build-authority.json").write_text(
         json.dumps(authority.to_dict(), indent=2, sort_keys=True) + "\n"
     )
     (dist / f"{prefix}.build.json").write_text(json.dumps({"build_id": build_id}))
@@ -117,37 +111,14 @@ def build_dist(
         json.dumps(authority.environment.to_dict())
     )
 
-    manifest = {
-        "build_id": build_id,
-        "release_version": VERSION,
-        "provenance": {
-            "verified": True,
-            "build_authority_sha256": authority.canonical_hash,
-            "builder_environment_sha256": authority.builder_environment_sha256,
-        },
-        "archive": {
-            "name": archive.name,
-            "digest": build_authority.file_sha256(archive),
-        },
-    }
-    (dist / f"{prefix}.manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
-    if signed:
-        (dist / f"{prefix}.manifest.json.asc").write_text(
-            "-----BEGIN PGP SIGNATURE-----\nabc\n-----END PGP SIGNATURE-----\n"
+    (reports / f"image-inspection-{profile}.json").write_text(
+        json.dumps(
+            {
+                "result": "pass",
+                "counts": {"pass": 12, "fail": 0, "not_run": 0},
+                "mandatory_not_run": [],
+            }
         )
-
-    for kind in ("image", "update"):
-        (reports / f"{kind}-inspection-{profile}.json").write_text(
-            json.dumps(
-                {
-                    "result": "pass",
-                    "counts": {"pass": 12, "fail": 0, "not_run": 0},
-                    "mandatory_not_run": [],
-                }
-            )
-        )
-    (reports / f"sparse-crosscheck-{profile}.json").write_text(
-        json.dumps({"schema_version": 1, "result": "pass", "members": []})
     )
     return dist, prefix, authority
 
@@ -327,7 +298,7 @@ def test_a_complete_signed_build_assembles_a_ready_kit(tmp_path):
     assert manifest["builds"][0]["build_id"] == BUILD_ID
     assert manifest["builds"][0]["builder_environment_sha256"].startswith("sha256:")
     assert (output / "rpi5" / f"{prefix}.img").is_file()
-    assert (output / "rpi5" / f"{prefix}.manifest.json.asc").is_file()
+    assert (output / "rpi5" / f"{prefix}.build-authority.json").is_file()
 
 
 def test_a_kit_without_a_signature_is_a_failure(tmp_path):
@@ -388,32 +359,6 @@ def test_an_image_that_is_not_the_one_the_build_recorded_is_refused(tmp_path):
 
     assert result.returncode == 1
     assert "build_authority_mismatch" in result.stdout
-
-
-def test_a_manifest_from_another_build_is_refused(tmp_path):
-    dist, prefix, _ = build_dist(tmp_path)
-    manifest = json.loads((dist / f"{prefix}.manifest.json").read_text())
-    manifest["build_id"] = "20250101000000"
-    (dist / f"{prefix}.manifest.json").write_text(json.dumps(manifest))
-    output = tmp_path / "kit"
-
-    result = run_kit(dist, output, "--gate-report", str(gate_report(tmp_path)))
-
-    assert result.returncode == 1
-    assert "the manifest names build" in result.stdout
-
-
-def test_an_unsigned_development_manifest_is_refused_for_a_production_kit(tmp_path):
-    dist, prefix, _ = build_dist(tmp_path)
-    manifest = json.loads((dist / f"{prefix}.manifest.json").read_text())
-    manifest["provenance"]["verified"] = False
-    (dist / f"{prefix}.manifest.json").write_text(json.dumps(manifest))
-    output = tmp_path / "kit"
-
-    result = run_kit(dist, output, "--gate-report", str(gate_report(tmp_path)))
-
-    assert result.returncode == 1
-    assert "development artefact" in result.stdout
 
 
 def test_an_inspection_with_a_check_that_never_ran_is_refused(tmp_path):
@@ -670,15 +615,3 @@ def test_the_baseline_capture_calls_subcommands_that_exist():
     assert cli  # the module imports, so the parser above is the real one
 
 
-def test_a_broken_persistence_is_a_failure_not_an_unreachable_runtime():
-    """`verify-persistence` exits non-zero *because* the persistence is broken.
-    Conflating that with an unreachable runtime turned every real finding into
-    NOT RUN -- neither a pass nor a problem anyone looks at."""
-
-    root = Path(__file__).resolve().parents[1]
-    script = (root / "scripts" / "appliance-hardware-verify-persistence.sh").read_text(
-        encoding="utf-8"
-    )
-
-    assert 'REPORT=$(ems-appliance ab verify-persistence --json 2>/dev/null)\n' in script
-    assert "|| not_run" not in script.split("REPORT=")[1].split("\n")[0]

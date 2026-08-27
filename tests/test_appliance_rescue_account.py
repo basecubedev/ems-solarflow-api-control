@@ -220,7 +220,7 @@ def test_the_helper_needs_no_python():
 def test_the_image_carries_what_a_console_login_needs():
     """A rescue account that cannot become root is not a rescue account."""
 
-    for layer in ("ems-appliance.yaml", "ems-appliance-single.yaml"):
+    for layer in ("ems-appliance.yaml",):
         text = (PACKAGING / "image" / "layer" / layer).read_text(encoding="utf-8")
         assert "\n    - sudo\n" in text, layer
 

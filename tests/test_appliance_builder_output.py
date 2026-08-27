@@ -48,7 +48,7 @@ def build_dist(tmp_path, *, completed=True, with_image=True):
     (dist / "gates").mkdir(parents=True)
     (dist / "reports").mkdir()
     (dist / "reports/image-inspection-rpi5.json").write_text('{"result": "pass"}')
-    # The build's own work root: a chroot, the image and its sparse copies.
+    # The build's own work root: a chroot and the image it produced.
     # None of it is an artefact and none of it may be described as one.
     (dist / "build-20260809120000/rootfs/usr/bin").mkdir(parents=True)
     (dist / "build-20260809120000/rootfs/usr/bin/sh").write_bytes(b"chroot content")
@@ -99,20 +99,6 @@ def test_only_logs_are_optional(tmp_path):
 
     optional = {entry["path"] for entry in manifest["files"] if not entry["required"]}
     assert optional == {f"{name}.build.log", "gates/build-rpi5.log"}
-
-
-def test_each_build_is_named_by_the_authority_it_wrote(tmp_path):
-    dist, name = build_dist(tmp_path)
-
-    manifest = describe(dist, tmp_path / "manifest.json")
-
-    assert len(manifest["builds"]) == 1
-    build = manifest["builds"][0]
-    assert build["profile"] == "rpi5"
-    assert build["build_id"] == "20260809120000"
-    assert build["image_file"] == f"{name}.img"
-    assert build["update_file"] == f"{name}.update.tar.zst"
-    assert build["builder_environment_sha256"].startswith("sha256:")
 
 
 def test_a_complete_copy_passes(tmp_path):

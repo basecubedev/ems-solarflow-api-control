@@ -244,13 +244,13 @@ def main():
             host.publish_image("v1.0.0", healthy=False)
             host.pull_local(f"{ADMIN_REPOSITORY}:v1.0.0")
             host.run_container(ADMIN_CONTAINER, f"{ADMIN_REPOSITORY}:v1.0.0", health="none")
-        if options.get("ab_deployment_drift"):
-            # An OS update refused before the first destructive byte. The
+        if options.get("deployment_drift"):
+            # An operation refused before the first destructive byte. The
             # browser has to say that nothing was written, because an operator
             # reading "incomplete" would otherwise go looking for an outage.
             from appliance.operations import STATE_FAILED_RECOVERABLE
 
-            operation = services.operations.create("ab.update", {"kind": "update"})
+            operation = services.operations.create("manager.update", {"kind": "update"})
             services.operations.await_confirmation(operation.operation_id, {"plan": True})
             record = services.operations.get(operation.operation_id, include_token=True)
             services.operations.confirm(operation.operation_id, record.confirmation_token)
@@ -258,12 +258,7 @@ def main():
                 operation.operation_id,
                 STATE_FAILED_RECOVERABLE,
                 stage="preflight_failed",
-                result={
-                    "default_slot_unchanged": True,
-                    "inactive_slot_untouched": True,
-                    "replan_required": True,
-                    "target_slot": "B",
-                },
+                result={"replan_required": True},
                 error={
                     "code": "deployment_authority_drift",
                     "message": "the EMS deployment changed after this update was confirmed",

@@ -115,7 +115,7 @@ class Release:
             profiles=[entry],
             runtime_gates={"sha256": release_trust.file_sha256(self.gates)},
             release_gate={"sha256": release_trust.file_sha256(self.gate)},
-            minimum_media_bytes=32_000_000_000,
+            minimum_media_bytes=14_500_000_000,
         )
         target = target or self.tmp_path / "release-attestation.json"
         release_attestation.write(target, attestation)

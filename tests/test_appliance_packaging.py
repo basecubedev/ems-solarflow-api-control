@@ -60,20 +60,6 @@ def test_supported_platforms_are_declared_in_one_place():
     )
 
 
-def test_the_package_runs_on_boards_the_ab_image_cannot_boot():
-    """Two different questions with two different answers.
-
-    The package is arm64 Python and systemd units; the A/B image is a boot
-    chain. Merging the two lists would either refuse a Pi 3 the package runs on
-    perfectly well, or promise an A/B image it cannot start.
-    """
-
-    from appliance import rpi_image_gen
-
-    assert "Raspberry Pi 3" in SUPPORTED_PI_MODELS
-    assert "pi3" not in rpi_image_gen.INSTALLABLE_BOARD_CLASSES
-
-
 def test_maintainer_scripts_are_executable_shell():
     for name in ("postinst", "prerm", "postrm"):
         script = PACKAGING / "debian" / name
@@ -708,27 +694,6 @@ def test_the_root_cli_wrapper_keeps_the_callers_environment_off_sys_path():
     assert "${PYTHONPATH" not in wrapper
 
 
-def test_every_tool_the_growth_helper_runs_is_declared_and_checked():
-    """A first boot that cannot grow the medium is the one failure an operator
-    cannot see coming: the helper runs before anything is reachable."""
-
-    from appliance.install_check import AB_REQUIRED_TOOLS
-
-    control = (PACKAGING / "debian" / "control").read_text(encoding="utf-8")
-    checked = {tool for tool, _package, _purpose in AB_REQUIRED_TOOLS}
-    helper = (PACKAGING / "bin" / "grow-persistent.sh").read_text(encoding="utf-8")
-
-    for tool, package in (
-        ("growpart", "cloud-guest-utils"),
-        ("resize2fs", "e2fsprogs"),
-        ("dumpe2fs", "e2fsprogs"),
-    ):
-        assert tool in helper, f"{tool} is no longer used by the helper"
-        assert tool in checked, f"verify-install does not check {tool}"
-        depends = control.split("Depends:")[1].split("Recommends:")[0]
-        assert package in depends, f"{package} is not a dependency"
-
-
 def test_removal_disables_every_unit_installation_enabled():
     """A dangling .wants symlink is a unit systemd still tries to start."""
 
@@ -777,14 +742,14 @@ def test_the_package_ships_the_keyring_os_updates_are_verified_against():
     repository and never will be.
     """
 
-    keyring = PACKAGING / "config" / "os-release-keyring.gpg"
+    keyring = PACKAGING / "config" / "release-keyring.gpg"
 
-    assert keyring.is_file(), "the package ships no OS release keyring"
+    assert keyring.is_file(), "the package ships no release keyring"
     assert keyring.stat().st_size > 0
     assert b"PRIVATE KEY" not in keyring.read_bytes()
 
     build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
-    assert "os-release-keyring.gpg" in build, "the keyring is never installed"
+    assert "release-keyring.gpg" in build, "the keyring is never installed"
 
 
 @pytest.mark.skipif(shutil.which("gpg") is None, reason="gpg reads the keyring")
@@ -799,7 +764,7 @@ def test_the_shipped_keyring_carries_the_key_that_actually_signs():
     is refused on an appliance that cannot be repaired afterwards.
     """
 
-    keyring = PACKAGING / "config" / "os-release-keyring.gpg"
+    keyring = PACKAGING / "config" / "release-keyring.gpg"
     listing = subprocess.run(
         ["gpg", "--show-keys", "--with-colons", str(keyring)],
         capture_output=True, text=True, check=False,

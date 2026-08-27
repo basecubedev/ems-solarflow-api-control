@@ -147,17 +147,16 @@ def test_an_index_that_says_nothing_still_labels_the_release():
 # --- where the section appears -----------------------------------------------
 
 
-def test_the_section_is_rendered_on_every_appliance_shape():
-    """It is the package the console runs from, not an A/B feature."""
+def test_the_manager_section_comes_before_the_package_one():
+    """It is the package the console runs from: an operator looking at a broken
+    console should not have to scroll past apt to find it."""
 
     body = extract("renderUpdates")
 
-    assert body.index("renderManagerUpdates(main)") < body.index("renderAbUpdates(main, ab)")
     assert body.index("renderManagerUpdates(main)") < body.index("renderPackageUpdates(")
 
 
 def test_the_browser_sends_a_release_id_and_nothing_else():
-    section = APP.split("function renderManagerUpdates(", 1)[1]
     section = APP.split("function renderManagerSources(", 1)[1].split(
         "function renderManagerUpdates(", 1
     )[0]
