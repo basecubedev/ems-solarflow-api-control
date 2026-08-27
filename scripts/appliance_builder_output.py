@@ -47,10 +47,10 @@ def is_required(relative):
     return not relative.endswith(OPTIONAL_SUFFIXES)
 
 
-# The build's work root lives under the dist directory too — a chroot, the
-# 16 GiB image and its sparse copies — and none of it is an artefact. What a
-# release consists of is the top level plus the two report directories, which
-# is exactly what the host collects.
+# The build's work root lives under the dist directory too -- a chroot and the
+# 8 GiB image it produced -- and none of it is an artefact. What a release
+# consists of is the top level plus the two report directories, which is exactly
+# what the host collects.
 COLLECTED_DIRECTORIES = ("gates", "reports")
 
 
@@ -98,7 +98,6 @@ def collect_builds(dist, entries):
             raise SystemExit(f"{entry['path']} is not a readable build authority: {error}")
         prefix = entry["path"][: -len(AUTHORITY_SUFFIX)]
         image = f"{prefix}.img"
-        update = f"{prefix}.update.tar.zst"
         builds.append(
             {
                 "profile": authority.get("profile", ""),
@@ -109,8 +108,6 @@ def collect_builds(dist, entries):
                 "builder_environment_sha256": authority.get("builder_environment_sha256", ""),
                 "image_file": image if image in by_path else "",
                 "image_sha256": by_path.get(image, {}).get("sha256", ""),
-                "update_file": update if update in by_path else "",
-                "update_sha256": by_path.get(update, {}).get("sha256", ""),
             }
         )
     return sorted(builds, key=lambda build: (build["profile"], build["build_id"]))

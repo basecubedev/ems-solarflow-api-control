@@ -78,7 +78,7 @@ def test_read_only_operations_never_take_the_mutation_lock():
 # password is not one, and must not queue behind one: an operator who cannot set
 # their first password while an OS update runs is locked out of their own box.
 LOCK_EXEMPT_MUTATIONS = frozenset(
-    {"audit.record_web_event", "ab.acknowledge", "auth.create", "auth.change"}
+    {"audit.record_web_event", "auth.create", "auth.change"}
 )
 
 
@@ -521,7 +521,7 @@ def test_a_planner_that_pulls_an_image_may_take_longer_than_the_default():
 
     from appliance.agent_client import DEFAULT_TIMEOUT, operation_timeout
 
-    for name in ("admin.plan_install", "admin.plan_rollback", "ab.plan_update", "ab.plan_fetch"):
+    for name in ("admin.plan_install", "admin.plan_rollback", "manager.plan_update"):
         assert operation_timeout(name) > DEFAULT_TIMEOUT, name
 
 
@@ -531,7 +531,7 @@ def test_a_cheap_read_only_call_keeps_the_short_timeout():
 
     from appliance.agent_client import DEFAULT_TIMEOUT, operation_timeout
 
-    for name in ("admin.get", "ab.status", "docker.get", "ssh.get"):
+    for name in ("admin.get", "manager.status", "docker.get", "ssh.get"):
         assert operation_timeout(name) == DEFAULT_TIMEOUT, name
 
 

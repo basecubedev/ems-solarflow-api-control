@@ -7,12 +7,14 @@
 | What does the Appliance Manager manage? | The Raspberry Pi host: OS status and updates, reboot/shutdown, network and WLAN, hostname and mDNS, Docker service state, the EMS Admin container lifecycle, SSH access, storage and temperature, host logs, appliance recovery. See [architecture.md](architecture.md). |
 | What does the EMS Admin Console manage? | EMS configuration, device discovery, grid meter and inverters, control parameters, EMS runtime state, EMS diagnostics, EMS backup/restore, Guided Setup and Guided Upgrade. |
 | How do I recover a failed Admin update? | [admin-recovery.md](admin-recovery.md) — the appliance rolls back automatically; otherwise use Repair or *Install version → Previous known-good*. |
+| The appliance will not come up at all | [console-recovery.md](console-recovery.md) — log in as `ems-rescue` at a keyboard, then work down the list. |
 | How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — Expert mode, *Exact release tag*. |
 | How do I add an SSH key? | [ssh-backup-access.md](ssh-backup-access.md) |
 | How do I back up files with rsync? | rsync is not available: the backup account is SFTP-only by design. Use the `sftp` commands in [ssh-backup-access.md](ssh-backup-access.md). |
 | How do I install OS updates? | [os-updates.md](os-updates.md) |
-| Does my appliance use A/B OS images? | `sudo ems-appliance ab status` — `mode=ab` or `mode=single_slot`. See [ab-os-updates.md](ab-os-updates.md). |
-| An OS update booted back into the old slot. Why? | The trial slot did not prove itself, so the one-shot trial boot expired. Nothing was changed and nothing is retried; see below. |
+| How do I update the Appliance Manager itself? | **System Updates → Appliance Manager**, never `apt` — see [os-updates.md](os-updates.md#updating-the-appliance-manager-itself). |
+| The console came back on the version I had before. Why? | A manager install that did not report itself healthy in time was undone by its own deadline; see [os-updates.md](os-updates.md#what-happens-when-it-fails). |
+| Was this host flashed from an appliance image? | `sudo ems-appliance image-check` — it prints the image layer, or fails. |
 | How do I recover access after a WLAN change? | [network-recovery.md](network-recovery.md) |
 | How do I reset the Appliance Manager password locally? | `sudo ems-appliance password-reset` — see [installation.md](installation.md). |
 
@@ -25,7 +27,18 @@ journalctl -u ems-appliance-web -n 200
 sudo ems-appliance status
 ```
 
-If the web service fails to start after a package upgrade:
+If the web service fails to start after a manager package upgrade, the appliance
+is already trying to undo it: the deadline armed before the install expires
+after fifteen minutes and reinstalls the previous package on its own. Check
+whether that happened before doing it by hand:
+
+```bash
+systemctl status ems-appliance-manager-verify.timer
+cat /var/lib/ems-appliance-manager/agent/packages/verify-verdict.json
+```
+
+If the verdict says `revert_unavailable` or `revert_failed`, or the deadline was
+never armed because the package was installed by hand, do it yourself:
 
 ```bash
 sudo ems-appliance rollback-manager
@@ -224,64 +237,3 @@ manifest of everything it contains. Check the manifest before sharing it.
 
 All log output is bounded and redacted before it reaches the browser.
 
-## A/B operating-system updates
-
-### The appliance returned to the previous slot after an update
-
-That is the mechanism working. The trial boot is one-shot: a slot that does not
-reach a successful health check never becomes the default, and the next ordinary
-boot returns to the previous one with nothing changed.
-
-```bash
-sudo ems-appliance ab status --json
-```
-
-`last_fallback` names the target slot, the target build and the last health
-result. **Nothing is retried automatically.** Acknowledge the fallback, then
-plan a new update; the inactive slot is staged again from scratch.
-
-Common causes, in the order worth checking:
-
-```bash
-journalctl -u ems-appliance-ab-health.service -b -1
-sudo ems-appliance ab verify-persistence
-systemctl status ems-appliance-persistence.service
-```
-
-### OS updates are greyed out
-
-```bash
-sudo ems-appliance ab status
-```
-
-- `mode=single_slot` — this is a normal installation. A/B host updates need an
-  A/B appliance image; see [installation.md](installation.md). There is no
-  in-place conversion.
-- `reason=layout_drift` — the signals that identify the slots disagree. The
-  `drift` list names each disagreement. A/B mutation stays disabled until it is
-  resolved, deliberately: writing to a partition nobody can identify is how an
-  appliance gets destroyed.
-- `persistence` is not `ok` — the shared partition is not mounted or a shared
-  path fell back to the root filesystem. Run `ab verify-persistence` for the
-  exact path.
-
-### The trial slot says manual action is required
-
-The firmware booted a slot under tryboot that no pending operation matches, or
-the running slot reports a different build than the trial wrote. Nothing is
-committed and nothing is guessed.
-
-```bash
-sudo ems-appliance ab status --json
-sudo systemctl reboot          # returns to the current default slot
-```
-
-After the ordinary reboot the appliance is on its known-good slot again. Report
-the `ab-status.json` member of a support archive with the issue.
-
-### Recovering a broken active slot
-
-If the active slot boots but a package is broken, Expert mode still offers
-package-manager recovery. It is recovery, not the normal update path: a live
-package mutation on an image-managed appliance creates slot drift and can
-disappear at the next rollback.

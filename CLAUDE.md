@@ -162,17 +162,35 @@ Docker. It is not part of the EMS control loop and must not import from `ems/`.
   The allowlist is enforced on the agent side (`protocol.py`,
   `operation_schema.py`); reaching that socket as an allowed uid is an
   appliance-takeover capability.
-- Fail-safe A/B OS updates own the `ab_*.py` modules plus `os_update.py`,
-  `os_fetch.py` and `os_releases.py`. This is bricking-class code: a trial slot
-  commits itself only after its own health gates pass, and nothing else commits
-  it. Read `docs/appliance/ab-os-updates.md` and
-  `docs/appliance/ab-persistence-contract.md` before touching it.
+- The operating system is patched in place by `apt`. There is no second copy
+  and nothing rolls back by itself, so a failed OS upgrade is recovered by
+  re-flashing and restoring a backup — which is why `packages.py`'s blockers
+  and the backup path matter more here than they look.
 - Release trust (`release_trust.py`, `release_attestation.py`,
-  `os_releases.py`) is fail-closed by design. Do not weaken a verification path
-  to make a gate pass.
-- Not confirmed on physical hardware. `docs/appliance/ab-hardware-validation.md`
-  is the authority on what has and has not been proven; never upgrade a claim
-  there without the evidence it names.
+  `artifact_trust.py`) is fail-closed by design. Do not weaken a verification
+  path to make a gate pass.
+- The Appliance Manager updates itself as a signed `.deb`
+  (`manager_update.py`, `manager_releases.py`, `manager_retention.py`,
+  `manager_install.py`, `manager_verify.py`), never on a timer and always on an
+  operator's button, with an older package installable as readily as a newer
+  one. Three properties are not negotiable: `dpkg` runs from its own systemd
+  unit rather than the agent's cgroup, every refusal happens before it runs,
+  and the reverter is a copy taken out of the *outgoing* package. **Doing
+  nothing commits an install here**, so the deadline in `manager_verify.py` is
+  the only thing standing in for a way back, and it is software rather than
+  firmware. Read `docs/appliance/adr/manager-self-update.md` before touching
+  any of it.
+- One image, three boards: `image_shape.py` and
+  `rpi_image_gen.HARDWARE_PROFILES` are the one table. `grow-root.sh` is the
+  only thing in this project that repartitions anything, it runs once on a
+  freshly imaged card, and it is gated on `ems-appliance image-check`.
+- `persistent_state.RETIRED_SCHEMAS` may be added to only by removing a state
+  format, never by adding one. Dropping an axis makes the next package
+  uninstallable on every appliance that recorded it.
+- Not confirmed on physical hardware — no image has booted on a board, and no
+  appliance has installed a manager package over HTTPS.
+  `docs/appliance/hardware-validation.md` is the authority on what has and has
+  not been proven; never upgrade a claim there without the evidence it names.
 
 Compile check and tests:
 
@@ -291,7 +309,7 @@ Update the relevant doc when changing behavior described there.
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **ems-solarflow-api-control** (23964 symbols, 62047 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **ems-solarflow-api-control** (35490 symbols, 83864 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

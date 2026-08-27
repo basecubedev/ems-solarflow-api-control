@@ -223,7 +223,7 @@ cannot regress silently.
 |---|---|
 | Password hashing | PBKDF2-SHA256, 600 000 iterations, 32-byte salt |
 | Minimum length | none — see "One password, and what that costs" |
-| Default password | none — the first start must create one |
+| Default password | none for the browser — the first start must create one. The **console** rescue account is the other way round: `ems-rescue` ships with a documented password, and changing it is optional. See [console-recovery.md](console-recovery.md) |
 | Independence | none — one secret for the Appliance Manager, the Admin console and the dashboard, in one shared store |
 | Transport | **Plain HTTP on every interface.** The manager terminates no TLS and has no certificate; anyone who can reach the port sees the login page |
 | Session cookie | `HttpOnly`, `SameSite=Strict`, `Path=/`. The `Secure` attribute is set only when a reverse proxy in front of it terminates TLS — the appliance never does |
@@ -390,7 +390,7 @@ it, backup access stays disabled and purge leaves the account and home alone.
 | `no_ownership_record` | there is no record |
 
 An install resolves exactly one of these, `no_ownership_record`, and only in the
-situation the A/B image creates — see [the account the image carries](#the-account-the-image-carries)
+situation a flashed image creates — see [the account the image carries](#the-account-the-image-carries)
 below. A **schema-2** record — one written
 before the marker but with the account and home identity fields — is adopted
 only by the explicit, root-only
@@ -423,15 +423,15 @@ a clean removal.
 
 ### The account the image carries
 
-On an A/B appliance `/etc` is read-only and slot-local, so the backup account
-has to be created in the build chroot. Everything that proves this package
-created it — the ownership record and the home marker — is written to paths the
-persistent partition covers, and on the first boot those mounts are empty. The
-device therefore wakes up beside an account with no record, which is
-indistinguishable from an account somebody else placed. Refusing it is correct,
-and it left the operator to set up backup access by hand.
+The image carries the backup account: the package's postinst runs in the build
+chroot, which is where the account is created. What proves this package created
+it — the ownership record and the home marker — lives under the EMS deployment
+root, which the build chroot does not have. The device therefore wakes up beside
+an account with no record, which is indistinguishable from an account somebody
+else placed. Refusing it is correct, and it left the operator to set up backup
+access by hand.
 
-The image also carries a slot-local **origin declaration** at
+The image also carries an **origin declaration** at
 `/usr/lib/ems-appliance-manager/backup-account-origin`: written by the postinst
 in the build chroot, read-only at runtime, and out of reach of the shared
 mounts. It names the account the build created — uid, gid, home, shell — and a
@@ -449,17 +449,16 @@ The first boot may act on it, and only under all of the following:
   same rule that judges it during a normal install: adopted only when it is
   empty, root-owned and closed to other writers
 
-What it then does is bind the record and the marker to the home that is mounted
-*now*, and record the declaration's nonce in the record. It creates no account
-and writes nothing outside the shared paths, which is what makes it possible on
-a read-only root at all.
+What it then does is bind the record and the marker to the home as it is
+*now*, and record the declaration's nonce in the record. It creates no account.
 
-What makes this safe is not the file's location alone. The declaration is a
+What makes this safe is not the file's location. The declaration is a
 *description*, not a capability: acting on it requires a passwd entry that
-matches it in every field, and passwd is in the read-only slot root. Forging a
-declaration therefore buys nothing unless the account it describes can also be
-created, which that root does not allow. The one account that does match is the
-one the build put there — and adopting it is what this is for.
+matches it in **every** field — uid, gid, home and shell — and writing
+`/etc/passwd` needs root. Forging a declaration therefore buys nothing unless
+the account it describes can also be created, and anyone who can do that did
+not need the declaration. The one account that does match is the one the build
+put there, and adopting it is what this is for.
 
 It cannot be spent twice: after the first boot the record exists and ownership
 is proven the ordinary way, and if that record is later deleted the home is no
@@ -528,7 +527,7 @@ authoritative manifest was untouched, but the transaction state moved to
 `staging` when the run opened, so the state is put back and verified there too.
 
 If the parent-directory flush fails after the rename, the previous manifest is
-restored and verified by hash, or — when there was none — the slot is emptied.
+restored and verified by hash, or — when there was none — the entry is emptied.
 If neither is possible the new manifest is moved off the authoritative name to
 `acl-manifest.tsv.uncommitted` and reported, so nothing reads a manifest
 describing grants the rollback withdrew.
@@ -564,97 +563,112 @@ descendant created later through the default ACL and every `setfacl` failure are
 preserved and reported as incomplete cleanup. The manifest survives an
 incomplete purge so a second attempt stays exact instead of guessing.
 
-## A/B operating-system updates
-
-The block-device write is the most destructive thing this appliance can do, so
-its authority is the narrowest.
-
-```text
-the browser sends           release_id, and a repair flag
-the browser can never send  a device path, a partition identity, a partition number,
-                            a URL, a signing key, a checksum, a mount flag,
-                            a dd argument or a reboot string,
-                            a device layer, a hardware class, a decoder path,
-                            an rpi-image-gen source, an expanded output path,
-                            a Docker command, a health URL, an SSH key path or
-                            a shared persistence path
-```
-
-Everything else is derived: the release directory and the signing keyring come
-from the root-owned `appliance.conf`, the digests come from a manifest whose
-detached signature this appliance's own keyring verified, and the devices come
-from layout discovery that cross-checks the firmware, the kernel command line,
-the mount table, the block layer and the image-build layout manifest. A
-disagreement between those is `layout_drift`, which disables every A/B mutation.
-
-An artifact without a verified signature is refused. A development override
-exists for a bench, is reachable only where the root-owned configuration enables
-it, and records a distinct verification value that no consumer can read as a
-release-gate pass.
-
-Extraction treats a verified archive as still an archive: absolute paths, parent
-traversals, nested paths, links, device nodes, unexpected or duplicate members,
-oversized members and members that produce more bytes than they declared are all
-refused, into a root-owned staging directory, with each member's digest checked
-against the manifest before any writer may read it.
-
-A verified member is still not an image. `image-rota` wraps both payloads in an
-Android Sparse container, so each member is expanded before anything reaches a
-partition, and the manifest signs both identities separately — the encoded
-digest extraction checks, and the expanded digest the read-back proves. The
-expander is in-process, so there is no decoder executable to allowlist and no
-converter output size to trust: every header field, every chunk extent and the
-running total are bounded before a byte is produced, and the expanded image must
-fit the target partition first. A malformed container fails before any block
-device is opened.
-
-Hardware is an authority, not a label. The manifest carries the device layer it
-was built from and only the board classes that layer is for; the appliance
-normalises its own device tree to a bounded board class and refuses anything
-else. A board it cannot identify blocks planning rather than being guessed at.
-
-The confirmed operation record binds the exact physical target — device, both
-partitions, both partition identities, both digests, the layout id and the persistent
-schema — and that binding is revalidated immediately before the first write. A
-recorded target that resolves to the running slot is refused even when the record
-says otherwise.
+## The one partition change this project makes
 
 **No feature repartitions a running installation.** The command allowlist
 contains no partitioning or filesystem-creation tool, and the only partition
-change this project makes at all is growing the persistent partition on a
-freshly imaged medium during first boot, before any data exists.
+change this project makes at all happens on a freshly imaged medium during first
+boot, before any data exists: the root is grown to fill the card. It is a
+one-shot unit that runs once and is done, and it is gated on a build marker this
+project's own image wrote — a host installed from the `.deb` onto somebody
+else's Raspberry Pi OS has no marker and is left alone.
 
-The audit trail carries the plan, the confirmation, the staging, the tryboot
-request, the trial boot, a health failure, the commit, an observed fallback and
-both rollback steps. It never carries signing material: the detail filter matches
-key material as a substring, so `signing_key` is dropped exactly like `key`.
+The growth helper lives in `packaging/appliance/bin/grow-root.sh` rather than in
+the appliance modules on purpose: no partitioning tool is reachable from the
+Python command runner, so no code path that handles a request can repartition
+anything.
 
-## Operating-system update trust
+## Update trust: one keyring, two artefact classes
 
-An OS artefact is installed only if a signature over its manifest verifies
-against a keyring this host was given. Three settings in
-`/etc/ems-appliance-manager/appliance.conf` decide that, and all three are host
-authority: the browser can influence none of them.
+One thing reaches this appliance over HTTPS and is installed only if a
+signature over its manifest verifies against the keyring this host was given:
+the **Appliance Manager package**, the `.deb` this console runs from.
+
+The order of operations is the security property: an index may only name
+candidates, the detached signature decides whether the manifest may be believed,
+and only a verified manifest says what the package must hash to. The manifest is
+**required** to declare what state schemas its manager implements and the oldest
+it can read; a package that says nothing cannot be proven able to read the state
+already on this appliance, and is refused.
+
+**A second thing reaches this appliance and this keyring does not govern it.**
+`apt` installs from the Debian and Raspberry Pi archives against APT's own
+trusted keys — that is what patching the operating system *is*. It is a
+different trust anchor with a different owner, and no setting here strengthens
+or weakens it. The Appliance Manager package is deliberately not in any of those
+archives, so the two paths never decide the same question.
+
+### Where the trust anchor comes from
+
+Two settings in `/etc/ems-appliance-manager/appliance.conf` decide it, and both
+are host authority: the browser can influence neither.
 
 | Setting | Default | What it decides |
 |---|---|---|
-| `os_release_keyring` | `/etc/ems-appliance-manager/os-release-keyring.gpg` | The trust anchor. **No package ships a key here** — a trust anchor the device brings itself is one whoever shipped the device controls. Until an operator installs one, every artefact is refused and the manager reports it as an unmet readiness prerequisite rather than failing at install time |
-| `os_release_dir` | `/var/lib/ems-appliance-os-update/releases` | Where verified releases live. A shared path, so it survives a slot switch |
-| `os_release_index_url` | empty | An `https` index naming downloadable releases. The index is never trusted: it may only name candidates, and what is installed is decided by the signature |
-| `allow_unsigned_os_artifacts` | `false` | A development-bench escape hatch reachable from the root CLI only. It is never a release-gate pass, is recorded as a distinct verification state, and the browser can never reach it |
+| `release_keyring` | `/etc/ems-appliance-manager/release-keyring.gpg` | The trust anchor. The package ships the project's own release keyring here, deliberately **not** as a conffile: it is a trust anchor rather than a setting, so a local edit must not survive an upgrade that rotates the key. With no keyring at all, every artefact is refused rather than installed unverified |
+| `manager_index_url` | empty | An `https` index naming downloadable Appliance Manager packages. The index is never trusted: it may only name candidates, and what is installed is decided by the signature. Empty is a working state — the package can still be installed by hand |
 
 Verification uses `gpgv` against that keyring alone — not the invoking user's
 keyring, and not a keyserver. A release signed by a key the keyring does not
 hold is refused with the same finality as an unsigned one.
+
+#### One identity, two keys
+
+The release identity is a primary key that only certifies, and a subkey that
+only signs. Releases are signed by the subkey; the primary never leaves the
+maintainer's machine.
+
+What that buys is a rotation that costs nothing in the field. The appliance
+pins the **primary's** fingerprint, and `gpg` reports that one for a subkey
+signature — field 12 of `VALIDSIG`, which
+`appliance/artifact_trust.py:valid_signature_fingerprints` reads deliberately
+instead of field 3. So a leaked signing subkey is revoked and replaced with the
+primary, and **no appliance needs a new keyring**. A leaked *primary* would
+need one, on every device, by package update — which is why it is not the key
+that travels.
+
+Two consequences worth stating, because both are easy to get wrong:
+
+- **The shipped keyring must contain the subkey's public half.** `gpgv`
+  verifies with the signing key's material, not the primary's. A keyring
+  exported before the subkey existed refuses every release, on an appliance
+  that would then have no way to install the package that fixed it.
+  `tests/test_appliance_packaging.py` pins this.
+- **Neither key expires.** An expired key produces `EXPKEYSIG`, which this
+  verifier refuses — and it does so for *every signature the key ever made*,
+  not only new ones. An expiry date would therefore be a fleet-wide cliff on a
+  forgotten calendar entry rather than a safety net. Rotation is by revocation,
+  which is deliberate.
+
+### Appliance Manager package trust
+
+Everything above applies unchanged. Three things are specific to a package:
+
+- **The refusals happen before `dpkg` runs.** Signature, digest, architecture
+  and state-schema compatibility are all decided while this project's Python is
+  still the code that started the process. Afterwards the module files under
+  `/usr/lib/ems-appliance-manager/appliance` are the *new* ones, so a decision
+  taken later would be taken by code nobody has proven yet.
+- **A published package is re-derivable.** `SOURCE_DATE_EPOCH` from the tagged
+  commit and a pinned compressor make two builds byte-identical, which is what
+  replaces the builder attestation an image carries. The manifest records both.
+- **Going backwards is allowed and going blind is not.** An older package
+  installs as readily as a newer one — it is the only recovery this appliance
+  has for its own console — but a package whose manager could not read the state
+  already on this appliance's disk is refused, whichever direction it moves.
+
+The install itself is described in
+[os-updates.md](os-updates.md#updating-the-appliance-manager-itself), and what a
+deadline in software is worth in
+[adr/manager-self-update.md](adr/manager-self-update.md).
 
 
 ## What is deliberately absent
 
 ```text
 arbitrary shell execution
-in-place conversion of a single-slot installation to A/B
 repartitioning a running installation from the browser
-EEPROM bootloader firmware-slot writes
+EEPROM bootloader firmware writes
 a browser-based terminal
 a general Linux package manager
 free-form systemd service editing

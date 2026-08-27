@@ -2,7 +2,11 @@
 
 `emsctl.py` safely edits the configured runtime-state file.
 
-It does not contact Zendure hardware and does not contact Home Assistant.
+Runtime-state edits and an ordinary `diagnose` contact no hardware and no Home
+Assistant. Two commands do reach the network, read-only and with short
+timeouts: `diagnose --hardware` probes configured grid meters and Zendure read
+endpoints, and `grid-meter test` reads the configured meter. Neither writes
+device state.
 
 ## Quickstart
 

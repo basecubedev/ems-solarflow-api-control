@@ -213,18 +213,6 @@ def test_readme_states_the_host_memory_tiers():
     assert "docs/user/hardware-requirements.md" in section
 
 
-def test_readme_says_ab_does_not_double_runtime_memory():
-    """Two slots on the medium is not two systems in memory.
-
-    Left unsaid, the sizing table reads as "double it for A/B", which would rule
-    out hardware that is in fact fine.
-    """
-
-    text = read(ROOT / "README.md")
-    assert "only one slot is" in text
-    assert "does not double runtime RAM" in text
-
-
 def test_the_hardware_requirements_page_covers_memory_and_raspberry_pi():
     page = ROOT / "docs" / "user" / "hardware-requirements.md"
     assert page.is_file()
@@ -232,7 +220,7 @@ def test_the_hardware_requirements_page_covers_memory_and_raspberry_pi():
     for tier in ("512 MB", "1 GB", ">1 GB"):
         assert tier in text, tier
     assert "## Raspberry Pi compatibility" in text
-    assert "only one slot" in text
+    assert "16 GB" in text
     # The optional half of the sizing answer: control must not appear to depend
     # on the history database.
     assert "InfluxDB" in text
@@ -240,7 +228,7 @@ def test_the_hardware_requirements_page_covers_memory_and_raspberry_pi():
 
 
 def test_the_hardware_page_states_the_pi3_limit_without_overclaiming_the_rest():
-    """The A/B refusal is definite; the Docker path on a Pi 3 is untested.
+    """The image is built for a Pi 3; nothing has booted one, and both are said.
 
     Collapsing those two into one verdict is the failure mode in both
     directions — "Pi 3 works" and "Pi 3 is useless" are each wrong.
@@ -248,7 +236,8 @@ def test_the_hardware_page_states_the_pi3_limit_without_overclaiming_the_rest():
 
     text = read(ROOT / "docs" / "user" / "hardware-requirements.md")
     section = text.split("### Raspberry Pi 3 and 3B+", 1)[1].split("\n## ", 1)[0]
-    assert "does not support" in section
+    assert "built for it" in section.lower()
+    assert "never been booted" in section
     assert "not tested" in section.lower() or "nobody has tested" in section
     assert "not listed as supported" in section
     assert "guaranteed" not in text.lower()

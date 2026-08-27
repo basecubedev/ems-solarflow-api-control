@@ -393,19 +393,15 @@ test.describe("operating-system updates", () => {
     await expect(page.locator("#main")).toContainText("flash the new supported appliance image");
   });
 
-  // The test host is a single-slot appliance, so the page must show the package
-  // mode and say what A/B would require rather than offering a conversion.
-  test("a single-slot appliance says A/B needs re-imaging", async ({ page }) => {
+  test("the updates page says what recovery is", async ({ page }) => {
     await signIn(page);
     await openView(page, "updates");
-    await expect(page.locator('[data-test="ab-single-slot"]')).toContainText(
-      "single root filesystem",
+    await expect(page.locator('[data-test="updates-recovery"]')).toContainText(
+      "patched in place",
     );
-    await expect(page.locator('[data-test="ab-single-slot"]')).toContainText(
-      "A/B-capable appliance image",
+    await expect(page.locator('[data-test="updates-recovery"]')).toContainText(
+      "writing the card again",
     );
-    await expect(page.locator('[data-test="ab-plan-update"]')).toHaveCount(0);
-    await expect(page.locator('[data-test="ab-stage-rollback"]')).toHaveCount(0);
   });
 });
 
@@ -636,14 +632,14 @@ test.describe("truthful host state @smoke", () => {
     page,
     request,
   }) => {
-    await request.post("/api/test/reset", { data: { ab_deployment_drift: true } });
+    await request.post("/api/test/reset", { data: { deployment_drift: true } });
     await signIn(page);
 
-    const replan = page.locator('[data-test="ab-replan-required"]');
+    const replan = page.locator('[data-test="replan-required"]');
     await expect(replan).toBeVisible({ timeout: 20_000 });
-    await expect(replan).toContainText("the inactive slot is untouched");
-    await expect(replan).toContainText("boot default is unchanged");
-    await expect(replan).toContainText("create a new update plan");
+    await expect(replan).toContainText("Nothing was written");
+    await expect(replan).toContainText("no longer the one this operation was");
+    await expect(replan).toContainText("create a new plan");
     await expect(page.locator('[data-test="operation-outcome"] .tone')).not.toHaveClass(
       /tone-ok/,
     );
@@ -739,5 +735,109 @@ test.describe("truthful host state @smoke", () => {
     const row = page.locator('[data-test="repair-findings"] tr', { hasText: "admin port" });
     await expect(row).toContainText("not checked");
     await expect(row.locator(".tone")).toHaveClass(/tone-warn/);
+  });
+});
+
+test.describe("appliance manager @smoke", () => {
+  test("a quiet appliance offers an update and has nothing to go back to", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "updates");
+
+    const card = page.locator('[data-test="manager-installed"]');
+    await expect(card).toBeVisible();
+    await expect(page.locator('[data-test="manager-kept"]')).toContainText("none kept");
+    await expect(page.locator('[data-test="manager-plan-revert"]')).toBeDisabled();
+  });
+
+  test("a kept package is offered as the way back", async ({ page, request }) => {
+    await resetAppliance(request, { manager_package_kept: true });
+    await signIn(page);
+    await openView(page, "updates");
+
+    await expect(page.locator('[data-test="manager-kept"]')).toContainText("0.1.0");
+    const revert = page.locator('[data-test="manager-plan-revert"]');
+    await expect(revert).toBeEnabled();
+    await expect(revert).toContainText("0.1.0");
+  });
+
+  test("a deadline in flight blocks both controls", async ({ page, request }) => {
+    // A second install would replace the package whose verdict the appliance is
+    // still waiting for.
+    await resetAppliance(request, { manager_package_kept: true, manager_deadline_armed: true });
+    await signIn(page);
+    await openView(page, "updates");
+
+    await expect(page.locator('[data-test="manager-deadline"]')).toContainText("being judged");
+    await expect(page.locator('[data-test="manager-deadline"]')).toContainText("0.3.0");
+    await expect(page.locator('[data-test="manager-plan-revert"]')).toBeDisabled();
+  });
+
+  test("a reverted install is reported rather than left silent", async ({ page, request }) => {
+    await resetAppliance(request, { manager_package_kept: true, manager_verdict: "reverted" });
+    await signIn(page);
+    await openView(page, "updates");
+
+    const verdict = page.locator('[data-test="manager-verdict"]');
+    await expect(verdict).toBeVisible();
+    await expect(verdict).toContainText("did not prove itself in time");
+  });
+
+  test("an appliance with no package index says so instead of offering nothing", async ({
+    page,
+  }) => {
+    await signIn(page);
+    await openView(page, "updates");
+
+    await expect(page.locator('[data-test="manager-sources-unconfigured"]')).toContainText(
+      "manager_index_url",
+    );
+  });
+
+  test("the revert plan states what it would put back before anything happens", async ({
+    page,
+    request,
+  }) => {
+    await resetAppliance(request, { manager_package_kept: true });
+    await signIn(page);
+    await openView(page, "updates");
+
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/manager/plan-revert")),
+      page.locator('[data-test="manager-plan-revert"]').click(),
+    ]);
+
+    const dialog = page.locator("#dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("0.1.0");
+  });
+});
+
+test.describe("console rescue account", () => {
+  test("the shipped password is reported without being demanded", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "access");
+
+    const card = page.locator('[data-test="rescue-account"]');
+    await expect(card).toContainText("ems-rescue");
+    await expect(card).toContainText("shipped password");
+    await expect(card).toContainText("sudo passwd ems-rescue");
+    // Reported, never demanded: there is no control that changes it.
+    await expect(card.locator("button")).toHaveCount(0);
+  });
+
+  test("a changed password is reported as changed", async ({ page, request }) => {
+    await resetAppliance(request, { rescue_password_changed: true });
+    await signIn(page);
+    await openView(page, "access");
+
+    await expect(page.locator('[data-test="rescue-account"]')).toContainText("changed");
+  });
+
+  test("an appliance without the account is not reported as secure", async ({ page, request }) => {
+    await resetAppliance(request, { rescue_account_absent: true });
+    await signIn(page);
+    await openView(page, "access");
+
+    await expect(page.locator('[data-test="rescue-account"]')).toContainText("not present");
   });
 });

@@ -2,9 +2,10 @@
 
 ## Timezone
 
-The appliance host runs on UTC and stays there: `/etc/localtime` lives on the
-read-only slot root, so a host timezone could not survive a slot switch and
-`timedatectl` cannot write one at all on an A/B image.
+The appliance image sets the host to UTC and leaves it there, and the container
+timezone below is the one that matters. `timedatectl` would work on this root,
+but nothing in the appliance offers it: a host zone nothing depends on is one
+less thing to get wrong.
 
 What the EMS actually needs is the zone its containers run in, because that is
 what decides when an hour-based control window opens — a winter midday charge
@@ -24,42 +25,69 @@ containers as `TZ` the next time the deployment starts.
 
 | Item | Supported |
 |---|---|
-| Hardware | Raspberry Pi 4, Raspberry Pi 5 — **reverse-engineered**: derived and tested in emulation, not confirmed on a physical board (see [the hardware gate](ab-hardware-validation.md)) |
+| Hardware | Raspberry Pi 3, 3B+, 4 and 5 — all **reverse-engineered**: derived, built and inspected offline. No image has booted on a board (see [the hardware gate](hardware-validation.md)) |
 | Operating system | Raspberry Pi OS 64-bit (Trixie). The appliance image is built from Trixie; the manager package also installs on Bookworm |
 | Architecture | `arm64` only |
 | Package | `ems-appliance-manager_<version>_arm64.deb` |
 
 Other boards and 32-bit systems are out of scope for this release.
 
-The **Raspberry Pi 3 and 3B+ cannot run the A/B appliance image**, and that is
-not a sizing decision that a future release could revisit cheaply: the image
-uses a GPT layout and the EEPROM boot selector that Pi 4 and Pi 5 firmware
-provide, and a Pi 3 boot ROM reads neither. See
-[adr/raspberry-pi-3-ab-support.md](adr/raspberry-pi-3-ab-support.md) for the
-evidence, and [../user/hardware-requirements.md](../user/hardware-requirements.md)
-for what a Pi 3 can and cannot be used for.
+The **Raspberry Pi 3 and 3B+** are built for, and nobody has booted the image on
+one yet. That board boots from SD and nothing else: upstream's `rpi3` device
+layer accepts no USB or NVMe storage type, so no such artefact exists. See
+[../user/hardware-requirements.md](../user/hardware-requirements.md) for what a
+Pi 3 can and cannot be used for.
 
 ## Two installation shapes
 
 ```text
-Single-slot installation
+Package installation
   the .deb on an existing Raspberry Pi OS system
   → classic package updates
   → a major OS generation change requires re-imaging
 
-A/B appliance image
-  ems-solarflow-appliance-<version>-<rpi4|rpi5>-arm64-ab.img, flashed to the medium
-  → image-based fail-safe host updates
-  → the inactive slot is staged, trial-booted, health-checked
-  → commit, or automatic fallback to the previous slot
+Appliance image
+  ems-solarflow-appliance-<version>-<rpi3|rpi4|rpi5>-arm64.img.xz, flashed
+  → one writable root, patched by apt
+  → the Manager updates as a .deb
+  → nothing falls back by itself: recovery is reflash plus backup restore
+
 ```
 
-**An existing single-slot installation is never converted in place.** Moving to
-A/B means flashing an A/B appliance image and restoring an EMS backup onto it;
-the appliance does not resize, move or repartition a running installation's
-storage, and no such action is reachable from the browser or the agent. Single-
-slot installations stay fully supported. See
-[ab-os-updates.md](ab-os-updates.md).
+### How each shape gets its updates
+
+| | `.deb` on your own OS | Appliance image |
+|---|---|---|
+| Operating system | `apt` | `apt` |
+| Appliance Manager | **System Updates → Appliance Manager**, or a `.deb` by hand | the same |
+| Admin and EMS containers | the Admin console | the Admin console |
+
+The Manager is not in any APT repository, so `apt` does not offer it an upgrade.
+**System Updates → Appliance Manager** does: it fetches a signed package over
+HTTPS, verifies it against the keyring the appliance already ships, and installs
+it — see [os-updates.md](os-updates.md#updating-the-appliance-manager-itself).
+Installing a `.deb` by hand still works and is what a development bench does.
+
+`sudo ems-appliance rollback-manager` reinstalls the package the appliance was
+running before the last update. That is a real procedure rather than a promise:
+the package that was running is copied to
+`/var/lib/ems-appliance-manager/agent/packages/previous.deb` **before** the new
+one is unpacked, so there is a file to go back to. When there is none — a first
+install, or a manager that was never installed through this path — the command
+refuses and says so, instead of reporting a success that did nothing.
+
+The image carries the Manager inside it, and the package path above is written
+without a shape check: nothing in `manager_update.py`, `manager_install.py` or
+`install-manager.sh` asks what it is running on. It is the normal way the
+Manager moves version, and the package is in no APT repository.
+
+**An installation is never converted in place.** A `.deb` installation on your
+own Raspberry Pi OS does not become a flashed appliance, and the other way
+round. Moving means flashing the image and restoring an EMS backup onto it. The
+appliance does not resize, move or repartition a running installation's storage,
+and no such action is reachable from the browser or the agent. Both shapes stay
+fully supported. See
+[adr/single-image-appliance.md](adr/single-image-appliance.md).
 
 ## Install
 
@@ -86,20 +114,38 @@ The package installs:
 /usr/lib/systemd/system/ems-appliance-export.service
 /usr/lib/systemd/system/ems-appliance-export.path
 /usr/lib/systemd/system/ems-appliance-backup-access-disable.service
-/usr/lib/systemd/system/ems-appliance-host-identity.service
-/usr/lib/systemd/system/ems-appliance-persistence.service
-/usr/lib/systemd/system/ems-appliance-ab-health.service
-/usr/lib/systemd/system/ems-appliance-slot-bootstrap.service
-/usr/lib/systemd/system/ems-appliance-grow-persistent.service
+/usr/lib/systemd/system/ems-appliance-config-seed.service
+/usr/lib/systemd/system/ems-appliance-grow-root.service
+/usr/lib/systemd/system/ems-appliance-manager-install.service
+/usr/lib/systemd/system/ems-appliance-manager-verify.service
+/usr/lib/systemd/system/ems-appliance-manager-verify.timer
 /usr/lib/ems-appliance-manager/setup-export-root.sh
 /usr/lib/ems-appliance-manager/backup-account.sh
+/usr/lib/ems-appliance-manager/rescue-account.sh
 /usr/lib/ems-appliance-manager/install-admin-console.sh
-/usr/lib/ems-appliance-manager/grow-persistent.sh
+/usr/lib/ems-appliance-manager/grow-root.sh
+/usr/lib/ems-appliance-manager/install-manager.sh
+/usr/lib/ems-appliance-manager/verify-manager.sh
 /usr/lib/tmpfiles.d/ems-appliance-manager.conf
 /etc/logrotate.d/ems-appliance-manager
-/etc/ems-appliance-manager/appliance.conf
-/etc/ems-appliance-manager/allowed-images.conf
+/etc/ems-appliance-manager/release-keyring.gpg
+/usr/share/ems-appliance-manager/appliance.conf        (template)
+/usr/share/ems-appliance-manager/allowed-images.conf   (template)
+/usr/share/ems-appliance-manager/rescue-password.hash
 ```
+
+The last three are **not** under `/etc` on purpose: a packaged copy at
+`/etc/ems-appliance-manager/appliance.conf` would put an operator's edit and a
+package file at the same path, and `dpkg` is entitled to the second.
+`ems-appliance-config-seed.service` creates what is missing from these
+templates, once. The keyring is the exception in the other direction: it is a
+trust anchor rather than a setting, so it *is* shipped under `/etc` and a local
+edit must not survive an upgrade that rotates the key.
+
+`verify-manager.sh` is the copy the package ships. The one that actually runs is
+a snapshot of it taken out of the **outgoing** package before an install, so the
+code judging an update is never code the update brought with it — see
+[os-updates.md](os-updates.md#what-happens-when-it-fails).
 
 Three further files are **generated** from `appliance.conf`, not shipped, so
 they always agree with the configured host paths:
@@ -117,8 +163,8 @@ the installation creates the backup account:
 /usr/lib/ems-appliance-manager/backup-account-origin
 ```
 
-It describes the account that was created, and it is what lets a flashed A/B
-image establish ownership of an account it could not create at runtime — see
+It describes the account that was created, and it is what lets a flashed image
+establish ownership of an account the build chroot created — see
 [the security model](security-model.md#the-account-the-image-carries). On a
 system you installed the package on yourself it is written and never read.
 Purge removes it.
@@ -370,9 +416,9 @@ dpkg --purge ems-appliance-manager
 ```
 
 This checks the package layout, the service accounts, the directory modes and
-that purge removes only appliance state. It is not a substitute for the
-Raspberry Pi 4 and Raspberry Pi 5 appliance tests; only the real hardware
-covers first boot, reboot persistence and the OS update path.
+that purge removes only appliance state. It is not a substitute for the appliance
+tests on a real board — a Pi 3, 4 or 5, whichever image it runs; only the
+hardware covers first boot, reboot persistence and the update paths.
 
 ## Appliance layout
 
@@ -382,6 +428,7 @@ covers first boot, reboot persistence and the OS update path.
   docker-compose.admin.yml     Admin service (when the Admin installer created it)
   .env.admin                   Admin image and tag
   config/config.json
+  config/dashboard-auth.json   the one shared password (0600, agent-owned)
   data/
   backups/
   admin/
@@ -391,12 +438,14 @@ covers first boot, reboot persistence and the OS update path.
 /etc/ems-appliance-manager/
   appliance.conf               host configuration, root-writable only
   allowed-images.conf          the image allowlist
+  release-keyring.gpg          the trust anchor for every signed artefact
+  timezone                     the zone carried into the containers
 
 /var/lib/ems-appliance-manager/      root:ems-appliance 0750
   web/                               ems-appliance-web
-    auth/auth.json                   the appliance password (0600)
     sessions/
     ui-preferences/
+    state.json
   agent/                             root
     operations/                      durable operation records
     known-good/                      verified Admin history with digests
@@ -404,7 +453,9 @@ covers first boot, reboot persistence and the OS update path.
     package-state/
     recovery/
     ssh-keys/
-    packages/                        previous Appliance Manager package
+    support/                         generated support archives
+    packages/                        the retained Appliance Manager packages,
+                                     the armed reverter and the install deadline
 
 /var/log/ems-appliance-manager/      root:ems-appliance 0750
   web/appliance.log                  ems-appliance-web
@@ -448,8 +499,11 @@ sudo systemctl start ems-appliance-export.service
 `ems-appliance host-config` without `--apply` prints what is configured and
 whether the generated files still agree; `verify-install` fails on drift.
 
-The web service can read agent state through the shared group but cannot write
-it; it reaches privileged state through the agent API.
+The web service cannot read agent state at all: the agent tree is `root:root`
+`0700` and the web unit adds `InaccessiblePaths=` over it. The shared
+`ems-appliance` group grants one thing — reaching the agent socket — and it is
+not a read grant on anything. Privileged state is reached through the agent API
+alone.
 
 ### Upgrading from the previous shared layout
 
@@ -506,8 +560,9 @@ and login rate limiting.
 
 ## Reset the password locally
 
-Password recovery never depends on the EMS Admin. On the console, or over SSH as
-an already authorised host user:
+Password recovery never depends on the EMS Admin. At a keyboard and monitor as
+the shipped rescue account `ems-rescue`, or over SSH as an already authorised
+host user:
 
 ```bash
 sudo ems-appliance password-reset
@@ -544,11 +599,20 @@ journalctl -u ems-appliance-agent -n 200
 
 ## Appliance Manager self-update
 
-The Appliance Manager updates through its signed OS package, separately from
-Admin updates. Its current version is visible in Settings. Install a new
-package with `apt`; the previous package is retained under
-`/var/lib/ems-appliance-manager/packages/previous.deb` so
-`sudo ems-appliance rollback-manager` can put it back.
+The Appliance Manager updates through its signed package, separately from Admin
+updates. Its current version is visible in Settings.
+
+`sudo ems-appliance rollback-manager` reinstalls the package that was running
+before the current one, from
+`/var/lib/ems-appliance-manager/agent/packages/previous.deb`.
+
+**It has something to reinstall only when the manager installed the update
+itself.** dpkg keeps no copy of the archive it unpacked and hands its
+maintainer scripts no path to it, so an update applied with `apt` or
+`dpkg --install` by hand leaves nothing behind to go back to, and the command
+says so rather than pretending otherwise. A freshly flashed appliance is in the
+same position until its first managed update: its manager arrived inside the
+image rather than through an install.
 
 ## Image integration
 

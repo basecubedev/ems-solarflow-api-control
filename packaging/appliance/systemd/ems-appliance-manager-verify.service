@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow Appliance Manager install verification
+Documentation=file:///usr/share/doc/ems-appliance-manager/os-updates.md
+# Deliberately unordered against the agent and the web service: this unit
+# judges whether those two came back, so waiting for them would make the
+# question answer itself.
+
+[Service]
+Type=oneshot
+User=root
+# The snapshot the outgoing package left behind, not the copy the package ships
+# under /usr/lib -- that one is replaced by the very install being judged.
+ExecStart=/var/lib/ems-appliance-manager/agent/packages/verify-manager.armed.sh /var/lib/ems-appliance-manager/agent/packages
+# A revert unpacks a package; it must not be cut off half way.
+TimeoutStartSec=600

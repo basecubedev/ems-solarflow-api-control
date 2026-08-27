@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Whether an archive of this repository is still this repository.
 
-Persistence activation depends on symlinks tracked in git: each generated bind
-mount is activated by a link in ``local-fs.target.wants``. A delivery path that
-flattens a symlink into a regular file produces a tree that still builds, still
-generates six mount units, activates none of them, and loses every write to the
-shared paths at the next slot switch. Silently, and only on hardware.
+A build can be handed a source archive rather than a checkout, and an archive is
+easy to produce badly. A delivery path that rewrites a file mode drops the
+executable bit off a build hook; one that flattens a symlink turns it into a
+regular file that still parses. Either produces a tree that still builds and is
+not this project -- silently, and only at the far end.
 
-So a bundle is compared against ``git ls-tree`` object by object — content, file
-mode, symlink mode and symlink target — and anything that does not round-trip is
+So a bundle is compared against ``git ls-tree`` object by object -- content, file
+mode, symlink mode and symlink target -- and anything that does not round-trip is
 a failure. Paths a bundle deliberately leaves out have to be declared: a silent
 omission and a dropped file look identical from the far end.
 

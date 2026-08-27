@@ -125,7 +125,6 @@ def test_password_reset_accepts_any_non_empty_password(appliance_env):
     assert command_password_reset(Args(password="short", json=False)) == 0
 
 
-
 def test_password_reset_creates_the_state_directory_when_missing(tmp_path, monkeypatch):
     for variable, name in (
         (ENV_INSTALL_ROOT, "opt"),
@@ -191,41 +190,6 @@ def test_a_disable_that_withdrew_authentication_reports_success(appliance_env, m
     assert command_backup_access(Args(action="disable", json=True)) == EXIT_OK
 
 
-def test_a_corrupt_ab_record_asks_for_an_operator_instead_of_crashing(tmp_path, capsys):
-    """The boot-time command runs as a systemd unit on a headless box. A
-    traceback there is a failed unit with no verdict; the designed answer for a
-    record nothing can read is manual_action_required."""
-
-    import json
-
-    from appliance import cli
-    from tests.helpers.appliance_ab import ApplianceAbHost
-    from appliance.ab_state import AbStateStore
-
-    host = ApplianceAbHost(tmp_path, slot="B", tryboot=True)
-    store = AbStateStore(host.ab_state_dir)
-    store.ensure()
-    (host.ab_state_dir / "pending-trial.json").write_text("{ not json", encoding="utf-8")
-
-    from appliance import ab_health, ab_state
-
-    payload = {}
-    original = cli._print
-    cli._print = lambda document, as_json: payload.update(document)
-    try:
-        result = cli.report_unreadable_ab_state(
-            ab_state.AbStateError("ab_state_unreadable", "pending-trial.json is not JSON"),
-            as_json=True,
-        )
-    finally:
-        cli._print = original
-
-    assert result == cli.EXIT_ERROR
-    assert payload["result"] == ab_health.RESULT_MANUAL_ACTION_REQUIRED
-    assert payload["code"] == "ab_state_unreadable"
-    assert json.dumps(payload)
-
-
 def test_local_is_an_escape_hatch_not_a_second_way_in(tmp_path):
     """A privileged in-process stack beside the live agent is a second writer to
     the same state, and the operation lock only serialises callers that share a
@@ -272,51 +236,3 @@ def _boot_services(monkeypatch, services):
     monkeypatch.setattr(cli, "build_services", lambda **_kwargs: services)
 
 
-def test_slot_bootstrap_reports_a_missing_runtime_bootstrap(monkeypatch, capsys, tmp_path):
-    """The service layer under these two is well covered; the glue was not, and
-    a mistake here surfaces only as a failed systemd unit on a real Pi."""
-
-    from appliance import cli
-    from tests.helpers.appliance import build_test_services
-
-    services = build_test_services(tmp_path)
-    services.ab_bootstrap = None
-    _boot_services(monkeypatch, services)
-
-    assert cli.command_ab_slot_bootstrap(_Args()) == cli.EXIT_ERROR
-    assert "no runtime bootstrap" in capsys.readouterr().err
-
-
-def test_slot_bootstrap_reports_what_reconstruction_found(monkeypatch, capsys, tmp_path):
-    from appliance import cli
-    from tests.helpers.appliance import build_test_services
-
-    services = build_test_services(tmp_path)
-
-    class _Bootstrap:
-        def reconstruct(self):
-            from appliance.ab_bootstrap import BootstrapReport
-
-            return BootstrapReport(
-                code="runtime_record_missing",
-                problems=("the shared partition carries no runtime record",),
-            )
-
-    services.ab_bootstrap = _Bootstrap()
-    _boot_services(monkeypatch, services)
-
-    assert cli.command_ab_slot_bootstrap(_Args()) == cli.EXIT_ERROR
-    output = capsys.readouterr()
-    assert "no runtime record" in output.err
-    assert json.loads(output.out)["code"] == "runtime_record_missing"
-
-
-def test_a_non_root_caller_never_reaches_the_block_layer(monkeypatch, capsys):
-    """These commands touch block devices; the refusal is the first thing."""
-
-    from appliance import cli
-
-    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
-
-    assert cli.command_ab_slot_bootstrap(_Args()) == cli.EXIT_ERROR
-    assert "must run as root" in capsys.readouterr().err

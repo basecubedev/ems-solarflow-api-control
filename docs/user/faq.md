@@ -81,14 +81,23 @@ the [Developer Setup guide](../developer/developer-setup.md).
 ### What is the appliance image?
 
 A ready-made Raspberry Pi system that runs EMS and nothing else: operating
-system, containers, an update mechanism that keeps a second copy of the system
-so a bad update can fall back, and a small web interface to drive all of it. You
-flash one card. See the [appliance guides](appliance/index.md).
+system, containers, an update mechanism and a small web interface to drive all
+of it. You flash one card.
+
+The operating system is patched in place by `apt`, the way an ordinary
+Raspberry Pi is, so a bad operating-system update is undone by you — or by
+writing the card again and restoring a backup. See the
+[appliance guides](appliance/index.md).
 
 ### Which Raspberry Pi do I need?
 
-A Raspberry Pi 4 or 5, and a card of 32 GB or larger. The images for the two
-boards are not interchangeable, and a Pi 3 or older cannot run them at all.
+A Raspberry Pi 3, 3B+, 4 or 5, and a card of 16 GB or larger. There is one
+image file per board and they are not interchangeable — the kernel and firmware
+differ.
+
+On a **Raspberry Pi 3 or 3B+** nobody has booted it yet, and 1 GB of RAM against
+Docker, EMS and InfluxDB is unmeasured. Anything older than a Pi 3 cannot run
+it at all.
 
 ### Has anyone run it on a real Pi?
 
@@ -112,29 +121,45 @@ called `ems-solarflow`. The first page asks you to choose a password. See
 
 ### Can I install other software on it?
 
-No. The card is managed as a whole, so anything installed by hand disappears at
-the next system update.
+Nothing stops you — `apt` is how the appliance is patched at all — but the
+appliance neither knows about it nor maintains it, and a package that breaks the
+box is yours to undo at the console.
 
 ### What happens if an OS update fails?
 
-The new system is written into a second slot and booted on trial. A trial that
-does not become healthy falls back to the slot that was working. Configuration
-and data live on a separate partition and survive both directions. See
+Nothing is undone by itself. An `apt` upgrade that breaks the boot is recovered
+at the console, and failing that, by writing the card again and restoring a
+backup. Kernel and firmware upgrades are not held back — installing updates
+installs them. This is why the backup matters more than the update does. See
 [Updates](appliance/updates.md).
+
+### What happens if an Appliance Manager update fails?
+
+The appliance keeps the package it was running and arms a deadline before the
+new one is unpacked. If the new manager does not report itself healthy in time,
+the previous package is installed again by itself.
+
+That covers the Appliance Manager and nothing else. It does **not** cover the
+kernel, the firmware or the operating system: those are patched in place, and
+if a kernel upgrade leaves the board unable to boot, the way back is a keyboard
+at the console, and failing that, re-flashing the card. That is a deliberate
+trade and it is written down in
+[the decision record](../appliance/adr/manager-self-update.md).
 
 ### Where is my config on the appliance?
 
-Under `/opt/ems-solarflow`, on the shared partition that survives system
-updates. You reach it through the appliance's SSH backup export rather than by
-logging in — the image ships no login account. See
-[Backups](appliance/backup.md).
+Under `/opt/ems-solarflow`. The normal way to reach it is the appliance's SSH
+backup export rather
+than a login. There *is* a console rescue account for when the appliance will
+not come up — see [When it stops working](appliance/recovery.md) — but it is a
+last resort, not the everyday path. See [Backups](appliance/backup.md).
 
 ### It does not come up at all. What now?
 
-Two things are readable without the network. Three of the card's six partitions
-are FAT, so any computer opens them and can show which slot the firmware chose.
-And the appliance narrates its whole start-up on a serial line, which is the
-only way to see *why* a boot failed. Both are in
+Two things are readable without the network. The card's boot partition is FAT,
+so any computer opens it and can read the firmware configuration and the kernel
+command line. And the appliance narrates its whole start-up on a serial line,
+which is the only way to see *why* a boot failed. Both are in
 [When it stops working](appliance/recovery.md).
 
 ## Config and files

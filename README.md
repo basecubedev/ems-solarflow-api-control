@@ -60,22 +60,25 @@ The machine EMS runs *on* — 64-bit `arm64` or `amd64`.
 | 1 GB | EMS with InfluxDB |
 | >1 GB | Additional headroom |
 
-InfluxDB stores energy history and is optional — control does not need it. A/B
-deployment does not double runtime RAM because only one slot is active at a time.
+InfluxDB stores energy history and is optional — control does not need it.
 [Pi matrix](docs/user/hardware-requirements.md).
 
 ## Get started
 
-### On a dedicated Raspberry Pi 4 or 5
+### On a dedicated Raspberry Pi
 
 The **appliance image** turns the board into a box that runs EMS and nothing
-else: flash one card, plug in Ethernet, power on. No shell to learn, no operating
-system to maintain, and A/B updates that roll themselves back if the new one does
-not come up.
+else: flash one card, plug in Ethernet, power on. No shell to learn and no
+operating system to maintain by hand.
 
-Needs a Pi 4 or a Pi 5 and a 32 GB card — a Pi 3 cannot boot it. The image is
-**not yet confirmed on physical hardware**; read what that means before you rely
-on one.
+One writable root, patched in place by `apt`, on a 16 GB card or larger. Built
+for the **Raspberry Pi 3, 3B+, 4 and 5** — one image file per board. A failed
+operating-system update is recovered by you, at the machine, or by writing the
+card again and restoring a backup, which is why the backup matters more than the
+update does.
+
+The image is **not confirmed on physical hardware** yet; read what that means
+before you rely on it.
 
 [Flashing the card](docs/user/appliance/install.md) ·
 [First start](docs/user/appliance/first-start.md) ·
@@ -129,7 +132,7 @@ upfront. EMS reaches your devices over any one of:
 ## Documentation
 
 - Step-by-step guides: [Admin Console](docs/user/admin/index.md) · [EMS Dashboard](docs/user/dashboard/index.md)
-- [Hardware requirements](docs/user/hardware-requirements.md) · [Raspberry Pi compatibility](docs/user/hardware-requirements.md#raspberry-pi-compatibility) · [A/B deployment](docs/appliance/ab-os-updates.md)
+- [Hardware requirements](docs/user/hardware-requirements.md) · [Raspberry Pi compatibility](docs/user/hardware-requirements.md#raspberry-pi-compatibility)
 - [Appliance installation](docs/appliance/installation.md) · [Administration](docs/user/admin-console.md) · [Troubleshooting](docs/user/troubleshooting.md)
 - [User documentation](docs/user/)
 - [Technical reference](docs/technical/)

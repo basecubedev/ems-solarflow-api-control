@@ -371,17 +371,17 @@ def validate_package_repair_action(value):
     return text
 
 
-# An OS release is named, never located. The browser may send this identifier and
-# nothing else about an artifact; every URL, path, device, key and checksum comes
-# from the root-owned release configuration or from the signed manifest.
-OS_RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
+# A release is named, never located. The browser may send this identifier and
+# nothing else about an artifact; every URL, path, key and checksum comes from
+# the root-owned configuration or from the signed manifest.
+RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
 
 
-def validate_os_release_id(value):
+def validate_release_id(value):
     text = str(value or "").strip()
-    if not OS_RELEASE_ID.match(text):
+    if not RELEASE_ID.match(text):
         raise ValidationError(
-            "invalid_release_id", "an OS release id may only contain letters, digits, . _ + and -"
+            "invalid_release_id", "a release id may only contain letters, digits, . _ + and -"
         )
     return text
 

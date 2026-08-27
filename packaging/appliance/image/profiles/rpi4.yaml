@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The appliance image for Raspberry Pi 4.
+#
+#   rpi-image-gen build -c <abs>/profiles/rpi4.yaml -S packaging/appliance/image
+#
+include:
+  file: ../shared/ems-appliance.yaml
+
+device:
+  layer: rpi4
+
+image:
+  name: ems-solarflow-appliance-rpi4

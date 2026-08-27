@@ -169,27 +169,30 @@ def test_the_shipped_configuration_is_the_port_authority_the_manager_uses():
 def test_the_shipped_configuration_names_every_os_release_key_the_code_reads():
     """A key the code defaults but the file never mentions is a key nobody sets.
 
-    The release directory and the keyring decide where an OS update comes from
-    and what is allowed to sign it. Both were resolved from a Python default
-    and appeared in no shipped file, so an operator had nothing to point at.
+    The keyring decides what is allowed to sign anything this appliance
+    installs. It was resolved from a Python default and appeared in no shipped
+    file, so an operator had nothing to point at.
     """
 
-    for key, default in (
-        ("os_release_dir", appliance_config.DEFAULT_OS_RELEASE_DIR),
-        ("os_release_keyring", appliance_config.DEFAULT_OS_RELEASE_KEYRING),
-    ):
-        assert shipped_value(key) == default
+    assert shipped_value("release_keyring") == appliance_config.DEFAULT_RELEASE_KEYRING
 
 
-def test_the_shipped_configuration_ships_no_default_release_source():
-    """An appliance with no configured index must say so, not guess a host."""
+def test_the_shipped_configuration_names_the_manager_package_source_too():
+    """Same question, same answer, for the package the console runs from.
+
+    The code default stays empty so an appliance nobody assembled here says it
+    has no transport, and the shipped configuration names this project's own
+    distribution point because /etc cannot be corrected after the flash.
+    """
 
     conf = SHIPPED_CONFIG.read_text(encoding="utf-8")
+    configured = re.search(r"^manager_index_url\s*=\s*(\S+)$", conf, re.M)
 
-    assert re.search(r"^os_release_index_url\s*=\s*$", conf, re.M), (
-        "os_release_index_url must be present and empty in the shipped configuration"
-    )
-    assert appliance_config.DEFAULT_OS_RELEASE_INDEX_URL == ""
+    assert appliance_config.DEFAULT_MANAGER_INDEX_URL == ""
+    assert configured, "the shipped configuration names no manager package source"
+    assert configured.group(1).startswith(
+        "https://github.com/basecubedev/ems-solarflow-api-control/"
+    ), configured.group(1)
 
 
 # --- Admin's transition record, which the appliance reads but never owns ------

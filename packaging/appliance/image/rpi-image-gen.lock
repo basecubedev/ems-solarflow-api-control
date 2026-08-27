@@ -1,6 +1,5 @@
 {
   "boot_mountpoint": "/boot/firmware",
-  "bootconfig_mountpoint": "/bootfs",
   "build_command": [
     "build",
     "-c",
@@ -9,12 +8,12 @@
     "<srcdir>"
   ],
   "comment": [
-    "The exact rpi-image-gen revision this project's A/B appliance image is",
-    "built against. Pinned rather than tracking master: image-rota owns the",
-    "partition table, the slot identities and the shared-slot mount mechanism,",
-    "so an upstream change to any of them changes what this appliance is.",
-    "appliance/rpi_image_gen.py verifies a checkout against this file and",
-    "refuses to build against anything else.",
+    "The exact rpi-image-gen revision this project's appliance image is built",
+    "against. Pinned rather than tracking master: image-rpios owns the partition",
+    "table and the by-slot links the root is mounted through, so an upstream",
+    "change to either changes what this appliance is. appliance/rpi_image_gen.py",
+    "verifies a checkout against this file and refuses to build against anything",
+    "else.",
     "tree_sha256 is the canonical digest of the extracted tree, excluding the",
     "source record itself. The record beside the tree is written by the same",
     "fetch that extracted it, so it cannot be the authority for it: this file",
@@ -23,24 +22,16 @@
   "commit": "a7b6d4806183195f3efadb533f58c8e46393d057",
   "executable": "rpi-image-gen",
   "host_dependencies_file": "depends",
-  "image_layer": "image-rota",
-  "image_layer_path": "image/gpt/ab_userdata/image.yaml",
-  "image_layer_version": "5.5.1",
-  "lock_version": 1,
-  "machine_id_source": "/persistent/common/etc/machine-id",
-  "partition_labels": {
-    "boot": [
-      "boot_a",
-      "boot_b"
-    ],
-    "bootconfig": "bootconfig",
-    "persistent": "persistent",
-    "system": [
-      "system_a",
-      "system_b"
-    ]
+  "image_layer": {
+    "name": "image-rpios",
+    "path": "image/mbr/simple_dual/image.yaml",
+    "version": "2.2.1"
   },
-  "persistent_mountpoint": "/persistent",
+  "lock_version": 1,
+  "partition_labels": {
+    "boot": "boot",
+    "root": "root"
+  },
   "reason_codes": {
     "checkout_missing": "rpi_image_gen_unavailable",
     "contract_mismatch": "rpi_image_gen_incompatible",
@@ -55,18 +46,12 @@
     "rpi-image-gen",
     "LICENSE",
     "depends",
-    "image/gpt/ab_userdata/image.yaml",
-    "image/gpt/ab_userdata/post-image.sh",
-    "image/gpt/ab_userdata/genimage.cfg.in.ext4",
-    "image/gpt/ab_userdata/device/rootfs-overlay/usr/lib/systemd/system-generators/slot-shared-generator",
-    "image/gpt/ab_userdata/device/rootfs-overlay/usr/lib/systemd/system-generators/slot-perst-generator",
-    "layer/rpi/device/slot-mapper/bin/rpi-slot-label",
-    "config/trixie-minbase-ab.yaml"
+    "config/trixie-minbase.yaml",
+    "image/mbr/simple_dual/image.yaml",
+    "image/mbr/simple_dual/setup.sh",
+    "image/mbr/simple_dual/genimage.cfg.in.ext4",
+    "image/mbr/simple_dual/device/rootfs-overlay/etc/udev/rules.d/99-rpi-05-image.rules"
   ],
-  "shared_root": "/persistent/shared",
-  "shared_slot_conf_dir": "/etc/rpi-image-gen/slot-shared.d",
-  "shared_slot_conf_version": "1",
-  "shared_slot_mechanism": "slot-shared",
   "slot_device_prefix": "/dev/disk/by-slot",
   "tarball": {
     "comment": [
@@ -79,11 +64,5 @@
     "top_level_directory": "rpi-image-gen-2.7.0",
     "url": "https://codeload.github.com/raspberrypi/rpi-image-gen/tar.gz/refs/tags/v2.7.0"
   },
-  "tree_sha256": "sha256:9ae7e0801afa81040da4d219eb69761a9404a4c2d6af2c34fb7f900783a2fa0f",
-  "update_archive": "update.tar.zst",
-  "update_member_format": "android-sparse",
-  "update_members": [
-    "boot",
-    "system"
-  ]
+  "tree_sha256": "sha256:9ae7e0801afa81040da4d219eb69761a9404a4c2d6af2c34fb7f900783a2fa0f"
 }

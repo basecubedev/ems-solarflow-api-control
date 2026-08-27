@@ -273,6 +273,10 @@ Repository-local GitNexus CLI and MCP invocations MUST use
 Repository-local analyze invocations MUST pass `--force` until the documented
 GitNexus 1.6.9 incremental LadybugDB/FTS failure is resolved.
 
+A stale index is an agent's to fix, not to work around: re-running the analysis
+through `scripts/gitnexus-project` is pre-authorized and needs no separate
+instruction. Report that it was refreshed and against which revision.
+
 If GitNexus is unavailable, stale or fails, do not pretend it was used. Perform
 a manual blast-radius review with symbol/reference searches; inspect callers,
 routes, tests and docs; report the limitation; and continue only when safe.
@@ -355,7 +359,7 @@ does not round-trip is deleted rather than delivered. Two previous review
 archives arrived with the six `local-fs.target.wants` persistence symlinks
 flattened into regular files, which produces a tree that still builds, generates
 six mount units, activates none of them, and loses every write to the shared
-paths at the next slot switch.
+paths at the next boot.
 
 ## 18. Validation and release claims
 

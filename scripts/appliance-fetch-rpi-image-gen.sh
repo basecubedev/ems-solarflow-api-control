@@ -118,7 +118,19 @@ OBSERVED=$(PYTHONPATH="$ROOT" python3 -c \
 echo "== extracting =="
 mkdir -p "$STAGE/tree"
 # No absolute paths, no traversal, no symlinks followed out of the tree.
-tar -xzf "$ARCHIVE" -C "$STAGE/tree" --no-same-owner --no-same-permissions \
+#
+# --no-same-permissions stays: it is what stops a downloaded archive setting its
+# own modes. But it applies the caller's umask, and the tree manifest records
+# every file's mode, so the digest this fetch is measured against depended on
+# whoever ran it. The lock was recorded at 0002; at the far more common 0022,
+# 841 files extract as 644 instead of 664 and the source-authority gate refuses
+# a perfectly good tree with rpi_image_gen_source_unverified. Root in a
+# container has 0022, and so does a CI runner, so the first step of an automated
+# release could never have passed.
+#
+# Pinning the umask makes the extraction reproducible on every host without
+# giving the archive back the authority over its own permissions.
+( umask 0002; tar -xzf "$ARCHIVE" -C "$STAGE/tree" --no-same-owner --no-same-permissions ) \
     || fail "the archive could not be extracted" fetch_failed
 [ -d "$STAGE/tree/$TOP_LEVEL" ] \
     || fail "the archive does not extract to $TOP_LEVEL" source_unverified

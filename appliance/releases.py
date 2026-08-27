@@ -20,6 +20,7 @@ from appliance.validation import (
     is_prerelease_tag,
     validate_release_tag,
 )
+from appliance.version import version_key
 
 DEFAULT_TIMEOUT = 10
 MAX_INDEX_BYTES = 512 * 1024
@@ -42,14 +43,6 @@ class ReleaseResolutionError(Exception):
         self.message = message
 
 
-def _version_key(tag):
-    core = tag.lstrip("v").split("-", 1)[0]
-    parts = []
-    for chunk in core.split("."):
-        parts.append(int(chunk) if chunk.isdigit() else 0)
-    while len(parts) < 3:
-        parts.append(0)
-    return tuple(parts[:3])
 
 
 def parse_release_index(payload):
@@ -79,7 +72,7 @@ def parse_release_index(payload):
         flag = is_prerelease_tag(tag) if prerelease is None else bool(prerelease)
         releases.append(ReleaseTarget(tag=tag, channel=CHANNEL_EXACT, prerelease=flag))
 
-    releases.sort(key=lambda item: _version_key(item.tag), reverse=True)
+    releases.sort(key=lambda item: version_key(item.tag), reverse=True)
     return releases
 
 

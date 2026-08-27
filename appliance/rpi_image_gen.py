@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The pinned rpi-image-gen contract, and whether a checkout satisfies it.
 
-``image-rota`` owns the partition table, the slot identities and the mechanism
-that shares state between slots. That makes the generator's revision part of
-this appliance's definition rather than a build-host detail, so it is pinned in
+``image-rpios`` owns the partition table and the labels the root is mounted
+through. That makes the generator's revision part of this appliance's definition
+rather than a build-host detail, so it is pinned in
 ``rpi-image-gen.lock`` and a checkout is verified against it before anything is
 built.
 
@@ -19,6 +19,8 @@ import shutil
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+
+from appliance import image_shape
 
 LOCK_NAME = "rpi-image-gen.lock"
 SOURCE_IDENTITY_NAME = ".rpi-image-gen-source.json"
@@ -60,14 +62,13 @@ AUTO_PACKAGE_QUERY = object()
 
 @dataclass(frozen=True)
 class HardwareProfile:
-    """One board this project builds a distinct A/B image for.
+    """One board this project builds a distinct image for.
 
-    ``device_layer`` is upstream's layer name — ``rpi5``, not the ``pi5``
+    ``device_layer`` is upstream's layer name -- ``rpi5``, not the ``pi5``
     directory it lives in. ``device_class`` is what that layer sets
-    ``IGconf_device_class`` to, and image-rota accepts only cm4, pi4, cm5, pi5.
-    The compatible board classes are derived from the device layer rather than
-    declared beside it, so an artefact cannot claim hardware its kernel and
-    firmware were not built for.
+    ``IGconf_device_class`` to. The compatible board classes are derived from
+    the device layer rather than declared beside it, so an artefact cannot claim
+    hardware its kernel and firmware were not built for.
     """
 
     name: str
@@ -76,25 +77,24 @@ class HardwareProfile:
     compatible_board_classes: tuple
     description: str
 
-    @property
-    def artifact_suffix(self):
-        return f"{self.name}-arm64-ab"
-
-    def artifact_basename(self, version):
-        return f"ems-solarflow-appliance-{version}-{self.artifact_suffix}"
-
     def to_dict(self):
         return {
             "name": self.name,
             "device_layer": self.device_layer,
             "device_class": self.device_class,
             "compatible_board_classes": list(self.compatible_board_classes),
-            "artifact_suffix": self.artifact_suffix,
             "description": self.description,
         }
 
 
 HARDWARE_PROFILES = {
+    "rpi3": HardwareProfile(
+        name="rpi3",
+        device_layer="rpi3",
+        device_class="pi3",
+        compatible_board_classes=("pi3",),
+        description="Raspberry Pi 3 Model B / B+",
+    ),
     "rpi4": HardwareProfile(
         name="rpi4",
         device_layer="rpi4",
@@ -116,6 +116,8 @@ HARDWARE_PROFILES = {
 # board must block an update rather than be guessed at: a Pi 4 kernel written to
 # a Pi 5 does not boot, and the appliance would be recoverable only by reflashing.
 BOARD_CLASSES = {
+    "raspberrypi,3-model-b": "pi3",
+    "raspberrypi,3-model-b-plus": "pi3",
     "raspberrypi,4-model-b": "pi4",
     "raspberrypi,400": "pi4",
     "raspberrypi,4-compute-module": "cm4",
@@ -125,11 +127,6 @@ BOARD_CLASSES = {
 
 BOARD_UNKNOWN = ""
 
-# The board classes this project actually ships an installable artefact for.
-# CM4 and CM5 are recognised so an operator is told what their appliance is,
-# rather than being told nothing — but there is no cm4 or cm5 build profile, so
-# reporting them as supported would promise an update that cannot be produced.
-INSTALLABLE_BOARD_CLASSES = ("pi4", "pi5")
 
 # An arm64 image built on anything else needs the kernel to hand aarch64
 # binaries to an emulator. That registration is host-wide and belongs to the
@@ -147,29 +144,27 @@ class ImageGenError(Exception):
 
 
 @dataclass(frozen=True)
+class LockedLayer:
+    """One upstream image layer, as the lock pins it."""
+
+    name: str
+    path: str
+    version: str
+
+
+@dataclass(frozen=True)
 class Lock:
     repository: str
     release: str
     commit: str
     executable: str
-    image_layer: str
-    image_layer_version: str
-    image_layer_path: str
-    shared_slot_mechanism: str
-    shared_slot_conf_dir: str
-    shared_root: str
-    persistent_mountpoint: str
+    image_layer: LockedLayer
     boot_mountpoint: str
-    bootconfig_mountpoint: str
-    machine_id_source: str
     slot_device_prefix: str
-    update_archive: str
-    update_members: tuple
     partition_labels: dict
     required_paths: tuple = ()
     refused_paths: tuple = ()
     host_dependencies_file: str = "depends"
-    update_member_format: str = ""
     tree_sha256: str = ""
     tarball: dict = None
 
@@ -179,14 +174,8 @@ class Lock:
             "release": self.release,
             "commit": self.commit,
             "executable": self.executable,
-            "image_layer": self.image_layer,
-            "image_layer_version": self.image_layer_version,
-            "shared_slot_mechanism": self.shared_slot_mechanism,
-            "shared_root": self.shared_root,
-            "persistent_mountpoint": self.persistent_mountpoint,
-            "update_archive": self.update_archive,
-            "update_members": list(self.update_members),
-            "update_member_format": self.update_member_format,
+            "image_layer": self.image_layer.name,
+            "image_layer_version": self.image_layer.version,
             "tarball": dict(self.tarball or {}),
         }
 
@@ -200,30 +189,27 @@ def read_lock(path=None):
     except ValueError:
         raise ImageGenError("lock_invalid", "the rpi-image-gen lock is not valid JSON")
     try:
+        layer = dict(payload["image_layer"])
         return Lock(
             repository=str(payload["repository"]),
             release=str(payload["release"]),
             commit=str(payload["commit"]),
             tree_sha256=str(payload.get("tree_sha256") or ""),
             executable=str(payload["executable"]),
-            image_layer=str(payload["image_layer"]),
-            image_layer_version=str(payload["image_layer_version"]),
-            image_layer_path=str(payload["image_layer_path"]),
-            shared_slot_mechanism=str(payload["shared_slot_mechanism"]),
-            shared_slot_conf_dir=str(payload["shared_slot_conf_dir"]),
-            shared_root=str(payload["shared_root"]),
-            persistent_mountpoint=str(payload["persistent_mountpoint"]),
+            # Declared in the lock rather than derived from ``image_shape``: the
+            # lock is the file that gets reviewed, and a contract test keeps the
+            # two from disagreeing.
+            image_layer=LockedLayer(
+                name=str(layer["name"]),
+                path=str(layer["path"]),
+                version=str(layer["version"]),
+            ),
             boot_mountpoint=str(payload["boot_mountpoint"]),
-            bootconfig_mountpoint=str(payload["bootconfig_mountpoint"]),
-            machine_id_source=str(payload["machine_id_source"]),
             slot_device_prefix=str(payload["slot_device_prefix"]),
-            update_archive=str(payload["update_archive"]),
-            update_members=tuple(payload["update_members"]),
             partition_labels=dict(payload["partition_labels"]),
             required_paths=tuple(payload.get("required_paths") or ()),
             refused_paths=tuple(payload.get("refused_paths") or ()),
             host_dependencies_file=str(payload.get("host_dependencies_file") or "depends"),
-            update_member_format=str(payload.get("update_member_format") or ""),
             tarball=dict(payload["tarball"]),
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -258,11 +244,22 @@ def file_sha256(path, *, chunk=1024 * 1024):
 
 @dataclass(frozen=True)
 class BuildProfile:
-    """One rpi-image-gen config this project builds, and what it is for."""
+    """One rpi-image-gen config this project builds, and what it is for.
+
+    A profile names a board. The image layer it is built from is one level up,
+    in the shared config it includes, because naming it twice is how two files
+    come to disagree about which image they build -- so that file is read and
+    checked rather than trusted.
+    """
 
     path: Path
     hardware: HardwareProfile
+    image_layer: str
     image_name: str
+
+    @property
+    def artifact_suffix(self):
+        return image_shape.IMAGE.artifact_suffix(self.hardware.name)
 
     @property
     def name(self):
@@ -281,13 +278,14 @@ class BuildProfile:
         return self.hardware.compatible_board_classes
 
     def artifact_basename(self, version):
-        return self.hardware.artifact_basename(version)
+        return f"ems-solarflow-appliance-{version}-{self.artifact_suffix}"
 
     def to_dict(self):
         return {
             "name": self.name,
             "config": str(self.path),
             "image_name": self.image_name,
+            "artifact_suffix": self.artifact_suffix,
             **self.hardware.to_dict(),
         }
 
@@ -341,8 +339,40 @@ def read_profile(path):
             f"{target.name} selects device layer {layer!r}, which this project has no profile for",
         )
     return BuildProfile(
-        path=target, hardware=hardware, image_name=values.get("image.name", "")
+        path=target,
+        hardware=hardware,
+        image_layer=_profile_image_layer(target, values),
+        image_name=values.get("image.name", ""),
     )
+
+
+def _profile_image_layer(target, values):
+    """The image layer this profile builds, read from the config it includes.
+
+    The profile itself names only a board. The image layer is one level up, in
+    the shared config, which is also the file that has to be right for the
+    build to be the image it claims -- so that is where the answer is taken
+    from, and an unrecognised one is refused rather than defaulted.
+    """
+
+    included = values.get("include.file", "")
+    if not included:
+        raise ImageGenError("profile_invalid", f"{target.name} includes no shared configuration")
+    shared = (target.parent / included).resolve()
+    try:
+        text = shared.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ImageGenError(
+            "profile_unreadable", f"{target.name} includes {included}, which could not be read: {exc}"
+        )
+    layer = _config_values(text).get("image.layer", "")
+    if not image_shape.image_layer_matches(layer):
+        raise ImageGenError(
+            "profile_image_layer_unknown",
+            f"{shared.name} builds image layer {layer or 'nothing'!r}, "
+            f"and this project builds {image_shape.IMAGE.image_layer}",
+        )
+    return layer
 
 
 def profiles(directory=None):
@@ -385,15 +415,17 @@ def detect_board_class(root="/"):
     return board_class(raw)
 
 
-def board_is_installable(board):
-    """Is there an artefact this board could actually be updated with?
+def board_has_an_image(board):
+    """Is there any appliance image at all for this board?
 
-    Recognising a board and being able to update it are separate answers.
-    Reporting a Compute Module as supported would offer an OS update that no
-    build profile can produce.
+    Distinct from installability: a Raspberry Pi 3 has an image and no way to
+    be updated with one, and the difference is what an operator is told.
     """
 
-    return str(board or "") in INSTALLABLE_BOARD_CLASSES
+    wanted = str(board or "")
+    return bool(wanted) and any(
+        wanted in profile.compatible_board_classes for profile in HARDWARE_PROFILES.values()
+    )
 
 
 # --- upstream host dependencies ---------------------------------------------
@@ -608,8 +640,6 @@ def layer_metadata(text):
     return name, version
 
 
-
-
 @dataclass(frozen=True)
 class BuildHost:
     """Whether this host can cross-build the appliance image, and what is missing.
@@ -726,29 +756,28 @@ def probe_checkout(
             )
         )
 
-    layer = root / lock.image_layer_path
-    if layer.is_file():
+    pinned = lock.image_layer
+    layer = root / pinned.path
+    if not layer.is_file():
+        findings.append(Finding("image_layer", FAIL, f"{pinned.path} is missing"))
+        findings.append(Finding("image_layer_version", NOT_RUN, "the layer file is missing"))
+    else:
         name, version = layer_metadata(layer.read_text(encoding="utf-8", errors="replace"))
         findings.append(
             Finding(
                 "image_layer",
-                PASS if name == lock.image_layer else FAIL,
-                f"{name or 'unnamed'} (expected {lock.image_layer})",
+                PASS if name == pinned.name else FAIL,
+                f"{name or 'unnamed'} (expected {pinned.name})",
             )
         )
         findings.append(
             Finding(
                 "image_layer_version",
-                PASS if version == lock.image_layer_version else FAIL,
-                f"{version or 'unversioned'} (expected {lock.image_layer_version})",
+                PASS if version == pinned.version else FAIL,
+                f"{version or 'unversioned'} (expected {pinned.version})",
             )
         )
-    else:
-        findings.append(Finding("image_layer", FAIL, f"{lock.image_layer_path} is missing"))
-        findings.append(Finding("image_layer_version", NOT_RUN, "the layer file is missing"))
 
-    findings.append(_shared_slot_finding(root, lock))
-    findings.append(_update_finding(root, lock))
 
     identity, revision, identity_finding, digest, identity_reason = _source_identity(
         root, lock, runner=runner
@@ -1128,38 +1157,3 @@ def assert_buildable(directory, lock=None, *, which=None, package_query=AUTO_PAC
     return report
 
 
-def _shared_slot_finding(root, lock):
-    generator = (
-        root
-        / "image/gpt/ab_userdata/device/rootfs-overlay/usr/lib/systemd/system-generators"
-        / f"{lock.shared_slot_mechanism}-generator"
-    )
-    if not generator.is_file():
-        return Finding(
-            "shared_slot", FAIL, f"{lock.shared_slot_mechanism}-generator is missing"
-        )
-    text = generator.read_text(encoding="utf-8", errors="replace")
-    if lock.shared_slot_conf_dir not in text or lock.shared_root not in text:
-        return Finding(
-            "shared_slot",
-            FAIL,
-            f"the generator does not read {lock.shared_slot_conf_dir} into {lock.shared_root}",
-        )
-    return Finding("shared_slot", PASS, str(generator))
-
-
-def _update_finding(root, lock):
-    script = root / "image/gpt/ab_userdata/post-image.sh"
-    if not script.is_file():
-        return Finding("update_artifact", FAIL, "post-image.sh is missing")
-    text = script.read_text(encoding="utf-8", errors="replace")
-    if lock.update_archive not in text:
-        return Finding(
-            "update_artifact", FAIL, f"post-image.sh does not produce {lock.update_archive}"
-        )
-    missing = [name for name in lock.update_members if f"/{name}" not in text]
-    if missing:
-        return Finding(
-            "update_artifact", FAIL, f"the archive does not carry {', '.join(missing)}"
-        )
-    return Finding("update_artifact", PASS, f"{lock.update_archive} ({', '.join(lock.update_members)})")

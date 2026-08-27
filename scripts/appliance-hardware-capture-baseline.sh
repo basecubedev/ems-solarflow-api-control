@@ -5,7 +5,7 @@
 #   scripts/appliance-hardware-capture-baseline.sh [--output DIR]
 #
 # Read-only. Runs on the Raspberry Pi under test, writes one directory of
-# evidence, and touches nothing else: no block device is written, no selector
+# evidence, and touches nothing else: no block device is written, no boot order
 # is changed, no service is restarted, nothing reboots, and no SSH key is
 # created, read or modified. It takes no device argument — every device it
 # reports is discovered from the running system, so there is no path by which
@@ -51,31 +51,19 @@ capture() {
 }
 
 # The runtime's own view first: it is the authority the operator is testing.
-capture ab-status.json ems-appliance ab status --json
-capture verify-persistence.json ems-appliance ab verify-persistence --json
 capture verify-install.json ems-appliance verify-install --json
-capture host-identity.json ems-appliance host-identity --json
+capture root-geometry.txt ems-appliance root-geometry
+capture image-check.txt ems-appliance image-check
 
 # Then the block and mount reality the runtime derived it from.
 capture lsblk.json lsblk --json --output NAME,PATH,SIZE,TYPE,FSTYPE,LABEL,PARTLABEL,PARTUUID,UUID,MOUNTPOINTS
 capture findmnt.json findmnt --json --all
-capture by-slot.txt ls -l /dev/disk/by-slot
 capture cmdline.txt cat /proc/cmdline
 capture machine-id.txt cat /etc/machine-id
 capture os-release.txt cat /etc/os-release
 
-# The selector itself, byte for byte. A power-cut case is an argument about
-# what reached this one file before the power went, and ab status reports the
-# parsed result rather than the bytes a torn write left behind.
-for mountpoint in /bootfs /boot/firmware /boot; do
-    [ -f "$mountpoint/autoboot.txt" ] || continue
-    capture autoboot.txt cat "$mountpoint/autoboot.txt"
-    echo "$mountpoint/autoboot.txt" >"$OUTPUT/autoboot.source.txt"
-    break
-done
-
 # Firmware's account of how this boot was selected. Absent off a Raspberry Pi.
-for property in tryboot partition boot-mode; do
+for property in partition boot-mode; do
     path="/proc/device-tree/chosen/bootloader/$property"
     [ -e "$path" ] && capture "bootloader-$property.bin" cat "$path"
 done

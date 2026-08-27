@@ -402,7 +402,7 @@ def test_the_image_does_not_inherit_somebody_elses_clock():
 
     shared = (
         Path(__file__).resolve().parents[1]
-        / "packaging" / "appliance" / "image" / "shared" / "ems-appliance-ab.yaml"
+        / "packaging" / "appliance" / "image" / "shared" / "ems-appliance.yaml"
     )
     document = yaml.safe_load(shared.read_text(encoding="utf-8"))
 

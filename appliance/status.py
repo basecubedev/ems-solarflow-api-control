@@ -8,7 +8,7 @@ down with it.
 
 import time
 
-from appliance import validation
+from appliance import rescue_account, validation
 from appliance.docker_backend import DAEMON_RUNNING
 from appliance.redaction import bounded_redacted_log
 from appliance.systemd import (
@@ -55,11 +55,9 @@ class StatusService:
         ssh,
         backup,
         operations,
-        os_update=None,
         time_fn=None,
     ):
         self.paths = paths
-        self.os_update = os_update
         self.config = config
         self.probe = probe
         self.docker = docker
@@ -93,6 +91,10 @@ class StatusService:
             "services": self.systemd.unit_states(
                 (UNIT_APPLIANCE_WEB, UNIT_APPLIANCE_AGENT, UNIT_DOCKER)
             ),
+            # Reported, never demanded: the console says whether the rescue
+            # account still carries the shipped password so an operator can see
+            # the answer without going to look for it.
+            "rescue": rescue_account.state(getattr(self.probe, "root", "/")).to_dict(),
         }
 
     def docker_state(self):
@@ -107,31 +109,13 @@ class StatusService:
         return self.admin.detect()
 
     def updates(self):
-        """Package updates plus, on an image-managed host, the A/B slot state.
+        """What apt has for this host.
 
-        Both modes are reported from one place so the page can show exactly one
-        of them: a single-slot appliance keeps package updates, an A/B appliance
-        stages images into the inactive slot instead.
+        The operating system is patched in place, so there is one update path
+        and one answer: what the package manager sees.
         """
 
-        payload = self.packages.check().to_dict()
-        payload["ab"] = self.ab_state()
-        payload["update_mode"] = (
-            "ab_image" if payload["ab"].get("ab_supported") else "single_slot"
-        )
-        return payload
-
-    def ab_state(self):
-        if self.os_update is None:
-            return {"mode": "unsupported", "ab_supported": False, "reason": "ab_unavailable"}
-        try:
-            return self.os_update.status()
-        except Exception as exc:
-            return {
-                "mode": "unsupported",
-                "ab_supported": False,
-                "reason": getattr(exc, "code", "ab_status_unavailable"),
-            }
+        return self.packages.check().to_dict()
 
     def network_state(self):
         return self.network.status()
@@ -227,15 +211,13 @@ class StatusService:
         system = sections.get("system", {})
         if system.get("status") == SECTION_OK:
             storage = system.get("storage") or {}
-            # On an A/B appliance / is the slot's fixed system partition,
-            # written once at build time and mounted read-only, so its usage
-            # cannot move. Everything that grows -- EMS data and backups, both
-            # slots' /var, the Docker stores, the journal and the update
-            # staging -- is on the persistent partition, which was measured and
-            # then never judged.
+            # Everything grows on one root here: the OS, the Docker stores,
+            # the journal, the EMS data and the operator's backups. Both
+            # entries are judged, because the deployment root may be a separate
+            # filesystem an operator mounted there.
             for name, label in (
                 ("root", "the root filesystem"),
-                ("ems_data", "the persistent partition"),
+                ("ems_data", "the EMS deployment"),
             ):
                 entry = storage.get(name) or {}
                 if entry.get("available") and (entry.get("used_percent") or 0) >= 90:

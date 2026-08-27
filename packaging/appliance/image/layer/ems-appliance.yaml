@@ -1,10 +1,10 @@
 # METABEGIN
 # X-Env-Layer-Name: ems-appliance
 # X-Env-Layer-Category: app
-# X-Env-Layer-Desc: EMS SolarFlow Appliance Manager, its Docker runtime and the
-#  shared state declaration that makes an A/B slot switch non-destructive.
-# X-Env-Layer-Version: 2.1.0
-# X-Env-Layer-Requires: image-rota,docker-debian-trixie
+# X-Env-Layer-Desc: EMS SolarFlow Appliance Manager and its Docker runtime on a
+#  single writable root filesystem, patched in place by apt.
+# X-Env-Layer-Version: 1.0.0
+# X-Env-Layer-Requires: image-rpios,docker-debian-trixie
 #
 # X-Env-VarPrefix: emsappliance
 #
@@ -15,27 +15,29 @@
 # X-Env-Var-package-Set: y
 #
 # X-Env-Var-release_version:
-# X-Env-Var-release_version-Desc: The OS release version recorded in the build
-#  marker a trial boot compares against the pending operation.
+# X-Env-Var-release_version-Desc: The release version recorded in the build
+#  marker. Provenance, not a gate.
 # X-Env-Var-release_version-Required: y
 # X-Env-Var-release_version-Valid: string
 # X-Env-Var-release_version-Set: y
 #
 # X-Env-Var-build_id:
-# X-Env-Var-build_id-Desc: The exact build this root filesystem is. A trial slot
-#  proves its identity with it, so it must be unique per build.
+# X-Env-Var-build_id-Desc: The exact build this root filesystem is. It names one
+#  artefact for the whole product, so it must be unique per build.
 # X-Env-Var-build_id-Required: y
 # X-Env-Var-build_id-Valid: string
 # X-Env-Var-build_id-Set: y
 #
-# X-Env-Var-layout_id: ems-appliance-rota-v1
-# X-Env-Var-layout_id-Desc: The layout contract the runtime is bound to.
-# X-Env-Var-layout_id-Required: n
-# X-Env-Var-layout_id-Valid: string
-# X-Env-Var-layout_id-Set: y
-#
 # METAEND
 ---
+# Nothing but DEB822 fields and their space-indented continuations may appear
+# above METAEND: upstream's layer loader parses that block, and a prose line
+# there fails the whole layer to load -- which is how the first real build of
+# this layer ended, with "Layer 'ems-appliance' not found".
+#
+# The overlay directory is derived from this file's own stem, so the layer and
+# ems-appliance.rootfs-overlay have to be renamed together or the overlay
+# silently stops being applied.
 mmdebstrap:
   packages:
     # Everything ems-appliance-manager declares as a runtime dependency. The
@@ -68,21 +70,26 @@ mmdebstrap:
     - network-manager
     - openssh-server
     - systemd-timesyncd
+    # The rescue account has to be able to become root, or it is not a
+    # rescue: root is locked and there is no other way up from a console.
+    - sudo
   customize-hooks:
     # openssh-server's postinst generates a host key pair when it is installed,
-    # and it is installed in the build chroot — so the image carried one, the
-    # same one in both slots, made on the build machine and published with the
-    # release. sshd uses the persistent pair because the drop-in names it, but a
-    # private key that ships in a public artefact is compromised whether or not
-    # anything reads it, and a slot whose drop-in did not apply falls back to
-    # exactly these. This appliance's identity is created on first boot, onto
-    # the persistent partition, so there is nothing here for the image to carry.
+    # and it is installed in the build chroot — so the image would carry one,
+    # the same one on every appliance flashed from it, made on the build machine
+    # and published with the release. A private key that ships in a public
+    # artefact is compromised whether or not anything reads it.
+    #
+    # Nothing replaces it here, and nothing has to: Debian ships
+    # sshd-keygen.service enabled, and on this image's writable root its
+    # ConditionPathIsReadWrite=/etc/ssh holds, so the appliance makes its own
+    # pair on first boot.
     - |-
       set -eu
       rm -f "$1"/etc/ssh/ssh_host_*_key "$1"/etc/ssh/ssh_host_*_key.pub
     # The package is built outside the image and installed here, so the same
-    # artifact an operator can install on an existing host is what both slots
-    # carry. dpkg is run in the chroot; the postinst detects that there is no
+    # artifact an operator can install on an existing host is what the image
+    # carries. dpkg is run in the chroot; the postinst detects that there is no
     # running systemd and defers service startup.
     - |-
       set -eu
@@ -94,15 +101,13 @@ mmdebstrap:
       chroot "$1" /usr/bin/dpkg -i /tmp/ems-appliance-manager.deb
       rm -f "$1/tmp/ems-appliance-manager.deb"
 
-    # The build marker is what a trial boot compares against the pending
-    # operation, so it names the exact build this filesystem is. It carries no
-    # slot: image-rota writes one bit-for-bit identical pair.
+    # The build marker names the exact build this filesystem is. Nothing here
+    # image_layer is read at every boot: it is what tells the first-boot growth
+    # helper that this host was flashed from an appliance image at all, and the
+    # helper fails closed unless it says so positively.
     #
-    # The package record is dpkg's own answer, captured here because it cannot
-    # be captured later: image-rota binds /var per slot, so the shipped root
-    # filesystem carries no dpkg database at all. Without it a release gate has
-    # nothing exact to compare a package name, version, architecture or
-    # installation status against.
+    # The package record is dpkg's own answer, captured here so a release gate
+    # can read it without a running system.
     - |-
       set -eu
       mkdir -p "$1/etc"
@@ -136,8 +141,7 @@ mmdebstrap:
       {
         "architecture": "arm64",
         "build_id": "$IGconf_emsappliance_build_id",
-        "image_layer": "image-rota",
-        "layout_id": "$IGconf_emsappliance_layout_id",
+        "image_layer": "image-rpios",
         "release_version": "$IGconf_emsappliance_release_version",
         "appliance_manager_version": "$(chroot "$1" /usr/bin/ems-appliance --version 2>/dev/null || echo unknown)",
         "package": {
@@ -154,31 +158,14 @@ mmdebstrap:
       }
       EOF
 
-    # Every mount point the appliance needs, created while the image is still
-    # writable. systemd creates a missing one only on a filesystem it can write
-    # to, and the slot root is read-only from the first boot onwards: a shared
-    # path with no directory in the image is a bind mount that never happens on
-    # hardware, and /persistent with no directory is a boot that has no state at
-    # all. Kept in step with appliance/ab_persistence.py by an image check.
-    - |-
-      set -eu
-      for mountpoint in /persistent \
-                        /opt/ems-solarflow \
-                        /var/lib/ems-appliance-manager \
-                        /var/log/ems-appliance-manager \
-                        /etc/ems-appliance-manager \
-                        /var/lib/ems-appliance-os-update \
-                        /etc/NetworkManager/system-connections \
-                        /var/lib/ems-backup; do
-         install -d -m 0755 "$1$mountpoint"
-      done
-
-    # The slot root is read-only. image-rota already says so in /etc/fstab, which
-    # is what systemd-remount-fs enforces once userspace is up; the kernel command
-    # line said nothing, so the *initial* mount depended on initramfs-tools
-    # defaulting to read-only. That default is not this project's to rely on, and
-    # a boot where it did not hold would let the first writes of a boot land on a
-    # filesystem the next slot switch discards. Upstream only adds ro for erofs.
+    # The whole point of this image. image-rpios writes an fstab that mounts
+    # the root rw, which is what
+    # systemd-remount-fs enforces once userspace is up; the kernel command line
+    # upstream ships says neither, so the *initial* mount would depend on
+    # initramfs-tools defaulting to read-only. This project does not rely on
+    # that default in either direction, so the intent is stated explicitly --
+    # and a ro that arrived from anywhere is refused, because apt on a
+    # read-only root is the failure this guards against.
     - |-
       set -eu
       cmdline="$1/boot/firmware/cmdline.txt"
@@ -186,27 +173,21 @@ mmdebstrap:
          echo "ems-appliance: $cmdline is missing" >&2
          exit 1
       }
-      grep -qE '(^| )ro( |$)' "$cmdline" || sed -i '1s|$| ro|' "$cmdline"
-      grep -qE '(^| )rw( |$)' "$cmdline" && {
-         echo "ems-appliance: the kernel command line asks for a writable root" >&2
+      grep -qE '(^| )ro( |$)' "$cmdline" && {
+         echo "ems-appliance: the kernel command line asks for a read-only root" >&2
          exit 1
       }
-      grep -qE '(^| )ro( |$)' "$cmdline" || {
-         echo "ems-appliance: ro could not be added to the kernel command line" >&2
+      grep -qE '(^| )rw( |$)' "$cmdline" || sed -i '1s|$| rw|' "$cmdline"
+      grep -qE '(^| )rw( |$)' "$cmdline" || {
+         echo "ems-appliance: rw could not be added to the kernel command line" >&2
          exit 1
       }
 
-    # The layout descriptor the runtime reads. Labels only: image-rota generates
-    # the partition identities per build, and the runtime discovers them.
-    - |-
-      set -eu
-      mkdir -p "$1/etc/ems-appliance-manager"
-      chroot "$1" /usr/bin/ems-appliance ab write-layout \
-         --layout-id "$IGconf_emsappliance_layout_id" \
-         --output /etc/ems-appliance-manager/ab-layout.json
-
+    # Four units, and no host-identity unit among them: the layer above deletes
+    # the host keys the build chroot generated, and on a writable root Debian's
+    # own sshd-keygen.service -- shipped enabled, ConditionFirstBoot=yes,
+    # ConditionPathIsReadWrite=/etc/ssh -- makes the appliance's own pair on
+    # first boot.
     - $BDEBSTRAP_HOOKS/enable-units "$1" ems-appliance-agent.service \
-        ems-appliance-web.service ems-appliance-host-identity.service \
-        ems-appliance-persistence.service \
-        ems-appliance-ab-health.service ems-appliance-slot-bootstrap.service \
-        ems-appliance-grow-persistent.service
+        ems-appliance-web.service ems-appliance-grow-root.service \
+        ems-appliance-config-seed.service

@@ -14,7 +14,6 @@ against it, and the fixture is proven byte-identical to that tree.
 
 import hashlib
 import json
-import shutil
 from pathlib import Path
 
 import pytest
@@ -97,21 +96,29 @@ def test_the_contract_fixture_is_the_real_pinned_tree():
 # --- what upstream actually exposes -----------------------------------------
 
 
-def test_upstream_names_its_device_layers_rpi4_and_rpi5():
-    assert upstream_device_layers() == {"pi4": "rpi4", "pi5": "rpi5"}
+def test_upstream_names_its_device_layers_after_the_boards():
+    assert upstream_device_layers() == {"pi3": "rpi3", "pi4": "rpi4", "pi5": "rpi5"}
 
 
-def test_upstream_ab_config_selects_the_rpi5_device_layer():
-    payload = yaml.safe_load(upstream.read(upstream.UPSTREAM_AB_CONFIG))
-    assert payload["device"]["layer"] == "rpi5"
-    assert payload["image"]["layer"] == "image-rota"
+def test_the_single_slot_root_is_writable_and_named_by_slot():
+    """What makes apt possible, read out of upstream's own bytes.
+
+    The A/B image mounts its root read-only, which is why it cannot be patched
+    in place. image-rpios writes the opposite fstab, and points the kernel at
+    the same by-slot name its udev rules create.
+    """
+
+    setup = upstream.read(upstream.IMAGE_RPIOS_SETUP)
+    rules = upstream.read(upstream.IMAGE_RPIOS_SLOT_RULES)
+
+    assert "/dev/disk/by-slot/system  /  ext4 rw," in setup
+    assert "root=/dev/disk/by-slot/system" in setup
+    assert 'ENV{ID_FS_LABEL}=="ROOT", SYMLINK+="disk/by-slot/system"' in rules
 
 
-def test_image_rota_accepts_only_the_pi4_and_pi5_device_classes(lock):
-    text = upstream.read(upstream.IMAGE_ROTA)
-    assert upstream.layer_field(text, "Name") == lock.image_layer
-    assert upstream.layer_field(text, "Version") == lock.image_layer_version
-    assert "regex:^(cm4|pi4|cm5|pi5)$" in text
+def test_upstream_single_slot_config_selects_image_rpios():
+    payload = yaml.safe_load(upstream.read(upstream.UPSTREAM_SINGLE_CONFIG))
+    assert payload["image"]["layer"] == "image-rpios"
 
 
 def test_upstream_exposes_the_trixie_docker_layer_and_its_capability():
@@ -136,22 +143,23 @@ def test_the_docker_capability_alone_is_ambiguous_upstream():
     assert providers == {"docker-debian-trixie", "docker-debian-bookworm"}
 
 
-def test_the_update_members_are_android_sparse_images():
-    post_image = upstream.read("image/gpt/ab_userdata/post-image.sh")
-    genimage = upstream.read("image/gpt/ab_userdata/genimage.cfg.in.ext4")
-    assert "../system.sparse" in post_image and "../boot.sparse" in post_image
-    assert "update.tar.zst" in post_image
-    for name in ("boot.sparse", "system.sparse"):
-        block = genimage.split(f"image {name} {{", 1)[1].split("}", 1)[0]
-        assert "android-sparse" in block
-
-
 # --- the project's build configuration --------------------------------------
 
 
-def test_the_project_declares_one_profile_per_supported_board():
+def test_the_project_declares_one_profile_per_board_and_variant_it_claims():
+    """Every shape a board claims exists, and nothing beyond it is offered.
+
+    A board that claims a shape and has no profile for it is the failure this
+    pins: an owner told the appliance supports their Pi finds no image of the
+    kind they were told to flash. The claim is the profile's own ``variants``,
+    which is not both for every board -- a Raspberry Pi 3 cannot boot the A/B
+    image, so it does not offer one.
+    """
+
+    expected = set(rpi_image_gen.HARDWARE_PROFILES)
     names = {path.stem for path in PROFILE_DIR.glob("*.yaml")} if PROFILE_DIR.is_dir() else set()
-    assert names == {"rpi4-ab", "rpi5-ab"}
+
+    assert names == expected
 
 
 def test_every_project_device_layer_resolves_upstream():
@@ -164,17 +172,12 @@ def test_every_project_device_layer_resolves_upstream():
         assert declared in available, f"{path.name} selects device layer {declared!r}"
 
 
-def test_every_project_profile_is_a_device_class_image_rota_accepts():
-    for path in project_image_configs():
-        profile = rpi_image_gen.read_profile(path)
-        assert profile.device_class in ROTA_DEVICE_CLASSES, path.name
-
-
 def test_the_project_layer_requires_layers_upstream_defines():
     """``X-Env-Layer-Requires`` names layers, and every one must exist."""
 
     upstream_names = set(upstream_device_layers().values())
-    upstream_names.add(upstream.layer_field(upstream.read(upstream.IMAGE_ROTA), "Name"))
+    for relative in (upstream.IMAGE_RPIOS,):
+        upstream_names.add(upstream.layer_field(upstream.read(relative), "Name"))
     for relative in upstream.DOCKER_LAYERS:
         upstream_names.add(upstream.layer_field(upstream.read(relative), "Name"))
 
@@ -224,52 +227,12 @@ def test_binary_dependencies_are_reported_by_their_package(lock):
 # --- pinned source identity --------------------------------------------------
 
 
-def test_a_source_tree_without_provable_identity_is_not_compatible(tmp_path, lock):
-    """A tarball extraction has no ``.git``; unknown identity is not a pass."""
-
-    root = tmp_path / "rpi-image-gen"
-    shutil.copytree(upstream.FIXTURE, root)
-    (root / lock.executable).write_text("#!/bin/bash\n", encoding="utf-8")
-    (root / lock.executable).chmod(0o755)
-    (root / "LICENSE").write_text("upstream\n", encoding="utf-8")
-    (root / "layer/rpi/device/slot-mapper/bin").mkdir(parents=True, exist_ok=True)
-    (root / "layer/rpi/device/slot-mapper/bin/rpi-slot-label").write_text("#!/bin/sh\n")
-
-    report = rpi_image_gen.probe_checkout(root, lock, which=lambda tool: f"/usr/bin/{tool}")
-    assert not report.compatible
-    assert report.reason == rpi_image_gen.REASON_SOURCE_UNVERIFIED
-
-
 def test_the_lock_pins_a_verifiable_tarball(lock):
     tarball = lock.tarball
     assert tarball["sha256"].startswith("sha256:")
     assert len(tarball["sha256"]) == len("sha256:") + 64
     assert lock.release in tarball["url"]
     assert tarball["top_level_directory"] == "rpi-image-gen-2.7.0"
-
-
-def test_a_recorded_tarball_identity_is_accepted(tmp_path, lock):
-    root = tmp_path / "rpi-image-gen"
-    shutil.copytree(upstream.FIXTURE, root)
-    (root / lock.executable).write_text("#!/bin/bash\n", encoding="utf-8")
-    (root / lock.executable).chmod(0o755)
-    (root / "LICENSE").write_text("upstream\n", encoding="utf-8")
-    (root / "layer/rpi/device/slot-mapper/bin").mkdir(parents=True, exist_ok=True)
-    (root / "layer/rpi/device/slot-mapper/bin/rpi-slot-label").write_text("#!/bin/sh\n")
-    rpi_image_gen.write_source_identity(
-        root,
-        form=rpi_image_gen.SOURCE_TARBALL,
-        release=lock.release,
-        commit=lock.commit,
-        url=lock.tarball["url"],
-        sha256=lock.tarball["sha256"],
-        top_level_directory=lock.tarball["top_level_directory"],
-    )
-
-    report = rpi_image_gen.probe_checkout(root, lock, which=lambda tool: f"/usr/bin/{tool}")
-    assert report.source_identity == "tarball"
-    assert report.compatible
-    assert report.tree_digest.startswith("sha256:")
 
 
 # --- the slot-shared generator upstream actually ships ----------------------
@@ -280,83 +243,6 @@ def generator_runner():
     if not upstream.namespaces_available():
         pytest.skip("a private mount namespace is required to run the upstream generator")
     return upstream.run_slot_shared_generator
-
-
-def test_the_pinned_generator_leaves_all_but_one_mount_unactivated(
-    generator_runner, tmp_path
-):
-    """Upstream links only the last generated mount into ``local-fs.target``.
-
-    Its ``ln -sf`` sits outside both loops, so ``unit_name`` still holds the last
-    path of the last configuration file. Six declared paths produce six mount
-    units and one activation link; the five that are never activated fall back to
-    the read-only root, silently, until the next slot switch discards everything
-    written to them.
-    """
-
-    from appliance import ab_persistence
-
-    result = generator_runner(
-        {ab_persistence.SLOT_SHARED_CONF_NAME: ab_persistence.slot_shared_conf()},
-        tmp_path / "generated",
-    )
-    expected = set(ab_persistence.shared_mount_units())
-
-    assert set(result["units"]) == expected
-    assert len(result["wants"]) == 1
-
-
-def test_one_configuration_file_per_path_does_not_change_activation(
-    generator_runner, tmp_path
-):
-    """Splitting the declaration is not a fix; the link is outside both loops."""
-
-    from appliance import ab_persistence
-
-    files = {
-        f"{50 + index}-ems.conf": f"Version=1\nPath={shared.target}\n"
-        for index, shared in enumerate(ab_persistence.SHARED_PATHS)
-    }
-    result = generator_runner(files, tmp_path / "generated")
-
-    assert len(result["units"]) == len(ab_persistence.SHARED_PATHS)
-    assert len(result["wants"]) == 1
-
-
-def test_the_image_activates_every_mount_the_generator_leaves_behind(
-    generator_runner, tmp_path
-):
-    """Generator output plus the links the image ships covers every path."""
-
-    from appliance import ab_persistence
-
-    result = generator_runner(
-        {ab_persistence.SLOT_SHARED_CONF_NAME: ab_persistence.slot_shared_conf()},
-        tmp_path / "generated",
-    )
-    shipped = {
-        path.name
-        for path in (
-            IMAGE_DIR
-            / "layer"
-            / "ems-appliance.rootfs-overlay"
-            / "etc/systemd/system/local-fs.target.wants"
-        ).iterdir()
-    }
-    expected = set(ab_persistence.shared_mount_units())
-
-    assert expected - (set(result["wants"]) | shipped) == set()
-
-
-def test_the_escaped_unit_names_match_systemd_escape(generator_runner, tmp_path):
-    """The project computes them without systemd; systemd has the last word."""
-
-    from appliance import ab_persistence
-
-    for shared in ab_persistence.SHARED_PATHS:
-        assert ab_persistence.mount_unit_name(shared.target) == upstream.escaped_mount_unit(
-            shared.target
-        )
 
 
 # --- the real upstream resolver ----------------------------------------------
@@ -382,8 +268,8 @@ def test_the_real_upstream_loader_resolves_every_project_profile(upstream_toolin
         data = upstream.load_config(source, config_loader, path)
         profile = rpi_image_gen.read_profile(path)
         assert data["device"]["layer"] == profile.device_layer, path.name
-        assert data["image"]["layer"] == "image-rota", path.name
-        assert data["layer"]["app"] == "ems-appliance", path.name
+        assert data["image"]["layer"] == profile.variant.image_layer, path.name
+        assert data["layer"]["app"] == profile.variant.app_layer, path.name
         # Inherited through the chain, never restated per profile.
         assert data["image"]["rootfs_type"] == "ext4", path.name
 
@@ -402,16 +288,25 @@ def test_the_real_upstream_layer_manager_knows_every_layer_the_project_names(
     assert unknown == []
 
 
-def test_the_project_layer_loads_and_its_dependencies_resolve(upstream_tooling):
-    """The project layer, loaded by upstream beside upstream's own."""
+@pytest.mark.parametrize("layer", ["ems-appliance", "ems-appliance-single"])
+def test_the_project_layer_loads_and_its_dependencies_resolve(upstream_tooling, layer):
+    """Each project layer, loaded by upstream beside upstream's own.
+
+    Not a formality. The metadata block above METAEND is parsed as DEB822, so a
+    line that is neither a field nor a space-indented continuation of one fails
+    the entire layer to load -- and the failure upstream reports is "Layer
+    'ems-appliance-single' not found", which reads like a missing file rather
+    than an unparseable one. The single-slot layer's first real build ended
+    exactly there, four seconds in, on an explanatory paragraph.
+    """
 
     source, (_config_loader, layer_manager) = upstream_tooling
     manager = upstream.layer_index(
         source, layer_manager, extra_paths=[IMAGE_DIR / "layer"]
     )
 
-    assert manager.resolve_layer_name("ems-appliance")
-    satisfied, problems = manager.check_dependencies("ems-appliance")
+    assert manager.resolve_layer_name(layer), f"upstream cannot load {layer}"
+    satisfied, problems = manager.check_dependencies(layer)
     blocking = [item for item in problems if "missing required dependency" in item]
     assert blocking == [], blocking
     assert satisfied or not blocking

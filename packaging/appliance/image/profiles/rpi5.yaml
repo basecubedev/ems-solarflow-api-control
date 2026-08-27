@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The appliance image for Raspberry Pi 5.
+#
+#   rpi-image-gen build -c <abs>/profiles/rpi5.yaml -S packaging/appliance/image
+#
+include:
+  file: ../shared/ems-appliance.yaml
+
+device:
+  layer: rpi5
+
+image:
+  name: ems-solarflow-appliance-rpi5

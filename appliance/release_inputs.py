@@ -19,6 +19,7 @@ the same project, the same package and an approved builder? Read-only, and no
 path here comes from a request.
 """
 
+import fnmatch
 import hashlib
 import io
 import json
@@ -481,9 +482,45 @@ def verify_builder_environment(build, *, lock, role="builder"):
             f"policy approves {distribution} {release_version}"
         )
 
-    expected_architecture = ARCHITECTURE_ALIASES.get(str(entry.get("architecture") or "").lower())
+    # The one field a builder somewhere else cannot reproduce by accident. Every
+    # other recorded fact is either copied from this lock or true of any Debian
+    # host; the running kernel belongs to the image that booted, and the
+    # genericcloud flavour belongs to the pinned artefact and to nothing else.
+    # A row with no pattern is an unreadable row rather than an exemption --
+    # otherwise deleting one line from the lock deletes the check.
+    kernel_pattern = str(entry.get("kernel_pattern") or "")
+    if not kernel_pattern:
+        problems.append(
+            f"{BUILDER_UNTRUSTED}: release policy states no expected kernel for {role!r}, "
+            "so the builder cannot be told from any other machine"
+        )
+    elif not fnmatch.fnmatch(environment.kernel, kernel_pattern):
+        problems.append(
+            f"{BUILDER_UNTRUSTED}: the builder ran {environment.kernel or 'no reported kernel'}, "
+            f"release policy approves {kernel_pattern}"
+        )
+
+    # Required but never compared, with a truthy default: the capture script
+    # writes the literal "none" when it finds no handler, which satisfied the
+    # completeness check while meaning the opposite of what it records.
+    if environment.binfmt_handler.strip().lower() == "none":
+        problems.append(
+            f"{BUILDER_UNTRUSTED}: the builder registered no aarch64 binfmt handler, so "
+            "nothing it produced for the target architecture was executed as recorded"
+        )
+
+    declared_architecture = str(entry.get("architecture") or "").lower()
+    expected_architecture = ARCHITECTURE_ALIASES.get(declared_architecture)
     observed_architecture = ARCHITECTURE_ALIASES.get(environment.architecture.lower())
-    if expected_architecture and observed_architecture != expected_architecture:
+    if declared_architecture and not expected_architecture:
+        # An architecture nobody enumerated used to make the comparison vanish,
+        # so a policy row naming one approved a builder of any architecture at
+        # all. A row this code cannot read is an unreadable row, not a waiver.
+        problems.append(
+            f"{BUILDER_UNTRUSTED}: release policy approves architecture "
+            f"{entry.get('architecture')!r}, which this appliance cannot interpret"
+        )
+    elif expected_architecture and observed_architecture != expected_architecture:
         problems.append(
             f"{BUILDER_UNTRUSTED}: the builder is {environment.architecture or 'unknown'}, "
             f"release policy approves {entry.get('architecture')}"
