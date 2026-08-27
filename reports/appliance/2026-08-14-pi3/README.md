@@ -15,9 +15,11 @@ the board's silicon, and each was reproduced rather than reasoned about.
 
 The user-facing conclusion is in
 [`docs/user/hardware-requirements.md`](../../../docs/user/hardware-requirements.md);
-the decision and its consequences are in
-[`docs/appliance/adr/raspberry-pi-3-ab-support.md`](../../../docs/appliance/adr/raspberry-pi-3-ab-support.md).
-This file is the evidence those two rest on.
+the decision this evidence was gathered for -- that a Raspberry Pi 3 cannot
+boot the A/B image -- was superseded when the A/B image was removed, and the
+record that replaced it is
+[`docs/appliance/adr/single-image-appliance.md`](../../../docs/appliance/adr/single-image-appliance.md).
+This file is the measurement, and it stands whatever was later decided with it.
 
 ## A. `image-rota` refuses the `pi3` device class
 

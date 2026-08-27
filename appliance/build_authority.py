@@ -395,7 +395,7 @@ def write(directory, authority):
 def prepare_output(root, *, build_id):
     """One build, one fresh directory. Stale artefacts cannot be inherited.
 
-    A reused directory is how yesterday's ``update.tar.zst`` ends up beside
+    A reused directory is how yesterday's artefact ends up beside
     today's metadata, which would let a release be signed for an artefact no
     completed build produced.
     """

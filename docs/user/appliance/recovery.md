@@ -5,12 +5,10 @@ Start at the top and work down. Each step is safe to try.
 ## The web page does not load
 
 **Give it three minutes first.** The first start has work to do before it
-answers — it grows the card to its full size, establishes the host identity and
-starts the containers. And after an operating-system update on a **two-slot**
-appliance the box reboots into its trial slot by itself; an `apt` update on a
-single-slot one asks you for the reboot when a kernel or firmware package was
-among the changes. A page that is missing for two minutes is usually a box that
-is coming back.
+answers — it grows the card to its full size, generates its own SSH host keys
+and starts the containers. And an update asks you for a reboot when a kernel or
+firmware package was among the changes. A page that is missing for two minutes
+is usually a box that is coming back.
 
 Then, in order:
 
@@ -40,19 +38,17 @@ say what happened.
 ### Read the card on your computer
 
 Power the appliance off, take the card out, and put it in your computer. The
-partitions your computer can open are FAT — three of six on a two-slot card, one
-of two on a single-slot one — so Windows, macOS and Linux all read them without
-extra software. You may be asked to format the others — **say no**; that is only
-your computer failing to read Linux filesystems, not a damaged card.
+card's `boot` partition is FAT, so Windows, macOS and Linux all read it without
+extra software. You may be asked to format the other one — **say no**; that is
+only your computer failing to read a Linux filesystem, not a damaged card.
 
 | File | What it tells you |
 | --- | --- |
-| `autoboot.txt` on the small first partition (two-slot cards only) | which system slot the firmware was told to start, and whether a trial boot was pending |
-| `cmdline.txt` on a `boot` partition | which root the kernel was asked to find |
+| `cmdline.txt` on the `boot` partition | which root the kernel was asked to find |
 | `config.txt` beside it | the board settings the firmware applied |
 
-Nothing there needs interpreting to be useful — copying the three files into an
-issue is enough.
+Nothing there needs interpreting to be useful — copying both files into an issue
+is enough.
 
 ### Watch it boot
 
@@ -70,22 +66,17 @@ port at **115200 baud, 8N1**:
 | Raspberry Pi 4 | GPIO header: GND = pin 6, TXD = pin 8, RXD = pin 10 | the adapter's RX goes to the Pi's TX |
 | Raspberry Pi 3 / 3B+ | the same GPIO pins as the Pi 4 | the image sets `enable_uart=1`, which is what a Pi 3 needs for a usable console |
 
-Then power the appliance on and copy everything the terminal prints. On a
-two-slot appliance a line beginning `FATAL: AB` is the start-up refusing to
-guess which system to boot, and it names exactly what it could not find.
+Then power the appliance on and copy everything the terminal prints. A root
+that will not mount says so there, and nowhere else.
 
 You can also log in on this line, with the same rescue account as at a keyboard.
 Anyone who can attach an adapter is already holding your appliance, which is the
 threshold this account was written for.
 
 If the boot never gets far enough to say anything, what is left is re-flashing
-the card — and that **erases everything on it**, on either shape. The two-slot
-image is not only its two systems; it carries its own empty shared partition, so
-writing it back replaces your configuration, data and on-box backups with a
-fresh one. A backup you took earlier is what you restore from. (An operating
-system *update* is the opposite: it writes one slot and leaves the shared area
-alone. Updating and re-flashing are different operations.) The paths are listed
-in
+the card — and that **erases everything on it**: your configuration, your data
+and the on-box backups alike. A backup you took earlier and kept somewhere else
+is what you restore from. The paths are listed in
 [network recovery](../../appliance/network-recovery.md#whether-you-have-a-shell-at-all).
 
 ![The Admin section, where restart and repair are offered](../../assets/screenshots/appliance/appliance-recovery.png)
@@ -107,13 +98,9 @@ Read the reason before retrying, whichever kind it was. An update that failed
 because the card is full or the download was truncated will fail again the same
 way.
 
-**An operating-system update on a two-slot appliance.** You are already back
-where you started — that is what the second slot is for. The Updates page
-reports what happened and waits for you to acknowledge it.
-
-**An operating-system update on a single-slot appliance.** There is no second
-slot, so nothing was undone. If the appliance still boots, the Updates page will
-say what failed and you can try again. If it does not, this page's
+**An operating-system update.** Nothing was undone: `apt` patches the system in
+place. If the appliance still boots, the Updates page will say what failed and
+you can try again. If it does not, this page's
 [first section](#the-web-page-does-not-load) is the route — screen and keyboard
 first, reflash and restore last.
 
@@ -148,9 +135,9 @@ thing that comes back.
 ## What not to do
 
 - **Do not pull power to "reset" it.** Shut it down from the page.
-- **Do not install packages on it by hand.** On a two-slot appliance the system
-  area is read-only and anything that did stick would disappear at the next
-  update; on a single-slot one it stays, and it becomes yours to keep working.
+- **Do not install packages on it by hand.** Nothing stops you, and what you
+  install stays — but it becomes yours to keep working, and yours to undo at
+  the console when an upgrade trips over it.
 - **Do not run a second controller against the same inverter.** Two things
   writing an output limit is worse than either alone.
 

@@ -100,11 +100,9 @@ On an appliance image the recovery paths are therefore, in order:
    `ems-backup`, which is chroot-confined, read-only and SFTP-only. What it buys
    is the ability to retrieve your configuration, data and backups from a box
    you can otherwise no longer reach, so step 4 costs you nothing.
-4. Re-flash. This erases the card on **either** shape: the A/B image carries all
-   six partitions including an empty shared one, so writing it back replaces the
-   operator's configuration, data and backups just as a single-slot image does.
-   What survives is an OS *update* into the spare slot, which is a different
-   operation. The backup in step 3 is not a convenience — it is the only copy.
+4. Re-flash. This erases the card: writing the image back replaces the
+   operator's configuration, data and on-box backups with a fresh installation.
+   The backup in step 3 is not a convenience — it is the only copy.
 
 Step 3 is the one worth doing early. There is no way to add a key to a box you
 can no longer reach.

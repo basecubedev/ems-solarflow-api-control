@@ -29,9 +29,9 @@ DEFAULT_ADMIN_SERVICE = "ems-solarflow-admin"
 DEFAULT_EMS_SERVICE = "ems"
 DEFAULT_INFLUX_SERVICE = "influxdb"
 # The Admin console's own unauthenticated status endpoint. It is the only fixed
-# loopback route Admin answers without a session, so it is what a trial slot and
-# a known-good check ask; a path Admin does not serve would 404 and fail every
-# healthy appliance.
+# loopback route Admin answers without a session, so it is what a known-good
+# check asks; a path Admin does not serve would 404 and fail every healthy
+# appliance.
 DEFAULT_ADMIN_HEALTH_PATH = "/api/admin/auth/status"
 DEFAULT_WEB_USER = "ems-appliance-web"
 DEFAULT_SOCKET_GROUP = "ems-appliance"

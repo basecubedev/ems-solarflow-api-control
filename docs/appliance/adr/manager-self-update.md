@@ -4,7 +4,12 @@
 - Date: 2026-08-26
 - Scope: how the `ems-appliance-manager` package reaches an appliance and what
   happens when the one that arrives does not work. Not the operating system,
-  not the EMS containers, not the A/B image.
+  not the EMS containers.
+
+> The A/B mechanism this record compares itself against has since been removed —
+> see [single-image-appliance.md](single-image-appliance.md). The comparison is
+> left standing because it is what this decision was weighed against, and
+> because "doing nothing commits" is still true and still the thing to know.
 
 ## Context
 
@@ -22,7 +27,7 @@ matrix — five images since the Raspberry Pi 3 gained a single-slot artefact �
 several gigabytes of real data per build. A release path that cannot
 run on the infrastructure this project has is not a release path.
 
-**`apt`** patches the OS in place on a single-slot appliance. It has never
+**`apt`** patches the OS in place. It has never
 touched the Appliance Manager, because the manager is not in any Debian archive
 this appliance trusts.
 
@@ -42,7 +47,7 @@ installed on an operator's button.**
   revert this path provides has to be a decision somebody made.
 - **Going back is a first-class outcome.** The same control installs an older
   package as readily as a newer one, and `previous.deb` is retained before
-  anything is unpacked. A single-slot appliance has no other recovery.
+  anything is unpacked. The appliance has no other recovery for its console.
 - **The refusals happen before dpkg runs.** Signature, digest, architecture and
   state-schema compatibility are all checked while this project's Python is
   still the code that started the process. Afterwards the module files are the
@@ -99,10 +104,11 @@ The remaining backstop is a person at a keyboard:
 - A rescue account ships with a documented default password, and changing it is
   optional. The trade is stated once in
   [../console-recovery.md](../console-recovery.md) and not argued again.
-- **A/B is not removed by this decision.** Adding the new path and deleting the
-  old one are two changes, and doing them in that order is what keeps a working
-  update path at every point. The deletion is its own branch and its own review.
+- **A/B was not removed by this decision.** Adding the new path and deleting the
+  old one were two changes, and doing them in that order is what kept a working
+  update path at every point. The deletion is
+  [single-image-appliance.md](single-image-appliance.md).
 - **None of this has run on a device.** The suite is green and the artefacts are
   built and inspected; no appliance has installed a manager package over HTTPS.
   What is proven is recorded in
-  [../ab-hardware-validation.md](../ab-hardware-validation.md).
+  [../hardware-validation.md](../hardware-validation.md).

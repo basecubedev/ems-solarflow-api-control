@@ -211,15 +211,13 @@ class StatusService:
         system = sections.get("system", {})
         if system.get("status") == SECTION_OK:
             storage = system.get("storage") or {}
-            # On an A/B appliance / is the slot's fixed system partition,
-            # written once at build time and mounted read-only, so its usage
-            # cannot move. Everything that grows -- EMS data and backups, both
-            # slots' /var, the Docker stores, the journal and the update
-            # staging -- is on the persistent partition, which was measured and
-            # then never judged.
+            # Everything grows on one root here: the OS, the Docker stores,
+            # the journal, the EMS data and the operator's backups. Both
+            # entries are judged, because the deployment root may be a separate
+            # filesystem an operator mounted there.
             for name, label in (
                 ("root", "the root filesystem"),
-                ("ems_data", "the persistent partition"),
+                ("ems_data", "the EMS deployment"),
             ):
                 entry = storage.get(name) or {}
                 if entry.get("available") and (entry.get("used_percent") or 0) >= 90:

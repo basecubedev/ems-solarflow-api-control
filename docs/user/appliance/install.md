@@ -18,7 +18,7 @@ waiting.
 | | |
 | --- | --- |
 | **Board** | Raspberry Pi 3, 3B+, 4 **or** 5 — you need the image for *your* board, they are not interchangeable. A Pi 3 or 3B+ has one image rather than two; see below |
-| **Card** | 32 GB or larger for the `-ab` image, 16 GB or larger for `-single`, and a card reader for your computer |
+| **Card** | 16 GB or larger, and a card reader for your computer |
 | **Cable** | Ethernet. The first start needs it; WLAN cannot be configured before the appliance runs |
 | **Power** | The official supply for your board |
 
@@ -35,47 +35,23 @@ Not under **Packages** in the sidebar. That holds the EMS and Admin container
 images, which the appliance downloads by itself once it runs; you never fetch
 those by hand.
 
-**Two images, and the choice is worth a minute.** They are the same appliance.
-They differ in how the operating system underneath it gets its security
-updates, and you cannot switch later without flashing again.
+**One file per board.** They are not interchangeable: the kernel and the
+firmware differ.
 
-| | `-ab` | `-single` |
-| --- | --- | --- |
-| OS updates | a new image, written to the spare half of the card | `apt`, like an ordinary Raspberry Pi |
-| If an update goes wrong | it starts the previous version by itself | you flash the card again and restore a backup |
-| Needs you at the machine | no | yes, if something breaks |
-| Card wear | high — most of a gigabyte per update | low |
+| Board | File |
+| --- | --- |
+| Raspberry Pi 5 | `ems-solarflow-appliance-<version>-rpi5-arm64.img.xz` |
+| Raspberry Pi 4 | `ems-solarflow-appliance-<version>-rpi4-arm64.img.xz` |
+| Raspberry Pi 3 / 3B+ | `ems-solarflow-appliance-<version>-rpi3-arm64.img.xz` |
 
-Take **`-ab`** if the appliance will live somewhere you would rather not have
-to crawl to: a cellar, a meter cabinet, a different building. It is the one
-that repairs itself, and it is the recommended choice.
-
-Take **`-single`** if you can reach the machine, and you would rather patch
-often and cheaply than rewrite most of a gigabyte to the card every time.
-
-Either way, two files belong together:
-
-| Board | Self-repairing image | apt-updated image |
-| --- | --- | --- |
-| Raspberry Pi 5 | `ems-solarflow-appliance-<version>-rpi5-arm64-ab.img.xz` | `…-rpi5-arm64-single.img.xz` |
-| Raspberry Pi 4 | `ems-solarflow-appliance-<version>-rpi4-arm64-ab.img.xz` | `…-rpi4-arm64-single.img.xz` |
-| Raspberry Pi 3 / 3B+ | — | `…-rpi3-arm64-single.img.xz` |
-
-**A Raspberry Pi 3 has no choice to make**, and the reason is its boot ROM
-rather than its speed: the self-repairing image uses a partition layout and a
-boot selector that only Pi 4 and Pi 5 firmware can read. There is no `-ab` file
-for it and there will not be one. What that costs you is the `-single` column of
-the "if an update goes wrong" row above: an operating-system update that leaves
-the board unable to start is undone by you, at the machine. A Pi 3 also boots
-from its SD card and nothing else: booting from a USB SSD or an NVMe drive is a
-Pi 4 and Pi 5 arrangement, and no `rpi3` image is built for it.
+A **Raspberry Pi 3 boots from its SD card and nothing else**: booting from a USB
+SSD or an NVMe drive is a Pi 4 and Pi 5 arrangement, and no `rpi3` image is
+built for it.
 
 Download the `.img.xz` **and** the `.img.xz.sha256` file beside it. The second
-one is how you check the first arrived intact. The `-ab` download is roughly
-490 MB and expands to 16.5 GiB on the card; the `-single` one is about 240 MB
-and expands to 8.3 GiB, because it holds one copy of the system instead of two.
-Both Imager and balenaEtcher expand it while they write, so **do not unpack it
-yourself.**
+one is how you check the first arrived intact. The download is about 240 MB and
+expands to 8.3 GiB on the card. Both Imager and balenaEtcher expand it while
+they write, so **do not unpack it yourself.**
 
 Not sure which board you have? The Pi 5 has a fan connector next to the USB-C
 socket and two camera ports; a Pi 3 has a full-size HDMI socket and is powered
@@ -137,8 +113,7 @@ When Imager says it is done, eject the card.
 
 **If your tool cannot read `.xz`** — some older writers, including
 Win32DiskImager, only take a plain `.img` — unpack it first and write the
-result. You need 16.5 GiB of free space for an unpacked `-ab` image, or 8.3 GiB
-for a `-single` one.
+result. You need 8.3 GiB of free space for an unpacked image.
 
 | | |
 | --- | --- |

@@ -4,7 +4,7 @@
 Never on a timer: an automatic update would distribute an untested package to
 every appliance at once, and the revert this path provides has to be a decision
 somebody made. Going backwards is a first-class outcome for the same reason —
-it is the only recovery a single-slot appliance has.
+it is the only recovery this appliance has for its own console.
 
 The fetch order is the one ``release_fetch`` established and is the security
 property: an index only names candidates, the detached signature decides
@@ -321,7 +321,7 @@ class ManagerUpdateService:
         """A kept package judged on what was written down when it arrived.
 
         A package with no recorded declaration is not refused: the revert is the
-        only recovery a single-slot appliance has, and taking it away because of
+        only recovery this appliance has for its console, and taking it away because of
         a missing annotation is worse than the risk it describes.
         """
 

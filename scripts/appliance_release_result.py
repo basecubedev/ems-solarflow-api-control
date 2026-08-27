@@ -205,7 +205,7 @@ def inspections_passed(entries):
     if not entries:
         return False
     for entry in entries.values():
-        for name in ("image_inspection", "update_inspection", "sparse_crosscheck"):
+        for name in ("image_inspection",):
             record = entry.get(name, {})
             if record.get("result") != "pass" or record.get("mandatory_not_run"):
                 return False
@@ -280,16 +280,12 @@ def main(argv=None):
                         "project_tree_sha256": authority.project.tree_sha256,
                         "builder_environment_sha256": authority.builder_environment_sha256,
                         "image_sha256": authority.image.sha256,
-                        "update_sha256": authority.update.sha256,
                         "package_sha256": authority.package_sha256,
                     }
                 )
                 image = dist / f"{prefix}.img"
                 if image.is_file():
                     entry["image_bytes"] = image.stat().st_size
-                update = dist / f"{prefix}.update.tar.zst"
-                if update.is_file():
-                    entry["update_bytes"] = update.stat().st_size
                 # Approval per profile, because each profile carries its own
                 # authority and its own environment. Recorded here rather than
                 # left to the finalizer's refusal: that refusal aborts the run
@@ -314,8 +310,6 @@ def main(argv=None):
 
         for name, path in (
             ("image_inspection", reports / f"image-inspection-{profile}.json"),
-            ("update_inspection", reports / f"update-inspection-{profile}.json"),
-            ("sparse_crosscheck", reports / f"sparse-crosscheck-{profile}.json"),
         ):
             counts = inspection_counts(path) if path.is_file() else None
             entry[name] = counts or {"result": "not_run"}
@@ -428,8 +422,8 @@ def render_markdown(result):
         f"Project: `{result['project'].get('revision', 'unknown')}`  ",
         f"Tree: `{result['project'].get('tree_sha256', 'unknown')}`",
         "",
-        "| Profile | Build | Image inspection | Update inspection | Sparse cross-check |",
-        "| --- | --- | --- | --- | --- |",
+        "| Profile | Build | Image inspection |",
+        "| --- | --- | --- |",
     ]
     for profile, entry in sorted(result["profiles"].items()):
         def cell(name):
@@ -443,8 +437,7 @@ def render_markdown(result):
 
         lines.append(
             f"| {profile} | `{entry.get('build_id', entry.get('error', '—'))}` | "
-            f"{cell('image_inspection')} | {cell('update_inspection')} | "
-            f"{cell('sparse_crosscheck')} |"
+            f"{cell('image_inspection')} |"
         )
     signature = result.get("release_attestation", {}).get("signature", {})
     gates = result.get("runtime_gates", {})

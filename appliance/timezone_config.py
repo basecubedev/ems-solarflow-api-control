@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The zone the EMS runs its local-hour control windows in.
 
-`/etc/localtime` lives on the read-only slot root, so a host timezone cannot
-survive a slot switch and `timedatectl` cannot write one at all on an A/B
-image. The operator's choice is therefore kept on a shared path and carried
-into the containers as `TZ`, which is what actually decides when a charge
-window opens.
+The host stays on a deterministic UTC rather than inheriting somebody else's
+clock. The operator's choice is kept beside the rest of their configuration and
+carried into the containers as `TZ`, which is what actually decides when a
+charge window opens.
 """
 
 from appliance.operations import STATE_SUCCEEDED

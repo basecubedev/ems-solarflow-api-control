@@ -19,9 +19,9 @@ UPTIME_FILE = "proc/uptime"
 def uptime_seconds(root="/"):
     """Seconds since this boot, from the kernel.
 
-    The one reader in this project. It is what the A/B trial window measures,
-    because a wall clock on a board with no real-time clock does not survive
-    the reboot the window spans.
+    The one reader in this project. A wall clock on a board with no real-time
+    clock does not survive a reboot, so anything measuring an interval across
+    one has to ask the kernel instead.
     """
 
     try:
@@ -119,7 +119,7 @@ class HostProbe:
     def power(self):
         """Whether the board is reporting an under-voltage condition.
 
-        A Pi that browns out under load corrupts a slot write and produces
+        A Pi that browns out under load corrupts a card write and produces
         failures that look like anything but a power supply. The alarm is a
         sticky bit on the Raspberry Pi hwmon device; a board that does not
         publish it is reported as unknown rather than as healthy.

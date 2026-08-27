@@ -205,7 +205,7 @@ def retain(
 ):
     """Keep ``archive`` as current, moving what was current to previous.
 
-    ``rotate=False`` seeds the current slot without displacing anything — what an
+    ``rotate=False`` seeds the current entry without displacing anything -- what an
     image build does for a manager that was never installed through this path.
     """
 

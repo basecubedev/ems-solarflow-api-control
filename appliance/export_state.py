@@ -42,15 +42,13 @@ def path_within_filesystem(path, *, mounts=None, is_mount=None):
     Binding ``/persistent/ems/config`` publishes a record whose root reads
     ``/ems/config``, because the persistent partition is mounted at
     ``/persistent``. The absolute path only equals that text while the source
-    happens to sit on the filesystem mounted at ``/`` — true on a developer
-    machine, false on the A/B appliance.
+    happens to sit on the filesystem mounted at ``/`` -- true on a developer
+    machine, and not something to rely on.
 
-    Stopping at the nearest mount point is not enough there either: on the A/B
-    image the enclosing directory is itself a bind whose own root is not ``/``,
-    so ``/opt/ems-solarflow/config`` is published as
-    ``/shared/opt/ems-solarflow/config``. The enclosing mount's root has to be
-    carried along, or every export reads as foreign and backup access disables
-    itself on each boot.
+    Stopping at the nearest mount point is not enough either: where the
+    enclosing directory is itself a bind whose own root is not ``/``, the
+    enclosing mount's root has to be carried along, or every export reads as
+    foreign and backup access disables itself on each boot.
     """
 
     at_mount = is_mount or (lambda candidate: os.path.ismount(candidate))

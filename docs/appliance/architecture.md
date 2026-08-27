@@ -14,7 +14,7 @@ backup format.
 
 | Layer | Owns |
 |---|---|
-| **Appliance Manager** | Raspberry Pi OS status, OS package updates, fail-safe A/B host image updates, its own replacement as a signed package, host reboot/shutdown, network and WLAN state, hostname and mDNS, Docker service state, EMS Admin container installation/restart/version/reinstall/rollback, Admin image and container diagnostics, SSH service and public keys, storage and temperature, host logs, appliance-level recovery |
+| **Appliance Manager** | Raspberry Pi OS status, OS package updates, its own replacement as a signed package, host reboot/shutdown, network and WLAN state, hostname and mDNS, Docker service state, EMS Admin container installation/restart/version/reinstall/rollback, Admin image and container diagnostics, SSH service and public keys, storage and temperature, host logs, appliance-level recovery |
 | **EMS Admin Console** | EMS configuration, device discovery, grid-meter and inverter configuration, control parameters, EMS runtime state, EMS diagnostics, EMS backup/restore semantics, Guided Setup, Guided Upgrade, application-level maintenance |
 | **EMS** | Energy-management logic, runtime control, device communication, configuration validation, EMS backup/restore logic, runtime safety and reconciliation |
 
@@ -25,19 +25,19 @@ grid-meter configuration, no duplicated EMS backup format, no unrestricted
 Docker container management, no unrestricted Docker image execution, **no
 repartitioning of a running installation** and no EEPROM firmware-slot writes.
 
-### Four rollbacks that are not the same thing
+### Three ways back, and they are not the same thing
 
 ```text
 Admin image rollback   Docker container   the previously running image digest
 EMS backup / restore   application data   EMS configuration, state and history
-OS A/B rollback        Raspberry Pi host  the previous known-good boot+root slot
 Manager package revert this console       the .deb that was running before it
 ```
 
-A/B is never used for Docker containers, and an OS rollback never restores EMS
-data. The fourth is the only one that exists on every appliance, A/B or not, and
-it is also the weakest: a deadline in software rather than a boot selector in
-firmware. See [ab-os-updates.md](ab-os-updates.md) and
+None of them recovers the operating system: a failed OS upgrade is recovered by
+writing the card again and restoring an EMS backup, which is why the backup is
+the part that matters. The third is the weakest of the three -- a deadline in
+software rather than a selector in firmware -- and it is the one that guards the
+console an operator would fix the box from. See
 [adr/manager-self-update.md](adr/manager-self-update.md).
 
 ## Two host services
@@ -91,7 +91,7 @@ is refused as `invalid_request` before any handler runs.
 | `migration.py` | Idempotent migration from the previous shared state layout |
 | `config.py` | `/etc` host configuration and the image allowlist |
 | `config_seed.py` | Creates the operator-owned configuration files that are missing, once |
-| `persistent_state.py` | What formats the state on the persistent partition is written in |
+| `persistent_state.py` | What formats the state this appliance keeps is written in |
 | `manager_retention.py` | The package that was running, kept so a revert has a target |
 | `manager_releases.py` | What a published manager package claims, and what may be believed |
 | `manager_install.py` | Hands a verified package to a unit that survives installing it |
@@ -114,24 +114,21 @@ is refused as `invalid_request` before any handler runs.
 | `agent.py`, `agent_client.py`, `services.py` | The privileged agent, its client and the service graph |
 | `auth.py`, `web.py`, `web_audit.py`, `static/` | Authentication, audit reporting to the agent, and the unprivileged web interface |
 | `install_check.py` | Post-install verification: is this installation actually usable |
-| `ab_layout.py`, `ab_persistence.py` | A/B slot discovery, drift detection and the shared-persistence contract |
-| `ab_boot.py`, `ab_blocks.py`, `ab_state.py` | The boot selector, the block-device backend and the state that crosses the reboot |
-| `os_releases.py`, `os_artifacts.py`, `os_update.py`, `ab_health.py` | Signed OS release authority, bounded extraction, inactive-slot staging, trial health and commit |
-| `os_fetch.py` | The HTTPS transport that brings a signed release onto the device |
+| `artifact_trust.py` | Whether an artifact is one this appliance may install: signature, digest and state-schema authority |
+| `release_fetch.py` | The HTTPS transport that brings a signed artifact onto the device |
+| `block_probe.py` | The partition mounted at `/`, and whether this host was flashed from an appliance image |
 | `admin_bootstrap.py`, `admin_transition.py` | The first Admin deployment, and standing back while Admin replaces itself |
 | `cli.py` | The `ems-appliance` host CLI |
-| `ab_image.py` | The declared image layout and the host-side image inspector |
-| `ab_geometry.py`, `ab_filesystems.py`, `media_sizing.py` | Real partition geometry, filesystem identity and what the medium has to hold |
-| `ab_bootstrap.py`, `ab_docker_health.py` | Rebuilding a slot's container runtime, and the gates that judge it |
-| `ab_inspect.py`, `sparse.py` | Mount-independent inspection of a written image, and Android-sparse expansion |
-| `host_identity.py`, `host_config.py` | The identity both slots share, and one host-path contract for everything that reads it |
+| `image_shape.py`, `image_inspect.py` | The declared image layout and the mount-free image inspector |
+| `partition_geometry.py`, `image_filesystems.py`, `media_sizing.py` | Real partition geometry, filesystem identity and what the medium has to hold |
+| `host_config.py` | One host-path contract for everything that reads it |
 | `ssh_policy.py`, `backup_confinement.py`, `backup_ownership.py`, `export_state.py` | The generated sshd policy, what the chroot actually is, and who owns the account a purge may remove |
 | `timezone_config.py` | The zone the EMS runs its local-hour control windows in |
 | `operation_schema.py` | The typed request shape every operation is validated against |
 | `release_trust.py`, `release_attestation.py`, `release_inputs.py` | What a signed release vouches for, and the readiness invariants that bound it |
 | `build_authority.py`, `source_bundle.py`, `project_source.py` | Which build an artefact came from, and the source tree it can be rebuilt from |
 | `rpi_image_gen.py`, `runtime_gates.py` | The pinned upstream generator and the runtime evidence a release is bound to |
-| `image_variants.py` | The two shapes an appliance image can have, and every fact that follows from choosing one |
+| `image_shape.py` | What the appliance image is, and every fact that follows from it |
 | `audit.py` | The append-only record of what was done to this appliance |
 | `health.py` | Whether a deployed container is answering, and how long to wait for it |
 | `version.py` | The appliance version, its supported architectures and board models |
@@ -196,8 +193,7 @@ proxy may later add `/system` and `/admin` paths in front of both.
 - [admin-recovery.md](admin-recovery.md) — Admin install, rollback and repair
 - [console-recovery.md](console-recovery.md) — the rescue account, and getting back in when the appliance will not come up
 - [os-updates.md](os-updates.md) — OS updates and package recovery
-- [ab-os-updates.md](ab-os-updates.md) — fail-safe A/B host image updates
-- [ab-hardware-validation.md](ab-hardware-validation.md) — the physical gate for both image shapes, and what remains NOT RUN
+- [hardware-validation.md](hardware-validation.md) — the physical gate, and what remains NOT RUN
 - [ssh-backup-access.md](ssh-backup-access.md) — SSH keys and file backup access
 - [network-recovery.md](network-recovery.md) — WLAN, hostname and lockout recovery
 - [security-model.md](security-model.md) — the privilege boundary in detail

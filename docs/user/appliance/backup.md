@@ -10,13 +10,11 @@ Getting your configuration and data off the appliance.
 | **Runtime state** | What the controller currently believes |
 | **Backups** | Snapshots the Admin Console made |
 
-An operating-system update does not touch any of it. On a two-slot appliance it
-lives on an area shared by both system slots; on a single-slot one it lives on
-the same root `apt` patches, and an update leaves it alone either way.
+An operating-system update does not touch any of it: `apt` patches the system
+packages around it.
 
-**Re-flashing the card is a different matter, and it erases all of it** — on
-both shapes, because the two-slot image carries its own empty shared partition.
-A backup protects against that, and against the card failing, which no software
+**Re-flashing the card is a different matter, and it erases all of it.** A
+backup protects against that, and against the card failing, which no software
 mechanism can.
 
 ![The SSH and backup access page showing the account state and the exported directories](../../assets/screenshots/appliance/appliance-backup-access.png)

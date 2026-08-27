@@ -344,7 +344,7 @@ The built-in web interfaces support password-protected operator access. The dash
 
 Typical installations run with Docker on a small home server, NAS or Raspberry Pi. A manual Python installation and a comprehensive command-line tool are also available for advanced users.
 
-A dedicated **appliance image** is also available for a Raspberry Pi that should run EMS and nothing else: a prepared card with the operating system, the containers and a small management console. It comes in a two-slot shape that rolls a failed operating-system update back by itself (Raspberry Pi 4 and 5) and a single-slot shape patched by `apt` (Raspberry Pi 3, 3B+, 4 and 5). Neither has been confirmed on a physical board yet.
+A dedicated **appliance image** is also available for a Raspberry Pi that should run EMS and nothing else: a prepared card with the operating system, the containers and a small management console. One writable root, patched by `apt`, for the Raspberry Pi 3, 3B+, 4 and 5. It has not been confirmed on a physical board yet.
 
 ---
 

@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The deadline that reverts a manager install nobody confirmed.
 
-Under A/B, an appliance that said nothing rebooted into the slot it came from.
-A package install has no such property: silence commits it. This arms a repeating
-timer instead, and the reverter it runs is a copy taken out of the *outgoing*
-package before anything is unpacked, so the code deciding keep-or-undo is not
-code the install brought with it.
+A package install commits itself: dpkg replaces the manager, systemd restarts
+it, and silence means the new one stays. This arms a repeating timer to make
+silence mean the opposite, and the reverter it runs is a copy taken out of the
+*outgoing* package before anything is unpacked, so the code deciding
+keep-or-undo is not code the install brought with it.
 
 See docs/appliance/adr/manager-self-update.md for what this does not replace.
 """

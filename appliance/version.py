@@ -17,9 +17,8 @@ APPLIANCE_VERSION = "0.1.0"
 
 PACKAGE_NAME = "ems-appliance-manager"
 SUPPORTED_ARCHITECTURES = ("arm64",)
-# The boards this package runs on. Not the same list as the boards that have
-# an A/B image: a Raspberry Pi 3 boots the single-slot image and the package
-# installs on Raspberry Pi OS anywhere, so it belongs here and not there.
+# The boards this package runs on. Not the same list as the boards this project
+# builds an image for: the package installs on Raspberry Pi OS anywhere.
 SUPPORTED_PI_MODELS = ("Raspberry Pi 3", "Raspberry Pi 4", "Raspberry Pi 5")
 
 _TRAILING_NUMBER = re.compile(r"^([^0-9]+)([0-9]+)$")

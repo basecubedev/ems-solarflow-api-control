@@ -1,19 +1,21 @@
 # Physical-hardware validation gate
 
-A/B operating-system support is **not complete** until a real Raspberry Pi has
-passed the cases below. Everything that can be proven without hardware — the
-state machine, the selector parser, the layout authority, the write failure
-matrix, the boot-flow simulator — is covered by the automated suites, and none
-of it substitutes for a physical boot.
-
-The document has since grown past A/B: the single-slot image variant, the
-Raspberry Pi 3 that can only run it, and the Appliance Manager's own package
-update each have their cases here too. The rule is the same for all of them —
-what has not been run is recorded as NOT RUN, and no claim outruns its evidence.
+The appliance is **not complete** until a real Raspberry Pi has passed the cases
+below. Everything that can be proven without hardware — the image contract, the
+build authority, the release gates, the boot-flow simulator — is covered by the
+automated suites, and none of it substitutes for a physical boot.
 
 Record every run in this file's results table with the board, the storage class,
 the image build ID and the date. A case that was not run is recorded as
 `NOT RUN`, never as a pass.
+
+> **Historical note.** Much of what follows was written while this project built
+> a second, A/B image with two boot slots and a trial-boot commit. That image was
+> removed — see [adr/single-image-appliance.md](adr/single-image-appliance.md) —
+> and its cases are moot. The runs recorded below are **not** rewritten: they are
+> evidence of what was actually built and inspected on the dates they name, and
+> editing them to match today's code would be the one thing this document exists
+> to prevent. Read a row that mentions slots as history.
 
 ## CURRENT RELEASE CANDIDATE
 
@@ -272,29 +274,18 @@ nodes, which would test the forgery rather than the device.
 
 ## Required equipment
 
-A Raspberry Pi 3 or 3B+ **cannot** stand in for either board. It is not a
-question of speed: the A/B image is GPT with an EEPROM-read boot selector, and a
-Pi 3 boot ROM reads neither, so it never reaches a bootloader and none of the
-cases below can be attempted on it. It is the board for the *single-slot*
-cases instead — see [Single-slot image variant](#single-slot-image-variant) and
-[adr/raspberry-pi-3-ab-support.md](adr/raspberry-pi-3-ab-support.md).
-
 ```text
-for the A/B cases below:
-  Raspberry Pi 4 and Raspberry Pi 5
-  one microSD card, 32 GB or larger
-  one USB SSD, 32 GB or larger
-  one NVMe drive on a Pi 5 carrier, 32 GB or larger
-
-for the single-slot cases:
-  any of those boards, or a Raspberry Pi 3 / 3B+ — that board boots from SD only
-  one microSD card, 16 GB or larger
-
-for both:
-  a switchable power supply for the power-cut cases
-  a serial console (UART) — a Pi that will not boot shows why only here
-  a second machine to re-image from
+one Raspberry Pi of each supported board:
+  Raspberry Pi 3 or 3B+   (SD only)
+  Raspberry Pi 4
+  Raspberry Pi 5
+one microSD card per board, 16 GB or larger
+one USB SSD, 16 GB or larger        (Pi 4 and Pi 5)
+one NVMe drive on a Pi 5 carrier    (Pi 5)
+a serial adapter, for a boot that never reaches the network
+a card reader, for reading the boot partition afterwards
 ```
+
 
 ### How the offline seed became usable
 
@@ -385,34 +376,12 @@ Pulling the plug on a `poweroff` is not the same test.
 | # | Case | Expected |
 |---|---|---|
 | 0.1 | `scripts/appliance-check-rpi-image-gen.sh --rpi-image-gen <checkout>` | PASS against the pinned revision |
-| 0.2 | `scripts/appliance-build-rpi-ab-image.sh --profile rpi5` on a builder with the upstream dependencies | PASS, image and `update.tar.zst` produced |
-| 0.2b | The same with `--profile rpi4` | PASS; a separate artefact, not the Pi 5 image relabelled |
-| 0.2c | `scripts/appliance-verify-slot-mounts.sh --rpi-image-gen <tree>` | PASS: every declared shared path is generated **and** activated |
-| 0.3 | `scripts/appliance-inspect-rpi-ab-image.sh <image>` | PASS: six partitions, image-rota labels, distinct identities |
-| 0.3b | The same inspection's content findings | PASS with **no** NOT RUN: the package and its exact version in both slot roots, the dpkg status, the layout descriptor, the build marker, the persistence configuration, every declared shared activation (seven today), the four services, the slot generators, the machine-id policy, no shipped host key, the runtime helpers, both service drop-ins, the bootconfig `tryboot_a_b=1` selector, and `root=/dev/disk/by-slot/active/system` with a read-only root on **both** boot partitions. No mount and no root: the Pi 5 root filesystem uses 16 KiB ext4 blocks that no 4 KiB-page kernel will mount |
-| 0.3c | The GPT structures | PASS: primary and backup headers, both entry-array CRCs, partition ranges inside the disk, no overlap, and `sgdisk --verify` agreeing where gdisk is installed |
-| 0.3d | The slot pairing | PASS: `system_a` and `system_b` hash to the same payload with different PARTUUIDs, and so do `boot_a` and `boot_b` |
-| 0.4 | Build a second image and `--compare` it | No partition identity is reused between builds |
-| 0.5 | `scripts/appliance-build-rpi-ab-update.sh --profile rpi5 --sign-key <key>` then `appliance-inspect-rpi-ab-update.sh` | PASS, members `boot` and `system`, signature verifies |
-| 0.6 | The manifest each build produced | Both members declare `encoding: android_sparse` with distinct `encoded_sha256` and `expanded_sha256` |
-| 0.7 | `simg2img` the real `system` member and compare | Its SHA-256 equals the manifest's `expanded_sha256` and its size equals `expanded_size` |
-| 0.8 | The `build-authority.json` the build wrote | Names the source form, the generator revision, the source tree hash and the SHA-256 of both artefacts, `completed: true` |
-| 0.9 | `appliance-build-rpi-ab-update.sh --sign-key <key>` with no `--build-authority` | FAIL `provenance_unverified`; a development artefact is never signed |
-| 0.10 | Append one byte to `update.tar.zst`, then sign with its build authority | FAIL `build_authority_mismatch` |
-| 0.11 | Edit any file under the generator's `config/`, `layer/` or `image/` and rebuild | FAIL `rpi_image_gen_source_modified` before `./rpi-image-gen build` runs |
-| 0.12 | `scripts/appliance-create-source-bundle.sh` for every source or review archive | PASS: the bundle self-verifies before it is handed over, and an archive that does not round-trip is deleted rather than delivered |
-| 0.12b | `scripts/appliance-check-source-bundle.sh <bundle>` on the delivered source archive | PASS: 0 missing, 0 wrong modes, 0 wrong symlink targets, 0 undeclared, 0 unsafe, 0 duplicate, and as many symlinks preserved as `ab_persistence.SHARED_PATHS` declares (seven today) |
-| 0.13 | `scripts/appliance-release-gates.sh --mode builder --rpi-image-gen <tree>` | Builder qualification. Strict by default: `RESULT: PASS (builder qualification)` and exit 0 only when every required gate PASSed; a required gate that did not run is `RESULT: NOT RUN` and exit 3. It says of itself that it is not a release |
-| 0.13c | `scripts/appliance-finalize-rpi-release.sh --sign-key <key> --keyring <file> --trusted-fingerprint <fpr>` on the signing host | The trusted half: it verifies the build authority and its builder environment, signs, verifies the signature against the keyring and the trust policy, runs `--mode production` (which builds nothing and requires the signature, the full content inspection, the sparse cross-check and the source bundle), and assembles the kit. `RESULT: PASS (signed production release)` |
-| 0.13d | `scripts/appliance-hardware-validation-kit.sh --gate-report <report>` | PASS only with exactly one completed build per profile, a signed manifest, both inspection reports with nothing NOT RUN, and a gate report that says PASS. `--development-kit` reports INCOMPLETE and `physical_ready=false` |
-| 0.13e | `scripts/appliance_verify_hardware_kit.py --kit <dir> --keyring <file> --trusted-fingerprint <fpr>` | The kit re-verified from the directory rather than from the run that made it: every file re-hashed against `KIT-SHA256SUMS`, no file in the kit that the list does not name, the attestation's detached signature verified by a trusted key, every artefact the attestation binds re-hashed out of the kit's own profile directories, and no private key material. `physical_ready=true` only when all of that holds |
-| 0.13f | `scripts/appliance_runtime_gates.py --from-log <gate>=<log>` | The runtime evidence a release is bound to. Each gate carries its result, the digest of the guest log it was read out of, the environment and — for anything that did not run — the exact prerequisite. A command-line verdict can never overrule a log, and a required gate that did not run is never a pass |
-| 0.13g | `scripts/appliance-guest-sftp-session.sh` in the packaged-runtime guest | A real SFTP session with a key issued through the appliance's own authenticated key management: login, the exported directories visible, a known file fetched, `cd ..` bounded by the chroot, `/etc/passwd` unreachable. Read-only is asked of the protocol and the mounts together — put, overwrite, rename, mkdir, rmdir, rm, chmod and symlink all refused, with the export tree and the file behind it re-read afterwards. Shell, `-R`, `-D` and `-A` are refused; `-L` is asked by *using* the forward, because the local listener belongs to the ssh client and appears whatever the server allows. The upgrade path is included: the old root-owned `0700` key directory is put back, the login is confirmed to fail with it, and the package's own `ensure` is what makes it work again |
-| 0.13h | `scripts/appliance-guest-network-persistence.sh <overlay>` in the same guest | Asked of systemd rather than read from two unit files: `Requires=`/`After=ems-appliance-persistence.service` are what systemd loaded, the healthy slot starts NetworkManager, and with the persistent source taken away the verification fails closed and NetworkManager is refused instead of consuming the slot-local fallback |
-| 0.13i | `pytest tests/test_appliance_ab_docker_reconstruction.py` against a real Docker daemon | Three real contract images in a registry the test controls: the deployment authority recorded by digest, drift detected, a corrupt, a truncated and a zero-length seed each refused with the fallback naming the exact digest, `platform_mismatch` refusing an image for another architecture, a mutable tag refused at record time, and an EMS an operator stopped rebuilt and left stopped. A slot with an emptied image store and **no registry at all** now rebuilds every service from the seed and starts them; the containers are re-inspected and run the exact image the record names. `runtime_seed_unaddressable` is closed — see below |
-| 0.14 | The medium the image is flashed to | At least 30,000,000,000 bytes (a 32 GB card). The image is ~16.5 GiB and the persistent partition needs ~11.2 GiB once both Docker stores, the seeds, a staged update and the operator's data are on it |
-| 0.13a | `scripts/appliance-builder-vm.sh --release-gate --profile rpi5 --profile rpi4` | The gate builds the images itself, so it only reaches PASS on a host with the generator's prerequisites. This runs it in the disposable builder and brings the verdict and `dist/gates/` back; the developer host is not modified |
-| 0.13b | The same with `--allow-not-run` on a host without the builder prerequisites | `RESULT: INCOMPLETE` and exit 0; the word PASS never appears |
+| 0.2 | `scripts/appliance-build-rpi-image.sh --profile rpi5` on a builder with the upstream dependencies | PASS, image produced |
+| 0.2b | The same with `--profile rpi4` and `--profile rpi3` | PASS; three separate artefacts, not one relabelled |
+| 0.3 | `scripts/appliance-inspect-rpi-image.sh <image>` | PASS: an MBR with a FAT `boot` and an ext4 `root` |
+| 0.3b | The same inspection's content findings | PASS with **no** mandatory NOT RUN: the package and its exact version in the root, the dpkg status, the build marker, the four enabled units and each one's program, the writable-root fstab line, no shipped host key, the runtime helpers, and `root=/dev/disk/by-slot/system rw` on the boot partition. No mount and no root: the Pi 5 root filesystem uses 16 KiB ext4 blocks that no 4 KiB-page kernel will mount |
+| 0.4 | The `build-authority.json` the build wrote | Names the source form, the generator revision, the source tree hash and the SHA-256 of the image, `completed: true` |
+| 0.5 | `scripts/appliance-release-gates.sh --mode builder` | PASS (builder qualification) |
 
 ### Group 1 — first boot and identity
 
@@ -430,54 +399,18 @@ Pulling the plug on a `poweroff` is not the same test.
 | 1.10 | `ssh-keyscan` the appliance, record the host key | Recorded for case 3.x |
 | 1.11 | Insert a second appliance card in a USB reader, `ab status` | Unchanged active slot; no drift from duplicate labels |
 
-### Group 2 — a healthy update
+### Groups 2 to 4 — the A/B update cases
 
-| # | Case | Expected |
-|---|---|---|
-| 2.1 | Stage an update artifact | Written to inactive slot B, read-back verified |
-| 2.2 | Check the selector before the trial | `[all]` still names slot A's boot partition, read back from `ems-appliance ab status --json` rather than assumed |
-| 2.3 | Trial-boot B | B boots, reports `tryboot=1`, health passes |
-| 2.3a | Inspection before the trial | `inspection.ok=true`; the selector was untouched while it ran |
-| 2.4 | Commit | `[all]` names slot B's boot partition and `[tryboot]` names slot A's, both compared against `ab status --json`, never against a fixed number |
-| 2.5 | `docker image ls` in slot B before commit | Admin image present, restored from the seed |
-| 2.6 | Disconnect the WAN, repeat 2.1–2.4 | The trial still commits; reconstruction used the seed only |
-| 2.7 | `cat /etc/machine-id` in slot B | Identical to the value recorded in 1.9 |
-| 2.8 | `ssh-keyscan` in slot B | Same host key as 1.10 |
-| 2.9 | `findmnt /var` in slot B | Bound from `/persistent/slots/system_b/var` |
-| 2.10 | Reboot normally | B boots as the default |
-| 2.11 | EMS configuration and data | unchanged |
-| 2.12 | SSH host key fingerprint | unchanged from before the update |
-| 2.13 | Network settings, hostname, mDNS name | unchanged |
-| 2.14 | Admin console reachable | yes |
-| 2.15 | Appliance authentication | the same password still works |
+Removed with the mechanism they tested. What replaced them, on this image, is
+`apt`: an ordinary Debian upgrade with no project-specific commit, trial or
+fallback to prove. The cases that remain are in group 1 (does it boot, does the
+root grow, do the services come up) and group 5 (does that hold on each storage
+class).
 
-### Group 3 — the next update, in the other direction
-
-| # | Case | Expected |
-|---|---|---|
-| 3.1 | Stage into A while B is default | A written, B untouched |
-| 3.2 | Trial-boot A, health passes, commit | A default, B rollback candidate |
-
-### Group 4 — failure and fallback
-
-| # | Case | Expected |
-|---|---|---|
-| 4.1 | Cut power while writing the inactive slot | The default slot still boots; the operation is `failed_recoverable`; the interrupted slot is never offered as bootable |
-| 4.2 | Corrupt the inactive boot partition after staging, then trial | Trial fails or falls back; default unchanged |
-| 4.3 | Corrupt the inactive root filesystem after staging, then trial | As 4.2 |
-| 4.4 | Break a health gate in the target slot (stop the agent before the health service runs) | No commit, normal reboot returns to the previous default |
-| 4.5 | Cut power during the trial boot, before commit | Next boot is the previous default; `fallback_observed` |
-| 4.6 | Cut power during the commit write of `autoboot.txt` | Either the old or the new selector, both parse; no `manual_action_required` from a torn file |
-| 4.7 | Trial boot where `/persistent` is missing | Health fails, no commit |
-| 4.8 | Manual rollback to the previous known-good slot | Trial boot of the previous slot, health, commit |
-| 4.9 | Edit `/opt/ems-solarflow/docker-compose.yml` after the plan is confirmed, then trial | `deployment_authority_drift`; no `docker load`, `pull` or `compose up` runs; no commit; the browser offers a new plan and no bypass |
-| 4.10 | Edit `/opt/ems-solarflow/.env` after the plan is confirmed, then trial | As 4.9 |
-| 4.11 | Stop EMS deliberately, then update | EMS comes back stopped, its image authority is still proven, and the slot commits |
-| 4.12 | Run Admin, EMS and InfluxDB, then update | All three are reconstructed and all three are health gates |
-| 4.13 | Delete one seed archive and disconnect the WAN, then trial | The affected service is `unavailable`; the slot does not commit if it is required |
-| 4.14 | Seed an amd64 image for one service, then trial | Refused on platform; no commit |
-| 4.15 | Replace one `ssh_host_*_key.pub` on the persistent partition, then reboot | `host_identity_keypair_mismatch`; `ssh.service` does not start |
-| 4.16 | Fill the persistent partition so an `fsync` fails during first-boot key creation | `host_identity_not_durable`; no success is reported and SSH stays blocked |
+The one update case this project still owns is the Appliance Manager's own
+package, and it has its own row in the results table below: no appliance has
+fetched and installed one over HTTPS, and the deadline in `manager_verify.py`
+has never expired on a board.
 
 ### Group 5 — storage classes
 
@@ -643,7 +576,7 @@ on a suitable builder, and then this table.
 ## Single-slot image variant
 
 A second image variant exists — one writable root, patched by `apt`, no slots
-(see [adr/single-slot-image-variant.md](adr/single-slot-image-variant.md)).
+(see [adr/single-image-appliance.md](adr/single-image-appliance.md)).
 It builds, and the artefacts it produces satisfy their contract. **Nothing
 about it has been confirmed on physical hardware**, and none of the A/B results
 above make that true either: a different partition table, a different boot

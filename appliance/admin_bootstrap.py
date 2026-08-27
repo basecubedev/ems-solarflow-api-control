@@ -11,11 +11,10 @@ Two things are deliberately not decided here. The script is never asked to
 start anything (``--no-start``) and never asked to overwrite anything (no
 ``--force``): a deployment that already exists belongs to whoever created it.
 
-The owner is read from the deployment root, never looked up by name. On an A/B
-appliance ``/etc/passwd`` is slot-local while ``/opt/ems-solarflow`` is shared,
-so the account name may resolve to a different uid in the other slot. The
-directory and the numeric uid baked into the compose file still agree, and a
-name lookup at that point would not.
+The owner is read from the deployment root, never looked up by name. A name can
+be re-created with a different uid, while the directory and the numeric uid
+baked into the compose file still agree -- and a name lookup at that point would
+not.
 """
 
 import os
@@ -219,9 +218,9 @@ class DeploymentBootstrap:
         environment = dict(os.environ)
         environment["PUID"] = str(uid)
         environment["PGID"] = str(gid)
-        # /etc/localtime is on the read-only slot root, so the host cannot carry
-        # the operator's zone across a slot switch. The containers can, and they
-        # are what runs the EMS's local-hour control windows.
+        # The host stays on a deterministic UTC; the containers are what run
+        # the EMS's local-hour control windows, so the zone is carried into
+        # them instead.
         environment["TZ"] = str(getattr(self.config, "timezone", "UTC") or "UTC")
         try:
             completed = self._run(  # noqa: S603 - fixed packaged path, no caller input

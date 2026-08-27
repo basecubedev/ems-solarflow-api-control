@@ -204,9 +204,8 @@ def prepare(paths, *, release, archive, state_schemas, verifier=None, manifest_p
     manager_releases.verify_artifact(release, archive)
 
     # `None` means undecidable, never "look it up here". Where the record comes
-    # from is the caller's question -- an A/B host reads it off /persistent, a
-    # package-only host from its own state directory -- and answering it here
-    # would let a lookup that found nothing pass as a lookup that was not asked.
+    # from is the caller's question, and answering it here would let a lookup
+    # that found nothing pass as a lookup that was not asked.
     problems = manager_releases.compatibility_problems(
         release, architecture=architecture, state_schemas=state_schemas
     )

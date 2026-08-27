@@ -233,9 +233,9 @@ def render_home_marker(*, account, uid, primary_gid, home, installation_id, nonc
 
 
 def render_account_origin(*, account, uid, primary_gid, home, shell, nonce):
-    """The slot-local declaration the image carries about the account it baked in.
+    """The declaration the image carries about the account it baked in.
 
-    ``/etc`` is read-only and slot-local on an A/B appliance, so the account has
+    The package's postinst runs in the build chroot, so the account has
     to exist before the device runs; the ownership record and the home marker
     live on the shared partition and are not there yet on the first boot. This
     is what lets that boot tell the account the build created from one somebody

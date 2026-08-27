@@ -354,32 +354,23 @@ scripts/appliance-builder-vm.sh --profile rpi5 [--profile rpi4] --output DIR
 # The strict release gate, in that same guest — the only host it can pass on.
 scripts/appliance-builder-vm.sh --release-gate --profile rpi5 --profile rpi4 --output DIR
 
-# The single-slot variant, one variant per run. rpi3 has only this one.
-scripts/appliance-builder-vm.sh --variant single --profile rpi3 --output DIR
-scripts/appliance-builder-vm.sh --release-gate --variant single --profile rpi3 --output DIR
+# The oldest board, which boots from SD and nothing else.
+scripts/appliance-builder-vm.sh --profile rpi3 --output DIR
 ```
 
-`--variant` defaults to `ab`, and a run builds one variant: the two shapes have
-different layouts, different gates and different artefacts, so mixing them in a
-run would make a single verdict cover two products. `rpi3` accepts
-`--variant single` only — there is no A/B image for that board.
-
-A release is **five images**: `rpi4` and `rpi5` in both shapes, `rpi3` in the
-single-slot one. `appliance-builder-vm.sh` requires at least one `--profile`
-and exits 2 without one, so covering a variant through the VM wrapper means
-naming every profile. `scripts/appliance-release-gates.sh`, run directly, is the
-one that derives the list from `rpi_image_gen.HARDWARE_PROFILES` when
-`--profile` is omitted.
+A release is **three images**, one per board. `appliance-builder-vm.sh` requires
+at least one `--profile` and exits 2 without one, so covering a release through
+the VM wrapper means naming every profile. `scripts/appliance-release-gates.sh`,
+run directly, is the one that derives the list from
+`rpi_image_gen.HARDWARE_PROFILES` when `--profile` is omitted.
 
 The gate builds the images itself, so it needs the generator's prerequisites and
 cannot reach `RESULT: PASS` on a workstation that deliberately lacks them.
 `--release-gate` runs it where those prerequisites are, and brings the verdict
-and `dist/gates/` back out. The mounted image checks stay NOT RUN inside the
-gate, because it runs unprivileged; answer them separately with
-`appliance-inspect-rpi-ab-image.sh --mount` — and `--variant single` for a
-single-slot image — as root in the same guest. The inspector defaults to the A/B
-contract, so an unqualified run judges a single-slot image against a layout it
-does not have.
+and `dist/gates/` back out. `appliance-inspect-rpi-image.sh` needs neither root
+nor a loop device: it reads the partition table, the filesystems and the files
+inside them straight out of the image file, which is the only way a Pi 5 root
+with 16 KiB ext4 blocks can be inspected on a 4 KiB-page host at all.
 
 Both need `qemu-system-x86_64`, `qemu-img`, a writable `/dev/kvm`, an ISO writer
 (`genisoimage` or `xorriso`) and network access to `cloud.debian.org`. The base
@@ -395,25 +386,22 @@ The tier these replaced ran systemd inside a privileged container, and systemd
 never finished booting there. That is not a slow test, it is an absent one: a
 container that never builds a systemd transaction cannot disprove anything about
 unit ordering. Two defects lived behind it — a `Requires=` on a mount unit that
-only exists on an A/B image, which failed the install on every single-slot host,
-and a host key generation that could never succeed on a real appliance.
+did not exist on every host, which failed the install, and a host key generation
+that could never succeed on a real appliance.
 
 ### What the guest tier deliberately does not claim
 
-`appliance-guest-ab-systemd.sh` assembles an A/B appliance inside the guest from
-upstream's own generators and udev rules, and proves every declared shared bind, the
-fail-open catch, the unit ordering, the failure propagation and the host
-identity. It does not produce a healthy A/B verdict, and says so: discovery
-anchors on `/proc/device-tree/chosen/bootloader/partition`, which the Raspberry
-Pi firmware writes and a generic QEMU guest does not have. Faking it would make
-the verdict a statement about the fake, so that case is reported NOT RUN and
-belongs to [../appliance/ab-hardware-validation.md](../appliance/ab-hardware-validation.md).
+A generic QEMU guest is not a Raspberry Pi: it has no Pi firmware, no
+`/proc/device-tree/chosen/bootloader`, and no SD card whose partition table the
+first boot would grow. Faking any of that would make the verdict a statement
+about the fake, so those cases are reported NOT RUN and belong to
+[../appliance/hardware-validation.md](../appliance/hardware-validation.md).
 
 ### Reading the build back
 
 A build produces a `build-authority.json` beside the image. The inspectors
-(`appliance-inspect-rpi-ab-image.sh`, `appliance-inspect-rpi-ab-update.sh`) and
-the strict gate (`appliance-release-gates.sh`) read the artefacts rather than
+(`appliance-inspect-rpi-image.sh`) and the strict gate
+(`appliance-release-gates.sh`) read the artefacts rather than
 the build log, so a build that half-succeeded is caught by the thing that reads
 its output, not by the thing that produced it.
 

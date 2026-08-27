@@ -52,11 +52,10 @@ def build_dist(tmp_path, *, completed=True, with_image=True):
     # None of it is an artefact and none of it may be described as one.
     (dist / "build-20260809120000/rootfs/usr/bin").mkdir(parents=True)
     (dist / "build-20260809120000/rootfs/usr/bin/sh").write_bytes(b"chroot content")
-    name = "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab"
+    name = "ems-solarflow-appliance-0.1.0-rpi5-arm64"
     (dist / f"{name}.build-authority.json").write_text(authority(completed=completed))
     if with_image:
         (dist / f"{name}.img").write_bytes(b"an image" * 512)
-    (dist / f"{name}.update.tar.zst").write_bytes(b"an update")
     (dist / f"{name}.build.log").write_text("noise")
     (dist / "gates" / "build-rpi5.log").write_text("gate log")
     return dist, name

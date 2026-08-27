@@ -154,7 +154,7 @@ upstream `dist/` output.
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream | Files |
 |---|---|---|---|:---:|:---:|---|---|
 | `uPlot` | 1.6.31 | MIT | Canvas charts on the Dashboard History and Analytics tabs | ✅ | ✅ | https://github.com/leeoniya/uPlot | `dashboard/static/uPlot.iife.min.js`, `dashboard/static/uPlot.min.css`, `dashboard/static/uPlot.LICENSE` |
-| `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Seventeen upstream files copied verbatim as the image contract the appliance is built against — the A/B layout (`image-rota`) and the single-slot one (`image-rpios`) | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (seventeen files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
+| `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Upstream files copied verbatim as the image contract the appliance is built against (`image-rpios`) | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (seventeen files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
 
 Provenance, verified on 2026-08-04 against the upstream `1.6.31` tag:
 
@@ -213,9 +213,9 @@ InfluxDB 3.x is licensed differently; this project does not use it.
 ## Appliance Package Dependencies
 
 The Debian packages `ems-appliance-manager` declares in its `Depends:` field.
-The `.deb` does not ship them — apt installs them from Debian — but the A/B
+The `.deb` does not ship them — apt installs them from Debian — but the
 appliance image does: it is a Debian Trixie root filesystem with this set
-installed into both slots.
+installed.
 
 As with the container base images, this inventory documents the declared set
 and not the thousands of packages a Debian root pulls in. Each build writes the
@@ -238,7 +238,6 @@ under Vendored Components above.
 | `mount` | Trixie | GPL-2.0-or-later | Slot and shared-path mount state | ✅ | ✅ | https://github.com/util-linux/util-linux |
 | `ca-certificates` | Trixie | GPL-2.0-or-later AND MPL-2.0 (certificate data) | TLS trust for release fetches and container pulls | ✅ | ✅ | https://salsa.debian.org/debian/ca-certificates |
 | `passwd` | Trixie | BSD-3-Clause AND GPL-2.0-or-later | Account and shell management for the confined backup account | ❌ | ✅ | https://github.com/shadow-maint/shadow |
-| `zstd` | Trixie | BSD-3-Clause OR GPL-2.0-only | Reads the `update.tar.zst` OS update archive | ✅ | ✅ | https://github.com/facebook/zstd |
 | `gpgv` | Trixie | GPL-3.0-or-later | Verifies the detached signature over each release manifest | ✅ | ✅ | https://github.com/gpg/gnupg |
 | `openssh-client` | Trixie | BSD-3-Clause AND mixed | Host key material and the forced SFTP command policy | ✅ | ✅ | https://github.com/openssh/openssh-portable |
 | `cloud-guest-utils` | Trixie | GPL-3.0-or-later | `growpart` grows the persistent partition on first boot | ✅ | ✅ | https://github.com/canonical/cloud-utils |

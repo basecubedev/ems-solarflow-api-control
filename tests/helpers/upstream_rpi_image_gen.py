@@ -35,15 +35,13 @@ DEVICE_LAYERS = (
     "device/pi5/device.yaml",
 )
 
-# Named separately as well, because image-rota does not accept its device class:
-# the Pi 3 builds only the single-slot image, and that refusal is proven against
-# real pinned bytes rather than an absence.
+# Named separately as well: the Pi 3 boots from SD and nothing else, so its
+# device layer is checked against real pinned bytes rather than assumed.
 PI3_DEVICE_LAYER = "device/pi3/device.yaml"
 DOCKER_LAYERS = (
     "layer/app-container/docker/engine-trixie.yaml",
     "layer/app-container/docker/engine-bookworm.yaml",
 )
-UPSTREAM_AB_CONFIG = "config/trixie-minbase-ab.yaml"
 
 # The non-A/B counterparts: one MBR boot partition, one root, and the udev
 # rules that give that root the /dev/disk/by-slot/system name the kernel

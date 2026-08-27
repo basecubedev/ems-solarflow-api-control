@@ -15,7 +15,6 @@ fixture, because "can this parse a Debian package" is the whole point of it.
 """
 
 import json
-import subprocess
 import tarfile
 import time
 from pathlib import Path

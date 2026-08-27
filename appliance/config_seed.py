@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Give an appliance its operator-owned configuration once, and never again.
 
-``appliance.conf`` and ``allowed-images.conf`` live on a declared shared path,
-which upstream re-seeds from the booting slot on every boot. A packaged copy
-there would overwrite an operator edit at the next reboot, so the package ships
-templates outside ``/etc`` and this seeds a missing file from one.
+``appliance.conf`` and ``allowed-images.conf`` belong to whoever runs the
+appliance. A packaged copy at the same path would put an operator's edit and a
+package file in one place, and ``dpkg`` is entitled to the second -- so the
+package ships templates outside ``/etc`` and this seeds a missing file from
+one.
 
 Seeding is the only write, which is what makes running it every boot equivalent
 to running it once.

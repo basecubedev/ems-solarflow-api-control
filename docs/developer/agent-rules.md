@@ -359,7 +359,7 @@ does not round-trip is deleted rather than delivered. Two previous review
 archives arrived with the six `local-fs.target.wants` persistence symlinks
 flattened into regular files, which produces a tree that still builds, generates
 six mount units, activates none of them, and loses every write to the shared
-paths at the next slot switch.
+paths at the next boot.
 
 ## 18. Validation and release claims
 

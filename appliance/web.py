@@ -808,9 +808,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
     def _download_support_archive(self, operation_id):
         """Hand the operator the archive the docs tell them to attach.
 
-        On an A/B image there is no shell and the archive lives in root-owned
-        agent state, so without this route it could be created and never
-        retrieved. The bytes come through the agent like every other privileged
+        A flashed appliance offers no shell and the archive lives in
+        root-owned agent state, so without this route it could be created and
+        never retrieved. The bytes come through the agent like every other privileged
         read; the web process never reaches that directory itself.
         """
 

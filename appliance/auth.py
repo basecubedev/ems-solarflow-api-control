@@ -409,10 +409,9 @@ def deployment_owner(install_root):
     """The (uid, gid) the hosted containers run as, or ``None``.
 
     Read from the deployment root itself, not by resolving an account name:
-    ``/etc/passwd`` is slot-local on an A/B image, so the same name can carry a
-    different uid in the other slot, while the containers keep running as the
-    uid baked into the compose file. The owner of the root is the identity --
-    the same rule the deployment bootstrap already applies.
+    a name can be re-created with a different uid, while the containers keep
+    running as the uid baked into the compose file. The owner of the root is the
+    identity -- the same rule the deployment bootstrap already applies.
 
     ``None`` when the root does not exist yet or is still root-owned, in which
     case adoption has not happened and the file stays with whoever wrote it.

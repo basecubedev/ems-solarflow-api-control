@@ -60,8 +60,7 @@ The machine EMS runs *on* — 64-bit `arm64` or `amd64`.
 | 1 GB | EMS with InfluxDB |
 | >1 GB | Additional headroom |
 
-InfluxDB stores energy history and is optional — control does not need it. A/B
-deployment does not double runtime RAM because only one slot is active at a time.
+InfluxDB stores energy history and is optional — control does not need it.
 [Pi matrix](docs/user/hardware-requirements.md).
 
 ## Get started
@@ -72,15 +71,14 @@ The **appliance image** turns the board into a box that runs EMS and nothing
 else: flash one card, plug in Ethernet, power on. No shell to learn and no
 operating system to maintain by hand.
 
-It comes in two shapes. The **two-slot** image keeps a second copy of the system
-and rolls itself back when an update does not come up; it needs a Pi 4 or a Pi 5
-and a 32 GB card. The **single-slot** image is the same appliance with one root
-that `apt` patches in place, on a 16 GB card. It is built for the Pi 4 and Pi 5
-too, and it is the only shape a **Raspberry Pi 3 or 3B+** can boot — that board
-cannot start the two-slot layout.
+One writable root, patched in place by `apt`, on a 16 GB card or larger. Built
+for the **Raspberry Pi 3, 3B+, 4 and 5** — one image file per board. A failed
+operating-system update is recovered by you, at the machine, or by writing the
+card again and restoring a backup, which is why the backup matters more than the
+update does.
 
-Neither image is **confirmed on physical hardware** yet; read what that means
-before you rely on one.
+The image is **not confirmed on physical hardware** yet; read what that means
+before you rely on it.
 
 [Flashing the card](docs/user/appliance/install.md) ·
 [First start](docs/user/appliance/first-start.md) ·
@@ -134,7 +132,7 @@ upfront. EMS reaches your devices over any one of:
 ## Documentation
 
 - Step-by-step guides: [Admin Console](docs/user/admin/index.md) · [EMS Dashboard](docs/user/dashboard/index.md)
-- [Hardware requirements](docs/user/hardware-requirements.md) · [Raspberry Pi compatibility](docs/user/hardware-requirements.md#raspberry-pi-compatibility) · [A/B deployment](docs/appliance/ab-os-updates.md)
+- [Hardware requirements](docs/user/hardware-requirements.md) · [Raspberry Pi compatibility](docs/user/hardware-requirements.md#raspberry-pi-compatibility)
 - [Appliance installation](docs/appliance/installation.md) · [Administration](docs/user/admin-console.md) · [Troubleshooting](docs/user/troubleshooting.md)
 - [User documentation](docs/user/)
 - [Technical reference](docs/technical/)

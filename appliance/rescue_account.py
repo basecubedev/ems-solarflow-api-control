@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The account that gets an operator back in when nothing else does.
 
-Under A/B a failed update rebooted into the other slot. A single-slot appliance
-has no such move, and without this it had no login either: no human account,
-root locked, ``sulogin`` at rescue.target.
+A flashed appliance has no login of its own: no human account, root locked,
+``sulogin`` at rescue.target. An operator standing in front of a box that will
+not come up needs one.
 
 So the package ships a rescue account with a password that is written down. The
 consequence is stated once and not argued again: those credentials are public

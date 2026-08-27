@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The pinned rpi-image-gen contract, and whether a checkout satisfies it.
 
-``image-rota`` owns the partition table, the slot identities and the mechanism
-that shares state between slots. That makes the generator's revision part of
-this appliance's definition rather than a build-host detail, so it is pinned in
+``image-rpios`` owns the partition table and the labels the root is mounted
+through. That makes the generator's revision part of this appliance's definition
+rather than a build-host detail, so it is pinned in
 ``rpi-image-gen.lock`` and a checkout is verified against it before anything is
 built.
 

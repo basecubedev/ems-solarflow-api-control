@@ -3,6 +3,9 @@
 Description=EMS SolarFlow Appliance Manager web interface
 Documentation=file:///usr/share/doc/ems-appliance-manager/architecture.md
 After=network.target ems-appliance-agent.service
+# Wants=, not Requires=: the web service is how an operator would look at an
+# agent that failed to start, so it must come up either way.
+Wants=ems-appliance-agent.service
 
 [Service]
 Type=simple

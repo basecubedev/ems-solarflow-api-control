@@ -117,8 +117,8 @@ sync
 
 Then remove `init=/bin/sh` from `cmdline.txt` again before the next boot.
 
-> On an A/B appliance the root is a read-only slot root by design, and the
-> remount above is what lets you edit it. On a single-slot appliance the root is
+> On this appliance the root is writable, so the remount above is only needed
+> when a filesystem error forced it read-only. The root is
 > already writable.
 
 A serial console is a login as well as a log: the getty on that line accepts the
@@ -139,9 +139,9 @@ does not cover:
 
 - **a kernel or firmware that does not boot.** `apt` on this appliance is
   unrestricted — anything an upgrade offers may install, kernel and firmware
-  included — and there is no second slot to fall back into on a single-slot
+  included — and there is nothing to fall back into automatically
   appliance. Recovery is steps 3 to 5 above, and failing those, step 6.
-- **the operating system.** A single-slot appliance is patched in place. There
+- **the operating system.** It is patched in place. There
   is no OS-level revert.
 
 That is a deliberate decision rather than an oversight, and it is recorded with
@@ -153,5 +153,5 @@ its reasoning in
 **The procedure above has NOT been executed on physical hardware.** It is
 written from the shipped configuration and from what each step does on a
 Raspberry Pi, not from a run. When it is executed, the result belongs in
-[ab-hardware-validation.md](ab-hardware-validation.md) with the evidence that
+[hardware-validation.md](hardware-validation.md) with the evidence that
 document requires — not here.

@@ -457,7 +457,7 @@ def build_authority_payload(update, *, profile="rpi5",
 
 
 def test_the_build_authority_hash_is_canonical(tmp_path):
-    update = tmp_path / "update.tar.zst"
+    update = tmp_path / "appliance.img"
     update.write_bytes(b"payload")
     payload = build_authority_payload(update)
     reordered = dict(reversed(list(payload.items())))
@@ -467,7 +467,7 @@ def test_the_build_authority_hash_is_canonical(tmp_path):
 
 
 def test_a_build_authority_round_trips_through_its_own_reader(tmp_path):
-    update = tmp_path / "update.tar.zst"
+    update = tmp_path / "appliance.img"
     update.write_bytes(b"payload")
     path = tmp_path / build_authority.AUTHORITY_NAME
     path.write_text(json.dumps(build_authority_payload(update)) + "\n", encoding="utf-8")
@@ -481,7 +481,7 @@ def test_a_build_authority_round_trips_through_its_own_reader(tmp_path):
 
 
 def test_an_unknown_build_authority_schema_is_refused(tmp_path):
-    update = tmp_path / "update.tar.zst"
+    update = tmp_path / "appliance.img"
     update.write_bytes(b"payload")
     payload = build_authority_payload(update)
     payload["schema_version"] = 99
@@ -510,7 +510,7 @@ def test_a_stale_artefact_cannot_be_signed_through_a_new_build(tmp_path):
     """The mixing this prevents: yesterday's update, today's metadata."""
 
     directory = build_authority.prepare_output(tmp_path, build_id="20260808-1")
-    stale = directory / "update.tar.zst"
+    stale = directory / "appliance.img"
     stale.write_bytes(b"yesterday")
     fresh = tmp_path / "fresh.tar.zst"
     fresh.write_bytes(b"today")
@@ -528,7 +528,7 @@ def test_a_stale_artefact_cannot_be_signed_through_a_new_build(tmp_path):
 
 
 def test_a_completed_build_authority_accepts_its_own_artefact(tmp_path):
-    update = tmp_path / "update.tar.zst"
+    update = tmp_path / "appliance.img"
     update.write_bytes(b"today")
     payload = build_authority_payload(update)
 
@@ -544,7 +544,7 @@ def test_a_completed_build_authority_accepts_its_own_artefact(tmp_path):
 
 
 def test_an_image_modified_after_the_build_authority_is_refused(tmp_path):
-    update = tmp_path / "update.tar.zst"
+    update = tmp_path / "appliance.img"
     update.write_bytes(b"payload")
     image = tmp_path / "image.img"
     image.write_bytes(b"an image")
@@ -558,7 +558,7 @@ def test_an_image_modified_after_the_build_authority_is_refused(tmp_path):
 
 
 def test_the_authority_file_is_written_with_a_stable_layout(tmp_path):
-    update = tmp_path / "update.tar.zst"
+    update = tmp_path / "appliance.img"
     update.write_bytes(b"payload")
     authority = build_authority.parse(build_authority_payload(update))
 

@@ -444,7 +444,6 @@ class AgentHandlers:
             return self._execute_power
         raise AgentError("unknown_operation_type", f"{operation_type} is not executable")
 
-    # --- A/B operating-system updates ------------------------------------
 
 
     def _require_manager(self):

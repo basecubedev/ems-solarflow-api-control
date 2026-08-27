@@ -2,7 +2,7 @@
 """The helpers an operator runs on a real appliance, and what they may not do.
 
 These four scripts run on hardware that is mid-validation, often between a
-tryboot and a commit. A helper that wrote a block device, moved the selector or
+a first boot. A helper that wrote a block device, changed the boot order or
 restarted a service would change the state the operator is measuring, and the
 case would have to start again. So the read-only contract is asserted here
 rather than left to review.
