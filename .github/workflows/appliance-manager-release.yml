@@ -1,0 +1,340 @@
+name: Appliance Manager release
+
+# Cut a signed Appliance Manager package and publish the index an appliance
+# reads to find it.
+#
+# This is the half of the release story that a hosted runner is allowed to do.
+# An image built here is refused at signing time with builder_environment_untrusted,
+# because base-images.lock.json approves exactly one builder. The .deb is not:
+# packaging/appliance/build-deb.sh is reproducible from SOURCE_DATE_EPOCH and a
+# pinned compressor, so two builds of one commit are the same bytes and an
+# unattested builder is no objection to it. That is why this workflow can exist
+# and .github/workflows/appliance-image.yml deliberately cannot sign.
+#
+# Three jobs, so that no single job holds both the signing key and permission to
+# write to the repository:
+#
+#   package  builds the .deb and the manifest.        no secret, contents: read
+#   sign     signs the manifest inside an approved    the key,   contents: read
+#            environment and verifies the result
+#            against the keyring the fleet ships
+#   publish  creates the release and rebuilds the     no secret, contents: write
+#            index that names every package
+#
+# Before the first run, one thing has to exist that only a human can create: an
+# environment named appliance-manager-signing, with required reviewers, holding
+# the secret APPLIANCE_MANAGER_SIGNING_KEY (an ASCII-armored secret key, base64
+# encoded) and the variable APPLIANCE_MANAGER_SIGNING_FINGERPRINT. The key must
+# be one the shipped packaging/appliance/config/release-keyring.gpg already
+# trusts -- the sign job verifies its own signature against that keyring, so a
+# key the fleet would reject fails here rather than in the field.
+
+"on":
+  push:
+    tags:
+      - appliance-manager-v*
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The Manager version to cut, e.g. 0.1.0 (must already be tagged)
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: appliance-manager-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.identify.outputs.version }}
+      release_id: ${{ steps.identify.outputs.release_id }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # build-deb.sh takes SOURCE_DATE_EPOCH from the commit date, and the
+          # manifest names the revision, so both need real history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Establish which version is being cut
+        id: identify
+        env:
+          WANTED: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # The tag is the request; appliance/version.py is the authority. They
+          # have to agree, because the package version comes from the file and
+          # the release is named after the tag -- a mismatch publishes one
+          # version under another's name.
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import sys
+
+          sys.path.insert(0, ".")
+          from appliance.version import APPLIANCE_VERSION, is_stable, version_from_tag
+
+          ref = os.environ.get("GITHUB_REF_NAME", "")
+          asked = (os.environ.get("WANTED") or "").strip().lstrip("vV")
+          wanted = version_from_tag(ref) or asked
+          if not wanted:
+              raise SystemExit(f"{ref!r} is not a Manager tag and no version was given")
+          if wanted != APPLIANCE_VERSION:
+              raise SystemExit(
+                  f"asked for {wanted}, but appliance/version.py says {APPLIANCE_VERSION}"
+              )
+          if not is_stable(wanted):
+              print(f"::warning::{wanted} is a candidate; no image will bake it in")
+          print(f"version={wanted}")
+          print(f"release_id=ems-appliance-manager-{wanted}-arm64")
+          PY
+          cat "$GITHUB_OUTPUT"
+
+      - name: Build the package
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/package"
+          # LC_ALL, because build-deb.sh records dpkg-deb's own --version string
+          # in the build record, the manifest quotes it, and the manifest is
+          # about to be signed. A German runner would sign a different document
+          # for the same bytes.
+          LC_ALL=C packaging/appliance/build-deb.sh \
+            --output "${RUNNER_TEMP}/package" --arch arm64
+          ls -l "${RUNNER_TEMP}/package"
+
+      - name: Describe it in the file that gets signed
+        env:
+          RELEASE_ID: ${{ steps.identify.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          # Everything descriptive is read from the package and its build record
+          # rather than passed in, so the manifest cannot disagree with the
+          # artefact it points at.
+          scripts/appliance-build-manager-manifest.py \
+            --revision "${GITHUB_SHA}" \
+            --output "${RUNNER_TEMP}/package" \
+            "${RUNNER_TEMP}"/package/*.deb
+          cat "${RUNNER_TEMP}/package/${RELEASE_ID}.manifest.json"
+
+      - name: Hand it to the signer
+        uses: actions/upload-artifact@v7
+        with:
+          name: appliance-manager-unsigned
+          path: ${{ runner.temp }}/package/
+          retention-days: 7
+          overwrite: true
+
+  sign:
+    name: sign
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # The approval gate. A human releases the key for this run; nothing else in
+    # this repository reads a secret at all.
+    environment: appliance-manager-signing
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Collect what was built
+        uses: actions/download-artifact@v7
+        with:
+          name: appliance-manager-unsigned
+          path: ${{ runner.temp }}/package
+
+      - name: Sign the manifest
+        env:
+          SIGNING_KEY: ${{ secrets.APPLIANCE_MANAGER_SIGNING_KEY }}
+          FINGERPRINT: ${{ vars.APPLIANCE_MANAGER_SIGNING_FINGERPRINT }}
+          RELEASE_ID: ${{ needs.package.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          [ -n "${SIGNING_KEY}" ] || {
+            echo "::error::the appliance-manager-signing environment holds no key"
+            echo "::error::create APPLIANCE_MANAGER_SIGNING_KEY (armored secret key, base64)"
+            exit 1
+          }
+          [ -n "${FINGERPRINT}" ] || {
+            echo "::error::APPLIANCE_MANAGER_SIGNING_FINGERPRINT is not set"
+            exit 1
+          }
+
+          manifest="${RUNNER_TEMP}/package/${RELEASE_ID}.manifest.json"
+          [ -r "${manifest}" ] || { echo "::error::${manifest} is missing"; exit 1; }
+
+          # The key reaches gpg on a pipe and never touches a filesystem, and the
+          # keyring it builds is destroyed unconditionally below. A key written
+          # to disk on a runner is a key in a snapshot nobody can revoke.
+          export GNUPGHOME="${RUNNER_TEMP}/gnupg"
+          mkdir -p "${GNUPGHOME}"
+          chmod 700 "${GNUPGHOME}"
+          printf '%s' "${SIGNING_KEY}" | base64 -d | gpg --batch --quiet --import
+
+          # The trailing '!' is not decoration. Without it gpg treats the
+          # fingerprint as naming a key and then signs with whichever of that
+          # key's signing subkeys it likes best -- measurably the newest, not
+          # the one named. That is harmless while there is one subkey and wrong
+          # the moment a rotation adds a second, which is exactly when nobody
+          # would be looking. With '!' it signs with the subkey named or fails.
+          gpg --batch --yes --armor --detach-sign \
+            --local-user "${FINGERPRINT}!" \
+            --output "${manifest}.asc" "${manifest}"
+
+      - name: Refuse a signature the fleet would refuse
+        env:
+          RELEASE_ID: ${{ needs.package.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          manifest="${RUNNER_TEMP}/package/${RELEASE_ID}.manifest.json"
+          # Verified against the keyring the package itself installs at
+          # /etc/ems-appliance-manager/release-keyring.gpg, with the same
+          # program the appliance uses. A key the fleet does not trust fails
+          # here, on a runner, instead of on every appliance that fetched it.
+          gpgv --keyring "$(pwd)/packaging/appliance/config/release-keyring.gpg" \
+            "${manifest}.asc" "${manifest}"
+          echo "the shipped keyring accepts this signature"
+
+      - name: Destroy the key material
+        if: always()
+        run: |
+          set -euo pipefail
+          rm -rf "${RUNNER_TEMP}/gnupg"
+          echo "GNUPGHOME removed"
+
+      - name: Hand the signed set to the publisher
+        uses: actions/upload-artifact@v7
+        with:
+          name: appliance-manager-signed
+          path: ${{ runner.temp }}/package/
+          retention-days: 7
+          overwrite: true
+
+  publish:
+    name: publish
+    needs: [package, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      # The only job that writes, and it holds no key.
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Collect the signed set
+        uses: actions/download-artifact@v7
+        with:
+          name: appliance-manager-signed
+          path: ${{ runner.temp }}/package
+
+      - name: Publish the package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.package.outputs.version }}
+          TAG: appliance-manager-v${{ needs.package.outputs.version }}
+        run: |
+          set -euo pipefail
+          notes="${RUNNER_TEMP}/notes.md"
+          {
+            echo "Appliance Manager ${VERSION} for arm64, signed."
+            echo
+            echo "An appliance installs this through its own Updates page; it is"
+            echo "listed in the package index and verified against the keyring"
+            echo "the appliance was flashed with. \`dpkg -i\` over SSH works too,"
+            echo "and arms no verification deadline, so it leaves no way back."
+            echo
+            echo "This release is marked pre-release so that GitHub's *Latest*"
+            echo "badge keeps naming an EMS release: two products publish from"
+            echo "this repository and only one of them owns the \`v*\` tags."
+          } > "${notes}"
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::error::${TAG} already exists; a published version is never rewritten"
+            exit 1
+          fi
+          gh release create "${TAG}" \
+            --prerelease \
+            --target "${GITHUB_SHA}" \
+            --title "Appliance Manager ${VERSION}" \
+            --notes-file "${notes}" \
+            "${RUNNER_TEMP}"/package/*
+
+      - name: Rebuild the index that names every package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.package.outputs.release_id }}
+          TAG: appliance-manager-v${{ needs.package.outputs.version }}
+          INDEX_TAG: appliance-manager-index
+        run: |
+          set -euo pipefail
+          work="${RUNNER_TEMP}/index"
+          mkdir -p "${work}"
+
+          # History is the point. The manager has no way back other than
+          # installing an earlier package, so an index naming only the newest
+          # one takes recovery away from every appliance that kept no copy.
+          # --previous carries every entry forward; --keep is left unset.
+          previous=""
+          if gh release download "${INDEX_TAG}" \
+              --pattern manager-packages.json --dir "${work}" 2>/dev/null; then
+            previous="${work}/manager-packages.json"
+            echo "carrying forward $(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["releases"]))' "${previous}") entries"
+          else
+            echo "no index yet; this run creates the first one"
+          fi
+
+          scripts/appliance-build-manager-index.py \
+            --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}" \
+            ${previous:+--previous "${previous}"} \
+            --output "${work}/manager-packages.json.new" \
+            "${RUNNER_TEMP}/package/${RELEASE_ID}.manifest.json"
+          mv "${work}/manager-packages.json.new" "${work}/manager-packages.json"
+          cat "${work}/manager-packages.json"
+
+          # One tag, forever, because packaging/appliance/config/appliance.conf
+          # names it and a flashed appliance never gets that value corrected.
+          if ! gh release view "${INDEX_TAG}" >/dev/null 2>&1; then
+            gh release create "${INDEX_TAG}" \
+              --prerelease \
+              --target "${GITHUB_SHA}" \
+              --title "Appliance Manager package index" \
+              --notes "The index every appliance reads to learn which Manager packages exist. Rewritten by each Manager release; the tag never moves, because a flashed appliance cannot be told a new address."
+          fi
+          gh release upload "${INDEX_TAG}" "${work}/manager-packages.json" --clobber
+
+      - name: Report what an appliance can now see
+        env:
+          VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Appliance Manager ${VERSION}"
+            echo
+            echo "Signed, published, and named by the index at"
+            echo "\`/releases/download/appliance-manager-index/manager-packages.json\`."
+            echo
+            echo '```json'
+            python3 -c 'import json,sys; print(json.dumps([{k: r[k] for k in ("release_id", "release_version")} for r in json.load(open(sys.argv[1]))["releases"]], indent=2))' \
+              "${RUNNER_TEMP}/index/manager-packages.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

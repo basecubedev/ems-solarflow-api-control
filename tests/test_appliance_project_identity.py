@@ -195,6 +195,25 @@ def test_the_shipped_configuration_names_the_manager_package_source_too():
     ), configured.group(1)
 
 
+def test_the_shipped_index_url_cannot_be_moved_by_someone_else_s_release():
+    """A flashed appliance never gets this value corrected.
+
+    ``ems-appliance-config-seed`` creates a missing ``appliance.conf`` and
+    leaves an existing one unread, and it is not a dpkg conffile either, so what
+    ships here is what every card keeps. ``/releases/latest`` resolves to the
+    newest release of the *whole repository* that is neither draft nor
+    prerelease — and this repository also publishes EMS releases, which carry no
+    package index. Pointing the fleet at that alias points it at whichever
+    product released last.
+    """
+
+    conf = SHIPPED_CONFIG.read_text(encoding="utf-8")
+    configured = re.search(r"^manager_index_url\s*=\s*(\S+)$", conf, re.M).group(1)
+
+    assert "/releases/latest/" not in configured, configured
+    assert "/releases/download/appliance-manager-index/" in configured, configured
+
+
 # --- Admin's transition record, which the appliance reads but never owns ------
 
 
