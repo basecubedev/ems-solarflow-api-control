@@ -1,45 +1,32 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# The gates a real A/B OS release has to pass, in order. Nothing is published.
+# The gates a real image release has to pass, in order. Nothing is published.
 #
 #   scripts/appliance-release-gates.sh [--mode builder|production]
-#                                      [--variant ab|single]
 #                                      [--rpi-image-gen DIR] [--output DIR]
-#                                      [--profile rpi4|rpi5]... [--fetch]
-#                                      [--sign-key KEYID] [--source-bundle FILE]
-#                                      [--keyring FILE] [--trusted-fingerprint FPR]...
-#                                      [--crosscheck]
+#                                      [--profile rpi3|rpi4|rpi5]... [--fetch]
+#                                      [--source-bundle FILE]
 #                                      [--builder-environment FILE]
 #
 # There are two different questions here, and one verdict used to answer both.
 #
 #   --mode builder (default)   Can this source, on this builder, produce an
-#                              image and an update that inspect cleanly? It
-#                              builds. It may be unsigned: a rehearsal is a
-#                              legitimate thing to run, and signing keys have no
-#                              business inside a disposable builder guest. Its
-#                              best verdict is PASS (builder qualification),
-#                              which is not a release.
+#                              image that inspects cleanly? It builds. Its best
+#                              verdict is PASS (builder qualification), which is
+#                              not a release.
 #
 #   --mode production          Are the artefacts already built here a release?
-#                              It builds nothing. It requires a signed manifest,
-#                              a signature that verifies against a named keyring
-#                              and trust policy, full image content inspection,
-#                              the update inspection, the external sparse
-#                              cross-check and the source bundle. Its verdict is
-#                              PASS (production release), and it cannot be
-#                              reached without signatures.
+#                              It builds nothing. It requires full image content
+#                              inspection and the source bundle. Its verdict is
+#                              PASS (production release).
 #
 # The sequence:
 #
 #   1  source authority       the pinned tree is the pinned tree, right now
 #   2  host dependencies      this host can run the generator at all
-#   3  build <profile>        one image and one update per board   (builder)
+#   3  build <profile>        one image per board                  (builder)
 #   4  inspect image          the artefact's structure and its contents
-#   5  inspect update         the members a slot will actually be written from
-#   6  sign / verify          a real signature by a trusted key    (production)
-#   7  sparse crosscheck      a second decoder agrees              (production)
-#   8  source bundle          the delivered tree is the tracked tree
+#   5  source bundle          the delivered tree is the tracked tree
 #
 # Strict is the default: a required gate that did not run is not a pass, because
 # "no image was built" and "the image is good" are not the same answer.
@@ -47,8 +34,7 @@
 # prints PASS.
 #
 # No credential is read from this file, nothing is pushed, tagged or uploaded,
-# and no release is created. Signing happens only when --sign-key names a key
-# already in the caller's keyring.
+# and no release is created.
 #
 # Exit status: 0 every required gate passed, 1 a gate failed, 2 the command line
 # is wrong, 3 a required gate did not run.
@@ -58,17 +44,10 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUTPUT="$ROOT/dist"
 GENERATOR=${EMS_RPI_IMAGE_GEN:-}
 PROFILES=""
-SIGN_KEY=${EMS_APPLIANCE_OS_SIGN_KEY:-}
 SOURCE_BUNDLE=""
 BUILDER_ENVIRONMENT=""
-KEYRING=${EMS_APPLIANCE_OS_KEYRING:-}
-FINGERPRINTS=${EMS_APPLIANCE_OS_TRUSTED_FINGERPRINTS:-}
 FETCH=no
 MODE=builder
-# One variant per run: the gate list itself differs between them, and a single
-# verdict covering both would be a verdict about neither.
-VARIANT=ab
-CROSSCHECK=no
 ALLOW_NOT_RUN=no
 FAILURES=0
 SKIPPED=0
@@ -76,47 +55,27 @@ REQUIRED_SKIPPED=0
 NOT_RUN_NAMES=""
 
 usage() {
-    sed -n '3,52p' "$0"
+    sed -n '3,42p' "$0"
 }
 
-# Everything the running mode claims. In builder mode `sign-<profile>` is
-# deliberately absent: an unsigned rehearsal is legitimate, and the builder is
-# the wrong place for a production key. In production mode the signature gates
-# are exactly what the verdict is about.
-# Whether a gate exists for the variant being built at all. A gate this image
-# does not have cannot be required of it, and that is stated rather than
-# inferred from the fact that those gates are currently reported NOT
-# APPLICABLE: if that ever became NOT RUN, a release would otherwise start
-# failing on the absence of an archive this variant never produces.
-applies_to_variant() {
-    [ "$VARIANT" = ab ] && return 0
-    case "$1" in
-        slot-mounts) return 1 ;;
-        inspect-update-*|describe-*) return 1 ;;
-        sign-*|verify-signature-*|crosscheck-*) return 1 ;;
-    esac
-    return 0
-}
-
+# Everything the running mode claims.
 required_gate() {
-    applies_to_variant "$1" || return 1
     case "$MODE" in
         builder)
             case "$1" in
-                source-authority|slot-mounts|source-bundle) return 0 ;;
-                build-*|inspect-image-*|inspect-update-*|describe-*) return 0 ;;
+                source-authority|source-bundle) return 0 ;;
+                build-*|inspect-image-*) return 0 ;;
                 *) return 1 ;;
             esac
             ;;
         production)
-            # source-authority and slot-mounts ask about a generator checkout.
-            # A finalizer builds nothing and has no checkout: what binds the
-            # upstream tree here is the build authority, which is verified
-            # before anything is signed.
+            # source-authority asks about a generator checkout. A finalizer
+            # builds nothing and has no checkout: what binds the upstream tree
+            # here is the build authority, which is verified before anything is
+            # attested.
             case "$1" in
                 source-bundle) return 0 ;;
-                artefacts-*|inspect-image-*|inspect-update-*) return 0 ;;
-                sign-*|verify-signature-*|crosscheck-*) return 0 ;;
+                artefacts-*|inspect-image-*) return 0 ;;
                 *) return 1 ;;
             esac
             ;;
@@ -179,22 +138,11 @@ while [ $# -gt 0 ]; do
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --output=*) OUTPUT=${1#*=}; shift ;;
         --profile) PROFILES="$PROFILES ${2:?--profile needs rpi3, rpi4 or rpi5}"; shift 2 ;;
-        --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
-        --variant=*) VARIANT=${1#*=}; shift ;;
         --profile=*) PROFILES="$PROFILES ${1#*=}"; shift ;;
-        --sign-key) SIGN_KEY=${2:?--sign-key needs a key id}; shift 2 ;;
-        --sign-key=*) SIGN_KEY=${1#*=}; shift ;;
         --source-bundle) SOURCE_BUNDLE=${2:?--source-bundle needs a file}; shift 2 ;;
         --source-bundle=*) SOURCE_BUNDLE=${1#*=}; shift ;;
         --builder-environment) BUILDER_ENVIRONMENT=${2:?--builder-environment needs a file}; shift 2 ;;
         --builder-environment=*) BUILDER_ENVIRONMENT=${1#*=}; shift ;;
-        --keyring) KEYRING=${2:?--keyring needs a file}; shift 2 ;;
-        --keyring=*) KEYRING=${1#*=}; shift ;;
-        --trusted-fingerprint)
-            FINGERPRINTS="$FINGERPRINTS ${2:?--trusted-fingerprint needs a fingerprint}"
-            shift 2 ;;
-        --trusted-fingerprint=*) FINGERPRINTS="$FINGERPRINTS ${1#*=}"; shift ;;
-        --crosscheck) CROSSCHECK=yes; shift ;;
         --fetch) FETCH=yes; shift ;;
         --allow-not-run) ALLOW_NOT_RUN=yes; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -207,33 +155,18 @@ case "$MODE" in
     *) echo "--mode is builder or production, not $MODE" >&2; exit 2 ;;
 esac
 
-case "$VARIANT" in
-    ab|single) ;;
-    *) echo "--variant is ab or single, not $VARIANT" >&2; exit 2 ;;
-esac
-
-# Which boards build this shape, from the one table that knows. Listing them
-# here would let a release publish an incomplete matrix the moment a profile
-# gains or loses a variant.
+# Which boards build an image, from the one table that knows. Listing them here
+# would let a release publish an incomplete matrix the moment a profile is added
+# or removed.
 default_profiles() {
-    PYTHONPATH="$ROOT" python3 - "$1" <<'PY'
-import sys
-
+    PYTHONPATH="$ROOT" python3 - <<'PY'
 from appliance import rpi_image_gen
 
-print(
-    " ".join(
-        sorted(
-            profile.name
-            for profile in rpi_image_gen.HARDWARE_PROFILES.values()
-            if profile.builds(sys.argv[1])
-        )
-    )
-)
+print(" ".join(sorted(rpi_image_gen.HARDWARE_PROFILES)))
 PY
 }
 
-[ -n "$PROFILES" ] || PROFILES=$(default_profiles "$VARIANT") \
+[ -n "$PROFILES" ] || PROFILES=$(default_profiles) \
     || fail "the profile list could not be resolved" hardware_profile_unknown
 mkdir -p "$OUTPUT/gates" "$OUTPUT/reports"
 
@@ -263,19 +196,10 @@ BUILDER_ENVIRONMENT_ARG=""
 
 # shellcheck disable=SC2086
 gate source-authority sh "$ROOT/scripts/appliance-check-rpi-image-gen.sh" $GENERATOR_ARGS
-if [ "$VARIANT" = ab ]; then
-    # shellcheck disable=SC2086
-    gate slot-mounts sh "$ROOT/scripts/appliance-verify-slot-mounts.sh" $GENERATOR_ARGS
-else
-    # Named rather than omitted. A gate list that silently gets shorter is one
-    # nobody can tell apart from a gate list that was passed.
-    report slot-mounts "NOT APPLICABLE (this image has one root and no binds)"
-fi
-
 VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
 
 for profile in $PROFILES; do
-    NAME="ems-solarflow-appliance-${VERSION}-${profile}-arm64-${VARIANT}"
+    NAME="ems-solarflow-appliance-${VERSION}-${profile}-arm64"
     AUTHORITY="$OUTPUT/$NAME.build-authority.json"
 
     if [ "$MODE" = builder ]; then
@@ -287,8 +211,8 @@ for profile in $PROFILES; do
         # completed, and the release would fail hours later on an artefact that
         # can never be signed. Committed evidence shows exactly that shape:
         # reports/appliance/2026-08-11-head/build-authority-rpi5-1.json.
-        gate "build-$profile" sh "$ROOT/scripts/appliance-build-rpi-ab-image.sh" \
-            --profile "$profile" --variant "$VARIANT" --output "$OUTPUT" \
+        gate "build-$profile" sh "$ROOT/scripts/appliance-build-rpi-image.sh" \
+            --profile "$profile" --output "$OUTPUT" \
             $BUILDER_ENVIRONMENT_ARG $GENERATOR_ARGS
     else
         # A production run consumes what a builder run proved. It never builds:
@@ -316,73 +240,13 @@ PY
 
     if [ -f "$OUTPUT/$NAME.img" ]; then
         gate_json "inspect-image-$profile" "image-inspection-$profile.json" \
-            sh "$ROOT/scripts/appliance-inspect-rpi-ab-image.sh" --json \
-            --variant "$VARIANT" \
+            sh "$ROOT/scripts/appliance-inspect-rpi-image.sh" --json \
             --appliance-version "$VERSION" --build-id "$BUILD_ID" \
             "$OUTPUT/$NAME.img"
     else
         report "inspect-image-$profile" "NOT RUN (no image was built)"
     fi
 
-    if [ "$VARIANT" != ab ]; then
-        # There is no update archive, so there is nothing to describe, nothing
-        # to sign and nothing for a second decoder to disagree about. This
-        # variant is patched by apt, and its OS updates carry no signature
-        # because they carry no artefact of this project's making.
-        for absent in "describe-$profile" "sign-$profile" "inspect-update-$profile" \
-                      "crosscheck-$profile"; do
-            report "$absent" "NOT APPLICABLE (this image has no update archive)"
-        done
-    elif [ -f "$OUTPUT/$NAME.update.tar.zst" ] && [ -f "$AUTHORITY" ]; then
-        if [ -n "$SIGN_KEY" ]; then
-            gate "sign-$profile" sh "$ROOT/scripts/appliance-build-rpi-ab-update.sh" \
-                --profile "$profile" --output "$OUTPUT" \
-                --update "$OUTPUT/$NAME.update.tar.zst" \
-                --build-authority "$AUTHORITY" \
-                --sign-key "$SIGN_KEY"
-        else
-            gate "describe-$profile" sh "$ROOT/scripts/appliance-build-rpi-ab-update.sh" \
-                --profile "$profile" --output "$OUTPUT" \
-                --update "$OUTPUT/$NAME.update.tar.zst" \
-                --build-authority "$AUTHORITY"
-            report "sign-$profile" "NOT RUN (no --sign-key)"
-        fi
-        if [ -f "$OUTPUT/$NAME.manifest.json" ]; then
-            INSPECT_ARGS=""
-            [ -n "$KEYRING" ] && INSPECT_ARGS="--keyring $KEYRING"
-            for fingerprint in $FINGERPRINTS; do
-                INSPECT_ARGS="$INSPECT_ARGS --trusted-fingerprint $fingerprint"
-            done
-            [ "$MODE" = production ] && INSPECT_ARGS="$INSPECT_ARGS --require-signature"
-            # shellcheck disable=SC2086
-            gate_json "inspect-update-$profile" "update-inspection-$profile.json" \
-                sh "$ROOT/scripts/appliance-inspect-rpi-ab-update.sh" --json $INSPECT_ARGS \
-                "$OUTPUT/$NAME.manifest.json"
-            if [ "$MODE" = production ]; then
-                if [ -n "$KEYRING" ] && [ -f "$OUTPUT/$NAME.manifest.json.asc" ]; then
-                    # shellcheck disable=SC2086
-                    gate "verify-signature-$profile" sh \
-                        "$ROOT/scripts/appliance-inspect-rpi-ab-update.sh" \
-                        --require-signature $INSPECT_ARGS "$OUTPUT/$NAME.manifest.json"
-                else
-                    report "verify-signature-$profile" \
-                        "NOT RUN (no --keyring, or the manifest is unsigned)"
-                fi
-            fi
-        fi
-    else
-        report "describe-$profile" "NOT RUN (no build authority and update artefact)"
-    fi
-
-    if [ "$VARIANT" = ab ] && { [ "$CROSSCHECK" = yes ] || [ "$MODE" = production ]; }; then
-        if [ -f "$OUTPUT/$NAME.update.tar.zst" ]; then
-            gate "crosscheck-$profile" sh "$ROOT/scripts/appliance-crosscheck-sparse.sh" \
-                --report "$OUTPUT/reports/sparse-crosscheck-$profile.json" \
-                "$OUTPUT/$NAME.update.tar.zst"
-        else
-            report "crosscheck-$profile" "NOT RUN (no update artefact)"
-        fi
-    fi
 done
 
 if [ -n "$SOURCE_BUNDLE" ]; then

@@ -3,24 +3,21 @@
 # Turn artefacts a builder qualified into a signed release, in a trusted place.
 #
 #   scripts/appliance-finalize-rpi-release.sh --sign-key KEYID --keyring FILE
-#          --trusted-fingerprint FPR... [--dist DIR] [--profile rpi4|rpi5]...
-#          [--variant ab|single]
+#          --trusted-fingerprint FPR... [--dist DIR] [--profile rpi3|rpi4|rpi5]...
 #          --source-bundle FILE [--source-authority FILE] [--runtime-gates FILE]
 #          --package FILE [--builder-lock FILE] [--kit DIR] [--no-kit]
-#          [--index-base-url URL [--index-previous FILE] [--index-keep N]]
 #
 # The builder guest is disposable, runs as root, installs whatever the generator
 # declares and is thrown away afterwards. A production signing key has no
 # business in it: whoever can reach that guest can sign a release. So the
-# builder proves what it can prove without a key — that this source, on this
-# builder, produces an image and an update that inspect cleanly — and the
-# signature happens here, in an environment that holds the key and builds
-# nothing.
+# builder proves what it can prove without a key -- that this source, on this
+# builder, produces an image that inspects cleanly -- and the signature happens
+# here, in an environment that holds the key and builds nothing.
 #
 # This script therefore never invokes rpi-image-gen. It verifies the build
-# authority in front of it, signs the manifest, verifies the signature against
-# the trusted keyring, runs the production release gate, and assembles the
-# hardware validation kit from that authority.
+# authority in front of it, runs the production release gate, signs the release
+# attestation, verifies that signature against the trusted keyring, and
+# assembles the hardware validation kit from that authority.
 #
 # Three artefacts arrive here and each one validates on its own, which is not
 # the same as their describing one release. So before anything is signed:
@@ -52,11 +49,6 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DIST="$ROOT/dist"
 KIT="$ROOT/dist/hardware-validation"
 PROFILES=""
-# One variant per release run. Both variants of a board can sit in the same dist
-# directory, and their artefact names differ only in this suffix -- so it is
-# what tells the finalizer which pair of files it is finalising, rather than
-# leaving it to find two build authorities and refuse both.
-VARIANT=ab
 SIGN_KEY=${EMS_APPLIANCE_OS_SIGN_KEY:-}
 KEYRING=${EMS_APPLIANCE_OS_KEYRING:-}
 FINGERPRINTS=${EMS_APPLIANCE_OS_TRUSTED_FINGERPRINTS:-}
@@ -70,9 +62,6 @@ BUILD_KIT=yes
 # be published. Without one there is nowhere for its urls to point, and an index
 # of unreachable urls is worse than none: the appliance would refuse each entry
 # one at a time instead of reporting that no index is configured.
-INDEX_BASE_URL=""
-INDEX_PREVIOUS=""
-INDEX_KEEP=0
 
 usage() { sed -n '3,40p' "$0"; }
 
@@ -100,14 +89,6 @@ while [ $# -gt 0 ]; do
         --trusted-fingerprint=*) FINGERPRINTS="$FINGERPRINTS ${1#*=}"; shift ;;
         --dist) DIST=${2:?--dist needs a directory}; shift 2 ;;
         --dist=*) DIST=${1#*=}; shift ;;
-        --index-base-url) INDEX_BASE_URL=${2:?--index-base-url needs a url}; shift 2 ;;
-        --index-base-url=*) INDEX_BASE_URL=${1#*=}; shift ;;
-        --index-previous) INDEX_PREVIOUS=${2:?--index-previous needs a file}; shift 2 ;;
-        --index-previous=*) INDEX_PREVIOUS=${1#*=}; shift ;;
-        --index-keep) INDEX_KEEP=${2:?--index-keep needs a number}; shift 2 ;;
-        --index-keep=*) INDEX_KEEP=${1#*=}; shift ;;
-        --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
-        --variant=*) VARIANT=${1#*=}; shift ;;
         --profile) PROFILES="$PROFILES ${2:?--profile needs rpi3, rpi4 or rpi5}"; shift 2 ;;
         --profile=*) PROFILES="$PROFILES ${1#*=}"; shift ;;
         --source-bundle) SOURCE_BUNDLE=${2:?--source-bundle needs a file}; shift 2 ;;
@@ -159,35 +140,19 @@ fi
 VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
 [ -n "$VERSION" ] || fail "the appliance version could not be read" version_unreadable
 
-case "$VARIANT" in
-    ab|single) ;;
-    *) echo "--variant is ab or single, not $VARIANT" >&2; exit 2 ;;
-esac
-
-# Which boards build this shape, from the one table that knows. Listing them
-# here would let a release publish an incomplete matrix the moment a profile
-# gains or loses a variant.
+# Which boards build an image, from the one table that knows. Listing them here
+# would let a release publish an incomplete matrix the moment a profile is added
+# or removed.
 default_profiles() {
-    PYTHONPATH="$ROOT" python3 - "$1" <<'PY'
-import sys
-
+    PYTHONPATH="$ROOT" python3 - <<'PY'
 from appliance import rpi_image_gen
 
-print(
-    " ".join(
-        sorted(
-            profile.name
-            for profile in rpi_image_gen.HARDWARE_PROFILES.values()
-            if profile.builds(sys.argv[1])
-        )
-    )
-)
+print(" ".join(sorted(rpi_image_gen.HARDWARE_PROFILES)))
 PY
 }
 
-[ -n "$PROFILES" ] || PROFILES=$(default_profiles "$VARIANT") \
+[ -n "$PROFILES" ] || PROFILES=$(default_profiles) \
     || fail "the profile list could not be resolved" hardware_profile_unknown
-export EMS_RELEASE_VARIANT="$VARIANT"
 
 echo "== the builds this release would be cut from =="
 # Before anything is signed: one completed authority per profile, its builder
@@ -219,9 +184,8 @@ print(
     f"{source.tracked_objects} objects {source.symlinks} symlinks"
 )
 
-variant = os.environ.get("EMS_RELEASE_VARIANT") or "ab"
 for profile in profiles:
-    matches = sorted(dist.glob(f"*-{profile}-arm64-{variant}.build-authority.json"))
+    matches = sorted(dist.glob(f"*-{profile}-arm64.build-authority.json"))
     if len(matches) != 1:
         problems.append(f"{profile}: {len(matches)} build authorities in {dist}")
         continue
@@ -232,23 +196,15 @@ for profile in profiles:
         continue
     prefix = matches[0].name[: -len(".build-authority.json")]
     image = dist / f"{prefix}.img"
-    update = dist / f"{prefix}.update.tar.zst"
     if not image.is_file():
         problems.append(f"{profile}: {image.name} is missing")
         continue
     problems.extend(
         f"{profile}: {problem}"
         for problem in build_authority.verify_image(
-            authority, image, profile=profile, variant=variant, require_environment=True
+            authority, image, profile=profile, require_environment=True
         )
     )
-    if update.is_file():
-        problems.extend(
-            f"{profile}: {problem}"
-            for problem in build_authority.verify_update(
-                authority, update, profile=profile, variant=variant, require_environment=True
-            )
-        )
     # The three bindings a valid-on-its-own artefact does not give you.
     problems.extend(
         f"{profile}: {problem}"
@@ -306,12 +262,12 @@ done
 [ -n "$SOURCE_BUNDLE" ] && GATE_ARGS="$GATE_ARGS --source-bundle $SOURCE_BUNDLE"
 
 echo
-echo "== signing and the production gates =="
+echo "== the production gates =="
 REPORT="$DIST/release-gate-report.txt"
 set +e
 # shellcheck disable=SC2086
 sh "$ROOT/scripts/appliance-release-gates.sh" --mode production --output "$DIST" \
-    --sign-key "$SIGN_KEY" --keyring "$KEYRING" $GATE_ARGS >"$REPORT" 2>&1
+    $GATE_ARGS >"$REPORT" 2>&1
 gate_status=$?
 set -e
 cat "$REPORT"
@@ -356,10 +312,9 @@ source = release_inputs.read_source_bundle_authority(os.environ["EMS_SOURCE_AUTH
 package = release_inputs.read_package(os.environ["EMS_PACKAGE"])
 runtime_gate_evidence = os.environ.get("EMS_RUNTIME_GATES") or ""
 
-variant = os.environ.get("EMS_RELEASE_VARIANT") or "ab"
 entries, environment = [], None
 for profile in profiles:
-    prefix = f"ems-solarflow-appliance-{version}-{profile}-arm64-{variant}"
+    prefix = f"ems-solarflow-appliance-{version}-{profile}-arm64"
     authority = build_authority.read(dist / f"{prefix}.build-authority.json")
     environment = authority.environment
     entries.append(
@@ -481,32 +436,6 @@ PYTHONPATH="$ROOT" python3 "$ROOT/scripts/appliance_release_result.py" \
     $KIT_MANIFEST_ARG \
     $TRUST_ARGS $EVIDENCE_ARGS $RESULT_PROFILE_ARGS \
     || fail "the release result does not add up to a ready release" release_result_incomplete
-
-if [ -n "$INDEX_BASE_URL" ]; then
-    # Whether this variant has anything to index is the variant table's answer,
-    # not a suffix written out here. A single-slot image is patched by apt and
-    # has no second slot to write, so it publishes no update archive at all.
-    if PYTHONPATH="$ROOT" python3 -c "
-import sys
-from appliance import image_variants
-sys.exit(0 if image_variants.variant(sys.argv[1]).has_update_archive else 1)
-" "$VARIANT"; then
-        INDEX="$DIST/os-releases.json"
-        INDEX_ARGS=""
-        [ -n "$INDEX_PREVIOUS" ] && INDEX_ARGS="$INDEX_ARGS --previous $INDEX_PREVIOUS"
-        [ "$INDEX_KEEP" != 0 ] && INDEX_ARGS="$INDEX_ARGS --keep $INDEX_KEEP"
-        # After the gate and after the signature, never before: the index tells
-        # appliances where to fetch a release, so it must only ever name one
-        # that has already been proven and signed.
-        python3 "$ROOT/scripts/appliance-build-os-release-index.py" \
-            --base-url "$INDEX_BASE_URL" $INDEX_ARGS --output "$INDEX" \
-            "$DIST"/*-arm64-"$VARIANT".manifest.json \
-            || fail "the release index could not be built" release_index_failed
-        echo "release index:       $INDEX"
-    else
-        echo "no release index: the $VARIANT variant publishes no update archive"
-    fi
-fi
 
 echo
 echo "release gate report: $REPORT"

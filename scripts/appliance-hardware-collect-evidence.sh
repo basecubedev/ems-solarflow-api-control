@@ -6,16 +6,15 @@
 #
 # Read-only, and the counterpart of appliance-hardware-capture-baseline.sh: it
 # captures the same set of facts after a case and prints what changed. For a
-# power-cut case that difference is the result — which slot came up, which
-# selector the firmware honoured, whether a pending trial survived, and whether
-# the shared state is still shared.
+# power-cut case that difference is the result -- whether the root came up,
+# whether the growth marker survived, and whether the services started.
 #
 # Nothing is written to a block device, no selector is changed, nothing reboots
 # and no SSH key is created, read or modified. Only public fingerprints and
 # digests are recorded. No device argument is accepted.
 #
 # Exit status: 0 evidence collected, 3 this host cannot produce it. A difference
-# against the baseline is reported, not judged: whether a slot switch was the
+# against the baseline is reported, not judged: whether a change was the
 # expected outcome depends on the case being run.
 set -eu
 
@@ -55,9 +54,9 @@ echo "baseline: $BASELINE"
 echo
 echo "== what this case changed =="
 changed=0
-for file in ab-status.json verify-persistence.json lsblk.json findmnt.json \
-            by-slot.txt cmdline.txt machine-id.txt ssh-fingerprints.txt \
-            autoboot.txt docker-digests.txt units.txt failed-units.txt; do
+for file in verify-install.json root-geometry.txt lsblk.json findmnt.json \
+            cmdline.txt machine-id.txt ssh-fingerprints.txt \
+            docker-digests.txt units.txt failed-units.txt; do
     before="$BASELINE/$file"
     after="$OUTPUT/$file"
     [ -f "$before" ] || [ -f "$after" ] || continue

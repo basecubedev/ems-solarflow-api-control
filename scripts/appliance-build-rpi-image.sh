@@ -2,24 +2,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Build an appliance image with Raspberry Pi's rpi-image-gen.
 #
-#   scripts/appliance-build-rpi-ab-image.sh --profile rpi4|rpi5
-#                                           [--variant ab|single] [--output DIR]
-#                                           [--build-id ID] [--rpi-image-gen DIR]
-#
-# The name is historical: this builds either image variant. One implementation
-# rather than two scripts, because what differs between them is two guards and
-# a layer name, while what is the same is every proof a release is signed on --
-# and two copies of that is how the security-relevant half comes to differ.
-# scripts/appliance-build-rpi-single-image.sh is the single-slot entry point.
+#   scripts/appliance-build-rpi-image.sh --profile rpi3|rpi4|rpi5
+#                                        [--output DIR] [--build-id ID]
+#                                        [--rpi-image-gen DIR]
 #
 # One artefact per board. The device layer selects the kernel and firmware, so
 # a Pi 5 image is not a Pi 4 image and neither may claim to be the other.
 #
 # rpi-image-gen is supplied by the build host and is not vendored here. Its
 # revision is pinned in packaging/appliance/image/rpi-image-gen.lock and the
-# checkout is verified against that lock before anything runs: image-rota owns
-# the partition table, the slot labels and the shared-slot mechanism, so a
-# different generator produces an image the runtime does not agree with.
+# checkout is verified against that lock before anything runs: image-rpios owns
+# the partition table and the labels, so a different generator produces an image
+# the runtime does not agree with.
 #
 # Exit status: 0 the image was built, 1 the build failed, 2 the command line is
 # wrong, 3 the host cannot run the build. A host that cannot build reports
@@ -30,27 +24,23 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 IMAGE_DIR="$ROOT/packaging/appliance/image"
 LOCK="$IMAGE_DIR/rpi-image-gen.lock"
 PROFILE=rpi5
-# Named once rather than spelled into the config path and the artefact name
-# separately: those two disagreeing is how an image gets published under the
-# other variant's name.
-VARIANT=ab
 OUTPUT="$ROOT/dist"
 BUILD_ID=""
 GENERATOR=${EMS_RPI_IMAGE_GEN:-}
 ENVIRONMENT=""
 
 usage() {
-    sed -n '3,21p' "$0"
+    sed -n '3,18p' "$0"
 }
 
 not_run() {
-    echo "appliance-build-rpi-ab-image: $1" >&2
+    echo "appliance-build-rpi-image: $1" >&2
     echo "RESULT: NOT RUN ($2)" >&2
     exit 3
 }
 
 fail() {
-    echo "appliance-build-rpi-ab-image: $1" >&2
+    echo "appliance-build-rpi-image: $1" >&2
     echo "RESULT: FAIL ($2)" >&2
     exit 1
 }
@@ -59,8 +49,6 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --profile) PROFILE=${2:?--profile needs rpi3, rpi4 or rpi5}; shift 2 ;;
         --profile=*) PROFILE=${1#*=}; shift ;;
-        --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
-        --variant=*) VARIANT=${1#*=}; shift ;;
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --output=*) OUTPUT=${1#*=}; shift ;;
         --build-id) BUILD_ID=${2:?--build-id needs a value}; shift 2 ;;
@@ -90,41 +78,19 @@ try:
     build_authority.validate_profile(sys.argv[1])
     build_authority.validate_build_id(sys.argv[2])
 except build_authority.BuildAuthorityError as error:
-    sys.exit(f"appliance-build-rpi-ab-image: {error.code}: {error.message}")
+    sys.exit(f"appliance-build-rpi-image: {error.code}: {error.message}")
 PY
 
 [ -f "$LOCK" ] || fail "$LOCK is missing" lock_missing
 
-# Refused here rather than resolved into a missing path, so an unknown variant
-# is a wrong command line and not a build that quietly did nothing.
-case "$VARIANT" in
-    ab|single) ;;
-    *) echo "unknown variant: $VARIANT" >&2; usage >&2; exit 2 ;;
-esac
-# Not every board has both shapes. A Raspberry Pi 3 boots the single-slot image
-# and cannot boot the A/B one, so the pair is refused at the identifier rather
-# than after a generator has produced a partial artefact tree.
-PYTHONPATH="$ROOT" python3 - "$PROFILE" "$VARIANT" <<'PY' || exit 2
-import sys
+IMAGE_LAYER=$(PYTHONPATH="$ROOT" python3 - <<'PY'
+from appliance.image_shape import IMAGE
 
-from appliance import build_authority
-
-try:
-    build_authority.validate_profile_variant(sys.argv[1], sys.argv[2])
-except build_authority.BuildAuthorityError as error:
-    sys.exit(f"appliance-build-rpi-ab-image: {error.code}: {error.message}")
+print(IMAGE.image_layer)
 PY
+) || fail "the image layer could not be resolved" hardware_profile_unknown
 
-IMAGE_LAYER=$(PYTHONPATH="$ROOT" python3 - "$VARIANT" <<'PY'
-import sys
-
-from appliance import image_variants
-
-print(image_variants.variant(sys.argv[1]).image_layer)
-PY
-) || fail "the image variant could not be resolved" hardware_profile_unknown
-
-CONFIG="$IMAGE_DIR/profiles/${PROFILE}-${VARIANT}.yaml"
+CONFIG="$IMAGE_DIR/profiles/${PROFILE}.yaml"
 [ -f "$CONFIG" ] || fail "there is no build profile for $PROFILE" hardware_profile_unknown
 [ -z "$ENVIRONMENT" ] || [ -f "$ENVIRONMENT" ] \
     || fail "$ENVIRONMENT is not a builder environment file" builder_environment_missing
@@ -151,28 +117,9 @@ case $compatibility in
                rpi_image_gen_dependencies_missing ;;
 esac
 
-# An image whose shared binds are generated but never activated loses every
-# write at the next slot switch, silently. That has to fail the build.
-#
-# Only the A/B image has binds to lose. The single-slot image has one root and
-# no generator that would produce them, so this gate has nothing to check --
-# and running it there would prove something about a mechanism that is absent.
-if [ "$VARIANT" = ab ]; then
-    set +e
-    "$ROOT/scripts/appliance-verify-slot-mounts.sh" --rpi-image-gen "$GENERATOR" >&2
-    mounts=$?
-    set -e
-    case $mounts in
-        0) ;;
-        1) fail "the generated persistence units are incomplete" persistence_units_incomplete ;;
-        *) not_run "the slot-shared generator could not be verified on this host" \
-                   persistence_units_unverified ;;
-    esac
-fi
-
 VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
 [ -n "$VERSION" ] || fail "cannot read APPLIANCE_VERSION" version_unreadable
-NAME="ems-solarflow-appliance-${VERSION}-${PROFILE}-arm64-${VARIANT}"
+NAME="ems-solarflow-appliance-${VERSION}-${PROFILE}-arm64"
 
 # What the generator will call the image it writes. The profile declares it, so
 # the profile is where it is read from rather than being guessed afterwards.
@@ -216,7 +163,7 @@ DEVICE_LAYER=$(echo "$PROFILE_FACTS" | sed -n 's/^DEVICE_LAYER=//p')
 BOARD_CLASSES=$(echo "$PROFILE_FACTS" | sed -n 's/^BOARD_CLASSES=//p')
 
 mkdir -p "$OUTPUT" || fail "cannot create $OUTPUT" output_unusable
-# One build, one fresh directory. A reused one is how yesterday's update.tar.zst
+# One build, one fresh directory. A reused one is how yesterday's artefact
 # ends up beside today's metadata and gets signed as if this build produced it.
 WORK=$(PYTHONPATH="$ROOT" python3 - "$OUTPUT" "$BUILD_ID" <<'PY'
 import sys
@@ -278,7 +225,7 @@ SOURCE_FORM=$(echo "$SOURCE" | sed -n 's/^FORM=//p')
 GENERATOR_REVISION=$(echo "$SOURCE" | sed -n 's/^REVISION=//p')
 SOURCE_TREE=$(echo "$SOURCE" | sed -n 's/^TREE=//p')
 
-echo "== building the $VARIANT image =="
+echo "== building the $PROFILE image =="
 # -S makes packaging/appliance/image the source root, so the project's config
 # and layer are found beside upstream's. Overrides are passed after --, which
 # is how rpi-image-gen takes build-time variables.
@@ -325,16 +272,6 @@ xz -T0 -6 -k -c "$OUTPUT/$NAME.img" > "$OUTPUT/$NAME.img.xz" \
     || fail "the image could not be compressed" output_unusable
 ( cd "$OUTPUT" && sha256sum "$NAME.img.xz" > "$NAME.img.xz.sha256" )
 
-# The update archive is the A/B transport: a whole slot, staged and trial
-# booted. The single-slot image has no such transport at all -- it is patched
-# by apt -- so an archive found beside it would be an artefact nothing can
-# install, and collecting it would put one in the release directory.
-UPDATE=""
-if [ "$VARIANT" = ab ]; then
-    [ -f "$IMAGE_DIR_NAME/update.tar.zst" ] && UPDATE="$IMAGE_DIR_NAME/update.tar.zst"
-    [ -n "$UPDATE" ] && cp "$UPDATE" "$OUTPUT/$NAME.update.tar.zst"
-fi
-
 echo "== proving both source trees are still the ones that were read =="
 # A build takes long enough that either tree can be edited while it runs. The
 # pre-build proof closes ordinary TOCTOU; this closes the build window itself,
@@ -375,17 +312,15 @@ PY
 # the artefact in front of it against exactly this, so an artefact nobody built
 # with the pinned generator cannot inherit its provenance.
 AUTHORITY=$(PYTHONPATH="$ROOT" python3 - "$WORK" "$SOURCE_FORM" "$GENERATOR_REVISION" \
-    "$SOURCE_TREE" "$PROFILE" "$VARIANT" "$PROJECT_REVISION" "$PROJECT_TREE" "$BUILD_ID" \
-    "$PACKAGE_SHA256" \
-    "$OUTPUT/$NAME.img" "$([ -n "$UPDATE" ] && echo "$OUTPUT/$NAME.update.tar.zst" || echo "")" \
-    "$ENVIRONMENT" \
+    "$SOURCE_TREE" "$PROFILE" "$PROJECT_REVISION" "$PROJECT_TREE" "$BUILD_ID" \
+    "$PACKAGE_SHA256" "$OUTPUT/$NAME.img" "$ENVIRONMENT" \
     <<'PY'
 import sys
 
 from appliance import build_authority
 
-(work, form, revision, tree, profile, variant, project_revision, project_tree,
- build_id, package, image, update, environment_path) = sys.argv[1:14]
+(work, form, revision, tree, profile, project_revision, project_tree,
+ build_id, package, image, environment_path) = sys.argv[1:12]
 environment = (
     build_authority.read_environment(environment_path)
     if environment_path
@@ -400,13 +335,9 @@ authority = build_authority.BuildAuthority(
         revision=project_revision, tree_sha256=project_tree
     ),
     profile=profile,
-    variant=variant,
     build_id=build_id,
     image=build_authority.Artefact(
         path=image, sha256=build_authority.file_sha256(image)
-    ),
-    update=build_authority.Artefact(
-        path=update, sha256=build_authority.file_sha256(update) if update else ""
     ),
     package_sha256=package,
     completed=True,
@@ -414,7 +345,7 @@ authority = build_authority.BuildAuthority(
 print(build_authority.write(work, authority))
 PY
 ) || fail "the build authority could not be written" build_authority_unwritable
-# Per profile, like the image and the update beside it. A fixed name means the
+# Per profile, like the image beside it. A fixed name means the
 # second board built into the same directory erases the first board's
 # provenance, and an artefact whose authority is gone cannot be signed at all.
 cp "$AUTHORITY" "$OUTPUT/$NAME.build-authority.json"
@@ -445,7 +376,6 @@ cat > "$OUTPUT/$NAME.build.json" <<JSON
   "device_layer": "$DEVICE_LAYER",
   "compatible_board_classes": $BOARD_CLASSES,
   "hardware_profile": "$PROFILE",
-  "image_variant": "$VARIANT",
   "image_layer": "$IMAGE_LAYER",
   "rpi_image_gen_revision": "$GENERATOR_REVISION",
   "rpi_image_gen_source_form": "$SOURCE_FORM",
@@ -457,8 +387,7 @@ cat > "$OUTPUT/$NAME.build.json" <<JSON
   "project_tree_sha256": "$PROJECT_TREE",
   "appliance_package": "$(basename "$PACKAGE")",
   "appliance_package_sha256": "$PACKAGE_SHA256",
-  "image_sha256": "$(cut -d' ' -f1 < "$OUTPUT/$NAME.img.sha256")",
-  "update_artifact": "$([ -n "$UPDATE" ] && echo "$NAME.update.tar.zst" || echo "")"
+  "image_sha256": "$(cut -d' ' -f1 < "$OUTPUT/$NAME.img.sha256")"
 }
 JSON
 
@@ -469,7 +398,6 @@ echo "publish:  $OUTPUT/$NAME.img.xz"
 echo "checksum: $OUTPUT/$NAME.img.xz.sha256"
 echo "metadata: $OUTPUT/$NAME.build.json"
 echo "authority: $OUTPUT/$NAME.build-authority.json"
-[ -n "$UPDATE" ] && echo "update:   $OUTPUT/$NAME.update.tar.zst"
 echo
 echo "Nothing was published. Sign and publish through the release pipeline; see"
 echo "packaging/appliance/image/README.md."

@@ -6,8 +6,8 @@
 #
 # Nothing is executed, downloaded, installed or built. The checkout is compared
 # against packaging/appliance/image/rpi-image-gen.lock, which pins the revision
-# whose image-rota layer defines this appliance's partition table, slot
-# identities and shared-slot mount mechanism.
+# whose image-rpios layer defines this appliance's partition table and the
+# labels its root is mounted through.
 #
 # Exit status: 0 compatible and buildable, 1 incompatible or the source identity
 # could not be proven, 2 the command line is wrong, 3 compatible but this host is

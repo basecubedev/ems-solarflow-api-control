@@ -11,7 +11,7 @@ look, every entry a suggestion, and what may be installed decided by the
 signature over the manifest it points at.
 
 It carries history for a sharper reason here than there. The manager has no
-second slot: going back to an earlier package is the whole recovery, and an
+way back: going back to an earlier package is the whole recovery, and an
 index naming only the newest package takes that away from every appliance that
 did not keep one locally.
 """

@@ -5,11 +5,11 @@
 #   scripts/appliance-create-source-bundle.sh [--output FILE] [--ref REF]
 #                                             [--prefix NAME] [--keep-invalid]
 #
-# Persistence activation depends on seven symlinks tracked in git. A delivery path
-# that flattens one into a regular file produces a tree that still builds,
-# generates seven mount units, activates none of them, and loses every write to
-# the shared paths at the next slot switch — silently, and only on hardware.
-# Both archives produced for previous independent reviews arrived that way.
+# A delivery path that rewrites a file mode drops the executable bit off a build
+# hook; one that flattens a symlink turns it into a regular file that still
+# parses. Either produces a tree that still builds and is not this project --
+# silently, and only at the far end. Both archives produced for previous
+# independent reviews arrived that way.
 #
 # So the bundle is written from the git object tree rather than the working
 # directory, and it is then verified against that same tree object by object

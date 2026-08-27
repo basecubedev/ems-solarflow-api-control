@@ -3,7 +3,7 @@
 # Build the amd64 package and prove it in a Debian guest that really booted.
 #
 #   scripts/appliance-smoke-vm-amd64.sh [--keep] [--cache DIR] [--ssh-port N]
-#                                       [--rpi-image-gen DIR] [--memory MB]
+#                                       [--memory MB]
 #                                       [--evidence DIR]
 #
 # The container tier this replaces could not finish a systemd boot, so every
@@ -11,10 +11,6 @@
 # process namespace rather than about an appliance. This boots a disposable
 # Debian Trixie cloud image under QEMU/KVM, installs the package the operator
 # would install, and runs the same guest smoke script the ARM64 driver runs.
-#
-# With --rpi-image-gen it additionally assembles an A/B appliance inside the
-# guest from upstream's own slot generators and drives the ordering, failure
-# and recovery scenarios against a real systemd.
 #
 # --evidence writes one log per runtime gate into a directory, so a release can
 # bind what the guest proved rather than a paragraph somebody wrote afterwards.
@@ -32,7 +28,6 @@ CACHE=${EMS_APPLIANCE_VM_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/ems-appliance-vm
 SSH_PORT=${EMS_APPLIANCE_VM_SSH_PORT:-2222}
 MEMORY=2560
 KEEP=0
-GENERATOR=${EMS_RPI_IMAGE_GEN:-}
 EVIDENCE=
 
 usage() { sed -n '3,26p' "$0"; }
@@ -49,7 +44,6 @@ while [ $# -gt 0 ]; do
         --cache) CACHE=${2:?--cache needs a directory}; shift 2 ;;
         --ssh-port) SSH_PORT=${2:?--ssh-port needs a port}; shift 2 ;;
         --memory) MEMORY=${2:?--memory needs a size in MB}; shift 2 ;;
-        --rpi-image-gen) GENERATOR=${2:?--rpi-image-gen needs a directory}; shift 2 ;;
         --evidence) EVIDENCE=${2:?--evidence needs a directory}; shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -127,15 +121,10 @@ else
 fi
 
 qemu-img create -f qcow2 -b "$BASE_IMAGE_PATH" -F qcow2 "$WORK/guest.qcow2" 40G >/dev/null
-# The second disk is the appliance medium: the A/B scenarios partition it with
-# the image-rota labels so the runtime identifies a real GPT partition rather
-# than a loop file the verifier was told to trust.
-qemu-img create -f raw "$WORK/ab-disk.raw" 3G >/dev/null
 qemu-system-x86_64 \
     -name ems-appliance-vm \
     -enable-kvm -cpu host -smp "$(nproc)" -m "$MEMORY" \
     -drive file="$WORK/guest.qcow2",if=virtio,format=qcow2 \
-    -drive file="$WORK/ab-disk.raw",if=virtio,format=raw \
     -drive file="$WORK/seed.iso",media=cdrom,format=raw \
     -nic user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22 \
     -display none -serial file:"$WORK/console.log" &
@@ -163,15 +152,14 @@ echo "guest: $(g '. /etc/os-release && echo "$PRETTY_NAME"') kernel $(g uname -r
 echo "== installing the guest baseline =="
 g 'export DEBIAN_FRONTEND=noninteractive
    apt-get update -qq
-   apt-get install -y -qq openssh-sftp-server acl docker.io docker-cli zstd gpgv \
-       jq curl e2fsprogs dosfstools android-sdk-libsparse-utils >/dev/null' \
+   apt-get install -y -qq openssh-sftp-server acl docker.io docker-cli gpgv \
+       jq curl e2fsprogs >/dev/null' \
     || not_run "the guest baseline could not be installed" guest_apt_failed
 
 gcp "$PACKAGE" "$ROOT/scripts/appliance-guest-smoke.sh" \
     "$ROOT/scripts/appliance-guest-sftp-lifecycle.sh" \
     "$ROOT/scripts/appliance-guest-sftp-session.sh" \
-    "$ROOT/scripts/appliance-guest-issue-backup-key.sh" \
-    "$ROOT/scripts/appliance-guest-network-persistence.sh" root@127.0.0.1:/root/ >/dev/null
+    "$ROOT/scripts/appliance-guest-issue-backup-key.sh" root@127.0.0.1:/root/ >/dev/null
 
 [ -n "$EVIDENCE" ] && mkdir -p "$EVIDENCE"
 # One log per gate, kept whatever the verdict was: a gate that failed is
@@ -216,46 +204,6 @@ if [ "$session" -eq 3 ]; then
     echo "appliance-smoke-vm-amd64: the SFTP session tier did not run" >&2
 elif [ "$session" -ne 0 ]; then
     status=$session
-fi
-
-if [ -n "$GENERATOR" ] && [ -d "$GENERATOR" ]; then
-    echo
-    echo "== A/B systemd scenarios =="
-    tar -C "$GENERATOR" -czf "$WORK/generators.tgz" \
-        image/gpt/ab_userdata/device/rootfs-overlay
-    tar -C "$ROOT/packaging/appliance/image/layer" -czf "$WORK/overlay.tgz" \
-        ems-appliance.rootfs-overlay
-    gcp "$WORK/generators.tgz" "$WORK/overlay.tgz" \
-        "$ROOT/scripts/appliance-guest-ab-systemd.sh" root@127.0.0.1:/root/ >/dev/null
-    g 'cd /root && rm -rf rig overlay && mkdir rig overlay
-       tar -xzf generators.tgz -C rig && tar -xzf overlay.tgz -C overlay'
-    scenario=0
-    g 'bash /root/appliance-guest-ab-systemd.sh /root/rig \
-           /root/overlay/ems-appliance.rootfs-overlay /dev/vdb' || scenario=$?
-    # NOT RUN is not a failure and must not be reported as one.
-    if [ "$scenario" -eq 3 ]; then
-        echo "appliance-smoke-vm-amd64: the A/B scenarios did not run" >&2
-    elif [ "$scenario" -ne 0 ]; then
-        status=$scenario
-    fi
-
-    echo
-    echo "== network persistence, asked of the same systemd =="
-    # Only meaningful on a guest the A/B scenarios have already turned into an
-    # appliance: without /persistent and the layout manifest the verification
-    # unit is conditioned out and the question cannot be asked at all.
-    # pipefail would make a NOT RUN tier end the whole run; the verdict is
-    # read from PIPESTATUS and classified below instead.
-    set +e
-    g "bash /root/appliance-guest-network-persistence.sh \
-           /root/overlay/ems-appliance.rootfs-overlay" 2>&1 | gate_log network-persistence
-    network=${PIPESTATUS[0]}
-    set -e
-    if [ "$network" -eq 3 ]; then
-        echo "appliance-smoke-vm-amd64: the network persistence tier did not run" >&2
-    elif [ "$network" -ne 0 ]; then
-        status=$network
-    fi
 fi
 
 echo

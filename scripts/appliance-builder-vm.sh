@@ -3,7 +3,6 @@
 # Provision a disposable builder VM and build the real A/B images in it.
 #
 #   scripts/appliance-builder-vm.sh --profile rpi5 [--profile rpi4]...
-#                                   [--variant ab|single]
 #                                   [--output DIR] [--cache DIR] [--keep]
 #                                   [--memory MB] [--disk SIZE] [--build-id ID]
 #                                   [--release-gate]
@@ -14,7 +13,7 @@
 # guest instead: the packages land in the guest, the guest is deleted, and the
 # only thing that comes back out is the dist directory.
 #
-# The build itself is the project's own scripts/appliance-build-rpi-ab-image.sh,
+# The build itself is the project's own scripts/appliance-build-rpi-image.sh,
 # run against the pinned generator, so the source-authority and post-build
 # re-verification are exactly the ones a release uses.
 #
@@ -41,10 +40,6 @@ KEEP=0
 BUILD_ID=""
 RELEASE_GATE=0
 PROFILES=()
-# Which image the requested profiles are built as. One variant per run: the two
-# are separate artefacts with separate authorities, and a run that produced
-# both would have to say which of them its verdict is about.
-VARIANT=ab
 
 usage() { sed -n '3,20p' "$0"; }
 
@@ -57,8 +52,6 @@ not_run() {
 while [ $# -gt 0 ]; do
     case "$1" in
         --profile) PROFILES+=("${2:?--profile needs rpi4 or rpi5}"); shift 2 ;;
-        --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
-        --variant=*) VARIANT=${1#*=}; shift ;;
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --cache) CACHE=${2:?--cache needs a directory}; shift 2 ;;
         --memory) MEMORY=${2:?--memory needs a size in MB}; shift 2 ;;
@@ -72,11 +65,6 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ "${#PROFILES[@]}" -gt 0 ] || { echo "at least one --profile is required" >&2; exit 2; }
-case "$VARIANT" in
-    ab|single) ;;
-    *) echo "unknown variant: $VARIANT" >&2; exit 2 ;;
-esac
-
 for tool in qemu-system-x86_64 qemu-img ssh scp ssh-keygen curl git; do
     command -v "$tool" >/dev/null 2>&1 || not_run "$tool is missing" "${tool}_unavailable"
 done
@@ -250,10 +238,7 @@ status=0
 if [ "$RELEASE_GATE" -eq 1 ]; then
     echo
     echo "== running the release gates =="
-    # The variant belongs here as much as in the build branch: the gate list
-    # itself differs between the two, so a run that did not pass it on would
-    # quietly measure the A/B gates against whatever was asked for.
-    gate_args="--variant $VARIANT"
+    gate_args=""
     for profile in "${PROFILES[@]}"; do gate_args="$gate_args --profile $profile"; done
     # The source-bundle gate checks a bundle against the git tree it came from,
     # so it is made in the guest from the guest's own clone.
@@ -264,35 +249,34 @@ if [ "$RELEASE_GATE" -eq 1 ]; then
        time ./scripts/appliance-release-gates.sh --rpi-image-gen /build/rpi-image-gen \
             --output /build/dist --source-bundle /build/source-bundle.tar.gz \
             --builder-environment /build/builder-environment.json \
-            --crosscheck $gate_args" \
+            $gate_args" \
         || status=$?
 else
 for profile in "${PROFILES[@]}"; do
     echo
-    echo "== building $profile ($VARIANT) =="
-    build_args="--profile $profile --variant $VARIANT"
+    echo "== building $profile =="
+    build_args="--profile $profile"
     build_args="$build_args --rpi-image-gen /build/rpi-image-gen --output /build/dist"
     build_args="$build_args --builder-environment /build/builder-environment.json"
-    [ -n "$BUILD_ID" ] && build_args="$build_args --build-id ${BUILD_ID}-${profile}-${VARIANT}"
+    [ -n "$BUILD_ID" ] && build_args="$build_args --build-id ${BUILD_ID}-${profile}"
     # Five of upstream's declared binaries — mkfs.btrfs, veritysetup, mkdosfs,
     # mke2fs, fdisk — live in /usr/sbin, which Debian keeps off a non-root
     # PATH. Without them the dependency probe reports the generator as
     # unusable, which is true of the shell and not of the machine.
     # shellcheck disable=SC2029
     u "export PATH=$GUEST_PATH
-       cd $SOURCE_DIR && time ./scripts/appliance-build-rpi-ab-image.sh $build_args" || status=$?
+       cd $SOURCE_DIR && time ./scripts/appliance-build-rpi-image.sh $build_args" || status=$?
 done
 fi
 
 echo
 echo "== collecting artefacts =="
 # The guest describes its own output before anything is copied, and the host
-# re-hashes what arrived against that description. A dropped 16 GiB image, a
-# full host disk and a complete build used to produce the same verdict.
+# re-hashes what arrived against that description. A dropped 8 GiB image, a full
+# host disk and a complete build used to produce the same verdict.
 #
-# The work root is deliberately not collected: /build/dist also holds a chroot
-# and the sparse copies of the image, and moving those over a slirp link takes
-# longer than the build did.
+# The work root is deliberately not collected: /build/dist also holds the build
+# chroot, and moving that over a slirp link takes longer than the build did.
 # shellcheck disable=SC2029
 b "python3 $SOURCE_DIR/scripts/appliance_builder_output.py describe \
        --dist /build/dist --output /build/output-manifest.json" \

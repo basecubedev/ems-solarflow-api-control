@@ -13,15 +13,15 @@
 The kit used to be a filename glob: everything under ``dist`` matching
 ``*-rpi5-*`` was copied, whatever was hashed was recorded, and the result was
 PASS. Two builds in one output directory produced a kit holding an image from
-one and an update from the other, with a SHA256SUMS file that agreed with
-itself. A missing signature, a missing release-gate report and a build
-authority describing a different build were all invisible.
+one and a report from the other, with a SHA256SUMS file that agreed with
+itself. A missing release-gate report and a build authority describing a
+different build were both invisible.
 
 So the kit is assembled from authority instead. Each profile has exactly one
 completed BuildAuthority, and that record names the build the kit is allowed to
-carry: the image and the update are verified against the digests it recorded,
-the manifest against the archive it describes, and every artefact has to belong
-to that one build id. Anything else is a failure, not a smaller kit.
+carry: the image is verified against the digest it recorded, and every artefact
+has to belong to that one build id. Anything else is a failure, not a smaller
+kit.
 
 A kit copied the attestation's ``.asc`` beside it and never verified it, so the
 signature was a file the kit carried rather than a thing the kit knew. The
@@ -159,15 +159,7 @@ def required_artefacts(dist, authority_path, authority, reports):
         "builder_environment": dist / f"{prefix}.builder-environment.json",
         "image": dist / f"{prefix}.img",
         "image_checksum": dist / f"{prefix}.img.sha256",
-        "update": dist / f"{prefix}.update.tar.zst",
-        "release_archive": dist / f"{prefix}.tar.zst",
-        "manifest": dist / f"{prefix}.manifest.json",
-        "signature": dist / f"{prefix}.manifest.json.asc",
         "image_inspection": reports / f"image-inspection-{profile}.json",
-        "update_inspection": reports / f"update-inspection-{profile}.json",
-        # The attestation binds it, so a kit that could not re-hash it could not
-        # verify itself away from the machine that assembled it.
-        "sparse_crosscheck": reports / f"sparse-crosscheck-{profile}.json",
     }
     return prefix, entries
 
@@ -177,7 +169,6 @@ def verify_build(authority, entries):
 
     problems = []
     image = entries["image"]
-    update = entries["update"]
 
     if image.is_file():
         problems.extend(
@@ -189,51 +180,6 @@ def verify_build(authority, entries):
                 require_environment=True,
             )
         )
-    if update.is_file():
-        problems.extend(
-            build_authority.verify_update(
-                authority,
-                update,
-                profile=authority.profile,
-                build_id=authority.build_id,
-                require_environment=True,
-            )
-        )
-
-    manifest_path = entries["manifest"]
-    if manifest_path.is_file():
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except ValueError:
-            problems.append(f"{manifest_path.name} is not valid JSON")
-            manifest = {}
-        if manifest:
-            if str(manifest.get("build_id") or "") != authority.build_id:
-                problems.append(
-                    f"the manifest names build {manifest.get('build_id')!r}, the authority "
-                    f"names {authority.build_id!r}"
-                )
-            provenance = manifest.get("provenance") or {}
-            if not provenance.get("verified"):
-                problems.append("the manifest is a development artefact, not a release")
-            if provenance.get("build_authority_sha256") != authority.canonical_hash:
-                problems.append(
-                    "the manifest was not described from this build authority"
-                )
-            if (
-                provenance.get("builder_environment_sha256")
-                != authority.builder_environment_sha256
-            ):
-                problems.append("the manifest names a different builder environment")
-            archive = manifest.get("archive") or {}
-            published = entries["release_archive"]
-            if published.is_file() and archive.get("digest"):
-                observed = file_sha256(published)
-                if observed != archive["digest"]:
-                    problems.append(
-                        f"{published.name} hashes to {observed}, the manifest declares "
-                        f"{archive['digest']}"
-                    )
     return problems
 
 
@@ -336,7 +282,7 @@ def assemble_profile(profile, authority_path, authority, args, reports, target):
 
     problems.extend(verify_build(authority, entries))
 
-    for name in ("image_inspection", "update_inspection", "sparse_crosscheck"):
+    for name in ("image_inspection",):
         if entries[name].is_file():
             ok, detail = inspection_passed(entries[name])
             if not ok:
