@@ -672,9 +672,6 @@ def test_a_second_profile_does_not_overwrite_the_first_authority():
     assert '$NAME.build-authority.json' in script
 
 
-UPDATE_SCRIPT = SCRIPTS / "appliance-build-rpi-ab-update.sh"
-
-
 BUILDER_VM_SCRIPT = SCRIPTS / "appliance-builder-vm.sh"
 
 

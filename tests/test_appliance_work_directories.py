@@ -82,8 +82,8 @@ def test_no_staging_script_defaults_to_tmp(name):
 
 @pytest.mark.parametrize("name", STAGING_SCRIPTS)
 def test_no_staging_script_hardcodes_a_maintainer_path(name):
-    """appliance-test-ab-layout.sh defaulted to /zfs/tmp/tmp, which exists on
-    exactly one machine."""
+    """A staging script once defaulted to /zfs/tmp/tmp, which exists on exactly
+    one machine."""
 
     text = script(name)
 

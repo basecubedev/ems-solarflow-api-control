@@ -127,7 +127,7 @@ installed by any manifest in this repository.
 | `ImageMagick` | host install (`convert`) | ImageMagick | Trims and measures captured documentation screenshots | ❌ | ❌ | https://github.com/ImageMagick/ImageMagick |
 | `Pillow` | host install (verified 12.2.0) | MIT-CMU | Renders the optional install demo animation (`docs/demo/build_install_demo.py`); see the License Notes below | ❌ | ❌ | https://github.com/python-pillow/Pillow |
 | `DejaVu fonts` | host install | Bitstream-Vera AND Public-Domain | Glyphs for the install demo animation when present on the host | ❌ | ❌ | https://github.com/dejavu-fonts/dejavu-fonts |
-| `xz-utils` | host install | GPL-2.0-or-later AND Public-Domain (liblzma) | Compresses the published appliance image (`scripts/appliance-build-rpi-ab-image.sh`) | ❌ | ❌ | https://github.com/tukaani-project/xz |
+| `xz-utils` | host install | GPL-2.0-or-later AND Public-Domain (liblzma) | Compresses the published appliance image (`scripts/appliance-build-rpi-image.sh`) | ❌ | ❌ | https://github.com/tukaani-project/xz |
 
 ### GitHub Actions
 
