@@ -1,0 +1,383 @@
+name: Appliance image
+
+# Build the flashable Raspberry Pi appliance image on a GitHub-hosted runner.
+#
+# What this workflow produces is a build: an image an operator can write to a
+# card, the build authority that says what it is made of, and the gate logs that
+# say what was proven about it. Three artefacts per run, one per board.
+#
+# What it does not produce is a release, and that is deliberate.
+# packaging/appliance/vm/base-images.lock.json approves exactly one builder --
+# the pinned Debian genericcloud guest -- and tells it from every other machine
+# by a kernel pattern no hosted runner carries. An image built here is therefore
+# refused at signing time with builder_environment_untrusted, by design. Cutting
+# a signable release still means scripts/appliance-builder-vm.sh on a host booted
+# from that image. Nothing here is relaxed to make a gate pass: the builder
+# environment is recorded honestly, including the base-image digest a hosted
+# runner does not have, so a finalizer refuses it for the true reason.
+#
+# Flashing does not verify an image signature, so an unsigned build is enough for
+# the physical-hardware validation gate in docs/appliance/hardware-validation.md.
+
+"on":
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Which board to build
+        type: choice
+        options:
+          - all
+          - rpi3
+          - rpi4
+          - rpi5
+        default: all
+
+permissions:
+  contents: read
+
+# A second run of the same ref would race the first for nothing, but a queued
+# run is not cancelled: a 45-minute build that is nearly done is worth more than
+# the one that would replace it.
+concurrency:
+  group: appliance-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      profiles: ${{ steps.pick.outputs.profiles }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Resolve the board list from the one table that knows
+        id: pick
+        env:
+          # Never interpolated into the program text: a choice input is
+          # constrained by GitHub, and the next input to be added might not be.
+          WANTED: ${{ inputs.profile }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import sys
+
+          sys.path.insert(0, ".")
+          from appliance import rpi_image_gen
+
+          known = sorted(rpi_image_gen.HARDWARE_PROFILES)
+          wanted = (os.environ.get("WANTED") or "all").strip()
+          if wanted in ("", "all"):
+              chosen = known
+          elif wanted in known:
+              chosen = [wanted]
+          else:
+              raise SystemExit(f"{wanted!r} is not a board this project builds: {known}")
+          print("profiles=" + json.dumps(chosen))
+          PY
+          cat "$GITHUB_OUTPUT"
+
+  manager-package:
+    name: manager package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    # The .deb the image carries, built on its own. packaging/appliance/build-deb.sh
+    # is reproducible from SOURCE_DATE_EPOCH and a pinned compressor, which is
+    # what lets it run on a builder nobody attested -- two builds of one commit
+    # are the same bytes. Uploaded separately because a Manager fix during a
+    # hardware test is then a file copy and a dpkg -i, not a 45-minute image
+    # build and a re-flash.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build the arm64 package
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/package"
+          packaging/appliance/build-deb.sh --output "${RUNNER_TEMP}/package" --arch arm64
+          ls -l "${RUNNER_TEMP}/package"
+
+      - name: Report what was built
+        run: |
+          set -euo pipefail
+          {
+            echo "### Appliance Manager package"
+            echo
+            echo '```'
+            cat "${RUNNER_TEMP}"/package/*.deb.sha256
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the package
+        uses: actions/upload-artifact@v7
+        with:
+          name: appliance-manager-deb
+          path: ${{ runner.temp }}/package/
+          retention-days: 30
+          overwrite: true
+
+  image:
+    name: image ${{ matrix.profile }}
+    needs: plan
+    runs-on: ubuntu-latest
+    # About 28 minutes per image on the maintainer's machine. A 4-CPU hosted
+    # runner running the foreign-architecture stages under emulation is several
+    # times that, and the xz of an 8.25 GiB image is single-file work.
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    strategy:
+      # One board's build says nothing about another board's, so a failure does
+      # not cancel the others.
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJSON(needs.plan.outputs.profiles) }}
+
+    steps:
+      - name: Reclaim runner disk
+        run: |
+          set -euo pipefail
+          before="$(df -PB1 --output=avail / | tail -n1)"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/local/.ghcup || true
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          after="$(df -PB1 --output=avail / | tail -n1)"
+          echo "reclaimed $(( (after - before) / 1024 / 1024 )) MiB on /"
+          df -h / /mnt || true
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # The build refuses to attribute an image to a revision whose commit
+          # object it cannot see, and the source bundle is written from the
+          # object tree rather than the working directory.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Choose the filesystem the build writes to
+        run: |
+          set -euo pipefail
+          # -B points the generator's build directory at $OUTPUT/build-<id>, so
+          # --output decides where roughly 15 G of chroot and intermediate
+          # images land. On a hosted runner that is not the root filesystem.
+          root=""
+          for candidate in /mnt "${RUNNER_TEMP}"; do
+            sudo mkdir -p "${candidate}/appliance" 2>/dev/null || continue
+            sudo chown "$(id -u):$(id -g)" "${candidate}/appliance" 2>/dev/null || continue
+            root="${candidate}/appliance"
+            break
+          done
+          [ -n "${root}" ] || { echo "::error::no writable build root on this runner"; exit 1; }
+
+          avail="$(df -PB1 --output=avail "${root}" | tail -n1)"
+          need=$((30 * 1024 * 1024 * 1024))
+          if [ "${avail}" -lt "${need}" ]; then
+            echo "::error::${root} has $(( avail / 1024 / 1024 / 1024 )) GiB free; the build needs 30 GiB"
+            exit 1
+          fi
+
+          mkdir -p "${root}/dist" "${root}/tmp"
+          # Every path this job works in, decided here and nowhere else. The
+          # generator's location is not job-level env because the runner context
+          # does not exist there: a workflow that names it is rejected whole,
+          # before a job starts.
+          {
+            echo "APPLIANCE_OUTPUT=${root}/dist"
+            echo "TMPDIR=${root}/tmp"
+            echo "EMS_RPI_IMAGE_GEN=${RUNNER_TEMP}/rpi-image-gen"
+          } >> "$GITHUB_ENV"
+          echo "building into ${root} ($(( avail / 1024 / 1024 / 1024 )) GiB free)"
+
+      - name: Fetch the pinned generator
+        run: |
+          set -euo pipefail
+          # Verifies the tarball against packaging/appliance/image/rpi-image-gen.lock
+          # before extracting it, so this proves the pin as well as fetching it.
+          scripts/appliance-fetch-rpi-image-gen.sh --into "${EMS_RPI_IMAGE_GEN}" --form tarball
+
+      - name: Install the generator's declared dependencies
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          sudo -E apt-get update -qq
+          # Upstream's own installer reads its own dependency list, which is the
+          # list the builder guest installs too. Its failure is not fatal here:
+          # the compatibility probe below is what decides whether this runner can
+          # build, and it names every missing binary and package.
+          # Invoked through bash rather than as a program: the exec bit is a
+          # property of the delivery path, and this one is a tarball.
+          if ! sudo -E bash "${EMS_RPI_IMAGE_GEN}/install_deps.sh"; then
+            echo "::warning::install_deps.sh did not complete; the probe below decides"
+          fi
+          # What the builder guest installs beside upstream's list.
+          sudo -E apt-get install -y -qq \
+            qemu-user-static binfmt-support zstd xz-utils gpgv gdisk
+
+      - name: Make rootless podman work on this runner
+        run: |
+          set -euo pipefail
+          # rpi-image-gen runs its foreign-architecture stages through rootless
+          # podman: its bin/ns helper evals a bash function definition when it is
+          # already root and dies before the first layer. Ubuntu 24.04 refuses
+          # unprivileged user namespaces through AppArmor, which is exactly what
+          # rootless podman and mmdebstrap are.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          user="$(id -un)"
+          grep -q "^${user}:" /etc/subuid || echo "${user}:100000:65536" | sudo tee -a /etc/subuid
+          grep -q "^${user}:" /etc/subgid || echo "${user}:100000:65536" | sudo tee -a /etc/subgid
+          # A login session is what gives rootless podman its XDG_RUNTIME_DIR,
+          # and an Actions step does not have one.
+          sudo loginctl enable-linger "${user}" || true
+          runtime="/run/user/$(id -u)"
+          if [ ! -d "${runtime}" ]; then
+            runtime="${RUNNER_TEMP}/runtime"
+            mkdir -p "${runtime}"
+            chmod 700 "${runtime}"
+          fi
+          echo "XDG_RUNTIME_DIR=${runtime}" >> "$GITHUB_ENV"
+          sudo systemctl restart systemd-binfmt.service || true
+
+      - name: Report what this runner can and cannot do
+        run: |
+          set -euo pipefail
+          podman system migrate >/dev/null 2>&1 || true
+          set +e
+          scripts/appliance-check-rpi-image-gen.sh --rpi-image-gen "${EMS_RPI_IMAGE_GEN}"
+          status=$?
+          set -e
+          case "${status}" in
+            0) echo "this runner satisfies the generator's contract" ;;
+            1) echo "::error::the fetched tree is not the pinned rpi-image-gen contract"; exit 1 ;;
+            *) echo "::error::this runner cannot build with the generator; see the missing entries above"
+               exit 1 ;;
+          esac
+
+      - name: Capture the builder environment
+        run: |
+          set -euo pipefail
+          # Recorded honestly rather than completely. A hosted runner has no
+          # approved base image and no digest for one, so --base-image-sha512 is
+          # left empty: release_inputs.verify_builder_environment then refuses
+          # this build for the true reason instead of being handed a digest of
+          # something that is not a base image.
+          lock_id="ci:github-hosted"
+          if [ -r /imagegeneration/imagedata.json ]; then
+            lock_id="ci:$(python3 - <<'PY'
+          import json
+
+          with open("/imagegeneration/imagedata.json", encoding="utf-8") as handle:
+              data = json.load(handle)
+          entry = data[0] if isinstance(data, list) and data else {}
+          print(f"{entry.get('group', 'unknown')}-{entry.get('version', 'unknown')}".strip())
+          PY
+          )"
+          fi
+          scripts/appliance-capture-builder-environment.sh \
+            --output "${APPLIANCE_OUTPUT}/builder-environment.json" \
+            --base-image-lock-id "${lock_id}" \
+            --depends "${EMS_RPI_IMAGE_GEN}/depends"
+          cat "${APPLIANCE_OUTPUT}/builder-environment.json"
+
+      - name: Create and verify the source bundle
+        run: |
+          set -euo pipefail
+          # The source-bundle gate's input: written from the git object tree and
+          # verified against it object by object before it is handed over.
+          scripts/appliance-create-source-bundle.sh \
+            --output "${APPLIANCE_OUTPUT}/source-bundle.tar.gz"
+
+      - name: Run the release gates in builder mode
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          set -euo pipefail
+          # --mode builder is the question this runner can answer: can this
+          # source, on this builder, produce an image that inspects cleanly? Its
+          # best verdict is PASS (builder qualification), which is not a release.
+          # Strict is the default, so a required gate that did not run exits 3
+          # and is not reported as a pass.
+          set +e
+          scripts/appliance-release-gates.sh \
+            --mode builder \
+            --profile "${PROFILE}" \
+            --output "${APPLIANCE_OUTPUT}" \
+            --rpi-image-gen "${EMS_RPI_IMAGE_GEN}" \
+            --builder-environment "${APPLIANCE_OUTPUT}/builder-environment.json" \
+            --source-bundle "${APPLIANCE_OUTPUT}/source-bundle.tar.gz" \
+            2>&1 | tee "${APPLIANCE_OUTPUT}/release-gates.log"
+          status="${PIPESTATUS[0]}"
+          set -e
+          exit "${status}"
+
+      - name: Summarise the verdict
+        if: always()
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          set -euo pipefail
+          output="${APPLIANCE_OUTPUT:-}"
+          {
+            echo "### ${PROFILE}"
+            echo
+            if [ -n "${output}" ] && [ -r "${output}/release-gates.log" ]; then
+              echo '```'
+              # The gate list and the verdict, not the whole build log.
+              sed -n '/^gate /,$p' "${output}/release-gates.log" | tail -n 40
+              echo '```'
+            else
+              echo "The gates produced no log; the build did not reach them."
+            fi
+            echo
+            echo "This image is **not signable**: it was built on a hosted runner,"
+            echo "which release policy does not approve as a builder."
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ -n "${output}" ] && ls -l "${output}" || true
+
+      - name: Upload the image
+        if: always() && env.APPLIANCE_OUTPUT != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: appliance-image-${{ matrix.profile }}
+          # The raw .img is 8.25 GiB and mostly empty; Imager and balenaEtcher
+          # write the .xz straight to a card, so the operator unpacks nothing.
+          path: |
+            ${{ env.APPLIANCE_OUTPUT }}/*.img.xz
+            ${{ env.APPLIANCE_OUTPUT }}/*.img.xz.sha256
+            ${{ env.APPLIANCE_OUTPUT }}/*.build-authority.json
+            ${{ env.APPLIANCE_OUTPUT }}/*.build.json
+            ${{ env.APPLIANCE_OUTPUT }}/builder-environment.json
+          if-no-files-found: warn
+          retention-days: 30
+          overwrite: true
+
+      - name: Upload the gate evidence
+        if: always() && env.APPLIANCE_OUTPUT != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: appliance-gates-${{ matrix.profile }}
+          path: |
+            ${{ env.APPLIANCE_OUTPUT }}/release-gates.log
+            ${{ env.APPLIANCE_OUTPUT }}/gates/
+            ${{ env.APPLIANCE_OUTPUT }}/reports/
+            ${{ env.APPLIANCE_OUTPUT }}/*.build.log
+          if-no-files-found: warn
+          retention-days: 30
+          overwrite: true
