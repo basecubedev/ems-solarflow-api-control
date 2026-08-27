@@ -28,6 +28,17 @@ name: Appliance image
 # the physical-hardware validation gate in docs/appliance/hardware-validation.md.
 
 "on":
+  # Weekly, because the point of a fresh image is a fresh OS: the build resolves
+  # its packages from trixie, trixie-updates and trixie-security at build time
+  # with nothing pinned, so a card flashed from last week's image comes up
+  # already patched instead of pulling months of updates on first boot. Not on
+  # push: three emulated builds per commit would be hours of runner time each
+  # time, and nothing about a commit makes last week's OS stale.
+  #
+  # Off the hour on purpose. Scheduled runs queue behind everyone else's, and
+  # the ones on :00 wait longest.
+  schedule:
+    - cron: "17 3 * * 1"
   workflow_dispatch:
     inputs:
       profile:
@@ -435,8 +446,13 @@ jobs:
     # evidence even when the gates fail -- that is when the logs are worth most
     # -- so the presence of an artefact says nothing here; the gates' verdict
     # does.
+    # The `inputs` context exists for workflow_dispatch and workflow_call and is
+    # empty for anything else, so a plain `inputs.publish` would make every
+    # scheduled run build three images and publish nothing -- as a green skip,
+    # with every job reporting success. Declining to publish is a choice a
+    # person makes at dispatch time; a schedule has nobody to make it.
     if: >-
-      ${{ inputs.publish
+      ${{ (github.event_name != 'workflow_dispatch' || inputs.publish)
       && needs.image.result == 'success'
       && needs['manager-package'].result == 'success' }}
     runs-on: ubuntu-latest

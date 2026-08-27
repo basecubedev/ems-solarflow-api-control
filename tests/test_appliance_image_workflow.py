@@ -168,10 +168,48 @@ def test_only_the_publish_job_may_write(workflow):
     assert workflow["permissions"] == {"contents": "read"}, "the default must stay read-only"
 
 
-def test_the_workflow_is_dispatch_only(workflow):
-    """Three image builds per push would be hours of runner time per commit."""
+def test_the_workflow_never_runs_on_a_commit(workflow):
+    """What the old dispatch-only rule was actually protecting.
 
-    assert set(workflow["on"]) == {"workflow_dispatch"}
+    Three emulated builds per push would be hours of runner time per commit, and
+    nothing about a commit makes last week's OS stale. A weekly schedule is the
+    opposite case: the OS moves whether or not this repository does.
+    """
+
+    assert set(workflow["on"]) <= {"workflow_dispatch", "schedule"}
+    assert "push" not in workflow["on"]
+    assert "pull_request" not in workflow["on"]
+
+
+def test_the_image_is_rebuilt_on_a_schedule(workflow):
+    """A card flashed from a months-old image spends its first boot pulling
+    months of updates. The build pins no package versions -- trixie,
+    trixie-updates and trixie-security are resolved as the build runs -- so
+    rebuilding is the entire mechanism."""
+
+    crons = [entry["cron"] for entry in workflow["on"]["schedule"]]
+
+    assert len(crons) == 1, crons
+    minute, hour, _day, _month, weekday = crons[0].split()
+
+    assert weekday != "*", "a daily build of three emulated images is not the ask"
+    assert minute != "0", "runs scheduled on the hour queue behind everyone else's"
+
+
+def test_a_scheduled_run_publishes_rather_than_skipping_in_silence(workflow):
+    """The trap this condition exists to avoid.
+
+    The `inputs` context is populated for workflow_dispatch and workflow_call
+    and is empty for anything else, so a plain `inputs.publish` makes every
+    scheduled run build three images and publish nothing -- as a green skip,
+    with every job reporting success. Declining to publish is a choice a person
+    makes at dispatch time; a schedule has nobody to make it.
+    """
+
+    condition = str(workflow["jobs"]["publish"]["if"])
+
+    assert "github.event_name != 'workflow_dispatch'" in condition
+    assert "inputs.publish" in condition
 
 
 def test_the_uploaded_image_is_the_compressed_one(workflow):
