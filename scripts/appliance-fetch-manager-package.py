@@ -24,6 +24,7 @@ import argparse
 import json
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -88,16 +89,21 @@ def main(argv=None):
     if not keyring.is_file():
         raise SystemExit(f"{keyring} is not a keyring; there is nothing to verify against")
 
-    # Not reachable and not readable are different answers. Before the first
-    # Manager release the index is simply not there, and a build that then makes
-    # its own package is right; an index that answered and turned out to be
-    # rubbish is something wrong, and saying "nothing published yet" about it
-    # would hide it behind the same fallback.
+    # Not published and not reachable are different answers, and only the first
+    # is a fallback. Before the first Manager release the index is genuinely not
+    # there and a build that then makes its own package is right. A 503, a
+    # timeout, a DNS failure or a TLS error are not that -- and urllib raises all
+    # of them as OSError, so catching the base class turned every one of them
+    # into "nothing published yet" and a silently unsigned package in the image.
     try:
         document = fetch(args.index, limit=MAX_DOCUMENT_BYTES, label="the index")
-    except OSError as exc:
-        print(f"no index is published at {args.index}: {exc}", file=sys.stderr)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise SystemExit(f"the index at {args.index} could not be read: HTTP {exc.code}")
+        print(f"no index is published at {args.index}", file=sys.stderr)
         return 3
+    except OSError as exc:
+        raise SystemExit(f"the index at {args.index} could not be reached: {exc}")
     try:
         index = json.loads(document)
     except ValueError as exc:

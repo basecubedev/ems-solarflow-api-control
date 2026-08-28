@@ -328,6 +328,60 @@ def test_an_index_that_answers_with_rubbish_is_not_no_index(tmp_path, monkeypatc
     assert "not readable json" in str(refused.value)
 
 
+def raising(error):
+    def fetch(url, *, limit, label):
+        raise error
+
+    return fetch
+
+
+def test_a_missing_index_is_the_only_failure_that_falls_back(tmp_path, monkeypatch, signer):
+    """404 is the state this project is in before the first Manager release, and
+    a build that then makes its own package is doing the right thing."""
+
+    import urllib.error
+
+    monkeypatch.setattr(fetcher, "fetch", raising(
+        urllib.error.HTTPError("https://example.invalid/index.json", 404, "Not Found", {}, None)
+    ))
+
+    assert fetcher.main([
+        "--index", "https://example.invalid/index.json",
+        "--into", str(tmp_path / "into"),
+        "--keyring", str(signer["keyring"]),
+    ]) == 3
+
+
+@pytest.mark.parametrize("unreachable", ["503", "429", "dns", "timeout"])
+def test_an_index_that_could_not_be_reached_fails_the_build(
+    tmp_path, monkeypatch, signer, unreachable
+):
+    """urllib raises every one of these as OSError, so catching the base class
+    reported a 503 as "nothing published yet" and put an unsigned package built
+    from the checkout into the image, behind one notice line in a three-hour log.
+    Harmless while no release exists; permanently wrong afterwards."""
+
+    import urllib.error
+
+    url = "https://example.invalid/index.json"
+    error = {
+        "503": urllib.error.HTTPError(url, 503, "Service Unavailable", {}, None),
+        "429": urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None),
+        "dns": urllib.error.URLError("name resolution failed"),
+        "timeout": TimeoutError("timed out"),
+    }[unreachable]
+    monkeypatch.setattr(fetcher, "fetch", raising(error))
+
+    with pytest.raises(SystemExit) as refused:
+        fetcher.main([
+            "--index", url,
+            "--into", str(tmp_path / "into"),
+            "--keyring", str(signer["keyring"]),
+        ])
+
+    assert "could not be re" in str(refused.value), str(refused.value)
+
+
 def test_an_index_that_is_not_https_is_refused_before_anything_is_read():
     with pytest.raises(SystemExit) as refused:
         fetcher.main(["--index", "http://example.invalid/i.json", "--into", "/tmp/unused"])
