@@ -1,4 +1,4 @@
-name: Generated config template
+name: EMS config template
 
 "on":
   pull_request:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   update-same-repository-pr:
-    name: Update template on same-repository PR
+    name: EMS config template update
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
@@ -51,7 +51,7 @@ jobs:
           git push origin "HEAD:${HEAD_BRANCH}"
 
   check-fork-pr:
-    name: Check template on fork PR
+    name: EMS config template check (fork)
     if: github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     permissions:
@@ -82,3 +82,32 @@ jobs:
             "Run: python tools/build_config_template.py" \
             "Then commit config/config.template.json." >&2
           exit 1
+
+  gate:
+    name: EMS config template gate
+    # See the note on the gate in simulated-regression-tests.yml. The two jobs
+    # above are mutually exclusive -- a fork pull request skips one and a
+    # same-repository one skips the other -- so exactly one skip is the normal
+    # case here rather than a signal.
+    needs:
+      - update-same-repository-pr
+      - check-fork-pr
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Refuse a run in which anything did not succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 -c 'import json, os, sys
+          results = json.loads(os.environ["RESULTS"])
+          bad = sorted((name, outcome["result"]) for name, outcome in results.items()
+                       if outcome["result"] not in ("success", "skipped"))
+          for name, result in bad:
+              print(f"::error::{name} concluded {result}")
+          print(f"{len(results) - len(bad)} of {len(results)} jobs succeeded or were skipped")
+          sys.exit(1 if bad else 0)'

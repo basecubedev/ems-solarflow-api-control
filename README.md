@@ -1,7 +1,7 @@
 # ems-solarflow-api-control
 
-[![Continuous Integration](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml)
-[![Playwright E2E](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml)
+[![Repo PR gate](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml)
+[![Repo browser e2e](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml)
 [![CodeQL](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
 ![automated tests](https://img.shields.io/badge/automated%20tests-12300%2B-blue)

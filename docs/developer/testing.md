@@ -161,12 +161,15 @@ test has exactly one owner. To run a *functional area* rather than a CI group,
 use the plain marker (`pytest -m "admin and authority"`) — that selection is
 intentionally overlapping.
 
-### Nightly
+### On the merge
 
-`.github/workflows/nightly-full-suite.yml` runs the full non-Docker suite on
-both supported Python versions, the strict deprecation check, the complete
-Chromium and Firefox Admin suites, the Docker-first tier, the System Build tier
-and the Admin upgrade/recovery journey.
+There is no nightly schedule. `.github/workflows/simulated-regression-tests.yml`
+and `.github/workflows/playwright-e2e.yml` run the full non-Docker suite on both
+supported Python versions, the strict deprecation check and the complete Chromium
+and Firefox Admin suites on the push to `main`, skipping them on pull requests.
+The Docker-first and System Build tiers run on every pull request already. The
+Admin upgrade/recovery journey belongs to
+`.github/workflows/admin-replacement-canary.yml`.
 
 ### Release candidate
 

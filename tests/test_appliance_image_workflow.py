@@ -174,11 +174,24 @@ def test_the_workflow_never_runs_on_a_commit(workflow):
     Three emulated builds per push would be hours of runner time per commit, and
     nothing about a commit makes last week's OS stale. A weekly schedule is the
     opposite case: the OS moves whether or not this repository does.
+
+    A tag is the third case and the reason `push` is here at all: somebody
+    naming a build is not the same event as somebody committing, and it happens
+    at the rate releases happen. So `push` is allowed to carry tags and must
+    never carry branches -- one word in the wrong place turns this back into a
+    half-hour build per commit.
     """
 
-    assert set(workflow["on"]) <= {"workflow_dispatch", "schedule"}
-    assert "push" not in workflow["on"]
+    assert set(workflow["on"]) <= {"workflow_dispatch", "schedule", "push"}
     assert "pull_request" not in workflow["on"]
+
+    push = workflow["on"].get("push") or {}
+    assert set(push) == {"tags"}, (
+        f"the image workflow triggers on push {sorted(push)}; only tags may be "
+        "there, because a branch push is a commit and this build takes half an "
+        "hour of runner time per board"
+    )
+    assert push["tags"] == ["appliance-image-v*"], push["tags"]
 
 
 def test_the_image_is_rebuilt_on_a_schedule(workflow):
