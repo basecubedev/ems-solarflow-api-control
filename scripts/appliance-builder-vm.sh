@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Provision a disposable builder VM and build the real A/B images in it.
+# Provision a disposable builder VM and build the real appliance images in it.
 #
-#   scripts/appliance-builder-vm.sh --profile rpi5 [--profile rpi4]...
+#   scripts/appliance-builder-vm.sh --profile rpi3|rpi4|rpi5 [--profile ...]...
 #                                   [--output DIR] [--cache DIR] [--keep]
 #                                   [--memory MB] [--disk SIZE] [--build-id ID]
 #                                   [--release-gate]
@@ -51,7 +51,7 @@ not_run() {
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --profile) PROFILES+=("${2:?--profile needs rpi4 or rpi5}"); shift 2 ;;
+        --profile) PROFILES+=("${2:?--profile needs rpi3, rpi4 or rpi5}"); shift 2 ;;
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --cache) CACHE=${2:?--cache needs a directory}; shift 2 ;;
         --memory) MEMORY=${2:?--memory needs a size in MB}; shift 2 ;;

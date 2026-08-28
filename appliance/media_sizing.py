@@ -17,7 +17,7 @@ change this project makes.
 MIB = 1024 * 1024
 GIB = 1024 * MIB
 
-# What the profile declares. packaging/appliance/image/shared/ems-appliance-single.yaml
+# What the profile declares. packaging/appliance/image/shared/ems-appliance.yaml
 # is the source of these, and tests/test_appliance_media_sizing.py keeps them equal.
 BOOT_PARTITION_BYTES = 256 * MIB
 ROOT_PARTITION_BYTES = 8 * GIB

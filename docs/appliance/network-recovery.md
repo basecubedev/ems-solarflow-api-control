@@ -84,10 +84,10 @@ not all answer the same way:
 | Shape | Console or SSH login |
 |---|---|
 | Manager package on your own Raspberry Pi OS | Yes — your own account, the one you set up when you installed the OS |
-| **Either appliance image** | **Console only.** `ems-rescue` with a documented password, for the case where nothing else answers — see [console-recovery.md](console-recovery.md). No SSH password login and no shipped authorized key: a shipped *key* is a credential every device shares, and unlike a console password it is reachable over the network |
+| **The appliance image** | **Console only.** `ems-rescue` with a documented password, for the case where nothing else answers — see [console-recovery.md](console-recovery.md). No SSH password login and no shipped authorized key: a shipped *key* is a credential every device shares, and unlike a console password it is reachable over the network |
 
-Both image shapes answer this identically. The rescue account comes from the
-package, not from the layout, and neither image accepts an SSH password.
+Both installation shapes answer this identically. The rescue account comes from
+the package rather than from the image, and neither accepts an SSH password.
 
 On an appliance image the recovery paths are therefore, in order:
 
