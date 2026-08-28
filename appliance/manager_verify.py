@@ -244,13 +244,24 @@ def arm(
     except FileNotFoundError:
         pass
 
+    # The deadline is written before the timer is started on purpose: a timer
+    # that fired first would find nothing to judge. But a deadline with no timer
+    # judges nothing and blocks everything -- the console gates both Update and
+    # Revert on `armed` -- so an arm that fails must leave none behind.
+    def abandon(code, message):
+        try:
+            deadline_path(paths).unlink()
+        except OSError:
+            pass
+        raise ManagerVerifyError(code, message)
+
     if runner is None or not runner.available("systemctl"):
-        raise ManagerVerifyError(
+        abandon(
             "systemctl_unavailable", "systemctl is not available, so no deadline could be armed"
         )
     result = runner.run("systemctl", ["enable", "--now", VERIFY_TIMER], timeout=60)
     if not result.ok:
-        raise ManagerVerifyError(
+        abandon(
             "verify_timer_failed",
             (result.stderr or result.stdout or f"{VERIFY_TIMER} could not be started").strip(),
         )

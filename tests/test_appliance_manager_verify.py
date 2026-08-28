@@ -153,6 +153,34 @@ def test_arming_starts_the_timer(paths, packaged):
     assert runner.calls == [("systemctl", ["enable", "--now", manager_verify.VERIFY_TIMER])]
 
 
+def test_a_timer_that_will_not_start_leaves_no_deadline_armed(paths, packaged):
+    """The deadline is written before the timer on purpose -- a timer that fired
+    first would find nothing to judge. But a deadline with no timer judges
+    nothing and blocks everything: the console gates both Update and Revert on
+    ``armed``, so the appliance would sit there offering neither, with the
+    package it just installed and no way to act on it."""
+
+    runner = FakeRunner(ok=False, available=True)
+
+    with pytest.raises(manager_verify.ManagerVerifyError) as refusal:
+        arm(paths, packaged, runner)
+
+    assert refusal.value.code == "verify_timer_failed"
+    assert not manager_verify.deadline_path(paths).exists()
+
+
+def test_a_host_without_systemctl_leaves_no_deadline_armed(paths, packaged):
+    """Same wedge, reached without running anything at all."""
+
+    runner = FakeRunner(available=False)
+
+    with pytest.raises(manager_verify.ManagerVerifyError) as refusal:
+        arm(paths, packaged, runner)
+
+    assert refusal.value.code == "systemctl_unavailable"
+    assert not manager_verify.deadline_path(paths).exists()
+
+
 def test_without_a_reverter_to_snapshot_nothing_is_armed(paths, tmp_path):
     runner = FakeRunner()
 

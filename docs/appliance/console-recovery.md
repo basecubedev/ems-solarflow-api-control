@@ -65,6 +65,17 @@ sudo ems-appliance verify-install
 sudo journalctl -u ems-appliance-web -u ems-appliance-agent -b --no-pager
 ```
 
+If the **Update** and **Revert** controls are both greyed out, a verification
+deadline is armed and nothing is judging it — normally
+`ems-appliance-manager-verify.timer` does, within its window. Run the check by
+hand and it resolves the deadline the same way the timer would, confirming a
+healthy manager or putting the previous one back:
+
+```bash
+sudo systemctl start ems-appliance-manager-verify.service
+sudo /usr/lib/ems-appliance-manager/verify-manager.sh   # if the unit is gone
+```
+
 To put back the Appliance Manager package the appliance was running before its
 last update:
 
