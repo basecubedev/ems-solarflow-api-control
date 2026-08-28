@@ -302,20 +302,51 @@ jobs:
           # installing an earlier package, so an index naming only the newest
           # one takes recovery away from every appliance that kept no copy.
           # --previous carries every entry forward; --keep is left unset.
+          #
+          # Whether an index already exists is decided on the HTTP status and
+          # nothing else. Reading "the download failed" as "there is no index
+          # yet" is how a transient 500 would republish the fleet's entire
+          # history as a single entry, with --clobber, and nothing failing.
           previous=""
-          if gh release download "${INDEX_TAG}" \
-              --pattern manager-packages.json --dir "${work}" 2>/dev/null; then
-            previous="${work}/manager-packages.json"
-            echo "carrying forward $(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["releases"]))' "${previous}") entries"
-          else
-            echo "no index yet; this run creates the first one"
-          fi
+          carried=0
+          # Read as a status code rather than out of a tool's error prose. `gh`
+          # exits 1 for a missing release and for a broken connection alike, and
+          # telling them apart by the wording of its message makes the fleet's
+          # history depend on a string that is not part of any contract.
+          code=$(curl -sS -o "${work}/index-release.json" -w '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GH_REPO}/releases/tags/${INDEX_TAG}" || echo 000)
+          case "${code}" in
+            200)
+              # It exists, so its content is not optional here.
+              gh release download "${INDEX_TAG}" --pattern manager-packages.json --dir "${work}"
+              previous="${work}/manager-packages.json"
+              carried=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["releases"]))' "${previous}")
+              echo "carrying forward ${carried} entries"
+              ;;
+            404)
+              echo "no index yet; this run creates the first one"
+              ;;
+            *)
+              echo "::error::the index release answered ${code}; could not establish whether an index already exists, and refusing to publish one that might replace it"
+              exit 1
+              ;;
+          esac
 
           scripts/appliance-build-manager-index.py \
             --base-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}" \
             ${previous:+--previous "${previous}"} \
             --output "${work}/manager-packages.json.new" \
             "${RUNNER_TEMP}/package/${RELEASE_ID}.manifest.json"
+          # The floor: this release adds one entry and removes none. Anything
+          # else means history was dropped somewhere above, and the upload below
+          # is a --clobber over the only list of packages an appliance can reach.
+          published=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["releases"]))' "${work}/manager-packages.json.new")
+          if [ "${published}" -lt "${carried}" ]; then
+            echo "::error::the new index names ${published} releases, the one it replaces named ${carried}"
+            exit 1
+          fi
           mv "${work}/manager-packages.json.new" "${work}/manager-packages.json"
           cat "${work}/manager-packages.json"
 
