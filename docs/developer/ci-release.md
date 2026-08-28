@@ -3,20 +3,90 @@
 How continuous integration and image publishing work for this repository. For
 the local test commands these mirror, see [testing.md](testing.md).
 
+## Naming
+
+A workflow is named for the product it ships or gates, and every job it runs
+carries that product as its first word. Three prefixes, and the set is closed:
+
+| Prefix | Ships | Workflows |
+|---|---|---|
+| `Appliance ` | the Raspberry Pi product — Manager `.deb`, OS image, fleet index | `appliance-image.yml`, `appliance-manager-release.yml` |
+| `EMS ` | the paired EMS controller and Admin console | `docker-publish.yml`, `docker-feature-publish.yml`, `docker-feature-cleanup.yml`, `admin-replacement-canary.yml`, `generated-config-template.yml` |
+| `Repo ` | ships nothing, gates both | `simulated-regression-tests.yml`, `playwright-e2e.yml`, `nightly-full-suite.yml` |
+
+There is deliberately no `Admin ` prefix: the two container images ship as one
+`build_id`/`channel` identity and `admin/releases.py` treats them as a single
+system build, so splitting them in the pipeline names would describe something
+the code does not do.
+
+The prefix is not decoration. Branch protection and the required-check picker
+show a job's name with no workflow around it, and two workflows here each had a
+job called `publish` — one publishing an OS image, one publishing a signed
+package. They now read `Appliance image publish` and `Appliance Manager
+publish`.
+
+Job **names** are display text and free to change. Job **ids** are not: they
+carry the `needs:` graph, and `tests/test_appliance_release_identity_gate.py`,
+`tests/test_appliance_image_release_contents.py` and
+`tests/test_docker_publish_workflow.py` index them directly. A name that has
+been entered as a required status check is frozen in a third way — renaming it
+orphans the check, and pull requests then block for good on a status that will
+never report again.
+
+## Tagging
+
+Each product is released by pushing a tag, and each has its own namespace. The
+namespaces are not cosmetic: `admin/releases.py` offers every non-draft release
+of this repository to the operator as an EMS system build and decides which ones
+by `VERSION_PATTERN.fullmatch(tag)`. There is no product marker on a release, so
+the tag's shape is the only thing telling the console that an OS image is not an
+EMS build it can install.
+
+| Tag | Product | Runs | Produces |
+|---|---|---|---|
+| `v<x.y.z>` | EMS + Admin | `docker-publish.yml` | the two GHCR images, plus `latest` on `main` |
+| `appliance-manager-v<x.y.z>` | Appliance Manager | `appliance-manager-release.yml` | a signed `.deb` and the index the fleet reads |
+| `appliance-image-v<x.y.z>` | Appliance OS image | `appliance-image.yml` | one prerelease carrying an image per board |
+
+`v<x.y.z>` is the only namespace allowed to parse as a version, and nothing else
+may ever take that shape. `tests/test_appliance_image_tag_namespace.py` reads the
+patterns back out of the workflows and instantiates them with values chosen to
+break them, so a workflow added later cannot quietly claim the shape.
+
+Two of these tags can never be reused. `appliance-manager-release.yml` refuses a
+version whose release already exists, and the image workflow refuses a tag whose
+release is already published — a published version is not rewritten, because an
+appliance that already fetched it would be holding different bytes under the same
+name. Cutting the wrong tag therefore costs the version, not just the run, which
+is why the image workflow compares the tag against `appliance/version.py` in its
+first job rather than after three hours of emulated building.
+
+The image workflow still publishes weekly under `appliance-image-ci-<run>`. A tag
+push is for a build worth naming — a hardware-validation round, a support thread,
+a line in a document — and both forms publish as a *prerelease*: a hosted runner
+is refused at signing time by design, so nothing this workflow builds is signed,
+whatever started it.
+
+`appliance-manager-index` is not in the table because it is not a release
+namespace: it is one fixed tag holding the index, pinned by absolute URL inside
+every flashed image, and it can never move. See
+[../appliance/manager-releases.md](../appliance/manager-releases.md).
+
 ## Continuous integration
 
-Workflow: `.github/workflows/simulated-regression-tests.yml` (job name
-**Continuous Integration**). It runs on every pull request and on pushes to
-`main`:
+Workflow: `.github/workflows/simulated-regression-tests.yml`, named **Repo PR
+gate**. It runs on every pull request and on pushes to `main`:
 
-- `Static checks` — Ruff lint, compile check, generated config template and
+- `Repo static checks` — Ruff lint, compile check, generated config template and
   `node --check admin/static/admin.js`
-- `python-<group> (<python-version>)` — the four functional groups (`core`,
+- `Repo python <group> (<python-version>)` — the four functional groups (`core`,
   `admin`, `mqtt`, `power-control`) across the supported Python versions
   (currently 3.11 and 3.14), each through `scripts/test-pr.sh`
-- `Simulated power-control regression tests`
-- `System Build compatibility gate`
-- `Docker smoke test`, `Docker-first setup e2e`, `InfluxDB analytics e2e`
+- `Repo power-control regression`
+- `Repo System Build compatibility`
+- `Repo docker smoke test`, `Repo docker-first setup e2e`,
+  `Repo InfluxDB analytics e2e`
+- `Repo PR gate` — waits on all of the above and fails if any of them did
 
 The groups are an exact partition of the non-Docker suite. Functional markers
 overlap by design, so execution ownership is resolved by the fixed priority
@@ -26,9 +96,16 @@ covering the full collection *and* when any two groups would run the same test.
 Each job prints its selection and fails when that selection unexpectedly
 collects nothing.
 
-The offline power-control regression tests are the intended required status
-check for `main` in branch protection or repository rulesets. They are
-deterministic and need no hardware, network, or secrets.
+`Repo PR gate` is the intended required status check for `main`. Branch
+protection holds a list of names and cannot say "all of them", so requiring the
+jobs individually means naming every matrix cell and leaving every future cell
+unrequired. The gate waits on all of them instead, which keeps the required list
+at one name per workflow while new jobs are picked up by adding them to its
+`needs`. `tests/test_ci_gate_covers_every_job.py` fails when a job is added
+without being listed.
+
+The offline power-control regression tests behind it are deterministic and need
+no hardware, network, or secrets.
 
 The former monolithic `Full Python test suite (<version>)` job moved to
 `.github/workflows/nightly-full-suite.yml`; branch protection referring to it
@@ -109,7 +186,7 @@ template never drifts from the catalog.
 
 ## Docker image publishing
 
-Workflow: `.github/workflows/docker-publish.yml` (job **Build and publish Docker
+Workflow: `.github/workflows/docker-publish.yml`, named **EMS release** (job **EMS release publish
 image**). It builds `linux/amd64` and `linux/arm64` images and publishes to
 GHCR. It runs on:
 
@@ -128,7 +205,7 @@ For stable installations, pin a release tag in `docker-compose.yml` rather than
 
 ## Development build publishing (testing only)
 
-Workflow: `.github/workflows/docker-feature-publish.yml` ("Docker Feature
+Workflow: `.github/workflows/docker-feature-publish.yml` ("EMS development
 Publish"). Manual-only (`workflow_dispatch`) build of the EMS and Admin images
 from a development ref, without touching the stable release path. It never
 publishes `latest`, `v*`, `stable`, or `rc`, marks its images with

@@ -1,4 +1,4 @@
-name: Admin Replacement Canary
+name: EMS Admin replacement canary
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   admin-replacement-canary:
-    name: Real Admin replacement and browser reconnect
+    name: EMS Admin replacement and browser reconnect
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

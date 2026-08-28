@@ -1,4 +1,4 @@
-name: Nightly full suite
+name: Repo nightly
 
 # The pull-request workflow runs partitioned groups and the critical browser
 # subsets. This workflow runs everything end to end: both Python versions, both
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   python-full:
-    name: python-full (${{ matrix.python-version }})
+    name: Repo nightly python (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -56,7 +56,7 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -W error::DeprecationWarning -m pytest -q -m "not docker" tests/
 
   playwright-full:
-    name: playwright-${{ matrix.browser }}-full
+    name: Repo nightly browser ${{ matrix.browser }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -109,7 +109,7 @@ jobs:
           retention-days: 14
 
   docker-first:
-    name: docker-first
+    name: Repo nightly docker-first
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -144,7 +144,7 @@ jobs:
           docker network ls
 
   system-build:
-    name: system-build
+    name: Repo nightly system build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -171,7 +171,7 @@ jobs:
           pytest -q -m system_build tests/
 
   upstream-generator:
-    name: Pinned rpi-image-gen tree
+    name: Repo nightly pinned rpi-image-gen tree
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

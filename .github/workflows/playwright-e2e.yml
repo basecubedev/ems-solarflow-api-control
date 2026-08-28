@@ -1,4 +1,4 @@
-name: Playwright E2E
+name: Repo browser e2e
 
 on:
   pull_request:
@@ -30,7 +30,7 @@ jobs:
   # Pull requests run the tagged critical subsets. The full Chromium and Firefox
   # suites run in nightly-full-suite.yml and in scripts/test-rc.sh.
   playwright-chromium-critical:
-    name: playwright-chromium-critical
+    name: Repo browser chromium critical
     runs-on: ubuntu-latest
 
     steps:
@@ -74,7 +74,7 @@ jobs:
           retention-days: 14
 
   playwright-firefox-smoke:
-    name: playwright-firefox-smoke
+    name: Repo browser firefox smoke
     runs-on: ubuntu-latest
 
     steps:
@@ -120,7 +120,7 @@ jobs:
   # WebKit is not required per PR: run the smoke group on demand and before a
   # release. Kept separate so a WebKit-only flake never blocks a PR.
   playwright-webkit:
-    name: playwright-webkit-pre-release
+    name: Repo browser webkit pre-release
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     steps:
@@ -166,7 +166,7 @@ jobs:
   # The Raspberry Pi Appliance Manager UI. Its own config and its own
   # deterministic test server, so it shares nothing with the Admin suite above.
   playwright-appliance:
-    name: playwright-appliance
+    name: Repo browser appliance
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -208,7 +208,7 @@ jobs:
           retention-days: 14
 
   gate:
-    name: Playwright gate
+    name: Repo browser gate
     # See the note on the gate in simulated-regression-tests.yml. playwright-webkit
     # is skipped on every pull request by its own `if`, which is why a skip counts
     # as a pass here.

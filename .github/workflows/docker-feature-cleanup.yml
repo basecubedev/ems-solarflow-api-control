@@ -1,4 +1,4 @@
-name: Docker Feature Cleanup
+name: EMS development cleanup
 
 # When a feature branch is deleted, remove the GHCR image tags this branch
 # published via docker-feature-publish.yml. Only `dev-<safe-ref>` tags are
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   cleanup-feature-tags:
-    name: Delete feature Docker tags
+    name: EMS development cleanup
     runs-on: ubuntu-latest
     if: ${{ github.event.ref_type == 'branch' }}
 

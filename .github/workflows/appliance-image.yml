@@ -1,4 +1,4 @@
-name: Appliance image
+name: Appliance image build
 
 # Build the flashable Raspberry Pi appliance image on a GitHub-hosted runner.
 #
@@ -67,7 +67,7 @@ concurrency:
 
 jobs:
   plan:
-    name: plan
+    name: Appliance image plan
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -110,7 +110,7 @@ jobs:
           cat "$GITHUB_OUTPUT"
 
   manager-package:
-    name: manager package
+    name: Appliance image manager package
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -156,7 +156,7 @@ jobs:
           overwrite: true
 
   image:
-    name: image ${{ matrix.profile }}
+    name: Appliance image build ${{ matrix.profile }}
     needs: plan
     runs-on: ubuntu-latest
     # About 28 minutes per image on the maintainer's machine. A 4-CPU hosted
@@ -435,7 +435,7 @@ jobs:
           overwrite: true
 
   publish:
-    name: publish
+    name: Appliance image publish
     needs: [plan, manager-package, image]
     # An Actions artefact expires in 30 days and is reachable only through the
     # run page, by someone signed in with access to this repository. The install

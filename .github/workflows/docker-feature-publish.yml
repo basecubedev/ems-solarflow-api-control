@@ -1,4 +1,4 @@
-name: Docker Feature Publish
+name: EMS development build
 
 # Manual, testing-only image builds from a feature branch. This path never
 # touches `latest`, `v*`, `stable`, or `rc` — see docker-publish.yml for the
@@ -29,7 +29,7 @@ env:
 
 jobs:
   resolve-source:
-    name: Resolve immutable source revision
+    name: EMS resolve source revision
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -101,7 +101,7 @@ jobs:
           echo "Resolved '${INPUT_REF}' to ${sha}"
 
   mqtt-release-contract:
-    name: Fast Zendure MQTT development-release gate
+    name: EMS MQTT development-release gate
     needs: [resolve-source]
     runs-on: ubuntu-latest
     permissions:
@@ -160,7 +160,7 @@ jobs:
           retention-days: 14
 
   packaged-system-build-smoke:
-    name: Packaged Admin System Build smoke
+    name: EMS packaged System Build smoke
     needs: [resolve-source]
     runs-on: ubuntu-latest
     permissions:
@@ -215,7 +215,7 @@ jobs:
           retention-days: 14
 
   mosquitto-lifecycle:
-    name: Real Mosquitto lifecycle
+    name: EMS Mosquitto lifecycle
     needs: [resolve-source]
     runs-on: ubuntu-latest
     permissions:
@@ -259,7 +259,7 @@ jobs:
           }
 
   package-smoke:
-    name: Admin and EMS package smoke
+    name: EMS package smoke
     needs: [resolve-source]
     runs-on: ubuntu-latest
     permissions:
@@ -331,7 +331,7 @@ jobs:
         run: pytest -q -rs tests/test_system_build_docker_contract.py
 
   publish-feature-ghcr:
-    name: Build and publish feature Docker image
+    name: EMS development build publish
     needs:
       - resolve-source
       - mqtt-release-contract
@@ -719,7 +719,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   remote-image-pullback:
-    name: Pull back and inspect remote image pair
+    name: EMS remote image pullback
     needs: publish-feature-ghcr
     runs-on: ubuntu-latest
     permissions:
@@ -747,7 +747,7 @@ jobs:
         run: bash scripts/verify_remote_system_build.sh
 
   remote-packaged-browser-canary:
-    name: Remote packaged Admin Chromium canary
+    name: EMS remote Chromium canary
     needs: [publish-feature-ghcr, remote-image-pullback]
     runs-on: ubuntu-latest
     permissions:
@@ -821,7 +821,7 @@ jobs:
           retention-days: 14
 
   publish-development-catalogue:
-    name: Publish verified development catalogue entry
+    name: EMS development catalogue publish
     needs: [publish-feature-ghcr, remote-packaged-browser-canary]
     runs-on: ubuntu-latest
     permissions:
@@ -896,7 +896,7 @@ jobs:
           exit 1
 
   public-catalogue-verification:
-    name: Verify public development catalogue and browser
+    name: EMS development catalogue verify
     needs: [publish-feature-ghcr, publish-development-catalogue]
     runs-on: ubuntu-latest
     permissions:
@@ -975,7 +975,7 @@ jobs:
           exit 1
 
   prune-old-development-builds:
-    name: Prune old development image versions
+    name: EMS development build prune
     needs: [publish-feature-ghcr, publish-development-catalogue]
     runs-on: ubuntu-latest
     permissions:

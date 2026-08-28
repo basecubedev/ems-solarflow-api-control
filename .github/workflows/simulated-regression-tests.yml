@@ -1,4 +1,4 @@
-name: Continuous Integration
+name: Repo PR gate
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   static-checks:
-    name: Static checks
+    name: Repo static checks
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -61,7 +61,7 @@ jobs:
   # test runs in exactly one group and none runs twice.
   # tests/test_test_classification.py proves both directions.
   python-tests:
-    name: python-${{ matrix.group }} (${{ matrix.python-version }})
+    name: Repo python ${{ matrix.group }} (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -126,7 +126,7 @@ jobs:
           python -B ems-solarflow-api-control.py --simulate --max-cycles 2
 
   simulated-regression-tests:
-    name: Simulated power-control regression tests
+    name: Repo power-control regression
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -154,7 +154,7 @@ jobs:
           pytest -q tests/ -m "simulation and power_control"
 
   system-build-compatibility:
-    name: System Build compatibility gate (paired + legacy Fresh Install)
+    name: Repo System Build compatibility
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -186,7 +186,7 @@ jobs:
           pytest -q -m system_build tests/
 
   docker-smoke-test:
-    name: Docker smoke test
+    name: Repo docker smoke test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -223,7 +223,7 @@ jobs:
           scripts/docker_compose_smoke.sh
 
   docker-first-e2e:
-    name: Docker-first setup e2e
+    name: Repo docker-first setup e2e
     runs-on: ubuntu-latest
     # Booting a systemd container per tier is minutes of work each, and the
     # appliance tiers added around two hundred of them.
@@ -270,7 +270,7 @@ jobs:
           docker network ls
 
   influx-e2e:
-    name: InfluxDB analytics e2e
+    name: Repo InfluxDB analytics e2e
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -321,7 +321,7 @@ jobs:
           pytest -q -rs tests/test_history_analytics_e2e.py
 
   gate:
-    name: CI gate
+    name: Repo PR gate
     # The one check branch protection holds for this workflow. Every job above is
     # listed, and tests/test_ci_gate_covers_every_job.py fails if one is added
     # without being listed -- an unlisted job still runs, but stops counting.

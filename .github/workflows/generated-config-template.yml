@@ -1,4 +1,4 @@
-name: Generated config template
+name: EMS config template
 
 "on":
   pull_request:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   update-same-repository-pr:
-    name: Update template on same-repository PR
+    name: EMS config template update
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
@@ -51,7 +51,7 @@ jobs:
           git push origin "HEAD:${HEAD_BRANCH}"
 
   check-fork-pr:
-    name: Check template on fork PR
+    name: EMS config template check (fork)
     if: github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     permissions:
@@ -84,7 +84,7 @@ jobs:
           exit 1
 
   gate:
-    name: Config template gate
+    name: EMS config template gate
     # See the note on the gate in simulated-regression-tests.yml. The two jobs
     # above are mutually exclusive -- a fork pull request skips one and a
     # same-repository one skips the other -- so exactly one skip is the normal

@@ -69,9 +69,9 @@ require Home Assistant, Shelly, Zendure devices, InfluxDB, secrets, or network
 access, and they do not replace longer runtime tests, InfluxDB analysis, or
 real hardware validation.
 
-The GitHub Actions job `Simulated power-control regression tests` can be used
-as a required status check for `main` in branch protection or repository
-rulesets.
+The GitHub Actions job `Repo power-control regression` runs these. The required
+status check for `main` is `Repo PR gate`, which waits on it and on every other
+job in that workflow.
 
 ## GitNexus Indexing
 
@@ -156,7 +156,7 @@ row, when an optional platform package in `package-lock.json` is undocumented,
 when a static asset without the project license header is not listed as
 vendored, when a documented entry no longer exists in any manifest, when a
 component appears twice in one section, or when a table is missing a required
-column. It runs in the CI `Static checks` job and through
+column. It runs in the `Repo static checks` job and through
 `tests/test_third_party_licenses.py`. Transitive resolution is deliberately out
 of scope — that table is maintained by hand.
 

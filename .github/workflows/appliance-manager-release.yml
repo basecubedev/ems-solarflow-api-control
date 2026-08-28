@@ -49,7 +49,7 @@ concurrency:
 
 jobs:
   package:
-    name: package
+    name: Appliance Manager package
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -150,7 +150,7 @@ jobs:
           overwrite: true
 
   sign:
-    name: sign
+    name: Appliance Manager sign
     needs: package
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -240,7 +240,7 @@ jobs:
           overwrite: true
 
   publish:
-    name: publish
+    name: Appliance Manager publish
     needs: [package, sign]
     runs-on: ubuntu-latest
     timeout-minutes: 20
