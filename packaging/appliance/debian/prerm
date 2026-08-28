@@ -44,6 +44,7 @@ case "$1" in
             systemctl disable ems-appliance-web.service ems-appliance-agent.service \
                               ems-appliance-export.service ems-appliance-export.path \
                               ems-appliance-config-seed.service \
+                              ems-appliance-sshd-keys.service \
                               ems-appliance-grow-root.service || true
         fi
         # The export binds must go before the package does, or the mount points

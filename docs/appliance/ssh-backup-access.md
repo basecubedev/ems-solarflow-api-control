@@ -17,6 +17,14 @@ PubkeyAuthentication   yes
 is no operation in the appliance that can turn on password authentication.
 **Disable SSH** stops and disables it.
 
+A flashed image ships with the service **off**, so this control is the only way
+it comes on. That is a property of the image rather than of the package:
+`openssh-server` is installed, and Debian's postinst would enable it, so the
+appliance layer switches both the service and the socket unit back off and fails
+the build if either survives. Installing the `.deb` on a Raspberry Pi you already
+administer changes nothing about your SSH — the appliance never edits a host-wide
+sshd setting, only the two `Match` blocks for the accounts it creates itself.
+
 ## The account a flashed image carries
 
 The account itself comes from the image: the package's postinst runs in the

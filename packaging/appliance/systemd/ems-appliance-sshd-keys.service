@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow appliance SSH host identity
+Documentation=file:///usr/share/doc/ems-appliance-manager/ssh-backup-access.md
+# The image deletes the host keys the build chroot made, because a private key
+# shipped in a public artefact is compromised whether or not anything reads it.
+# Debian's own sshd-keygen.service would replace them, but it is
+# WantedBy=ssh.service sshd.service sshd@.service ssh.socket -- never
+# multi-user.target -- so it only runs when an ssh unit starts. This image ships
+# ssh switched off, so nothing ever starts one, and its ConditionFirstBoot=yes
+# has passed by the time an owner presses Enable SSH. That leaves a card with no
+# host key at all: sshd -t exits 1 with "no hostkeys available", Enable SSH
+# fails through ssh.service's ExecStartPre, and backup-access reads the same
+# failure as an invalid policy and expires the backup account.
+#
+# So the appliance makes its own, on its own schedule.
+ConditionPathIsReadWrite=/etc/ssh
+ConditionPathIsSymbolicLink=!/etc/ssh
+After=local-fs.target
+# Before the export unit, whose ExecStartPost runs `backup-access activate` and
+# judges the sshd policy: a boot that checked the policy before the keys existed
+# would disable the account it just set up.
+Before=ems-appliance-export.service ssh.service ssh.socket
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# ssh-keygen -A creates only the keys that are missing, so this is a no-op on
+# every boot after the first and on a host that already had its own.
+ExecStart=/usr/bin/ssh-keygen -A
+
+[Install]
+WantedBy=multi-user.target

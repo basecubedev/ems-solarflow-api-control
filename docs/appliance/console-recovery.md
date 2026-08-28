@@ -44,8 +44,11 @@ containers, so it answers even when everything it manages is down.
 ### 2. SSH
 
 Only if you enabled it and added a key. `ems-rescue` is a password account and
-the shipped sshd policy does not accept passwords, so this is a key login for
-whatever account you configured:
+the shipped sshd policy refuses it a password — by `Match User ems-rescue`, and
+by refusing keyboard-interactive too, which is the path that otherwise still
+asks for it. Its password is published in this document, so it is a console
+credential and nothing else. This is a key login for whatever account you
+configured:
 
 ```bash
 ssh <your-account>@ems-solarflow.local
