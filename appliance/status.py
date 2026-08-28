@@ -16,7 +16,6 @@ from appliance.systemd import (
     UNIT_APPLIANCE_WEB,
     UNIT_DOCKER,
 )
-from appliance.version import APPLIANCE_VERSION
 
 SECTION_OK = "ok"
 SECTION_UNAVAILABLE = "unavailable"
@@ -56,10 +55,16 @@ class StatusService:
         backup,
         operations,
         time_fn=None,
+        installed_version=None,
     ):
         self.paths = paths
         self.config = config
         self.probe = probe
+        # Resolved once by the composition root rather than looked up here, the
+        # way ManagerUpdateService already takes it: dpkg is the authority on
+        # which Manager is installed, and a service that asks it directly cannot
+        # be told anything else by a test.
+        self.installed_version = installed_version or ""
         self.docker = docker
         self.systemd = systemd
         self.admin = admin
@@ -74,7 +79,7 @@ class StatusService:
 
     def system(self):
         return {
-            "appliance_version": APPLIANCE_VERSION,
+            "appliance_version": self.installed_version,
             "hardware": self.probe.hardware(),
             "operating_system": self.probe.operating_system(),
             "uptime": self.probe.uptime(),
@@ -147,7 +152,7 @@ class StatusService:
             "operations": section("operations", self.operations_state),
         }
         sections["health"] = self._health(sections)
-        sections["appliance_version"] = APPLIANCE_VERSION
+        sections["appliance_version"] = self.installed_version
         sections["collected_at"] = self._time()
         return sections
 

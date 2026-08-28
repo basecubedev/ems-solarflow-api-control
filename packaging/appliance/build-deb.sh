@@ -31,14 +31,29 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --output) OUTPUT=$2; shift 2 ;;
         --arch) ARCH=$2; shift 2 ;;
+        --version) VERSION=$2; shift 2 ;;
+        --version=*) VERSION=${1#*=}; shift ;;
         --allow-tarball) ALLOW_TARBALL=yes; shift ;;
         -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
 
-VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
-[ -n "$VERSION" ] || { echo "cannot read APPLIANCE_VERSION" >&2; exit 1; }
+# The version is the release tag, and nothing in the source tree records one --
+# the same way an EMS image takes its version from the tag CI was invoked with
+# and carries it as an OCI label. Without a tag this is a development build, and
+# it says so in a form both dpkg and appliance/version.py sort below every
+# release, so it can neither be published (is_stable refuses it) nor outrank one.
+if [ -z "${VERSION:-}" ]; then
+    REVISION=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)
+    VERSION=$(cd "$ROOT" && EMS_REVISION="$REVISION" python3 -c '
+import os, sys
+sys.path.insert(0, ".")
+from appliance.version import development_version
+print(development_version(os.environ.get("EMS_REVISION", "")))
+') || { echo "build-deb: could not derive a development version" >&2; exit 1; }
+fi
+[ -n "$VERSION" ] || { echo "build-deb: no version" >&2; exit 1; }
 
 # Every timestamp dpkg-deb writes comes from here, so this is what makes two
 # builds of one commit identical. Inherited when the caller pinned it, otherwise

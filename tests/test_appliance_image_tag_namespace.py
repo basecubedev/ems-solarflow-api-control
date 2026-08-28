@@ -104,25 +104,27 @@ def test_the_image_workflow_publishes_under_the_appliance_prefix():
         )
 
 
-def test_a_tag_that_misnames_its_version_is_refused_before_the_build():
-    """Three emulated boards take about three hours, and a published tag can
-    never be reused -- so the check has to sit in the first job, not the last."""
+def test_the_image_build_is_told_which_version_the_tag_names():
+    """There is nothing to compare a tag against any more -- the source records
+    no version -- so what used to be a guard is now a hand-off. If the build is
+    not told, it names itself a development build and the release ends up
+    pointing at files whose names do not contain the tag's version.
+    """
 
     document = yaml.safe_load(
         (ROOT / ".github" / "workflows" / "appliance-image.yml").read_text(encoding="utf-8")
     )
-    plan = document["jobs"]["plan"]["steps"]
-    guards = [
-        step for step in plan if "APPLIANCE_VERSION" in step.get("run", "")
-    ]
-
-    assert guards, (
-        "the plan job no longer compares the tag against appliance/version.py, so "
-        "a mistyped tag is only caught after the images are built"
+    scripts = " ".join(
+        step.get("run", "") for step in document["jobs"]["image"]["steps"]
     )
-    assert all(step.get("if") == "github.ref_type == 'tag'" for step in guards), (
-        "the version guard runs on more than tag pushes, where there is no tag to "
-        "compare and it would fail every scheduled build"
+
+    assert "GITHUB_REF_NAME#appliance-image-v" in scripts, (
+        "the image build no longer takes its version from the tag, so a tagged "
+        "build would publish files named after a development version"
+    )
+    assert "export VERSION" in scripts, (
+        "the version is derived but never exported, so the build script never "
+        "sees it"
     )
 
 

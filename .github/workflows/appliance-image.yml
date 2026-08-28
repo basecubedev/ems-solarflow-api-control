@@ -125,26 +125,6 @@ jobs:
           PY
           cat "$GITHUB_OUTPUT"
 
-      # Three emulated builds take about three hours, and the publish step
-      # refuses a tag whose release already exists -- so a tag that disagrees
-      # with the version it claims has to fail here, in the first minute,
-      # rather than at the end with the tag already spent.
-      - name: Refuse a tag that does not name the version it builds
-        if: github.ref_type == 'tag'
-        env:
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          python3 -c 'import os, sys
-          sys.path.insert(0, ".")
-          from appliance.version import APPLIANCE_VERSION
-          tag = os.environ["TAG_NAME"]
-          claimed = tag.removeprefix("appliance-image-v")
-          if claimed != APPLIANCE_VERSION:
-              print(f"::error::{tag} claims {claimed!r} but appliance/version.py says {APPLIANCE_VERSION!r}")
-              sys.exit(1)
-          print(f"{tag} names the version this tree builds")'
-
   manager-package:
     name: Appliance image manager package
     runs-on: ubuntu-latest
@@ -397,6 +377,16 @@ jobs:
           PROFILE: ${{ matrix.profile }}
         run: |
           set -euo pipefail
+          # A tag names the image it builds; every other trigger produces a
+          # development build that says so in its own file name. Nothing in the
+          # source tree records a version, so this is the only place the answer
+          # enters, and scripts/lib/appliance-version.sh gives the same answer
+          # to the gates, the build and the finalizer.
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#appliance-image-v}"
+            export VERSION
+            echo "building ${VERSION} from ${GITHUB_REF_NAME}"
+          fi
           # --mode builder is the question this runner can answer: can this
           # source, on this builder, produce an image that inspects cleanly? Its
           # best verdict is PASS (builder qualification), which is not a release.

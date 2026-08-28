@@ -137,8 +137,17 @@ fi
     || fail "the source bundle carries no authority at $SOURCE_AUTHORITY" \
             source_authority_missing
 
-VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
-[ -n "$VERSION" ] || fail "the appliance version could not be read" version_unreadable
+# Read off the images being finalized rather than derived. This runs against an
+# extracted source bundle, where git resolves nothing and a development version
+# would name files that do not exist -- and it finalizes images that were built
+# already, so their own names are the one answer that cannot disagree with them.
+if [ -z "${VERSION:-}" ]; then
+    FIRST_PROFILE=$(printf '%s' "$PROFILES" | tr ' ' '\n' | grep -v '^$' | head -1)
+    VERSION=$(ls "$DIST"/ems-solarflow-appliance-*-"$FIRST_PROFILE"-arm64.img.xz 2>/dev/null \
+        | head -1 \
+        | sed -n "s#.*/ems-solarflow-appliance-\(.*\)-$FIRST_PROFILE-arm64\.img\.xz\$#\1#p")
+fi
+[ -n "$VERSION" ] || fail "no image in $DIST names a version to finalize" version_unreadable
 
 # Which boards build an image, from the one table that knows. Listing them here
 # would let a release publish an incomplete matrix the moment a profile is added

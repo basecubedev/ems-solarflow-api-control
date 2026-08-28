@@ -115,12 +115,31 @@ def test_the_hyphen_form_is_the_one_that_disagrees():
     ).returncode == 0, "dpkg no longer sorts a hyphen revision above the release"
 
 
-def test_the_shipped_version_is_a_form_both_authorities_read_alike():
-    from appliance.version import APPLIANCE_VERSION
+def test_every_version_this_tree_spells_itself_is_read_alike_by_both():
+    """The two versions this repository writes rather than receives: what a
+    build with no tag calls itself, and the placeholder in ``debian/control``
+    that the build overwrites. A release version arrives from a tag and is
+    checked by ``is_stable`` in the release chain instead."""
 
-    assert "-" not in APPLIANCE_VERSION, (
-        "a hyphen makes dpkg and version_key disagree; spell a pre-release with ~"
+    from pathlib import Path
+
+    from appliance.version import DEVELOPMENT_VERSION_PREFIX
+
+    control = (
+        Path(__file__).resolve().parents[1]
+        / "packaging" / "appliance" / "debian" / "control"
+    ).read_text(encoding="utf-8")
+    placeholder = next(
+        line.split(":", 1)[1].strip()
+        for line in control.splitlines()
+        if line.startswith("Version:")
     )
+
+    for spelling in (DEVELOPMENT_VERSION_PREFIX, placeholder):
+        assert "-" not in spelling, (
+            f"{spelling!r} uses a hyphen, which makes dpkg and version_key "
+            "disagree about its order; spell a pre-release with ~"
+        )
 
 
 # --- the Manager's own tag namespace -----------------------------------------
@@ -204,33 +223,50 @@ def test_no_stable_tag_yields_no_answer_rather_than_a_guess():
     assert latest_stable([]) == ""
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="the tags live in git")
-def test_the_source_is_never_behind_the_newest_released_tag():
-    """The forgotten bump, which nothing caught before.
+def test_the_source_records_no_version_at_all():
+    """The inversion of the bug this file used to guard against.
 
-    ``APPLIANCE_VERSION`` is a hand-edited literal and the only thing the
-    package version comes from. Tagging a release without bumping it produces a
-    second release carrying the first one's version -- two different packages
-    that ``version_key`` reads as the same, which is precisely what the whole
-    comparator exists to prevent one layer down.
+    There used to be a hand-edited ``APPLIANCE_VERSION`` literal, and one test
+    here compared it against the newest released tag -- because tagging a release
+    without bumping it produced a second package carrying the first one's
+    version, two different artefacts that ``version_key`` read as equal.
+
+    A version is now the tag, and only the tag: the build is told which one and
+    stamps it into the package, the way an EMS image takes its version from the
+    tag CI was invoked with and carries it as an OCI label. The forgotten bump is
+    not caught any more, it is unrepresentable -- and this is what keeps it that
+    way, because re-introducing the literal would look like a tidy-up.
     """
 
     from pathlib import Path
 
-    from appliance.version import APPLIANCE_VERSION, latest_stable, version_key
+    source = Path(__file__).resolve().parents[1] / "appliance" / "version.py"
+    text = source.read_text(encoding="utf-8")
 
-    root = Path(__file__).resolve().parents[1]
-    listed = subprocess.run(
-        ["git", "tag", "--list"],
-        capture_output=True, text=True, check=False, cwd=root, timeout=60,
+    assert "APPLIANCE_VERSION" not in text, (
+        "a version literal is back in the source; the tag is the only version"
     )
-    if listed.returncode != 0:
-        pytest.skip("no git checkout to read tags from")
-    released = latest_stable(listed.stdout.split())
-    if not released:
-        pytest.skip("no Manager release has been tagged yet")
 
-    assert version_key(APPLIANCE_VERSION) >= version_key(released), (
-        f"appliance/version.py says {APPLIANCE_VERSION}, "
-        f"but {released} is already tagged"
+    from appliance.version import DEVELOPMENT_VERSION_PREFIX, is_stable
+
+    assert not is_stable(DEVELOPMENT_VERSION_PREFIX), (
+        "a build with no tag behind it would be publishable, and the release "
+        "chain refuses only what is_stable rejects"
     )
+
+
+def test_a_development_build_sorts_below_every_release():
+    """The tilde is the load-bearing character, and both comparators have to
+    agree about it: ``version_key`` gates which package an appliance installs,
+    and ``dpkg`` gates whether it will install at all. ``0.0.0+dev`` looks
+    equivalent and is not -- version_key scores it equal to 0.0.0 while dpkg
+    sorts it above."""
+
+    from appliance.version import development_version, version_key
+
+    development = development_version("abc123def456")
+
+    for release in ("0.0.0", "0.0.1", "0.1.0", "1.0.0", "0.1.0~rc1"):
+        assert version_key(development) < version_key(release), (
+            f"{development} does not sort below {release}"
+        )

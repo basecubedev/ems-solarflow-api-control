@@ -237,15 +237,23 @@ def test_gh_is_told_which_repository_to_act_on(workflow):
 # --- what gets signed ---------------------------------------------------------
 
 
-def test_the_tag_and_the_source_have_to_agree(workflow):
-    """The package version comes from appliance/version.py and the release is
-    named after the tag. A mismatch publishes one version under another's
-    name -- and the index would then carry an entry nothing can satisfy."""
+def test_the_package_is_built_with_the_version_the_tag_names(workflow):
+    """The tag is the version and the source records none, so the one thing
+    that can still go wrong is building the package without passing it through:
+    the release would be named after the tag while the artefact inside carried a
+    development version, and the index would point at an entry nothing can
+    satisfy."""
 
     blocks = run_blocks(workflow, "package")
 
-    assert "APPLIANCE_VERSION" in blocks
     assert "version_from_tag" in blocks
+    assert "--version" in blocks, (
+        "build-deb.sh is invoked without a version, so it would name itself a "
+        "development build while the release is named after the tag"
+    )
+    assert "APPLIANCE_VERSION" not in blocks, (
+        "the workflow reads a version literal again; the tag is the only version"
+    )
 
 
 def test_the_document_that_gets_signed_does_not_depend_on_the_runner_locale(workflow):

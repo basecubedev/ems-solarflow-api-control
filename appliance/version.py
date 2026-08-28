@@ -13,9 +13,20 @@ release, in either direction, by either caller.
 
 import re
 
-APPLIANCE_VERSION = "0.1.0"
-
 PACKAGE_NAME = "ems-appliance-manager"
+
+# What a build with no tag behind it calls itself. dpkg refuses a package with
+# no Version at all, so unlike the EMS `latest` channel -- which carries an
+# empty runtime version so a channel can never pose as a release -- this side
+# needs a string.
+#
+# The tilde is the load-bearing character, and it is the same choice the
+# packaging already makes for a candidate: dpkg sorts `~` below everything, and
+# ``version_key`` reads it as a prerelease marker, so both comparators agree
+# that a development build precedes every release. `+dev` would have looked
+# equivalent and is not -- ``version_key`` treats `+` in the core as part of a
+# number and would have scored it equal to 0.0.0, while dpkg sorts it above.
+DEVELOPMENT_VERSION_PREFIX = "0.0.0~dev"
 # Two products publish releases from this repository, and for a long time only
 # one of them had a tag namespace: every tag was an EMS version, so "the latest
 # stable Appliance Manager" was not a thing that could be asked for. This prefix
@@ -29,6 +40,7 @@ SUPPORTED_ARCHITECTURES = ("arm64",)
 SUPPORTED_PI_MODELS = ("Raspberry Pi 3", "Raspberry Pi 4", "Raspberry Pi 5")
 
 _TRAILING_NUMBER = re.compile(r"^([^0-9]+)([0-9]+)$")
+_INSTALLED_VERSION = None
 
 
 def version_key(text):
@@ -117,3 +129,71 @@ def latest_stable(tags):
     versions = [version for version in map(version_from_tag, tags) if version]
     stable = [version for version in versions if is_stable(version)]
     return max(stable, key=version_key, default="")
+
+
+def installed_version(package_version=None, *, refresh=False):
+    """The version dpkg reports for the installed Manager, or an empty string.
+
+    The package is the authority on which Manager is running, the same way an
+    image's OCI labels are the authority on which EMS release is running (see
+    ``admin/installed_release.py``). Nothing in this tree records a version, so
+    there is no second answer that could disagree with this one.
+
+    Empty rather than an exception on every path that is not an installed
+    package -- a source checkout, a test, a host without dpkg. A caller showing
+    this to a person renders the empty string as unknown; a caller comparing
+    versions gets a key that sorts below everything, which is the safe direction
+    for something that gates installs.
+    """
+
+    if package_version is None and not refresh and _INSTALLED_VERSION is not None:
+        return _INSTALLED_VERSION
+
+    query = package_version or default_package_version()
+    if query is None:
+        answer = ""
+    else:
+        try:
+            answer = query(PACKAGE_NAME) or ""
+        except Exception:
+            answer = ""
+
+    if package_version is None:
+        # Cached for the life of the process, which is exactly how long the
+        # answer can stay true: installing a Manager restarts the service that
+        # is asking, so a stale value has no window to be read in.
+        globals()["_INSTALLED_VERSION"] = answer
+    return answer
+
+
+def default_package_version(runner=None):
+    """``dpkg-query`` for one field, or nothing on a host without dpkg.
+
+    Routed through the one allowlisted command runner rather than a bare
+    subprocess, so this module starts no host process of its own. Sibling of
+    ``rpi_image_gen.default_package_query``, which asks the same tool whether a
+    package is installed.
+    """
+
+    from appliance.commands import CommandRunner
+
+    runner = runner or CommandRunner()
+    if not runner.available("dpkg-query"):
+        return None
+
+    def query(package):
+        result = runner.run(
+            "dpkg-query",
+            ["-W", "-f=${Version}", "--", str(package)],
+            timeout=15,
+        )
+        return result.stdout.strip() if result.ok else ""
+
+    return query
+
+
+def development_version(revision=""):
+    """What a build with no release tag behind it is called."""
+
+    short = str(revision or "").strip()[:12]
+    return f"{DEVELOPMENT_VERSION_PREFIX}.{short}" if short else DEVELOPMENT_VERSION_PREFIX
