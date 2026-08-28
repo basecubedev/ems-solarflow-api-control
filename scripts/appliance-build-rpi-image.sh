@@ -400,6 +400,12 @@ print(build_authority.read(sys.argv[1]).builder_environment_sha256)
 PY
 ) || fail "the build authority could not be read back" build_authority_unwritable
 
+# What the image actually carries, which since --manager-package is no longer
+# the same question as what appliance/version.py says. The inspection gate
+# compares against this; comparing against the source tree fails every build
+# made while a release is waiting for its signing approval.
+PACKAGE_VERSION=$(dpkg-deb -f "$PACKAGE" Version 2>/dev/null || true)
+
 cat > "$OUTPUT/$NAME.build.json" <<JSON
 {
   "format_version": 2,
@@ -419,6 +425,7 @@ cat > "$OUTPUT/$NAME.build.json" <<JSON
   "project_revision": "$PROJECT_REVISION",
   "project_tree_sha256": "$PROJECT_TREE",
   "appliance_package": "$(basename "$PACKAGE")",
+  "appliance_package_version": "$PACKAGE_VERSION",
   "appliance_package_sha256": "$PACKAGE_SHA256",
   "image_sha256": "$(cut -d' ' -f1 < "$OUTPUT/$NAME.img.sha256")"
 }
