@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   # Pull requests run the tagged critical subsets. The full Chromium and Firefox
-  # suites run in nightly-full-suite.yml and in scripts/test-rc.sh.
+  # suites run in the playwright-full job below and in scripts/test-rc.sh.
   playwright-chromium-critical:
     name: Repo browser chromium critical
     runs-on: ubuntu-latest
@@ -207,6 +207,64 @@ jobs:
             test-results/
           retention-days: 14
 
+  playwright-full:
+    name: Repo browser ${{ matrix.browser }} full
+    # After a merge, not in front of one. The two jobs above run the critical
+    # and smoke slices so a pull request answers in minutes; this is the same
+    # projects with no --grep, which is where a test outside those slices is
+    # allowed to cost ten minutes.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        browser:
+          - chromium
+          - firefox
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Run the full Admin suite
+        env:
+          CI: "1"
+        run: npx playwright test --project=${{ matrix.browser }}
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: full-playwright-report-${{ matrix.browser }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
   gate:
     name: Repo browser gate
     # See the note on the gate in simulated-regression-tests.yml. playwright-webkit
@@ -217,6 +275,7 @@ jobs:
       - playwright-firefox-smoke
       - playwright-webkit
       - playwright-appliance
+      - playwright-full
     if: always()
     runs-on: ubuntu-latest
     permissions:

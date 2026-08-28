@@ -12,7 +12,7 @@ carries that product as its first word. Three prefixes, and the set is closed:
 |---|---|---|
 | `Appliance ` | the Raspberry Pi product — Manager `.deb`, OS image, fleet index | `appliance-image.yml`, `appliance-manager-release.yml` |
 | `EMS ` | the paired EMS controller and Admin console | `docker-publish.yml`, `docker-feature-publish.yml`, `docker-feature-cleanup.yml`, `admin-replacement-canary.yml`, `generated-config-template.yml` |
-| `Repo ` | ships nothing, gates both | `simulated-regression-tests.yml`, `playwright-e2e.yml`, `nightly-full-suite.yml` |
+| `Repo ` | ships nothing, gates both | `simulated-regression-tests.yml`, `playwright-e2e.yml` |
 
 There is deliberately no `Admin ` prefix: the two container images ship as one
 `build_id`/`channel` identity and `admin/releases.py` treats them as a single
@@ -107,74 +107,52 @@ without being listed.
 The offline power-control regression tests behind it are deterministic and need
 no hardware, network, or secrets.
 
-The former monolithic `Full Python test suite (<version>)` job moved to
-`.github/workflows/nightly-full-suite.yml`; branch protection referring to it
-by name has to be repointed at the group jobs.
-
 See [testing.md](testing.md) for the marker dimensions and the matching local
 commands, and [../quality-and-maintenance.md](../quality-and-maintenance.md)
 for the user-facing summary of what is checked before release.
 
-## Nightly full suite
+## What runs on a merge and not on a pull request
 
-Workflow: `.github/workflows/nightly-full-suite.yml` (schedule plus
-`workflow_dispatch`). It runs what the pull-request workflow deliberately
-splits or narrows:
+There is no nightly schedule. A pull request answers in about fifteen minutes,
+and the work that cannot fit in fifteen minutes runs on the push to `main`
+instead — after the merge, where forty minutes costs nobody a wait. Both jobs
+carry `if: github.event_name == 'push'`, so a pull request skips them and the
+gate counts a skip as a pass.
 
-- the full non-Docker Python suite on 3.11 and 3.14, plus the strict
-  deprecation-warning run
-- the complete Chromium and Firefox Admin suites
-- the Docker-first tier and the System Build tier
+In `simulated-regression-tests.yml`:
 
-The Admin replacement journey is deliberately **not** part of this workflow. It
-may only run against immutable published digests, which
+- `Repo full suite (<version>)` — the whole non-Docker collection in one
+  process on 3.11 and 3.14, plus the strict deprecation-warning run
+  (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, `-W error::DeprecationWarning`)
+
+In `playwright-e2e.yml`:
+
+- `Repo browser <browser> full` — the complete Chromium and Firefox Admin
+  suites, the same projects the pull request runs `--grep`-narrowed
+
+The full suite is not extra coverage. The five pull-request groups are an exact
+partition of the same collection, so every test in it already ran. What one
+process adds is the only place an interaction *between* two tests can appear —
+the InfluxDB readiness timeout that failed in the full suite and passed in
+isolation is what that looks like. Running it before a merge would mean paying
+forty minutes for a class of failure that a merge is early enough to catch.
+
+The Docker-first and System Build tiers used to be duplicated on the nightly
+schedule. They are not duplicated anywhere now: `Repo docker-first setup e2e`
+and `Repo System Build compatibility` run the identical selections on every
+pull request.
+
+`Repo pinned rpi-image-gen tree` runs on both, because it takes about twelve
+seconds and the upstream-tree tests skip themselves unless a job fetches a real
+tree — without it nothing exercises the contract the image is built against.
+
+The Admin replacement journey is deliberately not duplicated. It may only run
+against immutable published digests, which
 `.github/workflows/admin-replacement-canary.yml` resolves from the Development
 build catalogue, verifies with `scripts/verify_development_catalogue.py` and
 pulls after a GHCR login. That workflow owns the gate end to end and runs on its
 own weekly schedule plus `workflow_dispatch`; a missing or mutable target fails
 it as a blocked precondition instead of skipping.
-
-**A successful Admin Replacement Canary run is part of RC readiness.** Record
-the run URL together with both tags, revisions, build IDs and digests it used.
-
-### Two immutable Development builds, no mutable source
-
-Both sides of the replacement are published Development builds, addressed by
-digest. `scripts/resolve_canary_builds.py` reads the public catalogue and
-returns a pair:
-
-- **target** — the newest installable build, or `target_tag` from
-  `workflow_dispatch`
-- **source** — the newest *older* installable build of the target's feature
-  branch, or `source_tag` from `workflow_dispatch`
-
-The source Admin used to be the mutable `:latest` release. That made the gate
-unrunnable before the first release cut from a branch: the shared page objects
-address the Admin through `data-testid` hooks (`start-fresh-install`,
-`system-build-select`, `system-build-status`, `system-build-reload`,
-`upgrade-system-build-reload`, `continue-button`, `admin-update-button`,
-`embedded-resources-check`), and a release predating those hooks fails at the
-first locator regardless of the target. Pinning the source to a published
-Development build of the same branch removes the dependency on a release
-without weakening anything: the resolver refuses a mutable digest, refuses a
-pair whose Admin digests are equal, and blocks when no pair exists.
-
-Test-hook compatibility is never inferred from tag naming.
-`tests/e2e/admin-test-contract.json` is the single source of truth for the
-version and the hook list. New catalogue entries declare it as
-`admin_test_contract`, and an entry declaring a different version is dropped
-during resolution. The authority for what an image actually serves is
-`scripts/admin_test_contract.py`, which the runner executes against the source
-and the target Admin before any container starts and which names every missing
-hook. Do not answer a failure there by teaching the shared page objects a
-second, legacy markup contract — that would couple every Setup spec to a
-released UI generation. Pick a build that serves the hooks instead.
-
-`./scripts/test-rc.sh` runs the same gates locally before a release candidate.
-Its `admin-replacement` gate needs the same immutable identities, so the script
-names the missing variables in its preflight rather than failing an hour in.
-`scripts/resolve_canary_builds.py --catalogue <file>` prints exactly those
-variable values for a downloaded catalogue.
 
 ## Generated config template
 

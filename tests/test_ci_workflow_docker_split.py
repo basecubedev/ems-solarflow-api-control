@@ -6,6 +6,7 @@ or silently disappearing, and against a group quietly dropping out of CI."""
 from pathlib import Path
 
 import pytest
+import yaml
 
 pytestmark = [
     pytest.mark.contract,
@@ -13,7 +14,6 @@ pytestmark = [
 
 ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "simulated-regression-tests.yml"
-NIGHTLY_WORKFLOW = ROOT / ".github" / "workflows" / "nightly-full-suite.yml"
 PLAYWRIGHT_WORKFLOW = ROOT / ".github" / "workflows" / "playwright-e2e.yml"
 PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "docker-publish.yml"
 CANARY_WORKFLOW = ROOT / ".github" / "workflows" / "admin-replacement-canary.yml"
@@ -34,16 +34,41 @@ def test_pull_request_workflow_runs_every_functional_group():
     assert "./scripts/test-pr.sh ${{ matrix.group }}" in text
 
 
-def test_pull_request_workflow_does_not_run_the_whole_suite_twice():
-    lines = _stripped_lines(CI_WORKFLOW)
-    assert "pytest -q tests/" not in lines
-    assert 'pytest -q -m "not docker" tests/' not in lines
+def test_a_pull_request_never_runs_the_whole_suite_twice():
+    """The groups partition the collection, so an unpartitioned run alongside
+    them is the same tests a second time. It exists -- see the test below -- but
+    a pull request must not reach it."""
+
+    assert "pytest -q tests/" not in _stripped_lines(CI_WORKFLOW)
+
+    jobs = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    unpartitioned = [
+        name
+        for name, job in jobs.items()
+        if any(
+            'pytest -q -m "not docker" tests/' in step.get("run", "")
+            for step in job.get("steps", [])
+        )
+    ]
+    assert unpartitioned, "nothing runs the suite unpartitioned any more"
+    for name in unpartitioned:
+        assert jobs[name].get("if") == "github.event_name == 'push'", (
+            f"{name} runs the whole suite and is reachable from a pull request, "
+            "which is the same tests the five groups already ran"
+        )
 
 
-def test_nightly_workflow_runs_the_full_non_docker_suite():
-    text = NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
+def test_the_full_non_docker_suite_still_runs_somewhere():
+    """It moved out of a nightly schedule and onto the merge. One process rather
+    than five is the only place an interaction between two tests shows up, so
+    losing it would cost a class of failure the groups cannot see."""
+
+    text = CI_WORKFLOW.read_text(encoding="utf-8")
     assert 'pytest -q -m "not docker" tests/' in text
-    assert "pytest -q tests/" not in _stripped_lines(NIGHTLY_WORKFLOW)
+    assert (
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -W error::DeprecationWarning "
+        "-m pytest -q -m \"not docker\" tests/" in text
+    ), "the strict deprecation run is not duplicated anywhere else"
 
 
 def test_publish_full_suite_excludes_docker_marked_tests():
@@ -56,21 +81,32 @@ def test_dedicated_job_runs_docker_marked_tests():
     assert "pytest -q -rs -m docker tests/" in CI_WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_nightly_keeps_a_docker_first_job():
-    assert "pytest -q -rs -m docker tests/" in NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
+def test_browser_groups_are_split_between_the_pull_request_and_the_merge():
+    text = PLAYWRIGHT_WORKFLOW.read_text(encoding="utf-8")
 
+    assert 'npx playwright test --project=chromium --grep "@smoke|@authority"' in text
+    assert 'npx playwright test --project=firefox --grep "@smoke"' in text
+    assert "npx playwright test --project=${{ matrix.browser }}" in text
 
-def test_browser_groups_are_split_between_pull_request_and_nightly():
-    pr_text = PLAYWRIGHT_WORKFLOW.read_text(encoding="utf-8")
-    nightly_text = NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
-
-    assert 'npx playwright test --project=chromium --grep "@smoke|@authority"' in pr_text
-    assert 'npx playwright test --project=firefox --grep "@smoke"' in pr_text
-    assert "npx playwright test --project=${{ matrix.browser }}" in nightly_text
+    jobs = yaml.safe_load(text)["jobs"]
+    ungrepped = [
+        name
+        for name, job in jobs.items()
+        if any(
+            step.get("run", "").strip() == "npx playwright test --project=${{ matrix.browser }}"
+            for step in job.get("steps", [])
+        )
+    ]
+    assert ungrepped, "no job runs the browser projects in full any more"
+    for name in ungrepped:
+        assert jobs[name].get("if") == "github.event_name == 'push'", (
+            f"{name} runs the full browser projects on a pull request, which is "
+            "what the critical and smoke slices exist to avoid"
+        )
 
 
 def test_no_job_suppresses_failures_unconditionally():
-    for workflow in (CI_WORKFLOW, NIGHTLY_WORKFLOW, PLAYWRIGHT_WORKFLOW, CANARY_WORKFLOW):
+    for workflow in (CI_WORKFLOW, PLAYWRIGHT_WORKFLOW, CANARY_WORKFLOW):
         for line in _stripped_lines(workflow):
             assert line != "continue-on-error: true", workflow.name
 
@@ -113,9 +149,7 @@ def _reports_selection(step):
 
 
 def test_every_pytest_job_reports_its_selection():
-    import yaml
-
-    for workflow in (CI_WORKFLOW, NIGHTLY_WORKFLOW):
+    for workflow in (CI_WORKFLOW,):
         jobs = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]
         for name, job in jobs.items():
             steps = job.get("steps", [])

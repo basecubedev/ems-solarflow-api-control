@@ -320,6 +320,100 @@ jobs:
         run: |
           pytest -q -rs tests/test_history_analytics_e2e.py
 
+  full-suite:
+    name: Repo full suite (${{ matrix.python-version }})
+    # After a merge, not in front of one. The five groups above are an exact
+    # partition of this same collection -- tests/test_test_classification.py
+    # proves it in both directions -- so no test here is one the pull request
+    # did not run. What one process adds over five is the only place an
+    # interaction between two tests can show up, and the influx readiness
+    # timeout that only ever failed in the full suite is what that looks like.
+    # Forty minutes is a fair price on main and a bad one on a pull request.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.14"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Install the filesystem tools the fixtures build with
+        run: sudo apt-get install -y --no-install-recommends mtools e2fsprogs
+
+      - name: Report the selected marker expression
+        run: printf 'pytest -q -m "not docker" tests/\n'
+
+      - name: Run full test suite (excludes real-Docker e2e, see the docker jobs)
+        run: |
+          pytest -q -m "not docker" tests/
+
+      - name: Run strict deprecation warning check
+        run: |
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -W error::DeprecationWarning -m pytest -q -m "not docker" tests/
+
+  upstream-generator:
+    name: Repo pinned rpi-image-gen tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      # The upstream-tree tests skip unless something names a real tree, so
+      # without this job nothing runs them and the contract the image is built
+      # against is bound only by the release gates. No count is stated here: the
+      # one that used to be went stale, and a comment that miscounts its own
+      # subject is worse than one that does not try.
+      #
+      # The form is deliberately not pinned. It resolves to a clone wherever git
+      # exists, which is every runner, and that is the half of the fetch whose
+      # umask went unpinned until 2026-08-27 -- this job is what found it, and
+      # naming the other form here would hide it again.
+      - name: Fetch the pinned generator tree
+        run: |
+          scripts/appliance-fetch-rpi-image-gen.sh --into "$RUNNER_TEMP/rpi-image-gen"
+
+      - name: Report the selected tier
+        run: printf 'pytest -q -rs tests/test_appliance_rpi_image_gen_upstream.py\n'
+
+      - name: Run the upstream contract tier
+        env:
+          EMS_RPI_IMAGE_GEN: ${{ runner.temp }}/rpi-image-gen
+        run: |
+          pytest -q -rs tests/test_appliance_rpi_image_gen_upstream.py
+
   gate:
     name: Repo PR gate
     # The one check branch protection holds for this workflow. Every job above is
@@ -333,6 +427,8 @@ jobs:
       - docker-smoke-test
       - docker-first-e2e
       - influx-e2e
+      - full-suite
+      - upstream-generator
     # Without always() a failure upstream skips this job instead of running it,
     # and a required check that reports "skipped" blocks a pull request for good
     # rather than reporting the failure underneath it.

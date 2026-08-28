@@ -74,8 +74,9 @@ on every relevant PR (path-filtered to `admin/**`, shared EMS config modules,
 screenshots are uploaded on failure. WebKit runs the smoke group on demand
 (`workflow_dispatch`) so a WebKit-only flake never blocks a PR.
 
-The complete Chromium and Firefox suites run in
-`.github/workflows/nightly-full-suite.yml` and in `./scripts/test-rc.sh`.
+The complete Chromium and Firefox suites run in the `Repo browser <browser>
+full` jobs of `.github/workflows/playwright-e2e.yml`, which are skipped on a pull
+request and run on the push to `main`, and in `./scripts/test-rc.sh`.
 The former `playwright-chromium-smoke` job is now
 `playwright-chromium-critical`; branch protection referring to the old name has
 to be repointed.
