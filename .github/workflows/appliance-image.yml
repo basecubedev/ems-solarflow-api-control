@@ -464,6 +464,19 @@ jobs:
       contents: write
 
     steps:
+      - name: Take the release identity these images carry
+        uses: actions/checkout@v7
+
+      # The fingerprint a card pins is frozen the moment it is flashed:
+      # appliance.conf ships to /usr/share, is not a conffile, and config-seed
+      # leaves an existing /etc copy unread. Publishing is therefore the point of
+      # no return, and an identity nobody holds the secret half of turns every
+      # card it reaches into one that can never install a Manager package again
+      # -- not an upgrade, and not the downgrade that is its only recovery.
+      # Building stays allowed, because hardware validation needs images.
+      - name: Refuse to publish against an identity nobody can sign with
+        run: python3 scripts/appliance-check-release-identity.py
+
       - name: Collect what the build produced
         uses: actions/download-artifact@v7
         with:

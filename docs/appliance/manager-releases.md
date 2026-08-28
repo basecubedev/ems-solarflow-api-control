@@ -21,10 +21,28 @@ its secret half is the only one who can sign a release, and if nobody does, the
 identity has to be made:
 
 ```bash
-scripts/appliance-new-release-identity.sh \
+scripts/appliance-new-release-identity.sh --force \
     --uid "EMS SolarFlow Appliance Releases <you@example.org>" \
     --secret-out ~/appliance-signing-subkey.b64
 ```
+
+`--force` is needed here and only here. The keyring in the tree is not empty —
+it holds the hand-made placeholder this project started with, whose primary
+carries `scSC` and whose secret half is on nobody's machine — and the script
+refuses to replace an identity without being told to, because normally doing so
+strands every appliance already flashed. Nothing has been flashed yet, which is
+what makes this the one safe moment to do it.
+
+**Before any image reaches the Releases page.** The fingerprint a card pins is
+frozen when it is flashed: `appliance.conf` ships to `/usr/share`, it is not a
+dpkg conffile, and config-seed leaves an existing `/etc` copy unread. A card
+flashed against an identity nobody can sign with will never install a Manager
+package again — not an upgrade, and not the downgrade that is its only recovery
+— and the repair is a root console on every unit. `scripts/appliance-check-release-identity.py`
+enforces this: the image workflow's publish job and the release workflow's first
+job both refuse while the placeholder is in the tree. Building is deliberately
+left alone, because hardware validation needs images and an image nobody
+downloads strands nobody.
 
 It writes the public keyring, pins the primary in the shipped configuration, and
 exports the signing subkey for GitHub — the three artefacts that have to agree.
@@ -81,8 +99,12 @@ a rotation is precisely what creates the second.
    `v*` namespace, which matters: `admin/releases.py` offers every non-draft
    release of this repository as an EMS system-build target and decides
    eligibility by parsing the tag.
-3. **Push the tag.** The *Appliance Manager release* workflow starts, builds the
-   package and the manifest, and then waits for a reviewer to release the key.
+3. **Push the tag** — from a commit that already contains the keyring. The sign
+   job verifies against `packaging/appliance/config/release-keyring.gpg` *as of
+   the tag*, so tagging a commit older than the identity fails after a reviewer
+   has already released the signing key. The *Appliance Manager release*
+   workflow starts, builds the package and the manifest, and then waits for that
+   approval.
 4. **Approve it.** The signature is made and verified, the release is published,
    and the index is rebuilt to name every version including this one.
 
@@ -144,6 +166,9 @@ exists it builds its own package from the checkout and says so; that is exit 3
 from `scripts/appliance-fetch-manager-package.py`, deliberately distinct from a
 verification failure, which fails the build.
 
-So the ordering for a first release is: cut the Manager release, then let the
-next weekly image pick it up. An image built before there is anything to pick up
-is not wrong, it is just carrying a package with no published counterpart.
+So the ordering for a first release is: create the identity, cut the Manager
+release, then let the next weekly image pick it up. An image *built* before
+there is anything to pick up is fine — it carries a package with no published
+counterpart, which is only a missing convenience. An image *published* before
+the identity exists is a different thing entirely, and is what the gate above
+refuses.

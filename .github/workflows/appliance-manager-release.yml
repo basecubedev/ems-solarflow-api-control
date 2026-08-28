@@ -67,6 +67,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Before anything is built and long before a reviewer is asked to release
+      # the signing key: an identity whose secret half nobody holds fails at
+      # `gpgv` three jobs later, reported as the fleet refusing the signature,
+      # which is a message about the wrong thing.
+      - name: Refuse an identity nobody can sign with
+        run: python3 scripts/appliance-check-release-identity.py
+
       - name: Establish which version is being cut
         id: identify
         env:
