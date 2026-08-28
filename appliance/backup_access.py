@@ -303,10 +303,14 @@ class BackupAccessService:
         return payload
 
     def examples(self, account_name, target_host):
+        # /data/backups, not /backups. EMS writes its archives under data, and
+        # the separate /backups export publishes a directory no writer in this
+        # project has ever used -- so the obvious command came back empty and
+        # said nothing, which a backup feature only discovers at restore time.
         return [
             {
                 "title": "Copy all EMS backups",
-                "command": f"sftp -r {account_name}@{target_host}:/backups ./ems-backups",
+                "command": f"sftp -r {account_name}@{target_host}:/data/backups ./ems-backups",
             },
             {
                 "title": "Copy the EMS configuration",

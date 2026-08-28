@@ -172,8 +172,16 @@ satisfies both.
 | Path in the SFTP session | Host path | Access |
 |---|---|---|
 | `/config` | `/opt/ems-solarflow/config` | read-only |
-| `/backups` | `/opt/ems-solarflow/backups` | read-only |
+| `/backups` | `/opt/ems-solarflow/backups` | read-only — **always empty**, see below |
 | `/data` | `/opt/ems-solarflow/data` | read-only |
+
+`/backups` publishes a directory nothing writes to. EMS keeps its archives in
+`data/backups` (`ems/backup.py`), which the `/data` export already carries, so
+that is where an operator finds them and what `backup_access.examples()` now
+puts on screen. The export is not repointed at `data/backups` because the two
+sources would then overlap, and `setup-export-root.sh` grants ACLs recursively
+per source — the first run's own grant would look pre-existing to the second and
+the transaction would stop being idempotent, which one of its tests refuses.
 
 Read-only is enforced twice: the bind mount carries `ro`, and POSIX ACLs grant
 the account read-and-traverse only. `/usr/lib/ems-appliance-manager/setup-export-root.sh`
@@ -448,7 +456,7 @@ enabled by default.
 Paths are relative to the export root, so they are short:
 
 ```bash
-sftp -r ems-backup@ems-solarflow.local:/backups ./ems-backups
+sftp -r ems-backup@ems-solarflow.local:/data/backups ./ems-backups
 ```
 
 ```bash

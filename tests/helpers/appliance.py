@@ -173,7 +173,11 @@ class FakeHost:
         lines = ["21 1 0:20 / /proc rw,relatime shared:5 - proc proc rw"]
         for index, name in enumerate(names):
             target = self.paths.export_root / name
-            source = (source_for or (lambda item: self.paths.install_root / item))(name)
+            # Derived from the same map production binds from, never restated
+            # here: a fixture that says where an export "should" come from turns
+            # a wrong mapping into a passing test, which is how /backups came to
+            # publish a directory nothing writes to.
+            source = (source_for or (lambda item: self.paths.export_paths()[item]))(name)
             lines.append(
                 f"{30 + index} 1 {self.device_of(self.paths.install_root)} "
                 f"{self.mount_root_of(source)} {target} "
@@ -292,8 +296,8 @@ class FakeHost:
             ),
             encoding="utf-8",
         )
-        for directory in ("config", "data", "backups"):
-            (self.paths.install_root / directory).mkdir(parents=True, exist_ok=True)
+        for source in self.paths.export_paths().values():
+            source.mkdir(parents=True, exist_ok=True)
         return compose
 
     def resolved_compose_image(self, service=ADMIN_SERVICE):

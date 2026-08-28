@@ -211,10 +211,18 @@ class ExportScriptHarness:
 
     # --- layout ----------------------------------------------------------
 
+    def export_source(self, name):
+        """Where the script binds this export from, taken from the one map."""
+
+        from appliance.paths import export_sources
+
+        return export_sources(self.install_root)[name]
+
     def seed_installation(self, *, names=EXPORT_NAMES):
         for name in names:
-            (self.install_root / name).mkdir(parents=True, exist_ok=True)
-            (self.install_root / name / "marker").write_text("ems\n", encoding="utf-8")
+            source = self.export_source(name)
+            source.mkdir(parents=True, exist_ok=True)
+            (source / "marker").write_text("ems\n", encoding="utf-8")
         (self.install_root / "secrets").mkdir(parents=True, exist_ok=True)
         return self.install_root
 

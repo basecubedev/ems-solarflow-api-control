@@ -419,6 +419,6 @@ def test_the_shown_commands_use_paths_inside_the_chroot(tmp_path):
     commands = " ".join(item["command"] for item in services.backup.status()["examples"])
 
     # Inside the chroot the export root is "/", so a host path would not resolve.
-    assert ":/backups" in commands
+    assert ":/data/backups" in commands, "the /backups export is empty; see export_sources()"
     assert ":/config" in commands
     assert str(services.paths.install_root) not in commands

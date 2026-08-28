@@ -80,7 +80,7 @@ def configured_status(paths):
         "paths": [
             {
                 "name": name,
-                "source": str(paths.install_root / name),
+                "source": str(paths.export_paths()[name]),
                 "target": str(target),
                 "state": "mounted",
                 "read_only": True,
@@ -103,7 +103,7 @@ def mounts(paths, *, read_only=True, names=None, source_for=None):
     for name, target in paths.export_targets().items():
         if names is not None and name not in names:
             continue
-        source = (source_for or (lambda item: str(paths.install_root / item)))(name)
+        source = (source_for or (lambda item: str(paths.export_paths()[item])))(name)
         table[str(target)] = {
             "options": options,
             "root": mount_root_of(source),
@@ -122,8 +122,11 @@ def device_of(path):
 
 
 def seed_sources(paths, *, names=("config", "backups", "data")):
+    # Taken from the map production binds from, never restated: a fixture that
+    # decides for itself where an export comes from turns a wrong mapping into a
+    # passing test.
     for name in names:
-        (paths.install_root / name).mkdir(parents=True, exist_ok=True)
+        paths.export_paths()[name].mkdir(parents=True, exist_ok=True)
     return paths.install_root
 
 
@@ -390,15 +393,19 @@ def test_an_unexpected_entry_inside_the_export_root_fails_verification(tmp_path)
 
 
 def test_a_missing_ems_directory_stays_pending_and_exact(tmp_path, production_chroot_chain):
+    """The absent one is ``backups``: the archives live under ``data``, so
+    creating that source creates ``data`` with it and no fixture can leave
+    ``data`` missing while ``backups`` is present."""
+
     paths = appliance_paths(tmp_path)
-    seed_sources(paths, names=("config", "backups"))
+    seed_sources(paths, names=("config", "data"))
     payload = configured_status(paths)
     for entry in payload["paths"]:
-        if entry["name"] == "data":
+        if entry["name"] == "backups":
             entry["state"] = "missing"
     write_status(paths, payload)
 
-    named = verify(paths, mounts_table=mounts(paths, names=("config", "backups")))
+    named = verify(paths, mounts_table=mounts(paths, names=("config", "data")))
 
     assert named["export_setup"]["status"] == STATUS_OK, named
 

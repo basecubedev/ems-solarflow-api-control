@@ -229,6 +229,30 @@ def chroot_chain_problems(export_root, *, stat_fn=None, euid=None):
     return problems
 
 
+def export_sources(install_root):
+    """The host directory each export publishes, keyed by its export name.
+
+    Defined once and away from the dataclass so the shell harness, the test
+    fixtures and the runtime read the same answer instead of each restating it.
+
+    ``backups`` is a known-empty export and cannot simply be repointed. EMS
+    writes its archives to ``data/backups`` (``ems/backup.py``), which is inside
+    the ``data`` export -- and ``setup-export-root.sh`` grants ACLs recursively
+    per source, so two overlapping sources make the first run's own grant look
+    pre-existing to the second and the transaction stops being idempotent. The
+    archives are reachable through ``data``; what is fixed instead is the
+    command the appliance puts on screen.
+    """
+
+    root = Path(install_root)
+    return {
+        "config": root / "config",
+        "backups": root / "backups",
+        "data": root / "data",
+    }
+
+
+
 @dataclass(frozen=True)
 class AppliancePaths:
     install_root: Path
@@ -256,7 +280,7 @@ class AppliancePaths:
 
     @property
     def ems_backups_dir(self):
-        return self.install_root / "backups"
+        return export_sources(self.install_root)["backups"]
 
     @property
     def admin_dir(self):
@@ -443,11 +467,7 @@ class AppliancePaths:
     def export_paths(self):
         """Host directories the backup-access account may read."""
 
-        return {
-            "config": self.ems_config_dir,
-            "backups": self.ems_backups_dir,
-            "data": self.ems_data_dir,
-        }
+        return export_sources(self.install_root)
 
     def export_targets(self):
         """Where each exported directory appears inside the SFTP chroot."""

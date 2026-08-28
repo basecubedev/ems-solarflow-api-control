@@ -94,7 +94,7 @@ def test_a_source_symlinked_to_etc_is_refused_before_any_mutation(harness):
 
 def test_a_source_symlinked_to_a_sibling_is_refused(harness):
     harness.replace_with_symlink(
-        harness.install_root / "backups", harness.install_root / "secrets"
+        harness.export_source("backups"), harness.install_root / "secrets"
     )
 
     result = harness.run()
@@ -412,7 +412,7 @@ def test_every_granted_acl_entry_is_recorded_with_its_object_identity(harness):
     entries = manifest_entries(harness)
     assert str(harness.install_root) in roots, harness.manifest_lines()
     for name in EXPORT_NAMES:
-        source = str(harness.install_root / name)
+        source = str(harness.export_source(name))
         assert source in roots, harness.manifest_lines()
         assert roots[source][3] == "recursive"
         identity = object_identity(source)
