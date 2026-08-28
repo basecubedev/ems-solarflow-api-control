@@ -13,6 +13,28 @@ pinned compressor, so two builds of one commit are the same bytes and anybody ca
 re-derive the artefact and compare. An unattested builder is no objection to
 something you can rebuild yourself.
 
+## Creating the identity
+
+Once, before any of this works. The shipped
+`packaging/appliance/config/release-keyring.gpg` is a public key; whoever holds
+its secret half is the only one who can sign a release, and if nobody does, the
+identity has to be made:
+
+```bash
+scripts/appliance-new-release-identity.sh \
+    --uid "EMS SolarFlow Appliance Releases <you@example.org>" \
+    --secret-out ~/appliance-signing-subkey.b64
+```
+
+It writes the public keyring, pins the primary in the shipped configuration, and
+exports the signing subkey for GitHub — the three artefacts that have to agree.
+It refuses to overwrite an existing identity without `--force`, because
+replacing one strands every appliance already flashed with the old one, and it
+refuses to write the secret anywhere inside the repository.
+
+The primary it makes is **certify-only**, so "the primary never signs" is true
+of the key rather than of whoever is at the keyboard.
+
 ## The one thing a person has to create first
 
 An environment named `appliance-manager-signing`, with **required reviewers**,
