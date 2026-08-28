@@ -206,3 +206,33 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 14
+
+  gate:
+    name: Playwright gate
+    # See the note on the gate in simulated-regression-tests.yml. playwright-webkit
+    # is skipped on every pull request by its own `if`, which is why a skip counts
+    # as a pass here.
+    needs:
+      - playwright-chromium-critical
+      - playwright-firefox-smoke
+      - playwright-webkit
+      - playwright-appliance
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Refuse a run in which anything did not succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 -c 'import json, os, sys
+          results = json.loads(os.environ["RESULTS"])
+          bad = sorted((name, outcome["result"]) for name, outcome in results.items()
+                       if outcome["result"] not in ("success", "skipped"))
+          for name, result in bad:
+              print(f"::error::{name} concluded {result}")
+          print(f"{len(results) - len(bad)} of {len(results)} jobs succeeded or were skipped")
+          sys.exit(1 if bad else 0)'

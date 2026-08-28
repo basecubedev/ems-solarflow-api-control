@@ -319,3 +319,39 @@ jobs:
           EMS_INFLUX_E2E_ORG: ems-e2e
         run: |
           pytest -q -rs tests/test_history_analytics_e2e.py
+
+  gate:
+    name: CI gate
+    # The one check branch protection holds for this workflow. Every job above is
+    # listed, and tests/test_ci_gate_covers_every_job.py fails if one is added
+    # without being listed -- an unlisted job still runs, but stops counting.
+    needs:
+      - static-checks
+      - python-tests
+      - simulated-regression-tests
+      - system-build-compatibility
+      - docker-smoke-test
+      - docker-first-e2e
+      - influx-e2e
+    # Without always() a failure upstream skips this job instead of running it,
+    # and a required check that reports "skipped" blocks a pull request for good
+    # rather than reporting the failure underneath it.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Refuse a run in which anything did not succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 -c 'import json, os, sys
+          results = json.loads(os.environ["RESULTS"])
+          bad = sorted((name, outcome["result"]) for name, outcome in results.items()
+                       if outcome["result"] not in ("success", "skipped"))
+          for name, result in bad:
+              print(f"::error::{name} concluded {result}")
+          print(f"{len(results) - len(bad)} of {len(results)} jobs succeeded or were skipped")
+          sys.exit(1 if bad else 0)'
