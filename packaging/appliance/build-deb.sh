@@ -99,6 +99,8 @@ install -m 0755 "$ROOT/deploy/admin/install-admin-console.sh" \
 install -m 0644 "$PACKAGING/systemd/ems-appliance-agent.service" "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-web.service" "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-export.service" "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-sshd-keys.service" \
+        "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-export.path" "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-backup-access-disable.service" \
         "$STAGE/usr/lib/systemd/system/"

@@ -547,3 +547,27 @@ def test_a_forced_command_without_the_read_only_flag_is_refused(tmp_path):
     policy = with_forced_command(services, f"internal-sftp -P {denied}")
 
     assert policy["restrictions"]["forcecommand"]["confirmed"] is False, policy
+
+
+def test_the_advertised_command_names_where_backups_actually_are(tmp_path):
+    """``/backups`` is a known-empty export and cannot simply be repointed.
+
+    ``ems/backup.py`` writes ``data/backups``, which lives inside the ``data``
+    export -- and ``setup-export-root.sh`` grants ACLs recursively per source,
+    so exporting both makes the first run's own grant look pre-existing to the
+    second and the transaction stops being idempotent. The archives are
+    reachable through ``data``; what has to be true is the command the appliance
+    puts on screen, which used to send the owner to the empty one and report
+    nothing when it came back with nothing.
+    """
+
+    from ems.backup import DEFAULT_BACKUP_DIR_NAME
+
+    services = appliance(tmp_path)
+    commands = " ".join(
+        str(entry["command"])
+        for entry in services.backup.examples("ems-backup", "ems-solarflow.local")
+    )
+
+    assert "/" + DEFAULT_BACKUP_DIR_NAME in commands, commands
+    assert ":/backups " not in commands, "still sends the owner to the empty export"

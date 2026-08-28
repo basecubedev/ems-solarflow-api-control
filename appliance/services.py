@@ -152,7 +152,11 @@ def build_services(
     manager = ManagerUpdateService(
         paths=paths,
         config=config,
-        verifier=SignatureVerifier(runner, keyring=config.release_keyring),
+        verifier=SignatureVerifier(
+            runner,
+            keyring=config.release_keyring,
+            fingerprints=config.release_fingerprints,
+        ),
         probe=probe,
         operations=operations,
         runner=runner,

@@ -7,7 +7,7 @@ import os
 import urllib.error
 import zipfile
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -1908,3 +1908,125 @@ def test_prepared_release_never_replaces_installed_digest_baseline(tmp_path):
     # the merely-prepared v0.9.0.
     assert by_tag["v0.8.1"]["upgrade_state"] != "downgrade_blocked"
     assert by_tag["v0.8.1"]["selectable"] is True
+
+
+# --- two products, one release list ------------------------------------------
+
+
+def _appliance_entries(count, *, start=1):
+    """What a weekly image build leaves behind, newest first."""
+
+    return [
+        {
+            "tag_name": f"appliance-image-ci-{number}",
+            "name": f"Appliance image 0.1.0 (CI build {number}, unsigned)",
+            "published_at": "2026-08-27T21:00:00Z",
+            "prerelease": True,
+            "draft": False,
+        }
+        for number in range(start + count - 1, start - 1, -1)
+    ]
+
+
+def _paged_opener(pages):
+    """An opener that answers /releases the way GitHub does: one page at a time."""
+
+    def open_url(request, timeout=None):
+        url = request.full_url
+        if _is_github_api_url(url) and "/releases" in url:
+            number = int(parse_qs(urlparse(url).query).get("page", ["1"])[0])
+            page = pages[number - 1] if number <= len(pages) else []
+            return _Response(json.dumps(page).encode())
+        return _opener()(request, timeout)
+
+    return open_url
+
+
+def test_an_appliance_release_is_not_offered_as_an_ems_system_build(tmp_path):
+    """The appliance publishes an image build and a Manager release from this
+    same repository, tagged outside the ``v*`` namespace on purpose. Offering
+    one would mean offering a build whose container images do not exist."""
+
+    payload = _appliance_entries(3) + _github_payload()
+    manager = ReleaseManager(data_dir=tmp_path, urlopen=_opener(payload=payload))
+
+    tags = {item["tag"] for item in manager.list_releases()["releases"]}
+
+    assert not any(tag.startswith("appliance-") for tag in tags), tags
+    assert "v0.6.1" in tags
+
+
+def test_a_year_of_weekly_image_builds_does_not_hide_every_ems_release(tmp_path):
+    """The failure this pagination exists for.
+
+    One fixed page of 50 and a weekly image build meant no ``v*`` release was
+    inside the window in under a year. ``latest_stable`` then became None and
+    the console fell back to the rolling ``latest`` channel with no warning,
+    because the fetch itself had succeeded.
+    """
+
+    pages = [_appliance_entries(100), _appliance_entries(52, start=101) + _github_payload()]
+    manager = ReleaseManager(data_dir=tmp_path, urlopen=_paged_opener(pages))
+
+    result = manager.list_releases()
+    tags = {item["tag"] for item in result["releases"]}
+
+    assert "v0.6.1" in tags, "an EMS release fell out of reach behind appliance builds"
+    assert result["latest_stable"], "no stable release could be resolved"
+
+
+def test_one_oversized_page_does_not_take_the_whole_catalogue_down(tmp_path):
+    """A release with assets is ~40 KB of JSON and the appliance publishes a
+    nineteen-asset image build every week, so a page can outgrow the 2 MiB this
+    will read. That used to raise out of the whole fetch: the console reported
+    "GitHub releases are unavailable" and fell back to the rolling latest
+    channel, for a repository that was answering perfectly well.
+    """
+
+    heavy = _appliance_entries(1)
+    heavy[0]["body"] = "x" * (2 * 1024 * 1024 + 64)
+    pages = [heavy, _github_payload()]
+    manager = ReleaseManager(data_dir=tmp_path, urlopen=_paged_opener(pages))
+
+    result = manager.list_releases()
+    tags = {item["tag"] for item in result["releases"]}
+
+    assert "v0.6.1" in tags, "one unreadable page emptied the catalogue"
+    assert result["latest_stable"]
+    assert any("could not be read" in warning for warning in result.get("warnings", [])), (
+        "a page was silently dropped; a missing release must not look like an absent one"
+    )
+
+
+def test_the_window_did_not_shrink_when_the_pages_got_smaller(tmp_path):
+    """Smaller pages are only safe if there are correspondingly more of them:
+    the point of paginating at all was that a year of weekly image builds must
+    not push every EMS release out of reach.
+    """
+
+    from admin.releases import (
+        GITHUB_RELEASE_PAGES,
+        GITHUB_RELEASES_PER_PAGE,
+        GITHUB_RELEASES_URL,
+    )
+
+    assert GITHUB_RELEASES_PER_PAGE * GITHUB_RELEASE_PAGES >= 500
+    assert f"per_page={GITHUB_RELEASES_PER_PAGE}" in GITHUB_RELEASES_URL
+
+
+def test_the_paging_stops_at_the_end_rather_than_asking_forever(tmp_path):
+    """A short page is the last page. Asking anyway spends a request per refresh
+    on a repository that will never answer with anything."""
+
+    asked = []
+
+    def counting(request, timeout=None):
+        url = request.full_url
+        if _is_github_api_url(url) and "/releases" in url:
+            asked.append(url)
+            return _Response(json.dumps(_github_payload()).encode())
+        return _opener()(request, timeout)
+
+    ReleaseManager(data_dir=tmp_path, urlopen=counting).list_releases()
+
+    assert len(asked) == 1, asked

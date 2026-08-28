@@ -17,6 +17,14 @@ PubkeyAuthentication   yes
 is no operation in the appliance that can turn on password authentication.
 **Disable SSH** stops and disables it.
 
+A flashed image ships with the service **off**, so this control is the only way
+it comes on. That is a property of the image rather than of the package:
+`openssh-server` is installed, and Debian's postinst would enable it, so the
+appliance layer switches both the service and the socket unit back off and fails
+the build if either survives. Installing the `.deb` on a Raspberry Pi you already
+administer changes nothing about your SSH — the appliance never edits a host-wide
+sshd setting, only the two `Match` blocks for the accounts it creates itself.
+
 ## The account a flashed image carries
 
 The account itself comes from the image: the package's postinst runs in the
@@ -164,8 +172,16 @@ satisfies both.
 | Path in the SFTP session | Host path | Access |
 |---|---|---|
 | `/config` | `/opt/ems-solarflow/config` | read-only |
-| `/backups` | `/opt/ems-solarflow/backups` | read-only |
+| `/backups` | `/opt/ems-solarflow/backups` | read-only — **always empty**, see below |
 | `/data` | `/opt/ems-solarflow/data` | read-only |
+
+`/backups` publishes a directory nothing writes to. EMS keeps its archives in
+`data/backups` (`ems/backup.py`), which the `/data` export already carries, so
+that is where an operator finds them and what `backup_access.examples()` now
+puts on screen. The export is not repointed at `data/backups` because the two
+sources would then overlap, and `setup-export-root.sh` grants ACLs recursively
+per source — the first run's own grant would look pre-existing to the second and
+the transaction would stop being idempotent, which one of its tests refuses.
 
 Read-only is enforced twice: the bind mount carries `ro`, and POSIX ACLs grant
 the account read-and-traverse only. `/usr/lib/ems-appliance-manager/setup-export-root.sh`
@@ -440,7 +456,7 @@ enabled by default.
 Paths are relative to the export root, so they are short:
 
 ```bash
-sftp -r ems-backup@ems-solarflow.local:/backups ./ems-backups
+sftp -r ems-backup@ems-solarflow.local:/data/backups ./ems-backups
 ```
 
 ```bash

@@ -113,6 +113,7 @@ Docker daemon or EMS itself are unavailable. It never edits EMS configuration.
 | SSH and backup access | [appliance/ssh-backup-access.md](appliance/ssh-backup-access.md) | SSH keys and the read-only, chroot-confined `ems-backup` account. SFTP only — rsync and scp are refused. |
 | Network recovery | [appliance/network-recovery.md](appliance/network-recovery.md) | WLAN with automatic revert, hostname changes and lockout recovery. |
 | Security model | [appliance/security-model.md](appliance/security-model.md) | The privilege boundary, the operation allowlist and secret handling. |
+| Manager releases | [appliance/manager-releases.md](appliance/manager-releases.md) | Cutting, signing and publishing the package that *is* the appliance web interface, and what the index carries so an operator can go back. |
 | Troubleshooting | [appliance/troubleshooting.md](appliance/troubleshooting.md) | Symptom-driven recovery and the error codes you may see. |
 | Decision records | [appliance/adr/](appliance/adr/) | Why the appliance is shaped the way it is. |
 

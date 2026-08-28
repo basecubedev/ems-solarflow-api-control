@@ -16,6 +16,13 @@ import re
 APPLIANCE_VERSION = "0.1.0"
 
 PACKAGE_NAME = "ems-appliance-manager"
+# Two products publish releases from this repository, and for a long time only
+# one of them had a tag namespace: every tag was an EMS version, so "the latest
+# stable Appliance Manager" was not a thing that could be asked for. This prefix
+# is what makes it askable, and it deliberately does not parse as a version --
+# admin/releases.py offers every non-draft release of this repository as an EMS
+# system build and decides eligibility by parsing the tag.
+TAG_PREFIX = "appliance-manager-v"
 SUPPORTED_ARCHITECTURES = ("arm64",)
 # The boards this package runs on. Not the same list as the boards this project
 # builds an image for: the package installs on Raspberry Pi OS anywhere.
@@ -67,3 +74,46 @@ def version_key(text):
         else:
             identifiers.append((1, chunk, 0))
     return (*release, 0, tuple(identifiers))
+
+
+def is_stable(text):
+    """Whether a version names a release rather than a candidate for one.
+
+    Derived from ``version_key`` rather than re-parsed, because a second reader
+    of the same string is how ``0.1.0~rc1`` came to compare equal to ``0.1.0``
+    in the first place. The key's fourth element already carries the answer: a
+    release outranks every prerelease sharing its core, and is marked with 1.
+    """
+
+    return version_key(text)[3] == 1
+
+
+def tag_for(text):
+    """The git tag that names a Manager version."""
+
+    return TAG_PREFIX + str(text or "").strip().lstrip("vV")
+
+
+def version_from_tag(tag):
+    """The Manager version a tag names, or an empty string for any other tag.
+
+    Empty rather than an exception: this reads a list of tags that belongs to
+    two products, and an EMS tag is not an error.
+    """
+
+    text = str(tag or "").strip()
+    return text[len(TAG_PREFIX):] if text.startswith(TAG_PREFIX) else ""
+
+
+def latest_stable(tags):
+    """The newest stable Manager version among tags, or an empty string.
+
+    A prerelease tag never wins here even when it is the newest thing there is:
+    the image bakes in what this returns, and "latest" answering with a release
+    candidate is the difference between shipping a candidate to every card and
+    shipping nothing until a release exists.
+    """
+
+    versions = [version for version in map(version_from_tag, tags) if version]
+    stable = [version for version in versions if is_stable(version)]
+    return max(stable, key=version_key, default="")

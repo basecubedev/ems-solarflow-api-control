@@ -121,3 +121,116 @@ def test_the_shipped_version_is_a_form_both_authorities_read_alike():
     assert "-" not in APPLIANCE_VERSION, (
         "a hyphen makes dpkg and version_key disagree; spell a pre-release with ~"
     )
+
+
+# --- the Manager's own tag namespace -----------------------------------------
+
+
+def test_a_manager_tag_is_not_readable_as_an_ems_version():
+    """The reason the prefix exists, and the reason it looks the way it does.
+
+    ``admin/releases.py`` offers every non-draft release of this repository as
+    an EMS system-build target and decides eligibility by parsing the tag. A
+    Manager tag that parsed as a version would offer operators an EMS build
+    whose container images do not exist. Run through the pattern that decides,
+    not eyeballed.
+    """
+
+    from admin.releases import VERSION_PATTERN
+    from appliance.version import tag_for
+
+    for version in ("0.1.0", "1.0.0", "0.2.0~rc1", "10.20.30"):
+        assert not VERSION_PATTERN.fullmatch(tag_for(version)), version
+
+
+def test_a_tag_round_trips_through_the_version_it_names():
+    from appliance.version import tag_for, version_from_tag
+
+    for version in ("0.1.0", "1.2.3", "0.2.0~rc1"):
+        assert version_from_tag(tag_for(version)) == version
+
+
+def test_an_ems_tag_is_not_mistaken_for_a_manager_one():
+    """Both products tag in one namespace, so reading the wrong one is the
+    mistake available here. An EMS tag is not an error, it is someone else's."""
+
+    from appliance.version import version_from_tag
+
+    for tag in ("v0.8.0-RC2", "v0.6.0", "archive-before-timestamp-rewrite", ""):
+        assert version_from_tag(tag) == ""
+
+
+@pytest.mark.parametrize(
+    "text,stable",
+    [
+        ("0.1.0", True),
+        ("1.0.0", True),
+        ("0.1.0~rc1", False),
+        ("0.1.0-rc1", False),
+        ("0.1.0~beta.2", False),
+    ],
+)
+def test_a_candidate_is_not_stable(text, stable):
+    from appliance.version import is_stable
+
+    assert is_stable(text) is stable
+
+
+def test_the_newest_stable_wins_and_a_candidate_never_does():
+    """What the image bakes in. "Latest" answering with a release candidate is
+    the difference between shipping a candidate to every card and shipping
+    nothing until a release exists."""
+
+    from appliance.version import latest_stable
+
+    tags = [
+        "appliance-manager-v0.1.0",
+        "appliance-manager-v0.2.0",
+        "appliance-manager-v0.3.0~rc1",
+        "v0.8.0-RC2",
+        "backup/admin-mqtt-before-cleanup",
+    ]
+
+    assert latest_stable(tags) == "0.2.0"
+
+
+def test_no_stable_tag_yields_no_answer_rather_than_a_guess():
+    """Today's state: the namespace exists and holds nothing. A caller must be
+    able to tell "none published yet" from "here is one"."""
+
+    from appliance.version import latest_stable
+
+    assert latest_stable(["appliance-manager-v0.1.0~rc1", "v0.8.0-RC2"]) == ""
+    assert latest_stable([]) == ""
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="the tags live in git")
+def test_the_source_is_never_behind_the_newest_released_tag():
+    """The forgotten bump, which nothing caught before.
+
+    ``APPLIANCE_VERSION`` is a hand-edited literal and the only thing the
+    package version comes from. Tagging a release without bumping it produces a
+    second release carrying the first one's version -- two different packages
+    that ``version_key`` reads as the same, which is precisely what the whole
+    comparator exists to prevent one layer down.
+    """
+
+    from pathlib import Path
+
+    from appliance.version import APPLIANCE_VERSION, latest_stable, version_key
+
+    root = Path(__file__).resolve().parents[1]
+    listed = subprocess.run(
+        ["git", "tag", "--list"],
+        capture_output=True, text=True, check=False, cwd=root, timeout=60,
+    )
+    if listed.returncode != 0:
+        pytest.skip("no git checkout to read tags from")
+    released = latest_stable(listed.stdout.split())
+    if not released:
+        pytest.skip("no Manager release has been tagged yet")
+
+    assert version_key(APPLIANCE_VERSION) >= version_key(released), (
+        f"appliance/version.py says {APPLIANCE_VERSION}, "
+        f"but {released} is already tagged"
+    )

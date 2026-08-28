@@ -13,11 +13,25 @@ waiting.
 > nothing to download; the steps below are complete and the file names are the
 > ones a release carries. A local build writes the same names into `dist/`.
 
+> **A new image is built every week**, so the card you flash comes up with a
+> current Debian instead of spending its first boot pulling months of updates.
+> Take the newest one; there is no reason to prefer an older.
+
+> **Appliance images are published as *pre-releases*.** They are built by the
+> project's CI rather than in the approved builder environment that holds the
+> release key, so nothing you download carries a signature to check. Writing a
+> card verifies no signature either way — [step 2](#2-check-the-download) is the
+> check that exists, and it is the one that catches a bad download. What a
+> signature would add is proof of *who* built the file, which is a question a
+> checksum published beside the file cannot answer. The releases page also
+> carries EMS release candidates, marked pre-release for an unrelated reason;
+> the appliance images are the entries titled *Appliance image*.
+
 ## Before you start
 
 | | |
 | --- | --- |
-| **Board** | Raspberry Pi 3, 3B+, 4 **or** 5 — you need the image for *your* board, they are not interchangeable. A Pi 3 or 3B+ has one image rather than two; see below |
+| **Board** | Raspberry Pi 3, 3B+, 4 **or** 5 — you need the image for *your* board, they are not interchangeable. A Pi 3 or 3B+ boots from its card and nothing else; see below |
 | **Card** | 16 GB or larger, and a card reader for your computer |
 | **Cable** | Ethernet. The first start needs it; WLAN cannot be configured before the appliance runs |
 | **Power** | The official supply for your board |
@@ -28,8 +42,9 @@ Everything on the card is erased. There is no undo.
 
 **Where to get it.** On the project's
 [Releases page](https://github.com/basecubedev/ems-solarflow-api-control/releases),
-open the newest release and scroll to **Assets** — a collapsed list at the
-bottom of the release notes. The image files are there.
+open the newest entry **whose title starts with "Appliance image"** and scroll to
+**Assets** — a collapsed list at the bottom of the release notes. The image files
+are there. The page lists EMS releases too, and those carry no image.
 
 Not under **Packages** in the sidebar. That holds the EMS and Admin container
 images, which the appliance downloads by itself once it runs; you never fetch
@@ -63,6 +78,14 @@ itself, next to the GPIO pins.
 A truncated or corrupted download produces a card that half-boots and fails in
 ways that look like broken hardware. This step takes ten seconds.
 
+**First, make sure the folder holds only this week's download.** A new image is
+built every Monday and every build uses the same file names, so a browser saves
+the second one as `… (1).img.xz` and leaves the first in place. The commands
+below match by pattern, and with two weeks of downloads present they will happily
+check one week's checksum against the other week's image — which fails, and looks
+exactly like a corrupted download. Move or delete the older pair before you
+start.
+
 **Windows** (PowerShell, in the download folder):
 
 ```powershell
@@ -85,8 +108,10 @@ sha256sum -c ems-solarflow-appliance-*.img.xz.sha256
 macOS and Linux print `OK` when it matches. On Windows, compare the two lines
 by eye — the long hex string has to be identical.
 
-**If they do not match**, delete the file and download it again. Do not write a
-card from a file that failed this check.
+**If they do not match**, first check that the folder really holds one image and
+one `.sha256` — a leftover from an earlier week is the more common cause than a
+bad download. If it is the only pair there, delete it and download it again. Do
+not write a card from a file that failed this check.
 
 ## 3. Write the card
 

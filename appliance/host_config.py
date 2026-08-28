@@ -29,6 +29,7 @@ from appliance.paths import (
 
 # The Match block is generated from the same constant the effective policy is
 # judged against, so a change to one is a change to both.
+from appliance.rescue_account import ACCOUNT as RESCUE_ACCOUNT
 from appliance.ssh_policy import FORCED_COMMAND
 
 HOST_PATHS_NAME = "host-paths.env"
@@ -91,10 +92,28 @@ def render_path_unit(paths):
 
 
 def render_sshd_policy(paths, config):
-    """The Match block that confines the backup account, for the configured root."""
+    """The Match blocks for the two accounts this package creates.
+
+    The backup account is confined to the configured export root. The rescue
+    account is made unusable over SSH by password, which is what
+    docs/appliance/console-recovery.md has always said of it: its password is
+    published in this repository, and it is meant for a keyboard or a serial
+    console, neither of which sshd is involved in.
+
+    Scoped to those two accounts rather than set globally on purpose. This
+    package can be installed on a Raspberry Pi somebody already administers over
+    a password login, and a global policy here would lock them out of their own
+    machine.
+    """
 
     return (
         HEADER
+        + f"Match User {RESCUE_ACCOUNT}\n"
+        + "    PasswordAuthentication no\n"
+        # Without this the password still works: sshd falls through to PAM's
+        # keyboard-interactive path, which asks for the same password and is not
+        # governed by PasswordAuthentication.
+        + "    KbdInteractiveAuthentication no\n"
         + f"Match User {config.backup_user}\n"
         + f"    ChrootDirectory {paths.export_root}\n"
         + "    PasswordAuthentication no\n"

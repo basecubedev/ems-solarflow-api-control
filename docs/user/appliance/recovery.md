@@ -144,6 +144,6 @@ thing that comes back.
 ## Getting help
 
 Open an issue with: what you were doing, what the page said, the model of your
-Pi and which of the two images you flashed. If the appliance is reachable, its **Support archive** collects the
+Pi and the build id the **System** page shows. If the appliance is reachable, its **Support archive** collects the
 relevant logs and state with secrets redacted, and attaching that answers most
 questions in one round.

@@ -480,8 +480,10 @@ def test_the_directories_a_boot_scaffolded_are_handed_over_with_the_root(tmp_pat
 
     bootstrap.identity(claim=True)
 
-    for name in ("config", "data", "backups"):
-        assert services.paths.install_root / name in chowned
+    # From the map production uses. Naming install_root/<name> here is the
+    # restatement that let /backups point at a directory nothing writes to.
+    for source in services.paths.export_paths().values():
+        assert source in chowned, source
 
 
 def test_a_root_owned_deployment_root_holding_an_installation_is_never_taken_over(tmp_path):

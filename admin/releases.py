@@ -31,7 +31,23 @@ from admin.image_identity import (
 
 REPO = "basecubedev/ems-solarflow-api-control"
 DOCKER_IMAGE_REPOSITORY = f"ghcr.io/{REPO}"
-GITHUB_RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases?per_page=50"
+# 30 rather than 100. A release with assets is roughly 40 KB of JSON, and the
+# appliance publishes an image build with nineteen of them every week, so a
+# hundred-entry page grows past the 2 MiB a page may be -- and one oversized page
+# used to take the whole catalogue down to "GitHub releases are unavailable".
+GITHUB_RELEASES_PER_PAGE = 30
+GITHUB_RELEASES_URL = (
+    f"https://api.github.com/repos/{REPO}/releases?per_page={GITHUB_RELEASES_PER_PAGE}"
+)
+# Two products publish releases from this repository and only one of them is an
+# EMS system build. The appliance cuts an image build and a Manager release of
+# its own, tagged outside the ``v*`` namespace, and every one of those used to
+# take a slot in a single fixed page: a weekly image build fills a 50-entry
+# window in under a year, at which point `latest_stable` is None and the console
+# falls back to the rolling `latest` channel without a warning, because the
+# fetch itself succeeded. So the page is followed to its end, up to a bound, and
+# a release whose tag is not a version is not a candidate to begin with.
+GITHUB_RELEASE_PAGES = 17
 # EMS image reference in a compose file; group 1 is the tag (may be ``latest``)
 # or, when the ref is digest-pinned, the ``sha256:...`` digest. A digest ref has
 # no detectable release tag, so identity comes from the image's OCI labels.
@@ -108,6 +124,14 @@ class ReleaseError(Exception):
     def __init__(self, message, status=400):
         super().__init__(message)
         self.status = status
+
+
+class ReleasePageTooLarge(ValueError):
+    """One page of the release list exceeded what this will read.
+
+    A ValueError so an older caller still treats it as a fetch failure; caught
+    by name where losing one page must not lose the whole catalogue.
+    """
 
 
 def legacy_release_resource_ref(*, tag, channel, revision):
@@ -334,6 +358,8 @@ class ReleaseManager:
         except (OSError, ValueError, urllib.error.URLError) as exc:
             remote_available = False
             warnings.append(f"GitHub releases are unavailable: {exc}")
+        else:
+            warnings.extend(getattr(self, "_release_page_warnings", []))
 
         by_tag = {item["tag"]: item for item in remote}
         by_tag["latest"] = {
@@ -926,9 +952,9 @@ class ReleaseManager:
         active = self.detect_active_release()
         return self._assess_upgrade(tag, running, running_known, active, pull=pull)
 
-    def _fetch_release_metadata(self):
+    def _fetch_release_page(self, url):
         request = urllib.request.Request(
-            GITHUB_RELEASES_URL,
+            url,
             headers={
                 "Accept": "application/vnd.github+json",
                 "User-Agent": "ems-solarflow-admin",
@@ -937,12 +963,36 @@ class ReleaseManager:
         with self._urlopen(request, timeout=10) as response:
             raw = response.read(2 * 1024 * 1024 + 1)
         if len(raw) > 2 * 1024 * 1024:
-            raise ValueError("GitHub response is too large")
+            raise ReleasePageTooLarge("the page is larger than 2 MiB")
         payload = json.loads(raw.decode("utf-8"))
         if not isinstance(payload, list):
             raise ValueError("GitHub returned an invalid release list")
+        return payload
+
+    def _fetch_release_metadata(self):
+        payload = []
+        self._release_page_warnings = []
+        for page in range(1, GITHUB_RELEASE_PAGES + 1):
+            try:
+                batch = self._fetch_release_page(f"{GITHUB_RELEASES_URL}&page={page}")
+            except ReleasePageTooLarge as exc:
+                # Losing one page is not losing the catalogue. It is still a
+                # wrong answer if an eligible release was on it, so it is
+                # reported rather than absorbed.
+                self._release_page_warnings.append(
+                    f"release page {page} could not be read ({exc}); "
+                    "releases listed on it are missing from this list"
+                )
+                continue
+            payload.extend(batch)
+            # A short page is the last page. Asking for the next one anyway
+            # spends a request per refresh on a repository that will never
+            # answer with anything.
+            if len(batch) < GITHUB_RELEASES_PER_PAGE:
+                break
 
         releases = []
+        seen = set()
         for entry in payload:
             if not isinstance(entry, dict) or entry.get("draft"):
                 continue
@@ -950,6 +1000,14 @@ class ReleaseManager:
                 tag = _safe_tag(entry.get("tag_name"))
             except ReleaseError:
                 continue
+            # An EMS system build is named by a version. The appliance's own
+            # releases are tagged deliberately outside that shape, so this is
+            # the line where they stop being offered as one.
+            if tag != "latest" and not _version(tag):
+                continue
+            if tag in seen:
+                continue
+            seen.add(tag)
             prerelease = bool(entry.get("prerelease"))
             self._known_downloads[tag] = (
                 f"https://codeload.github.com/{REPO}/zip/refs/tags/{tag}"

@@ -224,8 +224,11 @@ def state_schema_problems(release, *, recorded):
                 "code": "state_schemas_unrecorded",
                 "message": (
                     "this appliance has no record of what its stored state is formatted "
-                    "as, so no artifact can be proven able to read it; run "
-                    "'ems-appliance state-schema' and try again"
+                    "as, so no artifact can be proven able to read it. The record is "
+                    "ems-appliance/state-schema.json on the persistent partition; a "
+                    "manager that cannot read one never rewrites it, so an unreadable "
+                    "record has to be removed by hand and the next reconciliation will "
+                    "adopt the partition"
                 ),
             }
         ]

@@ -2,9 +2,17 @@ name: Appliance image
 
 # Build the flashable Raspberry Pi appliance image on a GitHub-hosted runner.
 #
-# What this workflow produces is a build: an image an operator can write to a
-# card, the build authority that says what it is made of, and the gate logs that
-# say what was proven about it. Three artefacts per run, one per board.
+# What this workflow produces is a build. Per board: an image an operator can
+# write to a card, the build authority that says what it is made of, the builder
+# environment it was recorded with, and the gate logs that say what was proven
+# about it. Once per run: the Appliance Manager package the images carry.
+#
+# A build every board finished is published as a GitHub prerelease, because
+# docs/user/appliance/install.md sends an operator to the Releases page for
+# exactly these file names, and an Actions artefact expires in thirty days
+# behind a sign-in wall, on a run page no operator will find. Prerelease is not
+# decoration: GitHub's /releases/latest alias skips one, so a weekly unsigned
+# build never becomes the "Latest" release this repository advertises.
 #
 # What it does not produce is a release, and that is deliberate.
 # packaging/appliance/vm/base-images.lock.json approves exactly one builder --
@@ -20,6 +28,17 @@ name: Appliance image
 # the physical-hardware validation gate in docs/appliance/hardware-validation.md.
 
 "on":
+  # Weekly, because the point of a fresh image is a fresh OS: the build resolves
+  # its packages from trixie, trixie-updates and trixie-security at build time
+  # with nothing pinned, so a card flashed from last week's image comes up
+  # already patched instead of pulling months of updates on first boot. Not on
+  # push: three emulated builds per commit would be hours of runner time each
+  # time, and nothing about a commit makes last week's OS stale.
+  #
+  # Off the hour on purpose. Scheduled runs queue behind everyone else's, and
+  # the ones on :00 wait longest.
+  schedule:
+    - cron: "17 3 * * 1"
   workflow_dispatch:
     inputs:
       profile:
@@ -31,6 +50,10 @@ name: Appliance image
           - rpi4
           - rpi5
         default: all
+      publish:
+        description: Publish the finished build as a downloadable prerelease
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -275,6 +298,30 @@ jobs:
                exit 1 ;;
           esac
 
+      - name: Take the Manager package an operator would be offered
+        run: |
+          set -euo pipefail
+          # The image should carry the bytes the update path offers, not a
+          # second build of the same source that only happens to match. So the
+          # build reads the same index the fleet reads and makes the same
+          # decision, with the same keyring and the same program.
+          #
+          # Exit 3 is "no stable release published yet", which is a state this
+          # project is actually in and not a failure: the build then makes its
+          # own package, and says which of the two happened.
+          set +e
+          package="$(scripts/appliance-fetch-manager-package.py \
+            --index "https://github.com/${GITHUB_REPOSITORY}/releases/download/appliance-manager-index/manager-packages.json" \
+            --into "${APPLIANCE_OUTPUT}/manager")"
+          status=$?
+          set -e
+          case "${status}" in
+            0) echo "EMS_APPLIANCE_MANAGER_PACKAGE=${package}" >> "$GITHUB_ENV"
+               echo "the image will carry the published $(basename "${package}")" ;;
+            3) echo "::notice::no stable Manager release is published yet; building one from this checkout" ;;
+            *) echo "::error::the published Manager package could not be verified"; exit 1 ;;
+          esac
+
       - name: Capture the builder environment
         run: |
           set -euo pipefail
@@ -386,3 +433,265 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
           overwrite: true
+
+  publish:
+    name: publish
+    needs: [plan, manager-package, image]
+    # An Actions artefact expires in 30 days and is reachable only through the
+    # run page, by someone signed in with access to this repository. The install
+    # page sends an operator to the Releases page instead, for these exact file
+    # names, so that is where the files have to be.
+    #
+    # Only a build every board finished is published. The image job uploads its
+    # evidence even when the gates fail -- that is when the logs are worth most
+    # -- so the presence of an artefact says nothing here; the gates' verdict
+    # does.
+    # The `inputs` context exists for workflow_dispatch and workflow_call and is
+    # empty for anything else, so a plain `inputs.publish` would make every
+    # scheduled run build three images and publish nothing -- as a green skip,
+    # with every job reporting success. Declining to publish is a choice a
+    # person makes at dispatch time; a schedule has nobody to make it.
+    if: >-
+      ${{ (github.event_name != 'workflow_dispatch' || inputs.publish)
+      && needs.image.result == 'success'
+      && needs['manager-package'].result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # The only job in this workflow that may write anything, and all it writes
+      # is a release of files the jobs above already built. No secret is read
+      # here: the automatic token creates the release, and nothing signs.
+      contents: write
+
+    steps:
+      - name: Take the release identity these images carry
+        uses: actions/checkout@v7
+
+      # The fingerprint a card pins is frozen the moment it is flashed:
+      # appliance.conf ships to /usr/share, is not a conffile, and config-seed
+      # leaves an existing /etc copy unread. Publishing is therefore the point of
+      # no return, and an identity nobody holds the secret half of turns every
+      # card it reaches into one that can never install a Manager package again
+      # -- not an upgrade, and not the downgrade that is its only recovery.
+      # Building stays allowed, because hardware validation needs images.
+      - name: Refuse to publish against an identity nobody can sign with
+        run: python3 scripts/appliance-check-release-identity.py
+
+      - name: Collect what the build produced
+        uses: actions/download-artifact@v7
+        with:
+          path: ${{ runner.temp }}/collected
+          pattern: appliance-*
+
+      - name: Lay out the files a download page needs
+        env:
+          PROFILES: ${{ needs.plan.outputs.profiles }}
+        run: |
+          set -euo pipefail
+          collected="${RUNNER_TEMP}/collected"
+          release="${RUNNER_TEMP}/release"
+          mkdir -p "${release}"
+
+          # The board list comes from the plan job rather than being typed a
+          # second time: a release short one board, with every job green, is
+          # the failure this workflow was written to prevent.
+          boards="$(printf '%s' "${PROFILES}" \
+            | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)))')"
+          [ -n "${boards}" ] || { echo "::error::the plan job named no board"; exit 1; }
+
+          for board in ${boards}; do
+            image="${collected}/appliance-image-${board}"
+            [ -d "${image}" ] || { echo "::error::no image artefact for ${board}"; exit 1; }
+            # The compressed image and the checksum beside it, under the names
+            # docs/user/appliance/install.md tells an operator to look for. The
+            # raw .img is 8.25 GiB and never leaves the runner.
+            cp "${image}"/*.img.xz "${image}"/*.img.xz.sha256 "${release}/"
+            cp "${image}"/*.build-authority.json "${release}/"
+            # One name for three boards, so it needs the board to stay distinct.
+            cp "${image}/builder-environment.json" \
+              "${release}/builder-environment-${board}.json"
+
+            gates="${collected}/appliance-gates-${board}"
+            [ -r "${gates}/release-gates.log" ] \
+              || { echo "::error::no gate log for ${board}"; exit 1; }
+            ( cd "${gates}" && zip -qr "${release}/gate-evidence-${board}.zip" . )
+          done
+
+          # Which Manager the images carry, read from their own build records
+          # rather than assumed. Since --manager-package the image bakes in the
+          # newest *published* stable Manager and the job above builds one from
+          # this checkout: between releases those are the same bytes, and from
+          # the first release onwards they are not.
+          carried=""
+          carried_version=""
+          for board in ${boards}; do
+            # Chosen by what it contains, not by what it sorts as. When no
+            # stable Manager is published the image builds its own .deb, and
+            # build-deb.sh writes a second .build.json into the same directory
+            # whose name sorts first and which carries no image fields at all --
+            # so `ls | head -1` picked the wrong record in exactly the state
+            # this repository is in.
+            record="$(python3 -c 'import json,pathlib,sys; print(next((str(p) for p in sorted(pathlib.Path(sys.argv[1]).glob("*.build.json")) if json.loads(p.read_text()).get("appliance_package_sha256")), ""))' "${collected}/appliance-image-${board}")"
+            [ -n "${record}" ] || { echo "::error::${board} produced no build record naming a manager package"; exit 1; }
+            cp "${record}" "${release}/"
+            this="$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("appliance_package_sha256",""))' "${record}")"
+            if [ -n "${carried}" ] && [ "${carried}" != "${this}" ]; then
+              echo "::error::the boards do not carry the same Manager package"
+              exit 1
+            fi
+            carried="${this}"
+            carried_version="$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("appliance_package_version",""))' "${record}")"
+          done
+
+          package="${collected}/appliance-manager-deb"
+          [ -d "${package}" ] || { echo "::error::no manager package"; exit 1; }
+          built="$(cut -d' ' -f1 < "$(ls "${package}"/*.deb.sha256 | head -1)")"
+
+          if [ "${built}" = "${carried}" ]; then
+            # The same bytes, so this really is the package these images carry.
+            # The .build.json travels with it because
+            # appliance-build-manager-manifest.py refuses without it: a published
+            # .deb nobody can write a manifest for would have to be rebuilt to be
+            # signed, and a rebuild elsewhere records a different builder.
+            cp "${package}"/*.deb "${package}"/*.deb.sha256 \
+              "${package}"/*.build.json "${release}/"
+            echo "MANAGER_BESIDE=yes" >> "$GITHUB_ENV"
+          else
+            # Publishing it anyway is how an operator hand-installs an unsigned
+            # HEAD build over the released one, under a sentence saying it is
+            # what the images carry -- usually under the same file name, with a
+            # .sha256 that contradicts the released package's.
+            echo "::notice::these images carry Manager ${carried_version}, which has its own release; a checkout build is not put beside them"
+            echo "MANAGER_BESIDE=no" >> "$GITHUB_ENV"
+          fi
+          echo "MANAGER_VERSION=${carried_version}" >> "$GITHUB_ENV"
+
+          # Written outside the directory it describes, so it cannot list itself.
+          ( cd "${release}" && sha256sum -- * > "${RUNNER_TEMP}/SHA256SUMS" )
+          mv "${RUNNER_TEMP}/SHA256SUMS" "${release}/SHA256SUMS"
+          ls -l "${release}"
+
+      - name: Say what this build is, and what it is not
+        env:
+          PROFILES: ${{ needs.plan.outputs.profiles }}
+        run: |
+          set -euo pipefail
+          release="${RUNNER_TEMP}/release"
+          boards="$(printf '%s' "${PROFILES}" \
+            | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)))')"
+          first="${boards%% *}"
+          # The version is read off what was actually built rather than out of
+          # the source tree, so the page cannot name a version the files do not.
+          version="$(ls "${release}"/*-"${first}"-*.img.xz \
+            | head -1 \
+            | sed -n "s/.*appliance-\(.*\)-${first}-.*\.img\.xz\$/\1/p")"
+          [ -n "${version}" ] || { echo "::error::cannot read the version"; exit 1; }
+          echo "APPLIANCE_VERSION=${version}" >> "$GITHUB_ENV"
+
+          notes="${RUNNER_TEMP}/release-notes.md"
+          {
+            echo "Appliance image ${version}, built on a GitHub-hosted runner from"
+            echo "\`${GITHUB_SHA}\`, for $(printf '%s' "${PROFILES}" \
+              | python3 -c 'import json,sys; print(", ".join(json.load(sys.stdin)))')."
+            echo
+            echo "**This image is not signable**: it was built on a hosted runner,"
+            echo "which release policy does not approve as a builder, and a finalizer"
+            echo "refuses it with \`builder_environment_untrusted\` by design."
+            echo "This is not a release. Cutting one means running the gates in"
+            echo "production mode against a signing environment."
+            echo
+            echo "Flashing verifies no signature, so an unsigned build is enough to"
+            echo "write a card with — which is what makes this worth downloading."
+            echo "Follow [Flashing the card](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_SHA}/docs/user/appliance/install.md):"
+            echo "take the \`.img.xz\` for your board and the \`.img.xz.sha256\` beside"
+            echo "it, check the download, and write it with Raspberry Pi Imager."
+            echo "\`SHA256SUMS\` covers every file here at once."
+            echo
+            if [ "${MANAGER_BESIDE}" = yes ]; then
+              echo "Also here: the Appliance Manager \`.deb\` these images carry, so a"
+              echo "Manager fix on a board under test is a file copy and a \`dpkg -i\`"
+              echo "rather than a re-flash."
+            else
+              echo "These images carry Appliance Manager \`${MANAGER_VERSION}\`, which is"
+              echo "published on its own release — take it from there rather than from"
+              echo "here, so what you install is the signed package the appliance would"
+              echo "have offered you."
+            fi
+            echo
+            echo "Also here: each image's build record and build authority, the builder"
+            echo "environment each was recorded with, and the gate logs."
+            echo
+            echo "The gate runner's own verdict, per board, read back from the log"
+            echo "each \`gate-evidence-<board>.zip\` carries rather than asserted here:"
+            echo
+            echo '```'
+            for board in ${boards}; do
+              log="${RUNNER_TEMP}/collected/appliance-gates-${board}/release-gates.log"
+              # A command substitution's failure is discarded, so an empty read
+              # would publish a blank verdict under a sentence promising the
+              # verdict was read back from evidence. Refuse instead.
+              verdict="$(sed -n 's/^RESULT: //p' "${log}" | tail -1)"
+              [ -n "${verdict}" ] \
+                || { echo "::error::${log} states no verdict" >&2; exit 1; }
+              printf '%-6s %s\n' "${board}" "${verdict}"
+            done
+            echo '```'
+          } > "${notes}"
+          cat "${notes}"
+
+      - name: Publish the download page
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # gh resolves the repository from --repo, GH_REPO or the git remotes of
+          # the working directory, in that order, and never from
+          # GITHUB_REPOSITORY. This job does not check out, so without this every
+          # gh call below dies with "not a git repository" -- at the end of a
+          # three-hour build.
+          GH_REPO: ${{ github.repository }}
+          # Deliberately not a version number. admin/releases.py lists every
+          # non-draft release of this repository as an EMS system-build target
+          # and decides eligibility by parsing the tag: a semver-shaped tag here
+          # would offer operators a build whose container images do not exist.
+          TAG: appliance-image-ci-${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          state="$(gh release view "${TAG}" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          case "${state}" in
+            true)
+              # A draft left by a failed upload holds no git tag, so removing it
+              # costs nothing and is what makes "re-run failed jobs" work: the
+              # run number does not change on a retry, so the tag would
+              # otherwise be taken by the wreckage of the previous attempt.
+              echo "removing the draft left by an earlier attempt"
+              gh release delete "${TAG}" --yes ;;
+            false)
+              echo "::error::${TAG} is already published; delete it or dispatch again"
+              exit 1 ;;
+          esac
+
+          # Created as a draft and published once, at the end. A release that is
+          # still receiving three quarters of a gigabyte is not one anybody
+          # should be able to download half of.
+          gh release create "${TAG}" \
+            --draft \
+            --target "${GITHUB_SHA}" \
+            --title "Appliance image ${APPLIANCE_VERSION} (CI build ${GITHUB_RUN_NUMBER}, unsigned)" \
+            --notes-file "${RUNNER_TEMP}/release-notes.md" \
+            "${RUNNER_TEMP}"/release/*
+
+          # Prerelease, and still load-bearing after the fleet's index moved
+          # to its own tag. /releases/latest resolves to the newest release
+          # that is neither draft nor prerelease, and it is what the repository
+          # sidebar advertises and what anything asking this repository for
+          # "the latest release" is handed. An ordinary release here would put
+          # an unsigned appliance image in that position every week, in front
+          # of the EMS version it is not, on the very page
+          # docs/user/appliance/install.md sends operators to.
+          gh release edit "${TAG}" --draft=false --prerelease
+
+          url="$(gh release view "${TAG}" --json url --jq .url)"
+          {
+            echo "### Published"
+            echo
+            echo "[${TAG}](${url}) — unsigned prerelease, one image per board."
+          } >> "$GITHUB_STEP_SUMMARY"

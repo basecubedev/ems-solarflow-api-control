@@ -178,6 +178,51 @@ def prepare_revert(paths, *, retained_at=""):
     return target, retention
 
 
+def seed_installed(
+    paths,
+    archive,
+    *,
+    sha256,
+    version,
+    architecture="",
+    retained_at="",
+    state_implements=None,
+    state_reads=None,
+):
+    """Keep the package an image was built with, which arrived without an install.
+
+    dpkg keeps no copy of the archive it unpacked, so a card whose manager came
+    in the image holds nothing to go back to. The first update then rotates that
+    nothing into ``previous`` and a failed verification finds
+    ``revert_unavailable``. The image build calls this while the archive is still
+    in hand, which is the only moment it can be called at all.
+
+    Refuses over an existing record. Seeding is for an appliance that has never
+    installed anything; on one that has, it would discard the retention chain it
+    is meant to protect.
+    """
+
+    kept = manager_retention.read(paths)
+    if kept.current.present:
+        raise ManagerInstallError(
+            "manager_already_retained",
+            f"this appliance already retains {kept.current.version or 'a package'}; "
+            "seeding over it would discard the way back it names",
+        )
+
+    return manager_retention.retain(
+        paths,
+        archive,
+        sha256=sha256,
+        version=version,
+        architecture=architecture,
+        retained_at=retained_at,
+        state_implements=state_implements,
+        state_reads=state_reads,
+        rotate=False,
+    )
+
+
 def prepare(paths, *, release, archive, state_schemas, verifier=None, manifest_path="",
             signature_path="", architecture="arm64", retained_at=""):
     """Prove the package may be installed, keep the outgoing one, and stage it.

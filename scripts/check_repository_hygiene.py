@@ -53,6 +53,13 @@ PRIVATE_KEY_MARKERS = (
     b"-----BEGIN PRIVATE KEY-----",
     b"-----BEGIN ENCRYPTED PRIVATE KEY-----",
     b"-----BEGIN PGP PRIVATE KEY BLOCK-----",
+    # The armored form base64-encoded, which is what a signing subkey looks like
+    # on its way to a CI secret, and which carries no literal marker at all.
+    # Three fragments because base64 has three alignments and the armor's offset
+    # in the file decides which one it lands on.
+    b"QkVHSU4gUEdQIFBSSVZBVEUgS0VZIEJM",
+    b"R0lOIFBHUCBQUklWQVRFIEtFWSBCTE9D",
+    b"RUdJTiBQR1AgUFJJVkFURSBLRVkgQkxP",
 )
 
 # Deliberate project media and one generated single-file frontend. Everything

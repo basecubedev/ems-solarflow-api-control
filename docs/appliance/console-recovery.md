@@ -44,8 +44,11 @@ containers, so it answers even when everything it manages is down.
 ### 2. SSH
 
 Only if you enabled it and added a key. `ems-rescue` is a password account and
-the shipped sshd policy does not accept passwords, so this is a key login for
-whatever account you configured:
+the shipped sshd policy refuses it a password — by `Match User ems-rescue`, and
+by refusing keyboard-interactive too, which is the path that otherwise still
+asks for it. Its password is published in this document, so it is a console
+credential and nothing else. This is a key login for whatever account you
+configured:
 
 ```bash
 ssh <your-account>@ems-solarflow.local
@@ -58,8 +61,19 @@ not, and the first one that works when the web service will not start.
 
 ```bash
 sudo ems-appliance status
-sudo ems-appliance diagnose
+sudo ems-appliance verify-install
 sudo journalctl -u ems-appliance-web -u ems-appliance-agent -b --no-pager
+```
+
+If the **Update** and **Revert** controls are both greyed out, a verification
+deadline is armed and nothing is judging it — normally
+`ems-appliance-manager-verify.timer` does, within its window. Run the check by
+hand and it resolves the deadline the same way the timer would, confirming a
+healthy manager or putting the previous one back:
+
+```bash
+sudo systemctl start ems-appliance-manager-verify.service
+sudo /usr/lib/ems-appliance-manager/verify-manager.sh   # if the unit is gone
 ```
 
 To put back the Appliance Manager package the appliance was running before its

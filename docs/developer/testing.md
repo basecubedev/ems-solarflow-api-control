@@ -388,6 +388,71 @@ name. Flashing verifies no signature, so a CI build is enough for
 [../appliance/hardware-validation.md](../appliance/hardware-validation.md) and
 is not enough for a signed release.
 
+A build every board finished is published, by the workflow's fourth job, as a
+GitHub **prerelease** carrying the `.img.xz` and `.img.xz.sha256` per board, a
+combined `SHA256SUMS`, the Manager `.deb`, each image's build authority and
+builder environment, and the gate logs as `gate-evidence-<board>.zip`.
+[../user/appliance/install.md](../user/appliance/install.md) already sent
+operators to the Releases page for exactly those file names; an Actions artefact
+expires in thirty days, sits behind a sign-in wall and lives on a run page no
+operator will find, so until that job existed the page described a download
+nobody produced.
+
+Two properties of that job are load-bearing rather than stylistic, and
+`tests/test_appliance_image_workflow.py` asserts both. It publishes a
+**prerelease**: GitHub's `/releases/latest` alias skips one, and that alias is
+what the repository sidebar advertises and what anything asking this repository
+for its latest release is handed. An unsigned appliance image published as an
+ordinary release would stand there every week, in front of the EMS version it is
+not, on the page operators are sent to. And the **tag is
+deliberately not a version** — `admin/releases.py` lists every non-draft release
+of this repository as an EMS system-build target and decides eligibility by
+parsing the tag, so a semver-shaped tag would offer operators a build whose
+container images do not exist. That test runs the tag template through
+`admin.releases.VERSION_PATTERN` rather than reading it.
+
+Signing is still refused here, and the workflow reads no repository secret at
+all. Publishing an unsigned build and signing one are different questions; the
+release page answers the first and says, in the gate runner's own words, that it
+is not the second.
+
+The build runs **weekly**, on a cron and never on a push. Nothing in it pins a
+package version — trixie, trixie-updates and trixie-security are resolved as the
+build runs, and upstream's snapshot-pinned alternative is deliberately unused —
+so rebuilding is the whole mechanism by which a freshly flashed card comes up
+patched. `tests/test_appliance_image_workflow.py` holds the trap that would have
+made the schedule pointless: the `inputs` context is populated for
+`workflow_dispatch` and `workflow_call` and empty otherwise, so a plain
+`inputs.publish` would make every scheduled run build three images and publish
+nothing, as a green skip.
+
+### The Manager package, which may be signed
+
+`.github/workflows/appliance-manager-release.yml` is the one workflow in this
+repository that reads a secret. The asymmetry is deliberate and worth stating,
+because it is easy to assume the builder-VM rule blocks both: an *image* built on
+a hosted runner is refused at signing time, while the `.deb` is reproducible from
+`SOURCE_DATE_EPOCH` and a pinned compressor, so two builds of one commit are the
+same bytes and an unattested builder is no objection to it.
+
+Three jobs, so that no job holds both the signing key and permission to write to
+the repository, and `tests/test_appliance_manager_release_workflow.py` asserts
+exactly that. The signature is verified against
+`packaging/appliance/config/release-keyring.gpg` — the keyring the package itself
+installs — with `gpgv`, the program the appliance runs, so a key the fleet would
+refuse fails on a runner instead of in the field. The runbook is
+[../appliance/manager-releases.md](../appliance/manager-releases.md).
+
+The image build then consumes what that workflow published:
+`scripts/appliance-fetch-manager-package.py` reads the same index the fleet
+reads, takes the newest **stable** entry, verifies the signature and the digest,
+and hands the package to `appliance-build-rpi-image.sh --manager-package`. Its
+exit 3 means "no stable release published yet", which is a state this project is
+actually in and not a failure — the build then makes its own package and says
+so. A package that failed verification is a different matter and fails the job;
+`tests/test_appliance_fetch_manager_package.py` covers both, against real
+signatures rather than stubs.
+
 The Appliance Manager `.deb` is built by its own job in that workflow and
 uploaded separately. `packaging/appliance/build-deb.sh` is reproducible from
 `SOURCE_DATE_EPOCH` and a pinned compressor, so two builds of one commit are the

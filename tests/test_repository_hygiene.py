@@ -112,6 +112,29 @@ def test_a_tracked_private_key_is_rejected(tmp_path):
     }
 
 
+@pytest.mark.parametrize("pad", [b"", b"x", b"xy"])
+def test_a_base64_encoded_private_key_is_still_a_private_key(tmp_path, pad):
+    """The shape this project now asks a maintainer to produce.
+
+    ``scripts/appliance-new-release-identity.sh`` exports a signing subkey and
+    base64-encodes it for a GitHub secret, so the armored marker is not in the
+    file as text and every literal signature above misses it. It refuses to
+    write inside the repository, which is the first net; this is the one behind
+    it. Three alignments because base64 has three, and where the armor starts in
+    the file decides which one it lands on.
+    """
+
+    import base64
+
+    armored = b"-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQVYBGiz\n-----END PGP PRIVATE KEY BLOCK-----\n"
+    encoded = base64.b64encode(pad + armored)
+    repo = make_repo(tmp_path, {"packaging/subkey.b64": encoded})
+
+    assert rejected_paths(check(str(repo), "HEAD", 512 * 1024, [])) == {
+        "packaging/subkey.b64": "private_key"
+    }
+
+
 def test_a_tracked_vm_disk_and_build_scratch_are_rejected(tmp_path):
     repo = make_repo(
         tmp_path,

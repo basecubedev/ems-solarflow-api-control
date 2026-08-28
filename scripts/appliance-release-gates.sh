@@ -239,9 +239,18 @@ PY
     fi
 
     if [ -f "$OUTPUT/$NAME.img" ]; then
+        # The version the image carries, not the version this checkout is at.
+        # Since --manager-package the image bakes in the newest *published*
+        # stable Manager, chosen independently of this tree -- so comparing
+        # against appliance/version.py fails every build made while the next
+        # release waits for its signing approval, and reports it as a broken
+        # image.
+        BAKED=$(sed -n 's/.*"appliance_package_version": "\([^"]*\)".*/\1/p' \
+            "$OUTPUT/$NAME.build.json" 2>/dev/null | head -1)
+        [ -n "$BAKED" ] || BAKED=$VERSION
         gate_json "inspect-image-$profile" "image-inspection-$profile.json" \
             sh "$ROOT/scripts/appliance-inspect-rpi-image.sh" --json \
-            --appliance-version "$VERSION" --build-id "$BUILD_ID" \
+            --appliance-version "$BAKED" --build-id "$BUILD_ID" \
             "$OUTPUT/$NAME.img"
     else
         report "inspect-image-$profile" "NOT RUN (no image was built)"

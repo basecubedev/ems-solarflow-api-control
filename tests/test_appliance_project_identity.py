@@ -11,6 +11,8 @@ controller never came back.
 """
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -195,6 +197,25 @@ def test_the_shipped_configuration_names_the_manager_package_source_too():
     ), configured.group(1)
 
 
+def test_the_shipped_index_url_cannot_be_moved_by_someone_else_s_release():
+    """A flashed appliance never gets this value corrected.
+
+    ``ems-appliance-config-seed`` creates a missing ``appliance.conf`` and
+    leaves an existing one unread, and it is not a dpkg conffile either, so what
+    ships here is what every card keeps. ``/releases/latest`` resolves to the
+    newest release of the *whole repository* that is neither draft nor
+    prerelease — and this repository also publishes EMS releases, which carry no
+    package index. Pointing the fleet at that alias points it at whichever
+    product released last.
+    """
+
+    conf = SHIPPED_CONFIG.read_text(encoding="utf-8")
+    configured = re.search(r"^manager_index_url\s*=\s*(\S+)$", conf, re.M).group(1)
+
+    assert "/releases/latest/" not in configured, configured
+    assert "/releases/download/appliance-manager-index/" in configured, configured
+
+
 # --- Admin's transition record, which the appliance reads but never owns ------
 
 
@@ -238,3 +259,62 @@ def test_the_installer_writes_that_variable_into_the_deployment():
     )
 
     assert admin_transition.ENV_ADMIN_DATA_DIR in installer
+
+
+# --- the signer this appliance accepts ---------------------------------------
+
+
+def test_the_appliance_names_the_signer_it_accepts():
+    """A keyring can hold more keys than a release may be signed with.
+
+    ``docs/appliance/security-model.md`` said the appliance pinned the primary's
+    fingerprint. It did not: ``SignatureVerifier`` was constructed with the
+    keyring alone, so ``artifact_trust``'s fingerprint gate was unarmed on every
+    device while the release side had refused to finalize without one since it
+    was written. The device was the weaker half of a chain described as one.
+    """
+
+    conf = SHIPPED_CONFIG.read_text(encoding="utf-8")
+    named = re.search(r"^release_fingerprints\s*=\s*(\S+)$", conf, re.M)
+
+    assert named, "the shipped configuration names no release signer"
+    assert re.fullmatch(r"[0-9A-F]{40}", named.group(1)), named.group(1)
+
+
+def test_the_gate_is_armed_from_that_configuration():
+    """Naming a fingerprint nothing reads would be worse than naming none: it
+    reads as a policy while behaving as its absence."""
+
+    import inspect
+
+    from appliance import services
+
+    source = inspect.getsource(services)
+
+    assert "fingerprints=config.release_fingerprints" in source
+
+
+@pytest.mark.skipif(shutil.which("gpg") is None, reason="the keyring is read with gpg")
+def test_the_named_signer_is_one_the_shipped_keyring_can_verify():
+    """A typo here does not fail loudly, it refuses every update the appliance
+    is ever offered -- on a device whose whole recovery is being offered one."""
+
+    named = re.search(
+        r"^release_fingerprints\s*=\s*(\S+)$",
+        SHIPPED_CONFIG.read_text(encoding="utf-8"),
+        re.M,
+    ).group(1)
+    keyring = ROOT / "packaging" / "appliance" / "config" / "release-keyring.gpg"
+    listed = subprocess.run(
+        ["gpg", "--show-keys", "--with-colons", str(keyring)],
+        capture_output=True, text=True, check=True, timeout=60,
+    )
+    held = [
+        line.split(":")[9] for line in listed.stdout.splitlines() if line.startswith("fpr:")
+    ]
+
+    assert held, "the shipped keyring holds no key"
+    assert named == held[0], (
+        f"{named} is not the primary of the shipped keyring ({held[0]}); "
+        "gpg reports the primary for a subkey signature, so the primary is what to pin"
+    )

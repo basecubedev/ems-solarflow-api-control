@@ -80,10 +80,10 @@ mmdebstrap:
     # and published with the release. A private key that ships in a public
     # artefact is compromised whether or not anything reads it.
     #
-    # Nothing replaces it here, and nothing has to: Debian ships
-    # sshd-keygen.service enabled, and on this image's writable root its
-    # ConditionPathIsReadWrite=/etc/ssh holds, so the appliance makes its own
-    # pair on first boot.
+    # What replaces it is ems-appliance-sshd-keys.service, enabled below.
+    # Debian's sshd-keygen.service will not: it is WantedBy=ssh.service
+    # sshd.service sshd@.service ssh.socket and never multi-user.target, so it
+    # runs only when an ssh unit starts — and this image ships ssh switched off.
     - |-
       set -eu
       rm -f "$1"/etc/ssh/ssh_host_*_key "$1"/etc/ssh/ssh_host_*_key.pub
@@ -99,6 +99,11 @@ mmdebstrap:
       }
       install -m 0644 "$IGconf_emsappliance_package" "$1/tmp/ems-appliance-manager.deb"
       chroot "$1" /usr/bin/dpkg -i /tmp/ems-appliance-manager.deb
+      # The archive is about to be deleted, and it is the only copy of what this
+      # card will be running. Without this the first update rotates nothing into
+      # previous, and a verification that fails has nowhere to go back to.
+      chroot "$1" /usr/bin/ems-appliance retain-installed-manager \
+          --package /tmp/ems-appliance-manager.deb
       rm -f "$1/tmp/ems-appliance-manager.deb"
 
     # The build marker names the exact build this filesystem is. Nothing here
@@ -183,11 +188,33 @@ mmdebstrap:
          exit 1
       }
 
-    # Four units, and no host-identity unit among them: the layer above deletes
-    # the host keys the build chroot generated, and on a writable root Debian's
-    # own sshd-keygen.service -- shipped enabled, ConditionFirstBoot=yes,
-    # ConditionPathIsReadWrite=/etc/ssh -- makes the appliance's own pair on
-    # first boot.
+    # SSH is installed but ships switched off. openssh-server's postinst enables
+    # it in the build chroot, so without this every flashed card is on the
+    # network with sshd listening before the owner has opened the browser --
+    # while appliance/ssh_service.py and docs/appliance/ssh-backup-access.md both
+    # describe a box where the operator turns it on. Trixie ships a service and a
+    # socket unit and either alone accepts a connection, so both go, and what is
+    # left is checked rather than assumed.
+    - |-
+      set -eu
+      for unit in ssh.service ssh.socket; do
+          systemctl --root="$1" disable "$unit" >/dev/null 2>&1 || true
+      done
+      find "$1/etc/systemd/system" \
+          \( -name 'ssh.service' -o -name 'ssh.socket' -o -name 'sshd.service' \) \
+          -delete 2>/dev/null || true
+      left=$(find "$1/etc/systemd/system" \
+          \( -name 'ssh.service' -o -name 'ssh.socket' -o -name 'sshd.service' \) \
+          -print 2>/dev/null || true)
+      [ -z "$left" ] || {
+          echo "ssh is still enabled in the image: $left" >&2
+          exit 1
+      }
+    # Five units. The host-identity one is this project's own rather than
+    # Debian's: sshd-keygen.service is WantedBy the ssh units alone, which this
+    # image ships disabled, and its ConditionFirstBoot has passed by the time an
+    # owner presses Enable SSH. A card with no host key cannot start sshd at all
+    # and, worse, fails the policy check that governs the backup account.
     - $BDEBSTRAP_HOOKS/enable-units "$1" ems-appliance-agent.service \
         ems-appliance-web.service ems-appliance-grow-root.service \
-        ems-appliance-config-seed.service
+        ems-appliance-config-seed.service ems-appliance-sshd-keys.service

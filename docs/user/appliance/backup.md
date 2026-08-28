@@ -48,8 +48,10 @@ Once connected:
 ```text
 get -r /config
 get -r /data
-get -r /backups
 ```
+
+`/data` is the one that carries your snapshots — they live in `data/backups`.
+There is a `/backups` entry in the session too; it is a leftover and is empty.
 
 A graphical client works too: FileZilla, WinSCP or Cyberduck, protocol **SFTP**,
 user `ems-backup`, and your key file.

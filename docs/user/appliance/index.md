@@ -60,8 +60,8 @@ This project uses the same words for the appliance as for its inverter support:
 
 The appliance is in the third group. Every part of it is exercised
 automatically — the package installs and its services start on a booted 64-bit
-guest, the update mechanism is tested against a real Docker engine, the
-read-only system layout is audited — but none of that runs on a Raspberry Pi.
+guest, the update mechanism is tested against a real Docker engine, the image
+layout is audited — but none of that runs on a Raspberry Pi.
 
 Concretely, these are the things only real hardware can settle:
 
