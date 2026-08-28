@@ -14,7 +14,7 @@ import time
 
 from appliance.operations import STATE_SUCCEEDED
 from appliance.redaction import bounded_redacted_log, redact_mapping
-from appliance.version import APPLIANCE_VERSION
+from appliance.version import installed_version
 
 TYPE_SUPPORT_ARCHIVE = "support.archive"
 
@@ -63,7 +63,7 @@ class SupportArchiveService:
         destination.parent.mkdir(parents=True, exist_ok=True)
         members = self._members()
         manifest = {
-            "appliance_version": APPLIANCE_VERSION,
+            "appliance_version": installed_version(),
             "created_at": self._time(),
             "operation_id": operation.operation_id,
             "files": [name for name, _ in members],

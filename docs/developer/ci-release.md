@@ -57,9 +57,15 @@ Two of these tags can never be reused. `appliance-manager-release.yml` refuses a
 version whose release already exists, and the image workflow refuses a tag whose
 release is already published — a published version is not rewritten, because an
 appliance that already fetched it would be holding different bytes under the same
-name. Cutting the wrong tag therefore costs the version, not just the run, which
-is why the image workflow compares the tag against `appliance/version.py` in its
-first job rather than after three hours of emulated building.
+name. Cutting the wrong tag therefore costs the version, not just the run.
+
+No product records its version in the source tree. A tag is passed into the build
+and stamped into the artefact — an OCI label for the EMS images, the `Version:`
+field for the Manager package — and read back from the artefact at runtime. A
+build with no tag behind it is a development build and says so
+(`0.0.0~dev.<revision>` for the appliance, the `latest` channel with an empty
+version for EMS), in a form that sorts below every release and that `is_stable`
+refuses to publish.
 
 The image workflow still publishes weekly under `appliance-image-ci-<run>`. A tag
 push is for a build worth naming — a hardware-validation round, a support thread,

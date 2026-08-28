@@ -141,8 +141,9 @@ case $compatibility in
                rpi_image_gen_dependencies_missing ;;
 esac
 
-VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
-[ -n "$VERSION" ] || fail "cannot read APPLIANCE_VERSION" version_unreadable
+. "$ROOT/scripts/lib/appliance-version.sh"
+VERSION=$(appliance_version "${VERSION:-}")
+[ -n "$VERSION" ] || fail "the appliance version could not be derived" version_unreadable
 NAME="ems-solarflow-appliance-${VERSION}-${PROFILE}-arm64"
 
 # What the generator will call the image it writes. The profile declares it, so

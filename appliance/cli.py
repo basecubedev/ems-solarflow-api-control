@@ -20,7 +20,7 @@ from appliance.config import load_config
 from appliance.migration import migrate_state, write_report
 from appliance.paths import ensure_directories, resolve_paths
 from appliance.services import build_services
-from appliance.version import APPLIANCE_VERSION, PACKAGE_NAME
+from appliance.version import PACKAGE_NAME, installed_version
 from appliance.web import serve as serve_web
 
 EXIT_OK = 0
@@ -664,7 +664,7 @@ def build_parser():
         prog="ems-appliance",
         description="EMS SolarFlow Raspberry Pi Appliance Manager host CLI",
     )
-    parser.add_argument("--version", action="version", version=f"{PACKAGE_NAME} {APPLIANCE_VERSION}")
+    parser.add_argument("--version", action="version", version=f"{PACKAGE_NAME} {installed_version() or 'unknown'}")
     parser.add_argument("--json", action="store_true", help="print raw JSON")
     parser.add_argument(
         "--local",

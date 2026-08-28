@@ -18,7 +18,7 @@ import pytest
 
 from appliance.config import load_allowed_images, load_config
 from appliance.paths import AppliancePaths
-from appliance.version import APPLIANCE_VERSION, SUPPORTED_ARCHITECTURES, SUPPORTED_PI_MODELS
+from appliance.version import SUPPORTED_ARCHITECTURES, SUPPORTED_PI_MODELS
 
 pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
 
@@ -46,9 +46,21 @@ def test_control_declares_an_arm64_package_for_raspberry_pi_os():
     assert "systemd" in control
 
 
-def test_package_version_matches_the_python_package_version():
+def test_the_shipped_control_version_is_a_placeholder_nothing_publishes():
+    """``build-deb.sh`` rewrites this line from the version it was given, so the
+    checked-in value reaches no package. It used to have to match a literal in
+    ``appliance/version.py``; there is no literal now, and a real-looking version
+    sitting here would be the next thing somebody mistook for one."""
+
     control = (PACKAGING / "debian" / "control").read_text(encoding="utf-8")
-    assert f"Version: {APPLIANCE_VERSION}" in control
+    shipped = [line for line in control.splitlines() if line.startswith("Version:")]
+
+    assert shipped == ["Version: 0.0.0~placeholder"], shipped
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+    assert 's/^Version: .*/Version: ${VERSION}/' in build, (
+        "the build no longer overwrites the control version, so the placeholder "
+        "above would ship"
+    )
 
 
 def test_supported_platforms_are_declared_in_one_place():

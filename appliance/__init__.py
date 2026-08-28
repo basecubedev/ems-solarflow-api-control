@@ -7,6 +7,6 @@ process and a privileged operation agent) and stays available when Docker, the
 EMS Admin container or EMS itself are broken.
 """
 
-from appliance.version import APPLIANCE_VERSION
+from appliance.version import installed_version
 
-__all__ = ["APPLIANCE_VERSION"]
+__all__ = ["installed_version"]

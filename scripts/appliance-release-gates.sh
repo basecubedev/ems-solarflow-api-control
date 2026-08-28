@@ -196,7 +196,8 @@ BUILDER_ENVIRONMENT_ARG=""
 
 # shellcheck disable=SC2086
 gate source-authority sh "$ROOT/scripts/appliance-check-rpi-image-gen.sh" $GENERATOR_ARGS
-VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
+. "$ROOT/scripts/lib/appliance-version.sh"
+VERSION=$(appliance_version "${VERSION:-}")
 
 for profile in $PROFILES; do
     NAME="ems-solarflow-appliance-${VERSION}-${profile}-arm64"

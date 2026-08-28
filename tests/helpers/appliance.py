@@ -754,11 +754,19 @@ def build_test_services(
         time_fn=clock,
         sleep=clock.sleep,
         admin_bootstrap=admin_bootstrap,
+        # dpkg on the machine running the tests knows nothing about this
+        # package, and asking it would make every version-reporting assertion
+        # depend on whether the developer happens to have the appliance
+        # installed. The version an appliance reports comes from its own package
+        # record; here it is stated.
+        installed_version=INSTALLED_VERSION,
     )
     services.host = host
     services.clock = clock
     return services
 
+
+INSTALLED_VERSION = "0.1.0"
 
 BACKUP_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH1cQ0kFvL5gLIQ0Q0mV3P6pC5J2Xw5RIu5Hn3fJ0hVb backup\n"

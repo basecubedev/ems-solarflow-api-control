@@ -80,26 +80,23 @@ jobs:
           WANTED: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          # The tag is the request; appliance/version.py is the authority. They
-          # have to agree, because the package version comes from the file and
-          # the release is named after the tag -- a mismatch publishes one
-          # version under another's name.
+          # The tag is the version. Nothing in the source tree records one, so
+          # there is no second answer it could disagree with -- the package is
+          # built with what is resolved here and the release is named after the
+          # same string, the way an EMS image takes its version from the tag CI
+          # was invoked with.
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import os
           import sys
 
           sys.path.insert(0, ".")
-          from appliance.version import APPLIANCE_VERSION, is_stable, version_from_tag
+          from appliance.version import is_stable, version_from_tag
 
           ref = os.environ.get("GITHUB_REF_NAME", "")
           asked = (os.environ.get("WANTED") or "").strip().lstrip("vV")
           wanted = version_from_tag(ref) or asked
           if not wanted:
               raise SystemExit(f"{ref!r} is not a Manager tag and no version was given")
-          if wanted != APPLIANCE_VERSION:
-              raise SystemExit(
-                  f"asked for {wanted}, but appliance/version.py says {APPLIANCE_VERSION}"
-              )
           if not is_stable(wanted):
               # Refused here, with the real reason, rather than five steps later
               # inside the manifest generator as "invalid_release_id". A
@@ -116,6 +113,8 @@ jobs:
           cat "$GITHUB_OUTPUT"
 
       - name: Build the package
+        env:
+          VERSION: ${{ steps.identify.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/package"
@@ -124,7 +123,7 @@ jobs:
           # about to be signed. A German runner would sign a different document
           # for the same bytes.
           LC_ALL=C packaging/appliance/build-deb.sh \
-            --output "${RUNNER_TEMP}/package" --arch arm64
+            --output "${RUNNER_TEMP}/package" --arch arm64 --version "${VERSION}"
           ls -l "${RUNNER_TEMP}/package"
 
       - name: Describe it in the file that gets signed

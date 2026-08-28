@@ -32,7 +32,7 @@ from appliance.auth import (
 from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS, WebLog
 from appliance.config import load_config
 from appliance.paths import ensure_directories, resolve_paths
-from appliance.version import APPLIANCE_VERSION
+from appliance.version import installed_version
 from appliance.web_audit import WebAuditReporter
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -314,7 +314,7 @@ class ApplianceWebApp:
 
 
 class ApplianceRequestHandler(BaseHTTPRequestHandler):
-    server_version = f"EMSApplianceManager/{APPLIANCE_VERSION}"
+    server_version = f"EMSApplianceManager/{installed_version() or 'unknown'}"
     protocol_version = "HTTP/1.1"
     timeout = CONNECTION_TIMEOUT_SECONDS
 
@@ -512,7 +512,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         payload = {
             "authenticated": session is not None,
             "password_configured": self.app.auth.configured(),
-            "appliance_version": APPLIANCE_VERSION,
+            "appliance_version": installed_version(),
         }
         if session is not None:
             payload["csrf_token"] = session.csrf_token
@@ -650,7 +650,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
     def _settings(self):
         config = self.app.config
         return {
-            "appliance_version": APPLIANCE_VERSION,
+            "appliance_version": installed_version(),
             "session_timeout_seconds": config.session_timeout_seconds,
             "session_absolute_max_seconds": config.session_absolute_max_seconds,
             "automatic_security_updates": config.automatic_security_updates,

@@ -68,6 +68,7 @@ def build_services(
     sleep=None,
     create_directories=True,
     admin_bootstrap=None,
+    installed_version=None,
 ):
     paths = paths or resolve_paths()
     if create_directories:
@@ -133,6 +134,16 @@ def build_services(
         operation_log=operation_log,
     )
     backup = BackupAccessService(paths=paths, config=config, ssh_service=ssh, probe=probe)
+    # One lookup, handed to everything that reports it. dpkg is asked once per
+    # process because installing a Manager restarts the process asking, and it
+    # is asked at all only when a caller did not already know -- a test builds
+    # these services on a host whose dpkg knows nothing about this package.
+    if installed_version is None:
+        from appliance.version import installed_version as resolve_installed_version
+
+        manager_version = resolve_installed_version()
+    else:
+        manager_version = installed_version
     status = StatusService(
         paths=paths,
         config=config,
@@ -146,9 +157,8 @@ def build_services(
         backup=backup,
         operations=operations,
         time_fn=time_fn,
+        installed_version=manager_version,
     )
-    from appliance.version import APPLIANCE_VERSION
-
     manager = ManagerUpdateService(
         paths=paths,
         config=config,
@@ -163,7 +173,7 @@ def build_services(
         state_mountpoint=persistent_state.record_mountpoint(paths),
         time_fn=time_fn,
         operation_log=operation_log,
-        installed_version=APPLIANCE_VERSION,
+        installed_version=manager_version,
         architecture=host_architecture(),
     )
     status.manager = manager

@@ -92,25 +92,29 @@ a rotation is precisely what creates the second.
 
 ## Cutting one
 
-1. **Bump the version.** `appliance/version.py`, the single source it comes
-   from. Spell a pre-release with a tilde if you ever need one — but see below,
-   they cannot be published.
-2. **Tag it** `appliance-manager-v<version>`. The prefix keeps it out of the EMS
+1. **Tag it** `appliance-manager-v<version>`. There is nothing to bump first:
+   the tag *is* the version, the way an EMS release takes its version from the
+   `v*` tag CI was invoked with. Nothing in the source tree records one. The prefix keeps it out of the EMS
    `v*` namespace, which matters: `admin/releases.py` offers every non-draft
    release of this repository as an EMS system-build target and decides
    eligibility by parsing the tag.
-3. **Push the tag** — from a commit that already contains the keyring. The sign
+2. **Push the tag** — from a commit that already contains the keyring. The sign
    job verifies against `packaging/appliance/config/release-keyring.gpg` *as of
    the tag*, so tagging a commit older than the identity fails after a reviewer
    has already released the signing key. The *Appliance Manager release*
    workflow starts, builds the package and the manifest, and then waits for that
    approval.
-4. **Approve it.** The signature is made and verified, the release is published,
+3. **Approve it.** The signature is made and verified, the release is published,
    and the index is rebuilt to name every version including this one.
 
-The tag and `appliance/version.py` have to agree; the workflow refuses a
-mismatch before it builds anything, because the package version comes from the
-file and the release is named after the tag.
+The version reaches the package by being passed to `build-deb.sh`, so the
+release and the artefact inside it cannot carry different numbers. A build with
+no tag behind it names itself `0.0.0~dev.<revision>`, which `is_stable` rejects —
+so a development build cannot be published even by accident.
+
+What an appliance reports as its own version is read back from the installed
+package with `dpkg-query`, the same way Admin recovers a running EMS release
+from its image labels rather than from anything in the source.
 
 ## What comes out
 
@@ -148,7 +152,8 @@ list may only be added to by *removing* a format, never by adding one.
 ## Candidates cannot be published, and that is structural
 
 A pre-release is spelled with a tilde — `0.2.0~rc1` — because that is the only
-form on which `dpkg` and `appliance/version.py`'s comparator agree about order.
+form on which `dpkg` and `appliance/version.py`'s comparator agree about order
+(the same tilde a development build uses, and for the same reason).
 `appliance/artifact_trust.py`'s `RELEASE_ID` grammar admits no tilde. So a
 candidate has no publishable release id, and the release workflow says so where
 the version is chosen rather than failing five steps later as
