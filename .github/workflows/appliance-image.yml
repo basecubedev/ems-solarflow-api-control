@@ -517,14 +517,54 @@ jobs:
             ( cd "${gates}" && zip -qr "${release}/gate-evidence-${board}.zip" . )
           done
 
+          # Which Manager the images carry, read from their own build records
+          # rather than assumed. Since --manager-package the image bakes in the
+          # newest *published* stable Manager and the job above builds one from
+          # this checkout: between releases those are the same bytes, and from
+          # the first release onwards they are not.
+          carried=""
+          carried_version=""
+          for board in ${boards}; do
+            # Chosen by what it contains, not by what it sorts as. When no
+            # stable Manager is published the image builds its own .deb, and
+            # build-deb.sh writes a second .build.json into the same directory
+            # whose name sorts first and which carries no image fields at all --
+            # so `ls | head -1` picked the wrong record in exactly the state
+            # this repository is in.
+            record="$(python3 -c 'import json,pathlib,sys; print(next((str(p) for p in sorted(pathlib.Path(sys.argv[1]).glob("*.build.json")) if json.loads(p.read_text()).get("appliance_package_sha256")), ""))' "${collected}/appliance-image-${board}")"
+            [ -n "${record}" ] || { echo "::error::${board} produced no build record naming a manager package"; exit 1; }
+            cp "${record}" "${release}/"
+            this="$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("appliance_package_sha256",""))' "${record}")"
+            if [ -n "${carried}" ] && [ "${carried}" != "${this}" ]; then
+              echo "::error::the boards do not carry the same Manager package"
+              exit 1
+            fi
+            carried="${this}"
+            carried_version="$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r.get("appliance_package_version",""))' "${record}")"
+          done
+
           package="${collected}/appliance-manager-deb"
           [ -d "${package}" ] || { echo "::error::no manager package"; exit 1; }
-          # The .build.json travels with the package because
-          # appliance-build-manager-manifest.py refuses without it: a published
-          # .deb nobody can write a manifest for would have to be rebuilt to be
-          # signed, and a rebuild elsewhere records a different builder.
-          cp "${package}"/*.deb "${package}"/*.deb.sha256 \
-            "${package}"/*.build.json "${release}/"
+          built="$(cut -d' ' -f1 < "$(ls "${package}"/*.deb.sha256 | head -1)")"
+
+          if [ "${built}" = "${carried}" ]; then
+            # The same bytes, so this really is the package these images carry.
+            # The .build.json travels with it because
+            # appliance-build-manager-manifest.py refuses without it: a published
+            # .deb nobody can write a manifest for would have to be rebuilt to be
+            # signed, and a rebuild elsewhere records a different builder.
+            cp "${package}"/*.deb "${package}"/*.deb.sha256 \
+              "${package}"/*.build.json "${release}/"
+            echo "MANAGER_BESIDE=yes" >> "$GITHUB_ENV"
+          else
+            # Publishing it anyway is how an operator hand-installs an unsigned
+            # HEAD build over the released one, under a sentence saying it is
+            # what the images carry -- usually under the same file name, with a
+            # .sha256 that contradicts the released package's.
+            echo "::notice::these images carry Manager ${carried_version}, which has its own release; a checkout build is not put beside them"
+            echo "MANAGER_BESIDE=no" >> "$GITHUB_ENV"
+          fi
+          echo "MANAGER_VERSION=${carried_version}" >> "$GITHUB_ENV"
 
           # Written outside the directory it describes, so it cannot list itself.
           ( cd "${release}" && sha256sum -- * > "${RUNNER_TEMP}/SHA256SUMS" )
@@ -567,10 +607,19 @@ jobs:
             echo "it, check the download, and write it with Raspberry Pi Imager."
             echo "\`SHA256SUMS\` covers every file here at once."
             echo
-            echo "Also here: the Appliance Manager \`.deb\` these images carry, so a"
-            echo "Manager fix on a board under test is a file copy and a \`dpkg -i\`"
-            echo "rather than a re-flash; the build authority for each image; the"
-            echo "builder environment each was recorded with; and the gate logs."
+            if [ "${MANAGER_BESIDE}" = yes ]; then
+              echo "Also here: the Appliance Manager \`.deb\` these images carry, so a"
+              echo "Manager fix on a board under test is a file copy and a \`dpkg -i\`"
+              echo "rather than a re-flash."
+            else
+              echo "These images carry Appliance Manager \`${MANAGER_VERSION}\`, which is"
+              echo "published on its own release — take it from there rather than from"
+              echo "here, so what you install is the signed package the appliance would"
+              echo "have offered you."
+            fi
+            echo
+            echo "Also here: each image's build record and build authority, the builder"
+            echo "environment each was recorded with, and the gate logs."
             echo
             echo "The gate runner's own verdict, per board, read back from the log"
             echo "each \`gate-evidence-<board>.zip\` carries rather than asserted here:"

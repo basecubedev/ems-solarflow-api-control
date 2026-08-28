@@ -78,6 +78,14 @@ itself, next to the GPIO pins.
 A truncated or corrupted download produces a card that half-boots and fails in
 ways that look like broken hardware. This step takes ten seconds.
 
+**First, make sure the folder holds only this week's download.** A new image is
+built every Monday and every build uses the same file names, so a browser saves
+the second one as `… (1).img.xz` and leaves the first in place. The commands
+below match by pattern, and with two weeks of downloads present they will happily
+check one week's checksum against the other week's image — which fails, and looks
+exactly like a corrupted download. Move or delete the older pair before you
+start.
+
 **Windows** (PowerShell, in the download folder):
 
 ```powershell
@@ -100,8 +108,10 @@ sha256sum -c ems-solarflow-appliance-*.img.xz.sha256
 macOS and Linux print `OK` when it matches. On Windows, compare the two lines
 by eye — the long hex string has to be identical.
 
-**If they do not match**, delete the file and download it again. Do not write a
-card from a file that failed this check.
+**If they do not match**, first check that the folder really holds one image and
+one `.sha256` — a leftover from an earlier week is the more common cause than a
+bad download. If it is the only pair there, delete it and download it again. Do
+not write a card from a file that failed this check.
 
 ## 3. Write the card
 
