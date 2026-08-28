@@ -48,6 +48,11 @@ installed on an operator's button.**
 - **Going back is a first-class outcome.** The same control installs an older
   package as readily as a newer one, and `previous.deb` is retained before
   anything is unpacked. The appliance has no other recovery for its console.
+  The first update is the one this nearly missed: the manager a card is flashed
+  with arrives by `dpkg -i` in the image build, which keeps no copy, so there was
+  nothing to rotate into `previous` and the first failed verification had nowhere
+  to go. The image build now seeds the record while the archive is still in hand
+  — the only moment it can be seeded at all.
 - **The refusals happen before dpkg runs.** Signature, digest, architecture and
   state-schema compatibility are all checked while this project's Python is
   still the code that started the process. Afterwards the module files are the

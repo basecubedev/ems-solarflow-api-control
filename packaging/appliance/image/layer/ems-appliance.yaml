@@ -99,6 +99,11 @@ mmdebstrap:
       }
       install -m 0644 "$IGconf_emsappliance_package" "$1/tmp/ems-appliance-manager.deb"
       chroot "$1" /usr/bin/dpkg -i /tmp/ems-appliance-manager.deb
+      # The archive is about to be deleted, and it is the only copy of what this
+      # card will be running. Without this the first update rotates nothing into
+      # previous, and a verification that fails has nowhere to go back to.
+      chroot "$1" /usr/bin/ems-appliance retain-installed-manager \
+          --package /tmp/ems-appliance-manager.deb
       rm -f "$1/tmp/ems-appliance-manager.deb"
 
     # The build marker names the exact build this filesystem is. Nothing here

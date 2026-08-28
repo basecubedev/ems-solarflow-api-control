@@ -26,6 +26,10 @@ EXECUTABLES = {
     "apt": ("/usr/bin/apt",),
     "dpkg": ("/usr/bin/dpkg",),
     "dpkg-query": ("/usr/bin/dpkg-query",),
+    # Reading Version and Architecture out of a .deb the image build is about
+    # to delete, so the record of what a card is running describes the package
+    # actually installed rather than what the checkout happened to say.
+    "dpkg-deb": ("/usr/bin/dpkg-deb",),
     "nmcli": ("/usr/bin/nmcli",),
     "hostnamectl": ("/usr/bin/hostnamectl", "/bin/hostnamectl"),
     "timedatectl": ("/usr/bin/timedatectl", "/bin/timedatectl"),

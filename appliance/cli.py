@@ -196,6 +196,63 @@ def command_operations(args):
     return EXIT_OK
 
 
+def command_retain_installed_manager(args):
+    """Record the package this appliance is running as the one to go back to.
+
+    An image installs the Manager with dpkg and then deletes the archive, so a
+    flashed card holds no copy of what it is running. The first update rotates
+    nothing into ``previous``, and a verification that fails then finds
+    ``revert_unavailable`` -- a console with no way back, on the one path whose
+    whole purpose is being a way back.
+
+    Seeds rather than rotates, and refuses to overwrite a record that already
+    names a package: displacing a real retention chain would take away the
+    recovery it exists to provide.
+    """
+
+    from pathlib import Path
+
+    from appliance import artifact_trust, manager_install, manager_retention, persistent_state
+    from appliance.commands import CommandRunner
+
+    paths = resolve_paths()
+    if os.geteuid() != 0:
+        print("error: run this command as root", file=sys.stderr)
+        return EXIT_ERROR
+
+    archive = Path(args.package)
+    if not archive.is_file():
+        print(f"error: {archive} is not a file", file=sys.stderr)
+        return EXIT_ERROR
+
+    runner = CommandRunner()
+    described = {}
+    for field in ("Version", "Architecture"):
+        result = runner.run("dpkg-deb", ["-f", str(archive), field], timeout=60)
+        if not result.ok or not result.stdout.strip():
+            print(f"error: {archive} is not a readable package", file=sys.stderr)
+            return EXIT_ERROR
+        described[field] = result.stdout.strip()
+
+    try:
+        retention = manager_install.seed_installed(
+            paths,
+            archive,
+            sha256=artifact_trust.file_digest(archive),
+            version=described["Version"],
+            architecture=described["Architecture"],
+            retained_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            state_implements=persistent_state.implemented_schemas(),
+            state_reads=persistent_state.readable_floors(),
+        )
+    except (manager_install.ManagerInstallError, manager_retention.RetentionError) as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
+        return EXIT_ERROR
+
+    print(f"retained {retention.current.version} at {retention.current.path}")
+    return EXIT_OK
+
+
 def command_rollback_manager(args):
     """Reinstall the previously installed Appliance Manager package.
 
@@ -640,6 +697,14 @@ def build_parser():
     subparsers.add_parser(
         "rollback-manager", parents=[shared], help="reinstall the previous Appliance Manager package"
     ).set_defaults(handler=command_rollback_manager)
+
+    retain = subparsers.add_parser(
+        "retain-installed-manager",
+        parents=[shared],
+        help="record the installed Appliance Manager package as the one to revert to",
+    )
+    retain.add_argument("--package", required=True, help="the .deb this appliance was installed from")
+    retain.set_defaults(handler=command_retain_installed_manager)
 
     subparsers.add_parser(
         "allowlist", parents=[shared], help="print the agent operation allowlist"
