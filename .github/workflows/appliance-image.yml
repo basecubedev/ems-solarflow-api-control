@@ -32,13 +32,29 @@ name: Appliance image build
   # its packages from trixie, trixie-updates and trixie-security at build time
   # with nothing pinned, so a card flashed from last week's image comes up
   # already patched instead of pulling months of updates on first boot. Not on
-  # push: three emulated builds per commit would be hours of runner time each
-  # time, and nothing about a commit makes last week's OS stale.
+  # every commit: three emulated builds a push would be about half an hour of
+  # runner time each, and nothing about a commit makes last week's OS stale. A
+  # tag is the exception, because a tag is somebody saying this one is worth
+  # naming.
   #
   # Off the hour on purpose. Scheduled runs queue behind everyone else's, and
   # the ones on :00 wait longest.
   schedule:
     - cron: "17 3 * * 1"
+  # A named build, for when a weekly run number is not something to point at:
+  # a hardware-validation round, a support thread, a line in a document. The
+  # tag becomes the release, so the same three files can be asked for by name
+  # a year later instead of by a run number nobody wrote down.
+  #
+  # The `appliance-` prefix is the load-bearing part, not the `v`.
+  # admin/releases.py offers every non-draft release of this repository as an
+  # EMS system build and decides by VERSION_PATTERN.fullmatch(tag), so a tag
+  # this side of the product must never parse as a version. It does not:
+  # the pattern is anchored and appliance-image-v0.1.0 fails it at the first
+  # character. tests/test_appliance_image_tag_namespace.py keeps that true.
+  push:
+    tags:
+      - appliance-image-v*
   workflow_dispatch:
     inputs:
       profile:
@@ -108,6 +124,26 @@ jobs:
           print("profiles=" + json.dumps(chosen))
           PY
           cat "$GITHUB_OUTPUT"
+
+      # Three emulated builds take about three hours, and the publish step
+      # refuses a tag whose release already exists -- so a tag that disagrees
+      # with the version it claims has to fail here, in the first minute,
+      # rather than at the end with the tag already spent.
+      - name: Refuse a tag that does not name the version it builds
+        if: github.ref_type == 'tag'
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 -c 'import os, sys
+          sys.path.insert(0, ".")
+          from appliance.version import APPLIANCE_VERSION
+          tag = os.environ["TAG_NAME"]
+          claimed = tag.removeprefix("appliance-image-v")
+          if claimed != APPLIANCE_VERSION:
+              print(f"::error::{tag} claims {claimed!r} but appliance/version.py says {APPLIANCE_VERSION!r}")
+              sys.exit(1)
+          print(f"{tag} names the version this tree builds")'
 
   manager-package:
     name: Appliance image manager package
@@ -648,11 +684,15 @@ jobs:
           # gh call below dies with "not a git repository" -- at the end of a
           # three-hour build.
           GH_REPO: ${{ github.repository }}
-          # Deliberately not a version number. admin/releases.py lists every
-          # non-draft release of this repository as an EMS system-build target
-          # and decides eligibility by parsing the tag: a semver-shaped tag here
-          # would offer operators a build whose container images do not exist.
-          TAG: appliance-image-ci-${{ github.run_number }}
+          # A tag push publishes under its own name; every other trigger falls
+          # back to the run number. Neither is a version number to
+          # admin/releases.py, which lists every non-draft release of this
+          # repository as an EMS system-build target and decides eligibility by
+          # parsing the tag: a semver-shaped tag here would offer operators a
+          # build whose container images do not exist. Both forms keep the
+          # `appliance-` prefix that makes VERSION_PATTERN.fullmatch fail.
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('appliance-image-ci-{0}', github.run_number) }}
+          IS_TAG: ${{ github.ref_type == 'tag' }}
         run: |
           set -euo pipefail
           state="$(gh release view "${TAG}" --json isDraft --jq .isDraft 2>/dev/null || true)"
@@ -672,10 +712,23 @@ jobs:
           # Created as a draft and published once, at the end. A release that is
           # still receiving three quarters of a gigabyte is not one anybody
           # should be able to download half of.
+          # docs/user/appliance/install.md tells an operator to open the newest
+          # entry "whose title starts with Appliance image", because this page
+          # also lists EMS releases that carry no image. Both forms therefore
+          # open with those two words and name the version after them.
+          # "CI build <n>" is true of a weekly run and a lie about a tagged one;
+          # unsigned is true of both and stays in both, because a hosted runner
+          # is refused at signing time by design.
+          if [ "${IS_TAG}" = "true" ]; then
+            title="Appliance image ${APPLIANCE_VERSION} (${TAG}, unsigned)"
+          else
+            title="Appliance image ${APPLIANCE_VERSION} (CI build ${GITHUB_RUN_NUMBER}, unsigned)"
+          fi
+
           gh release create "${TAG}" \
             --draft \
             --target "${GITHUB_SHA}" \
-            --title "Appliance image ${APPLIANCE_VERSION} (CI build ${GITHUB_RUN_NUMBER}, unsigned)" \
+            --title "${title}" \
             --notes-file "${RUNNER_TEMP}/release-notes.md" \
             "${RUNNER_TEMP}"/release/*
 
