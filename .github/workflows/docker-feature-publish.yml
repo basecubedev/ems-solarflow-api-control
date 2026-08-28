@@ -4,13 +4,16 @@ name: EMS development build
 # touches `latest`, `v*`, `stable`, or `rc` — see docker-publish.yml for the
 # stable release path.
 
+# Dispatched from the ref it builds: pick the branch or tag in the Actions run
+# dialog. There is deliberately no revision input, because a run's Actions cache
+# scope follows the ref it was *started* from and not the ref it checked out. An
+# input made those two independent choices — start from `main`, build a branch —
+# and every gate below then executed unmerged code while holding a cache token
+# for the default branch's scope, which docker-publish.yml restores from. The
+# publish procedure told operators to pair them by hand; nothing enforced it.
+# Taking the branch from the run makes them the same thing.
 on:
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "Branch, tag, or ref to build (e.g. feature/example)"
-        required: true
-        type: string
 
 # Least privilege: gates only read; GHCR and catalogue jobs receive separate
 # scoped write permissions.
@@ -21,38 +24,37 @@ concurrency:
   group: development-build-catalogue
   cancel-in-progress: false
 
-# Feature cache scopes, disjoint from the release scopes so a feature build can
-# never touch a release cache. Bump `-v1` to reset.
+# Feature cache scopes, kept separate from the release scopes so an honest
+# feature build never evicts release layers. The separation is a convention, not
+# a boundary — what keeps this run out of the release cache is the ref it runs
+# on, see the note above `on:`. Bump `-v1` to reset.
 env:
   EMS_FEATURE_CACHE_SCOPE: ems-feature-v1
   ADMIN_FEATURE_CACHE_SCOPE: admin-feature-v1
 
 jobs:
   resolve-source:
-    name: EMS resolve source revision
+    name: EMS source revision gate
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    outputs:
-      sha: ${{ steps.resolve.outputs.sha }}
-      ref: ${{ steps.resolve.outputs.ref }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ inputs.ref }}
       - name: Reject protected release refs
         env:
-          INPUT_REF: ${{ inputs.ref }}
+          SOURCE_REF: ${{ github.ref_name }}
         run: |
           # Development builds are for feature/fix/develop refs only. A protected
           # release ref (a release branch, or a v*/latest/stable/rc tag) must never
-          # be published through this development-only path — not as the dispatch
-          # input, and not reached indirectly by a commit a release tag also points
-          # at. Validate the operator input and the resolved checkout context here,
-          # before any gate runs or any package/catalogue write can happen.
+          # be published through this development-only path — not as the ref the
+          # run was dispatched on, and not reached indirectly by a commit a
+          # release tag also points at. Validate the ref's name and the checked-out
+          # context here, before any gate runs or any package/catalogue write can
+          # happen.
           shopt -s nocasematch
-          ref="${INPUT_REF#refs/heads/}"
+          ref="${SOURCE_REF#refs/heads/}"
           ref="${ref#refs/tags/}"
           reject() {
             echo "Refusing to publish a development build from protected release ref: $1" >&2
@@ -60,14 +62,14 @@ jobs:
           }
           for protected in main master latest stable rc; do
             if [[ "${ref}" == "${protected}" ]]; then
-              reject "${INPUT_REF}"
+              reject "${SOURCE_REF}"
             fi
           done
           if [[ "${ref}" =~ ^v[0-9] ]]; then
-            reject "${INPUT_REF}"
+            reject "${SOURCE_REF}"
           fi
-          if [[ "${INPUT_REF}" =~ ^refs/tags/v ]]; then
-            reject "${INPUT_REF}"
+          if [[ "${SOURCE_REF}" =~ ^refs/tags/v ]]; then
+            reject "${SOURCE_REF}"
           fi
           for tag in $(git tag --points-at HEAD 2>/dev/null || true); do
             if [[ "${tag}" =~ ^v[0-9] ]]; then
@@ -80,25 +82,25 @@ jobs:
             done
           done
           shopt -u nocasematch
-          echo "Development ref '${INPUT_REF}' is allowed."
-      - name: Resolve source revision
-        id: resolve
+          echo "Development ref '${SOURCE_REF}' is allowed."
+      - name: Verify the checkout is the dispatched revision
         env:
-          INPUT_REF: ${{ inputs.ref }}
+          DISPATCH_SHA: ${{ github.sha }}
         run: |
-          # Every gate and the publish job build this exact commit. A branch
-          # moving while the workflow runs cannot change the published source;
-          # the original ref stays available for display metadata only.
+          # Every job below checks out the same way, with no ref of its own, so
+          # they all land on this commit. A branch moving mid-run cannot change
+          # what gets published: the run is pinned to the revision the dispatch
+          # named, and this asserts the checkout agrees with it.
           sha="$(git rev-parse --verify HEAD)"
           if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "The selected ref did not resolve to a full lowercase Git SHA." >&2
+            echo "HEAD did not resolve to a full lowercase Git SHA." >&2
             exit 1
           fi
-          {
-            echo "sha=${sha}"
-            echo "ref=${INPUT_REF}"
-          } >> "${GITHUB_OUTPUT}"
-          echo "Resolved '${INPUT_REF}' to ${sha}"
+          if [[ "${sha}" != "${DISPATCH_SHA}" ]]; then
+            echo "HEAD ${sha} is not the dispatched revision ${DISPATCH_SHA}." >&2
+            exit 1
+          fi
+          echo "Building ${sha} from '${GITHUB_REF_NAME}'."
 
   mqtt-release-contract:
     name: EMS MQTT development-release gate
@@ -108,8 +110,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.resolve-source.outputs.sha }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
@@ -163,8 +163,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.resolve-source.outputs.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: "20"
@@ -216,8 +214,6 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.resolve-source.outputs.sha }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
@@ -258,7 +254,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ needs.resolve-source.outputs.sha }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
@@ -338,11 +333,10 @@ jobs:
       ems_digest: ${{ steps.published_pair.outputs.ems_digest }}
 
     steps:
-      - name: Checkout resolved source
+      - name: Checkout the dispatched source
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ needs.resolve-source.outputs.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -357,13 +351,13 @@ jobs:
       - name: Resolve feature build identity
         id: build_identity
         env:
-          INPUT_REF: ${{ inputs.ref }}
-          RESOLVED_SHA: ${{ needs.resolve-source.outputs.sha }}
+          SOURCE_REF: ${{ github.ref_name }}
+          DISPATCH_SHA: ${{ github.sha }}
         run: |
           # Sanitize the ref into a Docker-tag-safe slug. This same logic must
           # stay in sync with docker-feature-cleanup.yml so deletion targets the
           # tags this workflow publishes.
-          safe_ref="$(printf '%s' "${INPUT_REF}" \
+          safe_ref="$(printf '%s' "${SOURCE_REF}" \
             | tr '[:upper:]' '[:lower:]' \
             | sed 's#[^a-z0-9._-]#-#g' \
             | sed 's#^[._-]*##; s#[._-]*$##' \
@@ -373,15 +367,15 @@ jobs:
             echo "The selected ref does not contain a Docker-tag-safe name." >&2
             exit 1
           fi
-          ref_hash="$(printf '%s' "${INPUT_REF}" | sha256sum | cut -c1-10)"
+          ref_hash="$(printf '%s' "${SOURCE_REF}" | sha256sum | cut -c1-10)"
           feature_tag_prefix="dev-${safe_ref}-${ref_hash}"
           git_commit="$(git rev-parse --verify HEAD)"
           if [[ ! "${git_commit}" =~ ^[0-9a-f]{40}$ ]]; then
             echo "The checked-out ref did not resolve to a full lowercase Git SHA." >&2
             exit 1
           fi
-          if [[ "${git_commit}" != "${RESOLVED_SHA}" ]]; then
-            echo "Checked-out revision ${git_commit} does not match the resolved source ${RESOLVED_SHA}." >&2
+          if [[ "${git_commit}" != "${DISPATCH_SHA}" ]]; then
+            echo "Checked-out revision ${git_commit} does not match the dispatched source ${DISPATCH_SHA}." >&2
             exit 1
           fi
           git_commit_short="${git_commit::7}"
@@ -432,7 +426,7 @@ jobs:
             org.opencontainers.image.version=${{ steps.build_identity.outputs.immutable_tag }}
             org.opencontainers.image.revision=${{ steps.build_identity.outputs.git_commit }}
             de.basecubedev.ems.channel=development
-            de.basecubedev.ems.branch=${{ inputs.ref }}
+            de.basecubedev.ems.branch=${{ github.ref_name }}
             de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.immutable_tag }}
             de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
             de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
@@ -453,7 +447,7 @@ jobs:
             EMS_GIT_COMMIT=${{ steps.build_identity.outputs.git_commit }}
             EMS_GIT_COMMIT_SHORT=${{ steps.build_identity.outputs.git_commit_short }}
             EMS_GIT_DESCRIBE=${{ steps.build_identity.outputs.git_describe }}
-            EMS_GIT_BRANCH=${{ inputs.ref }}
+            EMS_GIT_BRANCH=${{ github.ref_name }}
             EMS_GIT_DIRTY=false
             EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
             EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}
@@ -479,7 +473,7 @@ jobs:
             EMS_GIT_COMMIT=${{ steps.build_identity.outputs.git_commit }}
             EMS_GIT_COMMIT_SHORT=${{ steps.build_identity.outputs.git_commit_short }}
             EMS_GIT_DESCRIBE=${{ steps.build_identity.outputs.git_describe }}
-            EMS_GIT_BRANCH=${{ inputs.ref }}
+            EMS_GIT_BRANCH=${{ github.ref_name }}
             EMS_GIT_DIRTY=false
             EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
             EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}
@@ -503,7 +497,7 @@ jobs:
             org.opencontainers.image.version=${{ steps.build_identity.outputs.immutable_tag }}
             org.opencontainers.image.revision=${{ steps.build_identity.outputs.git_commit }}
             de.basecubedev.ems.channel=development
-            de.basecubedev.ems.branch=${{ inputs.ref }}
+            de.basecubedev.ems.branch=${{ github.ref_name }}
             de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.immutable_tag }}
             de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
             de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
@@ -708,8 +702,6 @@ jobs:
       packages: read
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.publish-feature-ghcr.outputs.revision }}
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -736,8 +728,6 @@ jobs:
       packages: read
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.publish-feature-ghcr.outputs.revision }}
       - uses: actions/setup-node@v7
         with:
           node-version: "20"
@@ -807,8 +797,6 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.publish-feature-ghcr.outputs.revision }}
       - name: Publish development build catalogue entry
         if: ${{ success() }}
         env:
@@ -883,8 +871,6 @@ jobs:
       packages: read
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.publish-feature-ghcr.outputs.revision }}
       - uses: actions/setup-node@v7
         with:
           node-version: "20"
@@ -961,8 +947,6 @@ jobs:
     steps:
       - name: Checkout pruner
         uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.publish-feature-ghcr.outputs.revision }}
       - name: Keep only the newest builds per feature branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

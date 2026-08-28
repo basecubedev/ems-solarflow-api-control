@@ -190,28 +190,53 @@ For stable installations, pin a release tag in `docker-compose.yml` rather than
 ## Development build publishing (testing only)
 
 Workflow: `.github/workflows/docker-feature-publish.yml` ("EMS development
-Publish"). Manual-only (`workflow_dispatch`) build of the EMS and Admin images
+build"). Manual-only (`workflow_dispatch`) build of the EMS and Admin images
 from a development ref, without touching the stable release path. It never
 publishes `latest`, `v*`, `stable`, or `rc`, marks its images with
 `de.basecubedev.ems.channel=development`, and writes a public **development
 build catalogue** entry only after the pushed images pass remote verification.
 
-The workflow resolves the single required `ref` input to one immutable full SHA
-once (in `resolve-source`); every gate, the publish job and every post-publish
-job then check out that exact SHA, and the publish job re-verifies its checkout
-equals the resolved SHA. A `Reject protected release refs` guard in
-`resolve-source` fails the run before any gate or package write when the input —
-or the commit a tag at HEAD points at — is a protected release ref (`main`,
-`master`, `latest`, `stable`, `rc`, or a `v*` tag). Intended development refs
-(`feature/…`, `fix/…`, `develop/…`) are allowed. Job permissions are
-least-privilege: gates are `contents: read`, only `publish-feature-ghcr` holds
-`packages: write`, and only the catalogue jobs hold `contents: write`.
+**The workflow is dispatched from the branch it builds.** There is no `ref`
+input: the branch selector in the run dialog is the only way to choose a source,
+and every job checks out with no ref of its own, so they all land on the commit
+GitHub pinned the run to. `resolve-source` and the publish job each assert that
+the checkout equals `github.sha`, so a branch moving mid-run cannot change what
+is published.
+
+That is a security boundary, not a convenience. An Actions cache is scoped to
+the ref of the *run*, not to what the run checked out. A `ref` input made those
+two independent choices — start the run from `main`, build a branch — and the
+gates then executed unmerged code while holding a cache token for the default
+branch's scope, which `docker-publish.yml` restores from under lockfile-derived
+keys. The procedure below used to say to pair them by hand (select the branch,
+then name it again as the input), so the safe pairing was documented but never
+enforced. Taking the branch from the run makes them the same thing: the run sits
+in that branch's scope, which can read the default branch's cache and write only
+its own. `tests/test_ci_development_build_cache_scope.py` owns the property.
+
+Two consequences worth knowing before you dispatch:
+
+- **The branch you build must carry this workflow file**, because a
+  `workflow_dispatch` run executes the definition from the ref it was started
+  on. A branch forked before the file existed cannot be development-built until
+  it is rebased. The default branch still decides whether the workflow is
+  listed at all.
+- **Only a branch or tag tip can be built.** The dispatch ref selector takes no
+  commit SHA, so rebuilding an exact historical commit means pointing a branch
+  at it first. The old `ref` input accepted anything git resolved.
+
+A `Reject protected release refs` guard in `resolve-source` fails the run before
+any gate or package write when the dispatched ref — or the commit a tag at HEAD
+points at — is a protected release ref (`main`, `master`, `latest`, `stable`,
+`rc`, or a `v*` tag). Intended development refs (`feature/…`, `fix/…`,
+`develop/…`) are allowed. Job permissions are least-privilege: gates are
+`contents: read`, only `publish-feature-ghcr` holds `packages: write`, and only
+the catalogue jobs hold `contents: write`.
 
 ### Pre-publish gates
 
 `publish-feature-ghcr` depends on all four gates below, so no image is pushed
-before every one of them is green. Each checks out the resolved SHA, never the
-mutable `ref` input.
+before every one of them is green. Each checks out the run's own revision.
 
 | Job | What it runs |
 | --- | --- |
@@ -246,18 +271,19 @@ for the paired build identity and tag policy.
 
 The workflow must already exist on the repository **default branch** before it
 can be dispatched reliably — a `workflow_dispatch` workflow is only selectable
-once its file is present on the default branch. The bootstrap is a separate,
+once its file is present on the default branch — and on the **feature branch**,
+whose copy is the one that actually runs. The bootstrap is a separate,
 workflow-only commit off `main` (branch `ci/development-build-workflow-bootstrap`);
 it must never carry the feature implementation. Then:
 
 1. Merge the workflow-only bootstrap into the default branch.
 2. Push the feature branch.
-3. Open **Docker Feature Publish** in GitHub Actions.
-4. Select the feature branch as the workflow ref.
-5. Enter the same feature ref as the required `ref` input.
-6. Confirm the resolved immutable SHA printed by `resolve-source`.
-7. Allow all release gates to complete (see **Pre-publish gates** above).
-8. The catalogue entry is written only after the pushed images are pulled back
+3. Open **EMS development build** in GitHub Actions.
+4. Select the feature branch in the run dialog. That is the whole input — the
+   workflow builds the branch it is started from.
+5. Confirm the commit printed by `resolve-source`.
+6. Allow all release gates to complete (see **Pre-publish gates** above).
+7. The catalogue entry is written only after the pushed images are pulled back
    and the remote packaged Admin browser canary passes.
 
 Never bypass a failed gate by editing the catalogue by hand. If any
@@ -272,9 +298,10 @@ release tags untouched.
 ## Build caching
 
 Both publish workflows use the native BuildKit GitHub Actions cache
-(`type=gha`) plus the built-in pip/npm caches on the host setup steps. Caching
-is a performance optimization only: a cache hit never stands in for a build,
-validation, or publication gate, and never becomes part of image identity.
+(`type=gha`); only `docker-publish.yml` adds the built-in pip cache on a host
+setup step. Caching is a performance optimization only: a cache hit never stands
+in for a build, validation, or publication gate, and never becomes part of image
+identity.
 
 Four owned, stable cache scopes keep layers from leaking between images or
 pipelines:
