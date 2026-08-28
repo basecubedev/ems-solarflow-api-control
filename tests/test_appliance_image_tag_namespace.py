@@ -24,6 +24,8 @@ allowlist in ``releases.py``, since a shape test cannot tell an appliance tag
 from a third product nobody has written yet. Until then this is the guard.
 """
 
+import re
+
 import pytest
 import yaml
 
@@ -165,3 +167,196 @@ def test_both_release_titles_open_with_the_words_the_install_guide_names():
         assert "${APPLIANCE_VERSION}" in title, (
             f"{title!r} does not say which appliance version it carries"
         )
+
+
+# --- the fixed download link ------------------------------------------------
+#
+# The Releases page lists two products and its "Latest" badge names an EMS
+# release that carries no image, so finding the newest image meant reading a
+# mixed list and knowing which entries to skip. `appliance-image-latest` is one
+# address that always answers, and everything below is what keeps it honest.
+
+POINTER_TAG = "appliance-image-latest"
+POINTER_LINK = f"/releases/tag/{POINTER_TAG}"
+
+
+def publish_scripts():
+    document = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "appliance-image.yml").read_text(encoding="utf-8")
+    )
+    return " ".join(step.get("run", "") for step in document["jobs"]["publish"]["steps"])
+
+
+def pointer_step():
+    document = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "appliance-image.yml").read_text(encoding="utf-8")
+    )
+    for step in document["jobs"]["publish"]["steps"]:
+        if (step.get("env") or {}).get("POINTER_TAG"):
+            return step
+    raise AssertionError("no publish step declares POINTER_TAG")
+
+
+def test_the_fixed_download_tag_keeps_the_appliance_prefix():
+    """It is a release like any other to admin/releases.py, so it answers to the
+    same rule as every tag on this side."""
+
+    step = pointer_step()
+
+    assert step["env"]["POINTER_TAG"] == POINTER_TAG
+    assert not VERSION_PATTERN.fullmatch(POINTER_TAG), (
+        f"{POINTER_TAG} parses as a version, so the console would offer the "
+        "download signpost as an installable EMS system build"
+    )
+
+
+def test_the_fixed_download_tag_is_created_once_and_then_only_rewritten():
+    """The whole value is that a link printed in a document stays true. Deleting
+    and re-creating the release would move the tag to a new commit, and a
+    release created afresh each week is one whose URL was never fixed at all.
+
+    Same shape as `appliance-manager-index`, for the same reason.
+    """
+
+    script = pointer_step()["run"]
+
+    assert 'gh release view "${POINTER_TAG}"' in script, (
+        "the step no longer asks whether the pointer already exists, so it "
+        "cannot tell creating it from rewriting it"
+    )
+    assert 'gh release edit "${POINTER_TAG}"' in script, (
+        "an existing pointer is no longer edited in place"
+    )
+    assert 'gh release delete "${POINTER_TAG}"' not in script, (
+        "the pointer is deleted somewhere; re-creating it moves the tag, which "
+        "is the one thing a fixed address may not do"
+    )
+    assert "--clobber" in script, "the pointer file is not replaced in place"
+
+
+def test_the_fixed_download_tag_is_a_prerelease_like_everything_on_this_side():
+    """`/releases/latest` skips prereleases, and that alias belongs to EMS."""
+
+    script = pointer_step()["run"]
+    create = script.index('gh release create "${POINTER_TAG}"')
+
+    assert "--prerelease" in script[create : create + 400], (
+        "the fixed download release is not marked prerelease, so it would take "
+        "the Latest badge from the EMS release that owns it"
+    )
+
+
+def test_the_pointer_does_not_answer_the_install_guides_search():
+    """The guide's fallback tells an operator to open the newest entry whose
+    title starts with "Appliance image". The pointer holds no image, so a title
+    that matched would send exactly the reader this exists for to a page with
+    nothing to download."""
+
+    script = pointer_step()["run"]
+    titles = [
+        line.split("=", 1)[1].strip().strip('"')
+        for line in script.splitlines()
+        if line.strip().startswith("pointer_title=")
+    ]
+
+    assert len(titles) == 1, f"expected one pointer title, found {titles}"
+    assert not titles[0].startswith("Appliance image"), (
+        f"{titles[0]!r} answers the install guide's search and has no image to give"
+    )
+
+
+def test_the_pointer_carries_no_image_of_its_own():
+    """A copy here would cost three quarters of a gigabyte a week, lose the
+    version out of the file name, and leave a window where half the assets are
+    last week's while the checksums beside them are this week's."""
+
+    script = pointer_step()["run"]
+    uploads = [
+        line for line in script.splitlines()
+        if 'gh release upload "${POINTER_TAG}"' in line
+    ]
+
+    assert len(uploads) == 1, f"expected one upload to the pointer, found {uploads}"
+    assert ".img" not in uploads[0], (
+        "the pointer uploads an image; it is meant to name where the images are"
+    )
+
+
+def test_the_pointer_can_only_name_files_that_were_published():
+    """Built by reading the release back, not from the names this job used, so a
+    build that published nothing cannot advertise three files."""
+
+    script = pointer_step()["run"]
+
+    assert 'gh release view "${TAG}" --json tagName,url,assets' in script, (
+        "the pointer no longer reads its file list off the published release"
+    )
+    assert "publishes no .img.xz" in script, (
+        "the pointer no longer refuses to point at a release with no image"
+    )
+
+
+@pytest.mark.parametrize(
+    "document",
+    ("README.md", "docs/user/appliance/install.md"),
+)
+def test_the_fixed_link_is_the_one_the_reader_is_given(document):
+    text = (ROOT / document).read_text(encoding="utf-8")
+
+    assert POINTER_LINK in text, (
+        f"{document} does not give the reader the fixed download link, which "
+        "leaves them reading a release list that mixes two products"
+    )
+
+
+def test_the_pointer_step_defines_every_variable_it_reads():
+    """A `run:` block is its own shell, and this step is the last one in a build
+    that takes half an hour.
+
+    Writing it, I referred to `${url}` — a name the *previous* step had set. It
+    parsed, `bash -n` was happy, and every other contract here passed. Under
+    `set -u` it would have failed on the final line of the run that produced
+    three images, and only there.
+
+    So the rule is stated rather than remembered: a name is either in the step's
+    own `env:`, assigned by the step itself, handed over through `$GITHUB_ENV`
+    earlier in this job, or provided by the runner.
+    """
+
+    document = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "appliance-image.yml").read_text(encoding="utf-8")
+    )
+    steps = document["jobs"]["publish"]["steps"]
+    index = next(
+        position
+        for position, step in enumerate(steps)
+        if (step.get("env") or {}).get("POINTER_TAG")
+    )
+    script = steps[index]["run"]
+
+    # Everything the runner puts in the environment of every step.
+    provided = {"RUNNER_TEMP", "GITHUB_STEP_SUMMARY", "GITHUB_SHA", "GITHUB_REPOSITORY",
+                "GITHUB_RUN_NUMBER", "GITHUB_RUN_ID", "GITHUB_REF_NAME", "GITHUB_ENV"}
+    # Handed over by an earlier step of this job, which is the one hand-off that
+    # does survive between `run:` blocks.
+    carried = {
+        match.group(1)
+        for earlier in steps[:index]
+        for match in re.finditer(
+            r'echo\s+"([A-Za-z_][A-Za-z0-9_]*)=[^"]*"\s*>>\s*"?\$\{?GITHUB_ENV\}?"?',
+            earlier.get("run", ""),
+        )
+    }
+    declared = set(steps[index].get("env") or {})
+    assigned = set(re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=", script, re.MULTILINE))
+
+    read = set(re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", script))
+    read |= set(re.findall(r"\$([A-Za-z_][A-Za-z0-9_]*)", script))
+
+    unbound = sorted(read - provided - carried - declared - assigned)
+
+    assert unbound == [], (
+        f"{unbound} are read but never set in this step. A variable from the "
+        "step above does not survive into this shell, and `set -u` turns that "
+        "into a failure on the last line of a thirty-minute build"
+    )

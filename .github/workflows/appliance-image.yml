@@ -738,3 +738,95 @@ jobs:
             echo
             echo "[${TAG}](${url}) — unsigned prerelease, one image per board."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the fixed download link pointing at this build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('appliance-image-ci-{0}', github.run_number) }}
+          POINTER_TAG: appliance-image-latest
+        run: |
+          set -euo pipefail
+          # Where somebody is sent who has no version in mind. The releases above
+          # are the record — three files that can still be asked for by name a
+          # year later — and this is the signpost to the newest of them.
+          #
+          # It exists because the Releases page mixes two products and its
+          # "Latest" badge deliberately names an EMS release that carries no
+          # image. Without one fixed address, every sentence we write about
+          # downloading is a search instruction: open the list, skip the entries
+          # that are not images, find the newest one that is. That is the step
+          # someone installing their first appliance gets wrong.
+          #
+          # Created once and then only rewritten, exactly like
+          # appliance-manager-index: the tag never moves, so a link printed in a
+          # document — or in a forum post two years old — stays true.
+          #
+          # It deliberately carries no image of its own. Copying three quarters
+          # of a gigabyte here every week would buy a download URL whose file
+          # name has lost the version it identifies itself by, and a window
+          # during which half the assets are last week's while the checksums
+          # beside them are this week's.
+          #
+          # Its title deliberately does not open with "Appliance image". The
+          # install guide tells an operator to find the newest entry that does,
+          # and this entry has no image to hand them.
+          pointer_title="Download the appliance image"
+          pointer="${RUNNER_TEMP}/appliance-image-latest.json"
+          notes="${RUNNER_TEMP}/pointer-notes.md"
+
+          # Read back off the release rather than rebuilt from the names this
+          # job used, so the pointer can only ever name files that are actually
+          # published under it.
+          gh release view "${TAG}" --json tagName,url,assets --jq \
+            '{tag: .tagName, url: .url,
+              images: [.assets[] | select(.name | endswith(".img.xz")) | {name, url}]}' \
+            > "${pointer}"
+          count="$(jq '.images | length' "${pointer}")"
+          [ "${count}" -gt 0 ] || {
+            echo "::error::${TAG} publishes no .img.xz, so there is nothing to point at"
+            exit 1
+          }
+
+          # Read out of the pointer rather than reused from the step above: a
+          # `run:` block is its own shell, so a variable set in the previous one
+          # is unset here and `set -u` would end a thirty-minute build on the
+          # last line of it.
+          release_url="$(jq -r .url "${pointer}")"
+          {
+            echo "The newest appliance image build: **${APPLIANCE_VERSION}**, published as"
+            echo "[\`${TAG}\`](${release_url})."
+            echo
+            echo "One file per board — they are not interchangeable:"
+            echo
+            jq -r '.images[] | "- [`\(.name)`](\(.url))"' "${pointer}"
+            echo
+            echo "Download the \`.img.xz.sha256\` beside your file as well, and check it"
+            echo "before writing the card — see"
+            echo "[Flashing the card](https://github.com/${GH_REPO}/blob/main/docs/user/appliance/install.md)."
+            echo
+            echo "Unsigned, and that is by design: an image is only signable on an approved"
+            echo "builder, which a hosted runner is not. Writing a card verifies no signature"
+            echo "either way, so the checksum is the check that exists."
+            echo
+            echo "This tag never moves. The images keep their version in their file names and"
+            echo "live in the release above, which is never rewritten."
+          } > "${notes}"
+          cat "${notes}"
+
+          if gh release view "${POINTER_TAG}" >/dev/null 2>&1; then
+            gh release edit "${POINTER_TAG}" --title "${pointer_title}" --notes-file "${notes}"
+          else
+            gh release create "${POINTER_TAG}" \
+              --prerelease \
+              --target "${GITHUB_SHA}" \
+              --title "${pointer_title}" \
+              --notes-file "${notes}"
+          fi
+          gh release upload "${POINTER_TAG}" "${pointer}" --clobber
+
+          pointer_url="$(gh release view "${POINTER_TAG}" --json url --jq .url)"
+          {
+            echo
+            echo "Fixed download link: [${POINTER_TAG}](${pointer_url})"
+          } >> "$GITHUB_STEP_SUMMARY"
