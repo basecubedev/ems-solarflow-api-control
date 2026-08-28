@@ -1975,6 +1975,45 @@ def test_a_year_of_weekly_image_builds_does_not_hide_every_ems_release(tmp_path)
     assert result["latest_stable"], "no stable release could be resolved"
 
 
+def test_one_oversized_page_does_not_take_the_whole_catalogue_down(tmp_path):
+    """A release with assets is ~40 KB of JSON and the appliance publishes a
+    nineteen-asset image build every week, so a page can outgrow the 2 MiB this
+    will read. That used to raise out of the whole fetch: the console reported
+    "GitHub releases are unavailable" and fell back to the rolling latest
+    channel, for a repository that was answering perfectly well.
+    """
+
+    heavy = _appliance_entries(1)
+    heavy[0]["body"] = "x" * (2 * 1024 * 1024 + 64)
+    pages = [heavy, _github_payload()]
+    manager = ReleaseManager(data_dir=tmp_path, urlopen=_paged_opener(pages))
+
+    result = manager.list_releases()
+    tags = {item["tag"] for item in result["releases"]}
+
+    assert "v0.6.1" in tags, "one unreadable page emptied the catalogue"
+    assert result["latest_stable"]
+    assert any("could not be read" in warning for warning in result.get("warnings", [])), (
+        "a page was silently dropped; a missing release must not look like an absent one"
+    )
+
+
+def test_the_window_did_not_shrink_when_the_pages_got_smaller(tmp_path):
+    """Smaller pages are only safe if there are correspondingly more of them:
+    the point of paginating at all was that a year of weekly image builds must
+    not push every EMS release out of reach.
+    """
+
+    from admin.releases import (
+        GITHUB_RELEASE_PAGES,
+        GITHUB_RELEASES_PER_PAGE,
+        GITHUB_RELEASES_URL,
+    )
+
+    assert GITHUB_RELEASES_PER_PAGE * GITHUB_RELEASE_PAGES >= 500
+    assert f"per_page={GITHUB_RELEASES_PER_PAGE}" in GITHUB_RELEASES_URL
+
+
 def test_the_paging_stops_at_the_end_rather_than_asking_forever(tmp_path):
     """A short page is the last page. Asking anyway spends a request per refresh
     on a repository that will never answer with anything."""
