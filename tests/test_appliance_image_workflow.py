@@ -17,12 +17,12 @@ unsigned, and nothing here signs, reads a secret, or lets a build whose gates
 failed reach a download page.
 
 Where the release lands is itself load-bearing rather than cosmetic, which is
-why it is asserted here. ``packaging/appliance/config/appliance.conf`` points
-every flashed appliance at ``/releases/latest/download/manager-packages.json``,
-and GitHub resolves that alias to the newest release that is neither draft nor
-prerelease. An unsigned image build that took the alias would move it off a
-working index the day a signed release exists, and the fleet would read that as
-a network fault.
+why it is asserted here. GitHub resolves ``/releases/latest`` to the newest
+release that is neither draft nor prerelease, and that is what the repository
+sidebar advertises. An unsigned image build published as an ordinary release
+would stand there as this project's latest release every week, in front of the
+EMS version it is not -- on the page ``docs/user/appliance/install.md`` sends
+operators to.
 """
 
 import re
@@ -345,17 +345,19 @@ def test_a_verdict_that_could_not_be_read_is_not_published_blank(workflow):
     assert '[ -r "${gates}/release-gates.log" ]' in blocks
 
 
-def test_the_release_is_a_prerelease_so_the_fleet_pointer_stays_put(workflow):
+def test_an_unsigned_build_never_becomes_the_latest_release(workflow):
     """The load-bearing one.
 
-    ``packaging/appliance/config/appliance.conf`` points every flashed appliance
-    at ``/releases/latest/download/manager-packages.json``, and GitHub resolves
-    that alias to the newest release that is neither draft nor prerelease. An
-    unsigned image build published as an ordinary release takes the alias.
-    Nothing breaks while no signed release exists -- and the day one does, the
-    next image build moves the pointer off the working index and the Manager
-    updater goes quiet across the fleet, as ``release_download_failed``, which
-    an operator reads as a network fault.
+    GitHub resolves ``/releases/latest`` to the newest release that is neither
+    draft nor prerelease, and that is what the repository sidebar advertises and
+    what anything asking this repository for "the latest release" is handed. An
+    unsigned image build published as an ordinary release takes that position
+    every week, in front of the EMS version it is not.
+
+    This used to be stated as protecting the fleet's Manager index, which lived
+    behind the same alias. It no longer does -- the index is pinned to its own
+    tag, which is a stronger arrangement and one this test no longer stands in
+    for. The reason changed; the assertion did not.
     """
 
     blocks = run_blocks(workflow, "publish")

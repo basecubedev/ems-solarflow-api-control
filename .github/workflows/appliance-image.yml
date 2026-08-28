@@ -11,8 +11,8 @@ name: Appliance image
 # docs/user/appliance/install.md sends an operator to the Releases page for
 # exactly these file names, and an Actions artefact expires in thirty days
 # behind a sign-in wall, on a run page no operator will find. Prerelease is not
-# decoration: GitHub's /releases/latest alias skips one, and that alias is where
-# every flashed appliance looks for its Manager package index.
+# decoration: GitHub's /releases/latest alias skips one, so a weekly unsigned
+# build never becomes the "Latest" release this repository advertises.
 #
 # What it does not produce is a release, and that is deliberate.
 # packaging/appliance/vm/base-images.lock.json approves exactly one builder --
@@ -617,14 +617,14 @@ jobs:
             --notes-file "${RUNNER_TEMP}/release-notes.md" \
             "${RUNNER_TEMP}"/release/*
 
-          # Prerelease, and this is the load-bearing part. GitHub's
-          # /releases/latest alias resolves to the newest release that is
-          # neither draft nor prerelease, and packaging/appliance/config/appliance.conf
-          # points every flashed appliance at
-          # /releases/latest/download/manager-packages.json. An unsigned build
-          # that took that pointer would, the day a signed release exists, move
-          # it off the working index and turn the Manager updater off across the
-          # fleet -- reported to an operator as a network fault.
+          # Prerelease, and still load-bearing after the fleet's index moved
+          # to its own tag. /releases/latest resolves to the newest release
+          # that is neither draft nor prerelease, and it is what the repository
+          # sidebar advertises and what anything asking this repository for
+          # "the latest release" is handed. An ordinary release here would put
+          # an unsigned appliance image in that position every week, in front
+          # of the EMS version it is not, on the very page
+          # docs/user/appliance/install.md sends operators to.
           gh release edit "${TAG}" --draft=false --prerelease
 
           url="$(gh release view "${TAG}" --json url --jq .url)"

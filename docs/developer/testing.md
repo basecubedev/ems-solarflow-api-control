@@ -400,12 +400,11 @@ nobody produced.
 
 Two properties of that job are load-bearing rather than stylistic, and
 `tests/test_appliance_image_workflow.py` asserts both. It publishes a
-**prerelease**: GitHub's `/releases/latest` alias skips one, and
-`packaging/appliance/config/appliance.conf` points every flashed appliance at
-`/releases/latest/download/manager-packages.json`. An unsigned build that took
-that alias would, the day a signed release exists, move the pointer off the
-working index and silence the Manager updater fleet-wide, as a
-`release_download_failed` an operator reads as a network fault. And the **tag is
+**prerelease**: GitHub's `/releases/latest` alias skips one, and that alias is
+what the repository sidebar advertises and what anything asking this repository
+for its latest release is handed. An unsigned appliance image published as an
+ordinary release would stand there every week, in front of the EMS version it is
+not, on the page operators are sent to. And the **tag is
 deliberately not a version** — `admin/releases.py` lists every non-draft release
 of this repository as an EMS system-build target and decides eligibility by
 parsing the tag, so a semver-shaped tag would offer operators a build whose
