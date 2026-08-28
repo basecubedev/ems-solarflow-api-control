@@ -724,9 +724,6 @@ def test_the_gate_logs_come_back_out_of_the_guest():
     assert "gates" in script.split("== collecting artefacts ==")[1]
 
 
-UPDATE_INSPECTOR = SCRIPTS / "appliance-inspect-rpi-ab-update.sh"
-
-
 def test_a_tree_that_agrees_with_the_lock_and_was_then_modified_is_modified(tmp_path, lock):
     """The modification path stays reachable: the pin shadows it only for a tree
     that was never the pinned one to begin with."""
@@ -743,3 +740,67 @@ def test_a_tree_that_agrees_with_the_lock_and_was_then_modified_is_modified(tmp_
     assert report.reason == rpi_image_gen.REASON_SOURCE_MODIFIED
 
 
+
+
+# --- which Manager package the image is made to carry ------------------------
+
+BUILDER = SCRIPTS / "appliance-build-rpi-image.sh"
+
+
+def build_with(tmp_path, *arguments, environment=None):
+    """Run the image builder far enough to see how it treats its arguments.
+
+    It never reaches a build here: this host has no rpi-image-gen dependencies,
+    so a well-formed run stops at NOT RUN (3). That is exactly the boundary
+    being tested -- a command-line mistake has to be told apart from a host that
+    cannot build, and be found before twenty-five minutes are spent.
+    """
+
+    return subprocess.run(
+        ["sh", str(BUILDER), "--profile", "rpi3", *arguments],
+        capture_output=True, text=True, check=False, timeout=300,
+        cwd=str(ROOT), env={**os.environ, **(environment or {})},
+    )
+
+
+def test_a_supplied_package_that_is_not_there_is_a_command_line_error(tmp_path):
+    run = build_with(tmp_path, "--manager-package", str(tmp_path / "absent.deb"))
+
+    assert run.returncode == 2, run.stderr
+    assert "is not a file" in run.stderr
+
+
+def test_a_supplied_file_that_is_not_a_package_is_a_command_line_error(tmp_path):
+    other = tmp_path / "notes.txt"
+    other.write_text("not a package", encoding="utf-8")
+
+    run = build_with(tmp_path, "--manager-package", str(other))
+
+    assert run.returncode == 2, run.stderr
+    assert "is not a .deb" in run.stderr
+
+
+def test_the_package_may_also_arrive_through_the_environment(tmp_path):
+    """The caller that knows which package to use is two layers above the one
+    that runs the builder: the workflow resolves it and the gate runner in
+    between has no opinion about it, exactly as with the generator path."""
+
+    run = build_with(
+        tmp_path, environment={"EMS_APPLIANCE_MANAGER_PACKAGE": str(tmp_path / "absent.deb")}
+    )
+
+    assert run.returncode == 2, run.stderr
+    assert "is not a file" in run.stderr
+
+
+def test_a_well_formed_package_gets_past_the_command_line(tmp_path):
+    """The counter-case, so the two tests above are about the argument and not
+    about the flag being rejected outright."""
+
+    package = tmp_path / "ems-appliance-manager_0.1.0_arm64.deb"
+    package.write_bytes(b"stand-in")
+
+    run = build_with(tmp_path, "--manager-package", str(package))
+
+    assert run.returncode == 3, run.stderr
+    assert "NOT RUN" in run.stderr

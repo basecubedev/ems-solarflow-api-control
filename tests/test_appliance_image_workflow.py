@@ -25,6 +25,7 @@ working index the day a signed release exists, and the fleet would read that as
 a network fault.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -204,6 +205,45 @@ def test_the_manager_package_is_built_and_offered_on_its_own(workflow, text):
 
     assert "packaging/appliance/build-deb.sh" in run_blocks(workflow, "manager-package")
     assert "appliance-manager-deb" in text
+
+
+# --- what Manager the image carries ------------------------------------------
+
+
+def test_the_image_takes_the_package_an_operator_would_be_offered(workflow):
+    """Otherwise the image carries a second build of the same source that only
+    happens to match, and the two are compared by nothing."""
+
+    blocks = run_blocks(workflow, "image")
+
+    assert "scripts/appliance-fetch-manager-package.py" in blocks
+    assert "EMS_APPLIANCE_MANAGER_PACKAGE=" in blocks
+
+
+def test_the_image_reads_the_index_the_fleet_was_flashed_with(workflow):
+    """One index, two readers. An image built against a different index than
+    the one its own /etc names would ship a Manager the appliance's update page
+    cannot see, let alone go back from."""
+
+    configured = re.search(
+        r"^manager_index_url\s*=\s*(\S+)$",
+        (ROOT / "packaging" / "appliance" / "config" / "appliance.conf").read_text("utf-8"),
+        re.M,
+    ).group(1)
+    path = configured.split("basecubedev/ems-solarflow-api-control", 1)[1]
+
+    assert path in run_blocks(workflow, "image")
+
+
+def test_no_published_release_is_a_fallback_and_anything_else_is_a_failure(workflow):
+    """Before the first Manager release there is nothing to fetch and the build
+    must go on; a package that failed verification is a different matter, and
+    treating the two alike is how an unverified package reaches a card."""
+
+    blocks = run_blocks(workflow, "image")
+
+    assert "3) echo \"::notice::no stable Manager release is published yet" in blocks
+    assert "*) echo \"::error::the published Manager package could not be verified\"" in blocks
 
 
 # --- the download page -------------------------------------------------------

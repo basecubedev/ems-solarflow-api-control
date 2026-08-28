@@ -5,9 +5,17 @@
 #   scripts/appliance-build-rpi-image.sh --profile rpi3|rpi4|rpi5
 #                                        [--output DIR] [--build-id ID]
 #                                        [--rpi-image-gen DIR]
+#                                        [--manager-package FILE.deb]
 #
 # One artefact per board. The device layer selects the kernel and firmware, so
 # a Pi 5 image is not a Pi 4 image and neither may claim to be the other.
+#
+# Without --manager-package the Appliance Manager is built from this checkout.
+# With it, the image carries the package it was handed -- the same bytes the
+# update path would offer an operator, rather than a second build of the same
+# source that only happens to match. Verifying that package is the caller's
+# job, and the caller is expected to have done it against the keyring the image
+# ships.
 #
 # rpi-image-gen is supplied by the build host and is not vendored here. Its
 # revision is pinned in packaging/appliance/image/rpi-image-gen.lock and the
@@ -28,9 +36,14 @@ OUTPUT="$ROOT/dist"
 BUILD_ID=""
 GENERATOR=${EMS_RPI_IMAGE_GEN:-}
 ENVIRONMENT=""
+# Read from the environment as well as the command line, the way the generator
+# path is, because the caller that knows which package to use is two layers
+# above the caller that runs this: the workflow resolves it, the gate runner in
+# between has no opinion about it.
+SUPPLIED=${EMS_APPLIANCE_MANAGER_PACKAGE:-}
 
 usage() {
-    sed -n '3,18p' "$0"
+    sed -n '3,28p' "$0"
 }
 
 not_run() {
@@ -57,13 +70,24 @@ while [ $# -gt 0 ]; do
         --rpi-image-gen=*) GENERATOR=${1#*=}; shift ;;
         --builder-environment) ENVIRONMENT=${2:?--builder-environment needs a file}; shift 2 ;;
         --builder-environment=*) ENVIRONMENT=${1#*=}; shift ;;
+        --manager-package) SUPPLIED=${2:?--manager-package needs a .deb}; shift 2 ;;
+        --manager-package=*) SUPPLIED=${1#*=}; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
 
 # A profile selects a config path and a build id names a directory. Both are
-# refused before they are used to build either.
+# refused before they are used to build either, and so is a package that was
+# handed over: a wrong path is a command-line mistake, and finding it after a
+# twenty-five minute build makes it an expensive one.
+if [ -n "$SUPPLIED" ]; then
+    [ -f "$SUPPLIED" ] || { echo "--manager-package: $SUPPLIED is not a file" >&2; exit 2; }
+    case "$SUPPLIED" in
+        *.deb) ;;
+        *) echo "--manager-package: $SUPPLIED is not a .deb" >&2; exit 2 ;;
+    esac
+fi
 command -v python3 >/dev/null 2>&1 || not_run "python3 is not installed" required_tool_missing
 # Checked here rather than at the compression step, which runs after a
 # twenty-five minute build.
@@ -193,14 +217,23 @@ release_work_cleanup() {
 }
 trap release_work_cleanup EXIT
 
-echo "== building the appliance package =="
-"$ROOT/packaging/appliance/build-deb.sh" --output "$OUTPUT" --arch arm64 >/dev/null \
-    || fail "the arm64 package build failed" package_build_failed
-PACKAGE=""
-for candidate in "$OUTPUT"/ems-appliance-manager_*_arm64.deb; do
-    [ -f "$candidate" ] && PACKAGE=$candidate
-done
-[ -n "$PACKAGE" ] || fail "the package build produced no .deb" package_build_failed
+if [ -n "$SUPPLIED" ]; then
+    # A released package, verified by whoever handed it over. The image then
+    # carries the same bytes an operator would be offered by the update path
+    # instead of a second build of the same source that only happens to match.
+    echo "== using the supplied appliance package =="
+    PACKAGE=$OUTPUT/$(basename "$SUPPLIED")
+    [ "$SUPPLIED" = "$PACKAGE" ] || cp "$SUPPLIED" "$PACKAGE"
+else
+    echo "== building the appliance package =="
+    "$ROOT/packaging/appliance/build-deb.sh" --output "$OUTPUT" --arch arm64 >/dev/null \
+        || fail "the arm64 package build failed" package_build_failed
+    PACKAGE=""
+    for candidate in "$OUTPUT"/ems-appliance-manager_*_arm64.deb; do
+        [ -f "$candidate" ] && PACKAGE=$candidate
+    done
+    [ -n "$PACKAGE" ] || fail "the package build produced no .deb" package_build_failed
+fi
 PACKAGE_SHA256=$(sha256sum "$PACKAGE" | cut -d' ' -f1)
 
 echo "== proving the source tree one last time =="

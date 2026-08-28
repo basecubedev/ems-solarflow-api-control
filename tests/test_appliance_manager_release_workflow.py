@@ -263,12 +263,29 @@ def test_the_manifest_is_built_from_the_package_rather_than_typed(workflow):
     assert "--revision" in blocks
 
 
-def test_a_candidate_is_allowed_but_says_so(workflow):
-    """A prerelease version may be cut and published -- an operator can install
-    one deliberately. What must not happen is an image quietly baking it in, so
-    the run says which kind it is."""
+def test_a_candidate_is_refused_here_rather_than_five_steps_later(workflow):
+    """This chain publishes releases and nothing else, and it should say so
+    where the version is chosen.
+
+    A prerelease is spelled with a tilde, because that is the only form on which
+    dpkg and ``version_key`` agree about order, and
+    ``artifact_trust.RELEASE_ID`` admits no tilde. So a candidate has no
+    publishable release id -- which without this check surfaces inside the
+    manifest generator as ``invalid_release_id``, a message about the wrong
+    thing entirely.
+    """
 
     blocks = run_blocks(workflow, "package")
 
     assert "is_stable" in blocks
-    assert "no image will bake it in" in blocks
+    assert "RELEASE_ID admits no" in blocks
+
+
+def test_the_release_id_grammar_really_is_what_forbids_it():
+    """The premise of the check above, run rather than remembered. If the
+    grammar ever admits a tilde, the refusal is over-strict and should go."""
+
+    from appliance.artifact_trust import RELEASE_ID
+
+    assert RELEASE_ID.match("ems-appliance-manager-0.1.0-arm64")
+    assert not RELEASE_ID.match("ems-appliance-manager-0.1.0~rc1-arm64")

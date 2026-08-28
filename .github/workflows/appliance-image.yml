@@ -287,6 +287,30 @@ jobs:
                exit 1 ;;
           esac
 
+      - name: Take the Manager package an operator would be offered
+        run: |
+          set -euo pipefail
+          # The image should carry the bytes the update path offers, not a
+          # second build of the same source that only happens to match. So the
+          # build reads the same index the fleet reads and makes the same
+          # decision, with the same keyring and the same program.
+          #
+          # Exit 3 is "no stable release published yet", which is a state this
+          # project is actually in and not a failure: the build then makes its
+          # own package, and says which of the two happened.
+          set +e
+          package="$(scripts/appliance-fetch-manager-package.py \
+            --index "https://github.com/${GITHUB_REPOSITORY}/releases/download/appliance-manager-index/manager-packages.json" \
+            --into "${APPLIANCE_OUTPUT}/manager")"
+          status=$?
+          set -e
+          case "${status}" in
+            0) echo "EMS_APPLIANCE_MANAGER_PACKAGE=${package}" >> "$GITHUB_ENV"
+               echo "the image will carry the published $(basename "${package}")" ;;
+            3) echo "::notice::no stable Manager release is published yet; building one from this checkout" ;;
+            *) echo "::error::the published Manager package could not be verified"; exit 1 ;;
+          esac
+
       - name: Capture the builder environment
         run: |
           set -euo pipefail

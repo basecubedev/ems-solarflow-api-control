@@ -94,7 +94,15 @@ jobs:
                   f"asked for {wanted}, but appliance/version.py says {APPLIANCE_VERSION}"
               )
           if not is_stable(wanted):
-              print(f"::warning::{wanted} is a candidate; no image will bake it in")
+              # Refused here, with the real reason, rather than five steps later
+              # inside the manifest generator as "invalid_release_id". A
+              # prerelease is spelled with a tilde so dpkg and version_key agree
+              # on its order, and artifact_trust.RELEASE_ID has no tilde in its
+              # grammar -- so this chain publishes releases and nothing else.
+              raise SystemExit(
+                  f"{wanted} is a candidate, and a candidate has no publishable "
+                  "release id: RELEASE_ID admits no '~'. Cut a release instead."
+              )
           print(f"version={wanted}")
           print(f"release_id=ems-appliance-manager-{wanted}-arm64")
           PY
