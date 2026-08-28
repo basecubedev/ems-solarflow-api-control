@@ -52,8 +52,6 @@ JOBS = (
     "publish-feature-ghcr",
 )
 
-RESOLVED_SHA = "${{ needs.resolve-source.outputs.sha }}"
-
 
 def _text():
     return WORKFLOW.read_text(encoding="utf-8")
@@ -111,10 +109,25 @@ def test_triggered_only_by_workflow_dispatch():
     assert "\n  schedule:" not in text
 
 
-def test_required_ref_input():
-    text = _text()
-    assert "ref:" in text
-    assert "required: true" in text
+def test_the_dispatch_names_no_revision_of_its_own():
+    """The branch selector in the run dialog is the only way to pick a source.
+
+    A dispatch input naming a revision would put unmerged code in a run whose
+    ref -- and therefore whose Actions cache scope -- is whatever branch the
+    dispatch was started from, normally the default branch. Every gate below
+    runs that code with a cache token for that scope, and docker-publish.yml
+    restores from it. Taking the branch from the run itself keeps the scope and
+    the code at the same level of trust.
+    """
+
+    workflow = yaml.safe_load(_text())
+    triggers = workflow[True] if True in workflow else workflow["on"]
+
+    assert list(triggers) == ["workflow_dispatch"]
+    assert not triggers["workflow_dispatch"], (
+        f"the dispatch declares {triggers['workflow_dispatch']}; a revision "
+        "input reintroduces the cache scope crossing this workflow avoids"
+    )
 
 
 def test_mandatory_gates_cannot_be_disabled_by_dispatch_input():
@@ -134,7 +147,7 @@ def test_never_publishes_release_tags():
 def test_emits_development_channel_label():
     text = _text()
     assert text.count("de.basecubedev.ems.channel=development") == 2
-    assert "de.basecubedev.ems.branch=${{ inputs.ref }}" in text
+    assert "de.basecubedev.ems.branch=${{ github.ref_name }}" in text
 
 
 def test_builds_both_images():
@@ -180,13 +193,6 @@ def test_mqtt_release_contract_job_exists_and_is_read_only():
     section = _job("mqtt-release-contract")
     assert "runs-on: ubuntu-latest" in section
     assert _job_permissions()["mqtt-release-contract"] == ["contents: read"]
-
-
-def test_mqtt_release_contract_builds_the_resolved_immutable_sha():
-    section = _job("mqtt-release-contract")
-    assert "resolve-source" in section.split("    steps:", 1)[0]
-    assert f"ref: {RESOLVED_SHA}" in section
-    assert "ref: ${{ inputs.ref }}" not in section
 
 
 def test_mqtt_release_contract_runs_the_fast_release_gate():
@@ -272,36 +278,50 @@ def test_mosquitto_gate_fails_closed_in_release_ci():
     assert "No real Mosquitto lifecycle test executed" in section
 
 
-def test_source_revision_is_resolved_exactly_once():
-    text = _text()
-    # Only the resolve-source job may consume the mutable dispatch input as a
-    # checkout target; everything downstream builds the resolved commit.
-    assert text.count("ref: ${{ inputs.ref }}") == 1
-    resolve = _job("resolve-source")
-    assert "ref: ${{ inputs.ref }}" in resolve
-    assert "sha: ${{ steps.resolve.outputs.sha }}" in resolve
-    assert "ref: ${{ steps.resolve.outputs.ref }}" in resolve
+def _checkout_refs():
+    """Every job's checkout steps, as the ref each one names (None for the run's own)."""
+
+    workflow = yaml.safe_load(_text())
+    return {
+        name: [
+            (step.get("with") or {}).get("ref") or (step.get("with") or {}).get("repository")
+            for step in job.get("steps", ())
+            if "checkout" in str(step.get("uses", ""))
+        ]
+        for name, job in workflow["jobs"].items()
+    }
 
 
-def test_every_gate_and_publish_check_out_the_resolved_revision():
-    text = _text()
+def test_no_job_checks_out_a_revision_of_its_own():
+    """Every job takes the run's revision, so none can name a different one.
+
+    GitHub pins a dispatched run to one commit, and a checkout with no ref
+    lands on it. That replaces the job that used to resolve the input into a
+    sha and hand it downstream -- and it is what keeps the run's cache scope
+    and the code it executes at the same level of trust.
+    """
+
+    named = {
+        name: [ref for ref in refs if ref is not None]
+        for name, refs in _checkout_refs().items()
+        if any(ref is not None for ref in refs)
+    }
+
+    assert named == {}, (
+        f"{named} check out a revision the run was not dispatched on"
+    )
+
+
+def test_every_gate_and_publish_run_behind_the_source_gate():
     for job in JOBS[1:]:
-        section = _job(job)
-        assert f"ref: {RESOLVED_SHA}" in section, job
-        needs = section.split("    steps:", 1)[0]
+        needs = _job(job).split("    steps:", 1)[0]
         assert "resolve-source" in needs, job
-    assert text.count(f"ref: {RESOLVED_SHA}") == len(JOBS) - 1
 
 
-def test_no_gate_checks_out_the_mutable_input_ref():
-    for job in JOBS[1:]:
-        assert "ref: ${{ inputs.ref }}" not in _job(job), job
-
-
-def test_publish_identity_verifies_the_resolved_revision():
+def test_publish_identity_verifies_the_dispatched_revision():
     publish = _job("publish-feature-ghcr")
-    assert f"RESOLVED_SHA: {RESOLVED_SHA}" in publish
-    assert '"${git_commit}" != "${RESOLVED_SHA}"' in publish
+    assert "DISPATCH_SHA: ${{ github.sha }}" in publish
+    assert '"${git_commit}" != "${DISPATCH_SHA}"' in publish
 
 
 def test_oci_and_system_build_metadata_use_the_resolved_commit():
@@ -337,33 +357,43 @@ def _git(repo, *args):
     ).stdout.strip()
 
 
-def test_resolve_source_step_pins_the_commit_not_the_branch(tmp_path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _git(repo, "init", "-b", "feature/example")
-    (repo / "file.txt").write_text("one", encoding="utf-8")
-    _git(repo, "add", "file.txt")
-    _git(repo, "commit", "-m", "one")
-    first = _git(repo, "rev-parse", "HEAD")
-
-    result, values = run_output_step(
+def _verify_checkout(tmp_path, repo, dispatch_sha):
+    return run_output_step(
         WORKFLOW,
-        "Resolve source revision",
+        "Verify the checkout is the dispatched revision",
         cwd=repo,
-        tmp_path=tmp_path / "run",
-        environ={"INPUT_REF": "feature/example"},
+        tmp_path=tmp_path,
+        environ={
+            "DISPATCH_SHA": dispatch_sha,
+            "GITHUB_REF_NAME": "feature/example",
+        },
     )
-    assert result.returncode == 0, result.stderr
-    assert values["sha"] == first
-    assert re.fullmatch(r"[0-9a-f]{40}", values["sha"])
-    assert values["ref"] == "feature/example"
 
-    # The branch moves on after resolution; the captured output still names
-    # the exact commit every downstream job checks out.
-    (repo / "file.txt").write_text("two", encoding="utf-8")
-    _git(repo, "commit", "-am", "two")
-    assert _git(repo, "rev-parse", "feature/example") != first
-    assert _git(repo, "rev-parse", f"{values['sha']}^{{commit}}") == first
+
+def test_the_gate_accepts_the_revision_the_run_was_dispatched_on(tmp_path):
+    repo = _init_repo(tmp_path)
+    head = _git(repo, "rev-parse", "HEAD")
+
+    result, _ = _verify_checkout(tmp_path / "run", repo, head)
+
+    assert result.returncode == 0, result.stderr
+    assert re.fullmatch(r"[0-9a-f]{40}", head)
+
+
+def test_the_gate_refuses_a_checkout_that_is_not_the_dispatched_revision(tmp_path):
+    """The branch moving mid-run must not change what gets published.
+
+    GitHub pins the run, so this can only disagree if something re-pointed the
+    checkout -- and then the images would carry an identity nothing else in the
+    run agreed to.
+    """
+
+    repo = _init_repo(tmp_path)
+
+    result, _ = _verify_checkout(tmp_path / "run", repo, "b" * 40)
+
+    assert result.returncode != 0
+    assert "is not the dispatched revision" in result.stderr
 
 
 # --- protected-ref guard (development-only publish) ------------------------
@@ -407,7 +437,7 @@ def _run_guard(tmp_path, repo, input_ref):
         "Reject protected release refs",
         cwd=repo,
         tmp_path=tmp_path / "run",
-        environ={"INPUT_REF": input_ref},
+        environ={"SOURCE_REF": input_ref},
     )
 
 
@@ -417,7 +447,7 @@ def test_guard_step_lives_in_resolve_job_with_no_write_permission():
     assert "for protected in main master latest stable rc" in resolve
     assert "^v[0-9]" in resolve
     assert "refs/tags/v" in resolve
-    # The resolved checkout context is validated too, not only the raw input.
+    # The checked-out context is validated too, not only the ref's name.
     assert "git tag --points-at HEAD" in resolve
     # The guard runs in the resolve job, which every gate and publish depend on
     # and which holds no package/catalogue write permission.
@@ -447,7 +477,7 @@ def test_guard_rejects_a_release_tag_pointing_at_head_even_for_a_benign_ref(tmp_
     assert result.returncode != 0, result.stdout
 
 
-def test_publish_identity_rejects_a_source_moved_after_resolution(tmp_path):
+def test_publish_identity_rejects_a_checkout_that_is_not_the_dispatched_revision(tmp_path):
     bin_dir = _mock_checked_out_git(tmp_path, "b" * 40)
     result, _ = run_output_step(
         WORKFLOW,
@@ -455,10 +485,9 @@ def test_publish_identity_rejects_a_source_moved_after_resolution(tmp_path):
         cwd=ROOT,
         tmp_path=tmp_path,
         environ={
-            "INPUT_REF": "feature/example",
+            "SOURCE_REF": "feature/example",
             "CHECKED_OUT_SHA": "b" * 40,
-            "RESOLVED_SHA": "a" * 40,
-            "GITHUB_SHA": "c" * 40,
+            "DISPATCH_SHA": "a" * 40,
             "GITHUB_RUN_ID": "123456789",
             "GITHUB_RUN_ATTEMPT": "1",
             "GITHUB_RUN_NUMBER": "42",
@@ -466,7 +495,7 @@ def test_publish_identity_rejects_a_source_moved_after_resolution(tmp_path):
         },
     )
     assert result.returncode != 0
-    assert "resolved source" in result.stderr
+    assert "dispatched source" in result.stderr
 
 
 def test_release_gate_commands_cover_required_contracts_once():
@@ -498,7 +527,7 @@ def _mock_checked_out_git(tmp_path, sha):
 
 
 def _resolve(tmp_path, *, ref="feature/example", sha="a" * 40, run_id="123456789",
-             attempt="1", trigger_sha="c" * 40):
+             attempt="1"):
     bin_dir = _mock_checked_out_git(tmp_path, sha)
     result, values = run_output_step(
         WORKFLOW,
@@ -506,10 +535,9 @@ def _resolve(tmp_path, *, ref="feature/example", sha="a" * 40, run_id="123456789
         cwd=ROOT,
         tmp_path=tmp_path,
         environ={
-            "INPUT_REF": ref,
+            "SOURCE_REF": ref,
             "CHECKED_OUT_SHA": sha,
-            "RESOLVED_SHA": sha,
-            "GITHUB_SHA": trigger_sha,
+            "DISPATCH_SHA": sha,
             "GITHUB_RUN_ID": run_id,
             "GITHUB_RUN_ATTEMPT": attempt,
             "GITHUB_RUN_NUMBER": "42",
@@ -528,10 +556,11 @@ def test_first_workflow_attempt_is_part_of_canonical_install_tag(tmp_path):
     )
 
 
-def test_identity_uses_checked_out_ref_sha_not_dispatch_trigger_sha(tmp_path):
-    identity = _resolve(
-        tmp_path, sha="b" * 40, trigger_sha="a" * 40
-    )
+def test_identity_names_the_commit_that_was_checked_out(tmp_path):
+    """The tag carries the built commit, and the built commit is the dispatched
+    one -- the step above refuses the run if those two ever disagree."""
+
+    identity = _resolve(tmp_path, sha="b" * 40)
     assert identity["git_commit"] == "b" * 40
     assert "-bbbbbbb-" in identity["immutable_tag"]
 
@@ -594,7 +623,12 @@ def test_both_images_publish_the_same_canonical_development_metadata():
     assert text.count(f"de.basecubedev.ems.build_id={build_id}") == 2
     assert f"EMS_SYSTEM_TAG={immutable}" in text
     assert "${{ steps.build_identity.outputs.git_commit }}" in text
-    assert "${{ github.sha }}" not in text
+    # `github.sha` reaches the identity step only as the value it is checked
+    # against. Nothing is labelled with it, because a label naming the dispatch
+    # rather than the checkout is how the two could silently drift apart.
+    assert text.count("${{ github.sha }}") == 2
+    for label in ("image.revision=", "release_tag=", "build_id=", "image.version="):
+        assert f"{label}${{{{ github.sha }}}}" not in text, label
 
 
 def test_feature_pair_verification_checks_complete_runtime_and_bundle_identity():

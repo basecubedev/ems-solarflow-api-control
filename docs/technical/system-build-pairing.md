@@ -436,5 +436,7 @@ the Admin OCI labels, the Admin embedded `system-build.json`/`resource-manifest.
 and the EMS build identity disagree. There is one Admin image per paired system
 build — an older Admin image is never reused for a new EMS release.
 Both workflows derive the revision from `git rev-parse HEAD` after checkout, so
-a manually selected feature ref or scheduled `main` checkout cannot be stamped
-with the workflow trigger's different SHA.
+a scheduled `main` checkout cannot be stamped with the workflow trigger's
+different SHA. The development build additionally requires the two to agree: it
+is dispatched from the branch it builds, and it fails if the checkout is not
+`github.sha`.
