@@ -67,8 +67,8 @@ Two things are worth doing now:
 ## What this page is not
 
 The appliance manager looks after the *box*: the operating system, the network,
-operating-system updates — a new system image or `apt`, depending on which image
-you flashed — its own replacement as a signed package, and backups of the whole
+operating-system updates — `apt`, in place, on the one image there is — its own
+replacement as a signed package, and backups of the whole
 installation. It does not
 configure your inverter, your grid meter or your control settings — that is the
 Admin Console, on port 8090, once it is installed.

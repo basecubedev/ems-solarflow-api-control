@@ -61,7 +61,7 @@ not, and the first one that works when the web service will not start.
 
 ```bash
 sudo ems-appliance status
-sudo ems-appliance diagnose
+sudo ems-appliance verify-install
 sudo journalctl -u ems-appliance-web -u ems-appliance-agent -b --no-pager
 ```
 

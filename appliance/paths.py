@@ -274,9 +274,11 @@ class AppliancePaths:
     def timezone_file(self):
         """The operator's chosen zone.
 
-        Separate from appliance.conf, which is a packaged conffile an admin
-        edits: a value set through the web UI must not rewrite the package's
-        own file.
+        Separate from appliance.conf, which the package ships and an admin
+        edits: a value set through the web UI must not rewrite it. It is not a
+        dpkg conffile -- debian/conffiles names only the logrotate snippet --
+        which is why a value baked into a flashed card cannot be corrected by
+        an update.
         """
 
         return self.config_dir / "timezone"
