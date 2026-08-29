@@ -188,23 +188,42 @@ def account_entry(name):
         return None
 
 
-def home_identity(path):
-    """``device:inode`` of a real directory, or "" when there is nothing to bind.
+def home_is_real_directory(path):
+    """A real directory at the home path: not a symbolic link, not a file.
+
+    Split out of ``home_identity`` and made a gate of its own. The predicate
+    used to ride inside the device/inode comparison -- that comparison was the
+    only caller, and ``home_identity`` returning "" for a symlink was the only
+    thing refusing one. Dropping the comparison without lifting this out would
+    let a home replaced by a symlink into an attacker-chosen directory verify as
+    package-owned, and ``backup_confinement`` writes ``authorized_keys`` through
+    that verdict.
 
     ``lstat`` on purpose: a symbolic link at the home path is not the directory
     that was recorded, however its target stats.
-
-    This pair is a *supporting* signal only. An inode a filesystem released and
-    handed straight back out identifies a different directory just as well, so
-    the marker below is what actually decides ownership.
     """
 
     try:
         entry = os.lstat(str(path))
     except OSError:
+        return False
+    return stat.S_ISDIR(entry.st_mode)
+
+
+def home_identity(path):
+    """``device:inode`` of a real directory, or "" when there is nothing to bind.
+
+    Recorded for diagnosis and no longer compared. The pair is a property of the
+    mount and of where the filesystem was assembled, not of the directory: the
+    record is written in the image build chroot, on the build host's disk,
+    before rpi-image-gen packs the tree into ext4 and reassigns inodes. Neither
+    value survives that, so comparing them refused every appliance ever flashed
+    -- see ``verify_home``.
+    """
+
+    if not home_is_real_directory(path):
         return ""
-    if not stat.S_ISDIR(entry.st_mode):
-        return ""
+    entry = os.lstat(str(path))
     return f"{entry.st_dev}:{entry.st_ino}"
 
 
@@ -297,9 +316,19 @@ def verify_home(record):
     Returns ``""`` when it is, or the reason it cannot be proven.
     """
 
-    recorded = f"{record.home_device}:{record.home_inode}"
-    observed = home_identity(record.home)
-    if not observed or recorded == ":" or observed != recorded:
+    # Present but never compared. A schema-3 record missing these fields was not
+    # written by this package's writer, so it cannot prove what it claims -- but
+    # the values themselves cannot survive an image build, because the record is
+    # written while the root filesystem is still a directory tree on the
+    # builder's disk. Comparing them refused every appliance ever flashed and
+    # blocked every package operation on it. What is given up with the
+    # comparison is the ability to tell this directory from a faithful root-made
+    # copy; image packing is exactly such a copy, so the property that broke the
+    # fleet is the same one being traded away. The marker below still has to be
+    # there, and placing it still needs root.
+    if not record.home_device or not record.home_inode:
+        return HOME_MISMATCH
+    if not home_is_real_directory(record.home):
         return HOME_MISMATCH
 
     marker = record.marker_path
@@ -419,7 +448,9 @@ def ownership_state(paths, name, *, entry=_LOOKUP):
     verdict = verify_account(paths, name, entry=entry)
     if not verdict["owned"]:
         return STATE_CONFLICT
-    if home_identity(record.home) != f"{record.home_device}:{record.home_inode}":
+    if not record.home_device or not record.home_inode:
+        return STATE_CONFLICT
+    if not home_is_real_directory(record.home):
         return STATE_CONFLICT
     marker = record.marker_path
     if not marker or not os.path.lexists(marker):

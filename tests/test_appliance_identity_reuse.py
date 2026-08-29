@@ -368,6 +368,15 @@ def passwd_entry(home):
 
 @pytest.mark.parametrize("reuse_inode", [False, True], ids=["fresh_inode", "reused_inode"])
 def test_python_ownership_refuses_a_home_without_the_marker(tmp_path, reuse_inode):
+    """The marker decides, and now it decides in both directions.
+
+    The recorded device/inode pair used to answer the fresh-inode case and the
+    marker the reused one, which read as two defences. It was one: the pair
+    could never see a reused inode, and it is no longer compared at all because
+    it cannot survive an image build. Whatever the allocator did with the freed
+    inode, the answer is the same and it comes from the marker.
+    """
+
     state, home = python_state(tmp_path, reuse_inode=reuse_inode)
 
     verdict = backup_ownership.verify_ownership(
@@ -375,10 +384,7 @@ def test_python_ownership_refuses_a_home_without_the_marker(tmp_path, reuse_inod
     )
 
     assert verdict["owned"] is False, verdict
-    expected = (
-        backup_ownership.MARKER_MISSING if reuse_inode else backup_ownership.HOME_MISMATCH
-    )
-    assert verdict["reason"] == expected, verdict
+    assert verdict["reason"] == backup_ownership.MARKER_MISSING, verdict
 
 
 def bind_marker(state, home):

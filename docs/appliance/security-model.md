@@ -430,12 +430,19 @@ a clean removal.
 ### The account the image carries
 
 The image carries the backup account: the package's postinst runs in the build
-chroot, which is where the account is created. What proves this package created
-it — the ownership record and the home marker — lives under the EMS deployment
-root, which the build chroot does not have. The device therefore wakes up beside
-an account with no record, which is indistinguishable from an account somebody
-else placed. Refusing it is correct, and it left the operator to set up backup
-access by hand.
+chroot, which is where the account is created — and, with it, the ownership
+record and the home marker that prove it. Both live under
+`/var/lib/ems-appliance-manager/agent/package-state/`, which is on the root
+filesystem the build assembles, so both are packed into the image.
+
+This paragraph used to say the opposite — that the record lives under the EMS
+deployment root, out of the chroot's reach, so a device wakes up beside an
+account with *no* record. That was true while the state directory was a bind
+from the A/B shared partition, which hid the chroot's copy on first boot. The
+single-slot image removed that bind and nothing here was updated. A flashed
+device wakes up beside an account *with* a record, so the origin declaration
+below — which fires only when there is no record — became unreachable, and the
+recorded home identity became the thing that decided.
 
 The image also carries an **origin declaration** at
 `/usr/lib/ems-appliance-manager/backup-account-origin`: written by the postinst
@@ -457,6 +464,12 @@ The first boot may act on it, and only under all of the following:
 
 What it then does is bind the record and the marker to the home as it is
 *now*, and record the declaration's nonce in the record. It creates no account.
+
+This path is currently unreachable on a flashed appliance, for the reason above:
+the record is present, so the first condition never holds. It is kept because it
+is the correct answer for a device that genuinely has no record, and because the
+condition that shuts it out is a property of the image layout rather than of
+this mechanism.
 
 What makes this safe is not the file's location. The declaration is a
 *description*, not a capability: acting on it requires a passwd entry that
