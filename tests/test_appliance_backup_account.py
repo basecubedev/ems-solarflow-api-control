@@ -218,3 +218,44 @@ def test_purge_leaves_ems_data_alone(host):
     host.run_postrm("purge", EMS_APPLIANCE_LIBDIR=str(host.package_bin))
 
     assert (config / "config.json").is_file()
+
+
+# --- what a flashed image does to the recorded identity ----------------------
+
+
+def test_a_record_written_before_the_image_was_packed_still_owns_the_account(host):
+    """The field defect: no appliance flashed from an image can install a package.
+
+    ``home_identity`` is ``stat -c '%d:%i'``. ``%d`` is the device number of the
+    mount, not a property of the filesystem, and the record is written during the
+    image build -- while the root filesystem is still a directory tree on the
+    build host, before rpi-image-gen packs it into ext4 and reassigns inodes.
+    Neither value survives, so ``package_owns_account`` is false on every flashed
+    card and the postinst aborts every install, update, revert and reinstall.
+
+    The values here are the ones a real Raspberry Pi reported: 2049 is 8*256+1,
+    ``/dev/sda1`` on the machine that built the image.
+    """
+
+    host.run("ensure")
+    recorded = host.record()
+    assert recorded["created_by_package"] is True
+
+    host.write_record(
+        marker_nonce=recorded["home_marker_nonce"],
+        write_marker=False,
+        home_device="2049",
+        home_inode="2375248",
+    )
+
+    result = host.run("ensure")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    healed = host.record()
+    # Left exactly as the build wrote them, on purpose. Nothing compares them
+    # any more, so rewriting them would add a second writer for a value that
+    # decides nothing -- and the build-host numbers are worth keeping as the
+    # record of where this filesystem was assembled.
+    assert healed["home_device"] == "2049"
+    assert healed["home_inode"] == "2375248"
+    assert healed["home_marker_nonce"] == recorded["home_marker_nonce"]

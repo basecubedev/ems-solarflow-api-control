@@ -85,9 +85,44 @@ record_value() {
         | head -n 1
 }
 
+# Recorded for diagnosis and no longer compared. The pair is a property of the
+# mount and of where the filesystem was assembled, not of the directory: the
+# record is written in the image build chroot, on the build host's disk, before
+# rpi-image-gen packs the tree into ext4 and reassigns inodes. Neither value
+# survives that, so comparing them refused every appliance ever flashed and
+# blocked every package operation on it.
 home_identity() {
     [ -n "${1:-}" ] || return 0
     stat -c '%d:%i' "$1" 2>/dev/null || true
+}
+
+# Why real_chain and require_real_chain: one rule, one message, two callers --
+# a predicate for the ownership question and a refusal for the destructive
+# paths. Spelling the walk twice is how the two came to disagree elsewhere.
+real_chain_problem=""
+
+real_chain() {
+    real_chain_problem=""
+    rest=${1#/}
+    prefix=""
+    while [ -n "$rest" ]; do
+        segment=${rest%%/*}
+        case "$rest" in
+            */*) rest=${rest#*/} ;;
+            *) rest="" ;;
+        esac
+        prefix="$prefix/$segment"
+        if [ -L "$prefix" ]; then
+            real_chain_problem="$1 is reached through a symbolic link at $prefix"
+            return 1
+        fi
+        [ -e "$prefix" ] || return 0
+        if [ ! -d "$prefix" ]; then
+            real_chain_problem="$1 passes through $prefix, which is not a directory"
+            return 1
+        fi
+    done
+    return 0
 }
 
 marker_value() {
@@ -146,9 +181,10 @@ identity_matches() {
     return 0
 }
 
-# The recorded home must still be that exact directory. A home that is gone,
-# unstatable, replaced, or reached through a symbolic link is somebody else's
-# state, whatever the passwd entry still says.
+# The recorded home must still be a real directory at that path, reached
+# without a symbolic link, carrying the marker this record names. A home that is
+# gone, replaced by a file, or reached through a redirected ancestor is somebody
+# else's state, whatever the passwd entry still says.
 home_is_recorded() {
     recorded_home=$(record_value home)
     [ -n "$recorded_home" ] || return 1
@@ -156,9 +192,13 @@ home_is_recorded() {
         return 1
     fi
     [ -d "$recorded_home" ] || return 1
-    recorded_identity="$(record_value home_device):$(record_value home_inode)"
-    [ "$recorded_identity" != ":" ] || return 1
-    [ "$(home_identity "$recorded_home")" = "$recorded_identity" ] || return 1
+    # Present but never compared: see home_identity. A record missing the pair
+    # was not written by this package's writer. The chain walk moved here from
+    # the destructive paths because the pair was quietly carrying it -- a home
+    # reached through a redirected ancestor used to surface as a pair mismatch,
+    # and nothing else was looking.
+    [ "$(record_value home_device):$(record_value home_inode)" != ":" ] || return 1
+    real_chain "$recorded_home" || return 1
     home_marker_is_recorded || return 1
     return 0
 }

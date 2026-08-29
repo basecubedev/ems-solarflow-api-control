@@ -486,12 +486,21 @@ def test_python_ownership_refuses_a_replaced_home_whose_inode_was_reused(owned):
 
 
 def test_python_ownership_refuses_a_replaced_home_with_a_fresh_inode(owned):
+    """The marker refuses it, and it is the only half that could.
+
+    A filesystem hands a replacement directory the inode the original just
+    released, so the recorded pair was never able to tell the two apart. It is
+    no longer compared at all -- it cannot survive an image build -- and this
+    case is exactly why that costs nothing: what refuses a replaced home is the
+    absent marker, as it always really was.
+    """
+
     replace_home(owned, present_recorded_identity=False)
 
     verdict = backup_ownership.verify_ownership(owned.paths, BACKUP_USER, entry=owned.entry)
 
     assert verdict["owned"] is False, verdict
-    assert verdict["reason"] == backup_ownership.HOME_MISMATCH, verdict
+    assert verdict["reason"] == backup_ownership.MARKER_MISSING, verdict
 
 
 def test_python_ownership_refuses_a_replaced_home_on_any_filesystem(owned):
@@ -523,6 +532,47 @@ def test_python_ownership_refuses_a_home_that_is_a_symlink(owned):
 
 
 def test_python_ownership_refuses_a_home_that_is_not_a_directory(owned):
+    import shutil
+
+    shutil.rmtree(owned.home)
+    owned.home.write_text("not a directory\n", encoding="utf-8")
+
+    verdict = backup_ownership.verify_ownership(owned.paths, BACKUP_USER, entry=owned.entry)
+
+    assert verdict["owned"] is False, verdict
+    assert verdict["reason"] == backup_ownership.HOME_MISMATCH, verdict
+
+
+def test_python_ownership_refuses_a_home_replaced_by_a_symlink(owned, tmp_path):
+    """The type check has to be its own gate, not a passenger.
+
+    ``os.lstat`` + ``S_ISDIR`` used to ride inside ``home_identity``, and the
+    device/inode comparison was its only caller -- so it was the comparison that
+    happened to refuse a symbolic link. Dropping the comparison without lifting
+    the predicate out let a home redirected into an attacker-chosen directory
+    verify as package-owned, and ``backup_confinement`` moves and re-arms
+    ``authorized_keys`` through that verdict.
+    """
+
+    elsewhere = tmp_path / "attacker"
+    elsewhere.mkdir()
+    marker = owned.home / backup_ownership.HOME_MARKER_NAME
+    (elsewhere / backup_ownership.HOME_MARKER_NAME).write_bytes(marker.read_bytes())
+
+    import shutil
+
+    shutil.rmtree(owned.home)
+    owned.home.symlink_to(elsewhere)
+
+    verdict = backup_ownership.verify_ownership(owned.paths, BACKUP_USER, entry=owned.entry)
+
+    assert verdict["owned"] is False, verdict
+    assert verdict["reason"] == backup_ownership.HOME_MISMATCH, verdict
+
+
+def test_python_ownership_refuses_a_home_replaced_by_a_file(owned):
+    """Same gate, the other shape it has to refuse."""
+
     import shutil
 
     shutil.rmtree(owned.home)
