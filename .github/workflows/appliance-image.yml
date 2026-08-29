@@ -815,7 +815,17 @@ jobs:
           cat "${notes}"
 
           if gh release view "${POINTER_TAG}" >/dev/null 2>&1; then
-            gh release edit "${POINTER_TAG}" --title "${pointer_title}" --notes-file "${notes}"
+            # `--prerelease` on the edit as well, not only on the create. A
+            # release that is not one takes GitHub's Latest badge and the
+            # /releases/latest alias, and those belong to EMS -- only one of the
+            # two products publishing here owns the `v*` tags. Asserting it
+            # every time means a pointer that was created by hand, or flipped in
+            # the web UI, is put back rather than staying wrong forever: this
+            # branch is the only one that runs after the first build.
+            gh release edit "${POINTER_TAG}" \
+              --title "${pointer_title}" \
+              --notes-file "${notes}" \
+              --prerelease
           else
             gh release create "${POINTER_TAG}" \
               --prerelease \
