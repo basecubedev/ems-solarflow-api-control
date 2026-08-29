@@ -865,6 +865,28 @@ test.describe("appliance manager @smoke", () => {
     await expect(page.locator('[data-test="manager-plan-revert"]')).toBeDisabled();
   });
 
+  test("a deadline whose window closed without a verdict stops blocking", async ({
+    page,
+    request,
+  }) => {
+    // The lockout is for a deadline in flight. One whose window passed without a
+    // verdict never ran, cannot revert anything any more, and locking the
+    // controls on it leaves an operator with no lever but a keyboard at the
+    // console -- which an appliance owner often does not have.
+    await resetAppliance(request, {
+      manager_package_kept: true,
+      manager_deadline_expired: true,
+    });
+    await signIn(page);
+    await openView(page, "updates");
+
+    await expect(page.locator('[data-test="manager-deadline"]')).toHaveCount(0);
+    const notice = page.locator('[data-test="manager-deadline-expired"]');
+    await expect(notice).toContainText("nothing judged it");
+    await expect(notice).toContainText("0.3.0");
+    await expect(page.locator('[data-test="manager-plan-revert"]')).toBeEnabled();
+  });
+
   test("a reverted install is reported rather than left silent", async ({ page, request }) => {
     await resetAppliance(request, { manager_package_kept: true, manager_verdict: "reverted" });
     await signIn(page);

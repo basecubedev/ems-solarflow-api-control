@@ -41,13 +41,12 @@ def extract(name):
     raise AssertionError(f"{name} is not a closed function")
 
 
-def evaluate(name, payload, *, preamble=""):
+def evaluate(name, payload, *arguments, preamble=""):
+    rendered = ", ".join(json.dumps(value) for value in (payload,) + arguments)
     script = (
         preamble
         + extract(name)
-        + f"\nconsole.log(JSON.stringify({name}("
-        + json.dumps(payload)
-        + ")));\n"
+        + f"\nconsole.log(JSON.stringify({name}({rendered})));\n"
     )
     result = subprocess.run(
         [node, "-"], input=script, capture_output=True, text=True, timeout=120
@@ -79,9 +78,16 @@ def manager(**overrides):
 
 
 def test_the_action_gate_is_a_named_function():
-    """A gate buried in a render call cannot be tested at all."""
+    """A gate buried in a render call cannot be tested at all.
 
-    assert "function managerActions(manager)" in APP
+    The clock is a parameter for the same reason. Reading it from ``state``
+    inside the gate made both decisions depend on a page being around them,
+    which is exactly what this module exists to prevent -- and it broke every
+    test here at once.
+    """
+
+    assert "function managerActions(manager, now)" in APP
+    assert "function applianceNow()" in APP
 
 
 @requires_node
@@ -108,6 +114,44 @@ def test_an_armed_deadline_blocks_both_buttons():
     assert result["armed"] is True
     assert result["canUpdate"] is False
     assert result["canRevert"] is False
+
+
+@requires_node
+def test_a_deadline_whose_window_closed_stops_blocking():
+    """The lockout is for a deadline in flight, and one that expired is not.
+
+    It can no longer revert anything, so holding both controls shut on it
+    protects nothing and leaves the operator with the console as the only way
+    on -- which is the backstop, not the plan.
+    """
+
+    armed = manager(
+        can_revert=True,
+        verify={"armed": True, "expected_version": "0.2.0", "deadline_epoch": 1000},
+    )
+
+    assert evaluate("managerActions", armed, 999)["canUpdate"] is False
+    expired = evaluate("managerActions", armed, 1001)
+    assert expired["armed"] is True
+    assert expired["inFlight"] is False
+    assert expired["expiredUnjudged"] is True
+    assert expired["canUpdate"] is True
+    assert expired["canRevert"] is True
+
+
+@requires_node
+def test_a_clock_it_cannot_read_keeps_the_deadline_shut():
+    """Fail closed: a deadline this cannot place in time may still fire."""
+
+    armed = manager(
+        can_revert=True,
+        verify={"armed": True, "expected_version": "0.2.0", "deadline_epoch": 1000},
+    )
+
+    for unusable in (0, None, "later"):
+        result = evaluate("managerActions", armed, unusable)
+        assert result["canUpdate"] is False, unusable
+        assert result["canRevert"] is False, unusable
 
 
 @requires_node

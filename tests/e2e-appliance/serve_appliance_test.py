@@ -78,7 +78,7 @@ def seed_rescue_account(root, *, changed=False, absent=False):
     )
 
 
-def seed_manager_state(services, *, kept=False, verdict="", armed=False):
+def seed_manager_state(services, *, kept=False, verdict="", armed=False, deadline_expired=False):
     """What the Appliance Manager card reports, written the way the host does."""
 
     from appliance import manager_retention, manager_verify
@@ -130,7 +130,10 @@ def seed_manager_state(services, *, kept=False, verdict="", armed=False):
                     "build_id": "20260901000000",
                     "previous_path": str(packages / manager_retention.PREVIOUS_NAME),
                     "armed_at": 1787000000,
-                    "deadline_epoch": 4000000000,
+                    # In the past when the window is meant to have closed: the
+                    # console judges "in flight" by the appliance's own clock,
+                    # so the fixture has to move the deadline, not the clock.
+                    "deadline_epoch": 1787000900 if deadline_expired else 4000000000,
                     "window_seconds": 900,
                 }
             ),
@@ -335,7 +338,9 @@ def main():
             services,
             kept=bool(options.get("manager_package_kept")),
             verdict=str(options.get("manager_verdict") or ""),
-            armed=bool(options.get("manager_deadline_armed")),
+            armed=bool(options.get("manager_deadline_armed"))
+            or bool(options.get("manager_deadline_expired")),
+            deadline_expired=bool(options.get("manager_deadline_expired")),
         )
 
     seed_appliance_state({})
