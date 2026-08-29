@@ -1046,22 +1046,72 @@
     });
   }
 
+  /* One option, one target. A channel option names a channel the agent
+     resolves; a catalogue option names the exact tag it was listed under.
+     Either way what crosses the wire is a name, never an image reference. */
+  function installOption(value, label, channel, tag, disabled) {
+    return el("option", {
+      value: value,
+      text: label,
+      disabled: disabled || false,
+      "data-channel": channel,
+      "data-tag": tag || false
+    });
+  }
+
+  function installTargetOf(select) {
+    var option = select.options[select.selectedIndex];
+    return {
+      channel: (option && option.dataset.channel) || select.value,
+      tag: (option && option.dataset.tag) || ""
+    };
+  }
+
+  /* The catalogue in the order the agent listed it: every release, then every
+     candidate, each newest first. A version this host will not install is still
+     listed -- disabled, with the agent's own reason -- because an operator
+     looking for a candidate needs to see that it exists and why it is refused.
+     A disabled option can never be the selection, so nothing the host refuses
+     can be submitted. An empty group is not rendered. */
+  function appendReleaseGroups(select, releases) {
+    var available = (releases && releases.available) || [];
+    [
+      { label: "Stable", prerelease: false },
+      { label: "Unstable", prerelease: true }
+    ].forEach(function (group) {
+      var listed = available.filter(function (item) {
+        return !!item.prerelease === group.prerelease;
+      });
+      if (!listed.length) return;
+      var optgroup = el("optgroup", { label: group.label });
+      listed.forEach(function (item) {
+        var refused = item.installable === false;
+        var label = refused && item.reason ? item.tag + " — " + item.reason : item.tag;
+        optgroup.appendChild(installOption(item.tag, label, "exact", item.tag, refused));
+      });
+      select.appendChild(optgroup);
+    });
+  }
+
   function renderInstallForm(releases, options) {
     var opts = options || {};
     var wrapper = el("div", { class: "inline-form" });
     /* A first installation has no current version and no known-good history,
        so only the channels that can resolve without one are offered. */
-    var channelSelect = el("select", { id: "install-channel", "data-test": "install-channel" },
-      opts.bootstrap
-        ? [el("option", { value: "latest_stable", text: "Latest stable" })]
-        : [
-          el("option", { value: "latest_stable", text: "Latest stable" }),
-          el("option", { value: "current", text: "Current stable (reinstall)" }),
-          el("option", { value: "previous_known_good", text: "Previous known-good" })
-        ]);
+    var channels = opts.bootstrap
+      ? [installOption("latest_stable", "Latest stable", "latest_stable")]
+      : [
+        installOption("latest_stable", "Latest stable", "latest_stable"),
+        installOption("current", "Current stable (reinstall)", "current"),
+        installOption("previous_known_good", "Previous known-good", "previous_known_good")
+      ];
     if (expert()) {
-      channelSelect.appendChild(el("option", { value: "exact", text: "Exact release tag" }));
+      channels.push(installOption("exact", "Exact release tag", "exact"));
     }
+    var channelSelect = el("select", { id: "install-channel", "data-test": "install-channel" }, [
+      el("optgroup", { label: "Channels" }, channels)
+    ]);
+    appendReleaseGroups(channelSelect, releases);
 
     var tagField = el("div", { class: "field", hidden: true }, [
       el("label", { for: "install-tag", text: "Release tag" }),
@@ -1085,11 +1135,6 @@
 
     if (releases && releases.error) {
       wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: "Release list unavailable: " + releases.error }));
-    } else if (releases && (releases.available || []).length && expert()) {
-      wrapper.appendChild(el("p", {
-        class: "control-stage-subtitle",
-        text: "Available: " + releases.available.slice(0, 8).map(function (item) { return item.tag; }).join(", ")
-      }));
     }
 
     wrapper.appendChild(el("div", { class: "control-stage-actions" }, [
@@ -1098,9 +1143,10 @@
         "data-test": opts.bootstrap ? "admin-bootstrap-plan" : "install-plan",
         text: opts.bootstrap ? "Install Admin" : "Plan installation",
         onclick: function () {
-          var body = { channel: channelSelect.value, reinstall: opts.bootstrap ? false : reinstall.checked };
-          if (channelSelect.value === "exact") {
-            body.tag = document.getElementById("install-tag").value.trim();
+          var target = installTargetOf(channelSelect);
+          var body = { channel: target.channel, reinstall: opts.bootstrap ? false : reinstall.checked };
+          if (target.channel === "exact") {
+            body.tag = target.tag || document.getElementById("install-tag").value.trim();
           }
           planOperation({ endpoint: "/api/admin/plan-install", body: body, title: "Install EMS Admin", confirmLabel: "Install" });
         }

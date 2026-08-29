@@ -106,6 +106,7 @@ is refused as `invalid_request` before any handler runs.
 | `commands.py` | The only place a host process is started (tool allowlist, no shell) |
 | `docker_backend.py`, `systemd.py`, `hostprobe.py` | Typed host access |
 | `admin_deployment.py`, `known_good.py`, `releases.py` | Admin deployment files, known-good history, release channels |
+| `registry_tags.py` | The versions the image registry publishes, which is what may be installed |
 | `admin_lifecycle.py` | Transactional Admin install, rollback and repair |
 | `packages.py` | OS update state, installation and package-manager recovery |
 | `network.py` | Network overview, WLAN with automatic revert, hostname |

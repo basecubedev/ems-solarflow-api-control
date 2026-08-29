@@ -191,6 +191,12 @@ fields only. The agent validates:
 - every field against its declared kind (unknown key → `unknown_field`)
 - the target version (`invalid_release_tag`; mutable names such as `latest` are
   not tags)
+- whether that version may be a release candidate (`prerelease_not_allowed`;
+  `allow_prerelease` in `allowed-images.conf`, host configuration, never a
+  request field). A policy gate on the tag an operator names, and the single
+  point at which it is applied — nothing downstream re-checks it. It decides
+  nothing about image trust: `expected_source`, the OCI version label, the
+  architecture and the pinned digest are verified the same way either way.
 - the allowed registry and image repository (host configuration, never a request
   field)
 - path boundaries (canonical base, symlinks resolved)

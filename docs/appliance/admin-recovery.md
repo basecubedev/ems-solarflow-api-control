@@ -27,9 +27,13 @@ the usual lifecycle, repair and rollback stages.
 
 1. Open **Admin**. The page reads *No EMS Admin installation was found on this
    appliance*.
-2. Choose the version. *Latest stable* is the only channel offered — there is
-   no current version and no known-good history to fall back on. Expert mode
-   adds *Exact release tag*.
+2. Choose the version. Under **Channels** only *Latest stable* is offered —
+   there is no current version and no known-good history to fall back on — but
+   the **Stable** and **Unstable** groups below it list every version the
+   registry publishes, so a first installation can pin an older release just as
+   readily as the newest one. A candidate this host will not accept is listed
+   greyed out with the reason. Expert mode adds *Exact release tag* for a
+   version the list does not carry.
 3. Press **Install Admin**. The plan names the files it will create and the
    image digest it validated. Nothing is written yet.
 4. Confirm. Only now does the appliance run the packaged installer
@@ -57,16 +61,39 @@ installs EMS — the appliance deliberately has no second way to do that.
 
 ## Install a specific Admin version
 
+The list comes from the registry the Admin image is pulled from, so it names
+the versions that exist for this appliance rather than the versions this
+project has tagged. A version the host configuration will not accept is still
+listed, greyed out, with the reason — a candidate that exists and is refused is
+something to see, not something to hide. An operator running a mirror can point
+`release_index_url` in `/etc/ems-appliance-manager/appliance.conf` at a JSON
+index instead; that replaces the registry as the source of the list.
+
 1. Open **Admin → Install version**.
 2. Choose the version:
-   - Basic mode: *Latest stable*, *Current stable (reinstall)*, *Previous
+   - **Channels**: *Latest stable*, *Current stable (reinstall)*, *Previous
      known-good*.
-   - Expert mode adds *Exact release tag* — enter for example `v0.8.0`. An
-     approved prerelease tag is only accepted when the host configuration
-     enables prereleases.
+   - **Stable**: every release the registry publishes, newest first.
+   - **Unstable**: the release candidates, newest first. The group is always
+     listed. Whether a candidate can be chosen is `allow_prerelease` in
+     `/etc/ems-appliance-manager/allowed-images.conf`: a host that sets it to
+     false shows every candidate greyed out with the reason, and the agent
+     refuses the tag with `prerelease_not_allowed` even when it is typed by
+     hand in Expert mode.
+   - Expert mode adds *Exact release tag* — enter for example `v0.8.0`. Use it
+     for a version the list does not carry, or when the registry cannot be
+     reached.
 3. Tick **Reinstall the same version** when you want to reinstall what is
    already running.
 4. Press **Plan installation**.
+
+A newly imaged appliance ships with candidates enabled: before 1.0 this project
+publishes more Admin candidates than releases, and refusing them would leave the
+version list with almost nothing in it. An appliance installed earlier keeps
+whatever its own `/etc/ems-appliance-manager/allowed-images.conf` already says —
+`ems-appliance-config-seed.service` creates that file once and never rewrites
+it — so an existing appliance sees the candidates listed and greyed out until an
+operator changes the line and restarts `ems-appliance-agent.service`.
 
 Planning is where all validation happens, before anything changes:
 
@@ -81,6 +108,12 @@ Planning is where all validation happens, before anything changes:
 08 Record the operation plan
 09 Ask for explicit confirmation
 ```
+
+A release candidate is refused earlier still — at request validation, before
+step 01 — with `prerelease_not_allowed`, on a host that disables prereleases.
+The gate is on the tag an operator names: reinstalling the running version or
+rolling back to the recorded known-good one does not name a tag and is not
+gated, because both restore a version this appliance already ran.
 
 An image is refused when the repository is not allowlisted, the architecture
 does not match, the version label conflicts with the requested tag, a required

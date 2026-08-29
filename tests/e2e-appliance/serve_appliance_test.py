@@ -8,6 +8,7 @@ without touching Docker, apt, systemd or NetworkManager.
 Started by ``tests/e2e-appliance/run-appliance.sh``; never part of the package.
 """
 
+import dataclasses
 import json
 import os
 import sys
@@ -21,11 +22,14 @@ from appliance.agent import AgentHandlers  # noqa: E402
 from appliance.agent_client import InProcessAgentClient  # noqa: E402
 from appliance.auth import AuthStore  # noqa: E402
 from appliance.web import ApplianceWebApp, ApplianceWebServer  # noqa: E402
+from appliance.config import AllowedImages  # noqa: E402
 from tests.helpers.appliance import (  # noqa: E402
     ADMIN_CONTAINER,
     APT_SIMULATION,
     ADMIN_REPOSITORY,
+    appliance_config,
     build_test_services,
+    IMAGE_SOURCE,
     SSHD_BACKUP_MATCH,
     StaticCatalogue,
 )
@@ -159,11 +163,27 @@ def main():
     root = Path(tempfile.mkdtemp(prefix="ems-appliance-e2e-"))
     seed_host_files(root)
 
-    services = build_test_services(root, catalogue=StaticCatalogue(["v1.1.0", "v1.0.0"]))
+    # Prereleases are enabled here so the install list has both groups to show.
+    # The catalogue and the host configuration state it together: a fake that
+    # offers a candidate the agent would refuse is a fake that proves nothing.
+    services = build_test_services(
+        root,
+        config=appliance_config(
+            images=AllowedImages(
+                repositories=(ADMIN_REPOSITORY,),
+                expected_source=IMAGE_SOURCE,
+                allow_prerelease=True,
+            )
+        ),
+        catalogue=StaticCatalogue(
+            ["v1.2.0-rc1", "v1.1.0", "v1.0.0"], allow_prerelease=True
+        ),
+    )
     host = services.host
     host.write_deployment(tag="v1.0.0")
     host.publish_image("v1.0.0")
     host.publish_image("v1.1.0")
+    host.publish_image("v1.2.0-rc1")
     host.pull_local(f"{ADMIN_REPOSITORY}:v1.0.0")
     host.run_container(ADMIN_CONTAINER, f"{ADMIN_REPOSITORY}:v1.0.0")
     host.run_container("ems-solarflow", "ghcr.io/basecubedev/ems-solarflow-api-control:v1.0.0")
@@ -234,6 +254,16 @@ def main():
             host.containers.pop(ADMIN_CONTAINER, None)
             for entry in services.known_good.directory.glob("*.json"):
                 entry.unlink()
+        # The catalogue and the agent's validation context read the same policy,
+        # so a browser test of a refusing host has to move both -- a list that
+        # offers what the agent would reject proves nothing about either.
+        prereleases = not options.get("refuse_prereleases")
+        object.__setattr__(
+            services.config,
+            "images",
+            dataclasses.replace(services.config.images, allow_prerelease=prereleases),
+        )
+        services.admin.catalogue.allow_prerelease = prereleases
         if options.get("break_digest"):
             host.registry[f"{ADMIN_REPOSITORY}:v1.1.0"]["RepoDigests"] = []
         if options.get("agent_offline") and live["app"] is not None:

@@ -7,6 +7,7 @@ and ``getent``. No test starts a real process, contacts a network or writes
 outside its temporary directory.
 """
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -215,7 +216,12 @@ class FakeHost:
         repository=ADMIN_REPOSITORY,
     ):
         reference = f"{repository}:{tag}"
-        digest = digest or ("sha256:" + (tag.replace(".", "").replace("v", "") * 16)[:64].ljust(64, "0"))
+        # Hashed rather than spelled out of the tag: the old derivation kept the
+        # tag's own characters, so any tag carrying a letter -- every release
+        # candidate -- produced a digest that is not hex and that the production
+        # validator rejects, which reads as a refused install rather than as a
+        # fixture that cannot represent the tag.
+        digest = digest or ("sha256:" + hashlib.sha256(reference.encode("utf-8")).hexdigest())
         entry = {
             "Id": "sha256:" + digest.split(":")[1],
             "RepoDigests": [f"{repository}@{digest}"],
@@ -662,24 +668,34 @@ class FakeHealthChecker:
 
 
 class StaticCatalogue:
-    def __init__(self, tags=(), *, error=None):
+    """A fixed tag list, classified, ordered and gated by the production code.
+
+    Deriving the prerelease flag, the order or the installability here a second
+    time is how a fake comes to offer a list no appliance would.
+    """
+
+    def __init__(self, tags=(), *, error=None, allow_prerelease=False):
         self.tags = list(tags)
         self.error = error
+        self.allow_prerelease = allow_prerelease
 
     def available(self):
         if self.error:
             raise self.error
-        from appliance.releases import ReleaseTarget
+        from appliance.releases import _with_installability, parse_release_index
 
-        return [ReleaseTarget(tag=tag, channel="exact") for tag in self.tags]
+        return [
+            _with_installability(item, self.allow_prerelease)
+            for item in parse_release_index(self.tags)
+        ]
 
     def latest_stable(self):
         from appliance.releases import ReleaseResolutionError, ReleaseTarget
 
-        stable = [tag for tag in self.tags if "-" not in tag]
-        if not stable:
-            raise ReleaseResolutionError("release_channel_unresolved", "no stable release")
-        return ReleaseTarget(tag=stable[0], channel="latest_stable")
+        for release in self.available():
+            if not release.prerelease:
+                return ReleaseTarget(tag=release.tag, channel="latest_stable")
+        raise ReleaseResolutionError("release_channel_unresolved", "no stable release")
 
 
 class FrozenClock:

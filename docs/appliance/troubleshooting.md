@@ -8,7 +8,7 @@
 | What does the EMS Admin Console manage? | EMS configuration, device discovery, grid meter and inverters, control parameters, EMS runtime state, EMS diagnostics, EMS backup/restore, Guided Setup and Guided Upgrade. |
 | How do I recover a failed Admin update? | [admin-recovery.md](admin-recovery.md) — the appliance rolls back automatically; otherwise use Repair or *Install version → Previous known-good*. |
 | The appliance will not come up at all | [console-recovery.md](console-recovery.md) — log in as `ems-rescue` at a keyboard, then work down the list. |
-| How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — Expert mode, *Exact release tag*. |
+| How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — pick it from the **Stable** or **Unstable** group in *Install version*. |
 | How do I add an SSH key? | [ssh-backup-access.md](ssh-backup-access.md) |
 | How do I back up files with rsync? | rsync is not available: the backup account is SFTP-only by design. Use the `sftp` commands in [ssh-backup-access.md](ssh-backup-access.md). |
 | How do I install OS updates? | [os-updates.md](os-updates.md) |
@@ -196,9 +196,28 @@ reported as a success.
 
 ## "release_channel_unresolved"
 
-*Latest stable* needs a release index. Either configure `release_index_url` in
-`/etc/ems-appliance-manager/appliance.conf` or use Expert mode and enter an
-exact release tag.
+The chosen channel names no version: the list carries no stable release, or
+*Current stable (reinstall)* was chosen with nothing installed, or *Previous
+known-good* with no history recorded yet. Pick a version from the **Stable**
+group, or from **Unstable** if this host accepts candidates, or use Expert mode
+and enter an exact release tag.
+
+## "prerelease_not_allowed"
+
+The chosen version is a release candidate and this host does not accept them.
+Candidates are still listed under **Unstable**, greyed out, and the same refusal
+applies to a candidate tag typed by hand in Expert mode. Set
+`allow_prerelease = true` in `/etc/ems-appliance-manager/allowed-images.conf`
+and restart `ems-appliance-agent.service` to accept them.
+
+## "release_registry_unreachable" / "release_registry_invalid"
+
+The registry that publishes the Admin image could not be read, so the version
+list is empty and *Latest stable* cannot resolve. The channels that need no
+list — *Current stable (reinstall)* and *Previous known-good* — still work, and
+Expert mode still accepts an exact release tag. Check the appliance's DNS and
+outbound HTTPS; a site that has neither can point `release_index_url` in
+`/etc/ems-appliance-manager/appliance.conf` at a mirror's JSON index instead.
 
 ## "package_lock_held"
 
