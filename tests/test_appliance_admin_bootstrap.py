@@ -502,6 +502,50 @@ def test_a_root_owned_deployment_root_holding_an_installation_is_never_taken_ove
     assert excinfo.value.code == "deployment_root_root_owned"
 
 
+def test_the_refusal_names_the_entry_that_produced_it(tmp_path):
+    """An operator gets a path to act on, not three hypotheses.
+
+    The walk has always known which entry ended it. Reporting "it holds files,
+    or something below it cannot be read" turned that into a search of a
+    directory the operator cannot see from the console that refused them.
+    """
+
+    services = build_test_services(tmp_path)
+    root = services.paths.install_root
+    bootstrap = DeploymentBootstrap(
+        services.paths,
+        services.config,
+        stat=lambda path: RootOwned(),
+        lookup=lambda name: account(name, 700, 700),
+    )
+
+    stray = root / "config" / "leftover.tmp"
+    stray.parent.mkdir(parents=True, exist_ok=True)
+    stray.write_text("{}", encoding="utf-8")
+    with pytest.raises(BootstrapError) as excinfo:
+        bootstrap.identity()
+    assert str(stray) in excinfo.value.message
+    assert "config/dashboard-auth.json" in excinfo.value.message
+    stray.unlink()
+
+    link = root / "config" / "elsewhere"
+    link.symlink_to(tmp_path)
+    with pytest.raises(BootstrapError) as excinfo:
+        bootstrap.identity()
+    assert str(link) in excinfo.value.message
+    assert "symbolic link" in excinfo.value.message
+    link.unlink()
+
+    (root / "config").chmod(0o000)
+    try:
+        with pytest.raises(BootstrapError) as excinfo:
+            bootstrap.identity()
+        assert str(root / "config") in excinfo.value.message
+        assert "could not be read" in excinfo.value.message
+    finally:
+        (root / "config").chmod(0o755)
+
+
 def test_a_missing_deployment_account_is_named_not_worked_around(tmp_path):
     services = build_test_services(tmp_path)
 
