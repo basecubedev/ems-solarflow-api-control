@@ -1200,13 +1200,33 @@
      from the backend payload alone. A deadline in flight is the one state that
      blocks both buttons: a second install would replace the package whose
      verdict the appliance is still waiting for. */
-  function managerActions(manager) {
+  /* The appliance's own clock, which is the only one that may judge its
+     deadline: the browser's belongs to a different machine, and this board has
+     no real-time clock. Passed in rather than read from state inside
+     managerActions, so both decisions stay derived from backend values alone
+     and stay testable without a page around them. */
+  function applianceNow() {
+    return Number((((state.data.status || {}).system || {}).time || {}).epoch) || 0;
+  }
+
+  function managerActions(manager, now) {
     var verify = (manager || {}).verify || {};
     var armed = verify.armed === true;
+    /* In flight means the window has not passed, not merely that a deadline is
+       on disk. A deadline whose window expired without a verdict is a mechanism
+       that did not run: it can no longer revert anything, and locking both
+       controls on it removes the operator's last lever on a box whose only
+       documented alternative is a keyboard at the console. An unreadable clock
+       keeps the lock, because a deadline this cannot place may still fire. */
+    var expiry = Number(verify.deadline_epoch) || 0;
+    now = Number(now) || 0;
+    var inFlight = armed && !(now && expiry && now >= expiry);
     return {
       armed: armed,
-      canUpdate: !armed,
-      canRevert: (manager || {}).can_revert === true && !armed
+      inFlight: inFlight,
+      expiredUnjudged: armed && !inFlight,
+      canUpdate: !inFlight,
+      canRevert: (manager || {}).can_revert === true && !inFlight
     };
   }
 
@@ -1239,7 +1259,7 @@
           "data-direction": entry.direction || "",
           title: entry.release_id,
           text: "Install " + managerLabel(entry),
-          disabled: !managerActions(manager).canUpdate,
+          disabled: !managerActions(manager, applianceNow()).canUpdate,
           onclick: function () {
             planOperation({
               endpoint: "/api/manager/plan-update",
@@ -1265,6 +1285,7 @@
      package to every appliance at once. */
   function renderManagerUpdates(main) {
     var manager = state.data.manager;
+    var actions = managerActions(manager, applianceNow());
     if (manager === undefined || manager === null) {
       main.appendChild(el("h2", { class: "section-title", text: "Appliance Manager" }));
       main.appendChild(el("p", { class: "section-hint", text: "Reading the manager state\u2026" }));
@@ -1305,25 +1326,37 @@
       ], "manager-kept"),
       card("Last install", [
         el("p", { class: "status-value" }, [
-          verify.armed
+          actions.inFlight
             ? tone("warn", "waiting for the deadline")
-            : (verdict.settled
-                ? tone(MANAGER_VERDICTS[verdict.verdict] ? MANAGER_VERDICTS[verdict.verdict][0] : "warn",
-                       format(verdict.verdict))
-                : tone("ok", "nothing in flight"))
+            : actions.expiredUnjudged
+              ? tone("bad", "deadline expired without a verdict")
+              : (verdict.settled
+                  ? tone(MANAGER_VERDICTS[verdict.verdict] ? MANAGER_VERDICTS[verdict.verdict][0] : "warn",
+                         format(verdict.verdict))
+                  : tone("ok", "nothing in flight"))
         ]),
         fact("Result", (manager.outcome || {}).outcome),
         verify.armed ? fact("Expecting", verify.expected_version) : null
       ], "manager-verify")
     ]));
 
-    if (verify.armed) {
+    if (actions.inFlight) {
       main.appendChild(el("p", { class: "empty-state", "data-test": "manager-deadline" }, [
         el("strong", { text: "An install is being judged. " }),
         el("span", {
           text: "This appliance is waiting for " + format(verify.expected_version)
             + " to prove itself. If no healthy result appears before the deadline, the previous "
             + "package is installed again. Nothing else can be started until it settles."
+        })
+      ]));
+    } else if (actions.expiredUnjudged) {
+      main.appendChild(el("p", { class: "empty-state", "data-test": "manager-deadline-expired" }, [
+        el("strong", { text: "The deadline passed and nothing judged it. " }),
+        el("span", {
+          text: "This appliance armed a deadline for " + format(verify.expected_version)
+            + " and its window has closed without a verdict, so nothing was reverted and nothing "
+            + "will be. Installing or reverting is available again; the next install replaces "
+            + "this deadline. Check ems-appliance-manager-verify.timer if it keeps happening."
         })
       ]));
     } else if (verdict.settled && verdict.verdict !== "confirmed") {
@@ -1350,7 +1383,7 @@
           el("button", {
             type: "button", class: "ghost-button compact", "data-test": "manager-plan-revert",
             text: "Reinstall " + (manager.can_revert ? format(kept.version) : "\u2014"),
-            disabled: !managerActions(manager).canRevert,
+            disabled: !managerActions(manager, applianceNow()).canRevert,
             onclick: function () {
               planOperation({
                 endpoint: "/api/manager/plan-revert", body: {},
