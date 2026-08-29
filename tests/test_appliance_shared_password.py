@@ -175,34 +175,46 @@ def test_setting_a_password_does_not_block_the_admin_install(tmp_path):
     """The shared file is the first file ever placed in the deployment root,
     and adoption refuses a root-owned root that holds any file. Treating the
     password as evidence of an installation made setting one the thing that
-    prevents installing Admin at all."""
+    prevents installing Admin at all.
+
+    The password is written through the real store here, not spelled into the
+    directory by hand. Writing the file the test expected is what let this pass
+    while a flashed appliance refused: the store also leaves the lock it takes,
+    and the walk saw a second file nobody had listed.
+    """
 
     from appliance.admin_bootstrap import DeploymentBootstrap
+    from appliance.auth import AuthStore
 
     root = tmp_path / "opt" / "ems-solarflow"
     for name in ("config", "data", "backups"):
         (root / name).mkdir(parents=True)
 
     before = DeploymentBootstrap._unclaimed_directories(root)
-    assert before is not None and len(before) == 4
+    assert len(before) == 4
 
-    (root / "config" / "dashboard-auth.json").write_text("{}", encoding="utf-8")
+    AuthStore(root / "config" / "dashboard-auth.json").create("an-appliance-password")
     after = DeploymentBootstrap._unclaimed_directories(root)
 
-    assert after is not None, "the password made the deployment root un-adoptable"
-    assert root / "config" / "dashboard-auth.json" in after, "it is not handed over"
+    written = {item for item in (root / "config").iterdir() if item.is_file()}
+    assert written, "the store wrote nothing"
+    assert written <= set(after), f"not handed over: {sorted(written - set(after))}"
 
 
 def test_any_other_file_still_refuses_adoption(tmp_path):
     """The exemption is one named file, not a class of them."""
 
-    from appliance.admin_bootstrap import DeploymentBootstrap
+    from appliance.admin_bootstrap import BootstrapError, DeploymentBootstrap
 
     root = tmp_path / "opt" / "ems-solarflow"
     (root / "config").mkdir(parents=True)
     (root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
 
-    assert DeploymentBootstrap._unclaimed_directories(root) is None
+    with pytest.raises(BootstrapError) as error:
+        DeploymentBootstrap._unclaimed_directories(root)
+
+    assert error.value.code == "deployment_root_root_owned"
+    assert str(root / "docker-compose.yml") in error.value.message
 
 
 def test_the_cli_reset_leaves_the_file_readable_by_the_containers(tmp_path):

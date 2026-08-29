@@ -163,10 +163,23 @@ def test_a_non_object_request_is_rejected(context):
         validate_request(["admin.plan_install"], context)
 
 
-def test_prerelease_tags_need_an_explicit_host_opt_in(context):
+def test_a_host_that_disables_prereleases_refuses_a_candidate_tag():
+    """The refusal is pinned to the setting, never inherited from a default.
+
+    Reading it from ``appliance_config()`` meant a flip of the dataclass default
+    would have turned this assertion into a tautology without failing anything.
+    """
+
+    refusing = ValidationContext(
+        appliance_config(
+            images=appliance_config().images.__class__(
+                repositories=(ADMIN_REPOSITORY,), allow_prerelease=False
+            )
+        )
+    )
     with pytest.raises(ProtocolError) as excinfo:
         validate_request(
-            {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.0.0-rc1"}, context
+            {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.0.0-rc1"}, refusing
         )
     assert excinfo.value.code == "prerelease_not_allowed"
 

@@ -1,16 +1,27 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Resolve installable Admin versions.
+"""List every published Admin version, and say which of them this host installs.
 
-Channels are names, never image references. ``latest_stable`` needs a release
-index the host configuration points at; without one the channel is reported as
-unresolvable instead of silently falling back to a mutable ``latest`` tag.
+Channels are names, never image references. The versions come from the registry
+the images are pulled from, which is the only list that answers what exists; a
+host configuration may point at a release index instead, for a mirror or an
+air-gapped site.
+
+``available()`` never filters. Whether a version may be installed is a property
+of the entry (``installable``, ``reason``), because a release candidate that
+exists and is refused is something the operator needs to see rather than
+something to hide. The refusal itself is enforced in ``protocol.py``, at request
+validation, and this is a projection of that policy -- never a second authority.
+
+A mutable name such as ``latest`` is published by the registry too and is dropped
+here like any other non-version tag, so no channel can ever resolve to one.
 """
 
 import json
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from appliance.registry_tags import RegistryError, list_tags
 from appliance.validation import (
     CHANNEL_CURRENT,
     CHANNEL_EXACT,
@@ -26,14 +37,30 @@ DEFAULT_TIMEOUT = 10
 MAX_INDEX_BYTES = 512 * 1024
 
 
+# Named once so the greyed-out option and the "Prereleases allowed" fact in the
+# settings view speak about the same setting in the same words.
+PRERELEASE_NOT_ALLOWED_REASON = (
+    "Release candidates are not enabled on this appliance "
+    "(allow_prerelease in allowed-images.conf)"
+)
+
+
 @dataclass(frozen=True)
 class ReleaseTarget:
     tag: str
     channel: str
     prerelease: bool = False
+    installable: bool = True
+    reason: str = ""
 
     def to_dict(self):
-        return {"tag": self.tag, "channel": self.channel, "prerelease": self.prerelease}
+        return {
+            "tag": self.tag,
+            "channel": self.channel,
+            "prerelease": self.prerelease,
+            "installable": self.installable,
+            "reason": self.reason,
+        }
 
 
 class ReleaseResolutionError(Exception):
@@ -69,17 +96,31 @@ def parse_release_index(payload):
             tag = validate_release_tag(tag)
         except ValidationError:
             continue
-        flag = is_prerelease_tag(tag) if prerelease is None else bool(prerelease)
+        # An index states its own prerelease flag and may state it wrongly. The
+        # tag is the fail-closed half: a document that calls ``v2.0.0-rc1`` a
+        # release must not make ``latest_stable`` resolve to a candidate.
+        flag = is_prerelease_tag(tag) or bool(prerelease)
         releases.append(ReleaseTarget(tag=tag, channel=CHANNEL_EXACT, prerelease=flag))
 
-    releases.sort(key=lambda item: version_key(item.tag), reverse=True)
+    # Every release first, then every candidate -- each newest first. A plain
+    # version sort interleaves them, because a candidate sorts directly below
+    # the release it precedes, which buries the newest release under the
+    # candidates for the next one.
+    releases.sort(key=lambda item: (not item.prerelease, version_key(item.tag)), reverse=True)
     return releases
 
 
+def _with_installability(item, allow_prerelease):
+    if not item.prerelease or allow_prerelease:
+        return item
+    return replace(item, installable=False, reason=PRERELEASE_NOT_ALLOWED_REASON)
+
+
 class ReleaseCatalogue:
-    def __init__(self, config, *, fetcher=None):
+    def __init__(self, config, *, fetcher=None, registry=None):
         self.config = config
         self._fetch = fetcher or self._http_fetch
+        self._list_tags = registry or list_tags
 
     def _http_fetch(self, url):
         request = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -91,18 +132,25 @@ class ReleaseCatalogue:
                 "release_index_unreachable", f"release index is unreachable: {exc.__class__.__name__}"
             )
 
+    def _registry_payload(self):
+        try:
+            return self._list_tags(self.config.images.admin_repository)
+        except RegistryError as exc:
+            raise ReleaseResolutionError(exc.code, exc.message) from exc
+
     def available(self):
         url = (self.config.release_index_url or "").strip()
-        if not url:
-            return []
-        try:
-            payload = json.loads(self._fetch(url))
-        except ValueError:
-            raise ReleaseResolutionError("release_index_invalid", "release index is not valid JSON")
-        releases = parse_release_index(payload)
-        if not self.config.images.allow_prerelease:
-            releases = [item for item in releases if not item.prerelease]
-        return releases
+        if url:
+            try:
+                payload = json.loads(self._fetch(url))
+            except ValueError:
+                raise ReleaseResolutionError(
+                    "release_index_invalid", "release index is not valid JSON"
+                ) from None
+        else:
+            payload = self._registry_payload()
+        allowed = bool(self.config.images.allow_prerelease)
+        return [_with_installability(item, allowed) for item in parse_release_index(payload)]
 
     def latest_stable(self):
         for release in self.available():
@@ -110,7 +158,7 @@ class ReleaseCatalogue:
                 return ReleaseTarget(tag=release.tag, channel=CHANNEL_LATEST_STABLE)
         raise ReleaseResolutionError(
             "release_channel_unresolved",
-            "no stable release is available; configure release_index_url or pick an exact tag",
+            "no stable release is published; pick an exact tag or configure release_index_url",
         )
 
 

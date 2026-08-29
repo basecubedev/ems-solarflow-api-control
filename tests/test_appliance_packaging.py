@@ -356,8 +356,21 @@ def test_the_shipped_image_allowlist_is_the_project_repository():
     images = load_allowed_images(PACKAGING / "config" / "allowed-images.conf")
     assert images.repositories == ("ghcr.io/basecubedev/ems-solarflow-admin",)
     assert images.expected_source.startswith("https://github.com/basecubedev/")
-    assert images.allow_prerelease is False
     assert images.legacy_exempt_tags == ()
+
+
+def test_the_shipped_allowlist_offers_release_candidates():
+    """A recorded decision, not a default that drifted.
+
+    Before 1.0 this project publishes more Admin candidates than releases, so an
+    appliance that refused them would ship a version list with one entry in it.
+    The gate itself stays: ``protocol.py`` refuses a candidate tag wherever a
+    host sets this back to false.
+    """
+
+    images = load_allowed_images(PACKAGING / "config" / "allowed-images.conf")
+
+    assert images.allow_prerelease is True
 
 
 def test_the_release_channel_has_no_mutable_fallback_configured():

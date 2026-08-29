@@ -260,6 +260,99 @@ test.describe("admin lifecycle @authority", () => {
     );
   });
 
+  test("the install list offers every published version, releases before candidates", async ({
+    page,
+  }) => {
+    await signIn(page);
+    await openView(page, "admin");
+
+    const select = page.locator('[data-test="install-channel"]');
+    await expect(select.locator('optgroup[label="Stable"] option')).toHaveText([
+      "v1.1.0",
+      "v1.0.0",
+    ]);
+    await expect(select.locator('optgroup[label="Unstable"] option')).toHaveText(["v1.2.0-rc1"]);
+    // Basic mode: the versions are listed without the expert free-text field.
+    await expect(select).not.toContainText("Exact release tag");
+  });
+
+  test("a host that refuses candidates still shows them, greyed out with the reason", async ({
+    page,
+    request,
+  }) => {
+    await request.post("/api/test/reset", { data: { refuse_prereleases: true } });
+    await signIn(page);
+    await openView(page, "admin");
+
+    const candidate = page.locator(
+      '[data-test="install-channel"] optgroup[label="Unstable"] option',
+    );
+    await expect(candidate).toHaveCount(1);
+    await expect(candidate).toContainText("v1.2.0-rc1");
+    await expect(candidate).toContainText("allow_prerelease");
+    await expect(candidate).toBeDisabled();
+    // The releases stay listed and pickable; only the candidate is refused.
+    await expect(
+      page.locator('[data-test="install-channel"] optgroup[label="Stable"] option'),
+    ).toHaveText(["v1.1.0", "v1.0.0"]);
+  });
+
+  test("a candidate is installable on a host that enables candidates", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "admin");
+
+    await page.locator('[data-test="install-channel"]').selectOption("v1.2.0-rc1");
+    const [planned] = await Promise.all([
+      page.waitForRequest((candidate) => candidate.url().includes("/api/admin/plan-install")),
+      page.locator('[data-test="install-plan"]').click(),
+    ]);
+
+    expect(planned.postDataJSON()).toMatchObject({ channel: "exact", tag: "v1.2.0-rc1" });
+    await expect(page.locator("#dialog")).toBeVisible();
+    await expect(page.locator("#dialog")).toContainText("v1.2.0-rc1");
+  });
+
+  test("a version picked from the list is planned as that exact tag", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "admin");
+
+    await page.locator('[data-test="install-channel"]').selectOption("v1.1.0");
+    const [request] = await Promise.all([
+      page.waitForRequest((candidate) => candidate.url().includes("/api/admin/plan-install")),
+      page.locator('[data-test="install-plan"]').click(),
+    ]);
+
+    expect(request.postDataJSON()).toMatchObject({ channel: "exact", tag: "v1.1.0" });
+    await expect(page.locator("#dialog")).toBeVisible();
+    await expect(page.locator("#dialog")).toContainText("v1.1.0");
+  });
+
+  test("a first installation can pick a version instead of only the newest", async ({
+    page,
+    request,
+  }) => {
+    await request.post("/api/test/reset", { data: { never_installed: true } });
+    await signIn(page);
+    await openView(page, "admin");
+
+    const select = page.locator('[data-test="install-channel"]');
+    await expect(select.locator('optgroup[label="Stable"] option')).toHaveText([
+      "v1.1.0",
+      "v1.0.0",
+    ]);
+    await select.selectOption("v1.0.0");
+    const [planned] = await Promise.all([
+      page.waitForRequest((candidate) => candidate.url().includes("/api/admin/plan-install")),
+      page.locator('[data-test="admin-bootstrap-plan"]').click(),
+    ]);
+
+    expect(planned.postDataJSON()).toMatchObject({ channel: "exact", tag: "v1.0.0" });
+    await expect(page.locator("#dialog")).toBeVisible();
+    await expect(page.locator('[data-test="plan-creates-deployment"]')).toContainText(
+      "docker-compose.admin.yml",
+    );
+  });
+
   test("typing survives the two-second poll", async ({ page }) => {
     await signIn(page);
     await setMode(page, "expert");

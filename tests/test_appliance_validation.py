@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from appliance import validation
-from appliance.config import load_allowed_images
+from appliance.config import AllowedImages, ConfigError, load_allowed_images
 from appliance.paths import AppliancePaths, PathBoundaryError, ensure_within
 from appliance.redaction import bounded_redacted_log, clamp_log, redact_mapping, redact_text
 from appliance.validation import ValidationError
@@ -108,6 +108,37 @@ def test_allowed_images_file_is_the_authority(tmp_path):
     assert images.repositories == ("ghcr.io/basecubedev/ems-solarflow-admin",)
     assert images.expected_source == SOURCE
     assert images.allow_prerelease is False
+
+
+def test_a_file_that_omits_the_prerelease_directive_matches_an_absent_file(tmp_path):
+    """One default. Two literals is how a present-but-silent file came to
+    disagree with a missing one about what this appliance may install."""
+
+    silent = tmp_path / "silent.conf"
+    silent.write_text("ghcr.io/basecubedev/ems-solarflow-admin\n", encoding="utf-8")
+
+    assert (
+        load_allowed_images(silent).allow_prerelease
+        is load_allowed_images(tmp_path / "absent.conf").allow_prerelease
+        is AllowedImages.allow_prerelease
+        is False
+    )
+
+
+def test_a_misspelled_prerelease_directive_is_refused_not_read_as_false(tmp_path):
+    """Silently reading it as false would re-disable candidates on a host whose
+    operator wrote that they are allowed."""
+
+    conf = tmp_path / "allowed-images.conf"
+    conf.write_text(
+        "ghcr.io/basecubedev/ems-solarflow-admin\nallow_prerelease = ture\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError) as error:
+        load_allowed_images(conf)
+
+    assert error.value.code == "config_value_invalid"
 
 
 def test_missing_allowed_images_file_falls_back_to_the_packaged_default(tmp_path):

@@ -185,7 +185,10 @@ def load_allowed_images(path):
     repositories = []
     expected_source = DEFAULT_IMAGE_SOURCE
     legacy = []
-    allow_prerelease = False
+    # From the dataclass rather than a literal: a file that omits the directive
+    # and a file that is not there at all must resolve to the same policy, and
+    # two literals is how they come to disagree.
+    allow_prerelease = AllowedImages.allow_prerelease
 
     try:
         text = Path(path).read_text(encoding="utf-8")
@@ -205,7 +208,10 @@ def load_allowed_images(path):
             elif key == "legacy_exempt_tags":
                 legacy.extend(item.strip() for item in value.split(",") if item.strip())
             elif key == "allow_prerelease":
-                allow_prerelease = value.lower() in ("1", "true", "yes", "on")
+                # Through the same parser every other boolean uses: reading a
+                # typo as "false" would silently re-disable release candidates
+                # on a host whose operator wrote that they are allowed.
+                allow_prerelease = _as_bool({key: value}, key, allow_prerelease)
             else:
                 raise ConfigError("config_value_invalid", f"unknown image directive {key!r}")
             continue

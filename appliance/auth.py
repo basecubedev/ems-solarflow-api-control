@@ -32,6 +32,21 @@ DEFAULT_MAX_FAILURES = 5
 DEFAULT_FAILURE_WINDOW = 300
 
 
+def lock_path(path):
+    """The lock a writer of ``path`` takes, beside the record it guards.
+
+    It outlives the writer on purpose -- ``flock`` needs a file both processes
+    can open -- so it is a second artifact every writer of the shared password
+    leaves behind. Anything that reasons about what is in that directory has to
+    ask here rather than spell the name a second time: the deployment root's
+    adoption check did spell it, did not have it, and setting a password became
+    the thing that prevented ever installing Admin.
+    """
+
+    path = Path(path)
+    return path.with_name(f".{path.name}.lock")
+
+
 class AuthError(Exception):
     def __init__(self, code, message):
         super().__init__(message)
@@ -159,7 +174,7 @@ class AuthStore:
         """
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        lock = self.path.with_name(f".{self.path.name}.lock")
+        lock = lock_path(self.path)
         handle = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o600)
         try:
             fcntl.flock(handle, fcntl.LOCK_EX)

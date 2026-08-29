@@ -20,7 +20,9 @@ not.
 import os
 import pwd
 import subprocess
+from pathlib import PurePosixPath
 
+from appliance.auth import lock_path
 from appliance.paths import package_helper
 
 INSTALLER_NAME = "install-admin-console.sh"
@@ -39,10 +41,19 @@ def installer_path():
     return package_helper(INSTALLER_NAME)
 
 
-# Written by the appliance before anything is deployed, so its presence is not
+# Written by the appliance before anything is deployed, so their presence is not
 # evidence that an installation happened. Named exactly: any other file in a
 # root-owned deployment root still refuses adoption.
-APPLIANCE_SCAFFOLD_FILES = frozenset({"config/dashboard-auth.json"})
+#
+# The lock is derived rather than spelled, because it is the store's artifact
+# and not this module's fact. Listing only the password was enough to make
+# setting one the thing that prevented ever installing Admin: the store takes a
+# lock beside the record, the lock outlives the write, and the walk counted it
+# as somebody else's installation.
+SHARED_PASSWORD_FILE = PurePosixPath("config/dashboard-auth.json")
+APPLIANCE_SCAFFOLD_FILES = frozenset(
+    {SHARED_PASSWORD_FILE.as_posix(), lock_path(SHARED_PASSWORD_FILE).as_posix()}
+)
 
 
 class DeploymentBootstrap:
@@ -102,15 +113,23 @@ class DeploymentBootstrap:
         if entry.st_uid != 0:
             return (entry.st_uid, entry.st_gid)
 
-        directories = self._unclaimed_directories(root)
-        if directories is None:
-            raise BootstrapError(
-                "deployment_root_root_owned",
-                f"{root} is owned by root and is not an untouched deployment root — it "
-                "holds files, or something below it cannot be read; give it a non-root "
-                "owner before installing Admin from here",
-            )
-        return self._adopt(root, directories, claim=claim)
+        return self._adopt(root, self._unclaimed_directories(root), claim=claim)
+
+    @staticmethod
+    def _not_untouched(root, detail):
+        """The refusal, naming the one thing that produced it.
+
+        It used to list the possible causes instead -- "it holds files, or
+        something below it cannot be read" -- which leaves an operator with
+        three hypotheses, no path, and a walk that knew the answer and threw it
+        away. The code stays: what changed is that the message can be acted on.
+        """
+
+        return BootstrapError(
+            "deployment_root_root_owned",
+            f"{root} is owned by root and is not an untouched deployment root: "
+            f"{detail}; give it a non-root owner before installing Admin from here",
+        )
 
     @staticmethod
     def _unclaimed_directories(root):
@@ -120,16 +139,17 @@ class DeploymentBootstrap:
         ever installed, so an empty-directory test on the root alone would
         refuse a perfectly fresh appliance. What no installation can be without
         is a file: a compose file, an environment file or a configuration. The
-        first one found ends the walk and the answer is no — as does anything
+        first one found ends the walk and refuses, naming it — as does anything
         that cannot be read or is not a plain directory, because a root this
         cannot see all of is not one to take over.
 
-        One file is scaffolding rather than an installation: the password the
-        appliance, the Admin console and the dashboard share. The appliance
-        writes it on first boot, before anything is deployed, so treating it as
-        evidence of an installation would make setting a password the thing that
-        prevents ever installing Admin. It is named exactly, not tolerated as a
-        class, and it is handed over with the directories.
+        Two files are scaffolding rather than an installation: the password the
+        appliance, the Admin console and the dashboard share, and the lock its
+        store holds while writing it. The appliance writes both on first boot,
+        before anything is deployed, so treating either as evidence of an
+        installation makes setting a password the thing that prevents ever
+        installing Admin. They are named exactly, not tolerated as a class, and
+        they are handed over with the directories.
         """
 
         claimed = [root]
@@ -138,21 +158,35 @@ class DeploymentBootstrap:
             current = pending.pop()
             try:
                 entries = list(current.iterdir())
-            except OSError:
-                return None
+            except OSError as exc:
+                raise DeploymentBootstrap._not_untouched(
+                    root, f"{current} could not be read ({exc.__class__.__name__})"
+                ) from exc
             for entry in entries:
                 if entry.is_dir() and not entry.is_symlink():
                     claimed.append(entry)
                     pending.append(entry)
                     continue
-                if entry.is_symlink() or not entry.is_file():
-                    return None
+                if entry.is_symlink():
+                    raise DeploymentBootstrap._not_untouched(
+                        root, f"{entry} is a symbolic link"
+                    )
+                if not entry.is_file():
+                    raise DeploymentBootstrap._not_untouched(
+                        root, f"{entry} is neither a regular file nor a directory"
+                    )
                 try:
                     relative = entry.relative_to(root).as_posix()
                 except ValueError:
-                    return None
+                    raise DeploymentBootstrap._not_untouched(
+                        root, f"{entry} is not inside the deployment root"
+                    ) from None
                 if relative not in APPLIANCE_SCAFFOLD_FILES:
-                    return None
+                    raise DeploymentBootstrap._not_untouched(
+                        root,
+                        f"{entry} is a file this appliance did not put there "
+                        f"(only {', '.join(sorted(APPLIANCE_SCAFFOLD_FILES))} is expected)",
+                    )
                 claimed.append(entry)
         return claimed
 

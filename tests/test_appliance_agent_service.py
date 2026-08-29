@@ -100,8 +100,18 @@ def test_the_running_agent_fetches_the_release_index_over_http(host):
 
     releases = payload["result"]
     assert releases["error"] == "", releases
-    tags = [item["tag"] for item in releases["available"]]
-    assert tags == ["v1.2.0", "v1.1.0", "v1.0.0"], tags
+    # Every published version, releases before candidates, each newest first.
+    # The candidate is listed rather than hidden; whether it may be installed is
+    # the entry's own answer, taken from the host's own setting rather than from
+    # what the package happens to ship as the default.
+    allowed = releases["allow_prerelease"]
+    listed = [(item["tag"], item["installable"]) for item in releases["available"]]
+    assert listed == [
+        ("v1.2.0", True),
+        ("v1.1.0", True),
+        ("v1.0.0", True),
+        ("v2.0.0-rc.1", allowed),
+    ], listed
 
 
 def test_an_unreachable_release_index_is_reported_not_guessed(host):
