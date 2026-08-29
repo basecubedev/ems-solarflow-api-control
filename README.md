@@ -80,6 +80,10 @@ update does.
 The image is **not confirmed on physical hardware** yet; read what that means
 before you rely on it.
 
+**[Download the newest image →](https://github.com/basecubedev/ems-solarflow-api-control/releases/tag/appliance-image-latest)**
+— one file per board, always the current build. Not under *Packages*: that
+holds the container images the appliance fetches by itself.
+
 [Flashing the card](docs/user/appliance/install.md) ·
 [First start](docs/user/appliance/first-start.md) ·
 [All appliance guides](docs/user/appliance/index.md)

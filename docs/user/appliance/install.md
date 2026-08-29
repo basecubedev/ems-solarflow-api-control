@@ -8,9 +8,12 @@ waiting.
 > [what that means](index.md#what-not-confirmed-means). This page asks you to
 > erase a card, so it is worth knowing before you start.
 
-> **Check the [Releases page](https://github.com/basecubedev/ems-solarflow-api-control/releases)
-> before you start.** If no appliance image is listed there yet, there is
-> nothing to download; the steps below are complete and the file names are the
+> **Check that there is something to download before you start.** The
+> [download link](https://github.com/basecubedev/ems-solarflow-api-control/releases/tag/appliance-image-latest)
+> below appears once a build has published one; until then it is a 404 and no
+> appliance image is listed on the
+> [Releases page](https://github.com/basecubedev/ems-solarflow-api-control/releases)
+> either. The steps below are complete regardless, and the file names are the
 > ones a release carries. A local build writes the same names into `dist/`.
 
 > **A new image is built every week**, so the card you flash comes up with a
@@ -40,15 +43,26 @@ Everything on the card is erased. There is no undo.
 
 ## 1. Download the image for your board
 
-**Where to get it.** On the project's
-[Releases page](https://github.com/basecubedev/ems-solarflow-api-control/releases),
-open the newest entry **whose title starts with "Appliance image"** and scroll to
-**Assets** — a collapsed list at the bottom of the release notes. The image files
-are there. The page lists EMS releases too, and those carry no image.
+**Where to get it.**
+[**Download the appliance image**](https://github.com/basecubedev/ems-solarflow-api-control/releases/tag/appliance-image-latest)
+— that link always names the newest build and lists one file per board. It is
+the only address you need.
 
 Not under **Packages** in the sidebar. That holds the EMS and Admin container
 images, which the appliance downloads by itself once it runs; you never fetch
 those by hand.
+
+<details>
+<summary>Looking for an older build, or arrived on the Releases page instead?</summary>
+
+The [Releases page](https://github.com/basecubedev/ems-solarflow-api-control/releases) lists both products. The appliance images
+are the entries **whose title starts with "Appliance image"** — open the one you
+want and scroll to **Assets**, a collapsed list at the bottom of the release
+notes. EMS releases are on that page too and carry no image, and the green
+*Latest* badge is deliberately on one of those: only one of the two products
+owns the `v*` tags.
+
+</details>
 
 **One file per board.** They are not interchangeable: the kernel and the
 firmware differ.
