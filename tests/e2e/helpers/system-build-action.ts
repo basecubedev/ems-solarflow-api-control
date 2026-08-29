@@ -66,9 +66,60 @@ export async function expectValidSystemBuildAction(
   testInfo: TestInfo,
 ): Promise<"continue" | "admin_update" | "terminal_error"> {
   try {
+    // Client-side transients only. The words below are rendered by admin.js
+    // while it is mid-request; they say nothing about the server's own state.
     await expect(setup.status).not.toHaveText(
       /checking|confirming|updating|reconnecting/i,
     );
+
+    // The server's own busy stages need their own wait, and this is the one
+    // that was missing. `admin_update_pending`, `admin_reconnect_pending` and
+    // `admin_aligned` render "Preparing the Admin Server update…", "Waiting for
+    // the updated Admin Server to reconnect…" and "Verifying selected System
+    // Build resources…" -- not one of which contains any word the guard above
+    // looks for. So the guard passed while a transition was still running, the
+    // snapshot below caught `busy: true`, and its progress message was then
+    // compared against a status line that had already settled. Firefox lost
+    // that race twice on main; Chromium landed after the settle and passed.
+    //
+    // `busy` is the authoritative answer -- the server derives it from
+    // `_ACTION_BUSY_STAGES` in admin/system_alignment.py -- so waiting on it
+    // needs no timer and no list of stage names kept in step over here.
+    await expect
+      .poll(
+        async () => {
+          const seen = await setup.latestValidation().catch(() => null);
+          const state = seen?.action_state as ActionState | undefined;
+          return state ? state.busy === true : null;
+        },
+        {
+          // Longer than the 7s `expect` default this replaces, because a slow
+          // runner is the whole failure mode -- and well inside the 30s test
+          // timeout, so a transition that never settles still fails here, with
+          // the message above, rather than as an anonymous test timeout.
+          message: "the System Build action never left its busy stages",
+          timeout: 15_000,
+        },
+      )
+      .toBe(false);
+
+    // A validation response is recorded by a listener, which can run before the
+    // page has rendered what it says. The button and status reads below are
+    // single shots, so without this they could still see the busy frame.
+    const progressMessages = new Set(
+      setup
+        .validationHistory()
+        .map((entry) => (entry.action_state as ActionState | undefined)?.progress_message)
+        .filter((message): message is string => Boolean(message)),
+    );
+    if (progressMessages.size > 0) {
+      await expect
+        .poll(
+          async () => progressMessages.has(((await setup.status.textContent()) ?? "").trim()),
+          { message: "the status line kept showing a busy stage after it settled" },
+        )
+        .toBe(false);
+    }
 
     const validation = await setup.latestValidation();
     const action = validation.action_state as ActionState | undefined;
