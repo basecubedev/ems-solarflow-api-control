@@ -77,10 +77,7 @@ def build_services(
     runner = runner or CommandRunner()
     probe = HostProbe(runner, root=root, time_fn=time_fn)
 
-    deployment_compose = paths.install_root / "docker-compose.admin.yml"
-    if not deployment_compose.is_file():
-        deployment_compose = paths.compose_file
-    docker = DockerBackend(runner, compose_file=deployment_compose)
+    docker = DockerBackend(runner)
 
     systemd = SystemdBackend(runner)
     operations = OperationStore(paths.operations_dir, time_fn=time_fn)

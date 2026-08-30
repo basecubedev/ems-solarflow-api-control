@@ -49,6 +49,7 @@ from appliance.operations import (
     STATE_SUCCEEDED,
     STATE_VERIFYING,
 )
+from appliance.redaction import bounded_redacted_log
 from appliance.releases import ReleaseCatalogue, ReleaseResolutionError, resolve_channel
 from appliance.systemd import UNIT_DOCKER
 from appliance.validation import (
@@ -101,6 +102,18 @@ def repair_failure_message(remaining, unverified):
     if remaining:
         parts.append(f"{len(remaining)} finding(s) still block a healthy Admin")
     return "the repair ran but " + " — ".join(parts)
+
+
+def command_failure_detail(result):
+    """What the failed command said, bounded and redacted.
+
+    An operator has no shell on the appliance, so a refusal that drops the
+    tool's own output leaves nobody able to find out what went wrong.
+    """
+
+    bounded = bounded_redacted_log((result.stderr or "") + (result.stdout or ""))
+    lines = [line.strip() for line in bounded["text"].splitlines() if line.strip()]
+    return lines[-1] if lines else "no output"
 
 
 class AdminLifecycleError(Exception):
@@ -1455,11 +1468,16 @@ class AdminLifecycleService:
 
     def _compose_up(self, deployment):
         try:
-            result = self.docker.compose_up_service(deployment.service)
+            result = self.docker.compose_up_service(
+                deployment.service, compose_file=deployment.compose_file
+            )
         except DockerError as exc:
             raise AdminLifecycleError(exc.code, exc.message)
         if not result.ok:
-            raise AdminLifecycleError("compose_up_failed", "docker compose could not start Admin")
+            raise AdminLifecycleError(
+                "compose_up_failed",
+                f"docker compose could not start Admin: {command_failure_detail(result)}",
+            )
         return True
 
     def _compose_hash(self):

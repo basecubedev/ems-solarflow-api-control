@@ -57,7 +57,9 @@ installs EMS — the appliance deliberately has no second way to do that.
 - **Roll back a first installation.** There is no previous Admin to restore. A
   failure reports `failed_recoverable` and says whether the deployment files
   were created, so a retry is either another first installation or a normal
-  one.
+  one. When the failure came from a command, the reported message carries that
+  command's own last line of output, bounded and redacted: an operator has no
+  shell here, so a refusal that dropped it left nobody able to find the cause.
 
 ## Install a specific Admin version
 

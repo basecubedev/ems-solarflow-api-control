@@ -244,6 +244,43 @@ def test_the_created_deployment_is_recorded_as_known_good(tmp_path):
     assert services.known_good.current()["admin_version"] == "v1.1.0"
 
 
+def test_the_first_install_runs_compose_against_the_deployment_it_created(tmp_path):
+    """The deployment root is empty until this operation fills it.
+
+    A compose path resolved once, before the operation ran, still names the
+    file that was missing then, and ``docker compose -f`` gets a path that
+    does not exist.
+    """
+
+    bootstrap = RecordingBootstrap(None)
+    services = flashed_appliance(tmp_path, bootstrap=bootstrap)
+
+    execute(services, plan(services, channel="exact", tag="v1.1.0"))
+
+    created = str(services.paths.install_root / "docker-compose.admin.yml")
+    composed = [
+        args
+        for tool, args, _ in services.host.calls
+        if tool == "docker" and args[:1] == ("compose",)
+    ]
+    assert composed
+    assert [args[args.index("-f") + 1] for args in composed] == [created] * len(composed)
+
+
+def test_a_failed_first_install_reports_what_docker_said(tmp_path):
+    """The operator has no shell; the refusal is the only place the cause fits."""
+
+    bootstrap = RecordingBootstrap(None)
+    services = flashed_appliance(tmp_path, bootstrap=bootstrap)
+    services.host.compose_up_fails = True
+
+    record = execute(services, plan(services, channel="exact", tag="v1.1.0"))
+
+    assert record.state == STATE_FAILED_RECOVERABLE
+    assert record.error["code"] == "compose_up_failed"
+    assert "compose up failed" in record.error["message"]
+
+
 # --- what a bootstrap may never do -----------------------------------------
 
 
