@@ -171,9 +171,14 @@ cannot be reported as a success.
 - An agent restart turns an interrupted `running` operation into a visible
   `failed_recoverable`, and expires an unconfirmed plan, so the lock is never
   stuck.
+- A `failed_recoverable` operation has stopped acting on the host, so it does
+  not hold the lock: the operator can plan again without cancelling it first.
+  It stays retryable in place, and a retry is refused while another operation
+  holds the lock.
 - Confirmation and cancellation require the operation ID; execution
   additionally requires the confirmation token issued with that plan.
-- Terminal results stay visible until they are acknowledged.
+- Settled results — terminal ones and recoverable failures — stay visible until
+  they are acknowledged.
 
 Every mutation follows: **plan → preview → confirmation → execution →
 verification → result**.

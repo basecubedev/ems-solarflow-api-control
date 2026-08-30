@@ -56,6 +56,13 @@ TERMINAL_STATES = frozenset(
     }
 )
 
+# A recoverable failure has stopped acting on the host. It stays retryable
+# in place, so it is not terminal -- but holding the single mutation slot
+# while it waits for the operator makes the appliance refuse the very
+# operation that would fix it, and refuse to be acknowledged because it is
+# not finished. A first Admin install failed exactly this way.
+SETTLED_STATES = TERMINAL_STATES | {STATE_FAILED_RECOVERABLE}
+
 TRANSITIONS = {
     STATE_PLANNED: frozenset({STATE_AWAITING_CONFIRMATION, STATE_CANCELLED}),
     # A plan refused at its own confirmation never runs, and it is not a plan
@@ -149,14 +156,21 @@ class Operation:
         return self.state in TERMINAL_STATES
 
     @property
+    def settled(self):
+        """Finished acting on the host, whether or not it can still be retried."""
+
+        return self.state in SETTLED_STATES
+
+    @property
     def blocking(self):
-        return self.state not in TERMINAL_STATES
+        return self.state not in SETTLED_STATES
 
     def to_dict(self, *, include_token=False):
         data = asdict(self)
         if not include_token:
             data.pop("confirmation_token", None)
         data["terminal"] = self.terminal
+        data["settled"] = self.settled
         return redact_mapping(data)
 
     @classmethod
@@ -273,6 +287,11 @@ class OperationStore:
             operation = self._load(operation_id)
             if not secrets.compare_digest(str(operation.confirmation_token), str(token or "")):
                 raise OperationError("confirmation_token_mismatch", "confirmation token is invalid")
+            # No longer holding the slot is not the same permission as taking
+            # it back while somebody else has it.
+            active = self.active()
+            if active is not None and active.operation_id != operation_id:
+                raise OperationConflictError(active.operation_id, active.type)
             self._transition(operation, STATE_RUNNING)
             operation.stage = "running"
             operation.error = None
@@ -315,7 +334,7 @@ class OperationStore:
     def acknowledge(self, operation_id):
         with self._lock:
             operation = self._load(operation_id)
-            if not operation.terminal:
+            if not operation.settled:
                 raise OperationError(
                     "operation_not_terminal", "only a finished operation can be acknowledged"
                 )
@@ -323,7 +342,7 @@ class OperationStore:
             return self._save(operation)
 
     def unacknowledged(self):
-        return [item for item in self.list() if item.terminal and not item.acknowledged]
+        return [item for item in self.list() if item.settled and not item.acknowledged]
 
     def recover_interrupted(self):
         """Turn operations interrupted by a service restart into a visible failure.

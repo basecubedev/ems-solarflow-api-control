@@ -298,7 +298,9 @@
     var operation = state.operation;
     if (!operation) return wrapper;
 
-    var isTerminal = !!operation.terminal;
+    /* Settled, not terminal: a recoverable failure has stopped acting on the
+       host and is an outcome the operator may dismiss, retry or cancel. */
+    var isSettled = !!operation.settled;
     var OUTCOMES = {
       succeeded: { level: "ok", label: "completed" },
       rolled_back: { level: "warn", label: "rolled back" },
@@ -308,7 +310,7 @@
       cancelled: { level: "idle", label: "cancelled" }
     };
     var outcome = OUTCOMES[operation.state] ||
-      { level: isTerminal ? "bad" : "warn", label: operation.state.replace(/_/g, " ") };
+      { level: isSettled ? "bad" : "warn", label: operation.state.replace(/_/g, " ") };
     var level = outcome.level;
 
     var progress = el("ol", { class: "progress-list" },
@@ -320,7 +322,7 @@
       }));
 
     var actions = [];
-    if (isTerminal && !operation.acknowledged) {
+    if (isSettled && !operation.acknowledged) {
       actions.push(el("button", {
         type: "button", class: "primary-button compact", "data-test": "acknowledge-operation",
         text: "Acknowledge", onclick: acknowledgeOperation
@@ -331,7 +333,7 @@
         type: "button", class: "ghost-button compact", "data-test": "cancel-operation",
         text: "Cancel", onclick: cancelOperation
       }));
-    } else if (!isTerminal) {
+    } else if (!isSettled) {
       actions.push(el("p", {
         class: "control-result", "data-test": "operation-uninterruptible",
         text: "This operation cannot be interrupted."

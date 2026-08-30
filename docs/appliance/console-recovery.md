@@ -65,6 +65,13 @@ sudo ems-appliance verify-install
 sudo journalctl -u ems-appliance-web -u ems-appliance-agent -b --no-pager
 ```
 
+The same report is available from the browser at `GET /api/install/verify` while
+the web service is up, which is usually faster than finding a monitor. It is not
+a replacement for running it here: the check that the web account can reach the
+agent socket forks and connects back to the socket the agent is serving, so
+asked from inside the agent it reports `deferred` rather than a result. Only the
+console answers that one.
+
 If the **Update** and **Revert** controls are both greyed out, a verification
 deadline is armed and nothing is judging it — normally
 `ems-appliance-manager-verify.timer` does, within its window. Run the check by

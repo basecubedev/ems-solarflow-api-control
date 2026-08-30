@@ -152,13 +152,50 @@ def test_a_finished_operation_releases_the_lock(tmp_path):
     assert store.create("updates.install").state == STATE_PLANNED
 
 
-def test_a_recoverable_failure_still_blocks_a_second_mutation(tmp_path):
+def test_a_recoverable_failure_does_not_block_the_operation_that_fixes_it(tmp_path):
+    """A first Admin install failed this way on a real appliance.
+
+    Holding the slot meant planning again was refused with operation_conflict
+    and acknowledging was refused because the record is not terminal, leaving
+    cancel as the only way out of a state called recoverable.
+    """
+
     store = store_at(tmp_path)
     record = planned(store)
     store.confirm(record.operation_id, record.confirmation_token)
     store.finish(record.operation_id, STATE_FAILED_RECOVERABLE)
-    with pytest.raises(OperationConflictError):
-        store.create("updates.install")
+
+    assert store.active() is None
+    assert store.create("updates.install").state == STATE_PLANNED
+
+
+def test_a_retry_is_refused_while_another_operation_holds_the_slot(tmp_path):
+    """Not blocking is not the same permission as running twice."""
+
+    store = store_at(tmp_path)
+    failed = planned(store)
+    store.confirm(failed.operation_id, failed.confirmation_token)
+    store.finish(failed.operation_id, STATE_FAILED_RECOVERABLE)
+    other = planned(store, kind="updates.install")
+    store.confirm(other.operation_id, other.confirmation_token)
+
+    with pytest.raises(OperationConflictError) as excinfo:
+        store.retry(failed.operation_id, failed.confirmation_token)
+
+    assert excinfo.value.code == "operation_conflict"
+
+
+def test_a_recoverable_failure_can_be_acknowledged_and_still_retried(tmp_path):
+    store = store_at(tmp_path)
+    record = planned(store)
+    store.confirm(record.operation_id, record.confirmation_token)
+    failed = store.finish(record.operation_id, STATE_FAILED_RECOVERABLE)
+
+    assert failed.to_dict()["settled"] is True
+    assert failed.to_dict()["terminal"] is False
+    assert [item.operation_id for item in store.unacknowledged()] == [record.operation_id]
+    assert store.acknowledge(record.operation_id).acknowledged is True
+    assert store.retry(record.operation_id, record.confirmation_token).state == STATE_RUNNING
 
 
 def test_cancelling_a_recoverable_failure_releases_the_lock(tmp_path):

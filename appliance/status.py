@@ -14,7 +14,14 @@ from appliance.redaction import bounded_redacted_log
 from appliance.systemd import (
     UNIT_APPLIANCE_AGENT,
     UNIT_APPLIANCE_WEB,
+    UNIT_BACKUP_ACCESS_DISABLE,
+    UNIT_CONFIG_SEED,
     UNIT_DOCKER,
+    UNIT_EXPORT,
+    UNIT_GROW_ROOT,
+    UNIT_MANAGER_INSTALL,
+    UNIT_MANAGER_VERIFY,
+    UNIT_SSHD_KEYS,
 )
 
 SECTION_OK = "ok"
@@ -25,6 +32,19 @@ HEALTH_ATTENTION = "attention"
 HEALTH_DEGRADED = "degraded"
 
 DPKG_LOG = "var/log/dpkg.log"
+
+# One entry per unit this package ships whose journal is the only account
+# of what it did. Routing is a table rather than another elif so a source
+# that is declared and not routed fails instead of serving the dpkg log.
+UNIT_LOG_SOURCES = {
+    validation.LOG_SOURCE_MANAGER_INSTALL: UNIT_MANAGER_INSTALL,
+    validation.LOG_SOURCE_MANAGER_VERIFY: UNIT_MANAGER_VERIFY,
+    validation.LOG_SOURCE_EXPORT: UNIT_EXPORT,
+    validation.LOG_SOURCE_CONFIG_SEED: UNIT_CONFIG_SEED,
+    validation.LOG_SOURCE_GROW_ROOT: UNIT_GROW_ROOT,
+    validation.LOG_SOURCE_SSHD_KEYS: UNIT_SSHD_KEYS,
+    validation.LOG_SOURCE_BACKUP_ACCESS: UNIT_BACKUP_ACCESS_DISABLE,
+}
 
 
 def section(name, collector):
@@ -269,8 +289,12 @@ class StatusService:
             raw = self.systemd.journal(UNIT_DOCKER, lines)
         elif source == validation.LOG_SOURCE_BOOT:
             raw = self.systemd.boot_warnings(lines)
-        else:
+        elif source in UNIT_LOG_SOURCES:
+            raw = self._unit_or_file(UNIT_LOG_SOURCES[source], None, lines)
+        elif source == validation.LOG_SOURCE_PACKAGES:
             raw = self._tail_file(self.probe.root / DPKG_LOG, lines)
+        else:
+            raise validation.ValidationError("log_source_unrouted", f"{source} has no reader")
 
         bounded = bounded_redacted_log(raw, max_lines=lines)
         bounded["source"] = source

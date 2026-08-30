@@ -13,6 +13,13 @@ UNIT_NETWORK_MANAGER = "NetworkManager.service"
 UNIT_APPLIANCE_WEB = "ems-appliance-web.service"
 UNIT_APPLIANCE_AGENT = "ems-appliance-agent.service"
 UNIT_TIMESYNC = "systemd-timesyncd.service"
+UNIT_MANAGER_INSTALL = "ems-appliance-manager-install.service"
+UNIT_MANAGER_VERIFY = "ems-appliance-manager-verify.service"
+UNIT_EXPORT = "ems-appliance-export.service"
+UNIT_CONFIG_SEED = "ems-appliance-config-seed.service"
+UNIT_GROW_ROOT = "ems-appliance-grow-root.service"
+UNIT_SSHD_KEYS = "ems-appliance-sshd-keys.service"
+UNIT_BACKUP_ACCESS_DISABLE = "ems-appliance-backup-access-disable.service"
 
 READABLE_UNITS = (
     UNIT_DOCKER,
@@ -22,8 +29,20 @@ READABLE_UNITS = (
     UNIT_APPLIANCE_WEB,
     UNIT_APPLIANCE_AGENT,
     UNIT_TIMESYNC,
+    # Every unit this package ships. dpkg runs from the manager-install
+    # unit during a self-update, so a failure there has no other account
+    # of itself on a host with no shell.
+    UNIT_MANAGER_INSTALL,
+    UNIT_MANAGER_VERIFY,
+    UNIT_EXPORT,
+    UNIT_CONFIG_SEED,
+    UNIT_GROW_ROOT,
+    UNIT_SSHD_KEYS,
+    UNIT_BACKUP_ACCESS_DISABLE,
 )
 
+# Readable is not controllable: nothing above may be started or stopped
+# from a request, and this list is what says so.
 CONTROLLABLE_UNITS = (UNIT_DOCKER, UNIT_SSH)
 
 

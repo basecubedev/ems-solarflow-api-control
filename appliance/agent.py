@@ -25,6 +25,7 @@ from appliance import (
     config as appliance_config,
     docker_backend,
     host_config,
+    install_check,
     manager_install,
     manager_releases,
     manager_update,
@@ -251,6 +252,10 @@ class AgentHandlers:
             return self._require_manager().sources()
         if spec.name == "network.wifi.scan":
             return {"networks": self.services.network.scan()}
+        if spec.name == "install.verify":
+            return install_check.verify_installation(
+                paths=self.services.paths, runner=self.services.runner, in_agent=True
+            )
         if spec.name == "operations.list":
             return status.operations_state()
         if spec.name == "operations.get":
