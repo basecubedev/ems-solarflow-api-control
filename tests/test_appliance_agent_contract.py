@@ -664,3 +664,53 @@ def test_a_password_never_travels_as_an_ordinary_argument():
                 assert field.kind == protocol.KIND_SECRET, (name, field.name)
 
     assert validate_secret("  padded  ") == "  padded  "
+
+
+# --- what a refusal is allowed to say --------------------------------------
+
+
+def test_a_typed_service_error_reaches_the_caller_with_its_own_message(services):
+    """A class name is not a reason, and the operator has no other source.
+
+    Live, GET /api/logs/admin_container answered {"code": "agent_error",
+    "message": "DockerError"} while the raised error carried the sentence that
+    said what had actually happened.
+    """
+
+    from appliance.agent_client import InProcessAgentClient
+
+    services.host.fail_command("docker")
+    client = InProcessAgentClient(AgentHandlers(services, executor=lambda target: target()))
+
+    with pytest.raises(AgentCallError) as excinfo:
+        client.call("logs.read", source="admin_container", lines=50)
+
+    assert excinfo.value.code == "container_logs_unavailable"
+    assert "cannot read logs of" in excinfo.value.message
+
+
+def test_a_secret_in_a_service_error_never_reaches_the_browser():
+    """The socket reply is the browser's copy, so redaction belongs on it."""
+
+    from appliance.agent import SERVICE_ERRORS
+    from appliance.docker_backend import DockerError
+
+    assert DockerError in SERVICE_ERRORS
+
+    server = AgentServer.__new__(AgentServer)
+    server.handlers = _RaisingHandlers(
+        DockerError("pull_failed", "auth failed for PASSWORD=hunter2")
+    )
+
+    reply = AgentServer.handle_request_payload(server, {"operation": "status.get"})
+
+    assert reply["error"]["code"] == "pull_failed"
+    assert "hunter2" not in reply["error"]["message"]
+
+
+class _RaisingHandlers:
+    def __init__(self, error):
+        self.error = error
+
+    def dispatch(self, payload, *, actor="", source_ip=""):
+        raise self.error

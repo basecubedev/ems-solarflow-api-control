@@ -731,7 +731,7 @@ def appliance_config(**overrides):
         "admin_container": ADMIN_CONTAINER,
         "ems_container": EMS_CONTAINER,
         "admin_service": ADMIN_SERVICE,
-        "ssh_key_accounts": ("ems-backup", "pi"),
+        "ssh_key_accounts": ("ems-backup",),
         "health_timeout_seconds": 1,
         "wifi_revert_timeout_seconds": 1,
         "images": AllowedImages(

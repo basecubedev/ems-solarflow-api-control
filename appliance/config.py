@@ -265,6 +265,26 @@ def _deployment_user(values):
     )
 
 
+def _ssh_key_accounts(values):
+    """Whose authorized_keys a request may ever reach.
+
+    The backup account has no shell and is confined to a read-only SFTP view
+    of the export root. Any other name here would let an authenticated browser
+    deploy a key on an account that can open a session, which is the boundary
+    the unprivileged web process and the allowlisted agent exist to hold.
+    """
+
+    configured = _as_tuple(values, "ssh_key_accounts", (DEFAULT_BACKUP_USER,))
+    unsupported = [name for name in configured if name != DEFAULT_BACKUP_USER]
+    if unsupported:
+        raise ConfigError(
+            "ssh_key_accounts_unsupported",
+            f"ssh_key_accounts must be {DEFAULT_BACKUP_USER}; "
+            f"{', '.join(unsupported)} is not an account this package manages keys for",
+        )
+    return (DEFAULT_BACKUP_USER,)
+
+
 def _read_timezone(paths):
     """The operator's choice, which outranks the packaged default."""
 
@@ -294,7 +314,7 @@ def load_config(paths):
         socket_group=values.get("socket_group") or DEFAULT_SOCKET_GROUP,
         backup_user=DEFAULT_BACKUP_USER,
         deployment_user=DEFAULT_DEPLOYMENT_USER,
-        ssh_key_accounts=_as_tuple(values, "ssh_key_accounts", (DEFAULT_BACKUP_USER,)),
+        ssh_key_accounts=_ssh_key_accounts(values),
         admin_container=values.get("admin_container") or DEFAULT_ADMIN_CONTAINER,
         ems_container=values.get("ems_container") or DEFAULT_EMS_CONTAINER,
         influx_container=values.get("influx_container") or DEFAULT_INFLUX_CONTAINER,

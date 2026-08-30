@@ -235,9 +235,19 @@ def agent_round_trip(
     return outcome
 
 
-def check_web_reaches_agent(paths, *, live, user=WEB_USER):
+def check_web_reaches_agent(paths, *, live, user=WEB_USER, in_agent=False):
     """Connect to the socket as the web account, the way the service will."""
 
+    # The child connects back to the socket this process is serving, and the
+    # agent is threaded: forking it to ask itself is a deadlock, not a check.
+    if in_agent:
+        return [
+            _check(
+                "web_to_agent",
+                STATUS_DEFERRED,
+                "not testable from inside the agent; run verify-install on the console",
+            )
+        ]
     if not live:
         return [_check("web_to_agent", STATUS_DEFERRED, "the agent is not running yet")]
     import pwd
@@ -622,7 +632,7 @@ def check_host_tools():
     return checks
 
 
-def verify_installation(paths=None, *, runner=None, live=None):
+def verify_installation(paths=None, *, runner=None, live=None, in_agent=False):
     """Return a report; ``ok`` is false only when a critical check failed."""
 
     paths = paths or resolve_paths()
@@ -639,7 +649,7 @@ def verify_installation(paths=None, *, runner=None, live=None):
     checks.extend(check_host_paths(paths, runner=runner))
     checks.extend(check_units(runner, live=live))
     checks.extend(check_socket(paths, live=live))
-    checks.extend(check_web_reaches_agent(paths, live=live))
+    checks.extend(check_web_reaches_agent(paths, live=live, in_agent=in_agent))
     checks.extend(check_export(paths, runner, live=live))
     checks.extend(check_backup_account(paths))
     checks.extend(check_optional_features())

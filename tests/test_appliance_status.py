@@ -388,3 +388,122 @@ def test_a_board_that_publishes_no_alarm_is_unknown_not_healthy(tmp_path):
     from appliance.hostprobe import HostProbe
 
     assert HostProbe(root=tmp_path).power() == {"available": False, "under_voltage": None}
+
+
+def test_the_alarm_is_found_wherever_the_hwmon_device_landed(tmp_path):
+    """The index the board's own sensor gets depends on driver registration.
+
+    A live Pi 3B+ logged six kernel under-voltage events during a failing
+    install while the appliance reported the supply as unknown, because that
+    board publishes the alarm as hwmon1.
+    """
+
+    from appliance.hostprobe import HostProbe
+
+    thermal = tmp_path / "sys/class/hwmon/hwmon0"
+    thermal.mkdir(parents=True)
+    (thermal / "name").write_text("cpu_thermal\n")
+
+    volt = tmp_path / "sys/class/hwmon/hwmon1"
+    volt.mkdir(parents=True)
+    (volt / "name").write_text("rpi_volt\n")
+    (volt / "in0_lcrit_alarm").write_text("1\n")
+
+    assert HostProbe(root=tmp_path).power() == {"available": True, "under_voltage": True}
+
+
+def test_another_sensors_alarm_never_answers_for_the_board(tmp_path):
+    """Reporting a foreign rail's alarm as the supply would be a false alarm."""
+
+    from appliance.hostprobe import HostProbe
+
+    other = tmp_path / "sys/class/hwmon/hwmon0"
+    other.mkdir(parents=True)
+    (other / "name").write_text("some_regulator\n")
+    (other / "in0_lcrit_alarm").write_text("1\n")
+
+    volt = tmp_path / "sys/class/hwmon/hwmon1"
+    volt.mkdir(parents=True)
+    (volt / "name").write_text("rpi_volt\n")
+    (volt / "in0_lcrit_alarm").write_text("0\n")
+
+    assert HostProbe(root=tmp_path).power()["under_voltage"] is False
+
+
+# --- the appliance's own units ---------------------------------------------
+
+
+APPLIANCE_UNIT_SOURCES = {
+    "manager_install": "ems-appliance-manager-install.service",
+    "manager_verify": "ems-appliance-manager-verify.service",
+    "export": "ems-appliance-export.service",
+    "config_seed": "ems-appliance-config-seed.service",
+    "grow_root": "ems-appliance-grow-root.service",
+    "sshd_keys": "ems-appliance-sshd-keys.service",
+    "backup_access": "ems-appliance-backup-access-disable.service",
+}
+
+
+@pytest.mark.parametrize("source,unit", sorted(APPLIANCE_UNIT_SOURCES.items()))
+def test_each_appliance_unit_has_a_readable_journal(tmp_path, source, unit):
+    """dpkg runs from ems-appliance-manager-install.service during a self-update.
+
+    A unit the package ships and nobody can read is a failure with no account
+    of itself on a host with no shell.
+    """
+
+    services = appliance(tmp_path)
+
+    log = services.status.read_log(source, 20)
+
+    assert log["source"] == source
+    journalled = [
+        args
+        for tool, args, _ in services.host.calls
+        if tool == "journalctl" and "-u" in args and args[args.index("-u") + 1] == unit
+    ]
+    assert journalled, f"{source} never asked the journal for {unit}"
+
+
+def test_no_log_source_falls_through_to_the_package_log(tmp_path):
+    """read_log ends on an else, so an unrouted source silently serves dpkg."""
+
+    from appliance import validation
+
+    services = appliance(tmp_path)
+    dpkg = services.status.probe.root / "var/log/dpkg.log"
+    dpkg.parent.mkdir(parents=True, exist_ok=True)
+    dpkg.write_text("this-is-the-package-log\n", encoding="utf-8")
+
+    for source in validation.LOG_SOURCES:
+        if source == validation.LOG_SOURCE_PACKAGES:
+            continue
+        assert "this-is-the-package-log" not in services.status.read_log(source, 20)["text"], source
+
+
+def test_a_readable_unit_is_not_thereby_a_controllable_one():
+    """Reading a journal and starting a unit are different authorities."""
+
+    from appliance.systemd import CONTROLLABLE_UNITS, READABLE_UNITS, UNIT_DOCKER, UNIT_SSH
+
+    assert CONTROLLABLE_UNITS == (UNIT_DOCKER, UNIT_SSH)
+    for unit in APPLIANCE_UNIT_SOURCES.values():
+        assert unit in READABLE_UNITS
+        assert unit not in CONTROLLABLE_UNITS
+
+
+def test_the_support_archive_carries_every_declared_log_source(tmp_path):
+    """The bundle is what an operator sends when they cannot read the host.
+
+    A second hand-kept list of sources beside LOG_SOURCES is a bundle that
+    silently stops carrying whatever was added to the appliance last.
+    """
+
+    from appliance import validation
+
+    services = appliance(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    plan = handlers.dispatch({"operation": "support.plan_archive"})["plan"]
+
+    for source in validation.LOG_SOURCES:
+        assert f"logs/{source}.log" in plan["members"], source

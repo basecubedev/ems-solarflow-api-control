@@ -38,7 +38,9 @@ MEMINFO_FILE = "proc/meminfo"
 # would keep reporting the mount table as it looked at service start.
 HOST_MOUNTINFO_FILE = "proc/1/mountinfo"
 MOUNTINFO_FILE = "proc/self/mountinfo"
-UNDERVOLTAGE_FILE = "sys/class/hwmon/hwmon0/in0_lcrit_alarm"
+HWMON_DIR = "sys/class/hwmon"
+UNDERVOLTAGE_SENSOR = "rpi_volt"
+UNDERVOLTAGE_ALARM = "in0_lcrit_alarm"
 
 THERMAL_FILE = "sys/class/thermal/thermal_zone0/temp"
 REBOOT_REQUIRED_FILE = "var/run/reboot-required"
@@ -125,10 +127,34 @@ class HostProbe:
         publish it is reported as unknown rather than as healthy.
         """
 
-        raw = (self._read(UNDERVOLTAGE_FILE) or "").strip()
+        raw = self._undervoltage_alarm()
         if raw not in ("0", "1"):
             return {"available": False, "under_voltage": None}
         return {"available": True, "under_voltage": raw == "1"}
+
+    def _undervoltage_alarm(self):
+        """The board's own under-voltage bit, wherever its hwmon device landed.
+
+        The index depends on which drivers registered first, so a fixed
+        hwmon0 reports the supply as unknown on a board that is browning out.
+        A device that names itself answers; an unnamed one is only a fallback,
+        because a foreign rail's alarm is not this board's supply.
+        """
+
+        try:
+            names = sorted(entry.name for entry in (self.root / HWMON_DIR).iterdir())
+        except OSError:
+            return None
+        fallback = None
+        for name in names:
+            alarm = (self._read(f"{HWMON_DIR}/{name}/{UNDERVOLTAGE_ALARM}") or "").strip()
+            if alarm not in ("0", "1"):
+                continue
+            if (self._read(f"{HWMON_DIR}/{name}/name") or "").strip() == UNDERVOLTAGE_SENSOR:
+                return alarm
+            if fallback is None:
+                fallback = alarm
+        return fallback
 
     def memory(self):
         values = {}

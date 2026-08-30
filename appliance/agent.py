@@ -18,19 +18,34 @@ import struct
 import threading
 
 from appliance import (
+    admin_bootstrap,
+    admin_deployment,
     admin_lifecycle,
+    commands,
+    config as appliance_config,
+    docker_backend,
+    host_config,
+    install_check,
+    manager_install,
+    manager_releases,
     manager_update,
+    manager_verify,
     network,
     operation_schema,
     artifact_trust,
     packages,
+    persistent_state,
+    releases,
+    rescue_account,
     ssh_service,
     auth,
     support_archive,
+    systemd,
     timezone_config,
     validation,
 )
 from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS
+from appliance.redaction import redact_text
 from appliance.release_fetch import FetchError
 from appliance.operations import (
     STATE_FAILED_RECOVERABLE,
@@ -107,14 +122,38 @@ def _inline_executor(target):
 # The one list of errors a service may raise that are a refusal rather than a
 # defect. Both the socket server and the in-process client answer on it, so it
 # lives here rather than being spelled out twice.
+# Every typed service error whose code and message are written for an operator
+# to read. The list is an allowlist on purpose: anything not named here reaches
+# the browser as the bare class name, which is how "DockerError" became the
+# whole account of why a log could not be read.
 SERVICE_ERRORS = (
     AgentError,
     ValidationError,
     OperationError,
-    support_archive.SupportArchiveError,
-    timezone_config.TimezoneError,
-    manager_update.ManagerUpdateError,
+    admin_bootstrap.BootstrapError,
+    admin_deployment.DeploymentError,
+    admin_lifecycle.AdminLifecycleError,
+    appliance_config.ConfigError,
+    artifact_trust.ReleaseError,
     auth.AuthError,
+    commands.CommandError,
+    docker_backend.DockerError,
+    host_config.HostConfigError,
+    manager_install.ManagerInstallError,
+    manager_releases.ManagerReleaseError,
+    manager_update.ManagerUpdateError,
+    manager_verify.ManagerVerifyError,
+    network.NetworkError,
+    operation_schema.OperationSchemaError,
+    packages.PackageError,
+    persistent_state.PersistentStateError,
+    releases.ReleaseResolutionError,
+    rescue_account.RescueAccountError,
+    ssh_service.SshServiceError,
+    support_archive.SupportArchiveError,
+    systemd.SystemdError,
+    timezone_config.TimezoneError,
+    FetchError,
 )
 
 
@@ -213,6 +252,10 @@ class AgentHandlers:
             return self._require_manager().sources()
         if spec.name == "network.wifi.scan":
             return {"networks": self.services.network.scan()}
+        if spec.name == "install.verify":
+            return install_check.verify_installation(
+                paths=self.services.paths, runner=self.services.runner, in_agent=True
+            )
         if spec.name == "operations.list":
             return status.operations_state()
         if spec.name == "operations.get":
@@ -582,7 +625,7 @@ class AgentServer(socketserver.ThreadingUnixStreamServer):
                 "ok": False,
                 "error": {
                     "code": getattr(exc, "code", "operation_failed"),
-                    "message": str(getattr(exc, "message", exc)),
+                    "message": redact_text(str(getattr(exc, "message", exc))),
                 },
             }
         except Exception as exc:

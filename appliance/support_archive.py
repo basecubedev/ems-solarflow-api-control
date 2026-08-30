@@ -12,6 +12,7 @@ import json
 import tarfile
 import time
 
+from appliance import validation
 from appliance.operations import STATE_SUCCEEDED
 from appliance.redaction import bounded_redacted_log, redact_mapping
 from appliance.version import installed_version
@@ -124,7 +125,9 @@ class SupportArchiveService:
     def _members(self):
         status = redact_mapping(self.status_service.overview())
         members = [("status.json", json.dumps(status, indent=2, sort_keys=True))]
-        for source in ("appliance_web", "appliance_agent", "operations", "audit", "admin_container"):
+        # Derived from the declared sources, never restated: a hand-kept list
+        # here is a bundle that quietly stops carrying whatever was added last.
+        for source in validation.LOG_SOURCES:
             try:
                 log = self.status_service.read_log(source, MAX_LOG_LINES)
                 members.append((f"logs/{source}.log", log["text"]))

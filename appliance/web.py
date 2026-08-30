@@ -614,6 +614,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             "/api/ssh/keys": ("ssh.get", {}),
             "/api/backup": ("backup.get", {}),
             "/api/operations": ("operations.list", {}),
+            "/api/install/verify": ("install.verify", {}),
             "/api/network/wifi/scan": ("network.wifi.scan", {}),
         }
         if path in routes:

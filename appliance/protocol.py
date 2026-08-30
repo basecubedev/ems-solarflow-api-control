@@ -122,6 +122,13 @@ READ_ONLY_OPERATIONS = (
     _spec("ssh.get", summary="SSH service state and authorized keys"),
     _spec("backup.get", summary="Backup account and export paths"),
     _spec("operations.list", summary="Recent appliance operations"),
+    # Deliberately lock-free: the report an operator needs most is the one
+    # they need while an operation is stuck on the record.
+    _spec(
+        "install.verify",
+        summary="Installation verification report",
+        timeout_seconds=SLOW_PROBE_TIMEOUT,
+    ),
     # The appliance password lives in the file the Admin console and the
     # dashboard share, mode 0600 in the EMS deployment root. The unprivileged
     # web process cannot read it, so it asks -- the hash never leaves the agent.

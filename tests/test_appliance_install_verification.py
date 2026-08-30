@@ -705,3 +705,51 @@ def protocol_read_only_names():
     from appliance import protocol
 
     return {spec.name for spec in protocol.READ_ONLY_OPERATIONS}
+
+
+# --- reachable without a console -------------------------------------------
+
+
+def test_the_agent_never_forks_to_test_its_own_socket(monkeypatch):
+    """check_web_reaches_agent forks and connects back to the agent socket.
+
+    Run inside the threaded agent that owns that socket, it is a deadlock. The
+    honest answer is that the check could not run here, never a synthesized ok.
+    """
+
+    from appliance import install_check
+
+    def explode():
+        raise AssertionError("the agent must not fork to verify itself")
+
+    monkeypatch.setattr(install_check.os, "fork", explode)
+
+    checks = install_check.check_web_reaches_agent(None, live=True, in_agent=True)
+
+    assert [item["status"] for item in checks] == [STATUS_DEFERRED]
+    assert "console" in checks[0]["detail"]
+
+
+def test_verify_install_is_a_read_only_operation_that_takes_no_lock():
+    """It has to answer while a failed operation is still on the record."""
+
+    from appliance.protocol import OPERATIONS
+
+    spec = OPERATIONS["install.verify"]
+    assert spec.mutating is False
+    assert spec.takes_lock is False
+
+
+def test_the_appliance_reports_its_own_installation_over_the_api(tmp_path):
+    from appliance.agent import AgentHandlers
+    from tests.helpers.appliance import build_test_services
+
+    services = build_test_services(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    report = handlers.dispatch({"operation": "install.verify"})
+
+    assert isinstance(report["ok"], bool)
+    assert report["checks"]
+    statuses = {item["check"]: item["status"] for item in report["checks"]}
+    assert statuses["web_to_agent"] == STATUS_DEFERRED

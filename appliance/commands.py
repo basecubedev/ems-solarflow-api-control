@@ -103,6 +103,16 @@ def validated_arguments(args):
     return argv
 
 
+def _captured(value):
+    """Partial output from a killed process, which may not be decoded yet."""
+
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 class CommandRunner:
     """Run an allowlisted host tool with validated arguments."""
 
@@ -153,8 +163,18 @@ class CommandRunner:
                 shell=False,
                 check=False,
             )
-        except subprocess.TimeoutExpired:
-            result = CommandResult(tool, tuple(args), 124, "", "timed out", timed_out=True)
+        except subprocess.TimeoutExpired as exc:
+            # A tool killed at the deadline has usually already named its own
+            # problem; discarding that leaves "timed out" as the whole account.
+            captured = _captured(exc.stderr)
+            result = CommandResult(
+                tool,
+                tuple(args),
+                124,
+                _captured(exc.stdout),
+                f"{captured.rstrip()}\ntimed out" if captured.strip() else "timed out",
+                timed_out=True,
+            )
             if check:
                 raise CommandError("command_timeout", f"{tool} timed out")
             return result

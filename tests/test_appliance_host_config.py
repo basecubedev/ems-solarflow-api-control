@@ -333,6 +333,30 @@ def test_the_packaged_backup_user_is_accepted(tmp_path):
     assert load_config(paths).backup_user == "ems-backup"
 
 
+def test_an_ssh_key_account_outside_the_package_is_refused(tmp_path):
+    """One line here would hand the browser keys on an account that has a shell.
+
+    backup_user and deployment_user are pinned for a smaller reason than this
+    one, and this is the key that decides whose authorized_keys a request may
+    reach.
+    """
+
+    paths = layout(tmp_path)
+    write_conf(paths, "ssh_key_accounts = ems-backup, root\n")
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(paths)
+
+    assert excinfo.value.code == "ssh_key_accounts_unsupported"
+
+
+def test_the_packaged_ssh_key_account_is_accepted(tmp_path):
+    paths = layout(tmp_path)
+    write_conf(paths, "ssh_key_accounts = ems-backup\n")
+
+    assert load_config(paths).ssh_key_accounts == ("ems-backup",)
+
+
 # --- live activation ---------------------------------------------------------
 
 
