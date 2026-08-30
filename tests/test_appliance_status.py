@@ -388,3 +388,43 @@ def test_a_board_that_publishes_no_alarm_is_unknown_not_healthy(tmp_path):
     from appliance.hostprobe import HostProbe
 
     assert HostProbe(root=tmp_path).power() == {"available": False, "under_voltage": None}
+
+
+def test_the_alarm_is_found_wherever_the_hwmon_device_landed(tmp_path):
+    """The index the board's own sensor gets depends on driver registration.
+
+    A live Pi 3B+ logged six kernel under-voltage events during a failing
+    install while the appliance reported the supply as unknown, because that
+    board publishes the alarm as hwmon1.
+    """
+
+    from appliance.hostprobe import HostProbe
+
+    thermal = tmp_path / "sys/class/hwmon/hwmon0"
+    thermal.mkdir(parents=True)
+    (thermal / "name").write_text("cpu_thermal\n")
+
+    volt = tmp_path / "sys/class/hwmon/hwmon1"
+    volt.mkdir(parents=True)
+    (volt / "name").write_text("rpi_volt\n")
+    (volt / "in0_lcrit_alarm").write_text("1\n")
+
+    assert HostProbe(root=tmp_path).power() == {"available": True, "under_voltage": True}
+
+
+def test_another_sensors_alarm_never_answers_for_the_board(tmp_path):
+    """Reporting a foreign rail's alarm as the supply would be a false alarm."""
+
+    from appliance.hostprobe import HostProbe
+
+    other = tmp_path / "sys/class/hwmon/hwmon0"
+    other.mkdir(parents=True)
+    (other / "name").write_text("some_regulator\n")
+    (other / "in0_lcrit_alarm").write_text("1\n")
+
+    volt = tmp_path / "sys/class/hwmon/hwmon1"
+    volt.mkdir(parents=True)
+    (volt / "name").write_text("rpi_volt\n")
+    (volt / "in0_lcrit_alarm").write_text("0\n")
+
+    assert HostProbe(root=tmp_path).power()["under_voltage"] is False
