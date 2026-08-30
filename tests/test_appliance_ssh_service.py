@@ -81,14 +81,16 @@ def test_status_reports_service_accounts_and_hardening(tmp_path):
     assert status["hardening"]["passwordauthentication"]["compliant"] is True
     assert status["hardening"]["permitrootlogin"]["recommended"] == "no"
     names = {account["name"] for account in status["accounts"]}
-    assert names == {"ems-backup", "pi"}
+    assert names == {"ems-backup"}
 
 
 def test_status_reports_a_missing_host_account(tmp_path):
-    services = appliance(tmp_path)
+    """The configured account is reported whether or not the host has it yet."""
+
+    services = build_test_services(tmp_path)
     accounts = {item["name"]: item for item in services.ssh.status()["accounts"]}
-    assert accounts["pi"]["exists"] is False
-    assert accounts["pi"]["key_count"] == 0
+    assert accounts["ems-backup"]["exists"] is False
+    assert accounts["ems-backup"]["key_count"] == 0
 
 
 # --- service ---------------------------------------------------------------
@@ -214,11 +216,13 @@ def test_revoke_all_requires_a_confirmation_and_reports_the_count(tmp_path):
 
 
 def test_keys_for_an_account_the_host_does_not_have_are_refused(tmp_path):
-    services = appliance(tmp_path)
+    """Configured is not the same answer as present, and only one is a target."""
+
+    services = build_test_services(tmp_path)
     handlers = handlers_for(services)
     with pytest.raises(Exception) as excinfo:
         handlers.dispatch(
-            {"operation": "ssh.plan_key_add", "account": "pi", "public_key": ED25519}
+            {"operation": "ssh.plan_key_add", "account": "ems-backup", "public_key": ED25519}
         )
     assert getattr(excinfo.value, "code", "") == "account_missing"
 
