@@ -89,9 +89,8 @@ class ImageState:
 
 
 class DockerBackend:
-    def __init__(self, runner, *, compose_file=None, timeout=120):
+    def __init__(self, runner, *, timeout=120):
         self.runner = runner
-        self.compose_file = str(compose_file) if compose_file else ""
         self.timeout = timeout
 
     # --- daemon ----------------------------------------------------------
@@ -239,29 +238,38 @@ class DockerBackend:
 
     # --- compose ---------------------------------------------------------
 
-    def compose(self, args, *, timeout=None, overrides=()):
-        if not self.compose_file:
+    def compose(self, args, *, compose_file, timeout=None, overrides=()):
+        """Run ``docker compose`` against the file the caller resolved.
+
+        The path is never cached here: the deployment it names is created and
+        edited by the very operations that then have to run against it, so a
+        copy taken earlier can name a file that did not exist yet.
+        """
+
+        if not compose_file:
             raise DockerError("compose_file_missing", "no compose file is configured")
-        argv = ["compose", "-f", self.compose_file]
+        argv = ["compose", "-f", str(compose_file)]
         for override in overrides:
             argv += ["-f", str(override)]
         argv += list(args)
         return self.runner.run("docker", argv, timeout=timeout or max(self.timeout, 600))
 
-    def compose_services(self):
+    def compose_services(self, *, compose_file):
         try:
-            result = self.compose(["config", "--services"], timeout=60)
+            result = self.compose(["config", "--services"], compose_file=compose_file, timeout=60)
         except (DockerError, CommandError):
             return []
         if not result.ok:
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
-    def compose_up_service(self, service, *, overrides=()):
-        return self.compose(["up", "-d", "--no-deps", service], overrides=overrides)
+    def compose_up_service(self, service, *, compose_file, overrides=()):
+        return self.compose(
+            ["up", "-d", "--no-deps", service], compose_file=compose_file, overrides=overrides
+        )
 
-    def compose_stop_service(self, service):
-        return self.compose(["stop", service], timeout=120)
+    def compose_stop_service(self, service, *, compose_file):
+        return self.compose(["stop", service], compose_file=compose_file, timeout=120)
 
 
 def _container_state(name, payload):
