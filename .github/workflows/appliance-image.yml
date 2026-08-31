@@ -504,7 +504,7 @@ jobs:
         run: python3 scripts/appliance-check-release-identity.py
 
       - name: Collect what the build produced
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/collected
           pattern: appliance-*
