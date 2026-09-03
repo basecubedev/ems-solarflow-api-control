@@ -86,6 +86,8 @@ const SOC_ANIMATION_EPSILON = 0.1;
 const SSE_TELEMETRY_TIMEOUT_MS = 3000;
 let pollingStarted = false;
 let pollingIntervalId = null;
+let renderedSnapshotTimestamp = null;
+let deferredSnapshotRender = false;
 let pendingDeviceFlowBatteryAnimation = false;
 
 // Single-chart philosophy: one combined chart, configurable series. Colors are
@@ -269,12 +271,47 @@ function setConnection(text, connected) {
 }
 
 function updateSnapshot(snapshot) {
+  if (!snapshot) return;
   state.snapshot = snapshot;
   const status = state.demoMode
     ? "Demo"
     : state.liveTransport === "polling" ? "Polling" : "Live";
   setConnection(status, true);
+
+  const timestamp = snapshot.timestamp;
+  if (timestamp && timestamp === renderedSnapshotTimestamp && !deferredSnapshotRender) {
+    return;
+  }
+
+  // EventSource delivery and the polling timer both keep running in a
+  // background tab, so without this the tab rebuilds its view for a screen
+  // nobody is looking at. The newest state is kept; only the render waits.
+  if (liveDocumentHidden()) {
+    deferredSnapshotRender = true;
+    return;
+  }
+
+  renderSnapshotNow(snapshot);
+}
+
+function liveDocumentHidden() {
+  return typeof document !== "undefined" && document.hidden === true;
+}
+
+function renderSnapshotNow(snapshot) {
+  deferredSnapshotRender = false;
+  renderedSnapshotTimestamp = snapshot.timestamp || null;
   renderSnapshot(snapshot);
+}
+
+function flushDeferredSnapshotRender() {
+  if (!deferredSnapshotRender || liveDocumentHidden() || !state.snapshot) return;
+  renderSnapshotNow(state.snapshot);
+}
+
+function initLiveVisibilityHandling() {
+  if (typeof document === "undefined" || !document.addEventListener) return;
+  document.addEventListener("visibilitychange", flushDeferredSnapshotRender);
 }
 
 // View-aware live rendering. Every SSE/poll snapshot updates only the globally
@@ -5403,6 +5440,8 @@ function startPolling() {
 
 function resetLiveTransportForTests() {
   pollingStarted = false;
+  renderedSnapshotTimestamp = null;
+  deferredSnapshotRender = false;
   if (pollingIntervalId && typeof clearInterval === "function") {
     clearInterval(pollingIntervalId);
   }
@@ -5550,6 +5589,7 @@ function initDashboardApp() {
   initLogs();
   initMaintenance();
   initSessionHeartbeat();
+  initLiveVisibilityHandling();
   applyAnimationMode();
   if (state.demoMode) {
     initDemoMode();
@@ -5600,6 +5640,8 @@ if (typeof module !== "undefined") {
     renderDeviceFlow,
     updateSnapshot,
     renderSnapshot,
+    initLiveVisibilityHandling,
+    flushDeferredSnapshotRender,
     renderViewSnapshot,
     renderGlobalSnapshotMetrics,
     renderAggregatedSnapshot,
