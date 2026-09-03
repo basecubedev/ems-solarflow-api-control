@@ -84,8 +84,11 @@ const LOG_POLL_INTERVAL_MS = 2000;
 
 const SOC_ANIMATION_EPSILON = 0.1;
 const SSE_TELEMETRY_TIMEOUT_MS = 3000;
+const SSE_PROMOTION_INTERVAL_MS = 30000;
 let pollingStarted = false;
 let pollingIntervalId = null;
+let ssePromotionIntervalId = null;
+let activeEventSource = null;
 let renderedSnapshotTimestamp = null;
 let deferredSnapshotRender = false;
 let pendingDeviceFlowBatteryAnimation = false;
@@ -5364,7 +5367,16 @@ function startEvents() {
     return;
   }
 
+  connectEventSource();
+}
+
+// The only place an EventSource is created. Closing any previous one here is
+// what keeps a tab to a single live stream across reconnects and promotions.
+function connectEventSource() {
+  closeActiveEventSource();
+
   const source = new EventSource("/api/events");
+  activeEventSource = source;
   let receivedTelemetry = false;
   let telemetryVersion = 0;
   let fallbackStarted = false;
@@ -5373,6 +5385,7 @@ function startEvents() {
     if (fallbackStarted) return;
     fallbackStarted = true;
     source.close();
+    if (activeEventSource === source) activeEventSource = null;
     startPollingOnce();
   }
 
@@ -5389,7 +5402,7 @@ function startEvents() {
   source.addEventListener("telemetry", (event) => {
     receivedTelemetry = true;
     telemetryVersion += 1;
-    state.liveTransport = "sse";
+    promoteToSse();
     updateSnapshot(JSON.parse(event.data));
   });
 
@@ -5402,6 +5415,45 @@ function startEvents() {
 
     scheduleFallbackIfNoTelemetry(telemetryVersion);
   };
+
+  return source;
+}
+
+function closeActiveEventSource() {
+  if (!activeEventSource) return;
+  try {
+    activeEventSource.close();
+  } catch {
+    // A stream that cannot be closed is already gone.
+  }
+  activeEventSource = null;
+}
+
+// Reached when a retried stream delivers. Without this the server's 30-minute
+// connection cap and a momentarily exhausted per-IP slot are permanent
+// demotions: the tab polls every two seconds for the rest of its life.
+function promoteToSse() {
+  state.liveTransport = "sse";
+  if (!pollingStarted) return;
+  pollingStarted = false;
+  if (pollingIntervalId) {
+    clearInterval(pollingIntervalId);
+    pollingIntervalId = null;
+  }
+  if (ssePromotionIntervalId) {
+    clearInterval(ssePromotionIntervalId);
+    ssePromotionIntervalId = null;
+  }
+  setConnection("Live", true);
+}
+
+function scheduleSsePromotion() {
+  if (ssePromotionIntervalId) return;
+  if (typeof window === "undefined" || !window.EventSource) return;
+  ssePromotionIntervalId = setInterval(() => {
+    if (!pollingStarted) return;
+    connectEventSource();
+  }, SSE_PROMOTION_INTERVAL_MS);
 }
 
 async function fetchLiveSnapshot() {
@@ -5426,6 +5478,7 @@ function startPollingOnce() {
   state.liveTransport = "polling";
   setConnection("Polling", true);
   startPolling();
+  scheduleSsePromotion();
 }
 
 function startPolling() {
@@ -5446,6 +5499,11 @@ function resetLiveTransportForTests() {
     clearInterval(pollingIntervalId);
   }
   pollingIntervalId = null;
+  if (ssePromotionIntervalId && typeof clearInterval === "function") {
+    clearInterval(ssePromotionIntervalId);
+  }
+  ssePromotionIntervalId = null;
+  activeEventSource = null;
   state.liveTransport = "sse";
 }
 

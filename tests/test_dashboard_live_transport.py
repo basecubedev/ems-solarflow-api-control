@@ -233,3 +233,169 @@ console.log(JSON.stringify({
     assert out["whileHidden"] == 0
     assert out["afterVisible"] == out["rows"], "three hidden updates must coalesce into one render"
     assert out["shownPv"] == "300 W", "the flushed render must show the newest snapshot"
+
+
+TRANSPORT_PRELUDE = """
+const app = require(%s);
+
+// Controllable timers: nothing fires on its own, the test decides when.
+const timers = { next: 1, entries: new Map() };
+function addTimer(fn, ms, kind) {
+  const id = timers.next++;
+  timers.entries.set(id, { fn, ms, kind });
+  return id;
+}
+function fire(id) {
+  const entry = timers.entries.get(id);
+  if (!entry) return false;
+  if (entry.kind === "timeout") timers.entries.delete(id);
+  entry.fn();
+  return true;
+}
+function timerIds(kind) {
+  return [...timers.entries.entries()].filter(([, e]) => e.kind === kind).map(([id]) => id);
+}
+
+global.setTimeout = (fn, ms) => addTimer(fn, ms, "timeout");
+global.setInterval = (fn, ms) => addTimer(fn, ms, "interval");
+global.clearInterval = (id) => { timers.entries.delete(id); };
+global.clearTimeout = (id) => { timers.entries.delete(id); };
+
+// Every EventSource the app opens, in creation order.
+const sources = [];
+class FakeEventSource {
+  constructor(url) {
+    this.url = url;
+    this.closed = false;
+    this.listeners = {};
+    sources.push(this);
+  }
+  addEventListener(name, handler) { this.listeners[name] = handler; }
+  close() { this.closed = true; }
+  emitTelemetry(payload) {
+    if (this.listeners.telemetry) this.listeners.telemetry({ data: JSON.stringify(payload) });
+  }
+  emitError() { if (this.onerror) this.onerror(); }
+}
+
+global.EventSource = FakeEventSource;
+global.window = {
+  EventSource: FakeEventSource,
+  setTimeout: global.setTimeout,
+  setInterval: global.setInterval,
+  clearInterval: global.clearInterval,
+  localStorage: null,
+};
+global.fetch = async () => ({ ok: true, json: async () => ({ timestamp: "poll", rules: {}, devices: {} }) });
+
+class FakeClassList {
+  constructor() { this.values = new Set(); }
+  add(n) { this.values.add(n); }
+  remove(n) { this.values.delete(n); }
+  toggle(n, f) { const on = f === undefined ? !this.values.has(n) : f; if (on) this.values.add(n); else this.values.delete(n); return on; }
+  contains(n) { return this.values.has(n); }
+}
+class FakeElement {
+  constructor(id = "") {
+    this.id = id; this.textContent = ""; this.innerHTML = ""; this.hidden = false;
+    this.children = []; this.attrs = {}; this.classList = new FakeClassList();
+    this.clientWidth = 600; this.isConnected = true; this.style = { setProperty: () => {} };
+  }
+  setAttribute(k, v) { this.attrs[k] = v; }
+  appendChild(c) { this.children.push(c); }
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+}
+const nodes = new Map();
+global.document = {
+  hidden: false,
+  getElementById(id) { if (!nodes.has(id)) nodes.set(id, new FakeElement(id)); return nodes.get(id); },
+  createElement: () => new FakeElement(),
+  querySelector: () => null,
+  querySelectorAll: () => [],
+  addEventListener: () => {},
+};
+
+function openSources() { return sources.filter((s) => !s.closed).length; }
+""" % json.dumps(str(APP_JS))
+
+
+def test_no_telemetry_falls_back_to_polling():
+    script = TRANSPORT_PRELUDE + """
+app.resetLiveTransportForTests();
+app.startEvents();
+// The telemetry deadline expires without a single event.
+timerIds("timeout").forEach(fire);
+
+console.log(JSON.stringify({
+  transport: app.state.liveTransport,
+  sourcesOpen: openSources(),
+  pollingIntervals: timerIds("interval").length,
+}));
+"""
+    out = run_node(script)
+    assert out["transport"] == "polling"
+    assert out["sourcesOpen"] == 0, "the failed stream must be closed"
+    assert out["pollingIntervals"] >= 1
+
+
+def test_polling_retries_sse_and_is_promoted_back():
+    script = TRANSPORT_PRELUDE + """
+app.resetLiveTransportForTests();
+app.startEvents();
+timerIds("timeout").forEach(fire);
+const demoted = app.state.liveTransport;
+const sourcesAfterFallback = sources.length;
+
+// The promotion timer opens a fresh stream, and this one delivers.
+timerIds("interval").forEach(fire);
+const retried = sources.length;
+sources[sources.length - 1].emitTelemetry({ timestamp: "t1", rules: {}, devices: {} });
+
+console.log(JSON.stringify({
+  demoted,
+  sourcesAfterFallback,
+  retried,
+  promoted: app.state.liveTransport,
+  sourcesOpen: openSources(),
+}));
+"""
+    out = run_node(script)
+    assert out["demoted"] == "polling"
+    assert out["retried"] > out["sourcesAfterFallback"], "polling must retry SSE"
+    assert out["promoted"] == "sse", "telemetry on the retry must restore SSE"
+    assert out["sourcesOpen"] == 1, "exactly one live stream after promotion"
+
+
+def test_promotion_stops_the_polling_timer():
+    script = TRANSPORT_PRELUDE + """
+app.resetLiveTransportForTests();
+app.startEvents();
+timerIds("timeout").forEach(fire);
+const intervalsWhilePolling = timerIds("interval").length;
+
+timerIds("interval").forEach(fire);
+sources[sources.length - 1].emitTelemetry({ timestamp: "t1", rules: {}, devices: {} });
+const intervalsAfterPromotion = timerIds("interval").length;
+
+console.log(JSON.stringify({ intervalsWhilePolling, intervalsAfterPromotion }));
+"""
+    out = run_node(script)
+    assert out["intervalsWhilePolling"] >= 1
+    assert out["intervalsAfterPromotion"] == 0, "promotion must cancel polling and its retry timer"
+
+
+def test_never_more_than_one_open_event_source():
+    script = TRANSPORT_PRELUDE + """
+app.resetLiveTransportForTests();
+app.startEvents();
+timerIds("timeout").forEach(fire);
+// Several promotion attempts in a row, none of which deliver telemetry.
+for (let i = 0; i < 3; i += 1) {
+  timerIds("interval").forEach(fire);
+}
+console.log(JSON.stringify({ created: sources.length, open: openSources() }));
+"""
+    out = run_node(script)
+    assert out["created"] >= 2
+    assert out["open"] <= 1, "a tab must never hold two live streams"
