@@ -454,6 +454,61 @@ def test_the_renderer_is_wired_into_the_dashboard_bootstrap():
     assert calls >= 3, calls
 
 
+def test_an_off_screen_view_is_decided_without_measuring_it():
+    """The predicate must answer from attributes, never from geometry.
+
+    Asking the layout engine whether a view is on screen costs a full
+    synchronous layout, and the dashboard asks once per snapshot for every flow
+    SVG including the ones belonging to views that are switched away. Measured
+    in the control view, where no flow SVG is on screen at all, that single
+    question cost 25-36 ms of main thread per snapshot in Firefox. The stub
+    below fails the test if the predicate touches layout at all.
+    """
+
+    script = PRELUDE + """
+const boom = () => { throw new Error("forced layout"); };
+const el = (over) => Object.assign({
+  hidden: false,
+  getBoundingClientRect: boom,
+  closest: () => null,
+  parentNode: null,
+}, over);
+
+console.log(JSON.stringify({
+  hiddenItself: app.flowSvgOffScreen(el({ hidden: true })),
+  hiddenAncestor: app.flowSvgOffScreen(el({ closest: () => ({}) })),
+  onScreen: app.flowSvgOffScreen(el({})),
+  missing: app.flowSvgOffScreen(null),
+}));
+"""
+    out = run_node(script)
+    assert out["hiddenItself"] is True
+    assert out["hiddenAncestor"] is True
+    assert out["onScreen"] is False
+    # A missing node cannot be drawn into either.
+    assert out["missing"] is True
+
+
+def test_an_off_screen_view_is_skipped_before_anything_is_measured():
+    """The cheap question has to be asked before the expensive one.
+
+    Pinning the order, not just the predicate: consulting it after the rect has
+    already been read would leave the cost exactly where it was.
+    """
+
+    source = APP_JS.read_text(encoding="utf-8")
+    start = source.index("function buildFlowTileHost(")
+    end = source.index("\n}", start)
+    body = source[start:end]
+
+    assert "flowSvgOffScreen" in body, (
+        "buildFlowTileHost must decide off-screen views without measuring them"
+    )
+    assert body.index("flowSvgOffScreen") < body.index("getBoundingClientRect"), (
+        "the off-screen check has to come before the first layout-forcing read"
+    )
+
+
 def test_the_host_is_measured_before_it_is_written_to():
     """Every layout read in buildFlowTileHost precedes every style write.
 

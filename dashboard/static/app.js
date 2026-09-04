@@ -803,16 +803,32 @@ function flowTileLayerFor(svg) {
   return layer;
 }
 
+// Whether this flow SVG belongs to a view that is switched away. Answered from
+// the `hidden` attribute setFlowView already sets, because asking the layout
+// engine instead costs a full synchronous layout: in the control view, where no
+// flow SVG is on screen, that one question was 25-36 ms of main thread per
+// snapshot.
+function flowSvgOffScreen(svg) {
+  if (!svg) return true;
+  if (svg.hidden) return true;
+  return typeof svg.closest === "function" && Boolean(svg.closest("[hidden]"));
+}
+
 function buildFlowTileHost(svg) {
   const layer = flowTileLayerFor(svg);
   if (!layer) return null;
+
+  if (flowSvgOffScreen(svg)) {
+    // The view is switched away. Its layer is a sibling of the view that is on
+    // screen, so leaving it visible would paint one view's pipes over another's.
+    layer.hidden = true;
+    return null;
+  }
 
   // Every read before every write: a write between two reads makes each later
   // read flush layout again, once per pipe. Pinned by a test.
   const rect = svg.getBoundingClientRect();
   if (!rect.width || !rect.height) {
-    // The view is switched away. Its layer is a sibling of the view that is on
-    // screen, so leaving it visible would paint one view's pipes over another's.
     layer.hidden = true;
     return null;
   }
@@ -6335,6 +6351,7 @@ if (typeof module !== "undefined") {
     flowSegments,
     flowVisibleRuns,
     flowTileBackground,
+    flowSvgOffScreen,
     flowTileState,
     initFlowTiles,
     invalidateFlowTiles,
