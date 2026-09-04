@@ -1466,23 +1466,19 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
   background: linear-gradient(120deg, rgba(255,255,255,.14), transparent 42%);
   opacity: .46;
 }
-.control-result::after {
-  content: "";
+/* The travelling border on a result chip. The gradient lives in a child that is
+   translated, rather than in a background whose position is animated: the
+   control view puts one of these on every stage of every device, and
+   background-position is a paint property, so Chromium repainted all of them
+   every frame -- 45.2 fps against 134.6 with the animation off, measured headed
+   on a GPU at eight devices. The mask is not the cost and stays. */
+.control-result-ring {
   position: absolute;
   inset: 0;
   border-radius: inherit;
   padding: 1px;
   pointer-events: none;
-  background:
-    linear-gradient(
-      90deg,
-      rgba(34,211,238,.18),
-      rgba(125,211,252,.95),
-      rgba(122,168,255,.88),
-      rgba(34,211,238,.18)
-    );
-  background-size: 220% 100%;
-  animation: controlResultBorderFlow 4.2s linear infinite;
+  overflow: hidden;
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
@@ -1491,6 +1487,31 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
+}
+
+.control-result-ring i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 200%;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(34,211,238,.18),
+      rgba(125,211,252,.95),
+      rgba(122,168,255,.88),
+      rgba(34,211,238,.18)
+    );
+  background-size: 50% 100%;
+  background-repeat: repeat-x;
+  animation: controlResultRingSlide 4.2s linear infinite;
+  will-change: transform;
+}
+
+/* Half the element is exactly one tile, so the loop has no seam. */
+@keyframes controlResultRingSlide {
+  to { transform: translate3d(-50%, 0, 0); }
 }
 .control-result .value-icon {
   position: relative;
@@ -1972,7 +1993,7 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
     filter: none;
   }
 
-  .control-result::after {
+  .control-result-ring i {
     animation: none;
   }
 }
@@ -2010,7 +2031,7 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
 .dashboard-animation-off .solar-visual.active .solar-sun,
 .dashboard-animation-off .battery-visual.charging .battery-fill,
 .dashboard-animation-off .inverter-visual.active .inverter-led,
-.dashboard-animation-off .control-result::after {
+.dashboard-animation-off .control-result-ring i {
   animation: none;
 }
 @media (max-width: 420px) {

@@ -432,6 +432,58 @@ def test_animation_mode_css_classes_present():
     assert "@media (prefers-reduced-motion: reduce)" in css
 
 
+# The control view puts one animated result chip on every stage of every device,
+# and the border on each of them used to animate `background-position` -- a
+# paint property. Chromium cannot composite that, so it repainted every chip on
+# every frame: measured headed on a GPU, the control view ran at 45.2 fps with
+# eight devices and 134.6 with the same animation switched off, frame p95 27.8 ms
+# against 7.0. Removing the mask instead of the animation changed nothing
+# (48.7 fps), so the animated paint property is the cost and the mask is not.
+# Firefox was unaffected in all three arrangements.
+def test_the_result_ring_animates_a_property_the_compositor_can_carry():
+    css = (ROOT / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    assert "@keyframes controlResultRingSlide" in css, (
+        "the control result ring needs a keyframe the compositor can carry"
+    )
+    start = css.index("@keyframes controlResultRingSlide")
+    body = css[start:css.index("}", css.index("{", start) + 1) + 2]
+    assert "transform" in body, "the ring has to move with a transform"
+    for paint_property in ("background-position", "mask-position", "background-size"):
+        assert paint_property not in body, (
+            f"{paint_property} is a paint property; animating it repaints every "
+            "chip on every frame"
+        )
+
+    # The chips must no longer use the paint-animated keyframe at all.
+    for block in css.split("}"):
+        if ".control-result" in block and "controlResultBorderFlow" in block:
+            raise AssertionError(
+                "a .control-result rule still animates controlResultBorderFlow, "
+                "which animates background-position"
+            )
+
+
+def test_the_result_ring_still_stops_for_reduced_motion_and_animation_off():
+    """Making it cheap must not make it unstoppable.
+
+    Both switches targeted `.control-result::after` by name. A construction
+    that moves the animation somewhere else silently takes the accessibility
+    setting with it.
+    """
+
+    css = (ROOT / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
+    reduced = css[css.index("@media (prefers-reduced-motion: reduce)"):]
+    reduced = reduced[:reduced.index("\n}\n")]
+    assert "control-result-ring" in reduced, (
+        "prefers-reduced-motion no longer reaches the control result ring"
+    )
+    off = css[css.index(".dashboard-animation-off"):]
+    assert "control-result-ring" in off, (
+        "dashboard-animation-off no longer reaches the control result ring"
+    )
+
+
 # The lightweight SQLite History panel belongs only to the operational
 # aggregated/devices views. setFlowView() must reload it exactly for those
 # transitions and never when switching to analytics/control/energy/diagnose/logs

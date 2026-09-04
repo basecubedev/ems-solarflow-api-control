@@ -2330,6 +2330,7 @@ function controlResult(label, value, iconName = "charge", formatter = controlTex
   const text = hasExplainValue(value) ? formatter(value) : "--";
   return `
     <div class="control-result control-stage-result ${tone ? `tone-${escapeHtml(tone)}` : ""}">
+      <span class="control-result-ring" aria-hidden="true"><i></i></span>
       <span class="value-icon" aria-hidden="true">${icon(iconName)}</span>
       <span class="control-label control-stage-result-label">Result / ${escapeHtml(label)}</span>
       <strong class="control-stage-result-value">${escapeHtml(text)}</strong>
