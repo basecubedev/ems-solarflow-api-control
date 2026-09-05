@@ -14,6 +14,7 @@ They are deterministic and never touch a real InfluxDB or browser.
 """
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -632,6 +633,111 @@ console.log(JSON.stringify({ runtimeWrites, explainWrites }));
     assert out["explainWrites"] == 3
 
 
+def test_the_two_animation_routes_move_the_tile_the_same_way():
+    """The tile is driven by `element.animate()` where the browser has it and by
+    the CSS keyframes where it does not. Two implementations of one motion, and
+    nothing stopped them drifting apart: flipping a sign in either place would
+    send half the browsers the wrong way and no test would notice.
+
+    So the vectors are compared. The magnitude is a dash period in both and is
+    not the question; the axis and the sign are.
+    """
+
+    css = (ROOT / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
+    source = APP_JS.read_text(encoding="utf-8")
+
+    block = re.search(r"const FLOW_TILE_VECTORS = \{(.*?)\};", source, re.S)
+    assert block, "FLOW_TILE_VECTORS is missing"
+    from_js = {
+        name: (int(x), int(y))
+        for name, x, y in re.findall(
+            r"(\w+):\s*\[\s*(-?\d+)\s*,\s*(-?\d+)\s*\]", block.group(1)
+        )
+    }
+    assert set(from_js) == {"right", "left", "down", "up"}, from_js
+
+    def translate_arguments(text, at):
+        """The arguments of the translate3d() starting at `at`, split on the
+        commas that are not inside a nested calc()."""
+        opened = text.index("(", at)
+        depth, index = 0, opened
+        while True:
+            if text[index] == "(":
+                depth += 1
+            elif text[index] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            index += 1
+        inner = text[opened + 1:index]
+        args, depth, part = [], 0, ""
+        for char in inner:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            if char == "," and depth == 0:
+                args.append(part.strip())
+                part = ""
+            else:
+                part += char
+        args.append(part.strip())
+        return args
+
+    for direction, vector in sorted(from_js.items()):
+        name = "flowTile" + direction.capitalize()
+        start = css.find("@keyframes %s " % name)
+        assert start != -1, f"@keyframes {name} is missing"
+        moved = css.find("translate3d", start)
+        assert moved != -1 and moved < css.index("}", css.index("}", start) + 1), (
+            f"@keyframes {name} does not translate3d"
+        )
+        # "0", "var(--tile-step)" or "calc(-1 * var(--tile-step))" per axis.
+        args = translate_arguments(css, moved)
+        assert len(args) == 3, (name, args)
+        from_css = []
+        for arg in args[:2]:
+            if arg == "0":
+                from_css.append(0)
+            else:
+                from_css.append(-1 if "-1" in arg else 1)
+        assert tuple(from_css) == vector, (
+            f"{name} moves {tuple(from_css)} in CSS and {vector} in "
+            f"FLOW_TILE_VECTORS; a browser without element.animate() would run "
+            f"this pipe the other way"
+        )
+
+
+def test_every_compact_button_carries_the_ring_element():
+    """The travelling border is an element now, not a pseudo-element, so a
+    button that does not contain it simply has no border.
+
+    That is the same shape of mistake the border cost in the first place: a rule
+    whose reach nobody re-checked. There were five of these buttons in the
+    markup and two more generated, and the runtime editor multiplies one of them
+    by the device count.
+    """
+
+    ring = '<span class="button-ring" aria-hidden="true"><i></i></span>'
+    seen = 0
+    for path in (
+        ROOT / "dashboard" / "static" / "index.html",
+        ROOT / "dashboard" / "static" / "app.js",
+    ):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"primary-button compact", text):
+            close = text.find(">", match.end())
+            assert close != -1, f"{path.name}: unterminated tag near {match.start()}"
+            following = text[close + 1:close + 1 + len(ring) + 8]
+            assert "button-ring" in following, (
+                f"{path.name}: a `primary-button compact` at offset "
+                f"{match.start()} does not open with the ring element, so it "
+                f"renders without its border:\n  {following!r}"
+            )
+            seen += 1
+    assert seen >= 7, f"expected at least seven compact buttons, found {seen}"
+
+
 def test_the_result_ring_still_stops_for_reduced_motion_and_animation_off():
     """Making it cheap must not make it unstoppable.
 
@@ -643,13 +749,15 @@ def test_the_result_ring_still_stops_for_reduced_motion_and_animation_off():
     css = (ROOT / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
     reduced = css[css.index("@media (prefers-reduced-motion: reduce)"):]
     reduced = reduced[:reduced.index("\n}\n")]
-    assert "control-result-ring" in reduced, (
-        "prefers-reduced-motion no longer reaches the control result ring"
-    )
+    for ring in ("control-result-ring", "button-ring"):
+        assert ring in reduced, (
+            f"prefers-reduced-motion no longer reaches .{ring}"
+        )
     off = css[css.index(".dashboard-animation-off"):]
-    assert "control-result-ring" in off, (
-        "dashboard-animation-off no longer reaches the control result ring"
-    )
+    for ring in ("control-result-ring", "button-ring"):
+        assert ring in off, (
+            f"dashboard-animation-off no longer reaches .{ring}"
+        )
 
 
 # The lightweight SQLite History panel belongs only to the operational

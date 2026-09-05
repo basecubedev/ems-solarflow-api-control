@@ -1297,18 +1297,20 @@ MATRICES = {
 def looks_occluded(case, result):
     if not result:
         return False
-    # Two matrices put the dashboard behind another page deliberately, and there
-    # the 1 fps *is* the measurement. Only an unasked-for background counts.
-    if case.get("foreground") != "dashboard" or case.get("neighbour"):
+    # Only the page the scenario put in front is judged. A page deliberately
+    # left behind another is throttled on purpose -- `hiddentab` and `unfocused`
+    # exist to measure exactly that -- and there the 1 fps is the result rather
+    # than a failure to get one.
+    front = (
+        result.get("neighbour")
+        if case.get("foreground") == "neighbour"
+        else result.get("dashboard")
+    )
+    if not front:
         return False
-    for page in (result.get("dashboard"), result.get("neighbour")):
-        if not page:
-            continue
-        fps = page.get("fps")
-        frame_p95 = page.get("frameP95Ms")
-        if fps is not None and fps < 5 and (frame_p95 or 0) > 500:
-            return True
-    return False
+    fps = front.get("fps")
+    frame_p95 = front.get("frameP95Ms")
+    return fps is not None and fps < 5 and (frame_p95 or 0) > 500
 
 
 def run_case(node, case, browser, gpu, duration_ms, max_load, attempts=3):
