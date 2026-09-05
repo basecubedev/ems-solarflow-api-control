@@ -96,16 +96,21 @@ Neither could be removed on its own. Firefox, devices view, four devices:
 ### The flow tile layer
 
 The dashes are now an HTML layer above each flow SVG, one box per visible run of
-each pipe, each box clipping a repeating-gradient strip that a CSS `transform`
-moves by one dash period. A transform on a promoted layer is handled by the
+each pipe, each box clipping a tiled token strip that a CSS `transform` moves by
+one dash period. The token is a rounded rect drawn as a `data:` URI, which
+restores the round line caps the SVG stroke had; a generated stylesheet would be
+blocked by the dashboard's `style-src 'self'` CSP, and `element.style` is not. A transform on a promoted layer is handled by the
 compositor and repaints nothing: eighty of these tiles measured 60.2 fps against
 60.1 with none at all. `softPulse` animates opacity only.
 
-| Firefox, before → after | |
+| Firefox headless, before → after | |
 |---|---|
 | aggregated view, any device count | 5.5 → **57** fps |
 | devices view, two devices | 4.7 → **57.6** fps |
 | devices view, four or more | 4.1 → 9.2 fps |
+
+Those are headless numbers; see "What is still slow, and what only looked slow"
+below before drawing a conclusion from the last row.
 
 Three properties of the renderer are worth knowing before changing it:
 
@@ -118,6 +123,13 @@ Three properties of the renderer are worth knowing before changing it:
 - **Nothing in the layer may carry a `filter`.** Eighty tiles with one
   `drop-shadow` took Chromium from 17.3 to 9.1 fps. The halo comes from the
   static `.pipe-glow` stroke in the SVG.
+- **Magnitude is thickness, and it is continuous.** `--pipe-width` is
+  proportional to power on a scale that snaps to a coarse ladder taken from the
+  system's own output, with hysteresis. It replaced three fixed steps (4, 5 and
+  6 px at 150 W and 600 W thresholds) that made a 700 W flow and a 3000 W flow
+  identical. Thickness was chosen because it is the one magnitude channel that
+  survives desaturation and the deuteranopic collapse of the PV and battery
+  colours.
 - **It refuses what it cannot represent.** The path parser takes only `M`, `L`,
   `H` and `V`; anything else, or a browser without `getComputedStyle`, leaves the
   CSS animation in place rather than showing no flow at all.
@@ -125,22 +137,64 @@ Three properties of the renderer are worth knowing before changing it:
 [`../../tests/test_dashboard_flow_tiles.py`](../../tests/test_dashboard_flow_tiles.py)
 pins all three.
 
-### What is still slow
+### What is still slow, and what only looked slow
 
-- **The devices view past two devices, in Firefox.** The trigger is the tile
-  layer growing taller than the viewport, not the number of tiles: forty tiles
-  in a 395px layer run at 60.2 fps, twenty-eight in a 909px layer at 8.8.
-- **Chromium, at about 17 fps, because of `backdrop-filter`.** It is
-  re-evaluated whenever anything on the page repaints. With it disabled every
-  configuration measured reaches 60 fps. That is a visual-design decision, not a
-  rendering one.
+Every number above is **headless**, which on this project's Linux host means
+Chromium rasterises in software (ANGLE/SwiftShader) and Firefox composites the
+page on the CPU. Re-measured with a real GPU and a real window, two of the
+things this document used to list as unsolved do not happen:
+
+| Firefox, devices view, 8 devices | fps |
+|---|---:|
+| headless | 11.2 |
+| headed on a real display | **134.6** |
+
+| Chromium, devices view, 8 devices | fps |
+|---|---:|
+| headless, default (SwiftShader) | 9.6 |
+| headless with GPU flags | 58.5 |
+| headed on a real display | **115.6** |
+
+So the Firefox devices-view cliff and the Chromium `backdrop-filter` ceiling
+were both software-rasterisation artifacts. On hardware the shipped dashboard
+runs at the display's refresh ceiling in every view at 2, 4 and 8 devices in
+both engines.
+
+The **mechanism** behind the Firefox cliff was measured once and not
+independently re-verified. It will matter again on a weak machine: a transform animation on an element that is not entirely inside
+the visual viewport makes Firefox re-rasterise that region every frame, and the
+region is full of `drop-shadow`. The dose-response is sharp -- one such element
+is free, two collapse the page -- and it tracks viewport height rather than
+device count.
+
+`backdrop-filter` has been **removed from the panel rule**. It was measured
+invisible on this dashboard: the panels are 78-92% opaque over a near-featureless
+background, so turning an 18px blur off changes the page by a mean of 0.008/255
+in Firefox. It was not free -- on a GPU it cost about 19% in the control view,
+and only while something animated. Reducing the radius does not help; the cost
+is the backdrop-root recompute, not the kernel.
+
+### Reading a benchmark from this project
+
+`--gpu {software,gpu,headed}` selects the rasterisation path, and every report
+written from 2026-09-04 onward records `environment.gpu`, the observed
+`rasterisation.renderer` per run, and the machine's `load_average`. `--max-load`
+makes each case wait for a quiet machine first.
+
+One trap is worth stating: the renderer string comes from
+`WEBGL_debug_renderer_info`, which names the device *WebGL* was given, not the
+one compositing the page. Headless Firefox reports an NVIDIA device and still
+composites on the CPU. The probe can prove a run was software; it cannot prove
+one was hardware. Only headed on a real display is certain.
 
 `dashboard.animation_mode` (`normal` | `reduced` | `off`) remains a real
 performance control, and `prefers-reduced-motion` is honoured on top of it.
 
-The full account, including six rejected techniques and a canvas renderer that
-was built and withdrawn, is in
-[`../../reports/dashboard-perf/flow-rendering-investigation.md`](../../reports/dashboard-perf/flow-rendering-investigation.md).
+The full account is in
+[`../../reports/dashboard-perf/energy-flow-visualization-study.md`](../../reports/dashboard-perf/energy-flow-visualization-study.md),
+which supersedes
+[`flow-rendering-investigation.md`](../../reports/dashboard-perf/flow-rendering-investigation.md)
+on the two points above and on the canvas renderer it withdrew.
 
 ## Several tabs at once
 

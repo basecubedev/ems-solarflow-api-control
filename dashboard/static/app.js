@@ -154,6 +154,48 @@ const FLOW_SPEED_BUCKETS = {
   medium: { alpha: 0.68, width: 5, glow: 0.26 },
   high: { alpha: 0.90, width: 6, glow: 0.40 },
 };
+
+// Magnitude is thickness. See docs/technical/dashboard-performance.md.
+const FLOW_RIBBON_IDLE_W = 3;
+const FLOW_RIBBON_MIN_W = 4;
+const FLOW_RIBBON_MAX_W = 15;
+// The inverter's PV and battery ports are 28 user units apart; wider ribbons
+// than this collide in the aggregated layout.
+const FLOW_RIBBON_CEILING_W = 22;
+
+// A fixed full-scale suits neither a 600 W balcony system nor a 10 kW one, so
+// the scale snaps to a rung chosen from the system's own output.
+const FLOW_SCALE_LADDER = [250, 500, 1000, 2000, 3000, 5000, 8000, 12000];
+const flowScale = { reference: 1000 };
+
+function flowScaleReference(maxWatts) {
+  const current = flowScale.reference;
+  const value = Number.isFinite(maxWatts) ? Math.abs(maxWatts) : 0;
+  // Hysteresis: without it the widths flicker between two rungs at the boundary.
+  if (value <= current && value >= current * 0.5) return current;
+  let next = FLOW_SCALE_LADDER[FLOW_SCALE_LADDER.length - 1];
+  for (let i = 0; i < FLOW_SCALE_LADDER.length; i += 1) {
+    if (value <= FLOW_SCALE_LADDER[i]) {
+      next = FLOW_SCALE_LADDER[i];
+      break;
+    }
+  }
+  flowScale.reference = next;
+  return next;
+}
+
+function flowRibbonWidth(watts, active) {
+  if (!active) return FLOW_RIBBON_IDLE_W;
+  const value = Number.isFinite(watts) ? Math.abs(watts) : 0;
+  const reference = flowScale.reference || 1000;
+  const share = clamp(value / reference, 0, 1);
+  const width = FLOW_RIBBON_MIN_W + (FLOW_RIBBON_MAX_W - FLOW_RIBBON_MIN_W) * share;
+  // Quantised to half a pixel. The width is part of the style cache key, so a
+  // continuous one rewrites the pipe's style on almost every snapshot: at eight
+  // devices that measured as lagP95 3 ms -> 14 ms. Half a pixel is below what
+  // the eye resolves here and cuts the rewrites by roughly five.
+  return Math.min(FLOW_RIBBON_CEILING_W, Math.round(width * 2) / 2);
+}
 const DEVICE_FLOW_LAYOUT = {
   width: 900,
   rowHeight: 244,
@@ -396,6 +438,12 @@ function renderAggregatedSnapshot(snapshot) {
     gridPower > FLOW_THRESHOLD_W ? "importing" : gridPower < -FLOW_THRESHOLD_W ? "exporting" : "neutral"
   );
 
+  // The scale comes from the whole picture, not from one pipe, so that two
+  // ribbons in the same view are comparable with each other.
+  flowScaleReference(Math.max(
+    Math.abs(pvPower), batteryFlow.absW, Math.abs(inverterPower), Math.abs(gridPower)
+  ));
+
   setPipe("pipePvInverter", pvPower, "forward");
   // The battery path is drawn battery -> inverter; in the current SVG dash
   // animation, reverse visibly flows inverter -> battery for charging.
@@ -459,17 +507,23 @@ function applyFlowClasses(el, active, direction, speedBucket) {
   }
 }
 
-function applyPipeStyleBucket(el, speedBucket) {
+function applyPipeStyleBucket(el, speedBucket, watts) {
   if (!el) return;
-  if (typeof el.getAttribute === "function" && el.getAttribute("data-flow-style") === speedBucket) {
+  const style = FLOW_SPEED_BUCKETS[speedBucket] || FLOW_SPEED_BUCKETS.idle;
+  const width = watts === undefined
+    ? style.width
+    : flowRibbonWidth(watts, speedBucket !== "idle");
+  // The key must carry the width: keyed on the bucket alone, a flow moving from
+  // 700 W to 3000 W would keep the thickness it had at 700 W.
+  const key = `${speedBucket}:${width}`;
+  if (typeof el.getAttribute === "function" && el.getAttribute("data-flow-style") === key) {
     return;
   }
-  const style = FLOW_SPEED_BUCKETS[speedBucket] || FLOW_SPEED_BUCKETS.idle;
   el.style.setProperty("--pipe-alpha", String(style.alpha));
-  el.style.setProperty("--pipe-width", `${style.width}px`);
+  el.style.setProperty("--pipe-width", `${width}px`);
   el.style.setProperty("--pipe-glow", String(style.glow));
   if (typeof el.setAttribute === "function") {
-    el.setAttribute("data-flow-style", speedBucket);
+    el.setAttribute("data-flow-style", key);
   }
 }
 
@@ -481,7 +535,7 @@ function setPipe(id, value, direction = "forward") {
   const speedBucket = flowSpeedBucket(wattsValue, active);
 
   applyFlowClasses(el, active, direction, speedBucket);
-  applyPipeStyleBucket(el, speedBucket);
+  applyPipeStyleBucket(el, speedBucket, wattsValue);
 }
 
 // ---------------------------------------------------------------- flow tiles
@@ -752,6 +806,9 @@ function flowTileLayerFor(svg) {
 function buildFlowTileHost(svg) {
   const layer = flowTileLayerFor(svg);
   if (!layer) return null;
+
+  // Every read before every write: a write between two reads makes each later
+  // read flush layout again, once per pipe. Pinned by a test.
   const rect = svg.getBoundingClientRect();
   if (!rect.width || !rect.height) {
     // The view is switched away. Its layer is a sibling of the view that is on
@@ -759,14 +816,7 @@ function buildFlowTileHost(svg) {
     layer.hidden = true;
     return null;
   }
-  layer.hidden = false;
-
   const parentRect = svg.parentNode.getBoundingClientRect();
-  layer.style.left = `${rect.left - parentRect.left}px`;
-  layer.style.top = `${rect.top - parentRect.top}px`;
-  layer.style.width = `${rect.width}px`;
-  layer.style.height = `${rect.height}px`;
-
   const occluders = readFlowOccluders(svg, rect);
   const pipes = [];
   let readable = true;
@@ -783,19 +833,37 @@ function buildFlowTileHost(svg) {
   });
   if (!readable || !pipes.length) return null;
 
+  layer.hidden = false;
+  layer.style.left = `${rect.left - parentRect.left}px`;
+  layer.style.top = `${rect.top - parentRect.top}px`;
+  layer.style.width = `${rect.width}px`;
+  layer.style.height = `${rect.height}px`;
+
   return { layer, pipes, width: rect.width, height: rect.height };
 }
 
 function flowTileBackground(pipe, horizontal) {
   if (!pipe.period || !pipe.dash) return pipe.color;
-  const ramp = Math.min(pipe.dash / 2, pipe.period * FLOW_TILE_RAMP);
-  const axis = horizontal ? "90deg" : "180deg";
-  return `repeating-linear-gradient(${axis},`
-    + ` ${pipe.faded} 0px,`
-    + ` ${pipe.color} ${ramp}px,`
-    + ` ${pipe.color} ${pipe.dash - ramp}px,`
-    + ` ${pipe.faded} ${pipe.dash}px,`
-    + ` ${pipe.faded} ${pipe.period}px)`;
+  // A data: URI, not a generated stylesheet: the CSP is `style-src 'self'` with
+  // no 'unsafe-inline'. It must be assigned through element.style, because the
+  // quotes in a url("data:...") value truncate an HTML style attribute.
+  const thickness = Math.max(2, pipe.width);
+  const radius = Math.min(thickness / 2, pipe.dash / 2);
+  const width = horizontal ? pipe.period : thickness;
+  const height = horizontal ? thickness : pipe.period;
+  const token = horizontal
+    ? `<rect x="0" y="0" width="${round2(pipe.dash)}" height="${round2(thickness)}"`
+    : `<rect x="0" y="0" width="${round2(thickness)}" height="${round2(pipe.dash)}"`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${round2(width)}"`
+    + ` height="${round2(height)}" viewBox="0 0 ${round2(width)} ${round2(height)}">`
+    + `${token} rx="${round2(radius)}" ry="${round2(radius)}" fill="${pipe.color}"/></svg>`;
+  const size = horizontal ? `${round2(pipe.period)}px 100%` : `100% ${round2(pipe.period)}px`;
+  const repeat = horizontal ? "repeat-x" : "repeat-y";
+  return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}") 0 0 / ${size} ${repeat}`;
+}
+
+function round2(value) {
+  return Math.round(value * 100) / 100;
 }
 
 function renderFlowTiles(host) {
@@ -1559,7 +1627,12 @@ function applyDeviceFlowInitialStyles(container) {
   }
 
   container.querySelectorAll("[data-flow-speed]").forEach((el) => {
-    applyPipeStyleBucket(el, el.getAttribute("data-flow-speed") || "idle");
+    const watts = Number(el.getAttribute("data-flow-watts"));
+    applyPipeStyleBucket(
+      el,
+      el.getAttribute("data-flow-speed") || "idle",
+      Number.isFinite(watts) ? watts : undefined
+    );
   });
 
   container.querySelectorAll("[data-battery-fill-start]").forEach((el) => {
@@ -1600,7 +1673,7 @@ function updateDevicePipeElement(el, key, kind, value, direction = "forward") {
   const active = flowActive(`device:${key}:${kind}`, wattsValue);
   const speedBucket = flowSpeedBucket(wattsValue, active);
   setSvgClass(el, devicePipeClass(kind, active, direction, speedBucket));
-  applyPipeStyleBucket(el, speedBucket);
+  applyPipeStyleBucket(el, speedBucket, wattsValue);
 }
 
 function updateDeviceFlowSnapshot(container, snapshot, entries) {
@@ -1610,6 +1683,19 @@ function updateDeviceFlowSnapshot(container, snapshot, entries) {
   const fills = dataElementMap(container, "data-device-battery-fill");
   const homeLoad = Number(snapshot.home_load_w || 0);
   const gridPower = Number(snapshot.grid_power_w || 0);
+
+  // One scale for the whole view, taken before any pipe is drawn, so a ribbon
+  // in one device's row is comparable with a ribbon in another's.
+  let widest = Math.abs(gridPower);
+  entries.forEach(([, device]) => {
+    widest = Math.max(
+      widest,
+      Math.abs(devicePvPower(device)),
+      Math.abs(deviceOutputPower(device)),
+      normalizeBatteryPowerForDisplay(device?.battery_power_w).absW
+    );
+  });
+  flowScaleReference(widest);
 
   entries.forEach(([name, device], index) => {
     const key = deviceFlowKey(name, index);
@@ -2577,7 +2663,7 @@ function devicePipeGroup(kind, value, path, direction = "forward", key = "") {
   const pipeKey = key ? `${key}:${kind}` : `shared:${kind}`;
 
   return `
-    <g class="${classes}" data-flow-pipe="${pipeKey}" data-flow-speed="${speedBucket}">
+    <g class="${classes}" data-flow-pipe="${pipeKey}" data-flow-speed="${speedBucket}" data-flow-watts="${Math.round(wattsValue)}">
       <path class="pipe-base" d="${path}"></path>
       <path class="pipe-glow" d="${path}"></path>
       <path class="pipe-energy" d="${path}"></path>
@@ -6153,6 +6239,8 @@ if (typeof module !== "undefined") {
     renderAggregatedSnapshot,
     flowActive,
     flowSpeedBucket,
+    flowRibbonWidth,
+    flowScaleReference,
     deviceFlowSignature,
     setFlowView,
     setAnimationMode,

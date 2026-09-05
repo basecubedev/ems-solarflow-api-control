@@ -189,10 +189,14 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
   gap: 8px;
   margin-bottom: 8px;
 }
+/* No backdrop-filter here, deliberately: measured invisible on this dashboard
+   (the panels are 78-92% opaque over a near-featureless background) and not
+   free, because it is recomputed whenever anything animates above it. See
+   reports/dashboard-perf/glass-visual-delta-2026-09-04.json. */
 .metric, .flow-panel, .rules-panel, .chart-panel, .device-card, .energy-stats-panel {
   position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 16px;
   background: linear-gradient(180deg, var(--panel-strong), var(--panel));
-  box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,0.06); backdrop-filter: blur(18px);
+  box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,0.06);
 }
 .metric::before, .flow-panel::before, .rules-panel::before, .chart-panel::before, .device-card::before, .energy-stats-panel::before {
   content: ""; position: absolute; inset: 0; pointer-events: none;
@@ -1780,6 +1784,10 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .range-tabs button.active,
 .flow-view-tabs button.active { border-color: rgba(34, 211, 238, 0.46); background: linear-gradient(180deg, rgba(34, 211, 238, 0.18), rgba(139, 92, 246, 0.12)); color: var(--text); }
 .charts { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+/* Applies to EVERY canvas on the page, not just the chart ones: any canvas
+   added anywhere silently gets this background instead of being transparent.
+   That cost two investigations a wrong conclusion. A canvas meant to be
+   transparent must set `background: none`. */
 canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13); border-radius: 14px; background: linear-gradient(180deg, rgba(15,23,42,.80), rgba(15,23,42,.52)); box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
 
 /* Analytics single-chart panel (history & analytics) */
