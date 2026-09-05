@@ -512,6 +512,63 @@ def test_the_result_ring_animates_a_property_the_compositor_can_carry():
             )
 
 
+def test_the_runtime_editor_is_not_rebuilt_when_it_has_not_changed():
+    """`runtimeControlPanel()` takes no snapshot and reads none.
+
+    It is built from `state.runtime` and `state.auth`, which change when
+    `/api/runtime` is re-fetched and not otherwise -- but it was written into
+    the DOM on every snapshot, twice a second, destroying and recreating every
+    input in the runtime editor. Measured at 3.2 ms per snapshot with twelve
+    devices and authentication configured.
+    """
+    script = PRELUDE + """
+const doc = makeDoc();
+global.document = doc;
+
+const container = doc.getElementById("controlExplainView");
+const runtimeMount = doc.getElementById("runtimeEditorMount");
+const explainMount = doc.getElementById("controlExplainMount");
+// The shell already exists, which is the steady state after the first render.
+container.querySelector = (selector) =>
+  selector === "#runtimeEditorMount" ? runtimeMount
+  : selector === "#controlExplainMount" ? explainMount
+  : null;
+
+let runtimeWrites = 0;
+let explainWrites = 0;
+for (const [node, count] of [[runtimeMount, "runtime"], [explainMount, "explain"]]) {
+  let stored = "";
+  Object.defineProperty(node, "innerHTML", {
+    configurable: true,
+    get() { return stored; },
+    set(value) {
+      stored = String(value);
+      if (count === "runtime") runtimeWrites += 1; else explainWrites += 1;
+    },
+  });
+}
+
+app.state.flowView = "control";
+container.hidden = false;
+const snapshot = {
+  timestamp: "2026-09-05T12:00:00Z",
+  control_explain: { mode: "pv_first", devices: { WR1: {} } },
+};
+app.renderControlExplain(snapshot);
+app.renderControlExplain(snapshot);
+app.renderControlExplain(snapshot);
+
+console.log(JSON.stringify({ runtimeWrites, explainWrites }));
+"""
+    out = run_node(script)
+    assert out["runtimeWrites"] == 1, (
+        "the runtime editor was rebuilt %d times for three renders of unchanged "
+        "runtime state" % out["runtimeWrites"]
+    )
+    # The explain panel is snapshot-derived and must still be written every time.
+    assert out["explainWrites"] == 3
+
+
 def test_the_result_ring_still_stops_for_reduced_motion_and_animation_off():
     """Making it cheap must not make it unstoppable.
 
