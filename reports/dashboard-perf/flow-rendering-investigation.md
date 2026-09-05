@@ -2,7 +2,7 @@
 
 An investigation into how the dashboard's animated energy flow should be
 rendered. It replaces the conclusion of the previous pass
-([handoff-2026-09-04.md](handoff-2026-09-04.md)), which named the wrong cause.
+in a handoff document, which named the wrong cause.
 
 - **Date**: 2026-09-04.
 - **Subject**: the flow views of an EMS operator dashboard — an SVG of pipes and

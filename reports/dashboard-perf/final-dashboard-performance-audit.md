@@ -108,8 +108,7 @@ confirmed from inside the page.
 ## 2. Scaling: 2 → 12 devices, four views, both animation modes
 
 Thirty-two cases, ten seconds each — five snapshots at the two-second feed
-interval — Chromium headed on a GPU. Raw data:
-[`profile-audit-scale-chromium-2026-09-05.json`](profile-audit-scale-chromium-2026-09-05.json).
+interval — Chromium headed on a GPU, `--matrix scale`.
 
 **Nothing scales super-linearly.** Six times the devices costs, at worst, 4.9×:
 
@@ -306,8 +305,7 @@ oddity in the list is the `var()` the four tile keyframes read.
 
 Six cases, **seventy-five second** windows — long enough for the sixty-second
 timer to fire once — with each view renderer wrapped so it reports whether its
-container was off screen at the time. Raw data:
-[`profile-audit-offscreen-chromium-2026-09-05.json`](profile-audit-offscreen-chromium-2026-09-05.json).
+container was off screen at the time — `--matrix offscreen`.
 
 | on screen | devices | `renderControlExplain` **off screen** | cost | the on-screen renderers, same window |
 |---|---:|---:|---:|---|
@@ -1605,17 +1603,22 @@ python3 scripts/dashboard_profile/profile_bench.py --matrix lifecycle   --browse
 python3 scripts/dashboard_profile/profile_bench.py --matrix longrun     --browser chromium --gpu headed
 ```
 
-Render any result as a table:
+Each run writes its JSON under `--out` (`reports/dashboard-perf/` by default,
+which is not committed). Render one as a table:
 
 ```bash
-python3 scripts/dashboard_profile/profile_report.py \
-    reports/dashboard-perf/profile-audit-scale-after-chromium-2026-09-05.json
+python3 scripts/dashboard_profile/profile_report.py <the file the run printed>
 ```
 
 `waapithrottle` is the one to reach for when a cost is real on the main thread
 and invisible on this machine. It pairs a treatment with a 1×/4×/8×/16× CPU
 sweep, and it is what decided §15f after two earlier passes had declined the
 same change for lack of a machine without headroom.
+
+**The numbers here are in the tables, not in the tree.** Every run's JSON is
+written under `--out` and deliberately not committed: this repository keeps the
+conclusions and the means of reproducing them, not the raw output of a
+measurement run. Re-taking any table above is one command.
 
 **Taking a before.** The before/after pairs in §15 were produced by adding a
 `git worktree` at the pre-change commit, copying `scripts/dashboard_profile/`

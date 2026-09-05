@@ -38,8 +38,7 @@ pipe and its moving token should actually be built — fourteen constructions,
 both engines, headed on a real GPU. Its short answer is that at the size a
 dashboard draws none of them is distinguishable from any other, which turns the
 question into a design one; its useful output is that the artwork is free, plus
-two guardrails on the obvious paths that are not. Screenshots and the visual
-gallery: [screenshots/pipes/](screenshots/pipes/).
+two guardrails on the obvious paths that are not.
 
 [energy-flow-visualization-study.md](energy-flow-visualization-study.md) is the
 study before it, and the one that settled the renderer. It asks what the flow visualisation should *be*, not how to
@@ -67,13 +66,13 @@ A third harness sits beside the other two:
 [`scripts/flow_pipe_study/`](../../scripts/flow_pipe_study/) renders one scene
 with a selectable pipe construction and a selectable glow, and carries its own
 correctness gate (`pipe_verify.mjs`) that must pass before any of its numbers
-are believed. Its reports are the `pipes-*.json` files here.
+are believed.
 
 A second harness sits beside this one:
 [`scripts/flow_lab_bench.py`](../../scripts/flow_lab_bench.py) renders an
 isolated scene of pipes with a selectable technique, so rendering approaches can
 be compared against each other rather than against the whole dashboard. Its
-reports are the `flowlab-*.json` files here. Read section 6 of the investigation
+Read section 6 of the investigation
 before trusting one: a finding that held in that lab did not transfer.
 
 ## Matrices

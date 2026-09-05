@@ -108,7 +108,7 @@ drifted from it.
 The gallery (`scripts/flow_pipe_study/gallery.html`) shows all fourteen
 constructions animating against the same scene, with controls for power,
 automatic sweep, animation on/off, direction, device count, scenario, segment
-length and glow. Screenshots are under `screenshots/pipes/`.
+length and glow.
 
 These are judgements, made from the pictures, written before the phase-two
 numbers were read. Where a judgement is a measurement instead, it says so.
@@ -276,7 +276,7 @@ the counters that keep moving while the frame rate does not.
 
 Every number below is headed on the real display and GPU, one case at a time,
 each waiting for a one-minute load average at or below 2.0. The raw files are
-`reports/dashboard-perf/pipes-*.json`; `scripts/flow_pipe_study/pipe_report.py`
+`scripts/flow_pipe_study/pipe_report.py`
 regenerates these tables from them. 289 cases ran in phase one and none errored.
 
 ### What "within noise" means here

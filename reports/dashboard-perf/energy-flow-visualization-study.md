@@ -287,8 +287,7 @@ scaling behaviour.
 
 Structurally identical first: all seven produce 36 animations, all on
 `transform`, 72 elements, no filter on any animated layer and the same painted
-area, in both engines
-([metaphor-structural-equivalence-2026-09-04.json](metaphor-structural-equivalence-2026-09-04.json)).
+area, in both engines.
 
 And then in time, Chromium on GPU, 12 flows, against a 58.7 fps no-motion floor:
 
@@ -401,9 +400,7 @@ Two different questions, measured two different ways.
 
 **Distance from today** is `scripts/flow_lab_fidelity.mjs`: every candidate
 frozen at dash phase zero and diffed against the shipped technique. Consistent
-across both engines
-([chromium](flowlab-fidelity-chromium-2026-09-04.json),
-[firefox](flowlab-fidelity-firefox-2026-09-04.json)):
+across both engines:
 
 | Candidate | mean channel delta (Chromium) | differing |
 |---|---:|---:|
@@ -660,8 +657,7 @@ An empty `div` of identical size and position changed nothing. So did an `img`
 and a `video`. It looked like a browser-internal interaction specific to
 `<canvas>`, and it was written up as one.
 
-It is a line in this project's own stylesheet
-([raw data, annotated with the correction](canvas-over-svg-glow-2026-09-04.json)):
+It is a line in this project's own stylesheet:
 
 ```css
 /* dashboard/static/styles.css:1796 */
@@ -719,8 +715,7 @@ stylesheet. The variable that was never isolated was the page's own CSS.
 A canvas presenting once per frame, overlaid on the real dashboard, against the
 same page with no canvas. A draw counter is reported beside the frame rate, so a
 loop that stopped running cannot be mistaken for a loop that costs nothing --
-`draws/s` equals the frame rate in every row below
-([canvas-present-2026-09-04.json](canvas-present-2026-09-04.json)):
+`draws/s` equals the frame rate in every row below:
 
 | Browser | Path | no canvas | 2D per frame | WebGL per frame |
 |---|---|---:|---:|---:|
@@ -804,8 +799,7 @@ a backdrop root is the pathological arrangement for this property.
 
 The question section 13 of the brief asks is whether the glass can be given up.
 Measured, with every animation frozen in both shots so that dash phase cannot
-be mistaken for a backdrop difference
-([glass-visual-delta-2026-09-04.json](glass-visual-delta-2026-09-04.json)):
+be mistaken for a backdrop difference:
 
 | Browser | View | Mean channel delta (/255) | Pixels differing strongly |
 |---|---|---:|---:|
@@ -934,8 +928,7 @@ stops at a device box stop reading as a guillotine.
 
 It is free: **every metaphor is structurally identical** -- 36 animations, all
 on `transform`, 72 elements, no filter on any animated layer, identical painted
-area, in both engines
-([metaphor-structural-equivalence-2026-09-04.json](metaphor-structural-equivalence-2026-09-04.json)).
+area, in both engines.
 Of the seven tested, this is the only one all four evaluations rank at or above
 what ships.
 

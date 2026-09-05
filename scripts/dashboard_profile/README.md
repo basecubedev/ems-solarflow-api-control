@@ -14,7 +14,9 @@ python3 scripts/dashboard_profile/profile_bench.py --matrix attribution \
     --browser firefox --gpu headed
 ```
 
-Reports land in `reports/dashboard-perf/profile-*.json`.
+Each run writes its JSON under `--out`, which defaults to
+`reports/dashboard-perf/`. Those files are **not committed** -- the repository
+keeps the written accounts and this harness, not the output of a run.
 
 ## Running it on macOS
 
