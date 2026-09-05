@@ -417,6 +417,130 @@ def test_the_layer_moves_with_a_transform_and_nothing_else():
     assert "filter" not in inner.group(1)
 
 
+def test_the_tile_is_moved_by_the_animation_api_when_the_browser_has_one():
+    """Literal keyframe values instead of a keyframe that reads a custom property.
+
+    Both express the same motion. The difference is what the renderer pays for
+    it: the CSS form costs a style recalculation per frame, and on a main thread
+    slowed sixteen-fold that is the difference between 110.7 fps at a 13.9 ms
+    frame p95 and 134.2 at 7.0 on the aggregated view. On this desktop neither
+    form drops a frame, which is why it took a throttled run to decide.
+
+    The element must not also carry `dir-*`, or the CSS animation would run
+    alongside the one just created.
+    """
+    script = PRELUDE + """
+const calls = [];
+function el() {
+  return {
+    className: "", style: { setProperty() {} }, children: [],
+    appendChild(child) { this.children.push(child); },
+    animate(frames, timing) { calls.push({ className: this.className, frames, timing }); },
+  };
+}
+global.document = {
+  createElement: el,
+  createDocumentFragment: () => el(),
+};
+const layer = el();
+layer.textContent = "";
+const p = pipe({ period: 52, seconds: 1.38, reverse: false });
+p.runs = segmentsOf().map((s) => Object.assign({}, s, { length: 40 }));
+app.renderFlowTiles({ layer, pipes: [p], width: 400, height: 200 });
+console.log(JSON.stringify({
+  calls: calls.length,
+  runs: p.runs.length,
+  first: calls[0] || null,
+  directions: p.runs.map((s) => s.direction),
+}));
+"""
+    out = run_node(script)
+    assert out["calls"] == out["runs"], (
+        "every moving tile should be animated through element.animate()"
+    )
+    first = out["first"]
+    assert "dir-" not in first["className"], (
+        "a tile driven by the animation API must not also carry the CSS direction "
+        "class, or both animations run: %s" % first["className"]
+    )
+    assert first["timing"]["duration"] == 1380
+    assert first["timing"]["iterations"] is None or first["timing"]["iterations"] > 1e300
+    assert first["timing"]["easing"] == "linear"
+    assert first["timing"]["direction"] == "normal"
+    assert first["frames"][0]["transform"] == "translate3d(0px, 0px, 0)"
+    # The dashboard's own pipe starts by running right, one dash period.
+    assert first["frames"][1]["transform"] == "translate3d(52px, 0px, 0)"
+
+
+def test_a_reversed_pipe_runs_its_animation_backwards():
+    script = PRELUDE + """
+const calls = [];
+function el() {
+  return {
+    className: "", style: { setProperty() {} }, children: [],
+    appendChild(child) { this.children.push(child); },
+    animate(frames, timing) { calls.push(timing); },
+  };
+}
+global.document = { createElement: el, createDocumentFragment: () => el() };
+const layer = el();
+const p = pipe({ reverse: true });
+p.runs = segmentsOf().map((s) => Object.assign({}, s, { length: 40 }));
+app.renderFlowTiles({ layer, pipes: [p], width: 400, height: 200 });
+console.log(JSON.stringify({ direction: calls[0].direction }));
+"""
+    assert run_node(script)["direction"] == "reverse"
+
+
+def test_a_browser_without_the_animation_api_keeps_the_css_animation():
+    """The fallback is the construction that shipped before, unchanged."""
+    script = PRELUDE + """
+function el() {
+  return {
+    className: "", style: { setProperty() {} }, children: [],
+    appendChild(child) { this.children.push(child); },
+  };
+}
+global.document = { createElement: el, createDocumentFragment: () => el() };
+const layer = el();
+const p = pipe();
+p.runs = segmentsOf().map((s) => Object.assign({}, s, { length: 40 }));
+app.renderFlowTiles({ layer, pipes: [p], width: 400, height: 200 });
+const boxes = layer.children[0].children;
+console.log(JSON.stringify({ inner: boxes[0].children[0].className }));
+"""
+    out = run_node(script)
+    assert "dir-" in out["inner"], (
+        "without element.animate() the tile must keep the CSS animation: %s"
+        % out["inner"]
+    )
+
+
+def test_a_still_pipe_is_not_animated_by_either_route():
+    """`animation_mode=off` and `prefers-reduced-motion` both arrive here as
+    `seconds = 0`, read back out of the CSS. Neither route may animate then."""
+    script = PRELUDE + """
+const calls = [];
+function el() {
+  return {
+    className: "", style: { setProperty() {} }, children: [],
+    appendChild(child) { this.children.push(child); },
+    animate(frames, timing) { calls.push(timing); },
+  };
+}
+global.document = { createElement: el, createDocumentFragment: () => el() };
+const layer = el();
+const p = pipe({ seconds: 0 });
+p.runs = segmentsOf().map((s) => Object.assign({}, s, { length: 40 }));
+app.renderFlowTiles({ layer, pipes: [p], width: 400, height: 200 });
+const box = layer.children[0].children[0];
+console.log(JSON.stringify({ calls: calls.length, box: box.className }));
+"""
+    out = run_node(script)
+    assert out["calls"] == 0
+    assert "still" in out["box"]
+
+
 def test_no_rule_in_the_tile_layer_carries_a_filter():
     css = read_styles()
     for match in re.finditer(r"(\.flow-tile[^{]*)\{([^}]*)\}", css):

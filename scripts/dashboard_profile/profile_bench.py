@@ -867,6 +867,209 @@ COMPOSITOR_CONTROLS = (
 PROBE_SELECTORS = "#ctlPlain,#ctlMasked,#ctlCss,.control-result-ring i,.flow-tile-inner"
 
 
+# Re-drives the tile and ring animations through the Web Animations API with
+# literal keyframe values, and stops the CSS ones. The pipe study credited a
+# 31-46% style-time saving to expressing the keyframes as literals; this audit
+# showed the `var()` is not what costs, so what WAAPI actually buys on the real
+# dashboard is an open question with no measurement behind it.
+#
+# The control panel is rebuilt on every snapshot, so new rings keep appearing:
+# the treatment re-applies on an interval. That interval is itself charged to
+# the profiler and is the reason `setInterval` shows up in these runs.
+USE_WAAPI = (
+    "(() => { let n = 0;"
+    " const apply = () => {"
+    "   for (const el of document.querySelectorAll('.flow-tile-inner')) {"
+    "     if (el.__waapi) continue;"
+    "     const style = getComputedStyle(el);"
+    "     const name = String(style.animationName || '').split(',')[0].trim();"
+    "     if (!name || name === 'none') continue;"
+    "     const step = parseFloat(getComputedStyle(el.parentElement)"
+    "       .getPropertyValue('--tile-step')) || 0;"
+    "     const seconds = parseFloat(style.animationDuration) || 0;"
+    "     if (!step || !seconds) continue;"
+    "     const dir = name.replace('flowTile', '').toLowerCase();"
+    "     const to = dir === 'right' ? 'translate3d(' + step + 'px,0,0)'"
+    "       : dir === 'left' ? 'translate3d(' + (-step) + 'px,0,0)'"
+    "       : dir === 'down' ? 'translate3d(0,' + step + 'px,0)'"
+    "       : 'translate3d(0,' + (-step) + 'px,0)';"
+    "     const reverse = String(style.animationDirection || '')"
+    "       .split(',')[0].trim() === 'reverse';"
+    "     el.style.animation = 'none';"
+    "     el.animate([{ transform: 'translate3d(0,0,0)' }, { transform: to }],"
+    "       { duration: seconds * 1000, iterations: Infinity, easing: 'linear',"
+    "         direction: reverse ? 'reverse' : 'normal' });"
+    "     el.__waapi = true; n += 1; }"
+    "   for (const el of document.querySelectorAll("
+    "       '.control-result-ring i, .button-ring i')) {"
+    "     if (el.__waapi) continue;"
+    "     const style = getComputedStyle(el);"
+    "     const name = String(style.animationName || '').split(',')[0].trim();"
+    "     if (!name || name === 'none') continue;"
+    "     const seconds = parseFloat(style.animationDuration) || 4.2;"
+    "     el.style.animation = 'none';"
+    "     el.animate([{ transform: 'translate3d(0,0,0)' },"
+    "                 { transform: 'translate3d(-50%,0,0)' }],"
+    "       { duration: seconds * 1000, iterations: Infinity, easing: 'linear' });"
+    "     el.__waapi = true; n += 1; } };"
+    " apply(); setInterval(apply, 400);"
+    " return n; })()"
+)
+
+
+# Splits the control explanation into the two halves an incremental renderer
+# would treat differently: building the markup string, and handing it to the
+# parser. Rewriting the panel in place can only ever save the second -- the
+# first is the work of deciding what the panel should say, which any renderer
+# has to do. So this measures the ceiling of that change before anyone builds
+# it.
+SPLIT_EXPLAIN_PROBE = (
+    "(() => {"
+    " const w = window.__prof.work;"
+    " const bump = (name, ms) => {"
+    "   const slot = w[name] || (w[name] = { calls: 0, ms: 0, max: 0 });"
+    "   slot.calls += 1; slot.ms += ms; if (ms > slot.max) slot.max = ms; };"
+    " if (typeof renderControlExplainMount !== 'function') return 0;"
+    " window.renderControlExplainMount = function (snapshot) {"
+    "   const mount = document.getElementById('controlExplainMount');"
+    "   if (!mount) return;"
+    "   const t0 = performance.now();"
+    "   const html = controlExplainHtml(snapshot);"
+    "   const t1 = performance.now();"
+    "   mount.innerHTML = html;"
+    "   const t2 = performance.now();"
+    "   bump('explain:generate', t1 - t0);"
+    "   bump('explain:write', t2 - t1);"
+    "   bump('explain:bytes', html.length); };"
+    " return 1; })()"
+)
+
+
+# Tiles only, and no re-apply interval: the tile layer is rebuilt when its
+# signature changes and not on every snapshot, so one pass is enough. The
+# combined treatment above had to re-apply on a timer because the control panel
+# *is* rebuilt every snapshot, and that timer is charged to the page -- which is
+# both a measurement artefact and the argument against converting the rings.
+USE_WAAPI_TILES = (
+    "(() => { let n = 0;"
+    " const apply = () => {"
+    "   for (const el of document.querySelectorAll('.flow-tile-inner')) {"
+    "     if (el.__waapi) continue;"
+    "     if (el.closest && el.closest('[hidden]')) continue;"
+    "     const style = getComputedStyle(el);"
+    "     const name = String(style.animationName || '').split(',')[0].trim();"
+    "     if (!name || name.indexOf('flowTile') !== 0) continue;"
+    "     const step = parseFloat(getComputedStyle(el.parentElement)"
+    "       .getPropertyValue('--tile-step')) || 0;"
+    "     const seconds = parseFloat(style.animationDuration) || 0;"
+    "     if (!step || !seconds) continue;"
+    "     const dir = name.replace('flowTile', '').toLowerCase();"
+    "     const to = dir === 'right' ? 'translate3d(' + step + 'px,0,0)'"
+    "       : dir === 'left' ? 'translate3d(' + (-step) + 'px,0,0)'"
+    "       : dir === 'down' ? 'translate3d(0,' + step + 'px,0)'"
+    "       : 'translate3d(0,' + (-step) + 'px,0)';"
+    "     const reverse = String(style.animationDirection || '')"
+    "       .split(',')[0].trim() === 'reverse';"
+    "     el.style.animation = 'none';"
+    "     el.animate([{ transform: 'translate3d(0,0,0)' }, { transform: to }],"
+    "       { duration: seconds * 1000, iterations: Infinity, easing: 'linear',"
+    "         direction: reverse ? 'reverse' : 'normal' });"
+    "     el.__waapi = true; n += 1; } };"
+    " apply(); return n; })()"
+)
+
+
+def matrix_tilewaapi():
+    """The tile animation on the Web Animations API, with nothing else changed."""
+    cases = []
+    for view in ("aggregated", "devices"):
+        for devices in (4, 12):
+            base = dict(view=view, devices=devices, animation="normal",
+                        feed="live", cdp_metrics=True, trace=True)
+            cases.append(scenario(**base, name="tw-css-%s-%02d" % (view, devices)))
+            cases.append(scenario(**base, extra_js=USE_WAAPI_TILES,
+                                  name="tw-js-%s-%02d" % (view, devices)))
+    # The rings, measured where the panel is not rebuilt underneath them: a
+    # silent feed renders once and then nothing arrives, so one pass holds.
+    for devices in (4, 12):
+        base = dict(view="control", devices=devices, animation="normal",
+                    feed="silent", cdp_metrics=True, trace=True,
+                    scenario="write-mode")
+        cases.append(scenario(**base, name="tw-ring-css-%02d" % devices))
+        cases.append(scenario(**base, extra_js=USE_WAAPI,
+                              name="tw-ring-js-%02d" % devices))
+    return cases
+
+
+def matrix_waapithrottle():
+    """Does the animation's main-thread cost become visible on a slow machine?
+
+    On this desktop the Web Animations API saves 18-42% of style-recalculation
+    time and not one frame: everything sits at the refresh ceiling either way.
+    That is the whole argument for leaving it alone, and it is an argument about
+    a machine with headroom. Chromium's CPU throttling removes the headroom by
+    an exact factor, which is the only way to ask the question here.
+    """
+    cases = []
+    for rate in (1, 4, 8, 16):
+        for view in ("aggregated", "devices"):
+            base = dict(view=view, devices=12, animation="normal", feed="live",
+                        cdp_metrics=True, cpu_throttle=rate)
+            cases.append(scenario(**base, name="thr%02d-css-%s" % (rate, view)))
+            cases.append(scenario(**base, extra_js=USE_WAAPI_TILES,
+                                  name="thr%02d-js-%s" % (rate, view)))
+    return cases
+
+
+def matrix_mountsplit():
+    """Generating the control panel's markup, against handing it to the parser.
+
+    The control view is the only one whose per-snapshot cost scales with device
+    count, and the remedy on the table is to update it in place instead of
+    replacing it. That can only save the parse. This says how much of the cost
+    the parse actually is.
+    """
+    cases = []
+    for scenario_name in ("normal", "write-mode"):
+        for devices in (2, 4, 8, 12):
+            cases.append(scenario(view="control", devices=devices,
+                                  animation="normal", feed="live",
+                                  cdp_metrics=True, scenario=scenario_name,
+                                  extra_js=SPLIT_EXPLAIN_PROBE,
+                                  name="split-%s-%02ddev" % (scenario_name, devices)))
+    return cases
+
+
+def matrix_waapi():
+    """Does the Web Animations API remove the per-frame style recalculation?
+
+    Every style recalculation on this page comes from an animation, and the
+    cost tracks how many are running. The one look-preserving alternative is to
+    drive them with literal keyframe values through element.animate(). Whether
+    that changes anything here has never been measured on the dashboard itself.
+    """
+    cases = []
+    for view in ("aggregated", "devices", "control"):
+        for devices in (4, 12):
+            base = dict(view=view, devices=devices, animation="normal",
+                        feed="live", cdp_metrics=True, trace=True)
+            cases.append(scenario(**base, name="waapi-css-%s-%02d" % (view, devices)))
+            cases.append(scenario(**base, extra_js=USE_WAAPI,
+                                  name="waapi-js-%s-%02d" % (view, devices)))
+            cases.append(scenario(**base, extra_js=NO_ANIMATION_AT_ALL,
+                                  name="waapi-none-%s-%02d" % (view, devices)))
+    # And the one that matters commercially: the authenticated control view,
+    # which is where the animations are most numerous.
+    for devices in (4, 12):
+        base = dict(view="control", devices=devices, animation="normal",
+                    feed="live", cdp_metrics=True, trace=True,
+                    scenario="write-mode")
+        cases.append(scenario(**base, name="waapi-css-write-%02d" % devices))
+        cases.append(scenario(**base, extra_js=USE_WAAPI,
+                              name="waapi-js-write-%02d" % devices))
+    return cases
+
+
 def matrix_compositor2():
     """The same question as `compositor`, with a control that calibrates it."""
     cases = []
@@ -1047,6 +1250,10 @@ def matrix_unfocused():
 
 
 MATRICES = {
+    "waapithrottle": matrix_waapithrottle,
+    "tilewaapi": matrix_tilewaapi,
+    "mountsplit": matrix_mountsplit,
+    "waapi": matrix_waapi,
     "compositor2": matrix_compositor2,
     "buttonborder": matrix_buttonborder,
     "writeframes": matrix_writeframes,
