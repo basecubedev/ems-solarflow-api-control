@@ -14,8 +14,17 @@ python3 scripts/dashboard_bench.py --matrix baseline --browser firefox
 
 ## Start here
 
+[firefox-macos-investigation.md](firefox-macos-investigation.md) is the current
+document, and the only one that looks at the whole dashboard rather than its
+flow rendering. It found and fixed the dashboard's largest per-snapshot cost --
+a forced synchronous layout taken to discover that a view is not on screen --
+and it is explicit that no macOS measurement exists, which is what the reported
+symptom was about. Its harness,
+[`scripts/dashboard_profile/`](../../scripts/dashboard_profile/), is built to be
+run on a Mac; that directory's README says how.
+
 [energy-pipe-performance-study.md](energy-pipe-performance-study.md) is the
-current document. It asks, given that the renderer question is settled, how the
+study before it. It asks, given that the renderer question is settled, how the
 pipe and its moving token should actually be built — fourteen constructions,
 both engines, headed on a real GPU. Its short answer is that at the size a
 dashboard draws none of them is distinguishable from any other, which turns the

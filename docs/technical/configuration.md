@@ -409,8 +409,13 @@ few MB of RAM. `dashboard.log_redaction` (default `false`) masks secret-looking
 values in served log lines; enable it for shared/remote deployments.
 
 `dashboard.animation_mode` (default `normal`) controls how much the animated
-energy-flow view animates, to reduce browser CPU/GPU load on weak devices or
-long-open tabs. It is purely visual and never affects control, auth or data:
+energy-flow view animates. It is purely visual and never affects control, auth
+or data. Treat it as a preference and accessibility setting rather than a
+performance one: measured in Firefox on a GPU, `off` leaves the frame rate
+unchanged and makes the dashboard's main-thread work 1.3 to 2.3 times more
+expensive, because the remaining cost is a layout flush that a running animation
+keeps small. Whether it still pays on a device weak enough for the saved
+compositor work to dominate has not been measured.
 
 - `normal` — full animated flow view (pipe motion, glow/blur filters).
 - `reduced` — keeps state colours and basic flow indication but drops glow

@@ -142,6 +142,17 @@ Three properties of the renderer are worth knowing before changing it:
   identical. Thickness was chosen because it is the one magnitude channel that
   survives desaturation and the deuteranopic collapse of the PV and battery
   colours.
+- **It never asks the layout engine a question an attribute can answer.**
+  Reading a box forces the browser to flush pending style and layout first, and
+  the rebuild runs once per snapshot. Deciding whether a view is on screen by
+  measuring it cost 25-36 ms of main thread per snapshot in Firefox in the
+  control view -- where no flow SVG is on screen at all, so the measurement was
+  taken purely to discover that it should not have been taken.
+  `flowSvgOffScreen` answers from the `hidden` attribute `setFlowView` already
+  sets, and the rect check stays behind it as the fallback for anything hidden
+  some other way. Removing that flush cut main-thread work by 66-76% in the
+  control and energy views and left the views where the SVG is visible
+  unchanged.
 - **It refuses what it cannot represent.** The path parser takes only `M`, `L`,
   `H` and `V`; anything else, or a browser without `getComputedStyle`, leaves the
   CSS animation in place rather than showing no flow at all.
@@ -199,8 +210,17 @@ one compositing the page. Headless Firefox reports an NVIDIA device and still
 composites on the CPU. The probe can prove a run was software; it cannot prove
 one was hardware. Only headed on a real display is certain.
 
-`dashboard.animation_mode` (`normal` | `reduced` | `off`) remains a real
-performance control, and `prefers-reduced-motion` is honoured on top of it.
+`dashboard.animation_mode` (`normal` | `reduced` | `off`) is honoured together
+with `prefers-reduced-motion`, but **do not reach for it as a performance
+control**: measured on this hardware it makes the dashboard's main-thread work
+1.3 to 2.3 times *more* expensive, because the cost is a layout flush and a
+running animation keeps the style tree from accumulating one between snapshots.
+Frame rate is unaffected either way. See the "nothing is happening" section
+above and section 4 of
+[`../../reports/dashboard-perf/firefox-macos-investigation.md`](../../reports/dashboard-perf/firefox-macos-investigation.md).
+It stays as an accessibility and preference setting, which is the job it does
+well; on hardware weak enough that the saved compositor work outweighs the extra
+main-thread work it may still pay, and that has not been measured.
 
 The full account is in
 [`../../reports/dashboard-perf/energy-flow-visualization-study.md`](../../reports/dashboard-perf/energy-flow-visualization-study.md),
@@ -225,6 +245,63 @@ memory even when it costs no frames (72 px of transparent padding per side took
 the scene from 5.6 MB to 14.8 MB of composited layer), while growing the
 *texture* costs neither, because the layer is sized by the element and not by
 the image.
+
+## Animate a property the compositor can carry
+
+A CSS animation is cheap or ruinous depending only on which property it moves.
+`transform` and `opacity` are handed to the compositor; anything that changes
+what a pixel looks like -- `background-position`, `background-size`,
+`mask-position`, `filter` -- makes the browser repaint that element on every
+frame, and the cost is multiplied by however many elements the rule matches.
+
+The control view learned this the expensive way. Its result chips carried a
+travelling one-pixel gradient border driven by `background-position`, and the
+view puts one on every stage of every device: twenty-six at four devices, all
+repainted sixty times a second. Chromium drew that view at 45.2 fps with the
+effect running and 134.6 with it switched off. Removing the mask instead of the
+animation changed nothing, so the mask was never the cost. Firefox was
+unaffected either way.
+
+The effect is unchanged and now free: the gradient lives in a child that is
+translated, the child is two tiles wide so the loop has no seam, and the mask
+that turns the box into a ring stayed where it was. 133.1 fps at eight devices,
+frame p95 27.8 ms down to 7.0.
+
+Two guardrails in
+[`../../tests/test_dashboard_perf_guardrails.py`](../../tests/test_dashboard_perf_guardrails.py)
+keep it that way: one fails if a `.control-result` rule animates a paint
+property again, the other fails if `prefers-reduced-motion` or
+`dashboard-animation-off` stops reaching the ring -- both targeted the old
+pseudo-element by name, so a construction that moves the animation elsewhere
+takes the accessibility switches with it silently.
+
+`.primary-button.compact::after` keeps the old construction deliberately. It is
+a single element and measured free. What costs is the count, not the effect.
+
+## What the page costs when nothing is happening
+
+Nothing. With the snapshot feed silent, or delivering data whose timestamp has
+not changed, the dashboard measures **0 ms of attributed main-thread work and 0
+DOM mutations** over ten seconds in Firefox. There is no idle loop and no timer
+grinding away; every cost is paid per *rendered* snapshot.
+
+That is worth knowing before optimising anything here, and it is why
+`animation_mode` is a smaller lever than it looks: turning the animation off
+does not remove a standing cost, because there isn't one. Measured, it made the
+largest per-snapshot cost 40-54% *more* expensive, because that cost was a
+layout flush and an animation keeps the style tree from accumulating work
+between flushes. Fixing the flush (above) dissolved that.
+
+`scripts/dashboard_profile/` is the harness that can say this. It charges
+main-thread time to the callback that spent it -- listeners, timers, animation
+frames, observers, and optionally the layout-forcing reads themselves -- and it
+adds the axes the frame-rate harness has no way to express: a feed that is
+silent, a dashboard in the background, and a second page beside it. It is
+engine-neutral by construction, which is the point: the slowdown was reported
+on Firefox on macOS, and
+[`../../reports/dashboard-perf/firefox-macos-investigation.md`](../../reports/dashboard-perf/firefox-macos-investigation.md)
+contains no macOS measurement. That directory's README is the instruction for
+taking one.
 
 ## Several tabs at once
 
