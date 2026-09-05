@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import hashlib
 import json
 import logging
 import os
@@ -1710,17 +1711,70 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
 
         full_path, content_type = asset
-        with open(full_path, "rb") as f:
-            body = f.read()
+        try:
+            body, etag = _static_asset_body_and_etag(full_path)
+        except OSError:
+            self.send_error(404)
+            return
+
+        if _if_none_match_matches(self.headers.get("If-None-Match"), etag):
+            self.send_response(304)
+            self._send_security_headers()
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", STATIC_CACHE_CONTROL)
+            self.end_headers()
+            return
 
         self.send_response(200)
         self._send_security_headers()
         self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Pragma", "no-cache")
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", STATIC_CACHE_CONTROL)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+# The frontend ships unfingerprinted, so a cached copy may not be used without
+# asking. Revalidation still removes the whole body from the common case, which
+# is what the 359 KB per tab per reload was. Fingerprinted bundle output could
+# later be served immutable instead; nothing here assumes that it is not.
+STATIC_CACHE_CONTROL = "no-cache"
+_STATIC_CACHE = {}
+_STATIC_CACHE_LOCK = threading.Lock()
+
+
+def _static_asset_body_and_etag(full_path):
+    """Return the asset bytes and its validator, re-reading only when it changed."""
+
+    stat = os.stat(full_path)
+    identity = (stat.st_mtime_ns, stat.st_size)
+    with _STATIC_CACHE_LOCK:
+        cached = _STATIC_CACHE.get(full_path)
+        if cached is not None and cached[0] == identity:
+            return cached[1], cached[2]
+
+    with open(full_path, "rb") as handle:
+        body = handle.read()
+    etag = '"%s"' % hashlib.sha256(body).hexdigest()[:32]
+
+    with _STATIC_CACHE_LOCK:
+        _STATIC_CACHE[full_path] = (identity, body, etag)
+    return body, etag
+
+
+def _if_none_match_matches(header_value, etag):
+    if not header_value:
+        return False
+    for candidate in header_value.split(","):
+        candidate = candidate.strip()
+        if candidate == "*":
+            return True
+        if candidate.startswith("W/"):
+            candidate = candidate[2:]
+        if candidate == etag:
+            return True
+    return False
 
 
 def hmac_compare(left, right):

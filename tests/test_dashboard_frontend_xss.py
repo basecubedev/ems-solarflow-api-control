@@ -1184,6 +1184,8 @@ console.log(JSON.stringify({{
     output = run_node(script)
 
     assert output["closed"] is True
-    assert output["intervalCount"] == 1
-    assert output["intervalMs"] == [2000]
+    # One polling loop plus the one timer that retries SSE from it. The point of
+    # this test is that a repeated error starts no second copy of either.
+    assert output["intervalCount"] == 2
+    assert output["intervalMs"] == [2000, 30000]
     assert output["transport"] == "polling"

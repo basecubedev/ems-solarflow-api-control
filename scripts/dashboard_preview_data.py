@@ -34,6 +34,9 @@ FLOW_VIEWS = (
 )
 
 
+FROZEN_TIMESTAMP = "2026-06-17T12:00:00+00:00"
+
+
 def _timestamp():
     return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
 
@@ -544,7 +547,34 @@ def _logs(scenario):
     return lines
 
 
-def build_scenario(scenario=DEFAULT_SCENARIO):
+def scale_devices(devices, count):
+    """Return exactly ``count`` devices, cycling the scenario's own shapes.
+
+    Benchmarks need a device count as an independent variable; the per-device
+    render cost is what scales. Values are nudged per copy so no two devices are
+    byte-identical, which would let a renderer dedupe work a real install has.
+    """
+
+    if count is None or count <= 0:
+        return devices
+    names = list(devices)
+    if not names:
+        return devices
+
+    scaled = {}
+    for index in range(count):
+        source = devices[names[index % len(names)]]
+        name = f"WR{index + 1}"
+        copy = dict(source)
+        copy["name"] = name
+        for field, step in (("soc", 3), ("pv_input_w", 40), ("output_w", 15)):
+            if isinstance(copy.get(field), (int, float)):
+                copy[field] = copy[field] + step * index
+        scaled[name] = copy
+    return scaled
+
+
+def build_scenario(scenario=DEFAULT_SCENARIO, device_count=None, freeze_timestamp=False):
     """Return all synthetic preview payloads for one scenario."""
 
     if scenario not in SCENARIOS:
@@ -552,11 +582,15 @@ def build_scenario(scenario=DEFAULT_SCENARIO):
             f"unknown scenario {scenario!r}; choose one of {', '.join(SCENARIOS)}"
         )
 
-    devices = _devices_for(scenario)
+    devices = scale_devices(_devices_for(scenario), device_count)
     # Grid is held very close to zero (-5 W) to show the EMS regulating tightly
     # against the house load; an offline device breaks that balance.
     grid_power_w = 120 if scenario == "offline-device" else -5
     snapshot = _snapshot(devices, grid_power_w=grid_power_w)
+    # An unchanging timestamp is the A/B partner for the de-duplication work:
+    # the server keeps sending, and a correct client stops re-rendering.
+    if freeze_timestamp:
+        snapshot["timestamp"] = FROZEN_TIMESTAMP
     return {
         "name": scenario,
         "snapshot": snapshot,

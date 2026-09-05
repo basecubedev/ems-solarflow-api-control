@@ -30,9 +30,14 @@ TEMPORARY_PATTERNS = ("*.log", "*.tmp", "*.bak", "*.orig", "*.rej", "*.swp", "*~
 
 PYTHON_CACHE_PATTERNS = ("*.pyc", "*.pyo", "*/__pycache__/*", "__pycache__/*")
 
-# Bounded release evidence is committed on purpose: it is what a reviewer reads
-# instead of the 16 GiB artefacts it describes.
-SCRATCH_EXCEPTIONS = ("reports/appliance/*",)
+# Two bounded sets under reports/ are committed on purpose. The appliance
+# release evidence is what a reviewer reads instead of the 16 GiB artefacts it
+# describes. Under reports/dashboard-perf/ it is the written accounts only --
+# what was measured, what it meant, and which earlier conclusions it withdrew.
+# The runs themselves are not committed: a benchmark's JSON is the output of one
+# afternoon on one machine, and this repository keeps the conclusions and the
+# means of reproducing them instead (scripts/dashboard_profile/).
+SCRATCH_EXCEPTIONS = ("reports/appliance/*", "reports/dashboard-perf/*")
 
 SCRATCH_PATTERNS = (
     "dist/*",

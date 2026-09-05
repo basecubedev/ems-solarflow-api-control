@@ -1,0 +1,235 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+   Styling for the flow rendering lab. The pipe rules are copied from the
+   dashboard's styles.css so every candidate paints the same picture; only the
+   animated energy layer differs between renderers. */
+
+:root {
+  --bg: #070a0f;
+  --panel: rgba(16, 23, 34, 0.78);
+  --muted2: #64748b;
+  --pv: #ffd166;
+  --battery: #39e58c;
+  --output: #38d5ff;
+  --grid: #d87cff;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: #cbd5e1;
+  font: 12px/1.4 ui-sans-serif, system-ui, sans-serif;
+}
+
+#labHeader {
+  display: flex;
+  gap: 16px;
+  padding: 6px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid rgba(148, 163, 184, .12);
+}
+
+#labTitle { font-weight: 600; }
+
+#stage {
+  position: relative;
+  margin: 0 auto;
+}
+
+#flowSvg,
+#overlay,
+#flowCanvas {
+  position: absolute;
+  inset: 0;
+}
+
+#overlay { pointer-events: none; }
+
+#flowCanvas { display: none; }
+
+#stage.renderer-canvas #flowCanvas,
+#stage.renderer-canvas-worker #flowCanvas,
+#stage.renderer-webgl #flowCanvas { display: block; }
+
+/* ---------------------------------------------------------------- shared */
+
+.energy-pipe {
+  --pipe-alpha: .12;
+  --pipe-width: 3px;
+  --pipe-glow: .08;
+  --pipe-speed: 1.55s;
+  color: var(--muted2);
+}
+
+.energy-pipe.pv { color: var(--pv); }
+.energy-pipe.battery { color: var(--battery); }
+.energy-pipe.output { color: var(--output); }
+.energy-pipe.grid { color: var(--grid); }
+.energy-pipe.flow-speed-idle { --pipe-speed: 1.85s; }
+.energy-pipe.flow-speed-low { --pipe-speed: 1.70s; }
+.energy-pipe.flow-speed-medium { --pipe-speed: 1.38s; }
+.energy-pipe.flow-speed-high { --pipe-speed: 1.10s; }
+
+.energy-pipe path {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.pipe-base {
+  stroke-width: calc(var(--pipe-width) + 3px);
+  opacity: .16;
+  filter: drop-shadow(0 0 1px rgba(255, 255, 255, .24));
+}
+
+.pipe-glow {
+  stroke-width: calc(var(--pipe-width) + 6px);
+  opacity: var(--pipe-glow);
+  filter: blur(3px) drop-shadow(0 0 9px currentColor);
+}
+
+.energy-pipe.active .pipe-base { opacity: .25; }
+
+.energy-pipe.idle .pipe-base {
+  stroke-width: 4px;
+  opacity: .18;
+  filter: none;
+}
+
+.energy-pipe.idle .pipe-glow { opacity: 0; filter: none; }
+
+/* The halo the production energy layer carries. Every renderer that draws its
+   own energy layer wears this, so the comparison is technique against
+   technique and not filter against no filter. */
+.energy-halo {
+  filter: drop-shadow(0 0 6px currentColor) drop-shadow(0 0 15px currentColor);
+}
+
+/* ------------------------------------------------- R1/R2 stroke-dashoffset */
+
+.pipe-energy {
+  stroke-width: var(--pipe-width);
+  stroke-dasharray: 34 18;
+  opacity: var(--pipe-alpha);
+  filter: drop-shadow(0 0 6px currentColor) drop-shadow(0 0 15px currentColor);
+  animation: pipeFlow var(--pipe-speed) linear infinite;
+}
+
+.energy-pipe.idle .pipe-energy {
+  stroke-width: 1.5px;
+  stroke-dasharray: none;
+  opacity: .10;
+  filter: none;
+  animation-play-state: paused;
+}
+
+.energy-pipe.reverse .pipe-energy { animation-direction: reverse; }
+
+@keyframes pipeFlow { to { stroke-dashoffset: -52; } }
+
+/* ------------------------------------------------------- R3 svg-transform */
+
+.flow-tiles {
+  opacity: var(--pipe-alpha);
+}
+
+.energy-pipe.idle .flow-tiles { opacity: .10; }
+
+.flow-tile path {
+  stroke-width: var(--pipe-width);
+  stroke-dasharray: 34 18;
+}
+
+.energy-pipe.idle .flow-tile path { stroke-width: 1.5px; stroke-dasharray: none; }
+
+.flow-tile {
+  animation-duration: var(--pipe-speed);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.flow-tile.dir-right { animation-name: flowRight; }
+.flow-tile.dir-left { animation-name: flowLeft; }
+.flow-tile.dir-down { animation-name: flowDown; }
+.flow-tile.dir-up { animation-name: flowUp; }
+
+.energy-pipe.reverse .flow-tile { animation-direction: reverse; }
+.energy-pipe.idle .flow-tile { animation-play-state: paused; }
+
+@keyframes flowRight { to { transform: translateX(52px); } }
+@keyframes flowLeft { to { transform: translateX(-52px); } }
+@keyframes flowDown { to { transform: translateY(52px); } }
+@keyframes flowUp { to { transform: translateY(-52px); } }
+
+/* --------------------------------------------- R4/R5 pattern and mask paint */
+
+.pipe-paint {
+  stroke-width: var(--pipe-width);
+  opacity: var(--pipe-alpha);
+}
+
+.energy-pipe.idle .pipe-paint { stroke-width: 1.5px; opacity: .10; }
+
+/* ----------------------------------------------------------- R6 dom-tiles */
+
+.dom-pipe {
+  position: absolute;
+  overflow: hidden;
+}
+
+.dom-pipe-inner {
+  position: absolute;
+  inset: 0;
+  animation-duration: var(--tile-speed);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+.dom-pipe-inner.dir-right { animation-name: domRight; }
+.dom-pipe-inner.dir-left { animation-name: domLeft; }
+.dom-pipe-inner.dir-down { animation-name: domDown; }
+.dom-pipe-inner.dir-up { animation-name: domUp; }
+
+.dom-pipe.reverse .dom-pipe-inner { animation-direction: reverse; }
+.dom-pipe.paused .dom-pipe-inner { animation-play-state: paused; }
+
+@keyframes domRight { to { transform: translate3d(var(--tile-step), 0, 0); } }
+@keyframes domLeft { to { transform: translate3d(calc(-1 * var(--tile-step)), 0, 0); } }
+@keyframes domDown { to { transform: translate3d(0, var(--tile-step), 0); } }
+@keyframes domUp { to { transform: translate3d(0, calc(-1 * var(--tile-step)), 0); } }
+
+/* --------------------------------------------------------- R7 motion-path */
+
+.motion-host { position: absolute; inset: 0; }
+
+.motion-dash {
+  position: absolute;
+  left: 0;
+  top: 0;
+  offset-rotate: auto;
+  animation-name: motionTravel;
+  animation-duration: var(--travel-speed);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: offset-distance;
+}
+
+.motion-host.paused .motion-dash { animation-play-state: paused; }
+
+@keyframes motionTravel { to { offset-distance: 100%; } }
+
+/* Diagnostic axis (?glow=). Two filters sit on every pipe and they have to be
+   removable separately: the halo on the layer that moves, and the static blur
+   on .pipe-glow that does not. */
+.no-energy-halo .pipe-energy,
+.no-energy-halo .energy-halo {
+  filter: none;
+}
+
+.no-static-glow .pipe-glow {
+  filter: none;
+}

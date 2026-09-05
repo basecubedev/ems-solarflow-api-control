@@ -14,6 +14,7 @@ They are deterministic and never touch a real InfluxDB or browser.
 """
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -139,6 +140,54 @@ console.log(JSON.stringify({
     assert out["deviceFlowView"] == ""
     assert out["energyStats"] == ""
     assert out["controlExplainView"] == ""
+
+
+def test_control_panel_is_not_rebuilt_while_its_view_is_off_screen():
+    # The live snapshot path already renders only the visible view. The auth and
+    # runtime refreshes call renderControlExplain directly, and one of them is on
+    # a sixty-second timer that runs whatever is on screen -- measured at one
+    # rebuild per minute, 3.3 to 57.8 ms, of a subtree that at twelve devices is
+    # 3606 of the aggregated view's 4065 nodes.
+    script = PRELUDE + """
+const doc = makeDoc();
+global.document = doc;
+
+app.state.flowView = "aggregated";
+const container = doc.getElementById("controlExplainView");
+container.hidden = true;
+
+app.renderControlExplain({
+  timestamp: "2026-09-05T12:00:00Z",
+  control_explain: { mode: "pv_first", devices: { WR1: {} } },
+}, { forceRuntimeEditor: true });
+
+console.log(JSON.stringify({ controlExplainView: container.innerHTML }));
+"""
+    out = run_node(script)
+    assert out["controlExplainView"] == ""
+
+
+def test_control_panel_is_rebuilt_once_its_view_is_on_screen():
+    # The other half of the gate: deferring a rebuild must not lose it.
+    # setFlowView renders the view it switches to, so this is the state the user
+    # actually arrives in.
+    script = PRELUDE + """
+const doc = makeDoc();
+global.document = doc;
+
+app.state.flowView = "control";
+const container = doc.getElementById("controlExplainView");
+container.hidden = false;
+
+app.renderControlExplain({
+  timestamp: "2026-09-05T12:00:00Z",
+  control_explain: { mode: "pv_first", devices: { WR1: {} } },
+});
+
+console.log(JSON.stringify({ length: container.innerHTML.length }));
+"""
+    out = run_node(script)
+    assert out["length"] > 0
 
 
 def test_aggregated_view_still_rebuilds_its_own_flow():
@@ -430,6 +479,285 @@ def test_animation_mode_css_classes_present():
     assert ".dashboard-animation-off .pipe-energy" in css
     # Browser-level reduced motion is still honored.
     assert "@media (prefers-reduced-motion: reduce)" in css
+
+
+# The control view puts one animated result chip on every stage of every device,
+# and the border on each of them used to animate `background-position` -- a
+# paint property. Chromium cannot composite that, so it repainted every chip on
+# every frame: measured headed on a GPU, the control view ran at 45.2 fps with
+# eight devices and 134.6 with the same animation switched off, frame p95 27.8 ms
+# against 7.0. Removing the mask instead of the animation changed nothing
+# (48.7 fps), so the animated paint property is the cost and the mask is not.
+# Firefox was unaffected in all three arrangements.
+def test_the_result_ring_animates_a_property_the_compositor_can_carry():
+    css = (ROOT / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    assert "@keyframes controlResultRingSlide" in css, (
+        "the control result ring needs a keyframe the compositor can carry"
+    )
+    start = css.index("@keyframes controlResultRingSlide")
+    body = css[start:css.index("}", css.index("{", start) + 1) + 2]
+    assert "transform" in body, "the ring has to move with a transform"
+    for paint_property in ("background-position", "mask-position", "background-size"):
+        assert paint_property not in body, (
+            f"{paint_property} is a paint property; animating it repaints every "
+            "chip on every frame"
+        )
+
+    # The chips must no longer use the paint-animated keyframe at all.
+    for block in css.split("}"):
+        if ".control-result" in block and "controlResultBorderFlow" in block:
+            raise AssertionError(
+                "a .control-result rule still animates controlResultBorderFlow, "
+                "which animates background-position"
+            )
+
+
+def test_no_rule_animates_a_property_that_forces_a_repaint():
+    """The general form of the lesson, instead of one element's name.
+
+    `transform` and `opacity` go to the compositor. Anything that changes what a
+    pixel looks like -- `background-position`, `background-size`,
+    `mask-position`, `filter` -- repaints the element on every frame, and the
+    cost is multiplied by however many elements the rule matches.
+
+    The previous fix moved the control-stage chips off `background-position` and
+    left the same keyframe on `.primary-button.compact::after`, on the measured
+    grounds that it was one element. It is one element in the read-only
+    dashboard. With authentication configured the runtime editor renders a
+    submit button per stage card -- fifteen at twelve devices -- and the
+    authenticated control view measured 51.9 fps at four devices and 35.7 at
+    twelve, against 136.1 and 133.6 with the animation stopped, painting 4431
+    times per ten seconds against 175.
+
+    So the rule is not "this element is fine": it is that no keyframe on this
+    page may move a paint property, because no rule here is guaranteed to stay
+    matched by one element.
+    """
+
+    css = (ROOT / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
+    paint_properties = (
+        "background-position", "background-size", "mask-position",
+        "mask-size", "filter", "box-shadow", "clip-path",
+    )
+
+    offenders = []
+    cursor = 0
+    while True:
+        start = css.find("@keyframes", cursor)
+        if start == -1:
+            break
+        open_brace = css.index("{", start)
+        depth, index = 0, open_brace
+        while True:
+            if css[index] == "{":
+                depth += 1
+            elif css[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            index += 1
+        name = css[start + len("@keyframes"):open_brace].strip()
+        body = css[open_brace:index]
+        moved = [p for p in paint_properties if f"{p}:" in body.replace(" ", "")
+                 or f"{p} :" in body]
+        if moved:
+            offenders.append((name, moved))
+        cursor = index
+
+    # A keyframe nobody references costs nothing. The name appearing more than
+    # once means a rule names it in an `animation` or `animation-name`.
+    referenced = [(name, moved) for name, moved in offenders if css.count(name) > 1]
+    assert not referenced, (
+        "these keyframes move a property the compositor cannot carry and are "
+        f"still referenced by a rule: {referenced}. Animate a transform on a "
+        "child instead; see reports/dashboard-perf/"
+        "final-dashboard-performance-audit.md"
+    )
+
+
+def test_the_runtime_editor_is_not_rebuilt_when_it_has_not_changed():
+    """`runtimeControlPanel()` takes no snapshot and reads none.
+
+    It is built from `state.runtime` and `state.auth`, which change when
+    `/api/runtime` is re-fetched and not otherwise -- but it was written into
+    the DOM on every snapshot, twice a second, destroying and recreating every
+    input in the runtime editor. Measured at 3.2 ms per snapshot with twelve
+    devices and authentication configured.
+    """
+    script = PRELUDE + """
+const doc = makeDoc();
+global.document = doc;
+
+const container = doc.getElementById("controlExplainView");
+const runtimeMount = doc.getElementById("runtimeEditorMount");
+const explainMount = doc.getElementById("controlExplainMount");
+// The shell already exists, which is the steady state after the first render.
+container.querySelector = (selector) =>
+  selector === "#runtimeEditorMount" ? runtimeMount
+  : selector === "#controlExplainMount" ? explainMount
+  : null;
+
+let runtimeWrites = 0;
+let explainWrites = 0;
+for (const [node, count] of [[runtimeMount, "runtime"], [explainMount, "explain"]]) {
+  let stored = "";
+  Object.defineProperty(node, "innerHTML", {
+    configurable: true,
+    get() { return stored; },
+    set(value) {
+      stored = String(value);
+      if (count === "runtime") runtimeWrites += 1; else explainWrites += 1;
+    },
+  });
+}
+
+app.state.flowView = "control";
+container.hidden = false;
+const snapshot = {
+  timestamp: "2026-09-05T12:00:00Z",
+  control_explain: { mode: "pv_first", devices: { WR1: {} } },
+};
+app.renderControlExplain(snapshot);
+app.renderControlExplain(snapshot);
+app.renderControlExplain(snapshot);
+
+console.log(JSON.stringify({ runtimeWrites, explainWrites }));
+"""
+    out = run_node(script)
+    assert out["runtimeWrites"] == 1, (
+        "the runtime editor was rebuilt %d times for three renders of unchanged "
+        "runtime state" % out["runtimeWrites"]
+    )
+    # The explain panel is snapshot-derived and must still be written every time.
+    assert out["explainWrites"] == 3
+
+
+def test_the_two_animation_routes_move_the_tile_the_same_way():
+    """The tile is driven by `element.animate()` where the browser has it and by
+    the CSS keyframes where it does not. Two implementations of one motion, and
+    nothing stopped them drifting apart: flipping a sign in either place would
+    send half the browsers the wrong way and no test would notice.
+
+    So the vectors are compared. The magnitude is a dash period in both and is
+    not the question; the axis and the sign are.
+    """
+
+    css = (ROOT / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
+    source = APP_JS.read_text(encoding="utf-8")
+
+    block = re.search(r"const FLOW_TILE_VECTORS = \{(.*?)\};", source, re.S)
+    assert block, "FLOW_TILE_VECTORS is missing"
+    from_js = {
+        name: (int(x), int(y))
+        for name, x, y in re.findall(
+            r"(\w+):\s*\[\s*(-?\d+)\s*,\s*(-?\d+)\s*\]", block.group(1)
+        )
+    }
+    assert set(from_js) == {"right", "left", "down", "up"}, from_js
+
+    def translate_arguments(text, at):
+        """The arguments of the translate3d() starting at `at`, split on the
+        commas that are not inside a nested calc()."""
+        opened = text.index("(", at)
+        depth, index = 0, opened
+        while True:
+            if text[index] == "(":
+                depth += 1
+            elif text[index] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            index += 1
+        inner = text[opened + 1:index]
+        args, depth, part = [], 0, ""
+        for char in inner:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            if char == "," and depth == 0:
+                args.append(part.strip())
+                part = ""
+            else:
+                part += char
+        args.append(part.strip())
+        return args
+
+    for direction, vector in sorted(from_js.items()):
+        name = "flowTile" + direction.capitalize()
+        start = css.find("@keyframes %s " % name)
+        assert start != -1, f"@keyframes {name} is missing"
+        moved = css.find("translate3d", start)
+        assert moved != -1 and moved < css.index("}", css.index("}", start) + 1), (
+            f"@keyframes {name} does not translate3d"
+        )
+        # "0", "var(--tile-step)" or "calc(-1 * var(--tile-step))" per axis.
+        args = translate_arguments(css, moved)
+        assert len(args) == 3, (name, args)
+        from_css = []
+        for arg in args[:2]:
+            if arg == "0":
+                from_css.append(0)
+            else:
+                from_css.append(-1 if "-1" in arg else 1)
+        assert tuple(from_css) == vector, (
+            f"{name} moves {tuple(from_css)} in CSS and {vector} in "
+            f"FLOW_TILE_VECTORS; a browser without element.animate() would run "
+            f"this pipe the other way"
+        )
+
+
+def test_every_compact_button_carries_the_ring_element():
+    """The travelling border is an element now, not a pseudo-element, so a
+    button that does not contain it simply has no border.
+
+    That is the same shape of mistake the border cost in the first place: a rule
+    whose reach nobody re-checked. There were five of these buttons in the
+    markup and two more generated, and the runtime editor multiplies one of them
+    by the device count.
+    """
+
+    ring = '<span class="button-ring" aria-hidden="true"><i></i></span>'
+    seen = 0
+    for path in (
+        ROOT / "dashboard" / "static" / "index.html",
+        ROOT / "dashboard" / "static" / "app.js",
+    ):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"primary-button compact", text):
+            close = text.find(">", match.end())
+            assert close != -1, f"{path.name}: unterminated tag near {match.start()}"
+            following = text[close + 1:close + 1 + len(ring) + 8]
+            assert "button-ring" in following, (
+                f"{path.name}: a `primary-button compact` at offset "
+                f"{match.start()} does not open with the ring element, so it "
+                f"renders without its border:\n  {following!r}"
+            )
+            seen += 1
+    assert seen >= 7, f"expected at least seven compact buttons, found {seen}"
+
+
+def test_the_result_ring_still_stops_for_reduced_motion_and_animation_off():
+    """Making it cheap must not make it unstoppable.
+
+    Both switches targeted `.control-result::after` by name. A construction
+    that moves the animation somewhere else silently takes the accessibility
+    setting with it.
+    """
+
+    css = (ROOT / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
+    reduced = css[css.index("@media (prefers-reduced-motion: reduce)"):]
+    reduced = reduced[:reduced.index("\n}\n")]
+    for ring in ("control-result-ring", "button-ring"):
+        assert ring in reduced, (
+            f"prefers-reduced-motion no longer reaches .{ring}"
+        )
+    off = css[css.index(".dashboard-animation-off"):]
+    for ring in ("control-result-ring", "button-ring"):
+        assert ring in off, (
+            f"dashboard-animation-off no longer reaches .{ring}"
+        )
 
 
 # The lightweight SQLite History panel belongs only to the operational

@@ -131,23 +131,20 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
   background: linear-gradient(120deg, rgba(255,255,255,.09), transparent 42%);
   opacity: .34;
 }
-.primary-button.compact::after {
-  content: "";
+/* The same construction as the control-stage result chip: the gradient lives in
+   a child that is translated, instead of in a background whose position is
+   animated. `background-position` is a paint property, so the browser repaints
+   the element on every frame -- and the runtime editor renders one of these
+   buttons per stage card, twelve at four devices and twenty at twelve. Measured
+   authenticated: 52.4 -> 136.0 fps and 35.6 -> 135.4 fps, with paints per ten
+   seconds falling from 4399 to 175. */
+.button-ring {
   position: absolute;
   inset: 0;
   border-radius: inherit;
   padding: 1px;
   pointer-events: none;
-  background:
-    linear-gradient(
-      90deg,
-      rgba(34,211,238,.18),
-      rgba(125,211,252,.58),
-      rgba(122,168,255,.46),
-      rgba(34,211,238,.18)
-    );
-  background-size: 220% 100%;
-  animation: controlResultBorderFlow 4.2s linear infinite;
+  overflow: hidden;
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
@@ -156,6 +153,26 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
+}
+
+.button-ring i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 200%;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(34,211,238,.18),
+      rgba(125,211,252,.58),
+      rgba(122,168,255,.46),
+      rgba(34,211,238,.18)
+    );
+  background-size: 50% 100%;
+  background-repeat: repeat-x;
+  animation: controlResultRingSlide 4.2s linear infinite;
+  will-change: transform;
 }
 .icon-button {
   width: 28px;
@@ -189,10 +206,14 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
   gap: 8px;
   margin-bottom: 8px;
 }
+/* No backdrop-filter here, deliberately: measured invisible on this dashboard
+   (the panels are 78-92% opaque over a near-featureless background) and not
+   free, because it is recomputed whenever anything animates above it. See
+   reports/dashboard-perf/glass-visual-delta-2026-09-04.json. */
 .metric, .flow-panel, .rules-panel, .chart-panel, .device-card, .energy-stats-panel {
   position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 16px;
   background: linear-gradient(180deg, var(--panel-strong), var(--panel));
-  box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,0.06); backdrop-filter: blur(18px);
+  box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,0.06);
 }
 .metric::before, .flow-panel::before, .rules-panel::before, .chart-panel::before, .device-card::before, .energy-stats-panel::before {
   content: ""; position: absolute; inset: 0; pointer-events: none;
@@ -319,6 +340,70 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .energy-pipe.reverse .pipe-energy { animation-direction: reverse; }
 @keyframes pipeFlow { to { stroke-dashoffset: -52; } }
 
+/* The flow tile layer draws the moving dashes so that nothing animates inside
+   the flow SVG. An SVG element cannot be composited on its own, so a CSS
+   animation on one re-rasterises a subtree full of drop-shadow filters for
+   every frame: 4.1 fps in Firefox on the devices view with four devices.
+   A transform on a promoted layer is handled by the compositor instead and
+   repaints nothing -- eighty of these tiles measured 60.2 fps against 60.1
+   with none at all. A canvas was measured too and rejected: it has to be
+   repainted every frame, which cost as much as animating the SVG did.
+   See reports/dashboard-perf/flow-rendering-investigation.md.
+
+   The layer sits above the SVG, where the SVG's own dash used to be, and each
+   segment is cut back around the device boxes so they still hide the ends of
+   every pipe. Every rule here is inert unless app.js
+   turned the renderer on, so a browser it cannot run in keeps the CSS
+   animation. */
+.flow-tile-layer {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.flow-tile-layer[hidden] { display: none; }
+
+.flow-tile {
+  position: absolute;
+  overflow: hidden;
+}
+
+.flow-tile-inner {
+  position: absolute;
+  left: calc(-1 * var(--tile-step));
+  right: calc(-1 * var(--tile-step));
+  top: 0;
+  bottom: 0;
+  animation-duration: var(--tile-speed);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+.flow-tile-inner.vertical {
+  left: 0;
+  right: 0;
+  top: calc(-1 * var(--tile-step));
+  bottom: calc(-1 * var(--tile-step));
+}
+
+.flow-tile-inner.dir-right { animation-name: flowTileRight; }
+.flow-tile-inner.dir-left { animation-name: flowTileLeft; }
+.flow-tile-inner.dir-down { animation-name: flowTileDown; }
+.flow-tile-inner.dir-up { animation-name: flowTileUp; }
+
+.flow-tile.reverse .flow-tile-inner { animation-direction: reverse; }
+.flow-tile.still .flow-tile-inner { animation: none; }
+
+@keyframes flowTileRight { to { transform: translate3d(var(--tile-step), 0, 0); } }
+@keyframes flowTileLeft { to { transform: translate3d(calc(-1 * var(--tile-step)), 0, 0); } }
+@keyframes flowTileDown { to { transform: translate3d(0, var(--tile-step), 0); } }
+@keyframes flowTileUp { to { transform: translate3d(0, calc(-1 * var(--tile-step)), 0); } }
+
+.flow-tiles-active .pipe-energy {
+  display: none;
+}
+
 .device-visual {
   color: var(--muted);
   transition: opacity .28s ease, filter .28s ease;
@@ -413,7 +498,9 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .home-visual.active .home-body { filter: drop-shadow(0 0 8px currentColor); }
 .grid-visual.exporting,
 .grid-visual.importing { color: var(--grid); }
-@keyframes softPulse { 50% { opacity: .55; filter: drop-shadow(0 0 20px currentColor); } }
+/* Opacity only: animating the filter property makes every frame re-evaluate a
+   blur, which measured as expensive as the flow dashes themselves. */
+@keyframes softPulse { 50% { opacity: .55; } }
 @keyframes fillPulse { 50% { opacity: .72; } }
 
 .rules-list, .device-grid, .charts { display: grid; gap: 7px; }
@@ -1396,23 +1483,19 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
   background: linear-gradient(120deg, rgba(255,255,255,.14), transparent 42%);
   opacity: .46;
 }
-.control-result::after {
-  content: "";
+/* The travelling border on a result chip. The gradient lives in a child that is
+   translated, rather than in a background whose position is animated: the
+   control view puts one of these on every stage of every device, and
+   background-position is a paint property, so Chromium repainted all of them
+   every frame -- 45.2 fps against 134.6 with the animation off, measured headed
+   on a GPU at eight devices. The mask is not the cost and stays. */
+.control-result-ring {
   position: absolute;
   inset: 0;
   border-radius: inherit;
   padding: 1px;
   pointer-events: none;
-  background:
-    linear-gradient(
-      90deg,
-      rgba(34,211,238,.18),
-      rgba(125,211,252,.95),
-      rgba(122,168,255,.88),
-      rgba(34,211,238,.18)
-    );
-  background-size: 220% 100%;
-  animation: controlResultBorderFlow 4.2s linear infinite;
+  overflow: hidden;
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
@@ -1421,6 +1504,31 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
+}
+
+.control-result-ring i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 200%;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(34,211,238,.18),
+      rgba(125,211,252,.95),
+      rgba(122,168,255,.88),
+      rgba(34,211,238,.18)
+    );
+  background-size: 50% 100%;
+  background-repeat: repeat-x;
+  animation: controlResultRingSlide 4.2s linear infinite;
+  will-change: transform;
+}
+
+/* Half the element is exactly one tile, so the loop has no seam. */
+@keyframes controlResultRingSlide {
+  to { transform: translate3d(-50%, 0, 0); }
 }
 .control-result .value-icon {
   position: relative;
@@ -1444,10 +1552,6 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
   text-shadow:
     0 0 12px rgba(34,211,238,.62),
     0 0 24px rgba(34,211,238,.26);
-}
-@keyframes controlResultBorderFlow {
-  from { background-position: 0% 50%; }
-  to { background-position: 220% 50%; }
 }
 .control-result.tone-blocked {
   border-color: rgba(255,107,122,.48);
@@ -1714,6 +1818,10 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .range-tabs button.active,
 .flow-view-tabs button.active { border-color: rgba(34, 211, 238, 0.46); background: linear-gradient(180deg, rgba(34, 211, 238, 0.18), rgba(139, 92, 246, 0.12)); color: var(--text); }
 .charts { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+/* Applies to EVERY canvas on the page, not just the chart ones: any canvas
+   added anywhere silently gets this background instead of being transparent.
+   That cost two investigations a wrong conclusion. A canvas meant to be
+   transparent must set `background: none`. */
 canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13); border-radius: 14px; background: linear-gradient(180deg, rgba(15,23,42,.80), rgba(15,23,42,.52)); box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
 
 /* Analytics single-chart panel (history & analytics) */
@@ -1898,7 +2006,8 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
     filter: none;
   }
 
-  .control-result::after {
+  .control-result-ring i,
+  .button-ring i {
     animation: none;
   }
 }
@@ -1936,7 +2045,8 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
 .dashboard-animation-off .solar-visual.active .solar-sun,
 .dashboard-animation-off .battery-visual.charging .battery-fill,
 .dashboard-animation-off .inverter-visual.active .inverter-led,
-.dashboard-animation-off .control-result::after {
+.dashboard-animation-off .control-result-ring i,
+.dashboard-animation-off .button-ring i {
   animation: none;
 }
 @media (max-width: 420px) {

@@ -84,8 +84,13 @@ const LOG_POLL_INTERVAL_MS = 2000;
 
 const SOC_ANIMATION_EPSILON = 0.1;
 const SSE_TELEMETRY_TIMEOUT_MS = 3000;
+const SSE_PROMOTION_INTERVAL_MS = 30000;
 let pollingStarted = false;
 let pollingIntervalId = null;
+let ssePromotionIntervalId = null;
+let activeEventSource = null;
+let renderedSnapshotTimestamp = null;
+let deferredSnapshotRender = false;
 let pendingDeviceFlowBatteryAnimation = false;
 
 // Single-chart philosophy: one combined chart, configurable series. Colors are
@@ -149,6 +154,48 @@ const FLOW_SPEED_BUCKETS = {
   medium: { alpha: 0.68, width: 5, glow: 0.26 },
   high: { alpha: 0.90, width: 6, glow: 0.40 },
 };
+
+// Magnitude is thickness. See docs/technical/dashboard-performance.md.
+const FLOW_RIBBON_IDLE_W = 3;
+const FLOW_RIBBON_MIN_W = 4;
+const FLOW_RIBBON_MAX_W = 15;
+// The inverter's PV and battery ports are 28 user units apart; wider ribbons
+// than this collide in the aggregated layout.
+const FLOW_RIBBON_CEILING_W = 22;
+
+// A fixed full-scale suits neither a 600 W balcony system nor a 10 kW one, so
+// the scale snaps to a rung chosen from the system's own output.
+const FLOW_SCALE_LADDER = [250, 500, 1000, 2000, 3000, 5000, 8000, 12000];
+const flowScale = { reference: 1000 };
+
+function flowScaleReference(maxWatts) {
+  const current = flowScale.reference;
+  const value = Number.isFinite(maxWatts) ? Math.abs(maxWatts) : 0;
+  // Hysteresis: without it the widths flicker between two rungs at the boundary.
+  if (value <= current && value >= current * 0.5) return current;
+  let next = FLOW_SCALE_LADDER[FLOW_SCALE_LADDER.length - 1];
+  for (let i = 0; i < FLOW_SCALE_LADDER.length; i += 1) {
+    if (value <= FLOW_SCALE_LADDER[i]) {
+      next = FLOW_SCALE_LADDER[i];
+      break;
+    }
+  }
+  flowScale.reference = next;
+  return next;
+}
+
+function flowRibbonWidth(watts, active) {
+  if (!active) return FLOW_RIBBON_IDLE_W;
+  const value = Number.isFinite(watts) ? Math.abs(watts) : 0;
+  const reference = flowScale.reference || 1000;
+  const share = clamp(value / reference, 0, 1);
+  const width = FLOW_RIBBON_MIN_W + (FLOW_RIBBON_MAX_W - FLOW_RIBBON_MIN_W) * share;
+  // Quantised to half a pixel. The width is part of the style cache key, so a
+  // continuous one rewrites the pipe's style on almost every snapshot: at eight
+  // devices that measured as lagP95 3 ms -> 14 ms. Half a pixel is below what
+  // the eye resolves here and cuts the rewrites by roughly five.
+  return Math.min(FLOW_RIBBON_CEILING_W, Math.round(width * 2) / 2);
+}
 const DEVICE_FLOW_LAYOUT = {
   width: 900,
   rowHeight: 244,
@@ -269,12 +316,48 @@ function setConnection(text, connected) {
 }
 
 function updateSnapshot(snapshot) {
+  if (!snapshot) return;
   state.snapshot = snapshot;
   const status = state.demoMode
     ? "Demo"
     : state.liveTransport === "polling" ? "Polling" : "Live";
   setConnection(status, true);
+
+  const timestamp = snapshot.timestamp;
+  if (timestamp && timestamp === renderedSnapshotTimestamp && !deferredSnapshotRender) {
+    return;
+  }
+
+  // EventSource delivery and the polling timer both keep running in a
+  // background tab, so without this the tab rebuilds its view for a screen
+  // nobody is looking at. The newest state is kept; only the render waits.
+  if (liveDocumentHidden()) {
+    deferredSnapshotRender = true;
+    return;
+  }
+
+  renderSnapshotNow(snapshot);
+}
+
+function liveDocumentHidden() {
+  return typeof document !== "undefined" && document.hidden === true;
+}
+
+function renderSnapshotNow(snapshot) {
+  deferredSnapshotRender = false;
+  renderedSnapshotTimestamp = snapshot.timestamp || null;
   renderSnapshot(snapshot);
+  invalidateFlowTiles();
+}
+
+function flushDeferredSnapshotRender() {
+  if (!deferredSnapshotRender || liveDocumentHidden() || !state.snapshot) return;
+  renderSnapshotNow(state.snapshot);
+}
+
+function initLiveVisibilityHandling() {
+  if (typeof document === "undefined" || !document.addEventListener) return;
+  document.addEventListener("visibilitychange", flushDeferredSnapshotRender);
 }
 
 // View-aware live rendering. Every SSE/poll snapshot updates only the globally
@@ -355,6 +438,12 @@ function renderAggregatedSnapshot(snapshot) {
     gridPower > FLOW_THRESHOLD_W ? "importing" : gridPower < -FLOW_THRESHOLD_W ? "exporting" : "neutral"
   );
 
+  // The scale comes from the whole picture, not from one pipe, so that two
+  // ribbons in the same view are comparable with each other.
+  flowScaleReference(Math.max(
+    Math.abs(pvPower), batteryFlow.absW, Math.abs(inverterPower), Math.abs(gridPower)
+  ));
+
   setPipe("pipePvInverter", pvPower, "forward");
   // The battery path is drawn battery -> inverter; in the current SVG dash
   // animation, reverse visibly flows inverter -> battery for charging.
@@ -418,17 +507,23 @@ function applyFlowClasses(el, active, direction, speedBucket) {
   }
 }
 
-function applyPipeStyleBucket(el, speedBucket) {
+function applyPipeStyleBucket(el, speedBucket, watts) {
   if (!el) return;
-  if (typeof el.getAttribute === "function" && el.getAttribute("data-flow-style") === speedBucket) {
+  const style = FLOW_SPEED_BUCKETS[speedBucket] || FLOW_SPEED_BUCKETS.idle;
+  const width = watts === undefined
+    ? style.width
+    : flowRibbonWidth(watts, speedBucket !== "idle");
+  // The key must carry the width: keyed on the bucket alone, a flow moving from
+  // 700 W to 3000 W would keep the thickness it had at 700 W.
+  const key = `${speedBucket}:${width}`;
+  if (typeof el.getAttribute === "function" && el.getAttribute("data-flow-style") === key) {
     return;
   }
-  const style = FLOW_SPEED_BUCKETS[speedBucket] || FLOW_SPEED_BUCKETS.idle;
   el.style.setProperty("--pipe-alpha", String(style.alpha));
-  el.style.setProperty("--pipe-width", `${style.width}px`);
+  el.style.setProperty("--pipe-width", `${width}px`);
   el.style.setProperty("--pipe-glow", String(style.glow));
   if (typeof el.setAttribute === "function") {
-    el.setAttribute("data-flow-style", speedBucket);
+    el.setAttribute("data-flow-style", key);
   }
 }
 
@@ -440,7 +535,523 @@ function setPipe(id, value, direction = "forward") {
   const speedBucket = flowSpeedBucket(wattsValue, active);
 
   applyFlowClasses(el, active, direction, speedBucket);
-  applyPipeStyleBucket(el, speedBucket);
+  applyPipeStyleBucket(el, speedBucket, wattsValue);
+}
+
+// ---------------------------------------------------------------- flow tiles
+//
+// The moving dashes are drawn as an HTML layer under the flow SVG and moved
+// with a CSS transform, instead of being animated inside the SVG. The SVG keeps
+// the geometry, the colours, the speed buckets and every rule that decides how
+// a pipe should look; this renderer reads those decisions back with
+// getComputedStyle, so no appearance rule is written twice and animation_mode,
+// prefers-reduced-motion, the idle state and the flow-speed buckets keep
+// working through the CSS that already implements them.
+//
+// Why not keep animating the SVG: an SVG element cannot be composited on its
+// own, so a CSS animation on one re-rasterises a subtree full of drop-shadow
+// filters for every frame it produces. Measured on this page, devices view,
+// four devices: 4.1 fps in Firefox.
+//
+// Why not a canvas: a canvas has to be repainted every frame, and on this page
+// that costs as much as animating the SVG did -- 5 fps in Firefox, measured
+// with a working canvas renderer. A transform on a promoted layer is handled by
+// the compositor and never repaints anything: eighty such tiles measured 60.2
+// fps against 60.1 with none at all.
+//
+// The layer sits above the SVG, where the SVG's own dash used to be, and each
+// segment is cut back around the device boxes so they still hide the ends of
+// every pipe. Behind the SVG instead, the semi-transparent base and glow
+// strokes would wash the dashes out.
+// See reports/dashboard-perf/flow-rendering-investigation.md.
+
+// Below this an animation is not motion: prefers-reduced-motion collapses every
+// duration to .001ms rather than removing the declaration.
+const FLOW_MIN_ANIMATION_SECONDS = 0.05;
+// Softens each dash end, standing in for the round line cap. Kept small: a
+// wide ramp blurs the gaps away and the pipe stops reading as a dashed flow.
+// A CSS filter would soften it properly and is exactly what must not be here --
+// eighty tiles carrying one dropped Chromium from 17.3 to 9.1 fps.
+const FLOW_TILE_RAMP = 0.05;
+
+const flowTileState = {
+  active: false,
+  hosts: [],
+  signature: null,
+  frameId: null,
+  observer: null,
+};
+
+// Only the absolute straight-line commands the dashboard draws its pipes with.
+// Anything else refuses the whole path: drawing a shorter pipe than the SVG
+// shows would be worse than not drawing one at all.
+function parseFlowPath(d) {
+  if (typeof d !== "string" || !d) return null;
+  const tokens = d.match(/[A-Za-z]|-?\d*\.?\d+(?:[eE][-+]?\d+)?/g);
+  if (!tokens || !tokens.length) return null;
+
+  const points = [];
+  let index = 0;
+  let command = null;
+  let x = 0;
+  let y = 0;
+
+  const nextNumber = () => {
+    const value = Number(tokens[index]);
+    if (!Number.isFinite(value)) return null;
+    index += 1;
+    return value;
+  };
+
+  while (index < tokens.length) {
+    if (/^[A-Za-z]$/.test(tokens[index])) {
+      command = tokens[index];
+      index += 1;
+      if (!/^[MLHV]$/.test(command)) return null;
+      if (index >= tokens.length) return null;
+    }
+    if (command === "M" || command === "L") {
+      const nx = nextNumber();
+      const ny = nextNumber();
+      if (nx === null || ny === null) return null;
+      x = nx;
+      y = ny;
+      command = "L";
+    } else if (command === "H") {
+      const nx = nextNumber();
+      if (nx === null) return null;
+      x = nx;
+    } else if (command === "V") {
+      const ny = nextNumber();
+      if (ny === null) return null;
+      y = ny;
+    } else {
+      return null;
+    }
+    points.push({ x, y });
+  }
+  return points.length >= 2 ? points : null;
+}
+
+function flowDashPattern(value) {
+  if (!value || value === "none") return null;
+  const parts = String(value)
+    .split(/[\s,]+/)
+    .map((part) => parseFloat(part))
+    .filter((part) => Number.isFinite(part) && part >= 0);
+  return parts.length && parts.some((part) => part > 0) ? parts : null;
+}
+
+// Seconds per cycle, or 0 when the CSS says this should not be moving. Reading
+// it back is what keeps animation_mode and prefers-reduced-motion working
+// without the renderer knowing either of them exists.
+function flowAnimationSeconds(style) {
+  if (!style) return 0;
+  const name = String(style.animationName || "none").split(",")[0].trim();
+  if (!name || name === "none") return 0;
+  const playState = String(style.animationPlayState || "").split(",")[0].trim();
+  if (playState === "paused") return 0;
+  const iterations = String(style.animationIterationCount || "").split(",")[0].trim();
+  if (iterations && iterations !== "infinite") return 0;
+  const raw = String(style.animationDuration || "").split(",")[0].trim();
+  const value = parseFloat(raw);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const seconds = raw.endsWith("ms") ? value / 1000 : value;
+  return seconds >= FLOW_MIN_ANIMATION_SECONDS ? seconds : 0;
+}
+
+// A gradient stop needs the colour at zero alpha. The `transparent` keyword is
+// transparent *black*, which CSS interpolates through and leaves a dark fringe
+// on a coloured dash.
+function flowFadedColor(color) {
+  const parts = String(color || "").match(/-?\d*\.?\d+/g);
+  if (!parts || parts.length < 3) return "rgba(0, 0, 0, 0)";
+  return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, 0)`;
+}
+
+function flowSegments(points) {
+  const segments = [];
+  let travelled = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1];
+    const to = points[index];
+    const horizontal = from.y === to.y;
+    const length = Math.abs(to.x - from.x) + Math.abs(to.y - from.y);
+    if (!length) continue;
+    segments.push({
+      x: Math.min(from.x, to.x),
+      y: Math.min(from.y, to.y),
+      length,
+      horizontal,
+      before: travelled,
+      direction: horizontal
+        ? (to.x > from.x ? "right" : "left")
+        : (to.y > from.y ? "down" : "up"),
+    });
+    travelled += length;
+  }
+  return segments;
+}
+
+function readFlowPipe(group) {
+  const base = group.querySelector(".pipe-base");
+  const energy = group.querySelector(".pipe-energy");
+  if (!base || !energy || typeof base.getCTM !== "function") return null;
+
+  const points = parseFlowPath(base.getAttribute("d"));
+  if (!points) return null;
+  const matrix = base.getCTM();
+  if (!matrix) return null;
+  // getCTM() maps the element's user space to the coordinate system of the
+  // nearest svg viewport, which is what the overlay is positioned in: CSS
+  // pixels from the SVG's top-left corner.
+  const scale = Math.hypot(matrix.a, matrix.b) || 1;
+
+  const style = window.getComputedStyle(energy);
+  const dash = flowDashPattern(style.strokeDasharray);
+  const width = parseFloat(style.strokeWidth);
+  const opacity = Number(style.opacity);
+  const color = style.stroke && style.stroke !== "none" ? style.stroke : style.color;
+
+  return {
+    segments: flowSegments(points.map((point) => ({
+      x: (matrix.a * point.x) + (matrix.c * point.y) + matrix.e,
+      y: (matrix.b * point.x) + (matrix.d * point.y) + matrix.f,
+    }))),
+    dash: dash ? dash[0] * scale : 0,
+    period: dash ? dash.reduce((total, part) => total + part, 0) * scale : 0,
+    width: Math.max(1, (Number.isFinite(width) ? width : 1) * scale),
+    opacity: Number.isFinite(opacity) ? opacity : 1,
+    color,
+    faded: flowFadedColor(color),
+    seconds: flowAnimationSeconds(style),
+    reverse: String(style.animationDirection || "").split(",")[0].trim() === "reverse",
+  };
+}
+
+// The device boxes are painted over the pipes in the SVG and hide the stretch
+// of pipe that runs underneath them. The tile layer is above the SVG, so each
+// segment is cut back to the parts no box covers -- which is what the SVG was
+// already showing.
+function readFlowOccluders(svg, rect) {
+  const shapes = [];
+  svg.querySelectorAll(".device-visual .visual-shell").forEach((shell) => {
+    const box = shell.getBoundingClientRect();
+    if (!box.width || !box.height) return;
+    shapes.push({
+      x0: box.left - rect.left,
+      x1: box.right - rect.left,
+      y0: box.top - rect.top,
+      y1: box.bottom - rect.top,
+    });
+  });
+  return shapes;
+}
+
+// The parts of one axis-aligned segment that no occluder covers, each carrying
+// the arc length at which it starts so the dash phase stays continuous.
+function flowVisibleRuns(segment, occluders) {
+  const along0 = segment.horizontal ? segment.x : segment.y;
+  const along1 = along0 + segment.length;
+  const across = segment.horizontal ? segment.y : segment.x;
+  const cuts = [];
+  for (let index = 0; index < occluders.length; index += 1) {
+    const box = occluders[index];
+    const acrossLow = segment.horizontal ? box.y0 : box.x0;
+    const acrossHigh = segment.horizontal ? box.y1 : box.x1;
+    if (across < acrossLow || across > acrossHigh) continue;
+    const low = segment.horizontal ? box.x0 : box.y0;
+    const high = segment.horizontal ? box.x1 : box.y1;
+    if (high <= along0 || low >= along1) continue;
+    cuts.push([Math.max(low, along0), Math.min(high, along1)]);
+  }
+  cuts.sort((a, b) => a[0] - b[0]);
+
+  const runs = [];
+  let cursor = along0;
+  for (let index = 0; index < cuts.length; index += 1) {
+    if (cuts[index][0] > cursor) runs.push([cursor, cuts[index][0]]);
+    cursor = Math.max(cursor, cuts[index][1]);
+  }
+  if (cursor < along1) runs.push([cursor, along1]);
+
+  // Travelled distance grows from the segment's start, which is the low end
+  // only when the pipe runs right or down.
+  const forward = segment.direction === "right" || segment.direction === "down";
+  return runs
+    .filter(([from, to]) => to - from > 0.5)
+    .map(([from, to]) => ({
+      x: segment.horizontal ? from : segment.x,
+      y: segment.horizontal ? segment.y : from,
+      length: to - from,
+      horizontal: segment.horizontal,
+      direction: segment.direction,
+      before: segment.before + (forward ? from - along0 : along1 - to),
+    }));
+}
+
+function flowTileLayerFor(svg) {
+  const parent = svg.parentNode;
+  if (!parent || typeof parent.querySelector !== "function") return null;
+  let layer = parent.querySelector("div.flow-tile-layer");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.className = "flow-tile-layer";
+    layer.setAttribute("aria-hidden", "true");
+    parent.appendChild(layer);
+  }
+  return layer;
+}
+
+// Whether an element belongs to a view that is switched away. Answered from the
+// `hidden` attribute setFlowView already sets, because asking the layout engine
+// instead costs a full synchronous layout: in the control view, where no flow
+// SVG is on screen, that one question was 25-36 ms of main thread per snapshot.
+function viewOffScreen(el) {
+  if (!el) return true;
+  if (el.hidden) return true;
+  return typeof el.closest === "function" && Boolean(el.closest("[hidden]"));
+}
+
+function flowSvgOffScreen(svg) {
+  return viewOffScreen(svg);
+}
+
+function buildFlowTileHost(svg) {
+  const layer = flowTileLayerFor(svg);
+  if (!layer) return null;
+
+  if (flowSvgOffScreen(svg)) {
+    // The view is switched away. Its layer is a sibling of the view that is on
+    // screen, so leaving it visible would paint one view's pipes over another's.
+    layer.hidden = true;
+    return null;
+  }
+
+  // Every read before every write: a write between two reads makes each later
+  // read flush layout again, once per pipe. Pinned by a test.
+  const rect = svg.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    layer.hidden = true;
+    return null;
+  }
+  const parentRect = svg.parentNode.getBoundingClientRect();
+  const occluders = readFlowOccluders(svg, rect);
+  const pipes = [];
+  let readable = true;
+  svg.querySelectorAll(".energy-pipe").forEach((group) => {
+    const pipe = readFlowPipe(group);
+    if (!pipe || !pipe.segments.length) {
+      readable = false;
+      return;
+    }
+    pipe.runs = pipe.segments.reduce(
+      (all, segment) => all.concat(flowVisibleRuns(segment, occluders)), []
+    );
+    pipes.push(pipe);
+  });
+  if (!readable || !pipes.length) return null;
+
+  layer.hidden = false;
+  layer.style.left = `${rect.left - parentRect.left}px`;
+  layer.style.top = `${rect.top - parentRect.top}px`;
+  layer.style.width = `${rect.width}px`;
+  layer.style.height = `${rect.height}px`;
+
+  return { layer, pipes, width: rect.width, height: rect.height };
+}
+
+function flowTileBackground(pipe, horizontal) {
+  if (!pipe.period || !pipe.dash) return pipe.color;
+  // A data: URI, not a generated stylesheet: the CSP is `style-src 'self'` with
+  // no 'unsafe-inline'. It must be assigned through element.style, because the
+  // quotes in a url("data:...") value truncate an HTML style attribute.
+  const thickness = Math.max(2, pipe.width);
+  const radius = Math.min(thickness / 2, pipe.dash / 2);
+  const width = horizontal ? pipe.period : thickness;
+  const height = horizontal ? thickness : pipe.period;
+  const token = horizontal
+    ? `<rect x="0" y="0" width="${round2(pipe.dash)}" height="${round2(thickness)}"`
+    : `<rect x="0" y="0" width="${round2(thickness)}" height="${round2(pipe.dash)}"`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${round2(width)}"`
+    + ` height="${round2(height)}" viewBox="0 0 ${round2(width)} ${round2(height)}">`
+    + `${token} rx="${round2(radius)}" ry="${round2(radius)}" fill="${pipe.color}"/></svg>`;
+  const size = horizontal ? `${round2(pipe.period)}px 100%` : `100% ${round2(pipe.period)}px`;
+  const repeat = horizontal ? "repeat-x" : "repeat-y";
+  return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}") 0 0 / ${size} ${repeat}`;
+}
+
+function round2(value) {
+  return Math.round(value * 100) / 100;
+}
+
+// The same four vectors the flowTile* keyframes carry, so the two routes cannot
+// drift apart.
+const FLOW_TILE_VECTORS = {
+  right: [1, 0],
+  left: [-1, 0],
+  down: [0, 1],
+  up: [0, -1],
+};
+
+function renderFlowTiles(host) {
+  const fragment = document.createDocumentFragment();
+  for (let index = 0; index < host.pipes.length; index += 1) {
+    const pipe = host.pipes[index];
+    const backgrounds = {
+      true: flowTileBackground(pipe, true),
+      false: flowTileBackground(pipe, false),
+    };
+    for (let k = 0; k < pipe.runs.length; k += 1) {
+      const segment = pipe.runs[k];
+      const background = backgrounds[segment.horizontal];
+      const half = pipe.width / 2;
+      // `animation_mode`, `prefers-reduced-motion` and the idle state all
+      // arrive here as `seconds = 0`, read back out of the CSS by readFlowPipe.
+      // Neither route may animate then.
+      const moving = pipe.seconds > 0 && pipe.period > 0;
+      const box = document.createElement("div");
+      box.className = `flow-tile${pipe.reverse ? " reverse" : ""}`
+        + `${moving ? "" : " still"}`;
+      box.style.left = `${segment.x - (segment.horizontal ? 0 : half)}px`;
+      box.style.top = `${segment.y - (segment.horizontal ? half : 0)}px`;
+      box.style.width = `${segment.horizontal ? segment.length : pipe.width}px`;
+      box.style.height = `${segment.horizontal ? pipe.width : segment.length}px`;
+      box.style.opacity = String(pipe.opacity);
+      box.style.setProperty("--tile-step", `${pipe.period}px`);
+      box.style.setProperty("--tile-speed", `${pipe.seconds || 1}s`);
+
+      const inner = document.createElement("div");
+      // Literal keyframe values through the Web Animations API where the
+      // browser has it, and the CSS keyframes otherwise. Both express the same
+      // motion; the CSS form costs a style recalculation per frame, which on a
+      // main thread slowed sixteen-fold is the difference between 110.7 fps at
+      // a 13.9 ms frame p95 and 134.2 at 7.0. The direction class is what names
+      // the CSS animation, so it is left off when the API drives instead --
+      // otherwise both would run.
+      const composited = moving && typeof inner.animate === "function";
+      inner.className = `flow-tile-inner${composited ? "" : ` dir-${segment.direction}`}`
+        + `${segment.horizontal ? "" : " vertical"}`;
+      inner.style.background = background;
+      if (pipe.period) {
+        // The phase this segment has accumulated along the pipe, so the dashes
+        // stay continuous across the corners.
+        const phase = -(segment.before % pipe.period);
+        inner.style.backgroundPosition = segment.horizontal
+          ? `${phase}px 0`
+          : `0 ${phase}px`;
+      }
+      if (composited) {
+        const [dx, dy] = FLOW_TILE_VECTORS[segment.direction] || FLOW_TILE_VECTORS.right;
+        inner.animate(
+          [
+            { transform: "translate3d(0px, 0px, 0)" },
+            {
+              transform:
+                `translate3d(${dx * pipe.period}px, ${dy * pipe.period}px, 0)`,
+            },
+          ],
+          {
+            duration: pipe.seconds * 1000,
+            iterations: Infinity,
+            easing: "linear",
+            direction: pipe.reverse ? "reverse" : "normal",
+          },
+        );
+      }
+      box.appendChild(inner);
+      fragment.appendChild(box);
+    }
+  }
+  host.layer.textContent = "";
+  host.layer.appendChild(fragment);
+}
+
+function flowTileSvgs() {
+  const svgs = [];
+  const aggregated = document.getElementById("flowSvg");
+  if (aggregated) svgs.push(aggregated);
+  document.querySelectorAll(".device-flow-svg").forEach((svg) => svgs.push(svg));
+  return svgs;
+}
+
+function flowTileSignature(hosts) {
+  return JSON.stringify(hosts.map((host) => [
+    Math.round(host.width), Math.round(host.height),
+    host.pipes.map((pipe) => [
+      pipe.color, pipe.opacity, Math.round(pipe.width * 100),
+      Math.round(pipe.period * 100), Math.round(pipe.dash * 100),
+      pipe.seconds, pipe.reverse,
+      pipe.runs.map((s) => [
+        Math.round(s.x), Math.round(s.y), Math.round(s.length), s.direction,
+        Math.round(s.before),
+      ]),
+    ]),
+  ]));
+}
+
+function rebuildFlowTiles() {
+  const hosts = [];
+  flowTileSvgs().forEach((svg) => {
+    const host = buildFlowTileHost(svg);
+    if (host) hosts.push(host);
+  });
+  const signature = flowTileSignature(hosts);
+  flowTileState.hosts = hosts;
+  // Rebuilding identical tiles on every snapshot would undo the point of the
+  // change: touching the DOM is what has to stay rare.
+  if (signature === flowTileState.signature) return hosts;
+  flowTileState.signature = signature;
+  hosts.forEach(renderFlowTiles);
+  return hosts;
+}
+
+function invalidateFlowTiles() {
+  if (!flowTileState.active || flowTileState.frameId !== null) return;
+  if (typeof requestAnimationFrame !== "function") {
+    rebuildFlowTiles();
+    return;
+  }
+  // Coalesce: a snapshot render touches many pipes, and the layer only has to
+  // be brought up to date once afterwards.
+  flowTileState.frameId = requestAnimationFrame(() => {
+    flowTileState.frameId = null;
+    rebuildFlowTiles();
+  });
+}
+
+function initFlowTiles() {
+  if (flowTileState.active) return true;
+  if (typeof document === "undefined" || !document.body) return false;
+  if (typeof window === "undefined" || typeof window.getComputedStyle !== "function") {
+    return false;
+  }
+
+  document.body.classList.add("flow-tiles-active");
+  flowTileState.active = true;
+  flowTileState.signature = null;
+  if (!rebuildFlowTiles().length) {
+    // Nothing could be read back. Hand the flow to the CSS animation rather
+    // than ship a view with no flow in it.
+    flowTileState.active = false;
+    document.body.classList.remove("flow-tiles-active");
+    return false;
+  }
+
+  if (typeof ResizeObserver === "function") {
+    flowTileState.observer = new ResizeObserver(() => {
+      flowTileState.signature = null;
+      invalidateFlowTiles();
+    });
+    document.querySelectorAll(".flow-wrap, .device-flow-view").forEach((node) => {
+      flowTileState.observer.observe(node);
+    });
+  }
+  window.addEventListener("resize", () => {
+    flowTileState.signature = null;
+    invalidateFlowTiles();
+  });
+  return true;
 }
 
 function setVisualState(id, active, mode) {
@@ -1074,7 +1685,12 @@ function applyDeviceFlowInitialStyles(container) {
   }
 
   container.querySelectorAll("[data-flow-speed]").forEach((el) => {
-    applyPipeStyleBucket(el, el.getAttribute("data-flow-speed") || "idle");
+    const watts = Number(el.getAttribute("data-flow-watts"));
+    applyPipeStyleBucket(
+      el,
+      el.getAttribute("data-flow-speed") || "idle",
+      Number.isFinite(watts) ? watts : undefined
+    );
   });
 
   container.querySelectorAll("[data-battery-fill-start]").forEach((el) => {
@@ -1115,7 +1731,7 @@ function updateDevicePipeElement(el, key, kind, value, direction = "forward") {
   const active = flowActive(`device:${key}:${kind}`, wattsValue);
   const speedBucket = flowSpeedBucket(wattsValue, active);
   setSvgClass(el, devicePipeClass(kind, active, direction, speedBucket));
-  applyPipeStyleBucket(el, speedBucket);
+  applyPipeStyleBucket(el, speedBucket, wattsValue);
 }
 
 function updateDeviceFlowSnapshot(container, snapshot, entries) {
@@ -1125,6 +1741,19 @@ function updateDeviceFlowSnapshot(container, snapshot, entries) {
   const fills = dataElementMap(container, "data-device-battery-fill");
   const homeLoad = Number(snapshot.home_load_w || 0);
   const gridPower = Number(snapshot.grid_power_w || 0);
+
+  // One scale for the whole view, taken before any pipe is drawn, so a ribbon
+  // in one device's row is comparable with a ribbon in another's.
+  let widest = Math.abs(gridPower);
+  entries.forEach(([, device]) => {
+    widest = Math.max(
+      widest,
+      Math.abs(devicePvPower(device)),
+      Math.abs(deviceOutputPower(device)),
+      normalizeBatteryPowerForDisplay(device?.battery_power_w).absW
+    );
+  });
+  flowScaleReference(widest);
 
   entries.forEach(([name, device], index) => {
     const key = deviceFlowKey(name, index);
@@ -1169,7 +1798,16 @@ function renderControlExplain(snapshot, options = {}) {
   const container = $("controlExplainView");
   if (!container) return;
 
+  // The live snapshot path renders only the visible view. This function is also
+  // called directly by the auth and runtime refreshes, one of which runs on a
+  // sixty-second timer whatever is on screen -- measured at one rebuild per
+  // minute costing up to 57.8 ms, of a subtree that is 3606 of the aggregated
+  // view's 4065 nodes at twelve devices. setFlowView renders the view it
+  // switches to, so deferring loses nothing.
+  if (viewOffScreen(container)) return;
+
   if (!ensureControlExplainShell(container)) {
+    renderedRuntimePanelHtml = null;
     container.innerHTML = `
       <div class="control-decision-board">
         ${runtimeControlPanel()}
@@ -1194,6 +1832,7 @@ function ensureControlExplainShell(container) {
     return true;
   }
 
+  renderedRuntimePanelHtml = null;
   container.innerHTML = `
     <div class="control-decision-board">
       <div id="runtimeEditorMount"></div>
@@ -1206,10 +1845,25 @@ function ensureControlExplainShell(container) {
   );
 }
 
+// The panel this renders is built from state.runtime and state.auth. No
+// snapshot touches either, so on a live feed it produces the same string twice a
+// second -- measured byte-identical on every write, in every scenario, and worth
+// 3.2 ms per snapshot with twelve devices and authentication configured, plus
+// the destruction and recreation of every input in the form.
+let renderedRuntimePanelHtml = null;
+
 function renderRuntimeEditorMount() {
   const mount = $("runtimeEditorMount");
   if (!mount) return;
-  mount.innerHTML = runtimeControlPanel();
+  const html = runtimeControlPanel();
+  // Compared against what was generated last time, never against the DOM: the
+  // mount's own innerHTML is a re-serialisation of itself, and `<input checked>`
+  // comes back as `checked=""`, so that comparison can never be equal. Every
+  // path that recreates the mounts clears this, so a stale cache cannot outlive
+  // the element it describes.
+  if (html === renderedRuntimePanelHtml) return;
+  renderedRuntimePanelHtml = html;
+  mount.innerHTML = html;
 }
 
 function renderControlExplainMount(snapshot) {
@@ -1743,6 +2397,7 @@ function controlResult(label, value, iconName = "charge", formatter = controlTex
   const text = hasExplainValue(value) ? formatter(value) : "--";
   return `
     <div class="control-result control-stage-result ${tone ? `tone-${escapeHtml(tone)}` : ""}">
+      <span class="control-result-ring" aria-hidden="true"><i></i></span>
       <span class="value-icon" aria-hidden="true">${icon(iconName)}</span>
       <span class="control-label control-stage-result-label">Result / ${escapeHtml(label)}</span>
       <strong class="control-stage-result-value">${escapeHtml(text)}</strong>
@@ -2092,7 +2747,7 @@ function devicePipeGroup(kind, value, path, direction = "forward", key = "") {
   const pipeKey = key ? `${key}:${kind}` : `shared:${kind}`;
 
   return `
-    <g class="${classes}" data-flow-pipe="${pipeKey}" data-flow-speed="${speedBucket}">
+    <g class="${classes}" data-flow-pipe="${pipeKey}" data-flow-speed="${speedBucket}" data-flow-watts="${Math.round(wattsValue)}">
       <path class="pipe-base" d="${path}"></path>
       <path class="pipe-glow" d="${path}"></path>
       <path class="pipe-energy" d="${path}"></path>
@@ -2487,6 +3142,7 @@ function setFlowView(view, persist = true) {
   if (nextView === "maintenance") {
     enterMaintenanceView();
   }
+  invalidateFlowTiles();
 }
 
 function fullChargeAssistMeta(status) {
@@ -3140,7 +3796,7 @@ function maintenanceButton(action, label, options = {}) {
   const arg = options.arg ? ` data-maintenance-arg="${escapeHtml(options.arg)}"` : "";
   const id = options.id ? ` id="${escapeHtml(options.id)}"` : "";
   const variant = options.variant ? ` ${escapeHtml(options.variant)}` : "";
-  return `<button type="button"${id} class="primary-button compact maintenance-action${variant}" data-maintenance-action="${escapeHtml(action)}"${arg}${disabled}>${escapeHtml(label)}</button>`;
+  return `<button type="button"${id} class="primary-button compact maintenance-action${variant}" data-maintenance-action="${escapeHtml(action)}"${arg}${disabled}><span class="button-ring" aria-hidden="true"><i></i></span>${escapeHtml(label)}</button>`;
 }
 
 const MAINTENANCE_BACKUP_TYPE_LABELS = {
@@ -3892,7 +4548,7 @@ function runtimeSelect(name, label, selectedValue, options, optionLabelFormatter
 }
 
 function runtimeSubmit(label = "Apply") {
-  return `<button class="primary-button compact" type="submit">${escapeHtml(label)}</button>`;
+  return `<button class="primary-button compact" type="submit"><span class="button-ring" aria-hidden="true"><i></i></span>${escapeHtml(label)}</button>`;
 }
 
 function activeRuntimeEditorElement() {
@@ -4215,6 +4871,7 @@ function setAnimationMode(mode) {
   ANIMATION_MODES.forEach((value) => {
     root.classList.toggle(`dashboard-animation-${value}`, value === normalized);
   });
+  invalidateFlowTiles();
   return normalized;
 }
 
@@ -5327,7 +5984,16 @@ function startEvents() {
     return;
   }
 
+  connectEventSource();
+}
+
+// The only place an EventSource is created. Closing any previous one here is
+// what keeps a tab to a single live stream across reconnects and promotions.
+function connectEventSource() {
+  closeActiveEventSource();
+
   const source = new EventSource("/api/events");
+  activeEventSource = source;
   let receivedTelemetry = false;
   let telemetryVersion = 0;
   let fallbackStarted = false;
@@ -5336,6 +6002,7 @@ function startEvents() {
     if (fallbackStarted) return;
     fallbackStarted = true;
     source.close();
+    if (activeEventSource === source) activeEventSource = null;
     startPollingOnce();
   }
 
@@ -5352,7 +6019,7 @@ function startEvents() {
   source.addEventListener("telemetry", (event) => {
     receivedTelemetry = true;
     telemetryVersion += 1;
-    state.liveTransport = "sse";
+    promoteToSse();
     updateSnapshot(JSON.parse(event.data));
   });
 
@@ -5365,6 +6032,45 @@ function startEvents() {
 
     scheduleFallbackIfNoTelemetry(telemetryVersion);
   };
+
+  return source;
+}
+
+function closeActiveEventSource() {
+  if (!activeEventSource) return;
+  try {
+    activeEventSource.close();
+  } catch {
+    // A stream that cannot be closed is already gone.
+  }
+  activeEventSource = null;
+}
+
+// Reached when a retried stream delivers. Without this the server's 30-minute
+// connection cap and a momentarily exhausted per-IP slot are permanent
+// demotions: the tab polls every two seconds for the rest of its life.
+function promoteToSse() {
+  state.liveTransport = "sse";
+  if (!pollingStarted) return;
+  pollingStarted = false;
+  if (pollingIntervalId) {
+    clearInterval(pollingIntervalId);
+    pollingIntervalId = null;
+  }
+  if (ssePromotionIntervalId) {
+    clearInterval(ssePromotionIntervalId);
+    ssePromotionIntervalId = null;
+  }
+  setConnection("Live", true);
+}
+
+function scheduleSsePromotion() {
+  if (ssePromotionIntervalId) return;
+  if (typeof window === "undefined" || !window.EventSource) return;
+  ssePromotionIntervalId = setInterval(() => {
+    if (!pollingStarted) return;
+    connectEventSource();
+  }, SSE_PROMOTION_INTERVAL_MS);
 }
 
 async function fetchLiveSnapshot() {
@@ -5389,6 +6095,7 @@ function startPollingOnce() {
   state.liveTransport = "polling";
   setConnection("Polling", true);
   startPolling();
+  scheduleSsePromotion();
 }
 
 function startPolling() {
@@ -5403,10 +6110,17 @@ function startPolling() {
 
 function resetLiveTransportForTests() {
   pollingStarted = false;
+  renderedSnapshotTimestamp = null;
+  deferredSnapshotRender = false;
   if (pollingIntervalId && typeof clearInterval === "function") {
     clearInterval(pollingIntervalId);
   }
   pollingIntervalId = null;
+  if (ssePromotionIntervalId && typeof clearInterval === "function") {
+    clearInterval(ssePromotionIntervalId);
+  }
+  ssePromotionIntervalId = null;
+  activeEventSource = null;
   state.liveTransport = "sse";
 }
 
@@ -5544,12 +6258,14 @@ function initDashboardApp() {
   });
 
   initFlowViewSwitch();
+  initFlowTiles();
   initAuthControls();
   initRuntimeForms();
   initDiagnose();
   initLogs();
   initMaintenance();
   initSessionHeartbeat();
+  initLiveVisibilityHandling();
   applyAnimationMode();
   if (state.demoMode) {
     initDemoMode();
@@ -5600,11 +6316,15 @@ if (typeof module !== "undefined") {
     renderDeviceFlow,
     updateSnapshot,
     renderSnapshot,
+    initLiveVisibilityHandling,
+    flushDeferredSnapshotRender,
     renderViewSnapshot,
     renderGlobalSnapshotMetrics,
     renderAggregatedSnapshot,
     flowActive,
     flowSpeedBucket,
+    flowRibbonWidth,
+    flowScaleReference,
     deviceFlowSignature,
     setFlowView,
     setAnimationMode,
@@ -5692,5 +6412,18 @@ if (typeof module !== "undefined") {
     startEvents,
     startPollingOnce,
     resetLiveTransportForTests,
+    parseFlowPath,
+    flowDashPattern,
+    flowAnimationSeconds,
+    flowFadedColor,
+    flowSegments,
+    flowVisibleRuns,
+    flowTileBackground,
+    renderFlowTiles,
+    flowSvgOffScreen,
+    flowTileState,
+    initFlowTiles,
+    invalidateFlowTiles,
+    rebuildFlowTiles,
   };
 }

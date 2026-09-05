@@ -137,6 +137,7 @@ Architecture, internals and reference. You do not need this for a normal setup.
 | Troubleshooting reference | [technical/troubleshooting-reference.md](technical/troubleshooting-reference.md) | Command-level diagnostics, log events and deeper failure analysis. |
 | Backup/restore internals | [technical/backup-restore.md](technical/backup-restore.md) | CLI backup, dry-run restore checks, encrypted backups and full restore. |
 | Analytics / InfluxDB | [technical/influxdb.md](technical/influxdb.md) | Optional long-range analytics with bundled or external InfluxDB. |
+| Dashboard performance | [technical/dashboard-performance.md](technical/dashboard-performance.md) | Live-path render gating, SSE recovery, static caching, and the measured cost of the flow animation. |
 | CLI reference | [cli.md](cli.md) | Full `emsctl.py` reference for runtime-state, diagnostics, config and backups. |
 | Observed firmware behavior | [observed-firmware-no-energy-path.md](observed-firmware-no-energy-path.md) | Observed Zendure behavior when no energy path is available. |
 
