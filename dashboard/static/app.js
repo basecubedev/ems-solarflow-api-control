@@ -158,7 +158,12 @@ const FLOW_SPEED_BUCKETS = {
 // Magnitude is thickness. See docs/technical/dashboard-performance.md.
 const FLOW_RIBBON_IDLE_W = 3;
 const FLOW_RIBBON_MIN_W = 4;
-const FLOW_RIBBON_MAX_W = 15;
+// Two pixels above the 6 px the three fixed steps topped out at. The first
+// continuous version ran to 15 and drew an 800 W flow at 13 px on a 1 kW scale,
+// which reads as a heavier page rather than a more informative one; 8 keeps the
+// page's weight near what it was while giving the scale nine widths instead of
+// the steps' three.
+const FLOW_RIBBON_MAX_W = 8;
 // The inverter's PV and battery ports are 28 user units apart; wider ribbons
 // than this collide in the aggregated layout.
 const FLOW_RIBBON_CEILING_W = 22;
