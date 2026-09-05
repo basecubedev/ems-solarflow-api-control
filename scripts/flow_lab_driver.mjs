@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Playwright half of the dashboard benchmark. Opens N tabs against a running
-// preview server, records main-thread pressure inside each page and prints one
-// JSON object. scripts/dashboard_bench.py owns the scenario matrix and the
-// report; this file only measures what it is told to.
+// Playwright half of the flow rendering lab benchmark. Opens N tabs on the lab
+// page, records main-thread pressure in each, and -- on Chromium only -- can
+// take a DevTools trace so the claim "this animates on the compositor" is
+// checked rather than assumed.
 //
-// Event-loop lag is the primary metric because it is the one the reported
-// symptom is made of and the only one both Chromium and Firefox report the
-// same way. Long tasks are Chromium-only and are recorded when available.
+// scripts/flow_lab_bench.py owns the scenario matrix. This file measures one
+// scenario and prints one JSON object.
 
 import { chromium, firefox } from 'playwright';
 
@@ -15,16 +14,12 @@ const config = JSON.parse(process.argv[2]);
 const {
   url,
   tabs = 1,
-  view = 'aggregated',
-  animation = 'normal',
-  transport = 'sse',
   durationMs = 8000,
   browser = 'chromium',
   gpu = 'software',
-  backdrop = 'on',
-  extraCss = '',
-  extraJs = '',
   navigationTimeoutMs = 90000,
+  trace = false,
+  settleMs = 1200,
 } = config;
 
 const INSTRUMENT = () => {
@@ -63,8 +58,6 @@ const INSTRUMENT = () => {
   };
   requestAnimationFrame(frame);
 
-  // A timer that should fire every 50 ms. Whatever it is late by is time the
-  // main thread was not available -- exactly what a user feels as lag.
   const step = 50;
   let expected = performance.now() + step;
   setInterval(() => {
@@ -82,6 +75,17 @@ const INSTRUMENT = () => {
   }
 };
 
+// The measurement window starts after the page has settled, so page
+// construction is not charged to the animation.
+const RESET = () => {
+  const bench = window.__bench;
+  bench.mutations = 0;
+  bench.frameDeltas.length = 0;
+  bench.lags.length = 0;
+  bench.longTasks.length = 0;
+  bench.started = performance.now();
+};
+
 const SUMMARIZE = () => {
   const bench = window.__bench;
   const quantile = (values, q) => {
@@ -92,8 +96,7 @@ const SUMMARIZE = () => {
   const mean = (values) =>
     values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
   const elapsed = performance.now() - bench.started;
-  // The first frames cover page construction, which is not what this measures.
-  const frames = bench.frameDeltas.slice(5);
+  const frames = bench.frameDeltas.slice(2);
   return {
     elapsedMs: elapsed,
     mutations: bench.mutations,
@@ -107,14 +110,63 @@ const SUMMARIZE = () => {
     lagMaxMs: bench.lags.length ? Math.max(...bench.lags) : null,
     longTasks: bench.longTasks.length,
     longTaskTotalMs: bench.longTasks.reduce((a, b) => a + b, 0),
+    lab: window.__lab || null,
+    memoryMb:
+      performance.memory && performance.memory.usedJSHeapSize
+        ? performance.memory.usedJSHeapSize / (1024 * 1024)
+        : null,
   };
 };
 
-const NO_BACKDROP_CSS = `
-  .metric, .flow-panel, .rules-panel, .chart-panel, .device-card, .energy-stats-panel {
-    backdrop-filter: none !important;
+const TRACE_CATEGORIES = [
+  'blink',
+  'cc',
+  'devtools.timeline',
+  'disabled-by-default-devtools.timeline',
+  'disabled-by-default-devtools.timeline.frame',
+];
+
+// Names worth counting: whether the animation forces the main thread through
+// style/layout/paint again, or stays in the compositor.
+const TRACE_NAMES = [
+  'UpdateLayoutTree',
+  'Layout',
+  'PrePaint',
+  'Paint',
+  'UpdateLayerTree',
+  'RasterTask',
+  'CompositeLayers',
+  'Commit',
+  'DrawFrame',
+  'ScheduledActionExecute',
+];
+
+async function tracedCounts(page, ms) {
+  const session = await page.context().newCDPSession(page);
+  const events = [];
+  session.on('Tracing.dataCollected', ({ value }) => events.push(...value));
+  const finished = new Promise((resolve) => session.once('Tracing.tracingComplete', resolve));
+  await session.send('Tracing.start', {
+    traceConfig: { includedCategories: TRACE_CATEGORIES, recordMode: 'recordAsMuchAsPossible' },
+    transferMode: 'ReportEvents',
+  });
+  await page.waitForTimeout(ms);
+  await session.send('Tracing.end');
+  await finished;
+
+  const counts = {};
+  const durations = {};
+  for (const event of events) {
+    if (!TRACE_NAMES.includes(event.name)) continue;
+    if (event.ph !== 'X' && event.ph !== 'B') continue;
+    counts[event.name] = (counts[event.name] || 0) + 1;
+    if (typeof event.dur === 'number') {
+      durations[event.name] = (durations[event.name] || 0) + event.dur / 1000;
+    }
   }
-`;
+  await session.detach().catch(() => {});
+  return { windowMs: ms, counts, totalMs: durations, events: events.length };
+}
 
 // Which rasterisation path the run actually used. "software" is Chromium's
 // default headless ANGLE/SwiftShader; "gpu" asks Chromium for the real device;
@@ -159,51 +211,31 @@ async function main() {
   const engine = browser === 'firefox' ? firefox : chromium;
   const instance = await engine.launch(launchOptions(browser, gpu));
   const context = await instance.newContext({ viewport: { width: 1440, height: 900 } });
-
   await context.addInitScript(INSTRUMENT);
-
-  await context.route('**/api/ui-config', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ animation_mode: animation }),
-    }),
-  );
-
-  if (transport === 'polling') {
-    // What the third tab from one machine already gets from the real server.
-    await context.route('**/api/events', (route) =>
-      route.fulfill({
-        status: 429,
-        contentType: 'application/json',
-        body: JSON.stringify({ error: 'sse_connection_limit' }),
-      }),
-    );
-  }
 
   const pages = [];
   for (let i = 0; i < tabs; i += 1) {
     const page = await context.newPage();
     await page.goto(url, { waitUntil: 'load', timeout: navigationTimeoutMs });
-    if (backdrop === 'off') await page.addStyleTag({ content: NO_BACKDROP_CSS });
-    if (extraCss) await page.addStyleTag({ content: extraCss });
-    if (extraJs) await page.evaluate(extraJs);
-    await page.evaluate((target) => {
-      if (typeof setFlowView === 'function') setFlowView(target, false);
-    }, view);
+    await page.waitForFunction(() => window.__lab && window.__lab.ready, null, { timeout: 30000 });
     pages.push(page);
   }
 
-  // Only the last tab stays foreground, which is what several open tabs means.
   await pages[pages.length - 1].bringToFront();
-  await pages[0].waitForTimeout(durationMs);
+  await pages[0].waitForTimeout(settleMs);
+  for (const page of pages) await page.evaluate(RESET);
+
+  let traceResult = null;
+  if (trace && browser === 'chromium') {
+    traceResult = await tracedCounts(pages[pages.length - 1], durationMs);
+  } else {
+    await pages[0].waitForTimeout(durationMs);
+  }
 
   const rasterisation = await pages[0].evaluate(RENDERER_PROBE);
 
   const perTab = [];
-  for (const page of pages) {
-    perTab.push(await page.evaluate(SUMMARIZE));
-  }
+  for (const page of pages) perTab.push(await page.evaluate(SUMMARIZE));
 
   await context.close();
   await instance.close();
@@ -214,9 +246,10 @@ async function main() {
 
   process.stdout.write(
     JSON.stringify({
-      config: { url, tabs, view, animation, transport, durationMs, browser, gpu, backdrop, extraCss, extraJs },
+      config: { url, tabs, durationMs, browser, gpu, trace },
       rasterisation,
       perTab,
+      trace: traceResult,
       totals: {
         mutations: sum('mutations'),
         longTasks: sum('longTasks'),
@@ -225,6 +258,8 @@ async function main() {
         worstLagMaxMs: worst('lagMaxMs'),
         worstFrameP95Ms: worst('frameP95Ms'),
         foregroundFps: perTab[perTab.length - 1].fps,
+        meanFps:
+          perTab.reduce((a, t) => a + (t.fps || 0), 0) / (perTab.length || 1),
       },
     }),
   );

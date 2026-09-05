@@ -319,6 +319,70 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .energy-pipe.reverse .pipe-energy { animation-direction: reverse; }
 @keyframes pipeFlow { to { stroke-dashoffset: -52; } }
 
+/* The flow tile layer draws the moving dashes so that nothing animates inside
+   the flow SVG. An SVG element cannot be composited on its own, so a CSS
+   animation on one re-rasterises a subtree full of drop-shadow filters for
+   every frame: 4.1 fps in Firefox on the devices view with four devices.
+   A transform on a promoted layer is handled by the compositor instead and
+   repaints nothing -- eighty of these tiles measured 60.2 fps against 60.1
+   with none at all. A canvas was measured too and rejected: it has to be
+   repainted every frame, which cost as much as animating the SVG did.
+   See reports/dashboard-perf/flow-rendering-investigation.md.
+
+   The layer sits above the SVG, where the SVG's own dash used to be, and each
+   segment is cut back around the device boxes so they still hide the ends of
+   every pipe. Every rule here is inert unless app.js
+   turned the renderer on, so a browser it cannot run in keeps the CSS
+   animation. */
+.flow-tile-layer {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.flow-tile-layer[hidden] { display: none; }
+
+.flow-tile {
+  position: absolute;
+  overflow: hidden;
+}
+
+.flow-tile-inner {
+  position: absolute;
+  left: calc(-1 * var(--tile-step));
+  right: calc(-1 * var(--tile-step));
+  top: 0;
+  bottom: 0;
+  animation-duration: var(--tile-speed);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+.flow-tile-inner.vertical {
+  left: 0;
+  right: 0;
+  top: calc(-1 * var(--tile-step));
+  bottom: calc(-1 * var(--tile-step));
+}
+
+.flow-tile-inner.dir-right { animation-name: flowTileRight; }
+.flow-tile-inner.dir-left { animation-name: flowTileLeft; }
+.flow-tile-inner.dir-down { animation-name: flowTileDown; }
+.flow-tile-inner.dir-up { animation-name: flowTileUp; }
+
+.flow-tile.reverse .flow-tile-inner { animation-direction: reverse; }
+.flow-tile.still .flow-tile-inner { animation: none; }
+
+@keyframes flowTileRight { to { transform: translate3d(var(--tile-step), 0, 0); } }
+@keyframes flowTileLeft { to { transform: translate3d(calc(-1 * var(--tile-step)), 0, 0); } }
+@keyframes flowTileDown { to { transform: translate3d(0, var(--tile-step), 0); } }
+@keyframes flowTileUp { to { transform: translate3d(0, calc(-1 * var(--tile-step)), 0); } }
+
+.flow-tiles-active .pipe-energy {
+  display: none;
+}
+
 .device-visual {
   color: var(--muted);
   transition: opacity .28s ease, filter .28s ease;
@@ -413,7 +477,9 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .home-visual.active .home-body { filter: drop-shadow(0 0 8px currentColor); }
 .grid-visual.exporting,
 .grid-visual.importing { color: var(--grid); }
-@keyframes softPulse { 50% { opacity: .55; filter: drop-shadow(0 0 20px currentColor); } }
+/* Opacity only: animating the filter property makes every frame re-evaluate a
+   blur, which measured as expensive as the flow dashes themselves. */
+@keyframes softPulse { 50% { opacity: .55; } }
 @keyframes fillPulse { 50% { opacity: .72; } }
 
 .rules-list, .device-grid, .charts { display: grid; gap: 7px; }

@@ -12,6 +12,20 @@ python3 scripts/dashboard_bench.py --matrix ab       --browser chromium
 python3 scripts/dashboard_bench.py --matrix baseline --browser firefox
 ```
 
+## Start here
+
+[flow-rendering-investigation.md](flow-rendering-investigation.md) is the
+current account of why the flow views were slow and what was done about it. The
+two 2026-09-04 documents that precede it are kept for their raw data and their
+record of how the wrong conclusion was reached; both carry a note saying so.
+
+A second harness sits beside this one:
+[`scripts/flow_lab_bench.py`](../../scripts/flow_lab_bench.py) renders an
+isolated scene of pipes with a selectable technique, so rendering approaches can
+be compared against each other rather than against the whole dashboard. Its
+reports are the `flowlab-*.json` files here. Read section 6 of the investigation
+before trusting one: a finding that held in that lab did not transfer.
+
 ## Matrices
 
 | Matrix | Answers |

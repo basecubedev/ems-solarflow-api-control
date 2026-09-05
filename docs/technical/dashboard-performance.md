@@ -77,31 +77,70 @@ A bundle with content-hashed filenames could be served `immutable` instead.
 
 ## Animation cost
 
-The single most expensive thing the dashboard does is animate the dash pattern
-on the energy-flow pipes. `stroke-dashoffset` is not a compositable property, so
-every change invalidates the stroke's raster.
+An SVG element cannot be composited on its own, so a CSS animation on one makes
+the browser rasterise its whole subtree again for every frame -- and the flow
+subtree is full of `drop-shadow` filters. Which property is animated barely
+matters; that an animation is running at all does. Two rules used to do it: the
+dash pattern on `.pipe-energy`, and `softPulse`, whose keyframe animated the
+`filter` property itself.
 
-Measured on the devices view with four devices:
+Neither could be removed on its own. Firefox, devices view, four devices:
 
-| | Firefox | Chromium |
-|---|---:|---:|
-| `animation_mode: normal` | 4.4 fps | 14.4 fps |
-| `animation_mode: off` | 55.1 fps | 56.3 fps |
+| | fps |
+|---|---:|
+| both running | 3.8 |
+| dash animation off | 4.2 |
+| `softPulse` animating opacity instead of a filter | 4.2 |
+| **both** | **57.9** |
 
-`dashboard.animation_mode` (`normal` | `reduced` | `off`) is therefore a real
-performance control rather than a preference, and `prefers-reduced-motion` is
-honored on top of it. **It is the only lever that was found to work.**
+### The flow tile layer
 
-Three ways to keep the motion and lose the cost were implemented and measured,
-and all three were rejected: moving the filters off the animating layer (1.07x
-Chromium, 1.00x Firefox), `steps(N)` timing (2.13x at four steps per cycle), and
-driving the property from a timer instead of CSS (slightly *worse* than the CSS
-animation at 20 Hz). The cost tracks the rate at which the property changes, not
-the technique. See
-[`../../reports/dashboard-perf/findings-2026-09-04.md`](../../reports/dashboard-perf/findings-2026-09-04.md).
+The dashes are now an HTML layer above each flow SVG, one box per visible run of
+each pipe, each box clipping a repeating-gradient strip that a CSS `transform`
+moves by one dash period. A transform on a promoted layer is handled by the
+compositor and repaints nothing: eighty of these tiles measured 60.2 fps against
+60.1 with none at all. `softPulse` animates opacity only.
 
-**`backdrop-filter` is not a cost.** Measured in isolation with the animation
-off, three runs each: Chromium 1.02x, Firefox 1.00x. The glass-panel look stays.
+| Firefox, before → after | |
+|---|---|
+| aggregated view, any device count | 5.5 → **57** fps |
+| devices view, two devices | 4.7 → **57.6** fps |
+| devices view, four or more | 4.1 → 9.2 fps |
+
+Three properties of the renderer are worth knowing before changing it:
+
+- **It reads the appearance back out of the CSS.** Dash pattern, width, colour,
+  opacity, speed, direction and whether to move at all come from
+  `getComputedStyle` on the `.pipe-energy` element the stylesheet still defines.
+  That is why `animation_mode`, `prefers-reduced-motion`, the idle state and the
+  four flow-speed buckets keep working without being implemented twice. Change
+  the CSS and the layer follows; do not add a second source of truth.
+- **Nothing in the layer may carry a `filter`.** Eighty tiles with one
+  `drop-shadow` took Chromium from 17.3 to 9.1 fps. The halo comes from the
+  static `.pipe-glow` stroke in the SVG.
+- **It refuses what it cannot represent.** The path parser takes only `M`, `L`,
+  `H` and `V`; anything else, or a browser without `getComputedStyle`, leaves the
+  CSS animation in place rather than showing no flow at all.
+
+[`../../tests/test_dashboard_flow_tiles.py`](../../tests/test_dashboard_flow_tiles.py)
+pins all three.
+
+### What is still slow
+
+- **The devices view past two devices, in Firefox.** The trigger is the tile
+  layer growing taller than the viewport, not the number of tiles: forty tiles
+  in a 395px layer run at 60.2 fps, twenty-eight in a 909px layer at 8.8.
+- **Chromium, at about 17 fps, because of `backdrop-filter`.** It is
+  re-evaluated whenever anything on the page repaints. With it disabled every
+  configuration measured reaches 60 fps. That is a visual-design decision, not a
+  rendering one.
+
+`dashboard.animation_mode` (`normal` | `reduced` | `off`) remains a real
+performance control, and `prefers-reduced-motion` is honoured on top of it.
+
+The full account, including six rejected techniques and a canvas renderer that
+was built and withdrawn, is in
+[`../../reports/dashboard-perf/flow-rendering-investigation.md`](../../reports/dashboard-perf/flow-rendering-investigation.md).
 
 ## Several tabs at once
 

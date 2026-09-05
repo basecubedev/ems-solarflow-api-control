@@ -305,6 +305,7 @@ function renderSnapshotNow(snapshot) {
   deferredSnapshotRender = false;
   renderedSnapshotTimestamp = snapshot.timestamp || null;
   renderSnapshot(snapshot);
+  invalidateFlowTiles();
 }
 
 function flushDeferredSnapshotRender() {
@@ -481,6 +482,450 @@ function setPipe(id, value, direction = "forward") {
 
   applyFlowClasses(el, active, direction, speedBucket);
   applyPipeStyleBucket(el, speedBucket);
+}
+
+// ---------------------------------------------------------------- flow tiles
+//
+// The moving dashes are drawn as an HTML layer under the flow SVG and moved
+// with a CSS transform, instead of being animated inside the SVG. The SVG keeps
+// the geometry, the colours, the speed buckets and every rule that decides how
+// a pipe should look; this renderer reads those decisions back with
+// getComputedStyle, so no appearance rule is written twice and animation_mode,
+// prefers-reduced-motion, the idle state and the flow-speed buckets keep
+// working through the CSS that already implements them.
+//
+// Why not keep animating the SVG: an SVG element cannot be composited on its
+// own, so a CSS animation on one re-rasterises a subtree full of drop-shadow
+// filters for every frame it produces. Measured on this page, devices view,
+// four devices: 4.1 fps in Firefox.
+//
+// Why not a canvas: a canvas has to be repainted every frame, and on this page
+// that costs as much as animating the SVG did -- 5 fps in Firefox, measured
+// with a working canvas renderer. A transform on a promoted layer is handled by
+// the compositor and never repaints anything: eighty such tiles measured 60.2
+// fps against 60.1 with none at all.
+//
+// The layer sits above the SVG, where the SVG's own dash used to be, and each
+// segment is cut back around the device boxes so they still hide the ends of
+// every pipe. Behind the SVG instead, the semi-transparent base and glow
+// strokes would wash the dashes out.
+// See reports/dashboard-perf/flow-rendering-investigation.md.
+
+// Below this an animation is not motion: prefers-reduced-motion collapses every
+// duration to .001ms rather than removing the declaration.
+const FLOW_MIN_ANIMATION_SECONDS = 0.05;
+// Softens each dash end, standing in for the round line cap. Kept small: a
+// wide ramp blurs the gaps away and the pipe stops reading as a dashed flow.
+// A CSS filter would soften it properly and is exactly what must not be here --
+// eighty tiles carrying one dropped Chromium from 17.3 to 9.1 fps.
+const FLOW_TILE_RAMP = 0.05;
+
+const flowTileState = {
+  active: false,
+  hosts: [],
+  signature: null,
+  frameId: null,
+  observer: null,
+};
+
+// Only the absolute straight-line commands the dashboard draws its pipes with.
+// Anything else refuses the whole path: drawing a shorter pipe than the SVG
+// shows would be worse than not drawing one at all.
+function parseFlowPath(d) {
+  if (typeof d !== "string" || !d) return null;
+  const tokens = d.match(/[A-Za-z]|-?\d*\.?\d+(?:[eE][-+]?\d+)?/g);
+  if (!tokens || !tokens.length) return null;
+
+  const points = [];
+  let index = 0;
+  let command = null;
+  let x = 0;
+  let y = 0;
+
+  const nextNumber = () => {
+    const value = Number(tokens[index]);
+    if (!Number.isFinite(value)) return null;
+    index += 1;
+    return value;
+  };
+
+  while (index < tokens.length) {
+    if (/^[A-Za-z]$/.test(tokens[index])) {
+      command = tokens[index];
+      index += 1;
+      if (!/^[MLHV]$/.test(command)) return null;
+      if (index >= tokens.length) return null;
+    }
+    if (command === "M" || command === "L") {
+      const nx = nextNumber();
+      const ny = nextNumber();
+      if (nx === null || ny === null) return null;
+      x = nx;
+      y = ny;
+      command = "L";
+    } else if (command === "H") {
+      const nx = nextNumber();
+      if (nx === null) return null;
+      x = nx;
+    } else if (command === "V") {
+      const ny = nextNumber();
+      if (ny === null) return null;
+      y = ny;
+    } else {
+      return null;
+    }
+    points.push({ x, y });
+  }
+  return points.length >= 2 ? points : null;
+}
+
+function flowDashPattern(value) {
+  if (!value || value === "none") return null;
+  const parts = String(value)
+    .split(/[\s,]+/)
+    .map((part) => parseFloat(part))
+    .filter((part) => Number.isFinite(part) && part >= 0);
+  return parts.length && parts.some((part) => part > 0) ? parts : null;
+}
+
+// Seconds per cycle, or 0 when the CSS says this should not be moving. Reading
+// it back is what keeps animation_mode and prefers-reduced-motion working
+// without the renderer knowing either of them exists.
+function flowAnimationSeconds(style) {
+  if (!style) return 0;
+  const name = String(style.animationName || "none").split(",")[0].trim();
+  if (!name || name === "none") return 0;
+  const playState = String(style.animationPlayState || "").split(",")[0].trim();
+  if (playState === "paused") return 0;
+  const iterations = String(style.animationIterationCount || "").split(",")[0].trim();
+  if (iterations && iterations !== "infinite") return 0;
+  const raw = String(style.animationDuration || "").split(",")[0].trim();
+  const value = parseFloat(raw);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const seconds = raw.endsWith("ms") ? value / 1000 : value;
+  return seconds >= FLOW_MIN_ANIMATION_SECONDS ? seconds : 0;
+}
+
+// A gradient stop needs the colour at zero alpha. The `transparent` keyword is
+// transparent *black*, which CSS interpolates through and leaves a dark fringe
+// on a coloured dash.
+function flowFadedColor(color) {
+  const parts = String(color || "").match(/-?\d*\.?\d+/g);
+  if (!parts || parts.length < 3) return "rgba(0, 0, 0, 0)";
+  return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, 0)`;
+}
+
+function flowSegments(points) {
+  const segments = [];
+  let travelled = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1];
+    const to = points[index];
+    const horizontal = from.y === to.y;
+    const length = Math.abs(to.x - from.x) + Math.abs(to.y - from.y);
+    if (!length) continue;
+    segments.push({
+      x: Math.min(from.x, to.x),
+      y: Math.min(from.y, to.y),
+      length,
+      horizontal,
+      before: travelled,
+      direction: horizontal
+        ? (to.x > from.x ? "right" : "left")
+        : (to.y > from.y ? "down" : "up"),
+    });
+    travelled += length;
+  }
+  return segments;
+}
+
+function readFlowPipe(group) {
+  const base = group.querySelector(".pipe-base");
+  const energy = group.querySelector(".pipe-energy");
+  if (!base || !energy || typeof base.getCTM !== "function") return null;
+
+  const points = parseFlowPath(base.getAttribute("d"));
+  if (!points) return null;
+  const matrix = base.getCTM();
+  if (!matrix) return null;
+  // getCTM() maps the element's user space to the coordinate system of the
+  // nearest svg viewport, which is what the overlay is positioned in: CSS
+  // pixels from the SVG's top-left corner.
+  const scale = Math.hypot(matrix.a, matrix.b) || 1;
+
+  const style = window.getComputedStyle(energy);
+  const dash = flowDashPattern(style.strokeDasharray);
+  const width = parseFloat(style.strokeWidth);
+  const opacity = Number(style.opacity);
+  const color = style.stroke && style.stroke !== "none" ? style.stroke : style.color;
+
+  return {
+    segments: flowSegments(points.map((point) => ({
+      x: (matrix.a * point.x) + (matrix.c * point.y) + matrix.e,
+      y: (matrix.b * point.x) + (matrix.d * point.y) + matrix.f,
+    }))),
+    dash: dash ? dash[0] * scale : 0,
+    period: dash ? dash.reduce((total, part) => total + part, 0) * scale : 0,
+    width: Math.max(1, (Number.isFinite(width) ? width : 1) * scale),
+    opacity: Number.isFinite(opacity) ? opacity : 1,
+    color,
+    faded: flowFadedColor(color),
+    seconds: flowAnimationSeconds(style),
+    reverse: String(style.animationDirection || "").split(",")[0].trim() === "reverse",
+  };
+}
+
+// The device boxes are painted over the pipes in the SVG and hide the stretch
+// of pipe that runs underneath them. The tile layer is above the SVG, so each
+// segment is cut back to the parts no box covers -- which is what the SVG was
+// already showing.
+function readFlowOccluders(svg, rect) {
+  const shapes = [];
+  svg.querySelectorAll(".device-visual .visual-shell").forEach((shell) => {
+    const box = shell.getBoundingClientRect();
+    if (!box.width || !box.height) return;
+    shapes.push({
+      x0: box.left - rect.left,
+      x1: box.right - rect.left,
+      y0: box.top - rect.top,
+      y1: box.bottom - rect.top,
+    });
+  });
+  return shapes;
+}
+
+// The parts of one axis-aligned segment that no occluder covers, each carrying
+// the arc length at which it starts so the dash phase stays continuous.
+function flowVisibleRuns(segment, occluders) {
+  const along0 = segment.horizontal ? segment.x : segment.y;
+  const along1 = along0 + segment.length;
+  const across = segment.horizontal ? segment.y : segment.x;
+  const cuts = [];
+  for (let index = 0; index < occluders.length; index += 1) {
+    const box = occluders[index];
+    const acrossLow = segment.horizontal ? box.y0 : box.x0;
+    const acrossHigh = segment.horizontal ? box.y1 : box.x1;
+    if (across < acrossLow || across > acrossHigh) continue;
+    const low = segment.horizontal ? box.x0 : box.y0;
+    const high = segment.horizontal ? box.x1 : box.y1;
+    if (high <= along0 || low >= along1) continue;
+    cuts.push([Math.max(low, along0), Math.min(high, along1)]);
+  }
+  cuts.sort((a, b) => a[0] - b[0]);
+
+  const runs = [];
+  let cursor = along0;
+  for (let index = 0; index < cuts.length; index += 1) {
+    if (cuts[index][0] > cursor) runs.push([cursor, cuts[index][0]]);
+    cursor = Math.max(cursor, cuts[index][1]);
+  }
+  if (cursor < along1) runs.push([cursor, along1]);
+
+  // Travelled distance grows from the segment's start, which is the low end
+  // only when the pipe runs right or down.
+  const forward = segment.direction === "right" || segment.direction === "down";
+  return runs
+    .filter(([from, to]) => to - from > 0.5)
+    .map(([from, to]) => ({
+      x: segment.horizontal ? from : segment.x,
+      y: segment.horizontal ? segment.y : from,
+      length: to - from,
+      horizontal: segment.horizontal,
+      direction: segment.direction,
+      before: segment.before + (forward ? from - along0 : along1 - to),
+    }));
+}
+
+function flowTileLayerFor(svg) {
+  const parent = svg.parentNode;
+  if (!parent || typeof parent.querySelector !== "function") return null;
+  let layer = parent.querySelector("div.flow-tile-layer");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.className = "flow-tile-layer";
+    layer.setAttribute("aria-hidden", "true");
+    parent.appendChild(layer);
+  }
+  return layer;
+}
+
+function buildFlowTileHost(svg) {
+  const layer = flowTileLayerFor(svg);
+  if (!layer) return null;
+  const rect = svg.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    // The view is switched away. Its layer is a sibling of the view that is on
+    // screen, so leaving it visible would paint one view's pipes over another's.
+    layer.hidden = true;
+    return null;
+  }
+  layer.hidden = false;
+
+  const parentRect = svg.parentNode.getBoundingClientRect();
+  layer.style.left = `${rect.left - parentRect.left}px`;
+  layer.style.top = `${rect.top - parentRect.top}px`;
+  layer.style.width = `${rect.width}px`;
+  layer.style.height = `${rect.height}px`;
+
+  const occluders = readFlowOccluders(svg, rect);
+  const pipes = [];
+  let readable = true;
+  svg.querySelectorAll(".energy-pipe").forEach((group) => {
+    const pipe = readFlowPipe(group);
+    if (!pipe || !pipe.segments.length) {
+      readable = false;
+      return;
+    }
+    pipe.runs = pipe.segments.reduce(
+      (all, segment) => all.concat(flowVisibleRuns(segment, occluders)), []
+    );
+    pipes.push(pipe);
+  });
+  if (!readable || !pipes.length) return null;
+
+  return { layer, pipes, width: rect.width, height: rect.height };
+}
+
+function flowTileBackground(pipe, horizontal) {
+  if (!pipe.period || !pipe.dash) return pipe.color;
+  const ramp = Math.min(pipe.dash / 2, pipe.period * FLOW_TILE_RAMP);
+  const axis = horizontal ? "90deg" : "180deg";
+  return `repeating-linear-gradient(${axis},`
+    + ` ${pipe.faded} 0px,`
+    + ` ${pipe.color} ${ramp}px,`
+    + ` ${pipe.color} ${pipe.dash - ramp}px,`
+    + ` ${pipe.faded} ${pipe.dash}px,`
+    + ` ${pipe.faded} ${pipe.period}px)`;
+}
+
+function renderFlowTiles(host) {
+  const fragment = document.createDocumentFragment();
+  for (let index = 0; index < host.pipes.length; index += 1) {
+    const pipe = host.pipes[index];
+    const backgrounds = {
+      true: flowTileBackground(pipe, true),
+      false: flowTileBackground(pipe, false),
+    };
+    for (let k = 0; k < pipe.runs.length; k += 1) {
+      const segment = pipe.runs[k];
+      const background = backgrounds[segment.horizontal];
+      const half = pipe.width / 2;
+      const box = document.createElement("div");
+      box.className = `flow-tile${pipe.reverse ? " reverse" : ""}`
+        + `${pipe.seconds > 0 && pipe.period ? "" : " still"}`;
+      box.style.left = `${segment.x - (segment.horizontal ? 0 : half)}px`;
+      box.style.top = `${segment.y - (segment.horizontal ? half : 0)}px`;
+      box.style.width = `${segment.horizontal ? segment.length : pipe.width}px`;
+      box.style.height = `${segment.horizontal ? pipe.width : segment.length}px`;
+      box.style.opacity = String(pipe.opacity);
+      box.style.setProperty("--tile-step", `${pipe.period}px`);
+      box.style.setProperty("--tile-speed", `${pipe.seconds || 1}s`);
+
+      const inner = document.createElement("div");
+      inner.className = `flow-tile-inner dir-${segment.direction}`
+        + `${segment.horizontal ? "" : " vertical"}`;
+      inner.style.background = background;
+      if (pipe.period) {
+        // The phase this segment has accumulated along the pipe, so the dashes
+        // stay continuous across the corners.
+        const phase = -(segment.before % pipe.period);
+        inner.style.backgroundPosition = segment.horizontal
+          ? `${phase}px 0`
+          : `0 ${phase}px`;
+      }
+      box.appendChild(inner);
+      fragment.appendChild(box);
+    }
+  }
+  host.layer.textContent = "";
+  host.layer.appendChild(fragment);
+}
+
+function flowTileSvgs() {
+  const svgs = [];
+  const aggregated = document.getElementById("flowSvg");
+  if (aggregated) svgs.push(aggregated);
+  document.querySelectorAll(".device-flow-svg").forEach((svg) => svgs.push(svg));
+  return svgs;
+}
+
+function flowTileSignature(hosts) {
+  return JSON.stringify(hosts.map((host) => [
+    Math.round(host.width), Math.round(host.height),
+    host.pipes.map((pipe) => [
+      pipe.color, pipe.opacity, Math.round(pipe.width * 100),
+      Math.round(pipe.period * 100), Math.round(pipe.dash * 100),
+      pipe.seconds, pipe.reverse,
+      pipe.runs.map((s) => [
+        Math.round(s.x), Math.round(s.y), Math.round(s.length), s.direction,
+        Math.round(s.before),
+      ]),
+    ]),
+  ]));
+}
+
+function rebuildFlowTiles() {
+  const hosts = [];
+  flowTileSvgs().forEach((svg) => {
+    const host = buildFlowTileHost(svg);
+    if (host) hosts.push(host);
+  });
+  const signature = flowTileSignature(hosts);
+  flowTileState.hosts = hosts;
+  // Rebuilding identical tiles on every snapshot would undo the point of the
+  // change: touching the DOM is what has to stay rare.
+  if (signature === flowTileState.signature) return hosts;
+  flowTileState.signature = signature;
+  hosts.forEach(renderFlowTiles);
+  return hosts;
+}
+
+function invalidateFlowTiles() {
+  if (!flowTileState.active || flowTileState.frameId !== null) return;
+  if (typeof requestAnimationFrame !== "function") {
+    rebuildFlowTiles();
+    return;
+  }
+  // Coalesce: a snapshot render touches many pipes, and the layer only has to
+  // be brought up to date once afterwards.
+  flowTileState.frameId = requestAnimationFrame(() => {
+    flowTileState.frameId = null;
+    rebuildFlowTiles();
+  });
+}
+
+function initFlowTiles() {
+  if (flowTileState.active) return true;
+  if (typeof document === "undefined" || !document.body) return false;
+  if (typeof window === "undefined" || typeof window.getComputedStyle !== "function") {
+    return false;
+  }
+
+  document.body.classList.add("flow-tiles-active");
+  flowTileState.active = true;
+  flowTileState.signature = null;
+  if (!rebuildFlowTiles().length) {
+    // Nothing could be read back. Hand the flow to the CSS animation rather
+    // than ship a view with no flow in it.
+    flowTileState.active = false;
+    document.body.classList.remove("flow-tiles-active");
+    return false;
+  }
+
+  if (typeof ResizeObserver === "function") {
+    flowTileState.observer = new ResizeObserver(() => {
+      flowTileState.signature = null;
+      invalidateFlowTiles();
+    });
+    document.querySelectorAll(".flow-wrap, .device-flow-view").forEach((node) => {
+      flowTileState.observer.observe(node);
+    });
+  }
+  window.addEventListener("resize", () => {
+    flowTileState.signature = null;
+    invalidateFlowTiles();
+  });
+  return true;
 }
 
 function setVisualState(id, active, mode) {
@@ -2527,6 +2972,7 @@ function setFlowView(view, persist = true) {
   if (nextView === "maintenance") {
     enterMaintenanceView();
   }
+  invalidateFlowTiles();
 }
 
 function fullChargeAssistMeta(status) {
@@ -4255,6 +4701,7 @@ function setAnimationMode(mode) {
   ANIMATION_MODES.forEach((value) => {
     root.classList.toggle(`dashboard-animation-${value}`, value === normalized);
   });
+  invalidateFlowTiles();
   return normalized;
 }
 
@@ -5641,6 +6088,7 @@ function initDashboardApp() {
   });
 
   initFlowViewSwitch();
+  initFlowTiles();
   initAuthControls();
   initRuntimeForms();
   initDiagnose();
@@ -5792,5 +6240,16 @@ if (typeof module !== "undefined") {
     startEvents,
     startPollingOnce,
     resetLiveTransportForTests,
+    parseFlowPath,
+    flowDashPattern,
+    flowAnimationSeconds,
+    flowFadedColor,
+    flowSegments,
+    flowVisibleRuns,
+    flowTileBackground,
+    flowTileState,
+    initFlowTiles,
+    invalidateFlowTiles,
+    rebuildFlowTiles,
   };
 }
