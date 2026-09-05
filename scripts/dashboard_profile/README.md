@@ -74,6 +74,40 @@ trace; nothing here needs either.
 | `deep_reads` | on/off | charges forced synchronous layout to the reader |
 | `software` | on/off | **unverified — see below** |
 
+## What the final audit added
+
+[`../../reports/dashboard-perf/final-dashboard-performance-audit.md`](../../reports/dashboard-perf/final-dashboard-performance-audit.md)
+needed answers this harness could not give, so it grew four axes. All of them
+are off by default and none changes what the existing matrices measure.
+
+| axis | engines | what it adds |
+|---|---|---|
+| `cdp_metrics` | Chromium | `RecalcStyleCount/Duration`, `LayoutCount/Duration`, `ScriptDuration`, `TaskDuration`, and the live levels `Nodes`, `JSEventListeners`, `Documents`, `JSHeapUsedSize`, as a delta across the measurement window |
+| `trace` | Chromium | `Paint`, `RasterTask`, `Commit`, `PrePaint`, `UpdateLayoutTree`, and the renderer's own composite-failure reasons |
+| `cycle_views` | both | rotates the view on a fixed interval and times each switch |
+| `sample_ms` (+ `gc`) | both (heap: Chromium) | levels sampled through a long run, garbage collected first, so a level that keeps climbing is retention rather than allocation |
+| `scenario` | both | `write-mode` renders the control view as an authenticated operator sees it, where the runtime editor is a form per device instead of one line |
+
+The page-side instrument also keeps **cumulative lifecycle counters** — listeners
+added and removed, intervals created and cleared, observers constructed and
+disconnected, `EventSource`s opened and closed — deliberately *not* reset by
+`RESET`, because a leak is a level that keeps climbing across measurement
+windows and restarting the counter hides exactly that. `domNodesByView` reports
+node counts per view container, so "how many nodes" arrives with "whose".
+
+`profile_report.py` renders any of these JSON files as a table. Every column it
+prints is a recorded field or a ratio of two of them; it recomputes nothing.
+
+### One thing the driver now does on purpose
+
+After the first snapshot it calls `loadAuthStatus()` once and waits for
+`#controlExplainMount`. That is not cosmetic. Whether the control panel exists
+at all is a race between the boot fetches and the first snapshot — it is worth
+~1350 nodes at four devices — and the same scenario reported 443 or 1793 nodes
+run to run until this was pinned. The dashboard reaches that state on its own
+within a minute, because the auth refresh runs on a sixty-second timer; the
+driver just stops waiting for it.
+
 ## Two traps this harness has already fallen into
 
 **An A/B whose treatment silently did nothing.** `page.evaluate()` treats a

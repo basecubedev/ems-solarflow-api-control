@@ -262,21 +262,78 @@ effect running and 134.6 with it switched off. Removing the mask instead of the
 animation changed nothing, so the mask was never the cost. Firefox was
 unaffected either way.
 
-The effect is unchanged and now free: the gradient lives in a child that is
-translated, the child is two tiles wide so the loop has no seam, and the mask
+The effect is unchanged and costs no frames: the gradient lives in a child that
+is translated, the child is two tiles wide so the loop has no seam, and the mask
 that turns the box into a ring stayed where it was. 133.1 fps at eight devices,
-frame p95 27.8 ms down to 7.0.
+frame p95 27.8 ms down to 7.0. It is not free of *main thread* -- it is one of
+the animations in the "every animation costs a style recalculation per frame"
+result below -- but that costs no frames in either engine at any size measured.
 
-Two guardrails in
+### The same mistake, made twice, and why the guardrail is now general
+
+`.primary-button.compact::after` kept the old construction on the measured
+grounds that it was a single element. It is a single element **in the read-only
+dashboard**, which was the only state that had ever been benchmarked. With
+authentication configured the runtime editor renders a submit button per stage
+card -- twelve at four devices, twenty at twelve -- and the authenticated
+control view drew at **52.8 fps at four devices and 36.1 at twelve**, painting
+4463 times per ten seconds against the read-only view's 175. Disabling that one
+rule was indistinguishable from disabling every animation on the page.
+
+Both now use the same `.button-ring` / `.control-result-ring` construction and
+`@keyframes controlResultBorderFlow` is gone: **52.8 -> 139.2 fps** and
+**36.1 -> 133.8**, frame p95 to 7 ms, 96-97% of the paints removed. Firefox was
+unaffected either way.
+
+The rule to take from it is not "that element was fine". It is that **no rule
+here is guaranteed to stay matched by one element**, so no keyframe on this page
+may move a paint property. Three guardrails in
 [`../../tests/test_dashboard_perf_guardrails.py`](../../tests/test_dashboard_perf_guardrails.py)
-keep it that way: one fails if a `.control-result` rule animates a paint
-property again, the other fails if `prefers-reduced-motion` or
-`dashboard-animation-off` stops reaching the ring -- both targeted the old
-pseudo-element by name, so a construction that moves the animation elsewhere
-takes the accessibility switches with it silently.
+keep it that way: one fails if *any* referenced keyframe animates
+`background-position`, `background-size`, `mask-position`, `filter`,
+`box-shadow` or `clip-path`; one fails if a `.control-result` rule takes the old
+keyframe back; and one fails if `prefers-reduced-motion` or
+`dashboard-animation-off` stops reaching either ring.
 
-`.primary-button.compact::after` keeps the old construction deliberately. It is
-a single element and measured free. What costs is the count, not the effect.
+**Benchmark the authenticated dashboard.** `--matrix writeframes` and the
+`scenario="write-mode"` axis exist because every measurement in this project
+before 2026-09-05 ran the read-only preview, where the control view has no
+runtime editor at all.
+
+## Every animation costs a style recalculation per frame
+
+Chromium performs about **two thousand style recalculations per ten seconds**
+while any animation on this page is running, and **six to twelve** when none is.
+The cost of each pass grows with how many animations are running, not with how
+many devices there are:
+
+| running animations | style recalculation per 10 s |
+|---:|---:|
+| 0 (every keyframe stopped) | 4-92 ms |
+| 12 (aggregated view) | ~700 ms |
+| 26 (control, 4 devices) | 871 ms |
+| 48 (devices, 4 devices) | 1696 ms |
+| 66 (control, 12 devices) | 1809 ms |
+| 144 (devices, 12 devices) | **2920 ms** |
+
+The energy view is the control group: it has no flow animation and records five
+recalculations with the animation setting on, exactly as many as with it off.
+No treatment changed the paint count, so none of these is repainting -- the
+entire cost is style. In Firefox the same constructions cost event-loop lag
+instead (1-2 ms rising to 11-13 ms in the control view) and no frames.
+
+**This is not a reason to switch the animation off**, for the reason the section
+below gives: doing so makes per-snapshot work go *up*, in both engines, often by
+a factor of two. It is a reason not to add more running animations, and a
+budget: about 12-20 ms of main thread per ten seconds per animation.
+
+Two things it is *not*: it is not the `var()` in the tile keyframes -- replacing
+that with a constant changes nothing -- and it is not inherent to the tile
+renderer, whose own lab page records five recalculations for the same
+construction. Whether any of these animations reaches the compositor is
+**unknown**; the experiment that would answer it does not work, and
+[`../../reports/dashboard-perf/final-dashboard-performance-audit.md`](../../reports/dashboard-perf/final-dashboard-performance-audit.md)
+§13 says why.
 
 ## What the page costs when nothing is happening
 
@@ -302,6 +359,36 @@ on Firefox on macOS, and
 [`../../reports/dashboard-perf/firefox-macos-investigation.md`](../../reports/dashboard-perf/firefox-macos-investigation.md)
 contains no macOS measurement. That directory's README is the instruction for
 taking one.
+
+## Views that are not on screen
+
+The live snapshot path renders only `state.flowView`, and a guardrail pins it.
+There used to be a second way in: `loadAuthStatus()` and `loadRuntimeState()`
+call `renderControlExplain()` directly, and one of them runs on a sixty-second
+timer whatever is on screen -- so once a minute the control panel was rebuilt
+behind whichever view the user was actually looking at. Measured at one rebuild
+per minute costing up to 19 ms, and it built 3606 of the aggregated view's 4065
+nodes at twelve devices.
+
+`renderControlExplain` now returns immediately when its container is off screen;
+`setFlowView` renders the view it switches to, so nothing is lost. The rebuild
+costs 0.0-0.1 ms and a dashboard whose owner never opens the control view has a
+**469-node document instead of 4065**.
+
+Carrying those nodes was never the cost, and that was measured before the change
+was made: emptying the subtree at runtime moved the per-snapshot cost up in two
+cases and down in two. A `[hidden]` subtree is not laid out, not painted and not
+walked. What cost was the rebuild.
+
+The same shape of question applies to any panel built from something other than
+the snapshot. `renderRuntimeEditorMount()` was rebuilding the whole runtime
+editor twice a second from `state.runtime` and `state.auth`, neither of which a
+snapshot touches -- byte-identical markup on every write, 16.5 ms per five
+snapshots at twelve devices. It now compares the string it generated against the
+one it generated last time. Compare **generated strings, never the element's own
+`innerHTML`**: reading that back gives the DOM's re-serialisation of itself, and
+`<input ... checked>` returns as `checked=""`, so that comparison can never be
+equal.
 
 ## Several tabs at once
 

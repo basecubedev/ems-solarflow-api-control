@@ -14,8 +14,17 @@ python3 scripts/dashboard_bench.py --matrix baseline --browser firefox
 
 ## Start here
 
-[firefox-macos-investigation.md](firefox-macos-investigation.md) is the current
-document, and the only one that looks at the whole dashboard rather than its
+[final-dashboard-performance-audit.md](final-dashboard-performance-audit.md) is
+the current document. It is the last Linux-side pass over the whole frontend:
+how it scales to twelve devices, what it rebuilds, what it retains, what it does
+while nobody is looking at it. Three defects found and fixed, each with a
+before/after taken from a worktree at the pre-change commit; the largest is that
+the **authenticated** control view drew at 36 fps because the runtime editor
+renders twenty submit buttons and each animated a paint property. Everything
+before it had only ever benchmarked the read-only dashboard.
+
+[firefox-macos-investigation.md](firefox-macos-investigation.md) is the document
+before it, and the first that looked at the whole dashboard rather than its
 flow rendering. It found and fixed the dashboard's largest per-snapshot cost --
 a forced synchronous layout taken to discover that a view is not on screen --
 and it is explicit that no macOS measurement exists, which is what the reported
