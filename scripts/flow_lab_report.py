@@ -182,7 +182,7 @@ def print_report(report):
         print("\nChromium trace, events in the measured window")
         names = ["UpdateLayoutTree", "Layout", "PrePaint", "Paint",
                  "UpdateLayerTree", "RasterTask", "CompositeLayers", "Commit"]
-        print("%-15s %s" % ("renderer", " ".join("%>s" % n[:9] for n in [])), end="")
+        print("%-15s %s" % ("renderer", ""), end="")
         print(" ".join("%9s" % n[:9] for n in names))
         for key in sorted(traced, key=lambda k: k[0]):
             counts = traced[key]["trace"]["counts"]

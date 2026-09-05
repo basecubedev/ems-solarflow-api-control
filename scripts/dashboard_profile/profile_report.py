@@ -16,7 +16,6 @@ pasted into a report.
 
 import argparse
 import json
-import sys
 
 # Every column is a recorded field or a ratio of two of them. `perSnapMs` is
 # the one worth knowing: main-thread milliseconds charged to the snapshot
