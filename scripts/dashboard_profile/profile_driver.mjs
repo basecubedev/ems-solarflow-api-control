@@ -33,7 +33,35 @@ const {
   dashboardOpen = true,
   extraJs = '',
   navigationTimeoutMs = 90000,
+  cdpMetrics = false,
+  trace = false,
+  cycleViews = null,
+  cycleIntervalMs = 2000,
+  sampleMs = 0,
+  gc = false,
+  compositorProbe = null,
 } = config;
+
+// Chromium's own counters for the two stages the page cannot see from inside:
+// style recalculation and layout. Taken as a delta across the measurement
+// window, so what is reported is the work of this run and not of the load.
+const CDP_METRICS = [
+  'RecalcStyleCount', 'RecalcStyleDuration',
+  'LayoutCount', 'LayoutDuration',
+  'ScriptDuration', 'TaskDuration',
+  'Nodes', 'JSEventListeners', 'Documents', 'JSHeapUsedSize',
+];
+
+// Names the renderer uses for the stages after script. Paint and RasterTask
+// being zero is what separates a compositor-carried animation from one that
+// repaints; Commit counts the frames the compositor actually took.
+const TRACE_CATEGORIES = [
+  'blink', 'cc', 'devtools.timeline',
+  'disabled-by-default-devtools.timeline',
+  'disabled-by-default-devtools.timeline.frame',
+  'blink.animations',
+  'disabled-by-default-blink.animations',
+];
 
 // Installed before any page script. Every wrapper keeps the original callable
 // reachable so removeEventListener still matches, and the sampler timers use
@@ -51,6 +79,21 @@ const INSTRUMENT = () => {
     fetches: 0,
     fetchWallMs: 0,
     started: 0,
+    // Cumulative for the lifetime of the page, deliberately not cleared by
+    // RESET: a leak is a count that keeps climbing across view changes, which
+    // is invisible if the counter restarts with every measurement window.
+    live: {
+      listeners: Object.create(null),
+      listenerAdds: 0,
+      listenerRemoves: 0,
+      intervalsCreated: 0,
+      intervalsCleared: 0,
+      observersCreated: Object.create(null),
+      observersDisconnected: Object.create(null),
+      eventSourcesOpened: 0,
+      eventSourcesClosed: 0,
+    },
+    samples: [],
   };
   window.__prof = bench;
 
@@ -84,7 +127,13 @@ const INSTRUMENT = () => {
   const listenerWrappers = new WeakMap();
   const originalAdd = EventTarget.prototype.addEventListener;
   const originalRemove = EventTarget.prototype.removeEventListener;
+  const countListener = (type, delta) => {
+    bench.live.listeners[type] = (bench.live.listeners[type] || 0) + delta;
+    if (delta > 0) bench.live.listenerAdds += 1;
+    else bench.live.listenerRemoves += 1;
+  };
   EventTarget.prototype.addEventListener = function (type, listener, options) {
+    countListener(type, 1);
     if (typeof listener === 'function') {
       let wrapped = listenerWrappers.get(listener);
       if (!wrapped) {
@@ -96,6 +145,7 @@ const INSTRUMENT = () => {
     return originalAdd.call(this, type, listener, options);
   };
   EventTarget.prototype.removeEventListener = function (type, listener, options) {
+    countListener(type, -1);
     const wrapped = typeof listener === 'function' ? listenerWrappers.get(listener) : null;
     return originalRemove.call(this, type, wrapped || listener, options);
   };
@@ -103,6 +153,23 @@ const INSTRUMENT = () => {
   // EventSource handlers are usually assigned, not added, so the accessor has
   // to be patched too or the whole snapshot path is invisible.
   if (window.EventSource) {
+    const RawEventSource = window.EventSource;
+    const PatchedEventSource = function (...args) {
+      bench.live.eventSourcesOpened += 1;
+      return new RawEventSource(...args);
+    };
+    PatchedEventSource.prototype = RawEventSource.prototype;
+    for (const key of ['CONNECTING', 'OPEN', 'CLOSED']) {
+      PatchedEventSource[key] = RawEventSource[key];
+    }
+    const rawClose = RawEventSource.prototype.close;
+    if (typeof rawClose === 'function') {
+      RawEventSource.prototype.close = function (...rest) {
+        bench.live.eventSourcesClosed += 1;
+        return rawClose.apply(this, rest);
+      };
+    }
+    window.EventSource = PatchedEventSource;
     for (const prop of ['onmessage', 'onopen', 'onerror']) {
       const descriptor = Object.getOwnPropertyDescriptor(EventSource.prototype, prop);
       if (!descriptor || !descriptor.set) continue;
@@ -119,7 +186,13 @@ const INSTRUMENT = () => {
     return rawSetTimeout(typeof fn === 'function' ? wrap('setTimeout', fn) : fn, ms, ...rest);
   };
   window.setInterval = function (fn, ms, ...rest) {
+    bench.live.intervalsCreated += 1;
     return rawSetInterval(typeof fn === 'function' ? wrap('setInterval', fn) : fn, ms, ...rest);
+  };
+  const rawClearInterval = window.clearInterval.bind(window);
+  window.clearInterval = function (handle) {
+    bench.live.intervalsCleared += 1;
+    return rawClearInterval(handle);
   };
   if (rawRaf) {
     window.requestAnimationFrame = function (cb) {
@@ -134,9 +207,18 @@ const INSTRUMENT = () => {
   ]) {
     if (typeof Original !== 'function') continue;
     const Patched = function (callback, ...rest) {
+      bench.live.observersCreated[name] = (bench.live.observersCreated[name] || 0) + 1;
       return new Original(wrap(name, callback), ...rest);
     };
     Patched.prototype = Original.prototype;
+    const rawDisconnect = Original.prototype.disconnect;
+    if (typeof rawDisconnect === 'function') {
+      Original.prototype.disconnect = function (...rest) {
+        bench.live.observersDisconnected[name] =
+          (bench.live.observersDisconnected[name] || 0) + 1;
+        return rawDisconnect.apply(this, rest);
+      };
+    }
     window[name] = Patched;
   }
 
@@ -209,10 +291,19 @@ const INSTRUMENT = () => {
   if (document.documentElement) observeMutations();
   else originalAdd.call(document, 'DOMContentLoaded', observeMutations, { once: true });
 
+  // The samplers below run for as long as the page does. Bounded, because a
+  // thirty-minute run at 144 Hz and 250 Hz would otherwise accumulate hundreds
+  // of thousands of numbers inside the page being measured.
+  const SAMPLE_CAP = 20000;
+  const record = (into, value) => {
+    if (into.length >= SAMPLE_CAP) into.shift();
+    into.push(value);
+  };
+
   if (rawRaf) {
     let previous = now();
     const frame = (stamp) => {
-      bench.frameDeltas.push(stamp - previous);
+      record(bench.frameDeltas, stamp - previous);
       previous = stamp;
       rawRaf(frame);
     };
@@ -223,7 +314,7 @@ const INSTRUMENT = () => {
   let expected = now() + step;
   rawSetInterval(() => {
     const stamp = now();
-    bench.lags.push(Math.max(0, stamp - expected));
+    record(bench.lags, Math.max(0, stamp - expected));
     expected = stamp + step;
   }, step);
 
@@ -234,7 +325,7 @@ const INSTRUMENT = () => {
   const tick = () => {
     const stamp = now();
     const gap = stamp - lastTick;
-    bench.taskGaps.push(gap);
+    record(bench.taskGaps, gap);
     lastTick = stamp;
     rawSetTimeout(tick, 0);
   };
@@ -265,6 +356,13 @@ const RESET = () => {
 
 const SUMMARIZE = () => {
   const bench = window.__prof;
+  // Not Math.max(...values): that passes every element as an argument, and a
+  // thirty-minute run holds tens of thousands of them.
+  const largest = (values) => {
+    let top = null;
+    for (const value of values) if (top === null || value > top) top = value;
+    return top;
+  };
   const quantile = (values, q) => {
     if (!values.length) return null;
     const sorted = [...values].sort((a, b) => a - b);
@@ -299,9 +397,9 @@ const SUMMARIZE = () => {
     frameP95Ms: quantile(frames, 0.95),
     lagMeanMs: mean(bench.lags),
     lagP95Ms: quantile(bench.lags, 0.95),
-    lagMaxMs: bench.lags.length ? Math.max(...bench.lags) : null,
+    lagMaxMs: largest(bench.lags),
     taskGapP95Ms: quantile(gaps, 0.95),
-    taskGapMaxMs: gaps.length ? Math.max(...gaps) : null,
+    taskGapMaxMs: largest(gaps),
     blockingTasks: blocking.length,
     blockingMs: Number(blocking.reduce((a, b) => a + b, 0).toFixed(1)),
     longTasks: bench.longTasks.length,
@@ -311,6 +409,16 @@ const SUMMARIZE = () => {
     fetches: bench.fetches,
     fetchWallMs: Number(bench.fetchWallMs.toFixed(1)),
     domNodes: document.getElementsByTagName('*').length,
+    domNodesByView: (() => {
+      const per = {};
+      for (const id of ['flowSvg', 'deviceFlowView', 'controlExplainView',
+        'energyStatsView', 'analyticsView', 'diagnoseView', 'logsView',
+        'maintenanceView', 'deviceGrid', 'rulesList']) {
+        const el = document.getElementById(id);
+        per[id] = el ? el.getElementsByTagName('*').length : null;
+      }
+      return per;
+    })(),
     attributedWorkMs: Number(totalWorkMs.toFixed(1)),
     attributedShareOfWall: Number((totalWorkMs / elapsed).toFixed(4)),
     work: work.slice(0, 20),
@@ -322,7 +430,54 @@ const SUMMARIZE = () => {
       catch { return null; }
     })(),
     hidden: document.hidden,
+    live: {
+      listenerAdds: bench.live.listenerAdds,
+      listenerRemoves: bench.live.listenerRemoves,
+      listenersOutstanding: Object.entries(bench.live.listeners)
+        .filter(([, n]) => n !== 0)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 12)
+        .map(([type, count]) => ({ type, count })),
+      intervalsCreated: bench.live.intervalsCreated,
+      intervalsCleared: bench.live.intervalsCleared,
+      observersCreated: { ...bench.live.observersCreated },
+      observersDisconnected: { ...bench.live.observersDisconnected },
+      eventSourcesOpened: bench.live.eventSourcesOpened,
+      eventSourcesClosed: bench.live.eventSourcesClosed,
+    },
+    samples: bench.samples,
   };
+};
+
+// Taken repeatedly during a long run. Everything here is a level, not a rate:
+// a leak shows as a level that never comes back down, which a single
+// before/after pair cannot distinguish from a page that simply grew once.
+const SAMPLE = () => {
+  const bench = window.__prof;
+  const sample = {
+    atMs: Number((performance.now() - bench.started).toFixed(0)),
+    domNodes: document.getElementsByTagName('*').length,
+    controlNodes: (() => {
+      const el = document.getElementById('controlExplainView');
+      return el ? el.getElementsByTagName('*').length : null;
+    })(),
+    listenersOutstanding: bench.live.listenerAdds - bench.live.listenerRemoves,
+    intervalsOutstanding: bench.live.intervalsCreated - bench.live.intervalsCleared,
+    observersCreated: Object.values(bench.live.observersCreated)
+      .reduce((a, b) => a + b, 0),
+    eventSourcesOutstanding:
+      bench.live.eventSourcesOpened - bench.live.eventSourcesClosed,
+    mutations: bench.mutations,
+    animationsRunning: (() => {
+      try { return document.getAnimations ? document.getAnimations().length : null; }
+      catch { return null; }
+    })(),
+    heapMb: performance.memory && performance.memory.usedJSHeapSize
+      ? Number((performance.memory.usedJSHeapSize / (1024 * 1024)).toFixed(1))
+      : null,
+  };
+  bench.samples.push(sample);
+  return sample;
 };
 
 const NEIGHBOUR_PAGE = `<!doctype html><meta charset="utf-8">
@@ -352,6 +507,44 @@ function launchOptions(engineName, mode, softwareRendering) {
   }
   return options;
 }
+
+// The decisive question about an animation, asked directly: does it keep moving
+// while the main thread cannot run? Only the compositor can do that. Named as
+// the experiment that would settle it in the pipe study's remaining
+// uncertainties, and never run there -- and never on the real dashboard.
+const COMPOSITOR_PROBE = (selectors) => {
+  // Every selector is read on both sides of ONE block, so a control injected by
+  // the treatment is measured under exactly the conditions the real element is.
+  // Without a control this probe cannot tell "not composited" from "composited
+  // and unreadable while the main thread is stopped" -- which is the calibration
+  // the pipe study said this experiment needed.
+  const wanted = String(selectors).split(',').map((s) => s.trim()).filter(Boolean);
+  const targets = wanted.map((selector) => ({
+    selector, node: document.querySelector(selector),
+  }));
+  const read = (node) => {
+    if (!node) return null;
+    const value = getComputedStyle(node).transform;
+    const match = /matrix\(([^)]*)\)/.exec(value);
+    return match ? Number(match[1].split(',')[4]) : null;
+  };
+  const before = targets.map((t) => read(t.node));
+  const startedAt = performance.now();
+  // A busy wait, deliberately: a timer would let the main thread run.
+  while (performance.now() - startedAt < 600) { /* hold the thread */ }
+  const after = targets.map((t) => read(t.node));
+  const blockedMs = Number((performance.now() - startedAt).toFixed(0));
+  return targets.map((t, index) => ({
+    selector: t.selector,
+    found: Boolean(t.node),
+    before: before[index],
+    after: after[index],
+    blockedMs,
+    movedWhileBlocked:
+      before[index] !== null && after[index] !== null
+      && before[index] !== after[index],
+  }));
+};
 
 const RENDERER_PROBE = () => {
   const out = { webgl: false, renderer: null };
@@ -409,11 +602,57 @@ async function main() {
     return session;
   };
 
+  const readMetrics = async (session) => {
+    if (!session) return null;
+    const { metrics } = await session.send('Performance.getMetrics');
+    const out = {};
+    for (const metric of metrics) {
+      if (CDP_METRICS.includes(metric.name)) out[metric.name] = metric.value;
+    }
+    return out;
+  };
+  const diffMetrics = (before, after) => {
+    if (!before || !after) return null;
+    const out = {};
+    for (const key of Object.keys(after)) {
+      // Levels stay levels; only the counters and the accumulating durations
+      // are meaningful as a difference.
+      out[key] = ['Nodes', 'JSEventListeners', 'Documents', 'JSHeapUsedSize'].includes(key)
+        ? { before: before[key], after: after[key], delta: after[key] - before[key] }
+        : Number(((after[key] || 0) - (before[key] || 0)).toFixed(4));
+    }
+    return out;
+  };
+
   let extraJsResult = null;
   let dashboard = null;
   if (dashboardOpen) {
     dashboard = await context.newPage();
     await dashboard.goto(url, { waitUntil: 'load', timeout: navigationTimeoutMs });
+    // The steady state of a real dashboard, reached deterministically. The
+    // control panel is built by the auth and runtime fetches rather than by the
+    // view, so whether it exists is a race between those and the first
+    // snapshot -- and it is worth ~1350 nodes at four devices, which made the
+    // same scenario report two different DOM sizes run to run.
+    await dashboard
+      .waitForFunction(() => {
+        const slot = window.__prof && window.__prof.work['listener:telemetry'];
+        return Boolean(slot && slot.calls >= 1);
+      }, null, { timeout: 30000 })
+      .catch(() => {});
+    // Whether the control panel exists is decided by a race between the boot
+    // fetches and the first snapshot, and it is worth ~1350 nodes at four
+    // devices -- enough to make one scenario report two different DOM sizes.
+    // The auth refresh runs on a sixty-second interval and builds it either
+    // way, so calling it once puts the page in the state it reaches on its own
+    // within a minute, instead of waiting one out per case.
+    await dashboard.evaluate(() => {
+      if (typeof loadAuthStatus === 'function') loadAuthStatus();
+    });
+    await dashboard
+      .waitForFunction(() => Boolean(document.getElementById('controlExplainMount')),
+        null, { timeout: 15000 })
+      .catch(() => {});
     await dashboard.evaluate((target) => {
       if (typeof setFlowView === 'function') setFlowView(target, false);
     }, view);
@@ -439,22 +678,142 @@ async function main() {
   if (front) await front.bringToFront();
 
   await (front || neighbour).waitForTimeout(settleMs);
+
+  const target = dashboard || neighbour;
+  let session = null;
+  if ((cdpMetrics || trace || gc) && browser === 'chromium' && target) {
+    session = await context.newCDPSession(target);
+    if (cdpMetrics) await session.send('Performance.enable');
+  }
+  const collectGarbage = async () => {
+    if (!session || !gc) return;
+    await session.send('HeapProfiler.collectGarbage').catch(() => {});
+  };
+  await collectGarbage();
+
   for (const page of [dashboard, neighbour]) {
     if (page) await page.evaluate(RESET);
   }
-  await (front || neighbour).waitForTimeout(durationMs);
+  const metricsBefore = cdpMetrics ? await readMetrics(session) : null;
 
+  const traceEvents = [];
+  let traceDone = null;
+  if (trace && session) {
+    session.on('Tracing.dataCollected', ({ value }) => traceEvents.push(...value));
+    traceDone = new Promise((resolve) => session.once('Tracing.tracingComplete', resolve));
+    await session.send('Tracing.start', {
+      traceConfig: { includedCategories: TRACE_CATEGORIES, recordMode: 'recordAsMuchAsPossible' },
+      transferMode: 'ReportEvents',
+    });
+  }
+
+  // The measurement window. A plain wait when nothing else is asked for, so the
+  // existing matrices behave exactly as before; otherwise a stepped wait that
+  // rotates the view and takes levels as it goes.
+  const cycle = Array.isArray(cycleViews) && cycleViews.length ? cycleViews : null;
+  const viewChanges = [];
+  const samples = [];
+  if (!cycle && !sampleMs) {
+    await (front || neighbour).waitForTimeout(durationMs);
+  } else {
+    const step = Math.max(50, Math.min(sampleMs || cycleIntervalMs, cycleIntervalMs || durationMs));
+    let waited = 0;
+    let nextCycleAt = cycle ? cycleIntervalMs : Infinity;
+    let nextSampleAt = sampleMs || Infinity;
+    let cycleIndex = 0;
+    while (waited < durationMs) {
+      const slice = Math.min(step, durationMs - waited);
+      await (front || neighbour).waitForTimeout(slice);
+      waited += slice;
+      if (cycle && dashboard && waited >= nextCycleAt) {
+        const next = cycle[cycleIndex % cycle.length];
+        cycleIndex += 1;
+        const changed = await dashboard.evaluate((wanted) => {
+          if (typeof setFlowView !== 'function') return null;
+          const startedAt = performance.now();
+          setFlowView(wanted, false);
+          return Number((performance.now() - startedAt).toFixed(1));
+        }, next);
+        viewChanges.push({ atMs: waited, view: next, switchMs: changed });
+        nextCycleAt = waited + cycleIntervalMs;
+      }
+      if (sampleMs && waited >= nextSampleAt) {
+        await collectGarbage();
+        const sample = await (dashboard || neighbour).evaluate(SAMPLE);
+        if (session && cdpMetrics) sample.engine = await readMetrics(session);
+        samples.push(sample);
+        nextSampleAt = waited + sampleMs;
+      }
+    }
+  }
+
+  let traceSummary = null;
+  if (trace && session) {
+    await session.send('Tracing.end');
+    await traceDone;
+    const counts = {};
+    const durations = {};
+    // Why an animation is not on the compositor, in the renderer's own words.
+    // Without this the answer is an inference from a number going down.
+    const compositeFailures = new Set();
+    for (const event of traceEvents) {
+      if (event.ph !== 'X' && event.ph !== 'B') continue;
+      counts[event.name] = (counts[event.name] || 0) + 1;
+      if (typeof event.dur === 'number') {
+        durations[event.name] = (durations[event.name] || 0) + event.dur / 1000;
+      }
+      const data = event.args && (event.args.data || event.args);
+      if (data && data.compositeFailed !== undefined) {
+        compositeFailures.add('compositeFailed=' + String(data.compositeFailed));
+      }
+      if (data && data.unsupportedProperties) {
+        compositeFailures.add(JSON.stringify(data.unsupportedProperties));
+      }
+    }
+    const pick = (name) => ({
+      count: counts[name] || 0,
+      ms: Number((durations[name] || 0).toFixed(1)),
+    });
+    traceSummary = {
+      frames: counts.Commit || counts.DrawFrame || 0,
+      updateLayoutTree: pick('UpdateLayoutTree'),
+      layout: pick('Layout'),
+      prePaint: pick('PrePaint'),
+      paint: pick('Paint'),
+      rasterTask: pick('RasterTask'),
+      commit: pick('Commit'),
+      compositeFailures: [...compositeFailures],
+      note: 'UpdateLayoutTree counts an animation tick as well as an '
+        + 'invalidation; read it against RecalcStyleCount from '
+        + 'Performance.getMetrics before calling it a style recalculation.',
+    };
+  }
+  const metricsAfter = cdpMetrics ? await readMetrics(session) : null;
+  await collectGarbage();
+  const metricsSettled = cdpMetrics && gc ? await readMetrics(session) : null;
+
+  const compositor = compositorProbe
+    ? await (dashboard || neighbour).evaluate(COMPOSITOR_PROBE, compositorProbe)
+    : null;
   const rasterisation = await (dashboard || neighbour).evaluate(RENDERER_PROBE);
   const result = {
     config: {
       url, view, animation, transport, durationMs, browser, gpu, software,
       deepReads, cpuThrottle, foreground, dashboardOpen,
+      cdpMetrics, trace, cycleViews, cycleIntervalMs, sampleMs, gc, compositorProbe,
       neighbour: Boolean(neighbour), extraJsResult,
     },
     rasterisation,
+    compositor,
+    engine: diffMetrics(metricsBefore, metricsAfter),
+    engineAfterGc: metricsSettled,
+    trace: traceSummary,
+    viewChanges: viewChanges.length ? viewChanges : null,
+    samples: samples.length ? samples : null,
     dashboard: dashboard ? await dashboard.evaluate(SUMMARIZE) : null,
     neighbour: neighbour ? await neighbour.evaluate(SUMMARIZE) : null,
   };
+  if (session) await session.detach().catch(() => {});
 
   await context.close();
   await instance.close();
