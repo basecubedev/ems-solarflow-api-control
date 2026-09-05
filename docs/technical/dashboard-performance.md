@@ -120,9 +120,21 @@ Three properties of the renderer are worth knowing before changing it:
   That is why `animation_mode`, `prefers-reduced-motion`, the idle state and the
   four flow-speed buckets keep working without being implemented twice. Change
   the CSS and the layer follows; do not add a second source of truth.
-- **Nothing in the layer may carry a `filter`.** Eighty tiles with one
-  `drop-shadow` took Chromium from 17.3 to 9.1 fps. The halo comes from the
-  static `.pipe-glow` stroke in the SVG.
+- **Nothing in the layer may carry a `filter`.** Re-measured headed on a GPU and
+  it still holds -- the only inherited rule in this series that survived: a
+  `drop-shadow` on the moving layer costs Chromium 71% of its frame rate at
+  forty-eight pipes and 86% at ninety-six, while its main thread sits idle. A
+  filtered layer cannot be "rasterise once, then only move", which is the whole
+  basis of this renderer. A halo that is *drawn into the tile* costs nothing
+  instead, in either engine at any size. Today's halo comes from the static
+  `.pipe-glow` stroke in the SVG.
+- **One animated layer per pipe segment.** What costs is the number of animated
+  layers, not the number of painted elements: a construction painting 1728
+  elements measured *faster* than one painting 576, and Chromium falls roughly
+  inversely with animated-layer count past about 288 of them. Measured at twelve
+  devices: 138.4 fps with one layer per segment, 99.4 with two, 88.1 with four
+  tokens. Firefox holds the refresh rate to 2304 layers and bends at 4608.
+  Complexity belongs inside a layer, never in more of them.
 - **Magnitude is thickness, and it is continuous.** `--pipe-width` is
   proportional to power on a scale that snaps to a coarse ladder taken from the
   system's own output, with hysteresis. It replaced three fixed steps (4, 5 and
@@ -195,6 +207,24 @@ The full account is in
 which supersedes
 [`flow-rendering-investigation.md`](../../reports/dashboard-perf/flow-rendering-investigation.md)
 on the two points above and on the canvas renderer it withdrew.
+
+### What the artwork is allowed to cost
+
+[`energy-pipe-performance-study.md`](../../reports/dashboard-perf/energy-pipe-performance-study.md)
+compared fourteen ways of building the moving token inside this architecture.
+At the size a dashboard draws -- twelve devices, 108 animated layers -- none of
+them is distinguishable from any other in either engine, so how the flow looks
+is not a performance decision. Over 108 traced Chromium cases the renderer
+recorded **zero `Paint` events**, and `RasterTask` in one case out of 108: the
+layer is rasterised once and thereafter only moved, which is why a sixteen-fold
+texture, a richer tile and a baked gaussian halo are all free.
+
+Two things are not free, and both are on the obvious path -- the two rules
+above. A third is invisible to a frame rate: growing the layer costs texture
+memory even when it costs no frames (72 px of transparent padding per side took
+the scene from 5.6 MB to 14.8 MB of composited layer), while growing the
+*texture* costs neither, because the layer is sized by the element and not by
+the image.
 
 ## Several tabs at once
 

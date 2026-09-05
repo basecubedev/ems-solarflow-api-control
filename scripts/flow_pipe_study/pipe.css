@@ -1,0 +1,203 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later
+   Energy pipe study. Only the animated construction differs between
+   candidates; everything here is shared so it cannot bias a comparison. */
+
+:root {
+  color-scheme: dark;
+  --bg: #04101c;
+  --ink: #dbe7f3;
+  --muted: #7f95ab;
+  --panel: rgba(9, 26, 42, .82);
+  --line: rgba(120, 170, 210, .18);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.5 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+#stage {
+  position: relative;
+  margin: 0 auto;
+  background:
+    radial-gradient(120% 100% at 20% 0%, rgba(38, 92, 140, .22), rgba(4, 16, 28, 0) 60%),
+    #04101c;
+}
+
+#overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+#labInfo {
+  position: fixed;
+  right: 8px;
+  bottom: 6px;
+  color: var(--muted);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  opacity: .8;
+}
+
+.ps-seg {
+  position: absolute;
+  overflow: hidden;
+}
+
+.ps-static {
+  overflow: visible;
+}
+
+.ps-move {
+  position: absolute;
+  animation-duration: var(--secs);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+.ps-move.dir-right { animation-name: psMoveRight; }
+.ps-move.dir-left { animation-name: psMoveLeft; }
+.ps-move.dir-down { animation-name: psMoveDown; }
+.ps-move.dir-up { animation-name: psMoveUp; }
+.ps-move.reverse { animation-direction: reverse; }
+.ps-move.paused { animation-play-state: paused; }
+
+@keyframes psMoveRight { to { transform: translate3d(var(--step), 0, 0); } }
+@keyframes psMoveLeft { to { transform: translate3d(calc(-1 * var(--step)), 0, 0); } }
+@keyframes psMoveDown { to { transform: translate3d(0, var(--step), 0); } }
+@keyframes psMoveUp { to { transform: translate3d(0, calc(-1 * var(--step)), 0); } }
+
+.ps-chip { position: absolute; }
+
+/* Overlapping light adds instead of covering, which is what makes a flow read
+   as energy rather than as paint. It also forces a stacking context, so its
+   cost is measured rather than assumed. */
+.ps-add { mix-blend-mode: plus-lighter; }
+
+/* The Web Animations API drives these instead; the declarative rule must not
+   run as well or the element carries two animations. */
+.ps-js { animation-name: none !important; }
+
+.ps-halo { opacity: .55; }
+.ps-sheath { opacity: .85; }
+
+.ps-token {
+  position: absolute;
+  left: 0;
+  top: 0;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+.ps-token.dir-right { animation-name: psTravelRight; }
+.ps-token.dir-left { animation-name: psTravelLeft; }
+.ps-token.dir-down { animation-name: psTravelDown; }
+.ps-token.dir-up { animation-name: psTravelUp; }
+.ps-token.reverse { animation-direction: reverse; }
+.ps-token.paused { animation-play-state: paused; }
+
+@keyframes psTravelRight {
+  from { transform: translate3d(calc(-1 * var(--tw)), 0, 0); }
+  to { transform: translate3d(var(--span), 0, 0); }
+}
+@keyframes psTravelLeft {
+  from { transform: translate3d(var(--span), 0, 0); }
+  to { transform: translate3d(calc(-1 * var(--tw)), 0, 0); }
+}
+@keyframes psTravelDown {
+  from { transform: translate3d(0, calc(-1 * var(--tw)), 0); }
+  to { transform: translate3d(0, var(--span), 0); }
+}
+@keyframes psTravelUp {
+  from { transform: translate3d(0, var(--span), 0); }
+  to { transform: translate3d(0, calc(-1 * var(--tw)), 0); }
+}
+
+/* -------------------------------------------------------------- gallery */
+
+.gallery {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 18px 20px 60px;
+}
+
+.gallery h1 { font-size: 20px; margin: 0 0 4px; }
+.gallery .lede { color: var(--muted); margin: 0 0 18px; max-width: 70ch; }
+
+.controls {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 22px;
+  align-items: center;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  backdrop-filter: none;
+}
+
+.controls label { display: flex; gap: 8px; align-items: center; color: var(--muted); }
+.controls input[type="range"] { width: 220px; }
+.controls output { color: var(--ink); font-variant-numeric: tabular-nums; min-width: 6ch; }
+.controls button {
+  background: rgba(56, 213, 255, .12);
+  border: 1px solid rgba(56, 213, 255, .35);
+  color: #cdeeff;
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+}
+.controls button[aria-pressed="true"] { background: rgba(56, 213, 255, .3); }
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(10, 30, 48, .7), rgba(6, 20, 34, .7));
+  margin-bottom: 16px;
+  overflow: hidden;
+}
+
+.card header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: baseline;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.card header .letter {
+  font-weight: 700;
+  color: #7fe3ff;
+  font-variant-numeric: tabular-nums;
+}
+.card header .name { font-weight: 600; }
+.card header .blurb { color: var(--muted); flex: 1 1 340px; }
+
+.card .metrics {
+  display: flex;
+  gap: 16px;
+  color: var(--muted);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.card .metrics b { color: var(--ink); font-weight: 600; }
+
+.card .viewport {
+  position: relative;
+  height: 132px;
+  overflow: hidden;
+}
+.card .viewport .ps-host { position: absolute; inset: 0; }

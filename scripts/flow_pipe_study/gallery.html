@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Energy pipe study — visual gallery</title>
+<link rel="stylesheet" href="pipe.css">
+</head>
+<body>
+<main class="gallery">
+  <h1>Energy pipe study — visual gallery</h1>
+  <p class="lede">
+    Fourteen ways of representing energy flow inside the dashboard's existing
+    HTML/CSS compositor architecture. Geometry, colour, speed, phase
+    and magnitude are identical in every card; only the construction differs.
+  </p>
+
+  <div class="controls">
+    <label>Power
+      <input id="power" type="range" min="0" max="8" step="1" value="5">
+      <output id="powerOut">690 W</output>
+    </label>
+    <label>Scenario
+      <select id="scenario">
+        <option value="single">Single flow</option>
+        <option value="aggregate" selected>Aggregate</option>
+        <option value="devices">Devices</option>
+      </select>
+    </label>
+    <label>Devices
+      <select id="devices">
+        <option>1</option><option>2</option><option selected>4</option>
+        <option>8</option><option>12</option>
+      </select>
+    </label>
+    <label>Segments
+      <select id="shape">
+        <option value="normal" selected>Normal</option>
+        <option value="short">Very short</option>
+        <option value="long">Long</option>
+        <option value="mixed">Mixed lengths</option>
+      </select>
+    </label>
+    <label>Glow
+      <select id="glow">
+        <option value="none">None</option>
+        <option value="static">Static halo</option>
+        <option value="texture">Baked halo</option>
+        <option value="blur" selected>Blurred halo</option>
+        <option value="filter">drop-shadow</option>
+        <option value="layered">Second layer</option>
+        <option value="blend">Additive</option>
+      </select>
+    </label>
+    <label>Direction
+      <select id="direction">
+        <option value="mixed" selected>Mixed</option>
+        <option value="none">Forward</option>
+        <option value="all">Reversed</option>
+      </select>
+    </label>
+    <button id="sweep" type="button" aria-pressed="false">Auto sweep</button>
+    <button id="motion" type="button" aria-pressed="true">Animation on</button>
+    <button id="measure" type="button">Measure each</button>
+    <span id="status" style="color:var(--muted)"></span>
+  </div>
+
+  <div id="cards"></div>
+</main>
+<script src="pipe_study.js"></script>
+<script src="gallery.js"></script>
+</body>
+</html>

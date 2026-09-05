@@ -14,8 +14,17 @@ python3 scripts/dashboard_bench.py --matrix baseline --browser firefox
 
 ## Start here
 
+[energy-pipe-performance-study.md](energy-pipe-performance-study.md) is the
+current document. It asks, given that the renderer question is settled, how the
+pipe and its moving token should actually be built — fourteen constructions,
+both engines, headed on a real GPU. Its short answer is that at the size a
+dashboard draws none of them is distinguishable from any other, which turns the
+question into a design one; its useful output is that the artwork is free, plus
+two guardrails on the obvious paths that are not. Screenshots and the visual
+gallery: [screenshots/pipes/](screenshots/pipes/).
+
 [energy-flow-visualization-study.md](energy-flow-visualization-study.md) is the
-current document. It asks what the flow visualisation should *be*, not how to
+study before it, and the one that settled the renderer. It asks what the flow visualisation should *be*, not how to
 make the existing one cheaper, and it corrects three conclusions in the reports
 that precede it.
 
@@ -35,6 +44,12 @@ ANGLE/SwiftShader, which is software, and is not comparable with a GPU run.
 Note also that the renderer string proves a run was software but cannot prove it
 was hardware: headless Firefox reports an NVIDIA device for WebGL while
 compositing the page on the CPU.
+
+A third harness sits beside the other two:
+[`scripts/flow_pipe_study/`](../../scripts/flow_pipe_study/) renders one scene
+with a selectable pipe construction and a selectable glow, and carries its own
+correctness gate (`pipe_verify.mjs`) that must pass before any of its numbers
+are believed. Its reports are the `pipes-*.json` files here.
 
 A second harness sits beside this one:
 [`scripts/flow_lab_bench.py`](../../scripts/flow_lab_bench.py) renders an
