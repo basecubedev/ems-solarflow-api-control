@@ -906,6 +906,18 @@ one device ramping does not resize every ribbon on the page.
 | 1200 W | 6 px | 10.5 px |
 | 2000 W | 6 px | 15 px |
 
+**Corrected after the first installation saw it.** The range in this table is
+not what ships. Run on real hardware, ribbons of that weight read as heavy
+rather than as informative -- an 800 W flow on a 1 kW scale drew at 13 px -- and
+the top of the range was brought down to 8 px, two above the 6 px the three
+steps already used. The column above therefore describes the version this study
+argued for, not the one in the dashboard; the shipped scale runs 4 px to 8 px
+and the same rows read 4, 4.5, 5.5, 6.5 and 8 px. What survives is the finding this study exists for --
+that magnitude has to be encoded at all, and that thickness is the channel to
+encode it in. What it got wrong is how much of the panel to spend on it, which
+is a question no measurement here could answer and the first look at a real
+installation answered immediately.
+
 Thickness was chosen over brightness or hue because it is the one magnitude
 channel that survives desaturation and the deuteranopic collapse of `#ffd166`
 against `#39e58c` -- the two colours this dashboard uses for PV and battery.

@@ -718,11 +718,54 @@ console.log(JSON.stringify({
     assert out["w3000"] <= 22, "the inverter's two ports are 28 units apart"
 
 
+def test_the_widest_ribbon_stays_near_the_three_step_maximum():
+    """Continuous, and only two pixels past where the steps stopped.
+
+    The first continuous version ran to 15 px, which at a 1 kW scale drew an
+    800 W flow at 13 px -- more than twice the widest thing the three steps ever
+    produced. On a real installation that reads as heavy rather than as
+    informative. The top of the range is 8 px against the steps' 6, so the page
+    keeps roughly the weight it had while the scale has nine widths to spend
+    instead of three; the floor is unchanged at the steps' 4 px. What replacing
+    the steps with a scale buys is the ordering between two flows, not the
+    panel area they cover.
+    """
+
+    script = PRELUDE + """
+const rungs = [250, 500, 1000, 2000, 3000, 5000, 8000, 12000];
+const widths = [];
+rungs.forEach(function (rung) {
+  app.flowScaleReference(rung);
+  [0.01, 0.1, 0.25, 0.5, 0.75, 1, 2].forEach(function (share) {
+    widths.push(app.flowRibbonWidth(rung * share, true));
+  });
+});
+app.flowScaleReference(2000);
+console.log(JSON.stringify({
+  widest: Math.max.apply(null, widths),
+  narrowest: Math.min.apply(null, widths),
+  atFullScale: app.flowRibbonWidth(2000, true),
+  beyondFullScale: app.flowRibbonWidth(20000, true),
+  idle: app.flowRibbonWidth(0, false),
+}));
+"""
+    out = run_node(script)
+    assert out["widest"] == 8, "the widest ribbon is two pixels past the old high bucket"
+    assert out["atFullScale"] == 8
+    assert out["beyondFullScale"] == 8, "past full scale it saturates, it does not grow"
+    assert out["narrowest"] == 4, "an active flow keeps the old minimum"
+    assert out["idle"] == 3, "only an idle pipe is thinner than an active one"
+
+
 def test_the_magnitude_scale_follows_the_installation():
     """A 500 W system and a 5 kW system both use the whole range.
 
     A fixed full-scale would leave a balcony installation drawing every flow at
     the minimum width, and a large one saturating instantly.
+
+    Stated as a distance rather than a ratio: the range is 4 to 8 px, so the
+    widest ribbon is twice the narrowest by construction and a ratio says
+    nothing about whether the scale followed the installation.
     """
 
     script = PRELUDE + """
@@ -738,9 +781,9 @@ console.log(JSON.stringify({ small, large, largeSmallFlow }));
     # The ladder snaps upward, so a 420 W peak sits inside the 500 W rung and
     # does not quite reach the widest ribbon. What must hold is that it reads as
     # a big flow on a small system and a small one on a large system.
-    assert out["small"] > 10, "a balcony system's peak flow must not draw hairline"
-    assert out["largeSmallFlow"] < 6, "the same 420 W must read as minor on a 5 kW system"
-    assert out["small"] > out["largeSmallFlow"] * 2
+    assert out["small"] > 5, "a balcony system's peak flow must sit near the top"
+    assert out["largeSmallFlow"] <= 4.5, "the same 420 W must read as minor on a 5 kW system"
+    assert out["small"] - out["largeSmallFlow"] >= 1
 
 
 def test_the_magnitude_scale_does_not_flicker_between_rungs():

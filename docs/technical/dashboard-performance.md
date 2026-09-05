@@ -135,13 +135,17 @@ Three properties of the renderer are worth knowing before changing it:
   devices: 138.4 fps with one layer per segment, 99.4 with two, 88.1 with four
   tokens. Firefox holds the refresh rate to 2304 layers and bends at 4608.
   Complexity belongs inside a layer, never in more of them.
-- **Magnitude is thickness, and it is continuous.** `--pipe-width` is
-  proportional to power on a scale that snaps to a coarse ladder taken from the
-  system's own output, with hysteresis. It replaced three fixed steps (4, 5 and
-  6 px at 150 W and 600 W thresholds) that made a 700 W flow and a 3000 W flow
-  identical. Thickness was chosen because it is the one magnitude channel that
-  survives desaturation and the deuteranopic collapse of the PV and battery
-  colours.
+- **Magnitude is thickness, and it is continuous inside the old range.**
+  `--pipe-width` is proportional to power on a scale that snaps to a coarse
+  ladder taken from the system's own output, with hysteresis. It replaced three
+  fixed steps (4, 5 and 6 px at 150 W and 600 W thresholds) that made a 700 W
+  flow and a 3000 W flow identical. It runs from the steps' own 4 px floor to
+  8 px, two past where they stopped: a top of 15 px was shipped first and drew
+  an 800 W flow at 13 px on a 1 kW scale, which reads as a heavier page rather
+  than a more informative one. The scale buys the ordering between two flows,
+  not more of the panel covered. Thickness was chosen because it is the one magnitude
+  channel that survives desaturation and the deuteranopic collapse of the PV and
+  battery colours.
 - **It never asks the layout engine a question an attribute can answer.**
   Reading a box forces the browser to flush pending style and layout first, and
   the rebuild runs once per snapshot. Deciding whether a view is on screen by
