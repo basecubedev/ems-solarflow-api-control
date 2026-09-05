@@ -803,15 +803,18 @@ function flowTileLayerFor(svg) {
   return layer;
 }
 
-// Whether this flow SVG belongs to a view that is switched away. Answered from
-// the `hidden` attribute setFlowView already sets, because asking the layout
-// engine instead costs a full synchronous layout: in the control view, where no
-// flow SVG is on screen, that one question was 25-36 ms of main thread per
-// snapshot.
+// Whether an element belongs to a view that is switched away. Answered from the
+// `hidden` attribute setFlowView already sets, because asking the layout engine
+// instead costs a full synchronous layout: in the control view, where no flow
+// SVG is on screen, that one question was 25-36 ms of main thread per snapshot.
+function viewOffScreen(el) {
+  if (!el) return true;
+  if (el.hidden) return true;
+  return typeof el.closest === "function" && Boolean(el.closest("[hidden]"));
+}
+
 function flowSvgOffScreen(svg) {
-  if (!svg) return true;
-  if (svg.hidden) return true;
-  return typeof svg.closest === "function" && Boolean(svg.closest("[hidden]"));
+  return viewOffScreen(svg);
 }
 
 function buildFlowTileHost(svg) {
@@ -1755,6 +1758,14 @@ function updateDeviceFlowSnapshot(container, snapshot, entries) {
 function renderControlExplain(snapshot, options = {}) {
   const container = $("controlExplainView");
   if (!container) return;
+
+  // The live snapshot path renders only the visible view. This function is also
+  // called directly by the auth and runtime refreshes, one of which runs on a
+  // sixty-second timer whatever is on screen -- measured at one rebuild per
+  // minute costing up to 57.8 ms, of a subtree that is 3606 of the aggregated
+  // view's 4065 nodes at twelve devices. setFlowView renders the view it
+  // switches to, so deferring loses nothing.
+  if (viewOffScreen(container)) return;
 
   if (!ensureControlExplainShell(container)) {
     container.innerHTML = `

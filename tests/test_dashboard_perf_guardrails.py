@@ -141,6 +141,54 @@ console.log(JSON.stringify({
     assert out["controlExplainView"] == ""
 
 
+def test_control_panel_is_not_rebuilt_while_its_view_is_off_screen():
+    # The live snapshot path already renders only the visible view. The auth and
+    # runtime refreshes call renderControlExplain directly, and one of them is on
+    # a sixty-second timer that runs whatever is on screen -- measured at one
+    # rebuild per minute, 3.3 to 57.8 ms, of a subtree that at twelve devices is
+    # 3606 of the aggregated view's 4065 nodes.
+    script = PRELUDE + """
+const doc = makeDoc();
+global.document = doc;
+
+app.state.flowView = "aggregated";
+const container = doc.getElementById("controlExplainView");
+container.hidden = true;
+
+app.renderControlExplain({
+  timestamp: "2026-09-05T12:00:00Z",
+  control_explain: { mode: "pv_first", devices: { WR1: {} } },
+}, { forceRuntimeEditor: true });
+
+console.log(JSON.stringify({ controlExplainView: container.innerHTML }));
+"""
+    out = run_node(script)
+    assert out["controlExplainView"] == ""
+
+
+def test_control_panel_is_rebuilt_once_its_view_is_on_screen():
+    # The other half of the gate: deferring a rebuild must not lose it.
+    # setFlowView renders the view it switches to, so this is the state the user
+    # actually arrives in.
+    script = PRELUDE + """
+const doc = makeDoc();
+global.document = doc;
+
+app.state.flowView = "control";
+const container = doc.getElementById("controlExplainView");
+container.hidden = false;
+
+app.renderControlExplain({
+  timestamp: "2026-09-05T12:00:00Z",
+  control_explain: { mode: "pv_first", devices: { WR1: {} } },
+});
+
+console.log(JSON.stringify({ length: container.innerHTML.length }));
+"""
+    out = run_node(script)
+    assert out["length"] > 0
+
+
 def test_aggregated_view_still_rebuilds_its_own_flow():
     # Sanity: the active view IS rendered (the gating does not break the visible
     # view). Aggregated active -> the flow SVG texts update.
