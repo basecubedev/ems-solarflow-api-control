@@ -31,6 +31,7 @@ default.
 import argparse
 import json
 import os
+import threading
 import time
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -341,9 +342,46 @@ class PreviewServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, server_address, handler, scenario):
+    def __init__(
+        self,
+        server_address,
+        handler,
+        scenario,
+        device_count=None,
+        freeze_timestamp=False,
+        sse_interval=2.0,
+        sse_max_per_ip=0,
+    ):
         super().__init__(server_address, handler)
         self.scenario_name = scenario
+        self.device_count = device_count
+        self.freeze_timestamp = freeze_timestamp
+        self.sse_interval = sse_interval
+        # 0 disables the limit. A positive value reproduces the production
+        # per-IP cap so the polling-fallback cascade can be measured.
+        self.sse_max_per_ip = sse_max_per_ip
+        self._sse_counts = {}
+        self._sse_lock = threading.Lock()
+
+    def acquire_sse_slot(self, remote):
+        if self.sse_max_per_ip <= 0:
+            return True
+        with self._sse_lock:
+            used = self._sse_counts.get(remote, 0)
+            if used >= self.sse_max_per_ip:
+                return False
+            self._sse_counts[remote] = used + 1
+            return True
+
+    def release_sse_slot(self, remote):
+        if self.sse_max_per_ip <= 0:
+            return
+        with self._sse_lock:
+            used = self._sse_counts.get(remote, 0)
+            if used <= 1:
+                self._sse_counts.pop(remote, None)
+            else:
+                self._sse_counts[remote] = used - 1
 
 
 class PreviewHandler(BaseHTTPRequestHandler):
@@ -435,7 +473,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
     # --- handlers --------------------------------------------------------
 
     def _scenario(self):
-        return build_scenario(self.server.scenario_name)
+        return build_scenario(
+            self.server.scenario_name,
+            device_count=self.server.device_count,
+            freeze_timestamp=self.server.freeze_timestamp,
+        )
 
     # Map each chart series id to the history-item field it reads. ``target``
     # (EMS commanded) tracks the inverter output in the synthetic data.
@@ -705,6 +747,15 @@ class PreviewHandler(BaseHTTPRequestHandler):
         )
 
     def _send_events(self):
+        remote = self.client_address[0]
+        if not self.server.acquire_sse_slot(remote):
+            self.send_response(429)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(b'{"error": "sse_connection_limit"}')
+            return
+
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
@@ -712,6 +763,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         self.end_headers()
         last_timestamp = None
         started = time.monotonic()
+        interval = max(0.05, float(self.server.sse_interval))
         try:
             # Bounded stream so the daemon thread cannot live forever; the
             # frontend reconnects transparently.
@@ -723,9 +775,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
                     self.wfile.write(f"event: telemetry\ndata: {payload}\n\n".encode())
                     self.wfile.flush()
                     last_timestamp = timestamp
-                time.sleep(2)
+                time.sleep(interval)
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
+        finally:
+            self.server.release_sse_slot(remote)
 
     def _log_lines(self, after=0):
         now = time.time()
@@ -792,13 +846,29 @@ class PreviewHandler(BaseHTTPRequestHandler):
             pass
 
 
-def start_server(host=DEFAULT_HOST, port=DEFAULT_PORT, scenario=DEFAULT_SCENARIO):
+def start_server(
+    host=DEFAULT_HOST,
+    port=DEFAULT_PORT,
+    scenario=DEFAULT_SCENARIO,
+    device_count=None,
+    freeze_timestamp=False,
+    sse_interval=2.0,
+    sse_max_per_ip=0,
+):
     """Start the preview server and return the running PreviewServer instance."""
 
     if scenario not in SCENARIOS:
         raise ValueError(f"unknown scenario {scenario!r}")
     try:
-        server = PreviewServer((host, int(port)), PreviewHandler, scenario)
+        server = PreviewServer(
+            (host, int(port)),
+            PreviewHandler,
+            scenario,
+            device_count=device_count,
+            freeze_timestamp=freeze_timestamp,
+            sse_interval=sse_interval,
+            sse_max_per_ip=sse_max_per_ip,
+        )
     except OSError as exc:
         raise SystemExit(
             f"could not bind preview server to {host}:{port} ({exc}). "
@@ -861,6 +931,32 @@ def parse_args(argv=None):
         default=os.path.join(ROOT, "docs", "assets"),
     )
     parser.add_argument(
+        "--devices",
+        type=int,
+        default=None,
+        metavar="N",
+        help="scale the scenario to exactly N devices (benchmarks)",
+    )
+    parser.add_argument(
+        "--sse-interval",
+        type=float,
+        default=2.0,
+        metavar="SECONDS",
+        help="seconds between telemetry emissions (default: 2.0)",
+    )
+    parser.add_argument(
+        "--identical-snapshots",
+        action="store_true",
+        help="freeze the snapshot timestamp so every emission is unchanged",
+    )
+    parser.add_argument(
+        "--sse-max-per-ip",
+        type=int,
+        default=0,
+        metavar="N",
+        help="refuse more than N concurrent SSE streams per client IP (0: no limit)",
+    )
+    parser.add_argument(
         "--list-scenarios",
         action="store_true",
         help="print available scenarios and exit",
@@ -895,7 +991,15 @@ def main(argv=None):
             "intended for trusted local networks only."
         )
 
-    server = start_server(args.host, args.port, scenario)
+    server = start_server(
+        args.host,
+        args.port,
+        scenario,
+        device_count=args.devices,
+        freeze_timestamp=args.identical_snapshots,
+        sse_interval=args.sse_interval,
+        sse_max_per_ip=args.sse_max_per_ip,
+    )
     try:
         if args.capture:
             from capture_dashboard_previews import capture_assets
