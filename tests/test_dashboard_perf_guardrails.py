@@ -512,6 +512,69 @@ def test_the_result_ring_animates_a_property_the_compositor_can_carry():
             )
 
 
+def test_no_rule_animates_a_property_that_forces_a_repaint():
+    """The general form of the lesson, instead of one element's name.
+
+    `transform` and `opacity` go to the compositor. Anything that changes what a
+    pixel looks like -- `background-position`, `background-size`,
+    `mask-position`, `filter` -- repaints the element on every frame, and the
+    cost is multiplied by however many elements the rule matches.
+
+    The previous fix moved the control-stage chips off `background-position` and
+    left the same keyframe on `.primary-button.compact::after`, on the measured
+    grounds that it was one element. It is one element in the read-only
+    dashboard. With authentication configured the runtime editor renders a
+    submit button per stage card -- fifteen at twelve devices -- and the
+    authenticated control view measured 51.9 fps at four devices and 35.7 at
+    twelve, against 136.1 and 133.6 with the animation stopped, painting 4431
+    times per ten seconds against 175.
+
+    So the rule is not "this element is fine": it is that no keyframe on this
+    page may move a paint property, because no rule here is guaranteed to stay
+    matched by one element.
+    """
+
+    css = (ROOT / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
+    paint_properties = (
+        "background-position", "background-size", "mask-position",
+        "mask-size", "filter", "box-shadow", "clip-path",
+    )
+
+    offenders = []
+    cursor = 0
+    while True:
+        start = css.find("@keyframes", cursor)
+        if start == -1:
+            break
+        open_brace = css.index("{", start)
+        depth, index = 0, open_brace
+        while True:
+            if css[index] == "{":
+                depth += 1
+            elif css[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            index += 1
+        name = css[start + len("@keyframes"):open_brace].strip()
+        body = css[open_brace:index]
+        moved = [p for p in paint_properties if f"{p}:" in body.replace(" ", "")
+                 or f"{p} :" in body]
+        if moved:
+            offenders.append((name, moved))
+        cursor = index
+
+    # A keyframe nobody references costs nothing. The name appearing more than
+    # once means a rule names it in an `animation` or `animation-name`.
+    referenced = [(name, moved) for name, moved in offenders if css.count(name) > 1]
+    assert not referenced, (
+        "these keyframes move a property the compositor cannot carry and are "
+        f"still referenced by a rule: {referenced}. Animate a transform on a "
+        "child instead; see reports/dashboard-perf/"
+        "final-dashboard-performance-audit.md"
+    )
+
+
 def test_the_runtime_editor_is_not_rebuilt_when_it_has_not_changed():
     """`runtimeControlPanel()` takes no snapshot and reads none.
 

@@ -3757,7 +3757,7 @@ function maintenanceButton(action, label, options = {}) {
   const arg = options.arg ? ` data-maintenance-arg="${escapeHtml(options.arg)}"` : "";
   const id = options.id ? ` id="${escapeHtml(options.id)}"` : "";
   const variant = options.variant ? ` ${escapeHtml(options.variant)}` : "";
-  return `<button type="button"${id} class="primary-button compact maintenance-action${variant}" data-maintenance-action="${escapeHtml(action)}"${arg}${disabled}>${escapeHtml(label)}</button>`;
+  return `<button type="button"${id} class="primary-button compact maintenance-action${variant}" data-maintenance-action="${escapeHtml(action)}"${arg}${disabled}><span class="button-ring" aria-hidden="true"><i></i></span>${escapeHtml(label)}</button>`;
 }
 
 const MAINTENANCE_BACKUP_TYPE_LABELS = {
@@ -4509,7 +4509,7 @@ function runtimeSelect(name, label, selectedValue, options, optionLabelFormatter
 }
 
 function runtimeSubmit(label = "Apply") {
-  return `<button class="primary-button compact" type="submit">${escapeHtml(label)}</button>`;
+  return `<button class="primary-button compact" type="submit"><span class="button-ring" aria-hidden="true"><i></i></span>${escapeHtml(label)}</button>`;
 }
 
 function activeRuntimeEditorElement() {

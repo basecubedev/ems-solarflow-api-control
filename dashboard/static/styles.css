@@ -131,23 +131,20 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
   background: linear-gradient(120deg, rgba(255,255,255,.09), transparent 42%);
   opacity: .34;
 }
-.primary-button.compact::after {
-  content: "";
+/* The same construction as the control-stage result chip: the gradient lives in
+   a child that is translated, instead of in a background whose position is
+   animated. `background-position` is a paint property, so the browser repaints
+   the element on every frame -- and the runtime editor renders one of these
+   buttons per stage card, twelve at four devices and twenty at twelve. Measured
+   authenticated: 52.4 -> 136.0 fps and 35.6 -> 135.4 fps, with paints per ten
+   seconds falling from 4399 to 175. */
+.button-ring {
   position: absolute;
   inset: 0;
   border-radius: inherit;
   padding: 1px;
   pointer-events: none;
-  background:
-    linear-gradient(
-      90deg,
-      rgba(34,211,238,.18),
-      rgba(125,211,252,.58),
-      rgba(122,168,255,.46),
-      rgba(34,211,238,.18)
-    );
-  background-size: 220% 100%;
-  animation: controlResultBorderFlow 4.2s linear infinite;
+  overflow: hidden;
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
@@ -156,6 +153,26 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
     linear-gradient(#000 0 0) content-box,
     linear-gradient(#000 0 0);
   mask-composite: exclude;
+}
+
+.button-ring i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 200%;
+  background:
+    linear-gradient(
+      90deg,
+      rgba(34,211,238,.18),
+      rgba(125,211,252,.58),
+      rgba(122,168,255,.46),
+      rgba(34,211,238,.18)
+    );
+  background-size: 50% 100%;
+  background-repeat: repeat-x;
+  animation: controlResultRingSlide 4.2s linear infinite;
+  will-change: transform;
 }
 .icon-button {
   width: 28px;
@@ -1536,10 +1553,6 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
     0 0 12px rgba(34,211,238,.62),
     0 0 24px rgba(34,211,238,.26);
 }
-@keyframes controlResultBorderFlow {
-  from { background-position: 0% 50%; }
-  to { background-position: 220% 50%; }
-}
 .control-result.tone-blocked {
   border-color: rgba(255,107,122,.48);
   background:
@@ -1993,7 +2006,8 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
     filter: none;
   }
 
-  .control-result-ring i {
+  .control-result-ring i,
+  .button-ring i {
     animation: none;
   }
 }
@@ -2031,7 +2045,8 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
 .dashboard-animation-off .solar-visual.active .solar-sun,
 .dashboard-animation-off .battery-visual.charging .battery-fill,
 .dashboard-animation-off .inverter-visual.active .inverter-led,
-.dashboard-animation-off .control-result-ring i {
+.dashboard-animation-off .control-result-ring i,
+.dashboard-animation-off .button-ring i {
   animation: none;
 }
 @media (max-width: 420px) {

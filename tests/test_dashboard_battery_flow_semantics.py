@@ -1232,7 +1232,14 @@ def test_device_flow_mobile_layout_does_not_force_horizontal_scroll():
     assert ".control-result-divider" not in styles
     assert "@keyframes controlRailSweep" not in styles
     assert "@keyframes controlRailFlow" not in styles
-    assert "@keyframes controlResultBorderFlow" in styles
+    # The travelling border is still there; it is no longer driven by a paint
+    # property. `controlResultBorderFlow` animated `background-position`, which
+    # cost the authenticated control view three quarters of its frame rate once
+    # the runtime editor put twenty of those buttons on screen. Both the chips
+    # and the buttons now translate a child instead.
+    assert "@keyframes controlResultBorderFlow" not in styles
+    assert "@keyframes controlResultRingSlide" in styles
+    assert ".button-ring i" in styles
     assert "height: 58px;" in styles
     assert ".control-context-rail" in styles
     assert ".control-color-legend" not in styles
