@@ -16,9 +16,9 @@ worth another change.
 
 ## Executive summary
 
-Twelve matrices, both engines, headed on a GPU, one case at a time. Three
-defects found, all three fixed, each with a before/after taken from a worktree
-at the pre-change commit.
+Sixteen matrices, both engines, headed on a GPU, one case at a time. Four
+changes made, each with a before/after; the first three were taken from a
+worktree at the pre-change commit.
 
 The largest had never been measurable, because every benchmark this project has
 ever run used the **read-only** preview. With authentication configured the
@@ -31,12 +31,22 @@ screen (19 ms per minute, and 89 % of the aggregated view's DOM), and the
 runtime editor was rebuilt twice a second from data no snapshot touches
 (16.5 → 1.6 ms).
 
-What remains is one real cost and one open question. Every animation on the page
-costs a style recalculation per frame — up to 2.9 s per ten seconds at twelve
-devices — and it costs no frames in either engine at any size measured, so it is
-left alone. And a visible-but-unfocused window has its frames throttled to 1 fps
-while the page keeps rendering in full, which is the closest thing here to the
-symptom that started all of this and cannot be settled without a Mac.
+A fourth followed from the audit's own numbers. Every animation on the page
+costs a style recalculation per frame — up to 2.9 s per ten seconds — and on
+this desktop that costs no frames, which is why it was first left alone. Under
+16× CPU throttling it does: the aggregated view was drawing at 110.7 fps with a
+13.9 ms frame p95. The tile animation now runs from `element.animate()` with
+literal keyframes instead of a keyframe that reads a custom property, which
+returns that case to **135.0 fps at 7.0 ms** and takes 28–40 % of the style
+recalculation out of every view at every throttle level.
+
+What remains is one measured cost declined on risk and one open question. The
+control view's markup costs 1 ms to build and 12 ms to parse, twice a second at
+twelve devices — in-place updating has a real ceiling, and it is a reconciler in
+the view an operator reads to understand a write decision. And a
+visible-but-unfocused window has its frames throttled to 1 fps while the page
+keeps rendering in full, which is the closest thing here to the symptom that
+started all of this and cannot be settled without a Mac.
 
 Everything else is ruled out with numbers: the retained off-screen DOM, CSS
 selectors, containment, shadows, filters, charts, timers, and any leak across
@@ -1200,6 +1210,98 @@ of thing that gets quietly retried instead of fixed.
 
 ---
 
+## 15f. The first NICE TO HAVE, taken after all
+
+§16 classified the per-frame style recalculation NICE TO HAVE and left it, on
+the grounds that it costs no frames. That was a statement about a machine with
+headroom, and the harness can remove the headroom by an exact factor.
+
+Expressing the tile motion with literal keyframe values through
+`element.animate()` instead of a keyframe that reads `--tile-step`:
+
+| Chromium, style recalculation per 10 s | before | after |
+|---|---:|---:|
+| aggregated, 12 devices | 912 ms | **599 ms** |
+| devices, 12 devices | 2227 ms | **1328 ms** |
+| aggregated, 4× CPU throttling | 1192 ms | **736 ms** |
+| devices, 4× | 4891 ms | **3351 ms** |
+| aggregated, 8× | 2099 ms | **1311 ms** |
+| devices, 8× | 4632 ms | **3146 ms** |
+| aggregated, 16× | 3687 ms | **2663 ms** |
+| devices, 16× | 3806 ms | **2643 ms** |
+
+**−28 % to −40 %, in every row.** And once the headroom is gone it is frames:
+
+| | before | after |
+|---|---|---|
+| aggregated, 16× | 110.7 fps / p95 **13.9 ms** | **135.0 fps / p95 7.0 ms** |
+| devices, 4× | 87.3 fps | **98.0** |
+| devices, 8× | 36.6 fps | **40.6** |
+| devices, 16× | 11.5 fps | **14.0** |
+| aggregated, unthrottled | 136.6 fps | 137.8 |
+| devices, unthrottled | 136.8 fps | 139.2 |
+
+Unthrottled nothing moves, which is exactly why this needed a throttled run to
+decide. The 16× aggregated result is the cleanest single effect: a view that was
+dropping frames returns to the refresh ceiling and halves its frame time. Its
+repeat sample read 131.4 fps at a 13.8 ms p95, so the frame-time recovery at 16×
+is not perfectly stable across runs; the style-recalculation saving is, in all
+eight rows.
+
+**Two things this corrects in the pipe study.** It credited its 31–46 % saving
+to literal values replacing a `var()`; replacing the custom property with a
+constant in the keyframe changes nothing, so the mechanism is the path and not
+the property. And it declined the change to avoid "a second source of truth for
+motion" — but the renderer already reads speed, direction, period and appearance
+out of the stylesheet and holds them in JavaScript. The keyframes existed only
+to consume a custom property that the same code sets. Handing those values to
+`element.animate()` is the same source applied differently.
+
+The CSS keyframes remain as the fallback where `element.animate()` is missing,
+and the direction class is omitted only when the API drives — otherwise both
+animations would run. `animation_mode`, `prefers-reduced-motion` and the idle
+state still arrive as `seconds = 0` through `readFlowPipe`, and a contract test
+pins that neither route animates then.
+
+## 15g. The second NICE TO HAVE: measured, and not taken
+
+The control view is the only one whose per-snapshot cost scales with device
+count, and the remedy on the table is to update it in place instead of replacing
+it. §16 declined it because the preview's `control_explain` never changes, so a
+skip-if-identical guard could only measure the fixture.
+
+That objection does not apply to in-place updating, whose saving is the parse —
+paid whether or not the content changed. So the two halves were charged
+separately: building the markup string, and handing it to the parser.
+
+| control view, per snapshot | generate | **write** | markup |
+|---|---:|---:|---:|
+| read-only, 2 devices | 0.8 ms | **7.2 ms** | 39 947 bytes |
+| read-only, 4 devices | 1.0 ms | **7.4 ms** | 68 357 bytes |
+| read-only, 8 devices | 1.0 ms | **10.7 ms** | 125 118 bytes |
+| read-only, 12 devices | 1.2 ms | **12.3 ms** | 181 902 bytes |
+| authenticated, 12 devices | 1.1 ms | **11.4 ms** | 181 902 bytes |
+
+**The parse is 91 % of it.** Deciding what the panel should say costs about a
+millisecond; handing 182 KB of markup to the parser twice a second costs twelve.
+So the ceiling for in-place updating is real and now measured: about 12 ms per
+snapshot at twelve devices, which is 88 % of that view's 14.0 ms.
+
+It is still not taken here, and the reason is no longer a measurement gap. The
+change is a reconciler for a 532-line generator across five nested constructs,
+in the view an operator reads to understand why the EMS wrote what it wrote, and
+a partial update that misses a field shows a stale decision rather than a slow
+one. That is a correctness risk of a different kind from anything else in this
+audit, and it is worth more than 12 ms per snapshot on hardware that loses no
+frames to it.
+
+What would make it safe is a differential test — render the panel both ways for
+the same snapshot and assert the resulting markup is identical — and that test
+is the first thing to write if it is ever picked up. The number to beat is in
+the table above.
+
+---
+
 ## 16. Findings
 
 **Finding: the runtime editor's submit buttons animate a paint property, and the
@@ -1272,14 +1374,16 @@ devices on the devices view. In Firefox the same construction costs event-loop
 lag instead: 1–2 ms rises to 11–13 ms in the control view, and the result ring
 alone accounts for all of it.
 **Affected browsers/platforms:** both, differently.
-**Classification:** **NICE TO HAVE**
-**Recommendation:** leave it. It costs no frames in either engine at any device
-count measured, the page holds 130–143 fps throughout, and the one look-
-preserving alternative — driving the keyframes through the Web Animations API —
-was measured by the pipe study at a 31–46 % saving in style time and rejected
-there for weakening the property that makes the renderer maintainable. This
-audit adds one correction to that: the `var()` in the tile keyframes is **not**
-what costs. Replacing it with a constant changes nothing.
+**Classification:** **FIX NOW**, after a throttled run (was NICE TO HAVE)
+**Recommendation:** done for the tile animation, which is the largest
+contributor. On this desktop it costs no frames, which is why it was declined
+first; on a main thread slowed sixteen-fold the aggregated view was dropping
+them, and driving the tiles through `element.animate()` returns it to the
+refresh ceiling. −28 % to −40 % of style-recalculation time in all eight
+throttle/view combinations, and +11 % to +22 % frame rate on the devices view
+under load. §15f. The result rings were measured and **not** converted: they are
+recreated on every snapshot, so animating them from JavaScript would trade
+per-frame style cost for per-snapshot script cost.
 
 ---
 
@@ -1313,13 +1417,14 @@ view and zero everywhere else. Firefox does not reproduce the scaling: 16.6 →
 **Measured impact:** one long task per snapshot at twelve devices, averaging
 67 ms.
 **Classification:** **NICE TO HAVE**
-**Recommendation:** the remedy is incremental DOM updating for the control
-explanation, which the previous investigation also declined. The `innerHTML`
-measurement here cannot justify it: the preview's `control_explain` is
-byte-identical between snapshots, so the fixture makes any guard look free. A
-real installation's values change every snapshot, and rewriting that panel
-incrementally is a real change to a real view for a cost that is 12–35 ms on
-this hardware. Measure it on slower hardware before building it.
+**Recommendation:** not taken, and no longer for want of a measurement. The two
+halves were charged separately: building the markup costs about 1 ms per
+snapshot, handing 182 KB of it to the parser costs 12 — **the parse is 91 %**,
+so in-place updating has a real 12 ms ceiling at twelve devices (§15g). It is
+declined on risk, not on size: a reconciler for a 532-line generator in the view
+an operator reads to understand a write decision, where a missed field shows a
+stale decision rather than a slow one. Write the differential test first if it
+is ever picked up.
 
 ---
 
@@ -1488,6 +1593,11 @@ python3 scripts/dashboard_profile/profile_bench.py --matrix compositor2 --browse
 # writes that replace markup with itself, and the two control mounts separately
 python3 scripts/dashboard_profile/profile_bench.py --matrix htmlguard   --browser chromium --gpu headed
 python3 scripts/dashboard_profile/profile_bench.py --matrix mountcost   --browser chromium --gpu headed
+# the two nice-to-have questions: does the Animations API help, and on what
+# machine; and what does the control panel's markup cost to build against parse
+python3 scripts/dashboard_profile/profile_bench.py --matrix tilewaapi    --browser chromium --gpu headed
+python3 scripts/dashboard_profile/profile_bench.py --matrix waapithrottle --browser chromium --gpu headed
+python3 scripts/dashboard_profile/profile_bench.py --matrix mountsplit   --browser chromium --gpu headed
 # hidden tab, unfocused window, repeated view changes, thirty minutes of them
 python3 scripts/dashboard_profile/profile_bench.py --matrix hiddentab   --browser chromium --gpu headed
 python3 scripts/dashboard_profile/profile_bench.py --matrix unfocused   --browser chromium --gpu headed --repeat 3
@@ -1501,6 +1611,11 @@ Render any result as a table:
 python3 scripts/dashboard_profile/profile_report.py \
     reports/dashboard-perf/profile-audit-scale-after-chromium-2026-09-05.json
 ```
+
+`waapithrottle` is the one to reach for when a cost is real on the main thread
+and invisible on this machine. It pairs a treatment with a 1×/4×/8×/16× CPU
+sweep, and it is what decided §15f after two earlier passes had declined the
+same change for lack of a machine without headroom.
 
 **Taking a before.** The before/after pairs in §15 were produced by adding a
 `git worktree` at the pre-change commit, copying `scripts/dashboard_profile/`
@@ -1517,8 +1632,8 @@ distinguishes them. Every dataset in §15 is labelled `-before` or `-after`.
 | Area | Classification | Evidence |
 |---|---|---|
 | DOM scalability | **RULED OUT** | 6× the devices costs at worst 5.1×; aggregated and energy are flat after §15b; 469 nodes at twelve devices where there were 4065 |
-| incremental rendering | **NICE TO HAVE** | control view 12–35 ms per snapshot; the fixture's `control_explain` never changes, so no guard can be justified against it (§16) |
-| CSS/style recalculation | **NICE TO HAVE** | all of it is the animations: 6–12 passes with them stopped against ~2000 with them running, up to 2.9 s per 10 s; no frames lost in either engine (§7b) |
+| incremental rendering | **NICE TO HAVE** | the parse is 91 % of the control view's per-snapshot cost — 1 ms to build the markup, 12 ms to parse 182 KB of it (§15g); declined on risk, not on size |
+| CSS/style recalculation | **FIXED** (the tiles) | all of it is the animations (§7b); the tile animation now runs from `element.animate()`: −28 % to −40 % of style time in every throttle/view combination, and 110.7 → 135.0 fps at 16× on the aggregated view (§15f) |
 | hidden views | **FIXED** | one off-screen rebuild per minute, 19.4 → 0.0 ms; carrying the nodes was measured free (§15b, §3) |
 | visibility lifecycle | **NEEDS MACOS TEST** | hidden tab: 1645 → 20 mutations, works completely. Unfocused window: full work at 1 fps, `document.hidden` false (§8) |
 | SSE lifecycle | **RULED OUT** | 360 view changes in 30 min add no listeners, timers, observers, `EventSource`s or nodes; switches get faster (§14, §15e) |
@@ -1532,8 +1647,8 @@ distinguishes them. Every dataset in §15 is labelled `-before` or `-after`.
 ```text
 OVERALL STATUS: MINOR OPTIMIZATIONS REMAIN
 
-FIX NOW: 3          (all three implemented, tested and re-measured)
-NICE TO HAVE: 2
+FIX NOW: 4          (all four implemented, tested and re-measured)
+NICE TO HAVE: 1
 NOT WORTH IT: 3
 NEEDS MACOS TEST: 2
 RULED OUT: 6

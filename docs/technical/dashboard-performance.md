@@ -327,6 +327,23 @@ below gives: doing so makes per-snapshot work go *up*, in both engines, often by
 a factor of two. It is a reason not to add more running animations, and a
 budget: about 12-20 ms of main thread per ten seconds per animation.
 
+It is also a reason to drive an animation from `element.animate()` with literal
+keyframe values rather than from a keyframe that reads a custom property, which
+is what the flow tiles now do: 28-40% less style-recalculation time in every
+view at every CPU-throttling level measured. On this desktop that buys no
+frames; on a main thread slowed sixteen-fold the aggregated view goes from
+110.7 fps at a 13.9 ms frame p95 to 135.0 at 7.0. **Decide this kind of question
+with `cpu_throttle`, not on the development machine** -- the whole reason it was
+declined twice before is that a desktop with headroom cannot see it.
+
+Two conditions make that trade safe, and both hold here. The renderer must
+already hold the values in JavaScript, or `element.animate()` becomes a second
+source of truth -- the tile renderer reads speed, direction, period and
+appearance out of the stylesheet with `getComputedStyle`, so it does. And the
+element must not be recreated on every snapshot, or per-frame style cost is
+merely traded for per-snapshot script cost: that is why the control-stage result
+rings, which the panel rebuilds twice a second, were measured and left on CSS.
+
 Two things it is *not*: it is not the `var()` in the tile keyframes -- replacing
 that with a constant changes nothing -- and it is not inherent to the tile
 renderer, whose own lab page records five recalculations for the same
