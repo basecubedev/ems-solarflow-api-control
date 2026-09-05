@@ -33,11 +33,16 @@ runtime-state.json.*.tmp
 *.influx.jsonl
 
 # local generated reports. Two bounded sets are committed on purpose: the
-# appliance release evidence, and the dashboard performance baselines a change
-# has to be compared against. Nothing else here is.
+# appliance release evidence, and the written accounts of the dashboard
+# performance work. Nothing else here is.
 /reports/*
 !/reports/appliance/
 !/reports/dashboard-perf/
+# ...but only the written accounts. A benchmark run writes its JSON here by
+# default, and it is the output of one afternoon on one machine: `git add -A`
+# after a run would otherwise commit megabytes of it.
+/reports/dashboard-perf/*
+!/reports/dashboard-perf/*.md
 
 # Manual config/runtime backups (may contain secrets)
 /backup/
