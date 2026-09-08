@@ -112,7 +112,7 @@ compositor and repaints nothing: eighty of these tiles measured 60.2 fps against
 Those are headless numbers; see "What is still slow, and what only looked slow"
 below before drawing a conclusion from the last row.
 
-Three properties of the renderer are worth knowing before changing it:
+These properties of the renderer are worth knowing before changing it:
 
 - **It reads the appearance back out of the CSS.** Dash pattern, width, colour,
   opacity, speed, direction and whether to move at all come from
@@ -157,12 +157,25 @@ Three properties of the renderer are worth knowing before changing it:
   some other way. Removing that flush cut main-thread work by 66-76% in the
   control and energy views and left the views where the SVG is visible
   unchanged.
+- **The pipe is read in client pixels, not in the SVG's viewport.** The layer is
+  a plain div placed over the SVG's client rect, and the device boxes it cuts
+  around are measured with `getBoundingClientRect`, so the pipe geometry has to
+  arrive in the same space: `readFlowPipe` maps through `getScreenCTM()`, minus
+  that rect's origin. `getCTM()` stops at the SVG's own viewport and does not see
+  a CSS transform on the SVG element itself. The mobile layout applies one
+  (`#flowSvg { transform: scale(.98) }` below 760px), and reading through
+  `getCTM` there put every dash off its pipe -- measured at a 390px viewport,
+  0 of 10 tiles on their pipe, up to 7.5px away from pipes 1.5-4px thick, in
+  Chromium and Firefox alike. Neither engine agrees with the paint there, and
+  they do not agree with each other: Chromium omits the CSS scale from `getCTM`,
+  Firefox omits its translation.
 - **It refuses what it cannot represent.** The path parser takes only `M`, `L`,
-  `H` and `V`; anything else, or a browser without `getComputedStyle`, leaves the
-  CSS animation in place rather than showing no flow at all.
+  `H` and `V`; anything else, or a browser without `getComputedStyle` or
+  `getScreenCTM`, leaves the CSS animation in place rather than showing no flow
+  at all.
 
 [`../../tests/test_dashboard_flow_tiles.py`](../../tests/test_dashboard_flow_tiles.py)
-pins all three.
+pins each of them.
 
 ### What is still slow, and what only looked slow
 
