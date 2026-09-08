@@ -147,6 +147,79 @@ console.log(JSON.stringify({
     assert [s["direction"] for s in out["doublesBack"]] == ["right", "up", "left"]
 
 
+def test_the_pipe_is_read_in_the_space_the_layer_is_positioned_in():
+    """A CSS transform on the flow SVG has to move the dashes with the pipe.
+
+    The tile layer is an ordinary div placed over the SVG's client rect, and the
+    device boxes it cuts around are measured with getBoundingClientRect. Both are
+    client pixels, so the pipe geometry has to arrive in client pixels too.
+    getCTM() stops at the SVG's own viewport and does not see a CSS transform on
+    the SVG element itself, which the mobile layout applies below 760px
+    (`#flowSvg { transform: scale(.98) }`) -- the dashes then drift off their
+    pipe by an error that grows with the distance from the transform origin.
+
+    The numbers below were measured in Chromium and Firefox on that layout: a
+    900x420 viewBox in a 352.8px-wide box under `scale(.98)`. Both engines put
+    the painted centre of the last run at y=80.5 from the top of the SVG's client
+    rect and agree on getScreenCTM() to seven decimals; their getCTM() values
+    disagree with the paint and with each other, Chromium omitting the CSS scale
+    and Firefox its translation.
+    """
+
+    script = PRELUDE + """
+const screenCTM = { a: 0.392, b: 0, c: 0, d: 0.392, e: 11.6, f: 28.68 };
+const viewportCTM = { a: 0.4, b: 0, c: 0, d: 0.4, e: 0, f: 19 };
+const rect = { left: 11.6, top: 10.06, width: 352.8, height: 201.88 };
+
+const energy = {};
+const base = {
+  getAttribute: () => PIPE_D,
+  getCTM: () => viewportCTM,
+  getScreenCTM: () => screenCTM,
+};
+global.window = {
+  getComputedStyle: () => ({
+    strokeDasharray: "34 18",
+    strokeWidth: "6",
+    opacity: "0.68",
+    stroke: "rgb(56, 213, 255)",
+    animationName: "pipeFlow",
+    animationDuration: "1.38s",
+    animationIterationCount: "infinite",
+    animationPlayState: "running",
+    animationDirection: "normal",
+  }),
+};
+
+const read = app.readFlowPipe({
+  querySelector: (selector) => (selector === ".pipe-base" ? base : energy),
+}, rect);
+console.log(JSON.stringify({
+  segments: read.segments,
+  width: read.width,
+  dash: read.dash,
+  period: read.period,
+}));
+"""
+    out = run_node(script)
+    segments = out["segments"]
+    first, _, last = segments
+
+    # M204 91: 204 and 91 user units through the screen CTM, minus the rect the
+    # layer is positioned at.
+    assert first["x"] == pytest.approx(79.968, abs=0.01)
+    assert first["y"] == pytest.approx(54.292, abs=0.01)
+    # H372 V158: the painted centre both engines agree on.
+    assert last["y"] == pytest.approx(80.556, abs=0.01)
+    assert last["x"] + last["length"] == pytest.approx(145.824, abs=0.01)
+
+    # Thickness, dash and period are in the same space, so the token is as wide
+    # as the pipe it is drawn on rather than 2% wider.
+    assert out["width"] == pytest.approx(6 * 0.392, abs=0.01)
+    assert out["dash"] == pytest.approx(34 * 0.392, abs=0.01)
+    assert out["period"] == pytest.approx(52 * 0.392, abs=0.01)
+
+
 # ------------------------------------------------- reading the CSS policy
 
 

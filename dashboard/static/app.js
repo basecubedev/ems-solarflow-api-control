@@ -698,18 +698,21 @@ function flowSegments(points) {
   return segments;
 }
 
-function readFlowPipe(group) {
+function readFlowPipe(group, rect) {
   const base = group.querySelector(".pipe-base");
   const energy = group.querySelector(".pipe-energy");
-  if (!base || !energy || typeof base.getCTM !== "function") return null;
+  if (!base || !energy || typeof base.getScreenCTM !== "function") return null;
 
   const points = parseFlowPath(base.getAttribute("d"));
   if (!points) return null;
-  const matrix = base.getCTM();
+  const matrix = base.getScreenCTM();
   if (!matrix) return null;
-  // getCTM() maps the element's user space to the coordinate system of the
-  // nearest svg viewport, which is what the overlay is positioned in: CSS
-  // pixels from the SVG's top-left corner.
+  // getScreenCTM() maps the element's user space to client pixels, which is the
+  // space the layer box and the device boxes are measured in. getCTM() stops at
+  // the SVG's own viewport and does not see a CSS transform on the SVG element
+  // itself -- the mobile layout applies one below 760px, and the dashes then
+  // drift off their pipe by an error that grows with the distance from the
+  // transform origin.
   const scale = Math.hypot(matrix.a, matrix.b) || 1;
 
   const style = window.getComputedStyle(energy);
@@ -720,8 +723,8 @@ function readFlowPipe(group) {
 
   return {
     segments: flowSegments(points.map((point) => ({
-      x: (matrix.a * point.x) + (matrix.c * point.y) + matrix.e,
-      y: (matrix.b * point.x) + (matrix.d * point.y) + matrix.f,
+      x: (matrix.a * point.x) + (matrix.c * point.y) + matrix.e - rect.left,
+      y: (matrix.b * point.x) + (matrix.d * point.y) + matrix.f - rect.top,
     }))),
     dash: dash ? dash[0] * scale : 0,
     period: dash ? dash.reduce((total, part) => total + part, 0) * scale : 0,
@@ -845,7 +848,7 @@ function buildFlowTileHost(svg) {
   const pipes = [];
   let readable = true;
   svg.querySelectorAll(".energy-pipe").forEach((group) => {
-    const pipe = readFlowPipe(group);
+    const pipe = readFlowPipe(group, rect);
     if (!pipe || !pipe.segments.length) {
       readable = false;
       return;
@@ -6423,6 +6426,7 @@ if (typeof module !== "undefined") {
     flowFadedColor,
     flowSegments,
     flowVisibleRuns,
+    readFlowPipe,
     flowTileBackground,
     renderFlowTiles,
     flowSvgOffScreen,
