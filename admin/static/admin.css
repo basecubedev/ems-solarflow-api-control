@@ -2391,3 +2391,33 @@ code {
 .maintenance-path-card .maintenance-path-state + .maintenance-path-arrow {
   margin-left: 10px;
 }
+
+/* The preview diff separates what is live at once from what waits for a
+   restart. It is a grouping, never a filter: every row the server returned is
+   rendered, because a change the console dropped is one the owner applied
+   without seeing it. */
+.mconfig-diff-group + .mconfig-diff-group { margin-top: 10px; }
+.mconfig-diff-title {
+  margin: 0 0 5px;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mconfig-diff-group[data-when="live"] .mconfig-diff-title { color: var(--battery); }
+.mconfig-diff-group[data-when="restart"] .mconfig-diff-title { color: var(--pv); }
+.mconfig-change[data-applies-live="false"] .mconfig-change-path::after {
+  content: " · restart";
+  color: var(--pv);
+  font-weight: 700;
+}
+
+/* A switch shown at its catalog default is marked as such, so "on" never reads
+   as "somebody chose this" when the config file simply says nothing. */
+.feature-field-row[data-from-default="true"] .feature-field-label::after {
+  content: " · default";
+  color: var(--muted2);
+  font-weight: 600;
+  font-size: 11px;
+}

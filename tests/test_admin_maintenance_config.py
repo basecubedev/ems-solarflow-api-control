@@ -1142,7 +1142,9 @@ def test_summarize_ignores_comment_keys():
     before = {"_comment": ["a"], "x": 1}
     after = {"_comment": ["b"], "x": 2}
     diff = summarize_config_changes(before, after)
-    assert diff["changes"] == [{"path": "x", "before": 1, "after": 2}]
+    assert diff["changes"] == [
+        {"path": "x", "before": 1, "after": 2, "applies_live": False}
+    ]
 
 
 def test_summarize_bounds_long_strings():

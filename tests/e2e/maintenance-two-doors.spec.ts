@@ -138,6 +138,51 @@ test.describe("Maintenance: two doors", { tag: ["@maintenance"] }, () => {
     );
   });
 
+  test("the review separates what is live at once from what waits", async ({
+    page,
+  }) => {
+    const maintenance = new MaintenancePage(page);
+    await maintenance.openSettings("safety");
+    // One change of each kind: a mirrored limit and a write gate.
+    const ceiling = page
+      .locator('[data-path="system.max_total_power"]')
+      .locator("input")
+      .first();
+    await ceiling.fill("1400");
+    // The gate is absent from this config, so it renders at its catalog
+    // default (on). Turning it off is the change that needs a restart.
+    const gate = page
+      .locator('[data-path="system.allow_hardware_writes"]')
+      .locator("input")
+      .first();
+    await expect(gate).toBeChecked();
+    await expect(
+      page.locator('[data-path="system.allow_hardware_writes"]'),
+    ).toHaveAttribute("data-from-default", "true");
+    await gate.uncheck();
+
+    await page.locator("#maintenance-config-preview-btn").click();
+    await expect(page.locator("#maintenance-config-validation")).toHaveText("valid");
+
+    const live = page.locator('.mconfig-diff-group[data-when="live"]');
+    const restart = page.locator('.mconfig-diff-group[data-when="restart"]');
+    await expect(live).toContainText("system.max_total_power");
+    await expect(restart).toContainText("system.allow_hardware_writes");
+    // The split is a grouping, not a filter: every row the server returned is
+    // rendered, and the two groups account for all of them.
+    const rendered = await page.locator(".mconfig-change").count();
+    const grouped =
+      (await live.locator(".mconfig-change").count()) +
+      (await restart.locator(".mconfig-change").count());
+    expect(grouped).toBe(rendered);
+    await expect(page.locator("#maintenance-config-change-summary")).toContainText(
+      /immediate/,
+    );
+    await expect(page.locator("#maintenance-config-change-summary")).toContainText(
+      /need a restart/,
+    );
+  });
+
   test("the search finds a setting by its config path", async ({ page }) => {
     const maintenance = new MaintenancePage(page);
     await maintenance.openSettings("expert");

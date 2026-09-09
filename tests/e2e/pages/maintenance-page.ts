@@ -41,6 +41,10 @@ export class MaintenancePage {
     await this.page.locator('[data-start-path="manage_existing"]').click();
     await this.page.locator('[data-open-maintenance-path="settings"]').click();
     await expect(this.page.locator("#maintenance-settings-panel")).toBeVisible();
+    // The editor appears only once the config load has rendered it; waiting for
+    // the summary means a later render cannot replace a node under a test.
+    await expect(this.editor).toBeVisible();
+    await expect(this.configSummary).toContainText(/inverter/);
     if (tab) await this.openTab(tab);
   }
 

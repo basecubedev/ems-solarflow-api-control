@@ -13434,7 +13434,18 @@ function mconfigDeviceCatalogFields() {
 
 function mconfigCatalogControl(field, value, onChange, opts) {
   if (field.type === "boolean") {
-    return mconfigCheckboxControl(value, onChange);
+    // A switch the config does not store resolves to the catalog default, so
+    // that is what the box has to show. Four of the five write gates default to
+    // on and are absent from most config files: rendering them unchecked told
+    // the owner their inverters were safe while EMS was free to drive them.
+    // The draft still stores nothing until the box is actually toggled.
+    const unset = value === null || value === undefined;
+    const control = mconfigCheckboxControl(
+      unset && field.default !== undefined ? field.default : value,
+      onChange
+    );
+    if (unset && field.default !== undefined) control.dataset.fromDefault = "true";
+    return control;
   }
   if (Array.isArray(field.options) && field.options.length) {
     const current = value == null ? "" : String(value);
@@ -13472,6 +13483,9 @@ function mconfigCatalogRow(field, value, onChange, opts) {
   if (field.path) row.dataset.path = field.path;
   if (field.level) row.dataset.level = field.level;
   if (field.risk) row.dataset.risk = field.risk;
+  if (row.querySelector('[data-from-default="true"]')) {
+    row.dataset.fromDefault = "true";
+  }
   const badge = mconfigFieldRiskBadge(field);
   if (badge) row.appendChild(badge);
   return row;
@@ -16677,7 +16691,59 @@ function renderMaintenanceConfigChange(entry, kind) {
     value.textContent = "− " + mconfigDisplayValue(entry.before);
   }
   row.appendChild(value);
+  row.dataset.appliesLive = entry.applies_live === true ? "true" : "false";
   return row;
+}
+
+// Two groups, never a filter: the preview shows every row it was given. A
+// change the console dropped is a change the operator applied without seeing.
+const MCONFIG_DIFF_GROUPS = [
+  ["live", "Takes effect immediately"],
+  ["restart", "Needs an EMS restart"],
+];
+
+function mconfigDiffEntries(diff) {
+  return []
+    .concat((diff.changes || []).map((entry) => [entry, "changed"]))
+    .concat((diff.added || []).map((entry) => [entry, "added"]))
+    .concat((diff.removed || []).map((entry) => [entry, "removed"]));
+}
+
+function renderMaintenanceConfigChangeGroups(container, diff) {
+  container.textContent = "";
+  const entries = mconfigDiffEntries(diff);
+  MCONFIG_DIFF_GROUPS.forEach(([when, label]) => {
+    const rows = entries.filter(
+      ([entry]) => (entry.applies_live === true) === (when === "live")
+    );
+    if (!rows.length) return;
+    const group = document.createElement("div");
+    group.className = "mconfig-diff-group";
+    group.dataset.when = when;
+    const title = document.createElement("h4");
+    title.className = "mconfig-diff-title";
+    title.textContent = label + " (" + rows.length + ")";
+    group.appendChild(title);
+    rows.forEach(([entry, kind]) => {
+      group.appendChild(renderMaintenanceConfigChange(entry, kind));
+    });
+    container.appendChild(group);
+  });
+  return entries.length;
+}
+
+function mconfigDiffCounts(diff) {
+  const entries = mconfigDiffEntries(diff);
+  const live = entries.filter(([entry]) => entry.applies_live === true).length;
+  return { total: entries.length, live, restart: entries.length - live };
+}
+
+function mconfigChangeSummaryText(counts) {
+  if (!counts.total) return "no changes";
+  const parts = [counts.total + " change(s)"];
+  if (counts.live) parts.push(counts.live + " immediate");
+  if (counts.restart) parts.push(counts.restart + " need a restart");
+  return parts.join(" · ");
 }
 
 function mconfigDisplayValue(value) {
@@ -16716,18 +16782,16 @@ function renderMaintenanceConfigPreview(data) {
   );
 
   const diff = data.diff || { changes: [], added: [], removed: [] };
-  const total = (diff.changes || []).length + (diff.added || []).length + (diff.removed || []).length;
+  const counts = mconfigDiffCounts(diff);
+  const total = counts.total;
   setMaintenanceFact(
     mconfigEls.changeSummary,
-    data.changed ? total + " change(s)" : "no changes",
+    data.changed ? mconfigChangeSummaryText(counts) : "no changes",
     data.changed ? "ok" : "muted"
   );
 
   if (mconfigEls.changes) {
-    mconfigEls.changes.textContent = "";
-    (diff.changes || []).forEach((e) => mconfigEls.changes.appendChild(renderMaintenanceConfigChange(e, "changed")));
-    (diff.added || []).forEach((e) => mconfigEls.changes.appendChild(renderMaintenanceConfigChange(e, "added")));
-    (diff.removed || []).forEach((e) => mconfigEls.changes.appendChild(renderMaintenanceConfigChange(e, "removed")));
+    renderMaintenanceConfigChangeGroups(mconfigEls.changes, diff);
   }
 
   if (mconfigEls.warnings) {
@@ -16749,7 +16813,9 @@ function renderMaintenanceConfigPreview(data) {
 
   setMaintenanceFact(
     mconfigEls.summary,
-    (ok ? "config valid" : "config invalid") + " · " + (data.changed ? total + " change(s)" : "no changes"),
+    (ok ? "config valid" : "config invalid") +
+      " · " +
+      (data.changed ? mconfigChangeSummaryText(counts) : "no changes"),
     ok ? "ok" : "warn"
   );
 }

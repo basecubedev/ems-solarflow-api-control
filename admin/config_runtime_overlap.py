@@ -16,6 +16,7 @@ config apply service.
 
 import json
 import os
+import re
 
 from dashboard.runtime_write import DEVICE_FIELDS, SECTION_FIELDS, SYSTEM_FIELDS
 from ems import config as cfg
@@ -38,6 +39,28 @@ _DEVICE_DEFAULTS = {
     "offgrid_socket_mode": "off",
     "pv_priority_factor": 1.0,
 }
+
+
+_DEVICE_LEAF_RE = re.compile(r"^devices\[\d+\]\.([A-Za-z0-9_]+)$")
+
+
+def applies_live(path):
+    """Does changing this config path take effect without an EMS restart?
+
+    Only the whitelisted overlap keys are mirrored into runtime-state when the
+    Admin applies a config, and only those are re-read by the running EMS.
+    Everything else — every write gate, ``dry_run`` and ``simulation_mode``
+    included — stays inert until the container is recreated.
+    """
+
+    text = str(path or "")
+    if text.startswith("system."):
+        return text[len("system.") :] in SYSTEM_FIELDS
+    device = _DEVICE_LEAF_RE.match(text)
+    if device is not None:
+        return device.group(1) in DEVICE_FIELDS
+    section, _, key = text.partition(".")
+    return bool(key) and key in SECTION_FIELDS.get(section, {})
 
 
 def resolve_runtime_state_path(context, config):

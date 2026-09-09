@@ -185,3 +185,46 @@ def test_the_search_reaches_the_setting_path_not_only_its_label():
     terms = js.split("function maintenanceSettingsSearchTerms", 1)[1].split("\n}", 1)[0]
     assert "dataset.path" in terms
     assert "feature-field-desc" in terms
+
+
+# --- a switch shows what EMS will do, not what the file happens to store ---
+
+
+def test_an_absent_switch_is_shown_at_its_catalog_default():
+    """Four write gates default to on and are absent from most config files.
+
+    Rendering an absent boolean unchecked told the owner their inverters were
+    safe while EMS was free to drive them. RELEASE_WRITE_GATE_DEFAULTS resolves
+    a missing gate to true, so that is what the box has to show.
+    """
+
+    js = _read("admin.js")
+    body = js.split("function mconfigCatalogControl", 1)[1].split("\n}", 1)[0]
+    assert "field.default !== undefined ? field.default : value" in body
+    assert 'control.dataset.fromDefault = "true"' in body
+
+
+def test_showing_a_default_does_not_store_it():
+    """The row displays the default; the draft keeps saying nothing about it."""
+
+    js = _read("admin.js")
+    body = js.split("function mconfigCatalogControl", 1)[1].split("\n}", 1)[0]
+    for forbidden in ("onChange(", "features[", "mconfigState"):
+        assert forbidden not in body
+
+
+def test_the_gates_all_declare_a_default_for_that_to_work():
+    from ems.config_catalog import get_config_feature_field_index
+
+    fields = get_config_feature_field_index()
+    for path in (
+        "system.allow_hardware_writes",
+        "system.allow_mqtt_local_control_writes",
+        "system.allow_mqtt_zendure_control_writes",
+        "system.allow_state_reconciliation_writes",
+        "system.enabled",
+        "system.dry_run",
+        "system.simulation_mode",
+    ):
+        assert fields[path]["type"] == "boolean"
+        assert "default" in fields[path], path
