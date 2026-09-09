@@ -4,7 +4,8 @@
 // shipped code.
 //
 // Input  (stdin JSON): {"predicate": "<function name>", "payload": <any>}
-// Output (stdout JSON): {"present": true|false}
+// Output (stdout JSON): {"present": true|false} for a presence predicate,
+//                       {"tone": "<tone>"} for maintenanceRecoveryCardTone
 "use strict";
 
 const fs = require("fs");
@@ -40,6 +41,7 @@ const PREDICATES = [
   "maintenanceTelemetryCardPresent",
   "maintenanceMigrationCardPresent",
   "maintenanceRecoveryCardPresent",
+  "maintenanceRecoveryCardTone",
 ];
 
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
@@ -57,6 +59,11 @@ const factory = new Function(
 );
 factory(scope);
 
+const value = scope[input.predicate](input.payload);
 process.stdout.write(
-  JSON.stringify({ present: scope[input.predicate](input.payload) === true }) + "\n"
+  JSON.stringify(
+    input.predicate === "maintenanceRecoveryCardTone"
+      ? { tone: value }
+      : { present: value === true }
+  ) + "\n"
 );

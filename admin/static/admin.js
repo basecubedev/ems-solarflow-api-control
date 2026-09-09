@@ -9779,6 +9779,18 @@ function maintenanceMigrationCardPresent(data) {
   return review.needs_migration === true;
 }
 
+// The collapsed pill has to agree with the sentence next to it: the card used to
+// read "Guided Setup is blocked" under a READY badge.
+function maintenanceRecoveryCardTone(plan) {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return "warn";
+  if (plan.ok !== true) return "warn";
+  if (plan.operation_running === true) return "info";
+  if (plan.blocking === true) return "action";
+  const safe = plan.safe && plan.safe.available === true;
+  const advanced = plan.advanced && plan.advanced.available === true;
+  return safe || advanced ? "action" : "ok";
+}
+
 function maintenanceRecoveryCardPresent(plan) {
   if (!plan || typeof plan !== "object" || Array.isArray(plan)) return true;
   if (plan.ok !== true) return true;
@@ -17336,6 +17348,10 @@ function renderWorkflowRecovery(plan) {
   setMaintenanceCardPresence(
     "maintenance-workflow-recovery",
     maintenanceRecoveryCardPresent(plan)
+  );
+  setMaintenanceCardTone(
+    "maintenance-workflow-recovery",
+    maintenanceRecoveryCardTone(plan)
   );
   workflowRecoveryPlan = plan;
   const lifecycle = (plan && plan.lifecycle) || {};

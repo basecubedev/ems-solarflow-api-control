@@ -231,3 +231,73 @@ def test_the_repair_cards_sit_below_the_everyday_ones():
         'id="maintenance-workflow-recovery"',
     ):
         assert everyday < manual.index(repair)
+
+
+# --- the pill agrees with the sentence -------------------------------------
+
+
+def _tone(payload):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not available")
+    result = subprocess.run(
+        [node, RUNNER],
+        input=json.dumps({"predicate": "maintenanceRecoveryCardTone", "payload": payload}),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)["tone"]
+
+
+def test_a_blocked_workflow_is_not_labelled_ready():
+    """The card said "Guided Setup is blocked" under a READY pill."""
+
+    assert (
+        _tone(
+            {
+                "ok": True,
+                "blocking": True,
+                "lifecycle": {"state": "cleanup_pending", "owner": "guided_setup"},
+                "safe": {"available": True},
+                "advanced": {"available": False},
+            }
+        )
+        == "action"
+    )
+
+
+def test_a_running_operation_reads_as_information_not_as_a_fault():
+    assert (
+        _tone(
+            {
+                "ok": True,
+                "operation_running": True,
+                "lifecycle": {"state": "operation_running"},
+                "safe": {"available": False},
+                "advanced": {"available": False},
+            }
+        )
+        == "info"
+    )
+
+
+def test_an_unreadable_recovery_state_is_a_warning():
+    assert _tone({"ok": False}) == "warn"
+    assert _tone(None) == "warn"
+
+
+def test_an_offered_reset_without_a_block_still_asks_for_attention():
+    assert (
+        _tone(
+            {
+                "ok": True,
+                "blocking": False,
+                "lifecycle": {"state": "idle"},
+                "safe": {"available": True},
+                "advanced": {"available": False},
+            }
+        )
+        == "action"
+    )
