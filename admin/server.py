@@ -2918,8 +2918,11 @@ class AdminHandler(BaseHTTPRequestHandler):
         body = self._read_json_body(MAX_CONFIG_PREVIEW_BODY_BYTES)
         if body is None:
             return
-        if not isinstance(body, dict):
+        if not isinstance(body, dict) or set(body) - {"targets", "confirm"}:
             self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        if body.get("confirm") is not True:
+            self._send_json({"error": "confirmation_required"}, status=400)
             return
         targets = body.get("targets")
         if not isinstance(targets, list) or not targets:

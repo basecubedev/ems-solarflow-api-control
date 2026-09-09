@@ -16475,7 +16475,7 @@ async function resetMaintenanceRuntimeOverrides() {
     const resp = await fetch("/api/admin/maintenance/config/reset-runtime", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targets }),
+      body: JSON.stringify({ targets, confirm: true }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {

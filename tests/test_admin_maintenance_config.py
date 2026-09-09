@@ -1540,7 +1540,7 @@ def test_reset_runtime_endpoint_writes_config_value(tmp_path, monkeypatch):
     try:
         status, payload = _post(
             f"{base}/api/admin/maintenance/config/reset-runtime",
-            {"targets": [{"scope": "system", "key": "loop_interval"}]},
+            {"targets": [{"scope": "system", "key": "loop_interval"}], "confirm": True},
         )
     finally:
         srv.shutdown()
@@ -1617,7 +1617,8 @@ def test_reset_runtime_resolves_masked_cloud_name_by_opaque_token(
                         "key": "max_power",
                         "physical_identity_token": token,
                     }
-                ]
+                ],
+                "confirm": True,
             },
         )
     finally:
@@ -1634,3 +1635,32 @@ def test_reset_runtime_resolves_masked_cloud_name_by_opaque_token(
     assert route not in response_text
     assert product not in response_text
     assert f"iot/{product}/{route}/properties/write" not in response_text
+
+
+def test_reset_runtime_requires_an_explicit_confirmation(tmp_path, monkeypatch):
+    """The only mutating Maintenance route without a server-side confirmation.
+
+    Every other route that writes here (apply, migration apply, container sync)
+    refuses a body without ``confirm``. This one discards live runtime values
+    with no undo, so a browser-side ``window.confirm`` must not be the only
+    thing standing between a stray request and the operator's tuning.
+    """
+
+    data = _config()
+    data["system"]["loop_interval"] = 3
+    _write_config(tmp_path, data)
+    runtime_path = _seed_runtime_state(tmp_path, loop_interval=5)
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _server(config_apply=_convergence_service(tmp_path))
+    try:
+        status, payload = _post(
+            f"{base}/api/admin/maintenance/config/reset-runtime",
+            {"targets": [{"scope": "system", "key": "loop_interval"}]},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400
+    assert payload["error"] == "confirmation_required"
+    assert json.loads(runtime_path.read_text())["system"]["loop_interval"] == 5
