@@ -2029,24 +2029,27 @@ _CONTROL_GATE_TRANSPORT = {
 }
 
 
-def resolve_write_gate(control_gate) -> WriteGateDecision:
-    """Resolve the effective write-gate decision for a device's transport."""
+def _evaluate_write_gate(
+    control_gate, *, dry_run, simulation_mode, replay, gate_values
+) -> WriteGateDecision:
+    """The write-gate policy itself, free of process state.
+
+    Every caller — the loaded runtime and the read-only config projection —
+    routes through this one function so a projection can never drift from the
+    decision the controller actually makes.
+    """
 
     transport, gate_name = _CONTROL_GATE_TRANSPORT.get(
         control_gate, _CONTROL_GATE_TRANSPORT["api"]
     )
-    gate_enabled = {
-        "allow_hardware_writes": ALLOW_HARDWARE_WRITES,
-        "allow_mqtt_local_control_writes": ALLOW_MQTT_LOCAL_CONTROL_WRITES,
-        "allow_mqtt_zendure_control_writes": ALLOW_MQTT_ZENDURE_CONTROL_WRITES,
-    }[gate_name]
+    gate_enabled = gate_values[gate_name]
 
     blocked = []
-    if DRY_RUN:
+    if dry_run:
         blocked.append("dry_run")
-    if SIMULATION_MODE:
+    if simulation_mode:
         blocked.append("simulation_mode")
-    if getattr(ARGS, "replay", False):
+    if replay:
         blocked.append("replay_mode")
     if not gate_enabled:
         blocked.append(gate_name)
@@ -2058,6 +2061,108 @@ def resolve_write_gate(control_gate) -> WriteGateDecision:
         gate_enabled=bool(gate_enabled),
         blocked_by=tuple(blocked),
     )
+
+
+def resolve_write_gate(control_gate) -> WriteGateDecision:
+    """Resolve the effective write-gate decision for a device's transport."""
+
+    return _evaluate_write_gate(
+        control_gate,
+        dry_run=DRY_RUN,
+        simulation_mode=SIMULATION_MODE,
+        replay=getattr(ARGS, "replay", False),
+        gate_values={
+            "allow_hardware_writes": ALLOW_HARDWARE_WRITES,
+            "allow_mqtt_local_control_writes": ALLOW_MQTT_LOCAL_CONTROL_WRITES,
+            "allow_mqtt_zendure_control_writes": ALLOW_MQTT_ZENDURE_CONTROL_WRITES,
+        },
+    )
+
+
+def _projected_flag(system, name, *, default, on_invalid):
+    try:
+        return bool(optional_json_bool(system.get(name), name, default=default))
+    except ValueError:
+        return on_invalid
+
+
+def resolve_config_write_gate(config, control_gate) -> WriteGateDecision:
+    """Write-gate decision a stored config produces once EMS loads it.
+
+    Read-only projection for callers that must state a config's write authority
+    without loading it into this process. Missing gate keys resolve to the same
+    release defaults the loader applies; an unreadable config, or a value that is
+    not a real boolean, resolves to blocked rather than to an armed gate.
+    """
+
+    raw = config.get("system") if isinstance(config, dict) else None
+    system = raw if isinstance(raw, dict) else {}
+    readable = isinstance(raw, dict)
+    gate_values = {
+        name: _projected_flag(
+            system, name, default=default if readable else False, on_invalid=False
+        )
+        for name, default in RELEASE_WRITE_GATE_DEFAULTS.items()
+    }
+    return _evaluate_write_gate(
+        control_gate,
+        dry_run=_projected_flag(system, "dry_run", default=False, on_invalid=True),
+        simulation_mode=_projected_flag(
+            system, "simulation_mode", default=False, on_invalid=True
+        ),
+        replay=False,
+        gate_values=gate_values,
+    )
+
+
+def config_control_flags(config):
+    """Control-mode flags a stored config produces once EMS loads it.
+
+    Missing keys resolve to the template defaults the loader merges in; a value
+    that is not a real boolean resolves to the blocking side of the flag, so a
+    typo can never read as "EMS is controlling".
+    """
+
+    raw = config.get("system") if isinstance(config, dict) else None
+    system = raw if isinstance(raw, dict) else {}
+    return {
+        "enabled": _projected_flag(system, "enabled", default=True, on_invalid=False),
+        "dry_run": _projected_flag(system, "dry_run", default=False, on_invalid=True),
+        "simulation_mode": _projected_flag(
+            system, "simulation_mode", default=False, on_invalid=True
+        ),
+        "allow_state_reconciliation_writes": _projected_flag(
+            system, "allow_state_reconciliation_writes", default=True, on_invalid=False
+        ),
+    }
+
+
+def config_control_devices_by_gate(config):
+    """Group enabled control devices by write gate, as startup would group them."""
+
+    from ems.zendure_mqtt.config_entries import (
+        config_entry_enabled,
+        control_gate_for_config_device,
+    )
+
+    grouped = {gate: [] for gate in _CONTROL_GATE_TRANSPORT}
+    devices = config.get("devices") if isinstance(config, dict) else None
+    if not isinstance(devices, list):
+        return grouped
+    grouped["api"] = list(http_control_device_configs(devices))
+    for item in mqtt_control_device_configs(devices):
+        if config_entry_enabled(item):
+            grouped[control_gate_for_config_device(config, item)].append(item)
+    return grouped
+
+
+def config_control_gate_counts(config):
+    """Count enabled control devices per write gate."""
+
+    return {
+        gate: len(items)
+        for gate, items in config_control_devices_by_gate(config).items()
+    }
 
 
 def resolve_device_write_gate(device) -> WriteGateDecision:
