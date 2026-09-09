@@ -1,25 +1,12 @@
 import { type Page } from "@playwright/test";
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
 
 // Maintenance keeps the physical serial and the MQTT route/payload device id as
 // two independent editable fields. Editing one never changes the other, and the
 // route id is written only to mqtt.device_id (never a legacy top-level device_id
 // nor the serial). See admin/static/admin.js renderMaintenanceZendureMqttDevice.
-
-async function openMaintenanceConfig(page: Page) {
-  await page.locator('[data-start-path="manage_existing"]').click();
-  await page.locator('[data-open-maintenance-path="manual"]').click();
-  const toggle = page.locator(
-    '[data-maintenance-toggle="maintenance-config-card"]',
-  );
-  const editor = page.locator("#maintenance-config-editor");
-  await expect(toggle).toContainText("inverters");
-  await expect(async () => {
-    if (!(await editor.isVisible())) await toggle.click();
-    await expect(editor).toBeVisible({ timeout: 1_000 });
-  }).toPass();
-}
 
 async function readDraft(page: Page) {
   const response = await page.request.get("/api/admin/maintenance/config");
@@ -59,7 +46,7 @@ function cardReadiness(page: Page, card: ReturnType<Page["locator"]>) {
 
 async function reopenCard(page: Page, sourceId: string) {
   await page.reload();
-  await openMaintenanceConfig(page);
+  await new MaintenancePage(page).openEditor({ discovery: false });
   const card = page.locator(`[data-source-id="${sourceId}"]`);
   await card.locator(".hardware-card-summary").click();
   return card;
@@ -85,7 +72,7 @@ test("Maintenance renders exactly one MQTT device ID field per inverter", { tag:
   await login.authenticate();
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceConfig(page);
+  await new MaintenancePage(page).openEditor({ discovery: false });
 
   const card = page.locator('[data-source-id="maintenance-mqtt-device-1"]');
   await card.locator(".hardware-card-summary").click();
@@ -103,7 +90,7 @@ test("Maintenance MQTT device ID edit changes only the route id", { tag: ["@main
   await login.authenticate();
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceConfig(page);
+  await new MaintenancePage(page).openEditor({ discovery: false });
 
   const card = page.locator('[data-source-id="maintenance-mqtt-device-1"]');
   await card.locator(".hardware-card-summary").click();
@@ -129,7 +116,7 @@ test("Maintenance serial edit does not change the MQTT device ID field", { tag: 
   await login.authenticate();
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceConfig(page);
+  await new MaintenancePage(page).openEditor({ discovery: false });
 
   const card = page.locator('[data-source-id="maintenance-mqtt-device-1"]');
   await card.locator(".hardware-card-summary").click();
@@ -150,7 +137,7 @@ test("Maintenance MQTT device ID edit does not change the serial field", { tag: 
   await login.authenticate();
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceConfig(page);
+  await new MaintenancePage(page).openEditor({ discovery: false });
 
   const card = page.locator('[data-source-id="maintenance-mqtt-device-1"]');
   await card.locator(".hardware-card-summary").click();
@@ -169,7 +156,7 @@ test("Maintenance clearing the MQTT device ID removes the stored route id", { ta
   await login.authenticate();
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceConfig(page);
+  await new MaintenancePage(page).openEditor({ discovery: false });
 
   const card = page.locator('[data-source-id="maintenance-mqtt-device-1"]');
   await card.locator(".hardware-card-summary").click();
@@ -201,7 +188,7 @@ test("Maintenance clearing the MQTT device ID cannot leave writes enabled", { ta
   await login.authenticate();
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceConfig(page);
+  await new MaintenancePage(page).openEditor({ discovery: false });
 
   const card = page.locator('[data-source-id="maintenance-mqtt-device-1"]');
   await card.locator(".hardware-card-summary").click();
@@ -228,7 +215,7 @@ test("Maintenance clearing the physical serial is not silently restored", { tag:
   await login.authenticate();
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceConfig(page);
+  await new MaintenancePage(page).openEditor({ discovery: false });
 
   const card = page.locator('[data-source-id="maintenance-mqtt-device-1"]');
   await card.locator(".hardware-card-summary").click();

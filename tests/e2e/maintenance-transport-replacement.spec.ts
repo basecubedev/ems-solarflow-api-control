@@ -1,6 +1,7 @@
 import { type Locator, type Page, type Route } from "@playwright/test";
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
 
 // Maintenance transport replacement: one physical inverter keeps one config
 // entry, one name and one common value set while its connection moves between
@@ -154,28 +155,6 @@ async function mockDiscovery(page: Page, state: DiscoveryState) {
   );
 }
 
-async function openMaintenanceEditor(page: Page) {
-  await expect(page.locator("#view-start")).toBeVisible();
-  await page.locator('[data-start-path="manage_existing"]').click();
-  await page.locator('[data-open-maintenance-path="manual"]').click();
-  const toggle = page.locator(
-    '[data-maintenance-toggle="maintenance-config-card"]',
-  );
-  const editor = page.locator("#maintenance-config-editor");
-  await expect(toggle).toContainText(/inverter/);
-  await expect(async () => {
-    if (!(await editor.isVisible())) await toggle.click();
-    await expect(editor).toBeVisible({ timeout: 1_000 });
-  }).toPass();
-  const sources = page.locator("#maintenance-discovery-sources");
-  await expect(async () => {
-    if (!(await sources.isVisible())) {
-      await page.locator("#maintenance-add-devices > summary").click();
-    }
-    await expect(sources).toBeVisible({ timeout: 1_000 });
-  }).toPass();
-}
-
 async function runDiscovery(page: Page) {
   await page.locator("#maintenance-discovery-start").click();
   await expect(page.locator("#maintenance-discovery-status")).toContainText(
@@ -265,7 +244,7 @@ test("MQTT then API: discovery offers a transport switch, not a duplicate invert
   await login(page);
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
 
   // The seeded config holds three inverters.
   await expect(configuredCards(page)).toHaveCount(3);
@@ -301,7 +280,7 @@ test("MQTT then API: discovery offers a transport switch, not a duplicate invert
   await previewAndApply(page);
 
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(configuredCards(page)).toHaveCount(5);
   const renamed = cardByText(page, "Roof West");
   await expectInverterConnection(renamed, "local_mqtt");
@@ -348,7 +327,7 @@ test("MQTT then API: discovery offers a transport switch, not a duplicate invert
 
   await previewAndApply(page);
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
 
   // Exactly five inverter entries persist — the switch replaced, not added.
   await expect(configuredCards(page)).toHaveCount(5);
@@ -378,7 +357,7 @@ test("API then MQTT: proposal for a configured serial switches the transport in 
   await login(page);
   await seedAdminScenario("mixed_transports_api_mqtt_switch");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(configuredCards(page)).toHaveCount(3);
 
   // The proposal matches the configured Local API inverter's serial, so the
@@ -415,7 +394,7 @@ test("API then MQTT: proposal for a configured serial switches the transport in 
 
   await previewAndApply(page);
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(configuredCards(page)).toHaveCount(3);
   const persisted = cardByText(page, "Local API inverter");
   await expectInverterConnection(persisted, "local_mqtt");
@@ -435,7 +414,7 @@ test("API to Zendure Cloud MQTT on a scalar family keeps the inverter controllab
   await login(page);
   await seedAdminScenario("mixed_transports_api_mqtt_control_switch");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(configuredCards(page)).toHaveCount(3);
 
   // Same physical inverter, scalar telemetry family, complete write route, on
@@ -485,7 +464,7 @@ test("API to a local scalar MQTT connection does not become control-capable", { 
   await login(page);
   await seedAdminScenario("mixed_transports_api_local_scalar_switch");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(configuredCards(page)).toHaveCount(3);
 
   // Identical device, identical complete write route — only the broker source
@@ -516,7 +495,7 @@ test("serial-less Cloud identity survives apply, reload, rediscovery and scope c
   await loadRealMqttProposals(page, state);
 
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(configuredCards(page)).toHaveCount(1);
   await expect(page.locator("body")).not.toContainText(CLOUD_ROUTE_SERIALLESS);
   await expect(page.locator("body")).not.toContainText(CLOUD_TOPIC_SERIALLESS);
@@ -541,7 +520,7 @@ test("serial-less Cloud identity survives apply, reload, rediscovery and scope c
   // A derived token remains stable after persistence and reload; it is not
   // browser-authored or stored as route-like config data.
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(configuredCards(page)).toHaveCount(3);
   await expect(cardByText(page, "Roof Serial-less")).toHaveCount(1);
   await expect(page.locator("body")).not.toContainText(CLOUD_ROUTE_SERIALLESS);
@@ -579,7 +558,7 @@ test("serial-less Cloud identity survives apply, reload, rediscovery and scope c
   );
   await previewAndApply(page);
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(configuredCards(page)).toHaveCount(3);
   const serializedPersisted = cardByText(page, CLOUD_PHYSICAL_SERIAL);
   await expect(serializedPersisted).toHaveCount(1);
@@ -611,7 +590,7 @@ test("serial-less Cloud identity survives apply, reload, rediscovery and scope c
   await fieldInput(original, "Device name").fill("Roof Serial-less Final");
   await previewAndApply(page);
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(configuredCards(page)).toHaveCount(3);
   await expect(cardByText(page, "Roof Serial-less Final")).toHaveCount(1);
 });
