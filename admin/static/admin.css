@@ -1930,6 +1930,35 @@ code {
   overflow-wrap: anywhere;
 }
 .feature-unit { color: var(--muted2); font-weight: 600; flex: 0 0 auto; }
+/* Risk marker on a settings row. It sits in the description column so the
+   label/control rhythm is unchanged, and it stays quiet: the catalog's ordinary
+   restart_required carries no badge at all. */
+.mconfig-risk-badge {
+  grid-column: 3;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.mconfig-risk-badge[data-risk="control_stability"] {
+  color: var(--accent2);
+  border-color: color-mix(in srgb, var(--accent2) 45%, var(--border));
+}
+.mconfig-risk-badge[data-risk="data_loss"] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+@media (max-width: 720px) {
+  .mconfig-risk-badge { grid-column: 1; }
+}
+
 .mconfig-override-badge {
   display: inline-flex;
   align-items: center;

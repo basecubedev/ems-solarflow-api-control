@@ -13113,6 +13113,42 @@ function mconfigClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+// Consequences worth naming before an edit. restart_required is deliberately
+// absent: most fields carry it, so a badge on all of them would carry no signal.
+const MCONFIG_FIELD_RISK_LABELS = {
+  control_stability: {
+    text: "affects control stability",
+    title:
+      "Changing this can make the control loop oscillate or react too slowly. "
+      + "Change it in small steps and watch the dashboard afterwards.",
+  },
+  data_loss: {
+    text: "can discard stored data",
+    title: "Changing this can drop history or analytics data that is already stored.",
+  },
+  secret: {
+    text: "secret",
+    title:
+      "This value is a credential. It is stored outside the config file and is "
+      + "never shown back in full.",
+  },
+  deprecated: {
+    text: "deprecated",
+    title: "This setting is on its way out and may be removed in a later release.",
+  },
+};
+
+function mconfigFieldRiskBadge(field) {
+  const risk = field && MCONFIG_FIELD_RISK_LABELS[field.risk];
+  if (!risk) return null;
+  const badge = document.createElement("span");
+  badge.className = "mconfig-risk-badge";
+  badge.dataset.risk = field.risk;
+  badge.textContent = risk.text;
+  badge.setAttribute("title", risk.title);
+  return badge;
+}
+
 function mconfigLabelRow(labelText, control, description, unit) {
   const row = document.createElement("label");
   row.className = "feature-field-row";
@@ -13216,12 +13252,18 @@ function mconfigCatalogControl(field, value, onChange, opts) {
 }
 
 function mconfigCatalogRow(field, value, onChange, opts) {
-  return mconfigLabelRow(
+  const row = mconfigLabelRow(
     field.label || field.path,
     mconfigCatalogControl(field, value, onChange, opts),
     field.description || "",
     field.unit || ""
   );
+  if (field.path) row.dataset.path = field.path;
+  if (field.level) row.dataset.level = field.level;
+  if (field.risk) row.dataset.risk = field.risk;
+  const badge = mconfigFieldRiskBadge(field);
+  if (badge) row.appendChild(badge);
+  return row;
 }
 
 function mconfigOverrideEntry(path) {
