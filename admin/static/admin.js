@@ -9753,6 +9753,43 @@ function setMaintenanceFact(el, text, tone) {
   else delete el.dataset.tone;
 }
 
+// A repair card leaves the page only on a proven negative answer. "We could not
+// tell" keeps it visible, because a hidden card reads as "nothing to do here".
+function setMaintenanceCardPresence(cardId, present) {
+  const card = document.getElementById(cardId);
+  if (card) card.hidden = !present;
+}
+
+function maintenanceTelemetryCardPresent(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return true;
+  if (data.load_error === true) return true;
+  return (
+    Number(data.configured_device_count || 0) > 0 ||
+    Number(data.invalid_device_count || 0) > 0 ||
+    Number(data.broker_count || 0) > 0 ||
+    data.broker_configured === true
+  );
+}
+
+function maintenanceMigrationCardPresent(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return true;
+  if (data.status !== "ok") return true;
+  const review = data.review;
+  if (!review || typeof review !== "object") return true;
+  return review.needs_migration === true;
+}
+
+function maintenanceRecoveryCardPresent(plan) {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return true;
+  if (plan.ok !== true) return true;
+  const lifecycle = plan.lifecycle;
+  if (!lifecycle || typeof lifecycle !== "object") return true;
+  if (String(lifecycle.state || "") !== "idle") return true;
+  const safe = plan.safe && plan.safe.available === true;
+  const advanced = plan.advanced && plan.advanced.available === true;
+  return Boolean(safe || advanced);
+}
+
 // Card tone drives the collapsed row's left accent and status badge.
 function setMaintenanceCardTone(cardId, tone) {
   const card = document.getElementById(cardId);
@@ -10337,6 +10374,10 @@ function zmqttBrokerIssueCopy(code) {
 }
 
 function renderZendureMqttRuntimeStatus(data) {
+  setMaintenanceCardPresence(
+    "maintenance-zendure-mqtt",
+    maintenanceTelemetryCardPresent(data)
+  );
   const view = data && typeof data === "object" ? data : {};
   const state = String(view.runtime_state || "unavailable");
   // An unknown state (version skew: an already-open page rendering a newer
@@ -10430,6 +10471,7 @@ async function loadZendureMqttRuntimeStatus() {
   } catch (err) {
     renderZendureMqttRuntimeStatus({
       runtime_state: "unavailable",
+      load_error: true,
       message: "Could not load Zendure MQTT telemetry status. The Admin server may be unavailable.",
       devices: [],
     });
@@ -10496,6 +10538,10 @@ function mqttMigrationDeviceRow(change) {
 }
 
 function renderMqttMigrationReview(data) {
+  setMaintenanceCardPresence(
+    "maintenance-mqtt-migration",
+    maintenanceMigrationCardPresent(data)
+  );
   resetMqttMigrationStages();
   mqttMigrationState.revision = null;
   mqttMigrationState.review = null;
@@ -17287,6 +17333,10 @@ function workflowRecoverySummaryText(plan) {
 }
 
 function renderWorkflowRecovery(plan) {
+  setMaintenanceCardPresence(
+    "maintenance-workflow-recovery",
+    maintenanceRecoveryCardPresent(plan)
+  );
   workflowRecoveryPlan = plan;
   const lifecycle = (plan && plan.lifecycle) || {};
   if (workflowRecoveryEls.summary) {

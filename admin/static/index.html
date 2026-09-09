@@ -1256,281 +1256,6 @@
         <span class="maintenance-status-value" id="maintenance-system-status">…</span>
       </div>
 
-      <section class="control-pipeline-stage maintenance-card" id="maintenance-layout" aria-label="Installation layout" data-open="false">
-        <div class="control-stage-head maintenance-card-head">
-          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-layout" aria-expanded="false" aria-controls="maintenance-layout-body">
-            <span class="control-stage-title">Installation layout</span>
-            <span class="maintenance-summary" id="maintenance-layout-summary">…</span>
-            <span class="maintenance-card-status" aria-hidden="true"></span>
-            <span class="maintenance-caret" aria-hidden="true">▸</span>
-          </button>
-        </div>
-        <div class="maintenance-card-body setup-block" id="maintenance-layout-body" hidden>
-          <div class="maintenance-facts">
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">config/config.json</span>
-              <span class="maintenance-fact-value" id="maintenance-config">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">config path</span>
-              <span class="maintenance-fact-value muted" id="maintenance-config-path">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">data/</span>
-              <span class="maintenance-fact-value" id="maintenance-data">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">data path</span>
-              <span class="maintenance-fact-value muted" id="maintenance-data-path">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">docker-compose.yml</span>
-              <span class="maintenance-fact-value" id="maintenance-compose">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">compose path</span>
-              <span class="maintenance-fact-value muted" id="maintenance-compose-path">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">install state</span>
-              <span class="maintenance-fact-value" id="maintenance-state">…</span>
-            </div>
-          </div>
-          <p class="maintenance-note" id="maintenance-state-message"></p>
-        </div>
-      </section>
-
-      <section class="control-pipeline-stage maintenance-card" id="maintenance-containers" aria-label="Runtime containers" data-open="false">
-        <div class="control-stage-head maintenance-card-head">
-          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-containers" aria-expanded="false" aria-controls="maintenance-containers-body">
-            <span class="control-stage-title">Runtime containers</span>
-            <span class="maintenance-summary" id="maintenance-containers-summary">…</span>
-            <span class="maintenance-card-status" aria-hidden="true"></span>
-            <span class="maintenance-caret" aria-hidden="true">▸</span>
-          </button>
-        </div>
-        <div class="maintenance-card-body setup-block" id="maintenance-containers-body" hidden>
-          <div class="maintenance-facts">
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">EMS</span>
-              <span class="maintenance-fact-value" id="maintenance-ems">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">EMS status</span>
-              <span class="maintenance-fact-value muted" id="maintenance-ems-detail">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">EMS container</span>
-              <span class="maintenance-fact-value muted" id="maintenance-ems-name">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">InfluxDB</span>
-              <span class="maintenance-fact-value" id="maintenance-influx">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">InfluxDB status</span>
-              <span class="maintenance-fact-value muted" id="maintenance-influx-detail">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">InfluxDB container</span>
-              <span class="maintenance-fact-value muted" id="maintenance-influx-name">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Docker access</span>
-              <span class="maintenance-fact-value" id="maintenance-docker">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Docker server</span>
-              <span class="maintenance-fact-value muted" id="maintenance-docker-server">…</span>
-            </div>
-          </div>
-          <p class="maintenance-note" id="maintenance-docker-note"></p>
-
-          <div class="maintenance-container-actions" id="maintenance-runtime-container-actions">
-            <div class="maintenance-facts">
-              <div class="maintenance-fact">
-                <span class="maintenance-fact-label">EMS desired</span>
-                <span class="maintenance-fact-value" id="maintenance-runtime-ems-desired">…</span>
-              </div>
-              <div class="maintenance-fact">
-                <span class="maintenance-fact-label">InfluxDB desired</span>
-                <span class="maintenance-fact-value" id="maintenance-runtime-influx-desired">…</span>
-              </div>
-              <div class="maintenance-fact">
-                <span class="maintenance-fact-label">Action plan</span>
-                <span class="maintenance-fact-value" id="maintenance-runtime-action-summary">…</span>
-              </div>
-            </div>
-
-            <div class="mconfig-actions">
-              <button type="button" id="maintenance-runtime-containers-sync"
-                      class="primary-button compact">Restart / sync containers</button>
-              <button type="button" id="maintenance-runtime-containers-recheck"
-                      class="secondary-button compact">Re-check status</button>
-              <button type="button" id="maintenance-runtime-diagnostics"
-                      class="secondary-button compact">Run diagnostics</button>
-            </div>
-
-            <p class="maintenance-note" id="maintenance-runtime-containers-status"
-               role="status" aria-live="polite"></p>
-          </div>
-        </div>
-      </section>
-
-      <section class="control-pipeline-stage maintenance-card" id="maintenance-versions" aria-label="Versions and links" data-open="false">
-        <div class="control-stage-head maintenance-card-head">
-          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-versions" aria-expanded="false" aria-controls="maintenance-versions-body">
-            <span class="control-stage-title">Versions &amp; links</span>
-            <span class="maintenance-summary" id="maintenance-versions-summary">…</span>
-            <span class="maintenance-card-status" aria-hidden="true"></span>
-            <span class="maintenance-caret" aria-hidden="true">▸</span>
-          </button>
-        </div>
-        <div class="maintenance-card-body setup-block" id="maintenance-versions-body" hidden>
-          <div class="maintenance-facts">
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Admin image</span>
-              <span class="maintenance-fact-value" id="maintenance-admin-image">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">EMS image</span>
-              <span class="maintenance-fact-value" id="maintenance-ems-image">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">InfluxDB image</span>
-              <span class="maintenance-fact-value" id="maintenance-influx-image">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Dashboard</span>
-              <a class="maintenance-fact-value maintenance-dashboard-link" id="maintenance-dashboard-link" target="_blank" rel="noopener" hidden>Open dashboard</a>
-              <span class="maintenance-fact-value" id="maintenance-dashboard">…</span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="control-pipeline-stage maintenance-card" id="maintenance-diagnostics" aria-label="EMS diagnostics" data-open="false">
-        <div class="control-stage-head maintenance-card-head">
-          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-diagnostics" aria-expanded="false" aria-controls="maintenance-diagnostics-body">
-            <span class="control-stage-title">EMS diagnostics</span>
-            <span class="maintenance-summary" id="maintenance-diagnostics-summary">Diagnostics have not been run yet.</span>
-            <span class="maintenance-card-status" aria-hidden="true"></span>
-            <span class="maintenance-caret" aria-hidden="true">▸</span>
-          </button>
-        </div>
-        <div class="maintenance-card-body setup-block" id="maintenance-diagnostics-body" hidden>
-          <p class="maintenance-note">Read-only EMS checks from the installed system.</p>
-          <div class="maintenance-facts">
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Execution mode</span>
-              <span class="maintenance-fact-value" id="maintenance-diagnostics-mode">not run</span>
-            </div>
-          </div>
-          <div class="maintenance-diagnostics-checks" id="maintenance-diagnostics-checks"></div>
-          <p class="maintenance-note" id="maintenance-diagnostics-note">Diagnostics have not been run yet.</p>
-          <p class="maintenance-note">Config upgrade is checked in dry-run mode only. No config file is changed.</p>
-          <button type="button" id="maintenance-diagnostics-run" class="primary-button compact">Run diagnostics</button>
-        </div>
-      </section>
-
-      <section class="control-pipeline-stage maintenance-card" id="maintenance-zendure-mqtt" aria-label="Zendure MQTT telemetry" data-open="false">
-        <div class="control-stage-head maintenance-card-head">
-          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-zendure-mqtt" aria-expanded="false" aria-controls="maintenance-zendure-mqtt-body">
-            <span class="control-stage-title">Zendure MQTT telemetry</span>
-            <span class="maintenance-summary" id="maintenance-zendure-mqtt-summary">…</span>
-            <span class="maintenance-card-status" aria-hidden="true"></span>
-            <span class="maintenance-caret" aria-hidden="true">▸</span>
-          </button>
-        </div>
-        <div class="maintenance-card-body setup-block" id="maintenance-zendure-mqtt-body" hidden>
-          <p class="maintenance-note">This status panel is read-only and does not send commands. Configured MQTT control devices may still be controlled by the EMS runtime.</p>
-          <div class="maintenance-facts">
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Runtime</span>
-              <span class="maintenance-fact-value" id="maintenance-zendure-mqtt-state">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Endpoint</span>
-              <span class="maintenance-fact-value muted" id="maintenance-zendure-mqtt-endpoint">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Devices</span>
-              <span class="maintenance-fact-value" id="maintenance-zendure-mqtt-devices">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Invalid devices</span>
-              <span class="maintenance-fact-value" id="maintenance-zendure-mqtt-invalid">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Stale threshold</span>
-              <span class="maintenance-fact-value muted" id="maintenance-zendure-mqtt-stale">…</span>
-            </div>
-          </div>
-          <p class="maintenance-note" id="maintenance-zendure-mqtt-source"></p>
-          <p class="maintenance-note" id="maintenance-zendure-mqtt-message"></p>
-          <p class="maintenance-note muted" id="maintenance-zendure-mqtt-fallback" hidden></p>
-          <div id="maintenance-zendure-mqtt-brokers" class="results-list" hidden></div>
-          <div id="maintenance-zendure-mqtt-empty" class="results-empty">No Zendure MQTT telemetry devices are configured.</div>
-          <div id="maintenance-zendure-mqtt-list" class="results-list" hidden></div>
-        </div>
-      </section>
-
-      <section class="control-pipeline-stage maintenance-card" id="maintenance-mqtt-migration" aria-label="Zendure MQTT migration" data-open="false">
-        <div class="control-stage-head maintenance-card-head">
-          <button type="button" class="maintenance-card-summary"
-                  data-maintenance-toggle="maintenance-mqtt-migration"
-                  aria-expanded="false" aria-controls="maintenance-mqtt-migration-body">
-            <span class="control-stage-title">Zendure MQTT migration</span>
-            <span class="maintenance-summary" id="maintenance-mqtt-migration-summary">Review not loaded.</span>
-            <span class="maintenance-card-status" aria-hidden="true"></span>
-            <span class="maintenance-caret" aria-hidden="true">▸</span>
-          </button>
-        </div>
-        <div class="maintenance-card-body setup-block" id="maintenance-mqtt-migration-body" hidden>
-          <p class="maintenance-note">
-            Review and safely migrate legacy MQTT control devices using the EMS/Core migration service.
-          </p>
-          <ol class="migration-stage-list" aria-label="Migration stages">
-            <li data-mqtt-migration-stage="review">01 Review</li>
-            <li data-mqtt-migration-stage="backup">02 Backup</li>
-            <li data-mqtt-migration-stage="apply">03 Apply</li>
-            <li data-mqtt-migration-stage="validate">04 Validate</li>
-          </ol>
-          <div class="maintenance-facts">
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Migration</span>
-              <span class="maintenance-fact-value" id="maintenance-mqtt-migration-required">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Affected devices</span>
-              <span class="maintenance-fact-value" id="maintenance-mqtt-migration-affected">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Control disabled</span>
-              <span class="maintenance-fact-value" id="maintenance-mqtt-migration-disabled">…</span>
-            </div>
-            <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Validation</span>
-              <span class="maintenance-fact-value" id="maintenance-mqtt-migration-validation">…</span>
-            </div>
-          </div>
-          <div id="maintenance-mqtt-migration-devices" class="results-list" hidden></div>
-          <p class="maintenance-note" id="maintenance-mqtt-migration-warnings"></p>
-          <label class="mconfig-backup-choice">
-            <input type="checkbox" id="maintenance-mqtt-migration-backup" checked>
-            Create and verify a config backup before applying
-          </label>
-          <div class="mconfig-actions">
-            <button type="button" id="maintenance-mqtt-migration-apply"
-                    class="primary-button compact" disabled>Apply reviewed migration</button>
-            <button type="button" id="maintenance-mqtt-migration-refresh"
-                    class="secondary-button compact">Refresh review</button>
-          </div>
-          <p class="maintenance-note" id="maintenance-mqtt-migration-status"
-             role="status" aria-live="polite"></p>
-        </div>
-      </section>
-
       <section class="control-pipeline-stage maintenance-card" id="maintenance-config-card" aria-label="Configuration and hardware" data-open="false">
         <div class="control-stage-head maintenance-card-head">
           <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-config-card" aria-expanded="false" aria-controls="maintenance-config-card-body">
@@ -1827,6 +1552,281 @@
               </details>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-containers" aria-label="Runtime containers" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-containers" aria-expanded="false" aria-controls="maintenance-containers-body">
+            <span class="control-stage-title">Runtime containers</span>
+            <span class="maintenance-summary" id="maintenance-containers-summary">…</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body setup-block" id="maintenance-containers-body" hidden>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">EMS</span>
+              <span class="maintenance-fact-value" id="maintenance-ems">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">EMS status</span>
+              <span class="maintenance-fact-value muted" id="maintenance-ems-detail">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">EMS container</span>
+              <span class="maintenance-fact-value muted" id="maintenance-ems-name">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">InfluxDB</span>
+              <span class="maintenance-fact-value" id="maintenance-influx">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">InfluxDB status</span>
+              <span class="maintenance-fact-value muted" id="maintenance-influx-detail">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">InfluxDB container</span>
+              <span class="maintenance-fact-value muted" id="maintenance-influx-name">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Docker access</span>
+              <span class="maintenance-fact-value" id="maintenance-docker">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Docker server</span>
+              <span class="maintenance-fact-value muted" id="maintenance-docker-server">…</span>
+            </div>
+          </div>
+          <p class="maintenance-note" id="maintenance-docker-note"></p>
+
+          <div class="maintenance-container-actions" id="maintenance-runtime-container-actions">
+            <div class="maintenance-facts">
+              <div class="maintenance-fact">
+                <span class="maintenance-fact-label">EMS desired</span>
+                <span class="maintenance-fact-value" id="maintenance-runtime-ems-desired">…</span>
+              </div>
+              <div class="maintenance-fact">
+                <span class="maintenance-fact-label">InfluxDB desired</span>
+                <span class="maintenance-fact-value" id="maintenance-runtime-influx-desired">…</span>
+              </div>
+              <div class="maintenance-fact">
+                <span class="maintenance-fact-label">Action plan</span>
+                <span class="maintenance-fact-value" id="maintenance-runtime-action-summary">…</span>
+              </div>
+            </div>
+
+            <div class="mconfig-actions">
+              <button type="button" id="maintenance-runtime-containers-sync"
+                      class="primary-button compact">Restart / sync containers</button>
+              <button type="button" id="maintenance-runtime-containers-recheck"
+                      class="secondary-button compact">Re-check status</button>
+              <button type="button" id="maintenance-runtime-diagnostics"
+                      class="secondary-button compact">Run diagnostics</button>
+            </div>
+
+            <p class="maintenance-note" id="maintenance-runtime-containers-status"
+               role="status" aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-diagnostics" aria-label="EMS diagnostics" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-diagnostics" aria-expanded="false" aria-controls="maintenance-diagnostics-body">
+            <span class="control-stage-title">EMS diagnostics</span>
+            <span class="maintenance-summary" id="maintenance-diagnostics-summary">Diagnostics have not been run yet.</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body setup-block" id="maintenance-diagnostics-body" hidden>
+          <p class="maintenance-note">Read-only EMS checks from the installed system.</p>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Execution mode</span>
+              <span class="maintenance-fact-value" id="maintenance-diagnostics-mode">not run</span>
+            </div>
+          </div>
+          <div class="maintenance-diagnostics-checks" id="maintenance-diagnostics-checks"></div>
+          <p class="maintenance-note" id="maintenance-diagnostics-note">Diagnostics have not been run yet.</p>
+          <p class="maintenance-note">Config upgrade is checked in dry-run mode only. No config file is changed.</p>
+          <button type="button" id="maintenance-diagnostics-run" class="primary-button compact">Run diagnostics</button>
+        </div>
+      </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-layout" aria-label="Installation layout" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-layout" aria-expanded="false" aria-controls="maintenance-layout-body">
+            <span class="control-stage-title">Installation layout</span>
+            <span class="maintenance-summary" id="maintenance-layout-summary">…</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body setup-block" id="maintenance-layout-body" hidden>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">config/config.json</span>
+              <span class="maintenance-fact-value" id="maintenance-config">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">config path</span>
+              <span class="maintenance-fact-value muted" id="maintenance-config-path">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">data/</span>
+              <span class="maintenance-fact-value" id="maintenance-data">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">data path</span>
+              <span class="maintenance-fact-value muted" id="maintenance-data-path">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">docker-compose.yml</span>
+              <span class="maintenance-fact-value" id="maintenance-compose">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">compose path</span>
+              <span class="maintenance-fact-value muted" id="maintenance-compose-path">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">install state</span>
+              <span class="maintenance-fact-value" id="maintenance-state">…</span>
+            </div>
+          </div>
+          <p class="maintenance-note" id="maintenance-state-message"></p>
+        </div>
+      </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-versions" aria-label="Versions and links" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-versions" aria-expanded="false" aria-controls="maintenance-versions-body">
+            <span class="control-stage-title">Versions &amp; links</span>
+            <span class="maintenance-summary" id="maintenance-versions-summary">…</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body setup-block" id="maintenance-versions-body" hidden>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Admin image</span>
+              <span class="maintenance-fact-value" id="maintenance-admin-image">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">EMS image</span>
+              <span class="maintenance-fact-value" id="maintenance-ems-image">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">InfluxDB image</span>
+              <span class="maintenance-fact-value" id="maintenance-influx-image">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Dashboard</span>
+              <a class="maintenance-fact-value maintenance-dashboard-link" id="maintenance-dashboard-link" target="_blank" rel="noopener" hidden>Open dashboard</a>
+              <span class="maintenance-fact-value" id="maintenance-dashboard">…</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-zendure-mqtt" aria-label="Zendure MQTT telemetry" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-zendure-mqtt" aria-expanded="false" aria-controls="maintenance-zendure-mqtt-body">
+            <span class="control-stage-title">Zendure MQTT telemetry</span>
+            <span class="maintenance-summary" id="maintenance-zendure-mqtt-summary">…</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body setup-block" id="maintenance-zendure-mqtt-body" hidden>
+          <p class="maintenance-note">This status panel is read-only and does not send commands. Configured MQTT control devices may still be controlled by the EMS runtime.</p>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Runtime</span>
+              <span class="maintenance-fact-value" id="maintenance-zendure-mqtt-state">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Endpoint</span>
+              <span class="maintenance-fact-value muted" id="maintenance-zendure-mqtt-endpoint">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Devices</span>
+              <span class="maintenance-fact-value" id="maintenance-zendure-mqtt-devices">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Invalid devices</span>
+              <span class="maintenance-fact-value" id="maintenance-zendure-mqtt-invalid">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Stale threshold</span>
+              <span class="maintenance-fact-value muted" id="maintenance-zendure-mqtt-stale">…</span>
+            </div>
+          </div>
+          <p class="maintenance-note" id="maintenance-zendure-mqtt-source"></p>
+          <p class="maintenance-note" id="maintenance-zendure-mqtt-message"></p>
+          <p class="maintenance-note muted" id="maintenance-zendure-mqtt-fallback" hidden></p>
+          <div id="maintenance-zendure-mqtt-brokers" class="results-list" hidden></div>
+          <div id="maintenance-zendure-mqtt-empty" class="results-empty">No Zendure MQTT telemetry devices are configured.</div>
+          <div id="maintenance-zendure-mqtt-list" class="results-list" hidden></div>
+        </div>
+      </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-mqtt-migration" aria-label="Zendure MQTT migration" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <button type="button" class="maintenance-card-summary"
+                  data-maintenance-toggle="maintenance-mqtt-migration"
+                  aria-expanded="false" aria-controls="maintenance-mqtt-migration-body">
+            <span class="control-stage-title">Zendure MQTT migration</span>
+            <span class="maintenance-summary" id="maintenance-mqtt-migration-summary">Review not loaded.</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body setup-block" id="maintenance-mqtt-migration-body" hidden>
+          <p class="maintenance-note">
+            Review and safely migrate legacy MQTT control devices using the EMS/Core migration service.
+          </p>
+          <ol class="migration-stage-list" aria-label="Migration stages">
+            <li data-mqtt-migration-stage="review">01 Review</li>
+            <li data-mqtt-migration-stage="backup">02 Backup</li>
+            <li data-mqtt-migration-stage="apply">03 Apply</li>
+            <li data-mqtt-migration-stage="validate">04 Validate</li>
+          </ol>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Migration</span>
+              <span class="maintenance-fact-value" id="maintenance-mqtt-migration-required">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Affected devices</span>
+              <span class="maintenance-fact-value" id="maintenance-mqtt-migration-affected">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Control disabled</span>
+              <span class="maintenance-fact-value" id="maintenance-mqtt-migration-disabled">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Validation</span>
+              <span class="maintenance-fact-value" id="maintenance-mqtt-migration-validation">…</span>
+            </div>
+          </div>
+          <div id="maintenance-mqtt-migration-devices" class="results-list" hidden></div>
+          <p class="maintenance-note" id="maintenance-mqtt-migration-warnings"></p>
+          <label class="mconfig-backup-choice">
+            <input type="checkbox" id="maintenance-mqtt-migration-backup" checked>
+            Create and verify a config backup before applying
+          </label>
+          <div class="mconfig-actions">
+            <button type="button" id="maintenance-mqtt-migration-apply"
+                    class="primary-button compact" disabled>Apply reviewed migration</button>
+            <button type="button" id="maintenance-mqtt-migration-refresh"
+                    class="secondary-button compact">Refresh review</button>
+          </div>
+          <p class="maintenance-note" id="maintenance-mqtt-migration-status"
+             role="status" aria-live="polite"></p>
         </div>
       </section>
 

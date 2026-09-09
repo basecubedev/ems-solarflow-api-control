@@ -37,6 +37,7 @@ Read this before clicking something you are unsure about.
 
 | Area | Read-only | Writes config | Recreates containers |
 | --- | --- | --- | --- |
+| Control & safety | Yes | No | No |
 | Overview (status, layout, containers, versions) | Yes | No | No |
 | EMS diagnostics | Yes | No | No |
 | Zendure MQTT telemetry | Yes | No | No |
@@ -57,25 +58,57 @@ confirmation.
 
 ![Manual configuration panel with system status and the collapsed maintenance cards](../../assets/screenshots/admin/admin-maintenance-overview.png)
 
-**What you see:** a **SYSTEM STATUS** line (install kind, EMS state, version) and
-collapsed cards, each with a one-line summary and an OK / INFO / WARNING pill:
+**What you see:** first a **CONTROL & SAFETY** panel, then a **SYSTEM STATUS**
+line (install kind, EMS state, version), then collapsed cards, each with a
+one-line summary and an OK / INFO / WARNING pill:
 
-- **Installation layout** — where config, data and compose live.
+- **Configuration & hardware** — the config editor.
 - **Runtime containers** — what is running, and whether InfluxDB is enabled.
-- **Versions & links** — Admin and EMS versions, dashboard URL.
 - **EMS diagnostics** — health checks.
+- **Installation layout** — where config, data and compose live.
+- **Versions & links** — Admin and EMS versions, dashboard URL.
 - **Zendure MQTT telemetry** — MQTT brokers and devices.
 - **Zendure MQTT migration** — pending migration review.
-- **Configuration & hardware** — the config editor.
 - **Workflow recovery** — stuck or failed workflow state.
 
+The last three exist for a system that needs repair. They are shown only when
+they have something to report — a configured MQTT broker or device, a pending
+migration, a workflow that cannot finish. A card whose state could **not** be
+read stays on the page: hidden always means "we asked and the answer was no",
+never "we could not tell".
+
 **What it changes:** nothing. Opening and closing cards is display only.
+
+### Control & safety
+
+The panel at the top answers the one question this page exists for: **may EMS
+change your inverters right now?**
+
+- A sentence naming the effective state — allowed to change your inverters, only
+  calculating, running on simulated data, switched off, or nothing may write.
+- One row per connection (**Local connection**, **Your own MQTT broker**,
+  **Zendure cloud**) saying whether it is allowed and how many devices it covers.
+- The maximum output and charge window your devices are held to.
+- The standing warning that only one controller may change inverter output.
+- Whether EMS may restore device settings it expects, such as the minimum charge.
+
+Two limits are stated on the panel itself and are not a defect:
+
+- It reads your **saved settings**, so a change reaches the running EMS only
+  after a restart.
+- It does not observe the EMS container. It says what your configuration
+  *allows*, never that EMS is currently running.
+
+If any part of it cannot be read, the whole panel reads **unknown** in a warning
+tone rather than showing a partial answer.
 
 **Expected result:** you can read your whole installation state without touching
 it. Use **Refresh** to re-read.
 
 > Every summary here is read from the running system, not from a cached Admin
-> guess. If a fact cannot be proven — for example an image whose build labels are
+> guess. The write permissions in **Control & safety** come from the same EMS
+> gate logic the controller itself applies, projected onto your saved config —
+> the Admin Console does not decide them. If a fact cannot be proven — for example an image whose build labels are
 > missing — it is shown as **unknown** with a warning rather than filled in from
 > a weaker source.
 
@@ -113,6 +146,21 @@ reads e.g. *2 inverters · shelly grid meter · preview not run*.
 
 **If it differs:** see [Device management](device-management.md), which covers
 adding, editing, disabling and removing devices, and switching connections.
+
+### What the markers on a setting mean
+
+Some settings carry a small marker next to their description. It names the
+consequence of changing that value, so you can see it before you edit:
+
+| Marker | What it means |
+| --- | --- |
+| *affects control stability* | Can make the control loop oscillate or react too slowly. Change it in small steps and watch the dashboard afterwards. |
+| *can discard stored data* | Can drop history or analytics data that is already stored. |
+| *secret* | A credential. It is stored outside the config file and never shown back in full. |
+| *deprecated* | On its way out and may be removed in a later release. |
+
+Most settings need an EMS restart to take effect and carry no marker for it —
+the **Control & safety** panel states that rule once, at the top of the page.
 
 ### How your answers are read
 
