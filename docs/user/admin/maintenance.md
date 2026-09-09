@@ -63,7 +63,9 @@ line (install kind and EMS state), then collapsed cards, each with a
 one-line summary and an OK / INFO / ACTION / WARNING pill:
 
 - **Settings & devices** — the config editor.
-- **EMS services** — what is running, and whether InfluxDB is enabled.
+- **EMS services** — what is running, whether InfluxDB is enabled, and whether
+  the running EMS already has the settings as they are saved. If that cannot be
+  determined it says so rather than guessing.
 - **Something looks wrong?** — health checks.
 - **Files on this machine** — where config, data and compose live.
 - **Version & dashboard** — Admin and EMS versions (the exact image tags), dashboard URL.
@@ -144,6 +146,11 @@ reads e.g. *2 inverters · shelly grid meter · preview not run*.
 `config/config.json` is written and a config backup is made first.
 
 **Expected result:** *Config applied*, and a prompt if EMS needs a restart.
+
+**Unsaved changes survive a refresh.** Your edits live in the browser until you
+apply them. *Refresh* therefore leaves them alone and says so — the summary
+reads *unsaved changes kept*. Use **Discard my changes** to drop them and load
+the saved settings again.
 
 **If it differs:** see [Device management](device-management.md), which covers
 adding, editing, disabling and removing devices, and switching connections.
@@ -242,7 +249,9 @@ Details: [Diagnostics and recovery](diagnostics-recovery.md).
 ## Warnings and common problems
 
 - **Config-only edits are not automatically live.** Some settings need an EMS
-  restart to take effect; the console says so when they do.
+  restart to take effect; the console says so when they do. *EMS services* names
+  which case you are in: the settings file changed after EMS started, EMS is
+  running the settings as saved, or it could not be determined.
 - **Do not run a second controller.** EMS must not run in parallel with anything
   else writing Zendure `outputLimit`.
 - **An unfinished Guided Setup blocks an upgrade.** Discard it first.

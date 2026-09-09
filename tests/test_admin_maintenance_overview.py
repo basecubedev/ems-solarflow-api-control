@@ -391,3 +391,88 @@ def test_configured_container_name_is_honored_in_overview(tmp_path, monkeypatch)
     assert ems["running"] is True
     assert ems["name"] == "custom-ems"
     assert ems["tag"] == "v0.6.1"
+
+
+# --- the two observations the "is my config live" verdict rests on ---------
+
+
+class StartedAtDocker(FakeDocker):
+    def __init__(self, started_at, raise_on_started_at=False, **kwargs):
+        super().__init__(**kwargs)
+        self._started_at = started_at
+        self._raise_on_started_at = raise_on_started_at
+
+    def inspect_container_started_at(self, name):
+        self.calls.append(("inspect_container_started_at", name))
+        if self._raise_on_started_at:
+            raise RuntimeError("docker exploded")
+        return self._started_at
+
+
+def _ems_container(status="running"):
+    return {
+        DEFAULT_EMS_CONTAINER: {
+            "container_name": DEFAULT_EMS_CONTAINER,
+            "image": "ghcr.io/basecubedev/ems-solarflow-api-control:v0.6.1",
+            "status": status,
+        }
+    }
+
+
+def test_the_overview_reports_when_the_settings_file_was_last_written(tmp_path):
+    _standard_install(tmp_path)
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=FakeDocker())
+
+    written = overview["paths"]["config"]["modified_at"]
+    assert written and written.endswith("+00:00")
+
+
+def test_a_missing_settings_file_has_no_write_time(tmp_path):
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=FakeDocker())
+
+    assert overview["paths"]["config"]["exists"] is False
+    assert overview["paths"]["config"]["modified_at"] is None
+
+
+def test_a_running_container_reports_when_it_started(tmp_path):
+    _standard_install(tmp_path)
+    docker = StartedAtDocker(
+        "2026-09-09T10:00:00.123456789Z", containers=_ems_container()
+    )
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=docker)
+
+    assert overview["containers"]["ems"]["started_at"] == "2026-09-09T10:00:00.123456789Z"
+
+
+def test_a_stopped_container_is_not_asked_when_it_started(tmp_path):
+    _standard_install(tmp_path)
+    docker = StartedAtDocker("2026-09-09T10:00:00Z", containers=_ems_container("exited"))
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=docker)
+
+    assert overview["containers"]["ems"]["started_at"] is None
+    assert ("inspect_container_started_at", DEFAULT_EMS_CONTAINER) not in docker.calls
+
+
+@pytest.mark.parametrize(
+    "docker_kwargs", [{"started_at": None}, {"started_at": "x", "raise_on_started_at": True}]
+)
+def test_an_unreadable_start_time_stays_unknown_instead_of_breaking(
+    tmp_path, docker_kwargs
+):
+    _standard_install(tmp_path)
+    docker = StartedAtDocker(containers=_ems_container(), **docker_kwargs)
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=docker)
+
+    assert overview["containers"]["ems"]["started_at"] is None
+    assert overview["containers"]["ems"]["running"] is True
+
+
+def test_a_docker_without_the_start_time_seam_still_answers(tmp_path):
+    """Older fakes and any Docker wrapper without the method must not break."""
+
+    _standard_install(tmp_path)
+    overview = run_maintenance_overview(
+        base_dir=str(tmp_path), docker=FakeDocker(containers=_ems_container())
+    )
+
+    assert overview["containers"]["ems"]["started_at"] is None

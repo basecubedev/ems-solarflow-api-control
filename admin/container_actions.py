@@ -13,7 +13,9 @@ volume-removing command are intentionally not used.
 """
 
 import json
+import re
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from admin.deployment import DockerCompose
@@ -27,6 +29,12 @@ INFLUX_SERVICE = "influxdb"
 DESIRED_RUNNING = "running"
 DESIRED_STOPPED = "stopped"
 DESIRED_UNAVAILABLE = "unavailable"
+
+CONFIG_STATE_PENDING = "pending"
+CONFIG_STATE_CURRENT = "current"
+CONFIG_STATE_UNKNOWN = "unknown"
+
+_FRACTION_RE = re.compile(r"(\.\d{1,6})\d*")
 
 _UNAVAILABLE_MESSAGE = "Docker/Compose is not available. Re-check the Admin deployment."
 
@@ -107,13 +115,20 @@ def influx_auto_sync_enabled(config):
 
 def _current_state(container):
     if not isinstance(container, dict):
-        return {"found": False, "running": False, "status": "unknown", "name": None}
+        return {
+            "found": False,
+            "running": False,
+            "status": "unknown",
+            "name": None,
+            "started_at": None,
+        }
     status = container.get("status") or ("running" if container.get("running") else "missing")
     return {
         "found": bool(container.get("found")),
         "running": bool(container.get("running")),
         "status": str(status),
         "name": container.get("name"),
+        "started_at": container.get("started_at"),
     }
 
 
@@ -259,18 +274,78 @@ def build_container_summary(ems_display, influx_display):
     return f"EMS {_summary_word(ems_display)} · InfluxDB {_summary_word(influx_display)}"
 
 
-def _ems_action(desired, available):
+def _parse_timestamp(value):
+    """Read one Docker/filesystem timestamp, or ``None`` if it proves nothing."""
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    text = _FRACTION_RE.sub(r"\1", text, count=1)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    # Docker reports 0001-01-01 for a container that has never run.
+    return parsed if parsed.year >= 1970 else None
+
+
+def _config_state(config_modified_at, ems_current):
+    """Has the running EMS read the settings file as it is saved right now?
+
+    EMS reads ``config.json`` when it starts, so a file written after that start
+    cannot be live. Both observations have to be readable and EMS has to be
+    running for either answer; anything else is ``unknown``, never a claim.
+    """
+
+    modified = _parse_timestamp(config_modified_at)
+    started = _parse_timestamp((ems_current or {}).get("started_at"))
+    if not (ems_current or {}).get("running") or modified is None or started is None:
+        state = CONFIG_STATE_UNKNOWN
+    elif modified > started:
+        state = CONFIG_STATE_PENDING
+    else:
+        state = CONFIG_STATE_CURRENT
+    return {
+        "state": state,
+        "config_modified_at": modified.isoformat() if modified else None,
+        "ems_started_at": started.isoformat() if started else None,
+    }
+
+
+_EMS_RECREATE_REASONS = {
+    CONFIG_STATE_PENDING: "The settings file changed after EMS started.",
+    CONFIG_STATE_CURRENT: "EMS is running the settings file as it is saved.",
+    CONFIG_STATE_UNKNOWN: (
+        "Whether EMS is running the saved settings could not be determined."
+    ),
+}
+
+_EMS_RECREATE_SUMMARIES = {
+    CONFIG_STATE_PENDING: "EMS will be recreated so it reads the newer settings.",
+    CONFIG_STATE_CURRENT: (
+        "EMS will be recreated; it is already running the saved settings."
+    ),
+    CONFIG_STATE_UNKNOWN: "EMS will be recreated so it reads the saved settings.",
+}
+
+
+def _ems_action(desired, available, config_state=CONFIG_STATE_UNKNOWN):
     if not available:
         return ServiceAction(
             EMS_SERVICE, "unavailable", "EMS", _UNAVAILABLE_MESSAGE
         )
     if desired.desired == DESIRED_RUNNING:
-        # Recreate so EMS re-reads the freshly written mounted config cleanly.
+        # Recreating is also the only restart an owner has here, so it stays on
+        # offer whatever the verdict is; only the stated reason follows the facts.
         return ServiceAction(
             EMS_SERVICE,
             "recreate",
             "Recreate EMS",
-            "Config changed and EMS should reload it.",
+            _EMS_RECREATE_REASONS[config_state],
         )
     return ServiceAction(
         EMS_SERVICE, "none", "EMS", "No standard EMS installation to manage."
@@ -332,11 +407,11 @@ def _influx_sync_action(desired, available, config):
     )
 
 
-def _summary(actions):
+def _summary(actions, config_state=CONFIG_STATE_UNKNOWN):
     parts = []
     for action in actions:
         if action.action == "recreate" and action.service == EMS_SERVICE:
-            parts.append("EMS will be recreated so it reads the new config.")
+            parts.append(_EMS_RECREATE_SUMMARIES[config_state])
         elif action.action == "start" and action.service == INFLUX_SERVICE:
             parts.append("Bundled InfluxDB will be started because Analytics is enabled.")
         elif action.action == "stop" and action.service == INFLUX_SERVICE:
@@ -382,7 +457,8 @@ def build_container_sync_plan(config, overview):
         config if isinstance(config, dict) else {}, influx_current, influx_desired.desired
     )
 
-    ems_action = _ems_action(ems_desired, available)
+    config_state = _config_state(config_info.get("modified_at"), ems_current)
+    ems_action = _ems_action(ems_desired, available, config_state["state"])
     influx_action = _influx_action(influx_desired, influx_current, available)
     influx_sync_action = _influx_sync_action(influx_desired, available, config)
     actions = [
@@ -410,8 +486,11 @@ def build_container_sync_plan(config, overview):
             INFLUX_SERVICE: influx_display,
         },
         "status_summary": build_container_summary(ems_display, influx_display),
+        "config_state": config_state,
         "actions": actions,
-        "summary": _summary([ems_action, influx_action, influx_sync_action]),
+        "summary": _summary(
+            [ems_action, influx_action, influx_sync_action], config_state["state"]
+        ),
         "auto_init": influx_auto_init_enabled(config),
         "auto_sync": influx_auto_sync_enabled(config),
     }

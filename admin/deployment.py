@@ -375,6 +375,39 @@ class DockerCli:
         image_id = str(result.stdout or "").strip()
         return image_id if image_id.startswith("sha256:") else None
 
+    def inspect_container_started_at(self, container_name):
+        """Return when an exact container last started, or ``None``.
+
+        Read-only Maintenance uses this to say whether the running EMS can have
+        read the settings file as it is saved now. A missing CLI, an
+        unreachable daemon, an absent container or an unreadable answer all
+        return ``None`` so the caller reports "unknown" instead of a guess.
+        """
+
+        name = str(container_name or "").strip()
+        if not name:
+            return None
+        try:
+            result = self._run(
+                [
+                    "docker",
+                    "container",
+                    "inspect",
+                    "--format",
+                    "{{.State.StartedAt}}",
+                    name,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (FileNotFoundError, OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        started_at = str(result.stdout or "").strip()
+        return started_at or None
+
     def inspect_image(self, image_ref):
         """Return a sanitized identity view of one local image, or ``None``.
 

@@ -8,6 +8,7 @@ must degrade to file/config/compose facts, never break the overview.
 import json
 import os
 import re
+from datetime import datetime, timezone
 
 from admin.admin_update import admin_image_ref_from_env
 from admin.container_names import (
@@ -127,6 +128,7 @@ def run_maintenance_overview(base_dir=None, docker=None, admin_image=None):
             "config": {
                 "path": str(context.config_path),
                 "exists": context.config_exists,
+                "modified_at": _modified_at(context.config_path),
             },
             "data": {
                 "path": str(context.data_dir),
@@ -152,6 +154,16 @@ def run_maintenance_overview(base_dir=None, docker=None, admin_image=None):
         "links": {"dashboard_url": _dashboard_url(context)},
         "warnings": warnings,
     }
+
+
+def _modified_at(path):
+    """When the settings file was last written, or ``None`` if it cannot be read."""
+
+    try:
+        stamp = os.stat(path).st_mtime
+    except OSError:
+        return None
+    return datetime.fromtimestamp(stamp, tz=timezone.utc).isoformat()
 
 
 def _read_compose(context):
@@ -204,6 +216,7 @@ def _inspect_containers(docker, specs):
     probe = getattr(docker, "probe", None)
     inspect = getattr(docker, "inspect_container", None)
     inspect_image = getattr(docker, "inspect_image", None)
+    inspect_started_at = getattr(docker, "inspect_container_started_at", None)
 
     state = None
     if callable(probe):
@@ -222,14 +235,21 @@ def _inspect_containers(docker, specs):
 
     containers = {
         role: _container_status(
-            available, inspect, inspect_image, spec["name"], spec["declared_image"]
+            available,
+            inspect,
+            inspect_image,
+            spec["name"],
+            spec["declared_image"],
+            inspect_started_at,
         )
         for role, spec in specs.items()
     }
     return docker_info, containers
 
 
-def _container_status(available, inspect, inspect_image, name, declared_image):
+def _container_status(
+    available, inspect, inspect_image, name, declared_image, inspect_started_at=None
+):
     if not available or not callable(inspect):
         return _container_view(False, False, name, declared_image, "unknown",
                                inspect_image)
@@ -242,17 +262,31 @@ def _container_status(available, inspect, inspect_image, name, declared_image):
         return _container_view(False, False, name, declared_image, "missing",
                                inspect_image)
     status = str(existing.get("status") or "unknown").lower() or "unknown"
+    resolved_name = existing.get("container_name") or name
+    running = status == "running"
     return _container_view(
         True,
-        status == "running",
-        existing.get("container_name") or name,
+        running,
+        resolved_name,
         existing.get("image") or declared_image,
         status,
         inspect_image,
+        _container_started_at(inspect_started_at, resolved_name) if running else None,
     )
 
 
-def _container_view(found, running, name, image, status, inspect_image=None):
+def _container_started_at(inspect_started_at, name):
+    if not callable(inspect_started_at):
+        return None
+    try:
+        return inspect_started_at(name)
+    except Exception:  # an unreadable start time reads as unknown, never a 500
+        return None
+
+
+def _container_view(
+    found, running, name, image, status, inspect_image=None, started_at=None
+):
     return {
         "found": found,
         "running": running,
@@ -260,6 +294,7 @@ def _container_view(found, running, name, image, status, inspect_image=None):
         "image": image,
         "tag": _image_version_tag(image, inspect_image),
         "status": status,
+        "started_at": started_at,
     }
 
 
