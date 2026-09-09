@@ -228,3 +228,17 @@ def test_the_gates_all_declare_a_default_for_that_to_work():
     ):
         assert fields[path]["type"] == "boolean"
         assert "default" in fields[path], path
+
+
+def test_the_safety_tab_is_never_a_silent_empty_box():
+    """An EMS whose catalog omits the groups leaves the gates in Expert.
+
+    Rendering nothing would read as "there is nothing here", on the one tab
+    where that reading is dangerous.
+    """
+
+    js = _read("admin.js")
+    body = js.split("function renderMaintenanceFeatures", 1)[1].split("\n}", 1)[0]
+    assert "safety.childNodes.length" in body
+    assert "maintenance-config-safety-empty" in body
+    assert "Expert tab" in body

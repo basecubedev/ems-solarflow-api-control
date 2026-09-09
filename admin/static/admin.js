@@ -13467,8 +13467,13 @@ function mconfigCatalogControl(field, value, onChange, opts) {
   const numeric = field.type === "integer" || field.type === "number";
   const display = Array.isArray(value) ? value.join(", ") : value;
   const input = mconfigTextControl(display, onChange, numeric ? "number" : "text");
-  if (opts && opts.defaultValue != null && (value == null || value === "")) {
-    input.placeholder = String(opts.defaultValue) + " (default)";
+  // Same rule as the checkbox above: a field the config does not store falls
+  // back to the catalog default, so an empty box states which value applies
+  // instead of reading as "nothing set, nothing happens".
+  const fallback =
+    opts && opts.defaultValue != null ? opts.defaultValue : field.default;
+  if (fallback != null && (value == null || value === "")) {
+    input.placeholder = String(fallback) + " (default)";
   }
   return input;
 }
@@ -16386,7 +16391,22 @@ function renderMaintenanceFeatures() {
     if (target) target.textContent = "";
   });
   if (mconfigEls.safety) {
-    mconfigEls.safety.appendChild(renderMaintenanceSafetyGroups(sections));
+    const safety = renderMaintenanceSafetyGroups(sections);
+    // A tab about the switches that let EMS drive hardware must never be a
+    // silent empty box: an EMS whose catalog does not name the groups leaves
+    // those settings in Expert, and the page has to say so rather than imply
+    // there is nothing to see.
+    if (!safety.childNodes.length) {
+      const note = document.createElement("p");
+      note.className = "maintenance-note";
+      note.id = "maintenance-config-safety-empty";
+      note.textContent =
+        "This EMS version does not group its safety settings. They are in the "
+        + "Expert tab, and the Control & safety panel on the status page still "
+        + "states what is allowed.";
+      safety.appendChild(note);
+    }
+    mconfigEls.safety.appendChild(safety);
   }
   for (const section of sections) {
     const target =

@@ -2387,8 +2387,11 @@ code {
 .maintenance-hub-verdict[data-tone="ok"] { color: var(--output); }
 .maintenance-hub-verdict[data-tone="warn"] { color: var(--pv); }
 .maintenance-path-card .maintenance-path-state { margin-left: auto; }
-.maintenance-path-card .maintenance-recommended-badge + .maintenance-path-arrow,
-.maintenance-path-card .maintenance-path-state + .maintenance-path-arrow {
+/* The arrow keeps its own margin-left:auto unless a *visible* pill already
+   pushed it right; a hidden pill is still an adjacent sibling, so without
+   :not([hidden]) the arrow lands next to the subtitle on a card with no state. */
+.maintenance-path-card .maintenance-recommended-badge:not([hidden]) + .maintenance-path-arrow,
+.maintenance-path-card .maintenance-path-state:not([hidden]) + .maintenance-path-arrow {
   margin-left: 10px;
 }
 

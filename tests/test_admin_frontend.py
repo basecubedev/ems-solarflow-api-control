@@ -4121,7 +4121,9 @@ def test_maintenance_view_has_three_overview_sections():
         assert 'aria-label="' + label + '"' in maintenance
     for title in ("Files on this machine", "EMS services", "Version &amp; dashboard"):
         assert title in maintenance
-    assert "What is installed, what is running, and what you can change" in maintenance
+    # The status page reads and repairs; changing settings is its own page now.
+    assert "What is installed, what is running, and what is wrong" in maintenance
+    assert "and what you can change" not in maintenance
 
 
 def test_maintenance_view_has_layout_container_and_version_facts():

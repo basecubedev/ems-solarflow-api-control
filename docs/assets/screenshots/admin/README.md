@@ -28,10 +28,11 @@ hostnames.
 | `admin-guided-setup-config-preview.png` | Guided Setup — 03 Config | `config-preview` |
 | `admin-setup-deployment.png` | Guided Setup — 04 Prepare deployment | `setup-deployment` |
 | `admin-setup-start.png` | Guided Setup — 05 Start EMS | `setup-start-done` |
-| `admin-maintenance-hub.png` | Maintenance hub (three paths) | `maintenance-hub` |
-| `admin-maintenance-overview.png` | Maintenance — read-only overview | `maintenance-overview` |
+| `admin-maintenance-hub.png` | Maintenance hub (four paths, each with its state) | `maintenance-hub` |
+| `admin-maintenance-overview.png` | Maintenance — read-only System status page | `maintenance-overview` |
 | `admin-maintenance-diagnostics.png` | Maintenance — Something looks wrong? card | `maintenance-diagnostics` |
-| `admin-maintenance-config-hardware.png` | Maintenance — Settings & devices card | `maintenance-config-hardware` |
+| `admin-maintenance-config-hardware.png` | Maintenance — Settings & devices, Devices tab | `maintenance-config-hardware` |
+| `admin-maintenance-safety.png` | Maintenance — Settings & devices, Control & safety tab | `maintenance-safety` |
 | `admin-maintenance-mqtt.png` | Maintenance — Device telemetry card | `maintenance-mqtt` |
 | `admin-maintenance-recovery.png` | Maintenance — Unfinished setup or update card | `maintenance-recovery` |
 | `admin-backup-restore.png` | Backup / restore | `backup-restore` |

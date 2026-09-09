@@ -26,7 +26,7 @@ belong to [Backup and restore](backup-restore.md).
 
 ### 1 — Open Maintenance → Guided upgrade
 
-![Maintenance hub with Guided upgrade marked Recommended path, Your system and Backup / restore](../../assets/screenshots/admin/admin-maintenance-hub.png)
+![Maintenance hub with Guided upgrade marked Recommended path, System status, Settings and devices and Backup / restore](../../assets/screenshots/admin/admin-maintenance-hub.png)
 
 **What you see:** the Maintenance hub. **Guided upgrade** carries the
 *Recommended path* badge.

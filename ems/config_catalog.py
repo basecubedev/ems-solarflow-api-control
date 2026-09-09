@@ -904,7 +904,7 @@ _SECTIONS = [
                 "safety_gates",
                 "system",
                 "Control & safety",
-                "The switches that decide whether EMS may change your inverters.",
+                "Every write to your inverters passes these switches.",
                 "Every write to hardware passes these gates. Turning one on lets EMS "
                 "change device output; turning one off makes that transport read-only.",
                 1,

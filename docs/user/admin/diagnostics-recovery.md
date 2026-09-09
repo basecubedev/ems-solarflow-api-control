@@ -21,7 +21,7 @@ workflow back to a clean state.
 
 ![Something looks wrong? card expanded with the checked-against fact and the Run the checks button](../../assets/screenshots/admin/admin-maintenance-diagnostics.png)
 
-**Where:** Maintenance → **Your system** → **EMS
+**Where:** Maintenance → **System status** → **EMS
 diagnostics**.
 
 **What you select:** **Run the checks**.
@@ -127,7 +127,7 @@ See [Supported setups](../supported-setups.md) for the current support tiers.
 
 ![Unfinished setup or update card in Maintenance](../../assets/screenshots/admin/admin-maintenance-recovery.png)
 
-**Where:** Maintenance → **Your system** → **Workflow
+**Where:** Maintenance → **System status** → **Workflow
 recovery**.
 
 **What you see:** the lifecycle verdict for a workflow that did not finish

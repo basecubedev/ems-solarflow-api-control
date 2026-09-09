@@ -53,6 +53,7 @@ SCREENS = {
     "maintenance-overview": ("admin-maintenance-overview.png", 950),
     "maintenance-diagnostics": ("admin-maintenance-diagnostics.png", 600),
     "maintenance-config-hardware": ("admin-maintenance-config-hardware.png", 700),
+    "maintenance-safety": ("admin-maintenance-safety.png", 500),
     "maintenance-mqtt": ("admin-maintenance-mqtt.png", 600),
     "maintenance-recovery": ("admin-maintenance-recovery.png", 600),
     "backup-restore": ("admin-backup-restore.png", 800),

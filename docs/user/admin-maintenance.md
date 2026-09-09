@@ -26,13 +26,18 @@ install and recommends the safest flow. Any existing installation is routed to
 A legacy root `config.json` is offered a migration to `config/config.json` first
 (see [config-layout.md](config-layout.md)).
 
-Maintenance offers three paths:
+Maintenance offers four paths:
 
 | Path | What it is |
 |---|---|
 | **Guided upgrade** | Pick one Target System Build; align Admin + EMS together (recommended) |
-| **Your system** | See what is installed and running, change settings, fix problems |
+| **System status** | See what is installed and running, run checks, fix a stuck workflow |
+| **Settings & devices** | Change devices, features and the safety switches |
 | **Backup / restore** | Create, inspect, restore, or delete EMS backups |
+
+Reading and changing are two pages: the status page never edits anything, and
+the settings page never restarts anything. The older address
+`#maintenance-manual` still opens the status page.
 
 ## Guided upgrade
 
@@ -174,18 +179,32 @@ docker compose -f docker-compose.admin.yml logs
 docker compose -f docker-compose.admin.yml up -d
 ```
 
-## Your system
+## System status
 
-This path inspects and edits an existing installation.
+This path inspects an existing installation and repairs it.
 
-- **Overview** is read-only. It shows the install state, the resolved
+- **The whole page** is read-only apart from **Restart EMS now**. It shows the install state, the resolved
   `config/config.json`, `data/`, and `docker-compose.yml` paths, the EMS and
   InfluxDB containers, the Admin image and EMS image as separate component
   identities, and a link to the local dashboard
   (`http://localhost:8080` by default). It never builds, starts, stops, or
   changes anything.
+## Settings & devices
+
+This path edits an existing installation.
+
+- **Four tabs over one draft** — Devices, Features, Control & safety, Expert —
+  with a search across every setting and one shared footer. Switching a tab
+  never reloads and never discards unsaved changes.
+- **Control & safety** holds the switches that decide whether EMS may change
+  your inverters, with nothing hidden behind a disclosure. They are **on by
+  default**: a fresh installation controls your inverters without you enabling
+  anything, and the switches exist to stop it. A switch your settings file does
+  not mention is shown at that default and marked *· default*; nothing is
+  written until you toggle it.
 - **Config editor** loads your real config as a draft you can edit, then shows a
-  preview of the changes. Nothing is written by editing or previewing. Applying
+  preview of the changes, split into *Takes effect immediately* and *Needs an
+  EMS restart*. Nothing is written by editing or previewing. Applying
   the draft is the one action that writes config — it validates the change,
   backs up the current config first, then writes it. Apply writes `config.json`
   and additionally mirrors the whitelisted overlapping values it changed (system
@@ -390,7 +409,7 @@ This path inspects and edits an existing installation.
 The card is on the page only while a migration is actually pending; a
 review that cannot be loaded also keeps it visible.
 
-The Your system page carries a compact **Older MQTT device setup**
+The System status page carries a compact **Older MQTT device setup**
 card with Review → Backup → Apply → Validate stages. Review shows affected
 devices, the exact-model decision for each device, and whether control is kept
 or disabled. Broker credentials and API keys are never rendered.
@@ -416,7 +435,7 @@ covered. See [Backup and restore](admin-backup-restore.md).
 
 ## Unfinished setup or update
 
-**Your system → Unfinished setup or update** resolves a Guided
+**System status → Unfinished setup or update** resolves a Guided
 Setup or Guided Upgrade that can no longer be finished, switched away from, or
 started again. The card stays collapsed and quiet while nothing needs it, and
 opens by itself when the Admin Console reports a blocked workflow.
