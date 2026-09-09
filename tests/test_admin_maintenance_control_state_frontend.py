@@ -236,12 +236,17 @@ def test_an_unknown_envelope_value_is_omitted_rather_than_guessed():
     assert _view(control)["envelope"] == []
 
 
-def test_the_stage_is_read_only_markup_in_the_manual_panel():
-    html = _read("index.html")
-    manual = html.split('id="maintenance-manual-panel"', 1)[1].split(
-        'id="maintenance-upgrade-panel"', 1
+def _status_panel(html):
+    panel = html.split('id="maintenance-status-panel"', 1)[1].split(
+        'id="maintenance-settings-panel"', 1
     )[0]
-    assert manual, "manual panel slice is empty"
+    assert panel, "status panel slice is empty"
+    return panel
+
+
+def test_the_stage_is_read_only_markup_on_the_status_page():
+    html = _read("index.html")
+    manual = _status_panel(html)
     stage_start = manual.index('id="maintenance-control-state"')
     stage = manual[stage_start:].split("</section>", 1)[0]
     for marker in (
@@ -251,15 +256,18 @@ def test_the_stage_is_read_only_markup_in_the_manual_panel():
         'id="maintenance-control-notes"',
     ):
         assert marker in stage
-    for forbidden in ("<button", "<input", "<select", "<form"):
+    # It states what the saved config permits and offers no way to change it.
+    for forbidden in ("<input", "<select", "<form"):
         assert forbidden not in stage
+    # The one control is navigation to the page that can change these settings.
+    assert stage.count("<button") == 1
+    assert 'data-open-maintenance-path="settings-safety"' in stage
+    assert "Change these settings" in stage
 
 
 def test_the_stage_stands_above_the_collapsible_cards():
     html = _read("index.html")
-    manual = html.split('id="maintenance-manual-panel"', 1)[1].split(
-        'id="maintenance-upgrade-panel"', 1
-    )[0]
+    manual = _status_panel(html)
     assert manual.index('id="maintenance-control-state"') < manual.index(
         'id="maintenance-layout"'
     )
@@ -269,9 +277,7 @@ def test_the_control_answer_leads_the_page():
     """The safety statement stands above the technical status line, not below it."""
 
     html = _read("index.html")
-    manual = html.split('id="maintenance-manual-panel"', 1)[1].split(
-        'id="maintenance-upgrade-panel"', 1
-    )[0]
+    manual = _status_panel(html)
     assert manual.index('id="maintenance-control-state"') < manual.index(
         'id="maintenance-system-status"'
     )

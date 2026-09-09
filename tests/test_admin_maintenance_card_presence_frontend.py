@@ -32,13 +32,13 @@ def _read(name):
         return handle.read()
 
 
-def _manual_panel():
+def _status_panel():
     html = _read("index.html")
-    manual = html.split('id="maintenance-manual-panel"', 1)[1].split(
-        'id="maintenance-upgrade-panel"', 1
+    panel = html.split('id="maintenance-status-panel"', 1)[1].split(
+        'id="maintenance-settings-panel"', 1
     )[0]
-    assert manual, "manual panel slice is empty"
-    return manual
+    assert panel, "status panel slice is empty"
+    return panel
 
 
 def _present(predicate, payload):
@@ -210,20 +210,17 @@ def test_recovery_card_stays_when_the_state_could_not_be_read(payload):
 # --- order ----------------------------------------------------------------
 
 
-def test_the_settings_card_stands_above_the_read_only_facts():
-    """What an owner came to change comes before where the files live."""
+def test_the_settings_editor_is_not_on_the_status_page_at_all():
+    """It became its own page, so the status page reads and repairs only."""
 
-    manual = _manual_panel()
-    assert manual.index('id="maintenance-config-card"') < manual.index(
-        'id="maintenance-layout"'
-    )
-    assert manual.index('id="maintenance-config-card"') < manual.index(
-        'id="maintenance-versions"'
-    )
+    status = _status_panel()
+    assert 'id="maintenance-config-card"' not in status
+    # The status page still points at it, so the route is not lost.
+    assert 'data-open-maintenance-path="settings-safety"' in status
 
 
 def test_the_repair_cards_sit_below_the_everyday_ones():
-    manual = _manual_panel()
+    manual = _status_panel()
     everyday = manual.index('id="maintenance-containers"')
     for repair in (
         'id="maintenance-zendure-mqtt"',

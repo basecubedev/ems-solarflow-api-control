@@ -69,7 +69,7 @@ for (const scenario of [
 
     await page.reload();
     await page.locator('[data-start-path="manage_existing"]').click();
-    await page.locator('[data-open-maintenance-path="manual"]').click();
+    await page.locator('[data-open-maintenance-path="status"]').click();
     await page.locator('[data-maintenance-toggle="maintenance-versions"]').click();
 
     await expect(page.locator("#maintenance-admin-image")).toHaveText(ADMIN_IMAGE);

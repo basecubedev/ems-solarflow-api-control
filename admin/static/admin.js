@@ -7647,7 +7647,14 @@ const ADMIN_VIEWS = ["setup", "maintenance"];
 
 // Maintenance is a small hub with three nested paths. Only "manual" opens the
 // detailed editor and touches the backend; the placeholders never do.
-const MAINTENANCE_PATHS = ["hub", "manual", "upgrade", "backup"];
+const MAINTENANCE_PATHS = ["hub", "status", "settings", "upgrade", "backup"];
+
+// #maintenance-manual was the published address of the manual maintenance page.
+// It stays a permanent alias for the status page so bookmarks and the click
+// paths printed in the documentation keep landing somewhere real.
+const MAINTENANCE_PATH_ALIASES = { manual: "status" };
+
+const MAINTENANCE_SETTINGS_TABS = ["devices", "features", "safety", "expert"];
 
 function setAdminView(view) {
   const next = ADMIN_VIEWS.includes(view) ? view : "setup";
@@ -7673,11 +7680,13 @@ function setAdminView(view) {
   rescopeSystemBuildForNavigation();
 }
 
-// Each maintenance path maps to exactly one full-page panel. "manual" loads the
-// read-only overview; "upgrade" loads its own read-only planning data.
+// Each maintenance path maps to exactly one full-page panel. "status" loads the
+// read-only overview; "settings" holds the draft editor; "upgrade" loads its own
+// read-only planning data.
 const MAINTENANCE_PANEL_IDS = {
   hub: "maintenance-hub",
-  manual: "maintenance-manual-panel",
+  status: "maintenance-status-panel",
+  settings: "maintenance-settings-panel",
   upgrade: "maintenance-upgrade-panel",
   backup: "maintenance-backup-panel",
 };
@@ -7686,8 +7695,12 @@ const MAINTENANCE_PANEL_IDS = {
 // the load promise so a caller (e.g. a resume that must select the transition
 // tag before continuing) can await full completion; ``pinnedTag`` is forwarded
 // to the upgrade planning load.
-function setMaintenancePath(path, pinnedTag) {
+function setMaintenancePath(path, pinnedTag, settingsTab) {
   const next = MAINTENANCE_PATHS.includes(path) ? path : "hub";
+  // The borrowed singleton forms go home before the panel that holds them is
+  // hidden: parkInlineConfigs() refuses to reclaim a node mounted elsewhere, so
+  // parking afterwards strands them for the rest of the session.
+  if (next !== "settings") parkMaintenanceSourceConfigs();
   Object.entries(MAINTENANCE_PANEL_IDS).forEach(([key, id]) => {
     const panel = document.getElementById(id);
     if (panel) panel.hidden = key !== next;
@@ -7696,8 +7709,11 @@ function setMaintenancePath(path, pinnedTag) {
   // other maintenance sub-panel parks and hides the workflow immediately, and a
   // synthetic preview from another task never follows in.
   rescopeSystemBuildForNavigation();
-  if (next === "manual") {
+  if (next === "status") {
     return loadMaintenanceOverview();
+  }
+  if (next === "settings") {
+    return loadMaintenanceSettings(settingsTab);
   }
   if (next === "upgrade") {
     // Same-session navigation may keep an existing verification for the same
@@ -7720,19 +7736,35 @@ function adminViewForHash(hash) {
 }
 
 function maintenancePathForHash(hash) {
-  if (hash.startsWith("maintenance-")) return hash.slice("maintenance-".length);
-  return "hub";
+  if (!hash.startsWith("maintenance-")) return "hub";
+  const head = hash.slice("maintenance-".length).split("-")[0];
+  return MAINTENANCE_PATH_ALIASES[head] || head;
 }
 
-// Deep links (#maintenance, #maintenance-manual) still resolve to the
-// right panel, but only once the start gate has revealed the workspace — while
-// the landing gate is showing, hash changes must not un-hide a workspace panel.
+// #maintenance-settings-safety deep links straight to one tab of the editor.
+function maintenanceSettingsTabForHash(hash) {
+  const prefix = "maintenance-settings-";
+  if (!hash.startsWith(prefix)) return null;
+  const tab = hash.slice(prefix.length);
+  return MAINTENANCE_SETTINGS_TABS.includes(tab) ? tab : null;
+}
+
+// Deep links (#maintenance, #maintenance-manual, #maintenance-settings-safety)
+// still resolve to the right panel, but only once the start gate has revealed
+// the workspace — while the landing gate is showing, hash changes must not
+// un-hide a workspace panel.
 function applyHashRoute() {
   if (!workspaceRevealed) return;
   const hash = currentHashView();
   const view = adminViewForHash(hash);
   setAdminView(view);
-  if (view === "maintenance") setMaintenancePath(maintenancePathForHash(hash));
+  if (view === "maintenance") {
+    setMaintenancePath(
+      maintenancePathForHash(hash),
+      undefined,
+      maintenanceSettingsTabForHash(hash),
+    );
+  }
 }
 window.addEventListener("hashchange", applyHashRoute);
 
@@ -13130,6 +13162,12 @@ const mconfigEls = {
   discoveryProgressText: document.getElementById("maintenance-discovery-progress-text"),
   features: document.getElementById("maintenance-config-features"),
   advanced: document.getElementById("maintenance-config-advanced"),
+  safety: document.getElementById("maintenance-config-safety"),
+  settingsState: document.getElementById("maintenance-settings-state"),
+  settingsCount: document.getElementById("maintenance-settings-count"),
+  settingsSearch: document.getElementById("maintenance-settings-search"),
+  settingsSearchCount: document.getElementById("maintenance-settings-search-count"),
+  settingsEditorRoot: document.getElementById("maintenance-config-editor"),
   previewBtn: document.getElementById("maintenance-config-preview-btn"),
   resetBtn: document.getElementById("maintenance-config-reset-btn"),
   resetRuntimeBtn: document.getElementById("maintenance-config-reset-runtime-btn"),
@@ -13167,6 +13205,7 @@ const mconfigState = {
   openHardware: new Set(),
   openFeatures: new Set(),
   discoveryDraftChanges: 0,
+  settingsTab: "devices",
 };
 
 function mconfigClone(value) {
@@ -16081,7 +16120,7 @@ function mconfigFeatureBody(section) {
   const enabledPath = featureEnabledPath(section);
   const features = mconfigState.draft.features || (mconfigState.draft.features = {});
   const fields = (section.fields || []).filter(
-    (field) => field.path !== enabledPath
+    (field) => field.path !== enabledPath && !mconfigIsSafetyField(field)
   );
   return mconfigLevelledFields(fields, (field) =>
     mconfigAttachOverrideBadge(
@@ -16155,14 +16194,80 @@ function renderMaintenanceFeatureSection(section) {
   return card;
 }
 
+// The catalog decides which settings are safety-relevant, not this file: the
+// groups are declared in ems/config_catalog.py and read here by name only.
+const MAINTENANCE_SAFETY_GROUPS = ["safety_gates", "limits"];
+
+function mconfigIsSafetyField(field) {
+  return MAINTENANCE_SAFETY_GROUPS.includes(field && field.group);
+}
+
+// Every catalog section lands on exactly one tab, keyed on the catalog's own
+// audience axis rather than on a list of section ids kept here.
+function mconfigSectionTab(section) {
+  return section && section.setup_group === "advanced" ? "expert" : "features";
+}
+
+// The safety tab is flat on purpose: the level disclosure would hide four of
+// the five write gates behind "Advanced settings", which is the arrangement
+// this page exists to correct. docs/user/safety.md names the same floor.
+function renderMaintenanceSafetyGroups(sections) {
+  const wrap = document.createElement("div");
+  const features = mconfigState.draft.features || (mconfigState.draft.features = {});
+  const blocks = [];
+  sections.forEach((section) => {
+    (section.groups || [])
+      .filter((group) => MAINTENANCE_SAFETY_GROUPS.includes(group.id))
+      .forEach((group) => {
+        const fields = (section.fields || []).filter(
+          (field) => field.group === group.id
+        );
+        if (fields.length) blocks.push({ group, fields });
+      });
+  });
+  blocks.sort((a, b) => (a.group.order || 0) - (b.group.order || 0));
+  blocks.forEach(({ group, fields }) => {
+    const block = document.createElement("div");
+    block.className = "mconfig-safety-group";
+    block.dataset.groupId = group.id;
+    const title = document.createElement("h4");
+    title.className = "config-section-title";
+    title.textContent = group.title || group.id;
+    const note = document.createElement("p");
+    note.className = "future-note";
+    note.textContent = group.summary || "";
+    const list = document.createElement("div");
+    list.className = "mconfig-fields feature-fields";
+    fields.forEach((field) => {
+      list.appendChild(
+        mconfigAttachOverrideBadge(
+          mconfigCatalogRow(field, features[field.path], (value) => {
+            features[field.path] = value;
+          }),
+          mconfigOverrideEntry(field.path)
+        )
+      );
+    });
+    block.append(title, note, list);
+    wrap.appendChild(block);
+  });
+  return wrap;
+}
+
 function renderMaintenanceFeatures() {
   const sections = (mconfigState.catalog && mconfigState.catalog.feature_sections) || [];
-  if (mconfigEls.features) mconfigEls.features.textContent = "";
-  if (mconfigEls.advanced) mconfigEls.advanced.textContent = "";
+  [mconfigEls.features, mconfigEls.advanced, mconfigEls.safety].forEach((target) => {
+    if (target) target.textContent = "";
+  });
+  if (mconfigEls.safety) {
+    mconfigEls.safety.appendChild(renderMaintenanceSafetyGroups(sections));
+  }
   for (const section of sections) {
-    const target = section.setup_group === "advanced" ? mconfigEls.advanced : mconfigEls.features;
+    const target =
+      mconfigSectionTab(section) === "expert" ? mconfigEls.advanced : mconfigEls.features;
     if (target) target.appendChild(renderMaintenanceFeatureSection(section));
   }
+  applyMaintenanceSettingsSearch();
 }
 
 // --- load / render --------------------------------------------------------
@@ -16261,6 +16366,157 @@ function renderMaintenanceConfig(data, options) {
     null,
   );
   setMaintenanceCardTone("maintenance-config-card", keepDraft ? "action" : "ok");
+  renderMaintenanceSettingsState();
+}
+
+// Four doors over one draft. Switching a tab only toggles [hidden]: it never
+// reloads and never touches mconfigState.draft, so an unsaved edit made on one
+// tab is still there after visiting another.
+function setMaintenanceSettingsTab(tab) {
+  const next = MAINTENANCE_SETTINGS_TABS.includes(tab)
+    ? tab
+    : mconfigState.settingsTab || "devices";
+  mconfigState.settingsTab = next;
+  document.querySelectorAll("[data-settings-tab]").forEach((button) => {
+    button.setAttribute(
+      "aria-selected",
+      button.dataset.settingsTab === next ? "true" : "false"
+    );
+  });
+  document.querySelectorAll("[data-settings-pane]").forEach((pane) => {
+    pane.hidden = pane.dataset.settingsPane !== next;
+  });
+}
+
+document.querySelectorAll("[data-settings-tab]").forEach((button) => {
+  button.addEventListener("click", () => {
+    setMaintenanceSettingsTab(button.dataset.settingsTab);
+  });
+});
+
+// How many things the operator changed and has not applied. This is a browser
+// projection for the footer and the hub pill only — the authoritative diff is
+// the server's, computed at preview against the file on disk.
+function mconfigDraftChangeCount(state) {
+  if (!state || state.loaded !== true || !state.draft || !state.pristine) return 0;
+  const draft = state.draft;
+  const pristine = state.pristine;
+  let count = 0;
+  const draftFeatures = draft.features || {};
+  const pristineFeatures = pristine.features || {};
+  const paths = new Set(
+    Object.keys(draftFeatures).concat(Object.keys(pristineFeatures))
+  );
+  paths.forEach((path) => {
+    if (JSON.stringify(draftFeatures[path]) !== JSON.stringify(pristineFeatures[path])) {
+      count += 1;
+    }
+  });
+  const draftDevices = Array.isArray(draft.devices) ? draft.devices : [];
+  const pristineDevices = Array.isArray(pristine.devices) ? pristine.devices : [];
+  const total = Math.max(draftDevices.length, pristineDevices.length);
+  for (let index = 0; index < total; index += 1) {
+    if (
+      JSON.stringify(draftDevices[index] || null) !==
+      JSON.stringify(pristineDevices[index] || null)
+    ) {
+      count += 1;
+    }
+  }
+  ["grid_meter", "zendure_mqtt"].forEach((key) => {
+    if (JSON.stringify(draft[key] || null) !== JSON.stringify(pristine[key] || null)) {
+      count += 1;
+    }
+  });
+  return count;
+}
+
+function mconfigChangeSentence(count) {
+  if (count === 1) return "1 unsaved change.";
+  return count + " unsaved changes.";
+}
+
+function renderMaintenanceSettingsState() {
+  const count = mconfigDraftChangeCount(mconfigState);
+  const tone = count > 0 ? "action" : "ok";
+  if (mconfigEls.settingsCount) {
+    mconfigEls.settingsCount.textContent = count
+      ? mconfigChangeSentence(count) + " Nothing is written until you review and apply."
+      : "No unsaved changes.";
+    mconfigEls.settingsCount.dataset.tone = tone;
+  }
+  if (mconfigEls.settingsState) {
+    mconfigEls.settingsState.textContent = count ? count + " unsaved" : "No unsaved";
+    mconfigEls.settingsState.dataset.tone = tone;
+  }
+}
+
+// Client-side search over what is already rendered. It hides rows rather than
+// re-rendering, so nothing in the draft moves and no preview is invalidated.
+function maintenanceSettingsSearchTerms(row) {
+  const parts = [row.dataset.path || ""];
+  row.querySelectorAll(".feature-field-label, .feature-field-desc, .feature-title, .feature-desc")
+    .forEach((node) => parts.push(node.textContent || ""));
+  if (!parts.join("").trim()) parts.push(row.textContent || "");
+  return parts.join(" ").toLowerCase();
+}
+
+function applyMaintenanceSettingsSearch() {
+  const root = mconfigEls.settingsEditorRoot;
+  if (!root) return;
+  const query = ((mconfigEls.settingsSearch && mconfigEls.settingsSearch.value) || "")
+    .trim()
+    .toLowerCase();
+  root.classList.toggle("mconfig-searching", query !== "");
+  const rows = root.querySelectorAll(".feature-field-row");
+  let hits = 0;
+  rows.forEach((row) => {
+    const hit = query === "" || maintenanceSettingsSearchTerms(row).includes(query);
+    row.dataset.searchHit = hit ? "true" : "false";
+    if (hit && query !== "") hits += 1;
+  });
+  root.querySelectorAll(".feature-row, .hardware-card").forEach((card) => {
+    if (query === "") {
+      card.dataset.searchHit = "true";
+      return;
+    }
+    const own = maintenanceSettingsSearchTerms(card).includes(query);
+    const child = card.querySelector('.feature-field-row[data-search-hit="true"]');
+    card.dataset.searchHit = own || child ? "true" : "false";
+  });
+  document.querySelectorAll("[data-settings-pane]").forEach((pane) => {
+    const paneHits = query === ""
+      ? 0
+      : pane.querySelectorAll('.feature-field-row[data-search-hit="true"]').length;
+    const status = document.getElementById(
+      "maintenance-settings-tab-" + pane.dataset.settingsPane + "-status"
+    );
+    if (!status) return;
+    if (query === "") {
+      status.textContent = status.dataset.restText || status.textContent;
+      return;
+    }
+    if (!status.dataset.restText) status.dataset.restText = status.textContent;
+    status.textContent = paneHits + (paneHits === 1 ? " match" : " matches");
+  });
+  if (mconfigEls.settingsSearchCount) {
+    mconfigEls.settingsSearchCount.hidden = query === "";
+    mconfigEls.settingsSearchCount.textContent =
+      hits + (hits === 1 ? " setting" : " settings");
+  }
+}
+
+if (mconfigEls.settingsSearch) {
+  mconfigEls.settingsSearch.addEventListener("input", applyMaintenanceSettingsSearch);
+}
+
+// The settings page owns the draft editor. It loads the config only when there
+// is none yet: arriving from the status page must not re-render over an edit.
+async function loadMaintenanceSettings(tab) {
+  setMaintenanceSettingsTab(tab);
+  if (!mconfigState.loaded) await loadMaintenanceConfig();
+  renderMaintenanceSettingsState();
+  return undefined;
 }
 
 let mconfigLoading = false;
@@ -16957,9 +17213,13 @@ function enterMaintenance() {
 // and the single overview load so opening a panel never double-fetches.
 document.querySelectorAll("[data-open-maintenance-path]").forEach((button) => {
   button.addEventListener("click", () => {
-    const path = button.dataset.openMaintenancePath;
+    // The attribute may carry a tab suffix ("settings-safety"); the hash router
+    // owns the split, so the target is validated the way a deep link is.
+    const target = button.dataset.openMaintenancePath;
+    const hash = "maintenance-" + target;
+    const path = maintenancePathForHash(hash);
     if (!MAINTENANCE_PATHS.includes(path) || path === "hub") return;
-    window.location.hash = "maintenance-" + path;
+    window.location.hash = hash;
   });
 });
 

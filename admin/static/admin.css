@@ -148,11 +148,14 @@ code {
    rule, so a hidden hub would still render above the selected subpage. Restore
    hidden semantics explicitly for the hub and each full-page maintenance panel. */
 .maintenance-hub[hidden],
-#maintenance-manual-panel[hidden],
+#maintenance-status-panel[hidden],
+#maintenance-settings-panel[hidden],
 #maintenance-upgrade-panel[hidden],
 #maintenance-backup-panel[hidden] {
   display: none;
 }
+#maintenance-status-panel,
+#maintenance-settings-panel { display: flex; flex-direction: column; gap: 10px; }
 /* Guided upgrade reads as a clean staged workflow: plain control stages with
    even spacing, no maintenance status accent line ([hidden] keeps priority). */
 #maintenance-upgrade-panel { display: flex; flex-direction: column; gap: 10px; }
@@ -2246,3 +2249,129 @@ code {
 @media (max-width: 860px) {
   .system-alignment-stages { grid-template-columns: 1fr; }
 }
+
+
+/* --- Maintenance settings page ------------------------------------------
+   The settings card is the whole page here, so it drops the accordion chrome:
+   no caret, no toggle, a body that cannot be collapsed shut. It stays a
+   <section id="maintenance-config-card"> because setMaintenanceCardTone() is a
+   silent no-op on a missing id and warns on this card three times. */
+.maintenance-card[data-card-mode="panel"] { padding: 0; }
+.maintenance-card[data-card-mode="panel"]::before { opacity: 0.35; }
+.maintenance-card[data-card-mode="panel"] .maintenance-card-summary { cursor: default; }
+.maintenance-card[data-card-mode="panel"] .maintenance-caret { display: none; }
+
+.maintenance-path-state {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.maintenance-path-state[data-tone="ok"] {
+  color: var(--output);
+  border-color: color-mix(in srgb, var(--output) 45%, var(--border));
+}
+.maintenance-path-state[data-tone="action"] {
+  color: var(--pv);
+  border-color: color-mix(in srgb, var(--pv) 45%, var(--border));
+}
+.maintenance-path-state[data-tone="warn"] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+/* The status page points at the page that can change what it reports. */
+.maintenance-control-foot { display: flex; justify-content: flex-end; margin-top: 4px; }
+.link-button {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--output);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.link-button:hover { text-decoration: underline; }
+.link-button:focus-visible { outline: 2px solid var(--output); outline-offset: 2px; }
+
+/* Four doors over the same draft. Switching one only toggles [hidden]: it never
+   reloads and never touches mconfigState.draft. */
+.mconfig-tabs { margin-bottom: 4px; }
+.mconfig-tabs .setup-step[aria-selected="true"] {
+  border-color: rgba(34, 211, 238, 0.46);
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.16), rgba(139, 92, 246, 0.10));
+  color: var(--text);
+}
+.mconfig-tabpanel { display: flex; flex-direction: column; gap: 10px; }
+.mconfig-tabpanel[hidden] { display: none; }
+
+.mconfig-search-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mconfig-search-label {
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+.mconfig-search-input {
+  flex: 1 1 220px;
+  min-width: 0;
+  background: rgba(8, 12, 20, 0.6);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 12px;
+}
+.mconfig-search-input:focus-visible { outline: 2px solid var(--output); outline-offset: 1px; }
+#maintenance-settings-search-count[hidden] { display: none; }
+.feature-field-row[data-search-hit="false"],
+.feature-list > [data-search-hit="false"],
+.mconfig-hardware-list > [data-search-hit="false"] { display: none; }
+
+/* One footer for every tab: the count and the two draft actions never move. */
+.mconfig-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--output) 30%, var(--border));
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(20, 30, 45, 0.97), rgba(13, 19, 32, 0.99));
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.45);
+}
+.mconfig-footer .mconfig-actions { margin: 0; }
+.mconfig-footer-count { margin: 0; font-size: 13px; font-weight: 750; }
+.mconfig-footer-count[data-tone="action"] { color: var(--pv); }
+.mconfig-footer-count .mconfig-footer-detail { color: var(--muted); font-weight: 600; }
+
+/* Search reveals what it matched: a card body that is collapsed for reading
+   opens for the duration of the query, without touching the open-card state. */
+.mconfig-searching .feature-row[data-search-hit="true"] .feature-body[hidden],
+.mconfig-searching .hardware-card[data-search-hit="true"] .hardware-card-body[hidden] {
+  display: flex;
+}
+.mconfig-searching [data-search-hit="false"] { display: none; }
+
+/* The safety tab keeps the catalog's own grouping: gates first, then the
+   physical envelope, each with the sentence the catalog wrote for it. */
+.mconfig-safety-group + .mconfig-safety-group {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.mconfig-safety-group .config-section-title { margin: 0 0 2px; }
+.mconfig-safety-group .future-note { margin: 0 0 8px; }

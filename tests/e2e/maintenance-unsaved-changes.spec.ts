@@ -24,6 +24,17 @@ async function openInverterCard(page: Page) {
   return { maintenance, card };
 }
 
+// The settings page has no Refresh of its own — "Discard my changes" is the way
+// back to the saved state. The reload that could still clobber a draft is the
+// status page's Refresh, which reloads the config for the Control & safety
+// stage and re-renders the editor in the hidden settings panel.
+async function refreshFromTheStatusPage(page: Page) {
+  const maintenance = new MaintenancePage(page);
+  await maintenance.goTo("status");
+  await maintenance.refresh();
+  await maintenance.goTo("settings");
+}
+
 test.describe("Maintenance settings draft", { tag: ["@maintenance"] }, () => {
   test.beforeEach(async ({ page, seedAdminScenario }) => {
     const login = new LoginPage(page);
@@ -33,24 +44,27 @@ test.describe("Maintenance settings draft", { tag: ["@maintenance"] }, () => {
     await page.reload();
   });
 
-  test("Refresh keeps an unsaved edit and the card it was made in", async ({
+  test("a refresh on the status page keeps an unsaved edit and its open card", async ({
     page,
   }) => {
-    const { maintenance, card } = await openInverterCard(page);
+    const { card } = await openInverterCard(page);
     const serial = cardInput(page, card, "Serial number");
     await expect(serial).toHaveValue("API-SERIAL");
     await serial.fill("EDITED-NOT-SAVED");
 
-    await maintenance.refresh();
+    await refreshFromTheStatusPage(page);
 
     await expect(serial).toHaveValue("EDITED-NOT-SAVED");
     await expect(serial).toBeVisible();
+    await expect(page.locator("#maintenance-config-message")).toContainText(
+      /unsaved changes were kept/,
+    );
   });
 
-  test("Refresh reloads the saved settings once nothing is unsaved", async ({
+  test("a refresh reloads the saved settings once nothing is unsaved", async ({
     page,
   }) => {
-    const { maintenance, card } = await openInverterCard(page);
+    const { card } = await openInverterCard(page);
     const serial = cardInput(page, card, "Serial number");
     await serial.fill("EDITED-NOT-SAVED");
     await page.locator("#maintenance-config-reset-btn").click();
@@ -58,8 +72,11 @@ test.describe("Maintenance settings draft", { tag: ["@maintenance"] }, () => {
       "API-SERIAL",
     );
 
-    await maintenance.refresh();
+    await refreshFromTheStatusPage(page);
 
     await expect(page.locator("#maintenance-config-message")).toHaveText("");
+    await expect(page.locator("#maintenance-settings-count")).toHaveText(
+      "No unsaved changes.",
+    );
   });
 });

@@ -96,7 +96,9 @@ test("Maintenance additions use one compact sequence without renaming existing d
   await login.authenticate();
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await new MaintenancePage(page).openEditor({ discovery: false });
+  // This test adds devices by hand, so the add-devices disclosure has to be
+  // open: it used to be opened by a stray second click from the old helper.
+  await new MaintenancePage(page).openEditor();
 
   const before = await readDraft(page);
   const existingNames = before.devices.map((device: { name: string }) => device.name);
