@@ -26,7 +26,7 @@ belong to [Backup and restore](backup-restore.md).
 
 ### 1 — Open Maintenance → Guided upgrade
 
-![Maintenance hub with Guided upgrade marked Recommended path, Manual configuration and Backup / restore](../../assets/screenshots/admin/admin-maintenance-hub.png)
+![Maintenance hub with Guided upgrade marked Recommended path, Your system and Backup / restore](../../assets/screenshots/admin/admin-maintenance-hub.png)
 
 **What you see:** the Maintenance hub. **Guided upgrade** carries the
 *Recommended path* badge.
@@ -193,9 +193,9 @@ the [EMS Dashboard](../dashboard/index.md) should show live telemetry again.
 
 ## Recovery or next steps
 
-![Maintenance Workflow recovery card](../../assets/screenshots/admin/admin-maintenance-recovery.png)
+![Maintenance Unfinished setup or update card](../../assets/screenshots/admin/admin-maintenance-recovery.png)
 
-A failed upgrade does not throw the workflow away. **Workflow recovery** under
+A failed upgrade does not throw the workflow away. **Unfinished setup or update** under
 Maintenance offers:
 
 - **Resume** — retry from the exact point it is safe to retry from.

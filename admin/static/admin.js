@@ -9692,6 +9692,11 @@ async function restoreSetupWorkflowFromServer() {
 const maintenanceEls = {
   warnings: document.getElementById("maintenance-warnings"),
   systemStatus: document.getElementById("maintenance-system-status"),
+  controlState: document.getElementById("maintenance-control-state"),
+  controlVerdict: document.getElementById("maintenance-control-verdict"),
+  controlTransports: document.getElementById("maintenance-control-transports"),
+  controlEnvelope: document.getElementById("maintenance-control-envelope"),
+  controlNotes: document.getElementById("maintenance-control-notes"),
   layoutSummary: document.getElementById("maintenance-layout-summary"),
   containersSummary: document.getElementById("maintenance-containers-summary"),
   versionsSummary: document.getElementById("maintenance-versions-summary"),
@@ -9748,12 +9753,221 @@ function setMaintenanceFact(el, text, tone) {
   else delete el.dataset.tone;
 }
 
+// A repair card leaves the page only on a proven negative answer. "We could not
+// tell" keeps it visible, because a hidden card reads as "nothing to do here".
+function setMaintenanceCardPresence(cardId, present) {
+  const card = document.getElementById(cardId);
+  if (card) card.hidden = !present;
+}
+
+function maintenanceTelemetryCardPresent(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return true;
+  if (data.load_error === true) return true;
+  return (
+    Number(data.configured_device_count || 0) > 0 ||
+    Number(data.invalid_device_count || 0) > 0 ||
+    Number(data.broker_count || 0) > 0 ||
+    data.broker_configured === true
+  );
+}
+
+function maintenanceMigrationCardPresent(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return true;
+  if (data.status !== "ok") return true;
+  const review = data.review;
+  if (!review || typeof review !== "object") return true;
+  return review.needs_migration === true;
+}
+
+// The collapsed pill has to agree with the sentence next to it: the card used to
+// read "Guided Setup is blocked" under a READY badge.
+function maintenanceRecoveryCardTone(plan) {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return "warn";
+  if (plan.ok !== true) return "warn";
+  if (plan.operation_running === true) return "info";
+  if (plan.blocking === true) return "action";
+  const safe = plan.safe && plan.safe.available === true;
+  const advanced = plan.advanced && plan.advanced.available === true;
+  return safe || advanced ? "action" : "ok";
+}
+
+function maintenanceRecoveryCardPresent(plan) {
+  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return true;
+  if (plan.ok !== true) return true;
+  const lifecycle = plan.lifecycle;
+  if (!lifecycle || typeof lifecycle !== "object") return true;
+  if (String(lifecycle.state || "") !== "idle") return true;
+  const safe = plan.safe && plan.safe.available === true;
+  const advanced = plan.advanced && plan.advanced.available === true;
+  return Boolean(safe || advanced);
+}
+
 // Card tone drives the collapsed row's left accent and status badge.
 function setMaintenanceCardTone(cardId, tone) {
   const card = document.getElementById(cardId);
   if (!card) return;
   if (tone) card.dataset.tone = tone;
   else delete card.dataset.tone;
+}
+
+// One sentence per control state, ordered by cause in the backend. These state
+// what the saved config permits, never that EMS is running, and "unknown" is a
+// real answer: an unproven control state must never read as healthy.
+const MAINTENANCE_CONTROL_STATUS_TEXT = {
+  may_control: { tone: "ok", verdict: "EMS is allowed to change your inverters." },
+  calculating_only: {
+    tone: "info",
+    verdict: "EMS only calculates and does not change your inverters.",
+  },
+  simulated: {
+    tone: "info",
+    verdict: "EMS uses simulated data and does not change your inverters.",
+  },
+  disabled: { tone: "info", verdict: "EMS control is switched off." },
+  not_writing: {
+    tone: "warn",
+    verdict: "Nothing may change an inverter right now.",
+  },
+  unknown: {
+    tone: "warn",
+    verdict: "The control state of this installation is unknown.",
+  },
+};
+
+const MAINTENANCE_CONTROL_TRANSPORT_LABELS = {
+  api: "Local connection",
+  mqtt_local: "Your own MQTT broker",
+  mqtt_zendure: "Zendure cloud",
+};
+
+function maintenanceControlTransportRow(entry) {
+  const label =
+    entry && MAINTENANCE_CONTROL_TRANSPORT_LABELS[entry.control_gate];
+  if (!label) return null;
+  const count = Number(entry.device_count) || 0;
+  if (!entry.armed) return { label, value: "not allowed", tone: null };
+  if (!count) return { label, value: "allowed · no device uses it", tone: null };
+  const devices = count === 1 ? "1 device" : count + " devices";
+  return { label, value: "allowed · " + devices, tone: "ok" };
+}
+
+function maintenanceControlEnvelopeRows(envelope) {
+  const source = envelope && typeof envelope === "object" ? envelope : {};
+  const rows = [];
+  const limits = [];
+  if (Number.isFinite(source.total_output_w)) {
+    limits.push(source.total_output_w + " W total");
+  }
+  if (Number.isFinite(source.device_output_w)) {
+    limits.push(source.device_output_w + " W per device");
+  }
+  if (limits.length) rows.push({ label: "Maximum output", value: limits.join(" · ") });
+  if (Number.isFinite(source.soc_min) && Number.isFinite(source.soc_max)) {
+    const window = source.soc_min + "–" + source.soc_max + " %";
+    rows.push({
+      label: "Charge window",
+      value:
+        source.soc_uniform === false ? window + " (differs per device)" : window,
+    });
+  }
+  return rows;
+}
+
+// The provenance note stands in every state, including unknown: this stage reads
+// the saved config and cannot observe the running container from here.
+const MAINTENANCE_CONTROL_NOTES = {
+  singleController:
+    "Only one controller may change inverter output. Do not run a second one.",
+  stateReconciliation:
+    "EMS may restore device settings it expects, such as the minimum charge.",
+  provenance:
+    "This is what your saved settings allow. Changes apply after EMS restarts.",
+};
+
+function maintenanceControlNotes(control) {
+  const notes = [];
+  const transports = Array.isArray(control.transports) ? control.transports : [];
+  const writing = transports.some(
+    (entry) => entry && entry.armed && Number(entry.device_count) > 0
+  );
+  if (writing) notes.push(MAINTENANCE_CONTROL_NOTES.singleController);
+  if (control.state_reconciliation === true) {
+    notes.push(MAINTENANCE_CONTROL_NOTES.stateReconciliation);
+  }
+  notes.push(MAINTENANCE_CONTROL_NOTES.provenance);
+  return notes;
+}
+
+function maintenanceControlView(control) {
+  const source =
+    control && typeof control === "object" && !Array.isArray(control)
+      ? control
+      : null;
+  const known =
+    source !== null &&
+    Object.prototype.hasOwnProperty.call(
+      MAINTENANCE_CONTROL_STATUS_TEXT,
+      source.status
+    );
+  const status = known ? source.status : "unknown";
+  const text = MAINTENANCE_CONTROL_STATUS_TEXT[status];
+  if (status === "unknown") {
+    return {
+      status,
+      tone: text.tone,
+      verdict: text.verdict,
+      transports: [],
+      envelope: [],
+      notes: [MAINTENANCE_CONTROL_NOTES.provenance],
+    };
+  }
+  return {
+    status,
+    tone: text.tone,
+    verdict: text.verdict,
+    transports: (Array.isArray(source.transports) ? source.transports : [])
+      .map(maintenanceControlTransportRow)
+      .filter(Boolean),
+    envelope: maintenanceControlEnvelopeRows(source.envelope),
+    notes: maintenanceControlNotes(source),
+  };
+}
+
+function renderMaintenanceControlFacts(container, rows) {
+  if (!container) return;
+  container.textContent = "";
+  rows.forEach((row) => {
+    const fact = document.createElement("div");
+    fact.className = "maintenance-fact";
+    const label = document.createElement("span");
+    label.className = "maintenance-fact-label";
+    label.textContent = row.label;
+    const value = document.createElement("span");
+    value.className = "maintenance-fact-value";
+    value.textContent = row.value;
+    if (row.tone) value.dataset.tone = row.tone;
+    fact.append(label, value);
+    container.appendChild(fact);
+  });
+}
+
+function renderMaintenanceControlState(control) {
+  const view = maintenanceControlView(control);
+  const stage = maintenanceEls.controlState;
+  if (stage) stage.dataset.tone = view.tone;
+  setMaintenanceFact(maintenanceEls.controlVerdict, view.verdict, view.tone);
+  renderMaintenanceControlFacts(maintenanceEls.controlTransports, view.transports);
+  renderMaintenanceControlFacts(maintenanceEls.controlEnvelope, view.envelope);
+  const container = maintenanceEls.controlNotes;
+  if (!container) return;
+  container.textContent = "";
+  view.notes.forEach((note) => {
+    const line = document.createElement("p");
+    line.className = "maintenance-control-note";
+    line.textContent = note;
+    container.appendChild(line);
+  });
+  container.hidden = view.notes.length === 0;
 }
 
 function maintenancePathFact(entry) {
@@ -9908,6 +10122,9 @@ function renderMaintenanceSummaries(data) {
 
   setMaintenanceCardTone("maintenance-diagnostics", "info");
 
+  // The exact image tag belongs to the Version & dashboard card, which shows it
+  // in full. Repeating it here pushed a build id in front of the one line that
+  // has to stay readable.
   const systemText =
     (state.label || state.state || "Unknown") +
     " · " +
@@ -9915,8 +10132,7 @@ function renderMaintenanceSummaries(data) {
       ? emsRunning
         ? "EMS running"
         : "EMS not running"
-      : "Docker unavailable") +
-    (emsTag ? " · " + emsTag : "");
+      : "Docker unavailable");
   setMaintenanceFact(maintenanceEls.systemStatus, systemText, healthy ? "ok" : "warn");
 }
 
@@ -10172,6 +10388,10 @@ function zmqttBrokerIssueCopy(code) {
 }
 
 function renderZendureMqttRuntimeStatus(data) {
+  setMaintenanceCardPresence(
+    "maintenance-zendure-mqtt",
+    maintenanceTelemetryCardPresent(data)
+  );
   const view = data && typeof data === "object" ? data : {};
   const state = String(view.runtime_state || "unavailable");
   // An unknown state (version skew: an already-open page rendering a newer
@@ -10265,6 +10485,7 @@ async function loadZendureMqttRuntimeStatus() {
   } catch (err) {
     renderZendureMqttRuntimeStatus({
       runtime_state: "unavailable",
+      load_error: true,
       message: "Could not load Zendure MQTT telemetry status. The Admin server may be unavailable.",
       devices: [],
     });
@@ -10331,6 +10552,10 @@ function mqttMigrationDeviceRow(change) {
 }
 
 function renderMqttMigrationReview(data) {
+  setMaintenanceCardPresence(
+    "maintenance-mqtt-migration",
+    maintenanceMigrationCardPresent(data)
+  );
   resetMqttMigrationStages();
   mqttMigrationState.revision = null;
   mqttMigrationState.review = null;
@@ -12948,6 +13173,42 @@ function mconfigClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+// Consequences worth naming before an edit. restart_required is deliberately
+// absent: most fields carry it, so a badge on all of them would carry no signal.
+const MCONFIG_FIELD_RISK_LABELS = {
+  control_stability: {
+    text: "affects control stability",
+    title:
+      "Changing this can make the control loop oscillate or react too slowly. "
+      + "Change it in small steps and watch the dashboard afterwards.",
+  },
+  data_loss: {
+    text: "can discard stored data",
+    title: "Changing this can drop history or analytics data that is already stored.",
+  },
+  secret: {
+    text: "secret",
+    title:
+      "This value is a credential. It is stored outside the config file and is "
+      + "never shown back in full.",
+  },
+  deprecated: {
+    text: "deprecated",
+    title: "This setting is on its way out and may be removed in a later release.",
+  },
+};
+
+function mconfigFieldRiskBadge(field) {
+  const risk = field && MCONFIG_FIELD_RISK_LABELS[field.risk];
+  if (!risk) return null;
+  const badge = document.createElement("span");
+  badge.className = "mconfig-risk-badge";
+  badge.dataset.risk = field.risk;
+  badge.textContent = risk.text;
+  badge.setAttribute("title", risk.title);
+  return badge;
+}
+
 function mconfigLabelRow(labelText, control, description, unit) {
   const row = document.createElement("label");
   row.className = "feature-field-row";
@@ -13051,12 +13312,18 @@ function mconfigCatalogControl(field, value, onChange, opts) {
 }
 
 function mconfigCatalogRow(field, value, onChange, opts) {
-  return mconfigLabelRow(
+  const row = mconfigLabelRow(
     field.label || field.path,
     mconfigCatalogControl(field, value, onChange, opts),
     field.description || "",
     field.unit || ""
   );
+  if (field.path) row.dataset.path = field.path;
+  if (field.level) row.dataset.level = field.level;
+  if (field.risk) row.dataset.risk = field.risk;
+  const badge = mconfigFieldRiskBadge(field);
+  if (badge) row.appendChild(badge);
+  return row;
 }
 
 function mconfigOverrideEntry(path) {
@@ -14829,7 +15096,7 @@ function mconfigMarkDraftChanged(source) {
     if (mconfigEls.discoveryStatus) {
       mconfigEls.discoveryStatus.textContent =
         count + " discovery " + (count === 1 ? "change" : "changes") +
-        " added to the draft. Preview changes before applying.";
+        " added to the draft. Review the changes before applying.";
     }
   }
 }
@@ -15916,6 +16183,8 @@ function renderMaintenanceConfig(data) {
     const label = data.status === "missing" ? "Config not found" : "Config invalid";
     setMaintenanceFact(mconfigEls.summary, label, "warn");
     setMaintenanceCardTone("maintenance-config-card", "warn");
+    // No readable config means no proven control state; never carry the last one.
+    renderMaintenanceControlState(null);
     return;
   }
 
@@ -15956,6 +16225,7 @@ function renderMaintenanceConfig(data) {
   renderMaintenanceFeatures();
   mconfigUpdateResetRuntimeButton();
 
+  renderMaintenanceControlState((data.summary || {}).control);
   const line = mconfigSummaryLine(data.summary || {});
   mconfigState.summaryLine = line;
   setMaintenanceFact(mconfigEls.summary, line + " · preview not run", null);
@@ -16118,7 +16388,7 @@ async function previewMaintenanceConfig() {
     mconfigPreviewing = false;
     if (button) {
       button.disabled = false;
-      button.textContent = "Preview changes";
+      button.textContent = "Review changes";
     }
   }
 }
@@ -16221,7 +16491,7 @@ async function resetMaintenanceRuntimeOverrides() {
     mconfigResettingRuntime = false;
     if (button) {
       button.disabled = false;
-      button.textContent = "Reset live overrides";
+      button.textContent = "Put live values back";
     }
   }
 }
@@ -16328,13 +16598,13 @@ async function applyMaintenanceConfig() {
   } finally {
     mconfigApplying = false;
     mconfigEls.applyBtn.disabled = false;
-    mconfigEls.applyBtn.textContent = "Apply reviewed draft";
+    mconfigEls.applyBtn.textContent = "Save and apply";
   }
 }
 
-const CONTAINER_SYNC_LABEL = "Restart / sync containers";
+const CONTAINER_SYNC_LABEL = "Restart EMS now";
 const CONTAINER_SYNC_CONFIRM =
-  "Restart / sync containers with the current config? This may recreate EMS and " +
+  "Restart EMS now with the current config? This may recreate EMS and " +
   "start or stop optional feature containers. It will not delete config, data, " +
   "containers, volumes, or backups.";
 
@@ -17009,7 +17279,7 @@ let workflowRecoveryPlan = null;
 let workflowRecoveryBusy = false;
 
 const WORKFLOW_ADVANCED_CONFIRM =
-  "Release stale Admin workflow state?\n\n" +
+  "Force-clear leftover Admin records?\n\n" +
   "The unreadable Admin workflow metadata is backed up with its hashes and " +
   "then removed, so Guided Setup and Guided Upgrade become available again.\n\n" +
   "The installed EMS, live configuration, runtime data, deployment marker, " +
@@ -17077,6 +17347,14 @@ function workflowRecoverySummaryText(plan) {
 }
 
 function renderWorkflowRecovery(plan) {
+  setMaintenanceCardPresence(
+    "maintenance-workflow-recovery",
+    maintenanceRecoveryCardPresent(plan)
+  );
+  setMaintenanceCardTone(
+    "maintenance-workflow-recovery",
+    maintenanceRecoveryCardTone(plan)
+  );
   workflowRecoveryPlan = plan;
   const lifecycle = (plan && plan.lifecycle) || {};
   if (workflowRecoveryEls.summary) {

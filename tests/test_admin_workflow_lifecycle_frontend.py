@@ -370,13 +370,19 @@ def _render_driver(plan, *, epilogue):
             "function workflowRecoverySummaryText",
             "const WORKFLOW_STALE_REASON_LABELS",
             "function workflowStaleFileText",
+            "function maintenanceRecoveryCardPresent",
+            "function maintenanceRecoveryCardTone",
             "function renderWorkflowRecovery",
         )
     )
     preamble = """
 const opened = [];
+const presence = [];
+const tones = [];
 let workflowRecoveryPlan = null;
 function setMaintenanceCardOpen(id, open) { opened.push([id, open]); }
+function setMaintenanceCardPresence(id, present) { presence.push([id, present]); }
+function setMaintenanceCardTone(id, tone) { tones.push([id, tone]); }
 function element() { return { textContent: "", hidden: true }; }
 const workflowRecoveryEls = {
   summary: element(),

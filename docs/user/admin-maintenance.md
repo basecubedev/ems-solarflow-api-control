@@ -31,7 +31,7 @@ Maintenance offers three paths:
 | Path | What it is |
 |---|---|
 | **Guided upgrade** | Pick one Target System Build; align Admin + EMS together (recommended) |
-| **Manual configuration** | Inspect, edit, and restart an existing EMS setup |
+| **Your system** | See what is installed and running, change settings, fix problems |
 | **Backup / restore** | Create, inspect, restore, or delete EMS backups |
 
 ## Guided upgrade
@@ -174,7 +174,7 @@ docker compose -f docker-compose.admin.yml logs
 docker compose -f docker-compose.admin.yml up -d
 ```
 
-## Manual configuration
+## Your system
 
 This path inspects and edits an existing installation.
 
@@ -322,7 +322,7 @@ This path inspects and edits an existing installation.
   context, but remove credentials and expose only masked shapes for Cloud route,
   product and topic identifiers — never their full account-scoped values.
 
-  **Start discovery** searches all three sources, like the setup flow: the
+  **Search my network for devices** searches all three sources, like the setup flow: the
   local network (mDNS refresh plus network scans), local MQTT brokers (a fresh
   read-only listen on reachable brokers, trying anonymous access and every
   saved discovery credential), and — when a Zendure API key is saved — the
@@ -385,9 +385,12 @@ This path inspects and edits an existing installation.
   restored exactly, so the live config never references a secret that does not
   match its stored record.
 
-### Zendure MQTT migration
+### Older MQTT device setup
 
-The Manual configuration path includes a compact **Zendure MQTT migration**
+The card is on the page only while a migration is actually pending; a
+review that cannot be loaded also keeps it visible.
+
+The Your system page carries a compact **Older MQTT device setup**
 card with Review → Backup → Apply → Validate stages. Review shows affected
 devices, the exact-model decision for each device, and whether control is kept
 or disabled. Broker credentials and API keys are never rendered.
@@ -411,9 +414,9 @@ InfluxDB restore is orchestrated through the existing EMS CLI restore flow
 (replace-style, preview and confirmation required); external InfluxDB is not
 covered. See [Backup and restore](admin-backup-restore.md).
 
-## Workflow recovery
+## Unfinished setup or update
 
-**Manual configuration / existing system → Workflow recovery** resolves a Guided
+**Your system → Unfinished setup or update** resolves a Guided
 Setup or Guided Upgrade that can no longer be finished, switched away from, or
 started again. The card stays collapsed and quiet while nothing needs it, and
 opens by itself when the Admin Console reports a blocked workflow.
@@ -426,12 +429,12 @@ shortened workflow/operation reference, and whether an operation is still
 running. Two actions can appear, and only when the Admin Console says they are
 available:
 
-- **Reset guided workflow** — the normal path. It stops the current workflow
+- **Cancel the unfinished setup or update** — the normal path. It stops the current workflow
   through its own owner: a cancellable System Build transition is cancelled, a
   Guided Setup is terminated with its claim-aware cleanup, and a Guided Upgrade
   context is cleared only for the operation it belongs to. No state file is
   deleted.
-- **Release stale Admin workflow state** — for old Admin versions, corrupt
+- **Force-clear leftover Admin records** — for old Admin versions, corrupt
   workflow metadata and orphaned records left by a crash. It asks twice, backs
   the affected Admin workflow files up with their hashes, and only then clears
   them.
@@ -500,7 +503,7 @@ Two cases are deliberately not switched automatically:
 
 - an operation is still running — resume or wait for it;
 - the previous Setup left files it cannot prove it owns — this is an ownership
-  question an operator decides, so Workflow recovery is offered instead.
+  question an operator decides, so the recovery card is offered instead.
 
 ## Safety
 

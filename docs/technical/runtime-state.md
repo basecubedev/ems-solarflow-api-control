@@ -170,7 +170,7 @@ above the runtime power ceiling, a device not yet present in runtime (newly adde
 or renamed), or a read-only/absent runtime file is reported as a per-key skip and
 never fails the Apply. New devices are seeded from config by the EMS on its next
 start. The maintenance editor also shows a per-field provenance badge (installed
-config value vs. live Dashboard override) and a **Reset live overrides** action
+config value vs. live Dashboard override) and a **Put live values back** action
 that writes the installed config values back into runtime-state (it always
 writes the value; it never just clears the override, because the EMS loads
 `config.json` once per process).

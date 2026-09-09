@@ -19,12 +19,12 @@ workflow back to a clean state.
 
 ## Admin diagnostics (read-only)
 
-![EMS diagnostics card expanded with execution mode and the Run diagnostics button](../../assets/screenshots/admin/admin-maintenance-diagnostics.png)
+![Something looks wrong? card expanded with the checked-against fact and the Run the checks button](../../assets/screenshots/admin/admin-maintenance-diagnostics.png)
 
-**Where:** Maintenance → **Manual configuration / existing system** → **EMS
+**Where:** Maintenance → **Your system** → **EMS
 diagnostics**.
 
-**What you select:** **Run diagnostics**.
+**What you select:** **Run the checks**.
 
 **What it changes:** nothing. These are *read-only EMS checks from the installed
 system*, and the config upgrade is checked in **dry-run mode only** — no config
@@ -123,11 +123,11 @@ connection type and sanitized logs.
 
 See [Supported setups](../supported-setups.md) for the current support tiers.
 
-## Workflow recovery
+## Unfinished setup or update
 
-![Workflow recovery card in Maintenance](../../assets/screenshots/admin/admin-maintenance-recovery.png)
+![Unfinished setup or update card in Maintenance](../../assets/screenshots/admin/admin-maintenance-recovery.png)
 
-**Where:** Maintenance → **Manual configuration / existing system** → **Workflow
+**Where:** Maintenance → **Your system** → **Workflow
 recovery**.
 
 **What you see:** the lifecycle verdict for a workflow that did not finish

@@ -56,8 +56,11 @@ from admin.zendure_mqtt_config_draft import (
 from ems.config import (
     MQTT_GRID_METER_TYPES,
     MqttBrokerReferenceAmbiguousError,
+    config_control_devices_by_gate,
+    config_control_flags,
     grid_meter_mqtt_settings,
     normalize_mqtt_grid_meter_settings,
+    resolve_config_write_gate,
     resolve_grid_meter_mqtt_settings,
 )
 from ems.config_catalog import (
@@ -677,6 +680,87 @@ def _feature_draft(config):
     return draft
 
 
+CONTROL_GATE_ORDER = ("api", "mqtt_local", "mqtt_zendure")
+
+
+def _optional_number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _soc_window(devices):
+    lows = [_optional_number(device.get("min_soc")) for device in devices]
+    highs = [_optional_number(device.get("max_soc")) for device in devices]
+    lows = [value for value in lows if value is not None]
+    highs = [value for value in highs if value is not None]
+    if not lows or not highs:
+        return {"soc_min": None, "soc_max": None, "soc_uniform": None}
+    return {
+        "soc_min": min(lows),
+        "soc_max": max(highs),
+        "soc_uniform": len(set(lows)) == 1 and len(set(highs)) == 1,
+    }
+
+
+def _control_state(config):
+    """What the stored config permits, stated without adding an authority.
+
+    Every value is a projection of an EMS/Core decision: the gates come from the
+    shared write-gate evaluator, the device grouping from the Core selectors.
+    The status ladder is ordered by cause so the most fundamental reason is the
+    one shown. It states what the saved config permits, never that EMS is
+    running: ``may_control`` requires an armed transport with a device behind
+    it, nothing more.
+    """
+
+    flags = config_control_flags(config)
+    grouped = config_control_devices_by_gate(config)
+    transports = []
+    for control_gate in CONTROL_GATE_ORDER:
+        decision = resolve_config_write_gate(config, control_gate)
+        transports.append(
+            {
+                "control_gate": control_gate,
+                "gate": decision.gate_name,
+                "transport": decision.transport,
+                "armed": decision.allowed,
+                "blocked_by": list(decision.blocked_by),
+                "device_count": len(grouped[control_gate]),
+            }
+        )
+
+    if not flags["enabled"]:
+        status = "disabled"
+    elif flags["simulation_mode"]:
+        status = "simulated"
+    elif flags["dry_run"]:
+        status = "calculating_only"
+    elif any(entry["armed"] and entry["device_count"] for entry in transports):
+        status = "may_control"
+    else:
+        status = "not_writing"
+
+    system = config.get("system") if isinstance(config.get("system"), dict) else {}
+    controlled = [device for items in grouped.values() for device in items]
+    # Named after what the row shows, never after the core config key: admin.js
+    # must not carry a control-tuning key name (tests/test_control_tuning_defaults).
+    envelope = {
+        "total_output_w": _optional_number(system.get("max_total_power")),
+        "device_output_w": _optional_number(system.get("max_device_power")),
+    }
+    envelope.update(_soc_window(controlled))
+    return {
+        "status": status,
+        "enabled": flags["enabled"],
+        "dry_run": flags["dry_run"],
+        "simulation_mode": flags["simulation_mode"],
+        "state_reconciliation": flags["allow_state_reconciliation_writes"],
+        "transports": transports,
+        "envelope": envelope,
+    }
+
+
 def _summary(config, draft):
     devices = draft["devices"]
     grid_meter = config.get("grid_meter") if isinstance(config.get("grid_meter"), dict) else {}
@@ -689,6 +773,7 @@ def _summary(config, draft):
         "dashboard_enabled": bool(dashboard.get("enabled", False)),
         "influx_enabled": bool(influx.get("enabled", False)),
         "influx_mode": str(influx.get("mode") or "").strip() or None,
+        "control": _control_state(config),
     }
 
 

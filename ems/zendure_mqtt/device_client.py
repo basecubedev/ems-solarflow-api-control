@@ -57,11 +57,8 @@ from ems.mqtt_control.zendure_profiles import (
     WRITE_PROFILE_LEGACY_OBJECT,
     hardware_profile_by_name,
 )
-from ems.zendure_mqtt.service import (
-    SNAPSHOT_STALE,
-    SOURCE_LOCAL_MQTT,
-    SOURCE_ZENDURE_CLOUD_MQTT,
-)
+from ems.zendure_mqtt.config_entries import control_gate_for_broker_source
+from ems.zendure_mqtt.service import SNAPSHOT_STALE
 from ems.zendure_mqtt.write_protocols import (
     CONTROL_PUBLISH_QOS,
     MqttPublishMessage,
@@ -140,12 +137,6 @@ def _coerce_reply(payload):
             return None
         return parsed if isinstance(parsed, dict) else None
     return None
-
-# Broker source -> named write gate the controller must satisfy for this device.
-_SOURCE_GATE = {
-    SOURCE_LOCAL_MQTT: "mqtt_local",
-    SOURCE_ZENDURE_CLOUD_MQTT: "mqtt_zendure",
-}
 
 
 class ZendureMqttDeviceClient:
@@ -277,7 +268,7 @@ class ZendureMqttDeviceClient:
         # a trustworthy cross-transport identity; ``physical_serial`` distinguishes
         # a real, bindable serial from that fallback.
         self.physical_serial = serial_number or None
-        self.control_gate = _SOURCE_GATE.get(source, "mqtt_local")
+        self.control_gate = control_gate_for_broker_source(source)
         self.min_soc = min_soc
         self.max_soc = max_soc
         self.smart_mode = smart_mode

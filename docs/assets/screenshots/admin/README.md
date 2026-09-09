@@ -30,10 +30,10 @@ hostnames.
 | `admin-setup-start.png` | Guided Setup — 05 Start EMS | `setup-start-done` |
 | `admin-maintenance-hub.png` | Maintenance hub (three paths) | `maintenance-hub` |
 | `admin-maintenance-overview.png` | Maintenance — read-only overview | `maintenance-overview` |
-| `admin-maintenance-diagnostics.png` | Maintenance — EMS diagnostics card | `maintenance-diagnostics` |
-| `admin-maintenance-config-hardware.png` | Maintenance — Configuration & hardware card | `maintenance-config-hardware` |
-| `admin-maintenance-mqtt.png` | Maintenance — Zendure MQTT telemetry card | `maintenance-mqtt` |
-| `admin-maintenance-recovery.png` | Maintenance — Workflow recovery card | `maintenance-recovery` |
+| `admin-maintenance-diagnostics.png` | Maintenance — Something looks wrong? card | `maintenance-diagnostics` |
+| `admin-maintenance-config-hardware.png` | Maintenance — Settings & devices card | `maintenance-config-hardware` |
+| `admin-maintenance-mqtt.png` | Maintenance — Device telemetry card | `maintenance-mqtt` |
+| `admin-maintenance-recovery.png` | Maintenance — Unfinished setup or update card | `maintenance-recovery` |
 | `admin-backup-restore.png` | Backup / restore | `backup-restore` |
 | `admin-guided-upgrade-plan.png` | Guided upgrade plan | `guided-upgrade` |
 | `admin-upgrade-running.png` | Guided upgrade — live validation | `upgrade-run-3` |

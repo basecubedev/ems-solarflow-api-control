@@ -358,7 +358,7 @@ The second gate is the user-visible failure mode: a Guided Setup that is no
 longer in use leaves its transition at a non-terminal stage, so **Maintenance
 can no longer save a config change**. Every escape is now a supported backend
 operation — Restart setup, Discard setup, the recovery panel, a lifecycle switch
-(§7.3) or Maintenance → Workflow recovery (§7.4) — and each cancels the exact
+(§7.3) or Maintenance → Unfinished setup or update (§7.4) — and each cancels the exact
 operation its owner named. Deleting `pending-transition.json` by hand is not a
 supported recovery path.
 

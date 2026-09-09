@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ems.device_identity import (
+    broker_sources_from_config,
     normalize_mqtt_route_segment,
     resolve_inverter_identity,
 )
@@ -464,6 +465,37 @@ def zendure_mqtt_effective_broker_source(
         if resolved is not None:
             return resolved
     return normalize_broker_source(zendure_mqtt_source(item))
+
+
+CONTROL_GATE_API = "api"
+CONTROL_GATE_MQTT_LOCAL = "mqtt_local"
+CONTROL_GATE_MQTT_ZENDURE = "mqtt_zendure"
+
+_CONTROL_GATE_BY_BROKER_SOURCE = {
+    SOURCE_LOCAL_MQTT: CONTROL_GATE_MQTT_LOCAL,
+    SOURCE_ZENDURE_CLOUD_MQTT: CONTROL_GATE_MQTT_ZENDURE,
+}
+
+
+def control_gate_for_broker_source(source: Any) -> str:
+    """Named control gate an MQTT broker source writes through.
+
+    An unresolved source stays on the local-MQTT gate rather than falling back
+    to the API gate: an MQTT device must never be counted or evaluated against
+    a transport it cannot use.
+    """
+
+    return _CONTROL_GATE_BY_BROKER_SOURCE.get(source, CONTROL_GATE_MQTT_LOCAL)
+
+
+def control_gate_for_config_device(config: Any, item: Any) -> str:
+    """Control gate the runtime would evaluate for one configured device entry."""
+
+    if not is_control_zendure_mqtt_device_config(item):
+        return CONTROL_GATE_API
+    return control_gate_for_broker_source(
+        zendure_mqtt_effective_broker_source(item, broker_sources_from_config(config))
+    )
 
 
 def _normalized(value: Any) -> str | None:

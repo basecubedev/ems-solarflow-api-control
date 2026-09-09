@@ -23,10 +23,10 @@ inverter between its available connections — without hand-editing `config.json
 
 ### 1 — Open the device list
 
-![Configuration and hardware card showing the inverter and grid-meter configuration](../../assets/screenshots/admin/admin-maintenance-config-hardware.png)
+![Settings and devices card showing the inverter and grid-meter configuration](../../assets/screenshots/admin/admin-maintenance-config-hardware.png)
 
-**Where:** Maintenance → **Manual configuration / existing system** →
-**Configuration & hardware** → *Hardware*.
+**Where:** Maintenance → **Your system** →
+**Settings & devices** → *Hardware*.
 
 **What you see:** the **Grid meter** section and an **Inverters / devices**
 section with one card per logical device. Each card shows the EMS name (`INV_1`,

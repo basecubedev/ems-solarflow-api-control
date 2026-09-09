@@ -9,9 +9,18 @@
       "reasons": []
     },
     "paths": {
-      "config": { "path": "/opt/ems/config/config.json", "exists": true },
-      "data": { "path": "/opt/ems/data", "exists": true },
-      "compose": { "path": "/opt/ems/docker-compose.yml", "exists": true }
+      "config": {
+        "path": "/opt/ems/config/config.json",
+        "exists": true
+      },
+      "data": {
+        "path": "/opt/ems/data",
+        "exists": true
+      },
+      "compose": {
+        "path": "/opt/ems/docker-compose.yml",
+        "exists": true
+      }
     },
     "docker": {
       "available": true,
@@ -37,35 +46,105 @@
         "status": "missing"
       }
     },
-    "links": { "dashboard_url": "http://localhost:8080" },
+    "links": {
+      "dashboard_url": "http://localhost:8080"
+    },
     "warnings": []
   },
   "config": {
     "status": "ok",
     "config_path": "/opt/ems/config/config.json",
     "revision": "demo-rev-1",
-    "summary": { "device_count": 2, "grid_meter_type": "shelly" },
-    "catalog": { "feature_sections": [], "grid_meter_types": ["shelly", "ecotracker", "tasmota"] },
+    "summary": {
+      "device_count": 2,
+      "grid_meter_type": "shelly",
+      "control": {
+        "status": "may_control",
+        "enabled": true,
+        "dry_run": false,
+        "simulation_mode": false,
+        "state_reconciliation": true,
+        "transports": [
+          {
+            "control_gate": "api",
+            "gate": "allow_hardware_writes",
+            "transport": "http",
+            "armed": true,
+            "blocked_by": [],
+            "device_count": 2
+          },
+          {
+            "control_gate": "mqtt_local",
+            "gate": "allow_mqtt_local_control_writes",
+            "transport": "mqtt_local",
+            "armed": true,
+            "blocked_by": [],
+            "device_count": 0
+          },
+          {
+            "control_gate": "mqtt_zendure",
+            "gate": "allow_mqtt_zendure_control_writes",
+            "transport": "mqtt_zendure",
+            "armed": false,
+            "blocked_by": [
+              "allow_mqtt_zendure_control_writes"
+            ],
+            "device_count": 0
+          }
+        ],
+        "envelope": {
+          "total_output_w": 1600,
+          "device_output_w": 800,
+          "soc_min": 10,
+          "soc_max": 100,
+          "soc_uniform": true
+        }
+      }
+    },
+    "catalog": {
+      "feature_sections": [],
+      "grid_meter_types": [
+        "shelly",
+        "ecotracker",
+        "tasmota"
+      ]
+    },
     "draft": {
       "devices": [
-        { "name": "sf800-living", "ip": "192.168.1.50", "sn": "DEMO-SF800-001" },
-        { "name": "sf800-garage", "ip": "192.168.1.51", "sn": "DEMO-SF800-002" }
+        {
+          "name": "sf800-living",
+          "ip": "192.168.1.50",
+          "sn": "DEMO-SF800-001"
+        },
+        {
+          "name": "sf800-garage",
+          "ip": "192.168.1.51",
+          "sn": "DEMO-SF800-002"
+        }
       ],
-      "grid_meter": { "type": "shelly", "ip": "192.168.1.52" }
+      "grid_meter": {
+        "type": "shelly",
+        "ip": "192.168.1.52"
+      }
     }
   },
   "containers_plan": {
     "ok": true,
     "available": true,
     "summary": "No action required",
-    "status_summary": "EMS running · InfluxDB disabled",
+    "status_summary": "EMS running \u00b7 InfluxDB disabled",
     "message": "",
-    "actions": [{ "action": "none", "service": "ems" }],
+    "actions": [
+      {
+        "action": "none",
+        "service": "ems"
+      }
+    ],
     "services": {
       "ems": {
         "desired_state": "running",
         "display_label": "Running",
-        "display_detail": "ems-solarflow-api-control · v0.7.0-RC",
+        "display_detail": "ems-solarflow-api-control \u00b7 v0.7.0-RC",
         "tone": "ok"
       },
       "influxdb": {
@@ -74,6 +153,93 @@
         "display_detail": "Bundled InfluxDB is not enabled",
         "tone": "muted"
       }
+    }
+  },
+  "migration_review_none": {
+    "status": "ok",
+    "revision": "b2c1f0a9d8e7c6b5a4938271605f4e3d2c1b0a99",
+    "review": {
+      "needs_migration": false,
+      "changes": [],
+      "validation": {
+        "status": "ok"
+      }
+    }
+  },
+  "recovery_preview_idle": {
+    "ok": true,
+    "blocking": false,
+    "operation_running": false,
+    "safe": {
+      "available": false,
+      "actions": [],
+      "confirmation_required": true
+    },
+    "advanced": {
+      "available": false,
+      "files": [],
+      "confirmation_required": true,
+      "reason_required": true
+    },
+    "will_preserve": [
+      "config/config.json",
+      "data/runtime-state.json",
+      "docker-compose.yml",
+      "state/.admin-deployment.json",
+      "state/known-good-system-build.json",
+      "backups",
+      "containers and volumes"
+    ],
+    "fingerprint": "f1e2d3c4b5a69788",
+    "lifecycle": {
+      "ok": true,
+      "owner": "none",
+      "state": "idle",
+      "switchable": true,
+      "recoverable": false,
+      "blocking_reason": null,
+      "fingerprint": "f1e2d3c4b5a69788"
+    }
+  },
+  "recovery_preview_blocked": {
+    "ok": true,
+    "blocking": true,
+    "operation_running": false,
+    "safe": {
+      "available": true,
+      "actions": [
+        "clear_setup_cleanup"
+      ],
+      "confirmation_required": true
+    },
+    "advanced": {
+      "available": false,
+      "files": [],
+      "confirmation_required": true,
+      "reason_required": true
+    },
+    "will_preserve": [
+      "config/config.json",
+      "data/runtime-state.json",
+      "docker-compose.yml",
+      "state/.admin-deployment.json",
+      "state/known-good-system-build.json",
+      "backups",
+      "containers and volumes"
+    ],
+    "fingerprint": "a9b8c7d6e5f40312",
+    "lifecycle": {
+      "ok": true,
+      "owner": "guided_setup",
+      "state": "cleanup_pending",
+      "switchable": false,
+      "recoverable": true,
+      "blocking_reason": "cleanup_pending",
+      "setup": {
+        "workflow_id": "setup-2f4c8a1b",
+        "updated_at": "2026-09-08T21:14:07Z"
+      },
+      "fingerprint": "a9b8c7d6e5f40312"
     }
   }
 }

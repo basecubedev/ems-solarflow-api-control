@@ -2706,7 +2706,7 @@ def test_maintenance_hub_exposes_three_user_paths():
         'id="maintenance-manual-panel"', 1
     )[0]
     for path, label in (
-        ("manual", "Manual configuration / existing system"),
+        ("manual", "Your system"),
         ("upgrade", "Guided upgrade"),
         ("backup", "Backup / restore"),
     ):
@@ -4107,10 +4107,11 @@ def test_guided_upgrade_plan_shows_admin_alignment_not_optional_update():
 def test_maintenance_view_has_three_overview_sections():
     html = _read("index.html")
     maintenance = _maintenance_section(html)
-    for label in ("Installation layout", "Runtime containers", "Versions and links"):
+    for label in ("Files on this machine", "EMS services", "Version and dashboard"):
         assert 'aria-label="' + label + '"' in maintenance
-        assert label in maintenance
-    assert "Existing EMS installation overview" in maintenance
+    for title in ("Files on this machine", "EMS services", "Version &amp; dashboard"):
+        assert title in maintenance
+    assert "What is installed, what is running, and what you can change" in maintenance
 
 
 def test_maintenance_view_has_layout_container_and_version_facts():
@@ -4153,7 +4154,7 @@ def test_maintenance_limits_mutations_to_guarded_workflows():
         1,
     )
     manual_without_migration = migration_start + migration_rest.split("</section>", 1)[1]
-    guarded = manual_without_migration.replace("Restart / sync containers", "")
+    guarded = manual_without_migration.replace("Restart EMS now", "")
     for forbidden in (
         "Update",
         "Restart",
@@ -4396,7 +4397,7 @@ def test_maintenance_has_collapsed_diagnostics_card():
     card = maintenance.split('id="maintenance-diagnostics"', 1)
     assert len(card) == 2, "diagnostics card missing"
     # The overview row is a status accordion, not a numbered process stage.
-    assert 'aria-label="EMS diagnostics"' in maintenance
+    assert 'aria-label="Something looks wrong"' in maintenance
     assert 'data-open="false"' in card[1].split(">", 1)[0]
     body = maintenance.split('id="maintenance-diagnostics-body"', 1)[1].split(">", 1)[0]
     assert "hidden" in body
@@ -4499,7 +4500,7 @@ def test_js_diagnostics_is_not_auto_run_on_view_switch():
 def test_index_has_config_and_hardware_card_collapsed_by_default():
     html = _read("index.html")
     assert 'id="maintenance-config-card"' in html
-    assert "Configuration &amp; hardware" in html
+    assert "Settings &amp; devices" in html
     # collapsed by default: the card body is hidden and the toggle is not expanded
     card = html.split('id="maintenance-config-card"', 1)[1].split("</section>", 1)[0]
     assert 'data-open="false"' in card
@@ -4513,9 +4514,9 @@ def test_index_config_card_shows_safe_preview_and_apply_actions():
     html = _read("index.html")
     card = html.split('id="maintenance-config-card"', 1)[1].split("</section>", 1)[0]
     assert 'id="maintenance-config-source"' in card
-    assert "Preview changes" in card
-    assert "Reset draft" in card
-    assert "Apply reviewed draft" in card
+    assert "Review changes" in card
+    assert "Discard my changes" in card
+    assert "Save and apply" in card
     assert "Create a backup before applying (recommended)" in card
     for banned in (">Save<", ">Restart<", ">Restore<", ">Upgrade<"):
         assert banned not in card, f"unexpected write control {banned}"
@@ -4527,8 +4528,8 @@ def test_maintenance_config_uses_setup_hardware_and_feature_groups():
     assert 'id="maintenance-config-hardware"' in card
     assert 'class="mconfig-hardware-list"' in card
     assert "Add more devices" in card
-    assert "Start discovery" in card
-    assert "Add inverter" in card
+    assert "Search my network for devices" in card
+    assert "Add an inverter" in card
     assert 'id="maintenance-config-features"' in card
     assert 'class="feature-list"' in card
     assert "Advanced / System settings" in card
@@ -4775,7 +4776,7 @@ def test_maintenance_config_global_preview_button_remains_bottom_action():
     html = _read("index.html")
     card = html.split('id="maintenance-config-card"', 1)[1].split("</section>", 1)[0]
     assert 'id="maintenance-config-preview-btn"' in card
-    assert "Preview changes" in card
+    assert "Review changes" in card
 
 
 def test_maintenance_discovery_cards_keep_add_actions_not_local_preview():
@@ -5095,7 +5096,7 @@ def test_index_has_container_sync_post_apply_panel():
         'id="maintenance-containers-sync-status"',
     ):
         assert marker in html, marker
-    assert "Restart / sync containers" in html
+    assert "Restart EMS now" in html
 
 
 def test_index_runtime_containers_has_plan_and_action_hosts():
@@ -5117,7 +5118,7 @@ def test_index_runtime_containers_has_plan_and_action_hosts():
         "</section>", 1
     )[0]
     assert 'id="maintenance-runtime-container-actions"' in containers
-    assert "Restart / sync containers" in containers
+    assert "Restart EMS now" in containers
 
 
 def test_runtime_container_card_has_display_detail_hosts():

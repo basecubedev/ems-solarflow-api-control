@@ -36,7 +36,7 @@ async function returnToTaskSelection(page: Page) {
   await expect(start).toBeVisible();
 }
 
-async function openRecoveryCard(page: Page) {
+async function openManualPanel(page: Page) {
   await returnToTaskSelection(page);
   await page.locator('[data-start-path="manage_existing"]').click();
   const loaded = page.waitForResponse((response) =>
@@ -44,6 +44,10 @@ async function openRecoveryCard(page: Page) {
   );
   await page.locator('[data-open-maintenance-path="manual"]').click();
   expect((await loaded).ok()).toBeTruthy();
+}
+
+async function openRecoveryCard(page: Page) {
+  await openManualPanel(page);
   const body = page.locator("#maintenance-workflow-recovery-body");
   // A blocking verdict opens the card by itself; a healthy one is expanded by
   // the operator, which is exactly the difference this helper preserves.
@@ -78,13 +82,16 @@ function acceptConfirmations(page: Page, count: number): Promise<string[]> {
 }
 
 test.describe("Workflow recovery", { tag: ["@authority", "@workflow"] }, () => {
-  test("a healthy console keeps the recovery card quiet", async ({ page }) => {
+  test("a healthy console does not show the recovery card at all", async ({
+    page,
+  }) => {
     await login(page);
-    await openRecoveryCard(page);
+    await openManualPanel(page);
 
-    await expect(page.locator("#maintenance-workflow-recovery-summary")).toHaveText(
-      /No guided workflow needs recovery/i,
-    );
+    // Nothing is stuck, so the card is not on the page. A card that could not be
+    // read stays visible instead — that case is covered by the blocked-workflow
+    // tests below, which all reach it without expanding anything.
+    await expect(page.locator("#maintenance-workflow-recovery")).toBeHidden();
     await expect(page.locator("#maintenance-workflow-recovery-safe")).toBeHidden();
     await expect(
       page.locator("#maintenance-workflow-recovery-advanced"),
@@ -176,7 +183,7 @@ test.describe("Workflow recovery", { tag: ["@authority", "@workflow"] }, () => {
     await page.locator("#maintenance-workflow-recovery-advanced").click();
     const dialogs = await confirmations;
     expect(dialogs).toHaveLength(2);
-    expect(dialogs[0]).toContain("Release stale Admin workflow state?");
+    expect(dialogs[0]).toContain("Force-clear leftover Admin records?");
     expect(dialogs[1]).toContain("last confirmation");
     expect((await executed).ok()).toBeTruthy();
 

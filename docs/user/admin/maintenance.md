@@ -20,12 +20,12 @@ clean reinstall.
 
 ## The three paths
 
-![Maintenance hub with Guided upgrade (Recommended path), Manual configuration / existing system, and Backup / restore](../../assets/screenshots/admin/admin-maintenance-hub.png)
+![Maintenance hub with Guided upgrade (Recommended path), Your system, and Backup / restore](../../assets/screenshots/admin/admin-maintenance-hub.png)
 
 | Card | Use it for | Guide |
 | --- | --- | --- |
 | **Guided upgrade** | Move EMS + Admin to a newer System Build | [Guided Upgrade](guided-upgrade.md) |
-| **Manual configuration / existing system** | Inspect state, run diagnostics, edit config and hardware, recover a workflow | This page |
+| **Your system** | See what is installed and running, change settings, run checks, fix a stuck workflow | This page |
 | **Backup / restore** | Create, inspect, restore or delete backups | [Backup and restore](backup-restore.md) |
 
 Use **← Maintenance** in a panel header to return to this hub without ending
@@ -37,56 +37,90 @@ Read this before clicking something you are unsure about.
 
 | Area | Read-only | Writes config | Recreates containers |
 | --- | --- | --- | --- |
-| Overview (status, layout, containers, versions) | Yes | No | No |
-| EMS diagnostics | Yes | No | No |
-| Zendure MQTT telemetry | Yes | No | No |
-| Configuration & hardware — preview | Yes | No | No |
-| Configuration & hardware — apply | No | Yes, after preview | Optional |
-| Zendure MQTT migration — review | Yes | No | No |
-| Zendure MQTT migration — apply | No | Yes | No |
+| Control & safety | Yes | No | No |
+| Overview (status, files, services, version) | Yes | No | No |
+| Something looks wrong? | Yes | No | No |
+| Device telemetry | Yes | No | No |
+| Settings & devices — preview | Yes | No | No |
+| Settings & devices — apply | No | Yes, after preview | Optional |
+| Older MQTT device setup — review | Yes | No | No |
+| Older MQTT device setup — apply | No | Yes | No |
 | Guided upgrade | No | Yes | Yes |
 | Create backup | Yes | No | No |
 | Restore preview | Yes | No | No |
 | Restore (confirmed) | No | Yes | Possibly |
-| Workflow recovery | Depends on the action chosen | Possibly | Possibly |
+| Unfinished setup or update | Depends on the action chosen | Possibly | Possibly |
 
 Nothing in the write rows happens without a preview and an explicit
 confirmation.
 
 ## Overview — read-only
 
-![Manual configuration panel with system status and the collapsed maintenance cards](../../assets/screenshots/admin/admin-maintenance-overview.png)
+![Your system panel with the control-and-safety statement and the collapsed cards](../../assets/screenshots/admin/admin-maintenance-overview.png)
 
-**What you see:** a **SYSTEM STATUS** line (install kind, EMS state, version) and
-collapsed cards, each with a one-line summary and an OK / INFO / WARNING pill:
+**What you see:** first a **CONTROL & SAFETY** panel, then a **SYSTEM STATUS**
+line (install kind and EMS state), then collapsed cards, each with a
+one-line summary and an OK / INFO / ACTION / WARNING pill:
 
-- **Installation layout** — where config, data and compose live.
-- **Runtime containers** — what is running, and whether InfluxDB is enabled.
-- **Versions & links** — Admin and EMS versions, dashboard URL.
-- **EMS diagnostics** — health checks.
-- **Zendure MQTT telemetry** — MQTT brokers and devices.
-- **Zendure MQTT migration** — pending migration review.
-- **Configuration & hardware** — the config editor.
-- **Workflow recovery** — stuck or failed workflow state.
+- **Settings & devices** — the config editor.
+- **EMS services** — what is running, and whether InfluxDB is enabled.
+- **Something looks wrong?** — health checks.
+- **Files on this machine** — where config, data and compose live.
+- **Version & dashboard** — Admin and EMS versions (the exact image tags), dashboard URL.
+- **Device telemetry** — MQTT brokers and devices.
+- **Older MQTT device setup** — pending migration review.
+- **Unfinished setup or update** — stuck or failed workflow state.
+
+The last three exist for a system that needs repair, so the screenshot above —
+a healthy installation — shows only the first six. They appear when they have
+something to report: a configured MQTT broker or device, a pending migration, a
+workflow that cannot finish. A card whose state could **not** be read stays on
+the page: hidden always means "we asked and the answer was no", never "we could
+not tell".
 
 **What it changes:** nothing. Opening and closing cards is display only.
+
+### Control & safety
+
+The panel at the top answers the one question this page exists for: **may EMS
+change your inverters right now?**
+
+- A sentence naming the effective state — allowed to change your inverters, only
+  calculating, running on simulated data, switched off, or nothing may write.
+- One row per connection (**Local connection**, **Your own MQTT broker**,
+  **Zendure cloud**) saying whether it is allowed and how many devices it covers.
+- The maximum output and charge window your devices are held to.
+- The standing warning that only one controller may change inverter output.
+- Whether EMS may restore device settings it expects, such as the minimum charge.
+
+Two limits are stated on the panel itself and are not a defect:
+
+- It reads your **saved settings**, so a change reaches the running EMS only
+  after a restart.
+- It does not observe the EMS container. It says what your configuration
+  *allows*, never that EMS is currently running.
+
+If any part of it cannot be read, the whole panel reads **unknown** in a warning
+tone rather than showing a partial answer.
 
 **Expected result:** you can read your whole installation state without touching
 it. Use **Refresh** to re-read.
 
 > Every summary here is read from the running system, not from a cached Admin
-> guess. If a fact cannot be proven — for example an image whose build labels are
+> guess. The write permissions in **Control & safety** come from the same EMS
+> gate logic the controller itself applies, projected onto your saved config —
+> the Admin Console does not decide them. If a fact cannot be proven — for example an image whose build labels are
 > missing — it is shown as **unknown** with a warning rather than filled in from
 > a weaker source.
 
-## Diagnostics
+## Something looks wrong?
 
-![EMS diagnostics card expanded showing execution mode and the Run diagnostics button](../../assets/screenshots/admin/admin-maintenance-diagnostics.png)
+![Something looks wrong? card expanded showing the checked-against fact and the Run the checks button](../../assets/screenshots/admin/admin-maintenance-diagnostics.png)
 
 **What you see:** *Read-only EMS checks from the installed system*, an **Execution
-mode** fact, and **Run diagnostics**.
+mode** fact, and **Run the checks**.
 
-**What you select:** **Run diagnostics**.
+**What you select:** **Run the checks**.
 
 **What it changes:** nothing. Checks are read-only, and the config upgrade is
 checked in **dry-run mode only** — no config file is written.
@@ -96,9 +130,9 @@ checked in **dry-run mode only** — no config file is written.
 **If it differs:** for deeper evidence and a support bundle, use the CLI — see
 [Diagnostics and recovery](diagnostics-recovery.md).
 
-## Configuration and hardware
+## Settings and devices
 
-![Configuration and hardware card summary showing inverters, grid meter and preview state](../../assets/screenshots/admin/admin-maintenance-config-hardware.png)
+![Settings and devices card summary showing inverters, grid meter and preview state](../../assets/screenshots/admin/admin-maintenance-config-hardware.png)
 
 **What you see:** *Hardware* (grid meter, inverters, optional **Local MQTT
 broker**), *Features*, and *Advanced / System settings*. The collapsed summary
@@ -113,6 +147,21 @@ reads e.g. *2 inverters · shelly grid meter · preview not run*.
 
 **If it differs:** see [Device management](device-management.md), which covers
 adding, editing, disabling and removing devices, and switching connections.
+
+### What the markers on a setting mean
+
+Some settings carry a small marker next to their description. It names the
+consequence of changing that value, so you can see it before you edit:
+
+| Marker | What it means |
+| --- | --- |
+| *affects control stability* | Can make the control loop oscillate or react too slowly. Change it in small steps and watch the dashboard afterwards. |
+| *can discard stored data* | Can drop history or analytics data that is already stored. |
+| *secret* | A credential. It is stored outside the config file and never shown back in full. |
+| *deprecated* | On its way out and may be removed in a later release. |
+
+Most settings need an EMS restart to take effect and carry no marker for it —
+the **Control & safety** panel states that rule once, at the top of the page.
 
 ### How your answers are read
 
@@ -129,12 +178,15 @@ the same setting in either flow:
 - Changing a grid meter's type removes fields the new type cannot use; keys you
   added to the config by hand are left alone.
 
-## Zendure MQTT telemetry
+## Device telemetry
 
-![Zendure MQTT telemetry card expanded with a local broker, the cloud broker and two online devices](../../assets/screenshots/admin/admin-maintenance-mqtt.png)
+![Device telemetry card expanded with a local broker, the cloud broker and two online devices](../../assets/screenshots/admin/admin-maintenance-mqtt.png)
 
-**What you see:** runtime state, endpoint, device counts, stale threshold, and a
-card per broker and per device.
+**When it appears:** only when this installation has any Zendure MQTT at all — a
+configured broker, a telemetry device, or a device with a problem.
+
+**What you see:** connection state, broker address, device counts, the offline
+threshold, and a card per broker and per device.
 
 **What it changes:** **nothing — this panel is read-only and does not send
 commands.** Configured MQTT control devices may still be controlled by the EMS
@@ -153,12 +205,20 @@ EMS move together as one System Build during a
 [Guided Upgrade](guided-upgrade.md). A standalone Admin repair exists only under
 recovery, for restoring an inconsistent Admin after a failed transition.
 
-## Workflow recovery
+## Unfinished setup or update
 
-![Workflow recovery card](../../assets/screenshots/admin/admin-maintenance-recovery.png)
+![Unfinished setup or update card showing a blocked Guided Setup and the cancel action](../../assets/screenshots/admin/admin-maintenance-recovery.png)
 
-**What you see:** the lifecycle verdict for any workflow that did not finish
-cleanly, and the actions that are actually allowed for it.
+**When it appears:** only when a workflow did not finish cleanly, or when its
+state could not be read. On a healthy console the card is not on the page — the
+screenshot above deliberately shows a blocked Guided Setup so the card has
+something to display.
+
+**What you see:** the lifecycle verdict for the workflow that did not finish
+cleanly, and the actions that are actually allowed for it. The pill on the
+collapsed row matches that verdict: **Action** while something is blocked,
+**Info** while an operation is still running, **Warning** when the state cannot
+be read.
 
 **What it changes:** depends on the action — **Resume** retries, **Discard
 setup** removes files a setup created, **Return to running build** puts the Admin
