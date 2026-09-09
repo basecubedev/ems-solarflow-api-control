@@ -2375,3 +2375,19 @@ code {
 }
 .mconfig-safety-group .config-section-title { margin: 0 0 2px; }
 .mconfig-safety-group .future-note { margin: 0 0 8px; }
+
+/* The hub says what it can prove from the read-only overview, and stops there:
+   whether EMS is *controlling* is stated once, on the status page. */
+.maintenance-hub-verdict {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.maintenance-hub-verdict[data-tone="ok"] { color: var(--output); }
+.maintenance-hub-verdict[data-tone="warn"] { color: var(--pv); }
+.maintenance-path-card .maintenance-path-state { margin-left: auto; }
+.maintenance-path-card .maintenance-recommended-badge + .maintenance-path-arrow,
+.maintenance-path-card .maintenance-path-state + .maintenance-path-arrow {
+  margin-left: 10px;
+}

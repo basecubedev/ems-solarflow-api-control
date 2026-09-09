@@ -102,6 +102,42 @@ test.describe("Maintenance: two doors", { tag: ["@maintenance"] }, () => {
     await expect(serial).toHaveValue("EDITED-ACROSS-TABS");
   });
 
+  test("the hub reports the state of each door", async ({ page }) => {
+    await page.locator('[data-start-path="manage_existing"]').click();
+    await expect(page.locator("#maintenance-hub")).toBeVisible();
+    // Read from the live overview, not from a placeholder.
+    await expect(page.locator("#maintenance-hub-verdict")).not.toHaveText(
+      /Checking this installation/,
+    );
+    await expect(page.locator("#maintenance-hub-status-state")).not.toHaveText("…");
+    await expect(page.locator("#maintenance-hub-backup-state")).not.toHaveText("…");
+    // Nothing was edited yet, so the settings card has nothing to report.
+    await expect(page.locator("#maintenance-hub-settings-state")).toBeHidden();
+  });
+
+  test("an unsaved edit follows the owner back to the hub", async ({ page }) => {
+    const maintenance = new MaintenancePage(page);
+    await maintenance.openSettings();
+    const card = page.locator('[data-source-id="maintenance-inverter-0"]');
+    await card.locator(".hardware-card-summary").click();
+    await card
+      .locator("label")
+      .filter({
+        has: page.locator(".feature-field-label", { hasText: "Serial number" }),
+      })
+      .locator('input[type="text"]')
+      .first()
+      .fill("EDITED-NOT-SAVED");
+
+    await page.locator("#maintenance-back-settings").click();
+
+    await expect(page.locator("#maintenance-hub")).toBeVisible();
+    await expect(page.locator("#maintenance-hub-settings-state")).toBeVisible();
+    await expect(page.locator("#maintenance-hub-settings-state")).toHaveText(
+      /unsaved/,
+    );
+  });
+
   test("the search finds a setting by its config path", async ({ page }) => {
     const maintenance = new MaintenancePage(page);
     await maintenance.openSettings("expert");

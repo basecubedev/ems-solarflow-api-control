@@ -2773,9 +2773,9 @@ def test_maintenance_hub_copy_is_current_and_drops_planned():
     assert "Plan and validate an EMS update" in hub
     assert "Planned upgrade workflow" not in hub
     assert "Planned" not in hub
-    # Backup / restore keeps active wording.
+    # Backup / restore keeps active wording, in the owner's words.
     backup = hub.split('data-maintenance-path="backup"', 1)[1]
-    assert "Create, inspect, restore or delete EMS backups" in backup
+    assert "Save your settings, or put an older copy back" in backup
 
 
 def test_true_maintenance_workflows_keep_numbered_steps():

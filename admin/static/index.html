@@ -1193,6 +1193,8 @@
           </div>
         </header>
 
+        <p class="maintenance-hub-verdict" id="maintenance-hub-verdict" role="status" aria-live="polite">Checking this installation…</p>
+
         <button type="button" class="control-pipeline-stage maintenance-path-card maintenance-path-nav is-primary" data-maintenance-path="upgrade" data-open-maintenance-path="upgrade" aria-label="Open guided upgrade (recommended)">
           <span class="control-stage-head">
             <span class="control-stage-title-block">
@@ -1210,6 +1212,7 @@
               <span class="control-stage-title">System status</span>
               <span class="control-stage-subtitle">Is it running, is it controlling, and what is wrong</span>
             </span>
+            <span class="maintenance-path-state" id="maintenance-hub-status-state" data-tone="muted">…</span>
             <span class="maintenance-path-arrow" aria-hidden="true">→</span>
           </span>
         </button>
@@ -1220,6 +1223,7 @@
               <span class="control-stage-title">Settings &amp; devices</span>
               <span class="control-stage-subtitle">Devices, addresses, features and the safety switches</span>
             </span>
+            <span class="maintenance-path-state" id="maintenance-hub-settings-state" data-tone="action" hidden></span>
             <span class="maintenance-path-arrow" aria-hidden="true">→</span>
           </span>
         </button>
@@ -1228,8 +1232,9 @@
           <span class="control-stage-head">
             <span class="control-stage-title-block">
               <span class="control-stage-title">Backup / restore</span>
-              <span class="control-stage-subtitle">Create, inspect, restore or delete EMS backups</span>
+              <span class="control-stage-subtitle">Save your settings, or put an older copy back</span>
             </span>
+            <span class="maintenance-path-state" id="maintenance-hub-backup-state" data-tone="muted">…</span>
             <span class="maintenance-path-arrow" aria-hidden="true">→</span>
           </span>
         </button>

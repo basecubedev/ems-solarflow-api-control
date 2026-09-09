@@ -7709,6 +7709,9 @@ function setMaintenancePath(path, pinnedTag, settingsTab) {
   // other maintenance sub-panel parks and hides the workflow immediately, and a
   // synthetic preview from another task never follows in.
   rescopeSystemBuildForNavigation();
+  if (next === "hub") {
+    return loadMaintenanceHubState();
+  }
   if (next === "status") {
     return loadMaintenanceOverview();
   }
@@ -10198,6 +10201,115 @@ function renderMaintenanceError() {
   renderMaintenanceWarnings([
     "Could not load the Maintenance overview. The Admin server may be unavailable.",
   ]);
+}
+
+const maintenanceHubEls = {
+  verdict: document.getElementById("maintenance-hub-verdict"),
+  statusState: document.getElementById("maintenance-hub-status-state"),
+  settingsState: document.getElementById("maintenance-hub-settings-state"),
+  backupState: document.getElementById("maintenance-hub-backup-state"),
+};
+
+// What the hub can prove from the read-only overview alone. It deliberately
+// never says whether EMS is *controlling*: that verdict needs the saved config
+// and the transport gates, and it is stated once, on the status page. Saying it
+// twice from two inputs is how the two start to disagree.
+function maintenanceHubView(overview) {
+  if (!overview || typeof overview !== "object") {
+    return {
+      verdict: "This installation could not be read.",
+      tone: "warn",
+      state: "Unknown",
+    };
+  }
+  const install = overview.install_state || {};
+  const ems = (overview.containers || {}).ems || {};
+  const version = ems.tag || (overview.components || {}).ems?.tag || null;
+  const warnings = Array.isArray(overview.warnings) ? overview.warnings : [];
+  if (install.state !== "standard_install") {
+    return {
+      verdict: install.label || "This installation is not complete.",
+      tone: "warn",
+      state: "Needs setup",
+    };
+  }
+  if (!ems.running) {
+    return {
+      verdict: "EMS is installed but not running.",
+      tone: "warn",
+      state: "EMS stopped",
+    };
+  }
+  const parts = ["EMS is running"];
+  if (version) parts.push(version);
+  return {
+    verdict: parts.join(" · ") + ".",
+    tone: warnings.length ? "warn" : "ok",
+    state: warnings.length ? "Needs a look" : "EMS running",
+  };
+}
+
+function renderMaintenanceHubState(overview) {
+  const view = maintenanceHubView(overview);
+  if (maintenanceHubEls.verdict) {
+    maintenanceHubEls.verdict.textContent = view.verdict;
+    maintenanceHubEls.verdict.dataset.tone = view.tone;
+  }
+  if (maintenanceHubEls.statusState) {
+    maintenanceHubEls.statusState.textContent = view.state;
+    maintenanceHubEls.statusState.dataset.tone = view.tone;
+  }
+}
+
+// The unsaved pill appears only once this session actually holds a draft with
+// changes in it. Before that the hub has nothing to report, and "no unsaved
+// changes" about an editor that was never opened is noise, not an answer.
+function renderMaintenanceHubDraftState() {
+  const pill = maintenanceHubEls.settingsState;
+  if (!pill) return;
+  const count = mconfigDraftChangeCount(mconfigState);
+  pill.hidden = count === 0;
+  pill.textContent = count + " unsaved";
+}
+
+function renderMaintenanceHubBackupState(data) {
+  const pill = maintenanceHubEls.backupState;
+  if (!pill) return;
+  const latest = ((data || {}).summary || {}).latest_created_at;
+  if (!latest) {
+    pill.textContent = "No backup yet";
+    pill.dataset.tone = "action";
+    return;
+  }
+  pill.textContent = "Last backup " + latest;
+  pill.dataset.tone = "muted";
+}
+
+let maintenanceHubLoading = false;
+
+// Two read-only reads, both endpoints the pages behind these cards use anyway.
+// Either failing renders its own card as unknown and never the other's.
+async function loadMaintenanceHubState() {
+  if (maintenanceHubLoading) return;
+  maintenanceHubLoading = true;
+  renderMaintenanceHubDraftState();
+  try {
+    const resp = await fetch("/api/admin/maintenance/overview");
+    if (!resp.ok) throw new Error("maintenance overview request failed");
+    renderMaintenanceHubState(await resp.json());
+  } catch (err) {
+    renderMaintenanceHubState(null);
+  }
+  try {
+    const resp = await fetch("/api/admin/maintenance/backups");
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error("backup list unavailable");
+    renderMaintenanceHubBackupState(data);
+  } catch (err) {
+    renderMaintenanceHubBackupState(null);
+  } finally {
+    maintenanceHubLoading = false;
+  }
 }
 
 function setMaintenanceCardOpen(id, open) {
@@ -16367,6 +16479,7 @@ function renderMaintenanceConfig(data, options) {
   );
   setMaintenanceCardTone("maintenance-config-card", keepDraft ? "action" : "ok");
   renderMaintenanceSettingsState();
+  renderMaintenanceHubDraftState();
 }
 
 // Four doors over one draft. Switching a tab only toggles [hidden]: it never
@@ -16449,6 +16562,7 @@ function renderMaintenanceSettingsState() {
     mconfigEls.settingsState.textContent = count ? count + " unsaved" : "No unsaved";
     mconfigEls.settingsState.dataset.tone = tone;
   }
+  renderMaintenanceHubDraftState();
 }
 
 // Client-side search over what is already rendered. It hides rows rather than
