@@ -221,6 +221,63 @@ code {
 .maintenance-title { margin: 0; font-size: 18px; font-weight: 800; }
 .maintenance-subtitle { margin: 0; color: var(--muted); font-size: 12px; }
 
+/* Control & safety: the one always-open stage of the manual panel. It states
+   what the installed config permits and never offers an action, so it reuses the
+   Control/Energy stage shell and the maintenance fact rhythm without the card
+   accordion chrome. */
+.maintenance-control-state {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.maintenance-control-state .control-stage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.maintenance-control-verdict {
+  display: block;
+  margin-top: 2px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.maintenance-control-verdict[data-tone="ok"] { color: var(--battery); }
+.maintenance-control-verdict[data-tone="warn"] { color: var(--danger); }
+.maintenance-control-verdict[data-tone="info"] { color: var(--output); }
+.maintenance-control-body { display: flex; flex-direction: column; gap: 10px; }
+.maintenance-control-body .maintenance-facts:empty { display: none; }
+/* A class-level display beats the UA [hidden] rule, so the empty state needs it
+   back explicitly. */
+.maintenance-control-notes[hidden] { display: none; }
+.maintenance-control-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.maintenance-control-note { margin: 0; color: var(--muted); font-size: 12px; }
+.maintenance-control-state[data-tone="ok"] .maintenance-card-status {
+  color: var(--battery);
+  border-color: color-mix(in srgb, var(--battery) 45%, var(--border));
+}
+.maintenance-control-state[data-tone="warn"] .maintenance-card-status {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+.maintenance-control-state[data-tone="info"] .maintenance-card-status {
+  color: var(--output);
+  border-color: color-mix(in srgb, var(--output) 45%, var(--border));
+}
+.maintenance-control-state[data-tone="ok"] .maintenance-card-status::before { content: "OK"; }
+.maintenance-control-state[data-tone="warn"] .maintenance-card-status::before { content: "Warning"; }
+.maintenance-control-state[data-tone="info"] .maintenance-card-status::before { content: "Info"; }
+
 .maintenance-status-strip {
   display: flex;
   justify-content: space-between;
