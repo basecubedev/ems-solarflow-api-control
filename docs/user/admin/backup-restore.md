@@ -137,8 +137,8 @@ To create an encrypted backup today, use the CLI — see
 | --- | --- |
 | A config change went wrong | Restore the config backup made before the change |
 | An upgrade misbehaves | Restore the backup the upgrade created (leave *Create backup* enabled so it exists) |
-| An upgrade failed mid-way | **Workflow recovery** first — Resume, or Return to running build. See [Diagnostics and recovery](diagnostics-recovery.md) |
-| A workflow was abandoned | **Workflow recovery**; it never deletes a file it cannot prove it owns |
+| An upgrade failed mid-way | **Unfinished setup or update** first — Resume, or Return to running build. See [Diagnostics and recovery](diagnostics-recovery.md) |
+| A workflow was abandoned | **Unfinished setup or update**; it never deletes a file it cannot prove it owns |
 
 **Rollback backups** are made automatically by restores and by config applies, so
 the state you replaced is recoverable even when you did not think to save it.

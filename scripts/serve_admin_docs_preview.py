@@ -50,6 +50,12 @@ SETUP_STEP_SCREENS = frozenset(
     {"discovery", "config-preview", "setup-deployment", "setup-start-done"}
 )
 
+# The recovery card documents a console that is stuck, so that one screen is
+# served a blocked workflow. Every other screen gets the healthy verdict, which
+# is what makes the card disappear from the overview the way a real healthy
+# installation shows it.
+RECOVERY_BLOCKED_SCREENS = frozenset({"maintenance-recovery"})
+
 # Firefox ``--screenshot`` captures at the ``load`` event and does not wait for
 # post-load fetches. A hidden image pointed at ``/__hold`` deliberately delays
 # ``load`` so the SPA has time to authenticate, fetch its demo data, navigate to
@@ -88,6 +94,10 @@ def build_routes():
         "/api/admin/maintenance/containers/plan": overview["containers_plan"],
         "/api/admin/maintenance/backups": backups["backups_list"],
         "/api/admin/maintenance/zendure-mqtt/runtime-status": zendure_mqtt["runtime_status"],
+        # Nothing to migrate: the card is expected to be absent from the overview.
+        "/api/admin/maintenance/zendure-mqtt/migration-review": overview[
+            "migration_review_none"
+        ],
         "/api/admin/maintenance/admin-update/status": upgrade["admin_update_status"],
         "/api/setup/config-template": setup["config_template"],
         "/api/setup/config/catalog": setup["config_catalog"],
@@ -116,7 +126,11 @@ def build_routes():
         "active": setup["system_alignment_status"],
         "idle": setup["system_alignment_idle"],
     }
-    return get_routes, post_routes, releases, alignment
+    recovery = {
+        "blocked": overview["recovery_preview_blocked"],
+        "idle": overview["recovery_preview_idle"],
+    }
+    return get_routes, post_routes, releases, alignment, recovery
 
 
 class DocsPreviewHandler(BaseHTTPRequestHandler):
@@ -224,6 +238,10 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         if length:
             self.rfile.read(length)
+        if path == "/api/admin/workflow-lifecycle/recovery/preview":
+            blocked = self._requesting_screen() in RECOVERY_BLOCKED_SCREENS
+            self._send_json(self.server.recovery["blocked" if blocked else "idle"])
+            return
         if path in self.server.post_routes:
             self._send_json(self.server.post_routes[path])
             return
@@ -234,12 +252,13 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
 
 
 def start_server(host, port):
-    get_routes, post_routes, releases, alignment = build_routes()
+    get_routes, post_routes, releases, alignment, recovery = build_routes()
     server = ThreadingHTTPServer((host, port), DocsPreviewHandler)
     server.get_routes = get_routes
     server.post_routes = post_routes
     server.releases = releases
     server.alignment = alignment
+    server.recovery = recovery
     import threading
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)

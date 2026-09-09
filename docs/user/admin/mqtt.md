@@ -38,7 +38,7 @@ semantics and the measured latency figures.
 
 ### 1 — Add the broker
 
-**Where:** Maintenance → **Configuration & hardware** → *Hardware* → **Local MQTT
+**Where:** Maintenance → **Settings & devices** → *Hardware* → **Local MQTT
 broker (optional)**. In Guided Setup the same form is under *Add a device
 manually*.
 
@@ -63,9 +63,9 @@ projects that help with re-pointing and topic decoding.
 
 ### 3 — Check the result
 
-![Zendure MQTT telemetry card showing a local broker and the cloud broker, both connected, with two online devices](../../assets/screenshots/admin/admin-maintenance-mqtt.png)
+![Device telemetry card showing a local broker and the cloud broker, both connected, with two online devices](../../assets/screenshots/admin/admin-maintenance-mqtt.png)
 
-**Where:** Maintenance → **Zendure MQTT telemetry**.
+**Where:** Maintenance → **Device telemetry**.
 
 **What you see:** runtime state, endpoint, device count, invalid devices, stale
 threshold, a card per broker (source, endpoint, device count, connection status)

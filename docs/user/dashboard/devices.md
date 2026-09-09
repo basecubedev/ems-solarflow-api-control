@@ -116,7 +116,7 @@ the screenshot above, `GRID 120 W` instead of the usual near-zero.
 
 1. Is the device powered and on the network?
 2. For MQTT: is it still publishing to its broker? See
-   [Maintenance → Zendure MQTT telemetry](../admin/mqtt.md#3--check-the-result)
+   [Maintenance → Device telemetry](../admin/mqtt.md#3--check-the-result)
    for age and metric counts.
 3. For Local API: is the device's local API still enabled?
 4. Run `diagnose --hardware` — see [Diagnostics](diagnostics.md).

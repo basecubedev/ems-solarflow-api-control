@@ -67,8 +67,8 @@ Use this before you click something you are unsure about.
 
 | Action | Reads | Writes config | Recreates containers |
 | --- | --- | --- | --- |
-| Start page, Maintenance overview | Yes | No | No |
-| EMS diagnostics, Zendure MQTT telemetry | Yes | No | No |
+| Start page, Maintenance overview, Control & safety | Yes | No | No |
+| Something looks wrong?, Device telemetry | Yes | No | No |
 | Discovery / device scan | Yes | No | No |
 | Config preview | Yes | No | No |
 | Config apply (Setup or Maintenance) | Yes | Yes | Optional |

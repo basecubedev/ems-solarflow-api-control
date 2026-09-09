@@ -10122,6 +10122,9 @@ function renderMaintenanceSummaries(data) {
 
   setMaintenanceCardTone("maintenance-diagnostics", "info");
 
+  // The exact image tag belongs to the Version & dashboard card, which shows it
+  // in full. Repeating it here pushed a build id in front of the one line that
+  // has to stay readable.
   const systemText =
     (state.label || state.state || "Unknown") +
     " · " +
@@ -10129,8 +10132,7 @@ function renderMaintenanceSummaries(data) {
       ? emsRunning
         ? "EMS running"
         : "EMS not running"
-      : "Docker unavailable") +
-    (emsTag ? " · " + emsTag : "");
+      : "Docker unavailable");
   setMaintenanceFact(maintenanceEls.systemStatus, systemText, healthy ? "ok" : "warn");
 }
 
@@ -15094,7 +15096,7 @@ function mconfigMarkDraftChanged(source) {
     if (mconfigEls.discoveryStatus) {
       mconfigEls.discoveryStatus.textContent =
         count + " discovery " + (count === 1 ? "change" : "changes") +
-        " added to the draft. Preview changes before applying.";
+        " added to the draft. Review the changes before applying.";
     }
   }
 }
@@ -16386,7 +16388,7 @@ async function previewMaintenanceConfig() {
     mconfigPreviewing = false;
     if (button) {
       button.disabled = false;
-      button.textContent = "Preview changes";
+      button.textContent = "Review changes";
     }
   }
 }
@@ -16489,7 +16491,7 @@ async function resetMaintenanceRuntimeOverrides() {
     mconfigResettingRuntime = false;
     if (button) {
       button.disabled = false;
-      button.textContent = "Reset live overrides";
+      button.textContent = "Put live values back";
     }
   }
 }
@@ -16596,13 +16598,13 @@ async function applyMaintenanceConfig() {
   } finally {
     mconfigApplying = false;
     mconfigEls.applyBtn.disabled = false;
-    mconfigEls.applyBtn.textContent = "Apply reviewed draft";
+    mconfigEls.applyBtn.textContent = "Save and apply";
   }
 }
 
-const CONTAINER_SYNC_LABEL = "Restart / sync containers";
+const CONTAINER_SYNC_LABEL = "Restart EMS now";
 const CONTAINER_SYNC_CONFIRM =
-  "Restart / sync containers with the current config? This may recreate EMS and " +
+  "Restart EMS now with the current config? This may recreate EMS and " +
   "start or stop optional feature containers. It will not delete config, data, " +
   "containers, volumes, or backups.";
 
@@ -17277,7 +17279,7 @@ let workflowRecoveryPlan = null;
 let workflowRecoveryBusy = false;
 
 const WORKFLOW_ADVANCED_CONFIRM =
-  "Release stale Admin workflow state?\n\n" +
+  "Force-clear leftover Admin records?\n\n" +
   "The unreadable Admin workflow metadata is backed up with its hashes and " +
   "then removed, so Guided Setup and Guided Upgrade become available again.\n\n" +
   "The installed EMS, live configuration, runtime data, deployment marker, " +
