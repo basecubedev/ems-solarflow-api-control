@@ -16174,7 +16174,22 @@ function mconfigSummaryLine(summary) {
   return parts.join(" · ");
 }
 
-function renderMaintenanceConfig(data) {
+// A reload must never destroy edits the operator has not saved yet: they are
+// only in the browser, and nothing on the page announces that they went. Only
+// an explicit discard replaces the draft, and a draft we cannot compare counts
+// as unsaved.
+function mconfigShouldKeepDraft(state, options) {
+  if (options && options.discardDraft === true) return false;
+  if (!state || state.loaded !== true) return false;
+  if (!state.pristine || !state.draft) return false;
+  try {
+    return JSON.stringify(state.draft) !== JSON.stringify(state.pristine);
+  } catch (err) {
+    return true;
+  }
+}
+
+function renderMaintenanceConfig(data, options) {
   if (data.status !== "ok") {
     mconfigState.loaded = false;
     if (mconfigEls.editor) mconfigEls.editor.hidden = true;
@@ -16188,6 +16203,7 @@ function renderMaintenanceConfig(data) {
     return;
   }
 
+  const keepDraft = mconfigShouldKeepDraft(mconfigState, options);
   mconfigState.loaded = true;
   mconfigState.catalog = data.catalog || {
     feature_sections: [],
@@ -16195,21 +16211,27 @@ function renderMaintenanceConfig(data) {
     grid_meter_variants: {},
   };
   mconfigState.overrides = data.overrides || {};
-  mconfigState.revision = data.revision || null;
   mconfigState.previewFingerprint = null;
-  mconfigState.discoveryDraftChanges = 0;
-  mconfigState.pristine = mconfigClone(data.draft || {});
-  mconfigState.draft = mconfigClone(data.draft || {});
-  mconfigNormalizeDraftMqttControl(mconfigState.draft);
-  mconfigState.openHardware.clear();
-  mconfigState.openFeatures.clear();
-  seedDefaultOpenFeatureSections(
-    mconfigState.catalog.feature_sections,
-    mconfigState.openFeatures,
-  );
+  if (!keepDraft) {
+    mconfigState.revision = data.revision || null;
+    mconfigState.discoveryDraftChanges = 0;
+    mconfigState.pristine = mconfigClone(data.draft || {});
+    mconfigState.draft = mconfigClone(data.draft || {});
+    mconfigNormalizeDraftMqttControl(mconfigState.draft);
+    mconfigState.openHardware.clear();
+    mconfigState.openFeatures.clear();
+    seedDefaultOpenFeatureSections(
+      mconfigState.catalog.feature_sections,
+      mconfigState.openFeatures,
+    );
+  }
 
   setMaintenanceFact(mconfigEls.source, data.config_path || "—", "muted");
-  if (mconfigEls.message) mconfigEls.message.textContent = "";
+  if (mconfigEls.message) {
+    mconfigEls.message.textContent = keepDraft
+      ? "Your unsaved changes were kept. Discard them to load the saved settings."
+      : "";
+  }
   if (mconfigEls.editor) mconfigEls.editor.hidden = false;
   if (mconfigEls.result) mconfigEls.result.hidden = true;
   if (mconfigEls.applyPanel) mconfigEls.applyPanel.hidden = true;
@@ -16225,23 +16247,32 @@ function renderMaintenanceConfig(data) {
   renderMaintenanceFeatures();
   mconfigUpdateResetRuntimeButton();
 
+  // Loading normalizes the draft: MQTT control capability is re-derived and the
+  // broker password field is reset. Neither is an operator edit, so the
+  // baseline that decides "unsaved" is the draft as the editor first showed it.
+  if (!keepDraft) mconfigState.pristine = mconfigClone(mconfigState.draft);
+
   renderMaintenanceControlState((data.summary || {}).control);
   const line = mconfigSummaryLine(data.summary || {});
   mconfigState.summaryLine = line;
-  setMaintenanceFact(mconfigEls.summary, line + " · preview not run", null);
-  setMaintenanceCardTone("maintenance-config-card", "ok");
+  setMaintenanceFact(
+    mconfigEls.summary,
+    line + (keepDraft ? " · unsaved changes kept" : " · preview not run"),
+    null,
+  );
+  setMaintenanceCardTone("maintenance-config-card", keepDraft ? "action" : "ok");
 }
 
 let mconfigLoading = false;
 
-async function loadMaintenanceConfig() {
+async function loadMaintenanceConfig(options) {
   if (mconfigLoading) return null;
   mconfigLoading = true;
   try {
     const resp = await fetch("/api/admin/maintenance/config");
     if (!resp.ok) throw new Error("maintenance config request failed");
     const data = await resp.json();
-    renderMaintenanceConfig(data);
+    renderMaintenanceConfig(data, options);
     return data;
   } catch (err) {
     if (mconfigEls.editor) mconfigEls.editor.hidden = true;
@@ -16565,7 +16596,8 @@ async function applyMaintenanceConfig() {
     const successMessage =
       "Config updated at " + data.path +
       (data.backup_path ? " · backup: " + data.backup_path : " · no backup created");
-    await loadMaintenanceConfig();
+    // The draft is what was just written; reload it as the new saved state.
+    await loadMaintenanceConfig({ discardDraft: true });
     // Refresh the overview facts only: config + container plan are handled
     // explicitly below so the guided post-apply panel is not reset.
     await loadMaintenanceOverview({

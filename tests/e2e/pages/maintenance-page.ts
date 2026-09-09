@@ -7,6 +7,7 @@ export class MaintenancePage {
   readonly configCardToggle: Locator;
   readonly editor: Locator;
   readonly discoverySources: Locator;
+  readonly refreshButton: Locator;
 
   constructor(private readonly page: Page) {
     this.configCardToggle = page.locator(
@@ -14,6 +15,20 @@ export class MaintenancePage {
     );
     this.editor = page.locator("#maintenance-config-editor");
     this.discoverySources = page.locator("#maintenance-discovery-sources");
+    this.refreshButton = page.locator("#maintenance-refresh");
+  }
+
+  // Refresh reloads the whole panel; the config read is the last one that can
+  // still redraw the editor, so waiting for it is what makes this deterministic.
+  async refresh() {
+    await Promise.all([
+      this.page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === "/api/admin/maintenance/config" &&
+          response.request().method() === "GET",
+      ),
+      this.refreshButton.click(),
+    ]);
   }
 
   async openManualPanel() {
