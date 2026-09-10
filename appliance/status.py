@@ -31,6 +31,50 @@ HEALTH_HEALTHY = "healthy"
 HEALTH_ATTENTION = "attention"
 HEALTH_DEGRADED = "degraded"
 
+FINDING_ERROR = "error"
+FINDING_WARNING = "warning"
+
+# Where a finding is acted on, in the manager's own view ids. An unreadable
+# section routes to Diagnostics rather than to its own page: the probe that
+# failed is the same one that page would have to render.
+VIEW_DIAGNOSTICS = "diagnostics"
+VIEW_OVERVIEW = "overview"
+VIEW_ADMIN = "admin"
+VIEW_UPDATES = "updates"
+
+SECTION_LABELS = {
+    "system": "Raspberry Pi",
+    "docker": "Docker",
+    "admin": "EMS Admin",
+    "updates": "Updates",
+    "network": "Network",
+    "ssh": "SSH and backup access",
+    "operations": "Operations",
+}
+
+
+def finding(code, severity, section, title, message, next_step):
+    return {
+        "code": code,
+        "severity": severity,
+        "section": section,
+        "title": title,
+        "message": message,
+        "next_step": next_step,
+    }
+
+
+def health_level(findings):
+    """The level is the worst finding, not a second opinion about the same host."""
+
+    severities = {item["severity"] for item in findings}
+    if FINDING_ERROR in severities:
+        return HEALTH_DEGRADED
+    if FINDING_WARNING in severities:
+        return HEALTH_ATTENTION
+    return HEALTH_HEALTHY
+
+
 DPKG_LOG = "var/log/dpkg.log"
 
 # One entry per unit this package ships whose journal is the only account
@@ -177,61 +221,101 @@ class StatusService:
         return sections
 
     def _health(self, sections):
-        warnings = []
-        level = HEALTH_HEALTHY
+        findings = []
 
         for name, payload in sections.items():
             if isinstance(payload, dict) and payload.get("status") == SECTION_UNAVAILABLE:
-                warnings.append(
-                    {"code": f"{name}_unavailable", "message": f"{name} status is unavailable"}
+                label = SECTION_LABELS.get(name, name)
+                findings.append(
+                    finding(
+                        f"{name}_unavailable",
+                        FINDING_WARNING,
+                        VIEW_DIAGNOSTICS,
+                        f"{label} status could not be read",
+                        f"{name} status is unavailable",
+                        "Open Diagnostics and read the appliance log for the probe that failed.",
+                    )
                 )
-                level = HEALTH_ATTENTION
 
         docker = sections.get("docker", {})
         if docker.get("status") == SECTION_OK:
             daemon = docker.get("daemon", {})
             if daemon.get("state") != DAEMON_RUNNING:
-                warnings.append(
-                    {"code": "docker_not_running", "message": "the Docker daemon is not running"}
+                findings.append(
+                    finding(
+                        "docker_not_running",
+                        FINDING_ERROR,
+                        VIEW_DIAGNOSTICS,
+                        "Docker is not running",
+                        "the Docker daemon is not running",
+                        "Nothing containerised runs without it. Collect a support archive in "
+                        "Diagnostics; a restart from the Overview is the usual repair.",
+                    )
                 )
-                level = HEALTH_DEGRADED
 
         admin = sections.get("admin", {})
         if admin.get("status") == SECTION_OK:
             if not admin.get("installed"):
-                warnings.append(
-                    {"code": "admin_not_installed", "message": "the EMS Admin container is missing"}
+                findings.append(
+                    finding(
+                        "admin_not_installed",
+                        FINDING_ERROR,
+                        VIEW_ADMIN,
+                        "No EMS Admin is installed",
+                        "the EMS Admin container is missing",
+                        "Open Admin and install it; that is where an EMS is set up.",
+                    )
                 )
-                level = HEALTH_DEGRADED
             elif not admin.get("healthy"):
-                warnings.append(
-                    {"code": "admin_unhealthy", "message": "the EMS Admin container is not healthy"}
+                findings.append(
+                    finding(
+                        "admin_unhealthy",
+                        FINDING_ERROR,
+                        VIEW_ADMIN,
+                        "EMS Admin is not answering",
+                        "the EMS Admin container is not healthy",
+                        "Open Admin and restart it. Repair reinstalls the container if a "
+                        "restart does not bring it back.",
+                    )
                 )
-                level = HEALTH_DEGRADED
 
         updates = sections.get("updates", {})
         if updates.get("status") == SECTION_OK:
             if updates.get("security_count"):
-                warnings.append(
-                    {
-                        "code": "security_updates_pending",
-                        "message": f"{updates['security_count']} security update(s) available",
-                    }
+                count = updates["security_count"]
+                findings.append(
+                    finding(
+                        "security_updates_pending",
+                        FINDING_WARNING,
+                        VIEW_UPDATES,
+                        "Security updates are waiting",
+                        f"{count} security update(s) available",
+                        "Open System Updates and install them.",
+                    )
                 )
-                level = HEALTH_ATTENTION if level == HEALTH_HEALTHY else level
             if updates.get("reboot_required"):
-                warnings.append(
-                    {"code": "reboot_required", "message": "a reboot is required to finish updates"}
+                findings.append(
+                    finding(
+                        "reboot_required",
+                        FINDING_WARNING,
+                        VIEW_OVERVIEW,
+                        "A restart is needed to finish the updates",
+                        "a reboot is required to finish updates",
+                        "Restart the Raspberry Pi from the power actions on this page.",
+                    )
                 )
-                level = HEALTH_ATTENTION if level == HEALTH_HEALTHY else level
             if not (updates.get("package_manager") or {}).get("healthy", True):
-                warnings.append(
-                    {
-                        "code": "package_manager_unhealthy",
-                        "message": "the package manager needs recovery",
-                    }
+                findings.append(
+                    finding(
+                        "package_manager_unhealthy",
+                        FINDING_ERROR,
+                        VIEW_UPDATES,
+                        "The package manager needs recovery",
+                        "the package manager needs recovery",
+                        "No update can install until it is repaired. Open System Updates and "
+                        "run the repair.",
+                    )
                 )
-                level = HEALTH_DEGRADED
 
         system = sections.get("system", {})
         if system.get("status") == SECTION_OK:
@@ -240,19 +324,33 @@ class StatusService:
             # the journal, the EMS data and the operator's backups. Both
             # entries are judged, because the deployment root may be a separate
             # filesystem an operator mounted there.
-            for name, label in (
-                ("root", "the root filesystem"),
-                ("ems_data", "the EMS deployment"),
+            for name, label, code, title in (
+                (
+                    "root",
+                    "the root filesystem",
+                    "storage_low",
+                    "The root filesystem is nearly full",
+                ),
+                (
+                    "ems_data",
+                    "the EMS deployment",
+                    "persistent_storage_low",
+                    "The EMS deployment is nearly full",
+                ),
             ):
                 entry = storage.get(name) or {}
                 if entry.get("available") and (entry.get("used_percent") or 0) >= 90:
-                    warnings.append(
-                        {
-                            "code": "storage_low" if name == "root" else "persistent_storage_low",
-                            "message": f"{label} is nearly full",
-                        }
+                    findings.append(
+                        finding(
+                            code,
+                            FINDING_ERROR,
+                            VIEW_DIAGNOSTICS,
+                            title,
+                            f"{label} is nearly full",
+                            "Writes fail once it is full, including backups and updates. "
+                            "Open Diagnostics to collect a support archive before freeing space.",
+                        )
                     )
-                    level = HEALTH_DEGRADED
 
         last = None
         operations = sections.get("operations", {})
@@ -262,8 +360,8 @@ class StatusService:
             last = succeeded[0] if succeeded else None
 
         return {
-            "level": level,
-            "warnings": warnings,
+            "level": health_level(findings),
+            "warnings": findings,
             "last_successful_operation": last,
         }
 
