@@ -45,6 +45,7 @@ non-authoritative.
 | System Build identity | Validated paired Admin/EMS build metadata and digests | Selected tag text |
 | Diagnostics contract | EMS diagnostics service and versioned schema | CLI or UI formatting |
 | Authentication secret | Shared validated password/auth store | Session/UI state |
+| Shared UI design tokens (colour, surface, shape) | One token contract that every surface reads | Per-surface `:root` copies in Admin, Dashboard or Appliance CSS |
 
 ### Device activation invariant
 
@@ -58,6 +59,22 @@ effect of changing transport.
 Activation authority MUST NOT be duplicated in transport-specific objects.
 Transport adapters describe connectivity and capabilities, not whether the
 logical device is enabled.
+
+### Shared design-token invariant
+
+Admin, Dashboard and Appliance are separate deployables, but they render one
+product and already share sixteen identically named design tokens. A colour,
+surface or shape value that more than one surface uses has exactly one
+authoritative definition; a per-surface `:root` block is a copy, and copies
+drift silently because a slightly different border alpha looks like nobody's
+bug until a theme makes it three maintenance sites.
+
+Adding a token to one surface that another surface already defines, or changing
+a shared token in one surface only, is the prohibited pattern. Either extend the
+shared contract, or give the new token a name that says it is surface-specific.
+Where the deployment shape prevents a real import, a copy plus a contract test
+comparing the blocks is the accepted substitute — the test is what makes it one
+source rather than three.
 
 ### Workflow ownership invariant
 
@@ -396,6 +413,7 @@ environment failures, accepted limitations and untested hardware behavior.
 ## 20. Prohibited anti-patterns
 
 - A second independent source of truth.
+- A shared design token redefined per surface instead of once.
 - A duplicate writer, launcher or reconciler.
 - Browser state treated as backend authority.
 - File existence treated as ownership.
