@@ -4038,6 +4038,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         """
 
         if self._reject_unrelated_transition_write():
+            self.close_connection = True
             return
         name = self.headers.get("X-Backup-Filename", "")
         service = self.server.backup_service
@@ -4045,14 +4046,11 @@ class AdminHandler(BaseHTTPRequestHandler):
             backup_dir = service.backup_directory()
             accepted = service.accepts_import_name(name)
         except BackupRestoreError as exc:
-            self._drain_body()
-            self._send_json({"ok": False, "error": str(exc)}, status=400)
+            self._refuse_upload({"ok": False, "error": str(exc)}, 400)
             return
         if not accepted:
-            self._drain_body()
-            self._send_json(
-                {"ok": False, "error": "that is not an EMS backup file name"},
-                status=400,
+            self._refuse_upload(
+                {"ok": False, "error": "that is not an EMS backup file name"}, 400
             )
             return
         length = self._upload_length(MAX_BACKUP_UPLOAD_BYTES)
@@ -6978,30 +6976,33 @@ class AdminHandler(BaseHTTPRequestHandler):
             headers=headers,
         )
 
+    def _refuse_upload(self, payload, status):
+        """Answer a non-JSON upload without reading its body.
+
+        _drain_body stops at the JSON ceiling, so it silently does not drain an
+        archive. Leaving those bytes unread would desynchronise the next request
+        on this connection, so a refused upload ends the connection instead.
+        """
+
+        self.close_connection = True
+        self._send_json(payload, status=status)
+
     def _upload_length(self, max_bytes):
         """Validate a non-JSON body's declared size before anything is written.
 
-        Returns the length, or ``None`` once it has already answered. An
-        oversized body is refused without reading it, so the connection closes
-        rather than being left with unread bytes that would desynchronise the
-        next request on it.
+        Returns the length, or ``None`` once it has already answered.
         """
 
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except (TypeError, ValueError):
-            self._send_json(
-                {"ok": False, "error": "invalid Content-Length"}, status=400
-            )
+            self._refuse_upload({"ok": False, "error": "invalid Content-Length"}, 400)
             return None
         if length <= 0:
-            self._send_json({"ok": False, "error": "empty request body"}, status=400)
+            self._refuse_upload({"ok": False, "error": "empty request body"}, 400)
             return None
         if length > max_bytes:
-            self.close_connection = True
-            self._send_json(
-                {"ok": False, "error": "request body too large"}, status=413
-            )
+            self._refuse_upload({"ok": False, "error": "request body too large"}, 413)
             return None
         return length
 

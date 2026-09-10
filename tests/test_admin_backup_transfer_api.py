@@ -273,3 +273,36 @@ def test_the_download_keeps_the_csrf_gated_post():
     body = js.split("async function exportBackup", 1)[1].split("\nasync function ", 1)[0]
     assert 'method: "POST"' in body
     assert "res.blob()" in body
+
+
+def test_a_refused_import_does_not_corrupt_the_next_request(server, install):
+    """_drain_body stops at the JSON ceiling, so it cannot drain an archive.
+
+    Leaving a refused upload's bytes in the socket would make the next request
+    on that connection read them as a request line.
+    """
+
+    import http.client
+    from urllib.parse import urlparse
+
+    parsed = urlparse(server)
+    conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=10)
+    try:
+        url = server + "/api/admin/maintenance/backups/import"
+        headers = dict(auth_headers(url, "POST"))
+        headers["Content-Type"] = "application/octet-stream"
+        headers["X-Backup-Filename"] = "definitely-not-a-backup.tar.gz"
+        conn.request("POST", "/api/admin/maintenance/backups/import", b"x" * 8192, headers)
+        refusal = conn.getresponse()
+        assert refusal.status == 400
+        refusal.read()
+        # The server said it is done with this connection rather than leaving
+        # 8 KiB of body behind it.
+        assert refusal.will_close or refusal.getheader("Connection") == "close"
+    finally:
+        conn.close()
+
+    # A fresh request still gets a real answer.
+    status, data = _json_request(server + "/api/admin/maintenance/backups")
+    assert status == 200
+    assert data["ok"] is True
