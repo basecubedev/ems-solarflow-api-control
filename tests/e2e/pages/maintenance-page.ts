@@ -31,7 +31,9 @@ export class MaintenancePage {
 
   // A reload keeps the address, and a maintenance address now opens its page
   // directly, so the start gate is no longer guaranteed to be the first screen.
-  private async enterMaintenance() {
+  // Public because any spec that reloads while a maintenance page is open needs
+  // it; a private copy per spec is how the assumption spread in the first place.
+  async enterMaintenance() {
     const gate = this.page.locator("#view-start");
     const workspace = this.page.locator("#view-maintenance");
     // Both exist in the document at all times, so wait for whichever is shown
@@ -47,6 +49,11 @@ export class MaintenancePage {
   async openStatus() {
     await this.enterMaintenance();
     await this.goTo("status");
+  }
+
+  async openUpgrade() {
+    await this.enterMaintenance();
+    await this.goTo("upgrade");
   }
 
   async openSettings(tab?: string) {
