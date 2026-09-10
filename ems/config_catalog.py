@@ -524,7 +524,7 @@ _SECTIONS = [
                 "Runs the control logic without sending hardware writes. Useful for checking a setup safely.",
                 "boolean",
                 level="advanced",
-                            group="safety_gates",
+                            group="safety_holds",
             ),
             _field(
                 "system.simulation_mode",
@@ -532,7 +532,7 @@ _SECTIONS = [
                 "Uses simulated values instead of real hardware. Useful for development and testing.",
                 "boolean",
                 level="advanced",
-                            group="safety_gates",
+                            group="safety_holds",
             ),
             _field(
                 "system.allow_hardware_writes",
@@ -903,11 +903,23 @@ _SECTIONS = [
             _group(
                 "safety_gates",
                 "system",
-                "Control & safety",
-                "Every write to your inverters passes these switches.",
+                "What EMS may change",
+                "Turned on, each of these lets EMS act. Turned off, it cannot.",
                 "Every write to hardware passes these gates. Turning one on lets EMS "
                 "change device output; turning one off makes that transport read-only.",
                 1,
+                level="normal",
+                risk="control_stability",
+            ),
+            _group(
+                "safety_holds",
+                "system",
+                "Hold EMS back",
+                "The opposite direction: turned on, each of these stops EMS from "
+                "writing, whatever the switches above allow.",
+                "Dry run and simulation mode suppress every hardware write without "
+                "changing the gates, so a setup can be checked before it acts.",
+                2,
                 level="normal",
                 risk="control_stability",
             ),
@@ -917,7 +929,7 @@ _SECTIONS = [
                 "Output limits",
                 "The physical envelope EMS must stay inside.",
                 "Upper and lower bounds for what EMS may request from the inverters.",
-                2,
+                3,
                 level="normal",
                 risk="control_stability",
             ),
@@ -927,7 +939,7 @@ _SECTIONS = [
                 "Expert control tuning",
                 "Fine tuning for smoothing, ramps, and fast response.",
                 "Changes how quickly and smoothly EMS reacts. Wrong values can make control unstable.",
-                3,
+                4,
                 level="expert",
                 risk="control_stability",
             )

@@ -29,18 +29,29 @@ export class MaintenancePage {
     ]);
   }
 
+  // A reload keeps the address, and a maintenance address now opens its page
+  // directly, so the start gate is no longer guaranteed to be the first screen.
+  private async enterMaintenance() {
+    const gate = this.page.locator("#view-start");
+    const workspace = this.page.locator("#view-maintenance");
+    // Both exist in the document at all times, so wait for whichever is shown
+    // rather than for one of them to appear.
+    await expect
+      .poll(async () => (await gate.isVisible()) || (await workspace.isVisible()))
+      .toBe(true);
+    if (await gate.isVisible()) {
+      await this.page.locator('[data-start-path="manage_existing"]').click();
+    }
+  }
+
   async openStatus() {
-    await expect(this.page.locator("#view-start")).toBeVisible();
-    await this.page.locator('[data-start-path="manage_existing"]').click();
-    await this.page.locator('[data-open-maintenance-path="status"]').click();
-    await expect(this.page.locator("#maintenance-status-panel")).toBeVisible();
+    await this.enterMaintenance();
+    await this.goTo("status");
   }
 
   async openSettings(tab?: string) {
-    await expect(this.page.locator("#view-start")).toBeVisible();
-    await this.page.locator('[data-start-path="manage_existing"]').click();
-    await this.page.locator('[data-open-maintenance-path="settings"]').click();
-    await expect(this.page.locator("#maintenance-settings-panel")).toBeVisible();
+    await this.enterMaintenance();
+    await this.goTo("settings");
     // The editor appears only once the config load has rendered it; waiting for
     // the summary means a later render cannot replace a node under a test.
     await expect(this.editor).toBeVisible();

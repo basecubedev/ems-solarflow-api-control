@@ -161,7 +161,10 @@ def test_the_safety_tab_does_not_hide_a_gate_behind_a_disclosure():
 
 def test_the_safety_tab_takes_its_grouping_from_the_catalog():
     js = _read("admin.js")
-    assert 'const MAINTENANCE_SAFETY_GROUPS = ["safety_gates", "limits"]' in js
+    assert (
+        'const MAINTENANCE_SAFETY_GROUPS = ["safety_gates", "safety_holds", "limits"]'
+        in js
+    )
     body = js.split("function renderMaintenanceSafetyGroups", 1)[1].split("\n}", 1)[0]
     # Titles and order come from the catalog entry, never from a copy here.
     assert "group.title" in body
@@ -242,3 +245,44 @@ def test_the_safety_tab_is_never_a_silent_empty_box():
     assert "safety.childNodes.length" in body
     assert "maintenance-config-safety-empty" in body
     assert "Expert tab" in body
+
+
+# --- saying each thing once ------------------------------------------------
+
+
+def test_the_save_rule_is_stated_once_above_the_editor():
+    """The header, a paragraph and the footer all said the same sentence."""
+
+
+    panel = _settings_panel()
+    assert 'id="maintenance-settings-intro"' not in panel
+    assert panel.count("Nothing is saved until you review and apply.") == 1
+
+
+def test_discarding_nothing_is_not_offered():
+    js = _read("admin.js")
+    body = js.split("function renderMaintenanceSettingsState", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "resetBtn.disabled = count === 0" in body
+    # The primary treatment belongs to the action that has something to do.
+    assert "primary-button" in body
+
+
+def test_a_consequence_shared_by_a_whole_block_is_stated_once():
+    """A badge on every row of a block is noise, not a warning.
+
+    The Expert tab put "affects control stability" on all seven rows of System
+    basics, and Output limits carried it on all three.
+    """
+
+    js = _read("admin.js")
+    helper = js.split("function mconfigHoistSharedRisk", 1)[1].split("\nfunction ", 1)[0]
+    assert "mconfig-risk-badge" in helper
+    assert "remove()" in helper
+    levelled = js.split("function mconfigLevelledFields", 1)[1].split("\nfunction ", 1)[0]
+    assert "mconfigHoistSharedRisk" in levelled
+    groups = js.split("function renderMaintenanceSafetyGroups", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "mconfigHoistSharedRisk" in groups

@@ -259,14 +259,19 @@ def test_template_preserves_documented_assist_power_default_mismatch():
 # Admin must not decide which settings are safety-relevant: that is a property
 # of the configuration, so the catalog names it and the console reads it.
 
+# "On" means allowed here.
 SAFETY_GATE_PATHS = {
     "system.enabled",
-    "system.dry_run",
-    "system.simulation_mode",
     "system.allow_hardware_writes",
     "system.allow_mqtt_local_control_writes",
     "system.allow_mqtt_zendure_control_writes",
     "system.allow_state_reconciliation_writes",
+}
+
+# "On" means blocked here — the opposite polarity, so its own group.
+SAFETY_HOLD_PATHS = {
+    "system.dry_run",
+    "system.simulation_mode",
 }
 
 ENVELOPE_PATHS = {
@@ -316,11 +321,31 @@ def test_the_physical_envelope_is_its_own_named_group():
     assert members == ENVELOPE_PATHS
 
 
+def test_the_switches_that_hold_ems_back_are_their_own_group():
+    """Mixed polarity in one list is a comprehension hazard on a safety panel.
+
+    "Allow hardware writes" on means EMS writes; "Dry run" on means it writes
+    nothing. Rendered as one list of seven checkboxes, the same gesture means
+    opposite things, so the two polarities are two groups.
+    """
+
+    section = _system_section()
+    group = _group_by_id(section, "safety_holds")
+    assert group is not None, "system section has no safety_holds group"
+    members = {
+        field["path"]
+        for field in section["fields"]
+        if field.get("group") == "safety_holds"
+    }
+    assert members == SAFETY_HOLD_PATHS
+    assert not (SAFETY_GATE_PATHS & SAFETY_HOLD_PATHS)
+
+
 def test_the_safety_groups_are_not_hidden_behind_a_disclosure():
     """A gate the owner cannot find is a gate they cannot check."""
 
     section = _system_section()
-    for group_id in ("safety_gates", "limits"):
+    for group_id in ("safety_gates", "safety_holds", "limits"):
         assert _group_by_id(section, group_id)["level"] == "normal"
 
 
@@ -333,7 +358,10 @@ def test_the_safety_groups_do_not_relevel_the_fields_themselves():
     """
 
     fields = get_config_feature_field_index()
-    for path in SAFETY_GATE_PATHS - {"system.enabled", "system.dry_run"}:
+    for path in (SAFETY_GATE_PATHS | SAFETY_HOLD_PATHS) - {
+        "system.enabled",
+        "system.dry_run",
+    }:
         assert fields[path]["level"] == "advanced"
     assert fields["system.enabled"]["level"] == "normal"
     assert fields["system.dry_run"]["level"] == "normal"

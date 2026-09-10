@@ -2430,3 +2430,17 @@ code {
   font-weight: 600;
   font-size: 11px;
 }
+
+/* One consequence, stated once above the block it applies to, instead of the
+   same badge repeated on every row inside it. */
+.mconfig-block { display: flex; flex-direction: column; gap: 6px; }
+.mconfig-block-risk {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  border-left: 2px solid color-mix(in srgb, var(--pv) 55%, var(--border));
+  padding-left: 8px;
+}
+.mconfig-block-risk[data-risk="data_loss"] {
+  border-left-color: color-mix(in srgb, var(--danger) 55%, var(--border));
+}

@@ -13371,10 +13371,14 @@ const MCONFIG_FIELD_RISK_LABELS = {
     title:
       "Changing this can make the control loop oscillate or react too slowly. "
       + "Change it in small steps and watch the dashboard afterwards.",
+    shared: "Every setting here affects control stability. Change them in small "
+      + "steps and watch the dashboard afterwards.",
   },
   data_loss: {
     text: "can discard stored data",
     title: "Changing this can drop history or analytics data that is already stored.",
+    shared: "Every setting here can drop history or analytics data that is "
+      + "already stored.",
   },
   secret: {
     text: "secret",
@@ -13397,6 +13401,26 @@ function mconfigFieldRiskBadge(field) {
   badge.textContent = risk.text;
   badge.setAttribute("title", risk.title);
   return badge;
+}
+
+// A badge that repeats on every row of a block stops being a warning and
+// becomes wallpaper. When a whole block shares one consequence it is stated
+// once above the block and the per-row badges come off.
+function mconfigHoistSharedRisk(list, fields) {
+  if (fields.length < 2) return list;
+  const risk = fields[0].risk;
+  const label = risk && MCONFIG_FIELD_RISK_LABELS[risk];
+  if (!label || !label.shared) return list;
+  if (!fields.every((field) => field.risk === risk)) return list;
+  list.querySelectorAll(".mconfig-risk-badge").forEach((badge) => badge.remove());
+  const note = document.createElement("p");
+  note.className = "mconfig-block-risk";
+  note.dataset.risk = risk;
+  note.textContent = label.shared;
+  const wrap = document.createElement("div");
+  wrap.className = "mconfig-block";
+  wrap.append(note, list);
+  return wrap;
 }
 
 function mconfigLabelRow(labelText, control, description, unit) {
@@ -13595,7 +13619,7 @@ function mconfigLevelledFields(fields, renderRow) {
   const normal = document.createElement("div");
   normal.className = "mconfig-fields feature-fields";
   levels.normal.forEach((field) => normal.appendChild(renderRow(field)));
-  body.appendChild(normal);
+  body.appendChild(mconfigHoistSharedRisk(normal, levels.normal));
   [
     ["advanced", "Advanced settings", "feature-advanced"],
     ["expert", "Developer / expert settings", "feature-expert"],
@@ -13608,7 +13632,7 @@ function mconfigLevelledFields(fields, renderRow) {
     const list = document.createElement("div");
     list.className = "mconfig-fields feature-fields";
     levels[level].forEach((field) => list.appendChild(renderRow(field)));
-    details.append(summary, list);
+    details.append(summary, mconfigHoistSharedRisk(list, levels[level]));
     body.appendChild(details);
   });
   return body;
@@ -16366,7 +16390,7 @@ function renderMaintenanceFeatureSection(section) {
 
 // The catalog decides which settings are safety-relevant, not this file: the
 // groups are declared in ems/config_catalog.py and read here by name only.
-const MAINTENANCE_SAFETY_GROUPS = ["safety_gates", "limits"];
+const MAINTENANCE_SAFETY_GROUPS = ["safety_gates", "safety_holds", "limits"];
 
 function mconfigIsSafetyField(field) {
   return MAINTENANCE_SAFETY_GROUPS.includes(field && field.group);
@@ -16418,7 +16442,7 @@ function renderMaintenanceSafetyGroups(sections) {
         )
       );
     });
-    block.append(title, note, list);
+    block.append(title, note, mconfigHoistSharedRisk(list, fields));
     wrap.appendChild(block);
   });
   return wrap;
@@ -16627,9 +16651,16 @@ function renderMaintenanceSettingsState() {
   const tone = count > 0 ? "action" : "ok";
   if (mconfigEls.settingsCount) {
     mconfigEls.settingsCount.textContent = count
-      ? mconfigChangeSentence(count) + " Nothing is written until you review and apply."
+      ? mconfigChangeSentence(count) + " They survive a refresh until you apply or discard them."
       : "No unsaved changes.";
     mconfigEls.settingsCount.dataset.tone = tone;
+  }
+  // Discarding nothing does nothing, and the primary treatment belongs to the
+  // action that has something to do.
+  if (mconfigEls.resetBtn) mconfigEls.resetBtn.disabled = count === 0;
+  if (mconfigEls.previewBtn) {
+    mconfigEls.previewBtn.classList.toggle("primary-button", count > 0);
+    mconfigEls.previewBtn.classList.toggle("secondary-button", count === 0);
   }
   if (mconfigEls.settingsState) {
     mconfigEls.settingsState.textContent = count ? count + " unsaved" : "No unsaved";
@@ -16695,6 +16726,18 @@ function applyMaintenanceSettingsSearch() {
 
 if (mconfigEls.settingsSearch) {
   mconfigEls.settingsSearch.addEventListener("input", applyMaintenanceSettingsSearch);
+}
+
+// Every control writes straight into the draft, so the page's summary of that
+// draft has to redraw from the same events. Delegating from the editor covers
+// controls that do not exist yet; without it the unsaved count — and the
+// actions gated on it — lag one edit behind.
+if (mconfigEls.editor) {
+  ["input", "change"].forEach((event) =>
+    mconfigEls.editor.addEventListener(event, () =>
+      renderMaintenanceSettingsState()
+    )
+  );
 }
 
 // The settings page owns the draft editor. It loads the config only when there
