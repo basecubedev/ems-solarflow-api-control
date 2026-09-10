@@ -92,6 +92,45 @@ test.describe("Maintenance: navigation", { tag: ["@maintenance"] }, () => {
   });
 });
 
+// The landing states what this host has. It was read once at bootstrap and
+// never again, so a finished Guided Setup left it still insisting that nothing
+// was installed — the one screen whose whole job is to be current.
+test.describe("Landing: what this host has", { tag: ["@setup"] }, () => {
+  test.beforeEach(async ({ page, seedAdminScenario }) => {
+    const login = new LoginPage(page);
+    await login.open();
+    await login.authenticate();
+    await seedAdminScenario("mixed_transports");
+    await page.reload();
+  });
+
+  test("coming back to the landing reads the install state again", async ({
+    page,
+  }) => {
+    const reads: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/api/admin/install-state")) {
+        reads.push(request.url());
+      }
+    });
+    await page.locator('[data-start-path="manage_existing"]').click();
+    await expect(page.locator("#maintenance-hub")).toBeVisible();
+    const before = reads.length;
+    await page.locator('#maintenance-hub [data-back="landing"]').click();
+    await expect(page.locator("#view-start")).toBeVisible();
+    await expect.poll(() => reads.length).toBeGreaterThan(before);
+  });
+
+  test("returning to the landing moves focus to its heading", async ({
+    page,
+  }) => {
+    await page.locator('[data-start-path="manage_existing"]').click();
+    await expect(page.locator("#maintenance-hub")).toBeVisible();
+    await page.locator('#maintenance-hub [data-back="landing"]').click();
+    await expect(page.locator("#view-start h2")).toBeFocused();
+  });
+});
+
 // The hub used to print "Recommended path" on the Guided upgrade card whatever
 // the system said — including for an installation it could not see running.
 test.describe("Maintenance: hub recommendation", { tag: ["@maintenance"] }, () => {
@@ -139,12 +178,14 @@ test.describe("Maintenance: what is wrong", { tag: ["@maintenance"] }, () => {
     await expect(page.locator("#maintenance-findings-headline")).toContainText(
       /needs? your attention|could not be read/,
     );
-    const first = page.locator(".maintenance-finding").first();
+    // Scoped to this page's list: the landing renders its own findings with the
+    // same class, and a bare selector picks up that hidden list first.
+    const first = page.locator("#maintenance-findings-list .maintenance-finding").first();
     await expect(first).toBeVisible();
     await expect(first.locator(".maintenance-finding-next")).not.toBeEmpty();
     // Worst first: no finding may outrank the one above it.
     const order = await page
-      .locator(".maintenance-finding")
+      .locator("#maintenance-findings-list .maintenance-finding")
       .evaluateAll((items) =>
         items.map((item) =>
           ["error", "warning", "info"].indexOf(

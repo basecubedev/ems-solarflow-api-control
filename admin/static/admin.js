@@ -8248,11 +8248,11 @@ function renderStepper() {
   SETUP_STEPS.forEach((step) =>
     setSummary(setupEls.stepStatus[step], setupStepStatusText(step))
   );
-  const active = setupState.activeStep;
+  const activeStep = setupState.activeStep;
   const progress = setupProgressView(
-    active,
-    setupStepStatusText(active),
-    setupStepTone(active)
+    activeStep,
+    setupStepStatusText(activeStep),
+    setupStepTone(activeStep)
   );
   if (setupEls.verdict) {
     setupEls.verdict.textContent = progress.verdict;
@@ -17888,6 +17888,10 @@ function showLanding() {
   if (startEls.gate) startEls.gate.hidden = false;
   workspaceRevealed = false;
   focusPageHeading(startEls.gate);
+  // The landing's whole job is to say what this host has right now, and coming
+  // back is exactly when that answer may have changed — a finished setup, a
+  // restored backup. Reading it once at bootstrap left it stating the past.
+  loadInstallState();
   if (window.location.hash) {
     history.replaceState(null, "", window.location.pathname + window.location.search);
   }
