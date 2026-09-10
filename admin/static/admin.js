@@ -9742,8 +9742,10 @@ async function restoreSetupWorkflowFromServer() {
 // mutating action is exposed yet.
 
 const maintenanceEls = {
-  warnings: document.getElementById("maintenance-warnings"),
   systemStatus: document.getElementById("maintenance-system-status"),
+  findings: document.getElementById("maintenance-findings"),
+  findingsHeadline: document.getElementById("maintenance-findings-headline"),
+  findingsList: document.getElementById("maintenance-findings-list"),
   controlState: document.getElementById("maintenance-control-state"),
   controlVerdict: document.getElementById("maintenance-control-verdict"),
   controlTransports: document.getElementById("maintenance-control-transports"),
@@ -10027,17 +10029,46 @@ function maintenancePathFact(entry) {
   return { text: exists ? "found" : "missing", tone: exists ? "ok" : "warn" };
 }
 
-function renderMaintenanceWarnings(warnings) {
-  const el = maintenanceEls.warnings;
-  if (!el) return;
-  const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
-  if (!list.length) {
-    el.hidden = true;
-    el.innerHTML = "";
-    return;
-  }
-  el.hidden = false;
-  el.innerHTML = list.map((note) => "<span>" + escapeHtml(note) + "</span>").join("<br>");
+function maintenanceFindingsHeadline(findings) {
+  if (!findings.length) return "Nothing needs your attention.";
+  if (findings.length === 1) return "1 thing needs your attention.";
+  return findings.length + " things need your attention.";
+}
+
+// The page's own headline promises "what is wrong". The server ranks the answer;
+// this renders it in that order, because a second sort here would be a second
+// ranking rule. An unreadable block is reported as unreadable, never as healthy.
+function renderMaintenanceFindings(health) {
+  const section = maintenanceEls.findings;
+  const headline = maintenanceEls.findingsHeadline;
+  const list = maintenanceEls.findingsList;
+  if (!section || !headline || !list) return;
+  const readable = Boolean(health) && Array.isArray(health.findings);
+  const findings = readable ? health.findings.filter(Boolean) : [];
+  section.hidden = false;
+  section.dataset.status = readable ? String(health.status || "ok") : "error";
+  headline.textContent = readable
+    ? maintenanceFindingsHeadline(findings)
+    : "This installation could not be read.";
+  list.replaceChildren(
+    ...findings.map((finding) => {
+      const item = document.createElement("li");
+      item.className = "maintenance-finding";
+      item.dataset.code = String(finding.code || "");
+      item.dataset.severity = String(finding.severity || "info");
+      const title = document.createElement("p");
+      title.className = "maintenance-finding-title";
+      title.textContent = String(finding.title || "");
+      const message = document.createElement("p");
+      message.className = "maintenance-finding-message";
+      message.textContent = String(finding.message || "");
+      const next = document.createElement("p");
+      next.className = "maintenance-finding-next";
+      next.textContent = String(finding.next_step || "");
+      item.append(title, message, next);
+      return item;
+    })
+  );
 }
 
 function renderMaintenanceImage(el, image) {
@@ -10113,7 +10144,7 @@ function renderMaintenance(data) {
   const dashboard = data.links && data.links.dashboard_url;
   renderMaintenanceDashboard(dashboard);
   renderMaintenanceSummaries(data);
-  renderMaintenanceWarnings(data.warnings);
+  renderMaintenanceFindings(data.health);
 }
 
 // The dashboard link href is set through the DOM property (never innerHTML) so
@@ -10215,9 +10246,7 @@ function renderMaintenanceError() {
   ].forEach((el) => setMaintenanceFact(el, "unavailable", "muted"));
   renderMaintenanceDashboard(null);
   if (maintenanceEls.stateMessage) maintenanceEls.stateMessage.textContent = "";
-  renderMaintenanceWarnings([
-    "Could not load the Maintenance overview. The Admin server may be unavailable.",
-  ]);
+  renderMaintenanceFindings(null);
 }
 
 const maintenanceHubEls = {

@@ -1250,7 +1250,10 @@
         </div>
         <button type="button" id="maintenance-refresh" class="refresh-button">Refresh</button>
       </header>
-      <p id="maintenance-warnings" class="maintenance-warnings" role="status" aria-live="polite" hidden></p>
+      <section class="maintenance-findings" id="maintenance-findings" aria-label="What needs attention" role="status" aria-live="polite">
+        <p class="maintenance-findings-headline" id="maintenance-findings-headline">Checking this installation…</p>
+        <ul class="maintenance-findings-list" id="maintenance-findings-list"></ul>
+      </section>
 
       <section class="control-pipeline-stage maintenance-control-state" id="maintenance-control-state" aria-label="Control and safety">
         <div class="control-stage-head">

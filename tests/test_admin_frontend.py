@@ -4146,7 +4146,7 @@ def test_maintenance_view_has_layout_container_and_version_facts():
         'id="maintenance-ems-image"',
         'id="maintenance-influx-image"',
         'id="maintenance-dashboard"',
-        'id="maintenance-warnings"',
+        'id="maintenance-findings"',
     ):
         assert marker in maintenance
 
@@ -4230,11 +4230,13 @@ def test_js_maintenance_dynamic_values_are_escaped_or_text_only():
     setter = js.split("function setMaintenanceFact", 1)[1].split("\nfunction ", 1)[0]
     assert "el.textContent = text" in setter
     assert "innerHTML" not in setter
-    # Warnings are the only innerHTML path and pass through escapeHtml.
-    warnings = js.split("function renderMaintenanceWarnings", 1)[1].split(
+    # The findings list replaced the innerHTML warnings paragraph: every value
+    # it renders goes through textContent, so nothing needs escaping by hand.
+    findings = js.split("function renderMaintenanceFindings", 1)[1].split(
         "\nfunction ", 1
     )[0]
-    assert "escapeHtml(note)" in warnings
+    assert "innerHTML" not in findings
+    assert "textContent" in findings
 
 
 def test_js_maintenance_card_tone_helper_uses_dataset():

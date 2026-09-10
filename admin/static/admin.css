@@ -2444,3 +2444,53 @@ code {
 .mconfig-block-risk[data-risk="data_loss"] {
   border-left-color: color-mix(in srgb, var(--danger) 55%, var(--border));
 }
+
+/* The status page leads with what is wrong: one ranked list, each entry with a
+   next step, above everything it summarises. */
+.maintenance-findings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 4px;
+}
+.maintenance-findings-headline {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.maintenance-findings[data-status="error"] .maintenance-findings-headline { color: var(--danger); }
+.maintenance-findings[data-status="warning"] .maintenance-findings-headline { color: var(--pv); }
+.maintenance-findings[data-status="ok"] .maintenance-findings-headline { color: var(--output); }
+.maintenance-findings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.maintenance-finding {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 10px;
+  padding: 9px 12px;
+  background: var(--panel);
+}
+.maintenance-finding[data-severity="error"] {
+  border-left-color: var(--danger);
+}
+.maintenance-finding[data-severity="warning"] {
+  border-left-color: var(--pv);
+}
+.maintenance-finding[data-severity="info"] {
+  border-left-color: var(--output);
+}
+.maintenance-finding-title { margin: 0; font-size: 13px; font-weight: 700; }
+.maintenance-finding-message { margin: 3px 0 0; font-size: 12px; color: var(--muted); }
+.maintenance-finding-next {
+  margin: 5px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}

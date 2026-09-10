@@ -117,3 +117,41 @@ test.describe("Maintenance: hub recommendation", { tag: ["@maintenance"] }, () =
     );
   });
 });
+
+// The status page used to open with a red banner that named a problem and said
+// in the same breath that nothing could be done about it.
+test.describe("Maintenance: what is wrong", { tag: ["@maintenance"] }, () => {
+  test.beforeEach(async ({ page, seedAdminScenario }) => {
+    const login = new LoginPage(page);
+    await login.open();
+    await login.authenticate();
+    await seedAdminScenario("mixed_transports");
+    await page.reload();
+  });
+
+  test("the status page leads with a ranked answer and a next step", async ({
+    page,
+  }) => {
+    const maintenance = new MaintenancePage(page);
+    await maintenance.openStatus();
+    const findings = page.locator("#maintenance-findings");
+    await expect(findings).toBeVisible();
+    await expect(page.locator("#maintenance-findings-headline")).toContainText(
+      /needs? your attention|could not be read/,
+    );
+    const first = page.locator(".maintenance-finding").first();
+    await expect(first).toBeVisible();
+    await expect(first.locator(".maintenance-finding-next")).not.toBeEmpty();
+    // Worst first: no finding may outrank the one above it.
+    const order = await page
+      .locator(".maintenance-finding")
+      .evaluateAll((items) =>
+        items.map((item) =>
+          ["error", "warning", "info"].indexOf(
+            (item as HTMLElement).dataset.severity || "info",
+          ),
+        ),
+      );
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+});

@@ -26,17 +26,17 @@ from admin.install_state import (
     STATE_STANDARD_INSTALL,
     detect_install_state,
 )
+from admin.maintenance_health import (
+    EMS_RUNNING_IDENTITY_UNKNOWN_WARNING,
+    PARTIAL_INSTALL_WARNING,
+    build_maintenance_health,
+)
 
 _CONTAINER_NAME_RE = re.compile(
     r"^\s*container_name:\s*[\"']?([A-Za-z0-9][A-Za-z0-9_.-]*)[\"']?\s*(?:#.*)?$",
     re.MULTILINE,
 )
 
-EMS_RUNNING_IDENTITY_UNKNOWN_WARNING = (
-    "EMS is running but its image identity could not be verified; the installed "
-    "release is unknown. The Compose or last-known-good release is not shown as "
-    "the running one."
-)
 _IMAGE_RE = re.compile(
     r"^\s*image:\s*[\"']?(\S+?)[\"']?\s*(?:#.*)?$", re.MULTILINE
 )
@@ -82,11 +82,6 @@ _PARTIAL_STATES = frozenset(
     }
 )
 
-PARTIAL_INSTALL_WARNING = (
-    "This looks like a partial EMS installation. Maintenance can inspect it, "
-    "but repair actions are not part of this read-only overview yet."
-)
-
 _DOCKER_UNAVAILABLE_MESSAGE = (
     "Docker is not available. Container status could not be read."
 )
@@ -116,7 +111,7 @@ def run_maintenance_overview(base_dir=None, docker=None, admin_image=None):
         warnings.append(EMS_RUNNING_IDENTITY_UNKNOWN_WARNING)
 
     admin_image = admin_image or admin_image_ref_from_env()
-    return {
+    payload = {
         "install_state": {
             "state": install_state.state,
             "label": label,
@@ -154,6 +149,10 @@ def run_maintenance_overview(base_dir=None, docker=None, admin_image=None):
         "links": {"dashboard_url": _dashboard_url(context)},
         "warnings": warnings,
     }
+    # A projection of everything above, ranked worst-first, so the status page
+    # can answer "what is wrong" without the owner opening seven cards.
+    payload["health"] = build_maintenance_health(payload)
+    return payload
 
 
 def _modified_at(path):
