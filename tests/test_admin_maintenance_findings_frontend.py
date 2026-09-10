@@ -147,3 +147,23 @@ def test_finding_text_is_escaped_rather_than_written_as_markup():
     assert view["items"][0]["title"] == "<img src=x onerror=alert(1)>"
     assert "<img" not in view["html"]
     assert "&lt;img" in view["html"]
+
+
+def test_a_quote_in_server_data_cannot_forge_an_attribute_in_the_serialized_html():
+    """The serialized html is the only view these tests have of the DOM.
+
+    `finding.code` is server data and lands in an attribute. A serializer that
+    escapes `<` but leaves `"` alone lets that data close the attribute and
+    invent markup the real DOM never held, so every escaping assertion made
+    against `html` would be reading a forgery rather than the rendered tree.
+    """
+
+    view = _render(
+        {
+            "status": "warning",
+            "findings": [_finding(code='" onerror="alert(1)', severity="warning")],
+        }
+    )
+    assert view["items"][0]["code"] == '" onerror="alert(1)'
+    assert 'onerror="alert(1)"' not in view["html"]
+    assert "&quot; onerror=&quot;alert(1)" in view["html"]

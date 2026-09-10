@@ -79,9 +79,13 @@ function escapeText(value) {
     .replace(/>/g, "&gt;");
 }
 
+function escapeAttr(value) {
+  return escapeText(value).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 function serialize(node) {
   const attrs = Object.entries(node.dataset)
-    .map(([key, value]) => " " + key + '="' + escapeText(value) + '"')
+    .map(([key, value]) => " " + key + '="' + escapeAttr(value) + '"')
     .join("");
   const inner = node.children.length
     ? node.children.map(serialize).join("")
