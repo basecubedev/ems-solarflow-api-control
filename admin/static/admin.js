@@ -8090,6 +8090,7 @@ const setupEls = {
   startConflictResolve: document.getElementById("start-conflict-resolve"),
   startSuccess: document.getElementById("start-success"),
   startDashboardLink: document.getElementById("start-dashboard-link"),
+  verdict: document.getElementById("setup-verdict"),
   stepStatus: {
     release: document.getElementById("step-status-release"),
     devices: document.getElementById("step-status-devices"),
@@ -8147,10 +8148,66 @@ function stepLocked(step) {
 }
 
 function deviceStepStatusText() {
-  if (stepLocked("devices")) return "Locked";
   if (setupState.devices.status === "discovering") return "Discovering…";
   const count = setupState.devices.supported_count;
   return count ? plural(count, "device") : "No devices yet";
+}
+
+const SETUP_STEP_TITLES = {
+  release: "Choose a System Build",
+  devices: "Find your devices",
+  config: "Check the generated config",
+  deployment: "Prepare the deployment",
+  start: "Start EMS",
+};
+
+// A locked step says nothing: the chip is already dimmed and disabled, and the
+// hub dropped the same repeated label from its own state pills.
+function setupStepStatusText(step) {
+  if (stepLocked(step)) return "";
+  if (step === "release") {
+    return RELEASE_STATUS_TEXT[setupState.release.status] || "Not started";
+  }
+  if (step === "devices") return deviceStepStatusText();
+  if (step === "config") {
+    return CONFIG_STATUS_TEXT[setupState.config.status] || "Empty";
+  }
+  if (step === "deployment") {
+    return setupState.deployment.generated_ready ? "Config ready" : "Pending";
+  }
+  if (step === "start") return startStepStatusText();
+  return "";
+}
+
+// The tone comes from the same state that produced the text, never from
+// matching on the text itself.
+function setupStepTone(step) {
+  if (step === "release") {
+    return setupState.release.status === "failed" ? "warn" : "";
+  }
+  if (step === "config") {
+    return setupState.config.status === "needs_attention" ? "warn" : "";
+  }
+  if (step === "start") {
+    if (setupState.start.status === "failed") return "warn";
+    return setupState.start.running ? "ok" : "";
+  }
+  return "";
+}
+
+// Where the installer stands, in the place the maintenance hub states its
+// verdict. It is handed the active step's own status text rather than
+// recomputing it, so the sentence and the chip cannot drift apart.
+function setupProgressView(step, statusText, tone) {
+  const index = SETUP_STEPS.indexOf(step);
+  if (index < 0) return { verdict: "Guided setup is starting…", tone: "" };
+  const number = (value) => String(value).padStart(2, "0");
+  const parts = [
+    "Step " + number(index + 1) + " of " + number(SETUP_STEPS.length),
+    SETUP_STEP_TITLES[step],
+  ];
+  if (statusText) parts.push(statusText);
+  return { verdict: parts.join(" · ") + ".", tone: tone || "" };
 }
 
 function computeSetupStatus() {
@@ -8188,29 +8245,19 @@ function computeSetupStatus() {
 
 function renderStepper() {
   computeSetupStatus();
-  setSummary(
-    setupEls.stepStatus.release,
-    RELEASE_STATUS_TEXT[setupState.release.status] || "Not started"
+  SETUP_STEPS.forEach((step) =>
+    setSummary(setupEls.stepStatus[step], setupStepStatusText(step))
   );
-  setSummary(setupEls.stepStatus.devices, deviceStepStatusText());
-  setSummary(
-    setupEls.stepStatus.config,
-    stepLocked("config")
-      ? "Locked"
-      : CONFIG_STATUS_TEXT[setupState.config.status] || "Empty"
+  const active = setupState.activeStep;
+  const progress = setupProgressView(
+    active,
+    setupStepStatusText(active),
+    setupStepTone(active)
   );
-  setSummary(
-    setupEls.stepStatus.deployment,
-    stepLocked("deployment")
-      ? "Locked"
-      : setupState.deployment.generated_ready
-      ? "Config ready"
-      : "Pending"
-  );
-  setSummary(
-    setupEls.stepStatus.start,
-    stepLocked("start") ? "Locked" : startStepStatusText()
-  );
+  if (setupEls.verdict) {
+    setupEls.verdict.textContent = progress.verdict;
+    setupEls.verdict.dataset.tone = progress.tone;
+  }
   document.querySelectorAll("[data-setup-step]").forEach((button) => {
     const step = button.dataset.setupStep;
     const active = step === setupState.activeStep;
@@ -17855,6 +17902,7 @@ function enterSetup() {
   if (!setupInitialized) initSetupWizard();
   window.location.hash = "setup";
   setAdminView("setup");
+  focusPageHeading(document.getElementById("view-setup"));
 }
 
 function enterMaintenance() {

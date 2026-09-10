@@ -22,7 +22,7 @@ hostnames.
 | --- | --- | --- |
 | `admin-first-start-password.png` | First start — create the shared password | `password-setup` |
 | `admin-login.png` | Login | `login` |
-| `admin-landing.png` | Start page (Setup vs. Maintenance) | `landing` |
+| `admin-landing.png` | Start page (what is on this host, and the two paths) | `landing` |
 | `admin-guided-setup-start.png` | Guided Setup — 01 Release | `guided-setup-start` |
 | `admin-discovery-preview.png` | Guided Setup — 02 Devices | `discovery` |
 | `admin-guided-setup-config-preview.png` | Guided Setup — 03 Config | `config-preview` |

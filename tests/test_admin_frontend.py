@@ -1107,7 +1107,10 @@ def test_setup_has_blocked_step_05_start_ems_panel():
     assert 'data-setup-step="start"' in setup
     assert ">05<" in setup
     assert '<span class="setup-step-label">Start EMS</span>' in setup
-    assert 'id="step-status-start">Locked</span>' in setup
+    # The chip's disabled state is what says "not yet"; its status line stays
+    # empty until the step opens (tests/test_admin_setup_shell_frontend.py).
+    assert 'id="step-status-start"></span>' in setup
+    assert 'data-setup-step="start" role="tab" aria-selected="false" disabled' in setup
     assert 'data-setup-step-panel="start" hidden' in setup
     assert "Prepare deployment first before starting EMS." in start
     for marker in (
@@ -1131,7 +1134,13 @@ def test_js_step_05_unlocks_only_after_prepare_completes():
     assert 'step === "start"' in locked
     assert "!deploymentReady()" in locked
     render = js.split("function renderStepper", 1)[1].split("\nfunction ", 1)[0]
-    assert "setupEls.stepStatus.start" in render
+    # One status text per step, from one mapping, so a locked step cannot show
+    # a stale label the chip's disabled state contradicts.
+    assert "SETUP_STEPS.forEach" in render
+    assert "setupEls.stepStatus[step]" in render
+    status = js.split("function setupStepStatusText", 1)[1].split("\nfunction ", 1)[0]
+    assert 'step === "start"' in status
+    assert "stepLocked(step)" in status
 
 
 def test_js_step_05_starts_and_polls_backend_job():
@@ -2018,8 +2027,7 @@ def test_setup_release_step_has_version_controls():
     assert 'id="release-download"' not in release
     assert 'id="release-status"' in release
     assert 'id="release-error"' in release
-    assert "Docker-based EMS installations" in release
-    assert "from v0.6.0 onward" in release
+    assert "Docker releases from v0.6.0 onward" in release
     assert 'id="release-badges"' in release
 
 
@@ -7715,7 +7723,7 @@ def test_setup_channel_guidance_copy_sits_directly_above_the_selector():
     text = " ".join(help_block.split())
     # A short lead-in plus a semantic description list of the four channels,
     # led by the rolling ``latest`` line.
-    assert "Choose the System Build you want to install." in text
+    assert "Docker releases from v0.6.0 onward can be installed here" in text
     for term, blurb in (
         (
             "Latest",
@@ -8927,10 +8935,13 @@ def test_release_stage_frames_selection_as_paired_system_build():
     release = _release_stage(_read("index.html"))
     # The heading no longer sells this as an EMS-version-only choice.
     assert "Select one paired Admin + EMS System Build" in release
-    intro = release.split('id="release-system-build-intro"', 1)[1].split(
-        "</div>", 1
-    )[0]
-    text = re.sub(r"\s+", " ", intro)
+    assert 'id="release-system-build-intro"' in release
+    # Everything an installer needs before choosing a build stays visible above
+    # the selector: no disclosure may hide what the Admin container update does
+    # to this page or to the data on this host.
+    before_select = release.split('id="release-select"', 1)[0]
+    text = re.sub(r"\s+", " ", before_select)
+    assert "<details" not in text
     # A compact pre-click explanation of the paired build and its consequences.
     assert "matching Admin Console and EMS images" in text
     assert "updated and recreated first" in text

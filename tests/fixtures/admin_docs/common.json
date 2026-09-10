@@ -10,10 +10,7 @@
   "install_state": {
     "state": "standard_install",
     "recommended_path": "manage_existing",
-    "reasons": [
-      "A standard config/config.json and docker-compose.yml were found.",
-      "The EMS container is running."
-    ],
+    "reasons": [],
     "warnings": []
   },
   "mdns_status": {

@@ -55,7 +55,7 @@ feature settings → start EMS and open the dashboard.
 [Download MP4](../assets/videos/admin/admin-guided-setup-demo.mp4) ·
 [Download WebM](../assets/videos/admin/admin-guided-setup-demo.webm)
 
-![Admin Console landing page with Setup and Maintenance choices](../assets/screenshots/admin/admin-landing.png)
+![Admin Console start page stating what was found on this host, with Guided setup and Maintenance as the two paths](../assets/screenshots/admin/admin-landing.png)
 
 ### Software update — Guided Upgrade with live validation
 

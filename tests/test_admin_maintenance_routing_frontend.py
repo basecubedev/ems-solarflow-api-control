@@ -185,7 +185,9 @@ def test_every_maintenance_page_heading_can_take_focus():
     """Panel switches move focus, so the headings must be focus targets."""
 
     html = _read("index.html")
-    assert html.count('<h2 class="maintenance-title" tabindex="-1">') == 5
+    # Five maintenance pages plus the landing and Guided Setup, which share the
+    # same header and the same focus helper.
+    assert html.count('<h2 class="maintenance-title" tabindex="-1">') == 7
     assert '<h2 class="maintenance-title">' not in html
 
 
@@ -194,5 +196,8 @@ def test_switching_pages_moves_focus_to_the_new_heading():
     body = js.split("function setMaintenancePath", 1)[1].split("\nfunction ", 1)[0]
     assert "focusMaintenanceHeading(next)" in body
     helper = js.split("function focusMaintenanceHeading", 1)[1].split("\nfunction ", 1)[0]
-    assert ".maintenance-title" in helper
-    assert "heading.focus()" in helper
+    assert "MAINTENANCE_PANEL_IDS[path]" in helper
+    # One focus helper for every Admin page that can be navigated to.
+    shared = js.split("function focusPageHeading", 1)[1].split("\nfunction ", 1)[0]
+    assert ".maintenance-title" in shared
+    assert "heading.focus()" in shared

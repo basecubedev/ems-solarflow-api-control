@@ -26,7 +26,8 @@ everything.
 
 ## The five steps
 
-Guided Setup runs as a stepper. Steps 02–05 stay **Locked** until the step
+Guided Setup runs as a stepper, under a header and a progress line that names
+the step you are on. Steps 02–05 stay dimmed and unclickable until the step
 before them is genuinely complete — that lock is enforced by the server, not by
 the browser.
 

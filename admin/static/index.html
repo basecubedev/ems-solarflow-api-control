@@ -130,10 +130,15 @@
 
     <div class="admin-view" id="view-setup" data-admin-view-panel="setup" hidden>
 
-      <div class="workspace-nav">
+      <header class="maintenance-head">
         <button type="button" class="workspace-back" data-back="landing">← Back</button>
-        <span class="workspace-view-title">Guided setup</span>
-      </div>
+        <div class="maintenance-head-titles">
+          <h2 class="maintenance-title" tabindex="-1">Guided setup</h2>
+          <p class="maintenance-subtitle">Install a new EMS on this host: pick a build, find the devices, write the config, start it</p>
+        </div>
+      </header>
+
+      <p class="maintenance-hub-verdict" id="setup-verdict" role="status" aria-live="polite">Guided setup is starting…</p>
 
       <!-- System Build progress mounts here while Guided Setup owns the
            active transition; otherwise parked in #system-build-parking. -->
@@ -143,31 +148,31 @@
         <button type="button" class="setup-step active" data-setup-step="release" role="tab" aria-selected="true">
           <span class="setup-step-index">01</span>
           <span class="setup-step-label">Release</span>
-          <span class="setup-step-status" id="step-status-release">Not started</span>
+          <span class="setup-step-status" id="step-status-release"></span>
         </button>
         <span class="setup-step-arrow" aria-hidden="true">→</span>
         <button type="button" class="setup-step" data-setup-step="devices" role="tab" aria-selected="false" disabled>
           <span class="setup-step-index">02</span>
           <span class="setup-step-label">Devices</span>
-          <span class="setup-step-status" id="step-status-devices">Locked</span>
+          <span class="setup-step-status" id="step-status-devices"></span>
         </button>
         <span class="setup-step-arrow" aria-hidden="true">→</span>
         <button type="button" class="setup-step" data-setup-step="config" role="tab" aria-selected="false" disabled>
           <span class="setup-step-index">03</span>
           <span class="setup-step-label">Config</span>
-          <span class="setup-step-status" id="step-status-config">Locked</span>
+          <span class="setup-step-status" id="step-status-config"></span>
         </button>
         <span class="setup-step-arrow" aria-hidden="true">→</span>
         <button type="button" class="setup-step" data-setup-step="deployment" role="tab" aria-selected="false" disabled>
           <span class="setup-step-index">04</span>
           <span class="setup-step-label">Prepare deployment</span>
-          <span class="setup-step-status" id="step-status-deployment">Locked</span>
+          <span class="setup-step-status" id="step-status-deployment"></span>
         </button>
         <span class="setup-step-arrow" aria-hidden="true">→</span>
         <button type="button" class="setup-step" data-setup-step="start" role="tab" aria-selected="false" disabled>
           <span class="setup-step-index">05</span>
           <span class="setup-step-label">Start EMS</span>
-          <span class="setup-step-status" id="step-status-start">Locked</span>
+          <span class="setup-step-status" id="step-status-start"></span>
         </button>
       </div>
 
@@ -181,11 +186,6 @@
               <span class="control-stage-subtitle">Select one paired Admin + EMS System Build</span>
             </div>
           </div>
-          <p class="future-note">
-            This assistant prepares Docker-based EMS installations. Admin Setup
-            supports Docker releases from v0.6.0 onward; older releases remain
-            visible for reference.
-          </p>
           <div class="setup-summary">
             <div class="setup-summary-row">
               <span class="setup-summary-key">Selected System Build</span>
@@ -196,24 +196,20 @@
               <span id="release-status-val" class="setup-summary-val">Not started</span>
             </div>
           </div>
-          <div id="release-system-build-intro">
-            <p class="future-note">
-              The selected System Build contains matching Admin Console and EMS images.
-            </p>
-            <p class="future-note">
-              If this Admin Console does not match the selected build, the Admin
-              container will be updated and recreated first. Config, EMS data and
-              backups are not deleted. This page will reconnect automatically.
-            </p>
-            <p class="future-note">
-              EMS itself is not started until Step 05.
-            </p>
-          </div>
+          <p class="future-note" id="release-system-build-intro">
+            A System Build is one set of matching Admin Console and EMS images.
+            EMS itself is not started until Step 05.
+          </p>
+          <p class="future-note">
+            If this Admin Console does not match the selected build, the Admin
+            container is updated and recreated first. Config, EMS data and
+            backups are not deleted, and this page will reconnect automatically.
+          </p>
           <section class="setup-block">
             <h3 class="config-section-title">Select System Build</h3>
             <div id="release-badges" class="device-sources" aria-label="Release classification"></div>
             <div class="system-build-channel-help">
-              <p>Choose the System Build you want to install.</p>
+              <p>Docker releases from v0.6.0 onward can be installed here; older ones stay visible for reference.</p>
               <dl>
                 <div>
                   <dt>Latest</dt>

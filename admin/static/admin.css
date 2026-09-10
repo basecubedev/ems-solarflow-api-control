@@ -200,8 +200,6 @@ code {
 .maintenance-path-nav:focus-visible { outline: 2px solid var(--output); outline-offset: 2px; }
 .maintenance-path-arrow { margin-left: auto; font-size: 18px; color: var(--output); }
 
-.workspace-nav { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.workspace-view-title { font-size: 18px; font-weight: 800; min-width: 0; }
 .workspace-back {
   appearance: none;
   background: transparent;
