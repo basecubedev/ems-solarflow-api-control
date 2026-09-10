@@ -1195,13 +1195,13 @@
 
         <p class="maintenance-hub-verdict" id="maintenance-hub-verdict" role="status" aria-live="polite">Checking this installation…</p>
 
-        <button type="button" class="control-pipeline-stage maintenance-path-card maintenance-path-nav is-primary" data-maintenance-path="upgrade" data-open-maintenance-path="upgrade" aria-label="Open guided upgrade (recommended)">
+        <button type="button" class="control-pipeline-stage maintenance-path-card maintenance-path-nav" data-maintenance-path="upgrade" data-open-maintenance-path="upgrade" id="maintenance-open-upgrade" aria-label="Open guided upgrade">
           <span class="control-stage-head">
             <span class="control-stage-title-block">
               <span class="control-stage-title">Guided upgrade</span>
               <span class="control-stage-subtitle">Plan and validate an EMS update</span>
             </span>
-            <span class="maintenance-recommended-badge">Recommended path</span>
+            <span class="maintenance-recommended-badge" id="maintenance-hub-upgrade-badge" hidden>Recommended path</span>
             <span class="maintenance-path-arrow" aria-hidden="true">→</span>
           </span>
         </button>
@@ -1212,6 +1212,7 @@
               <span class="control-stage-title">System status</span>
               <span class="control-stage-subtitle">Is it running, is it controlling, and what is wrong</span>
             </span>
+            <span class="maintenance-recommended-badge" id="maintenance-hub-status-badge" hidden>Start here</span>
             <span class="maintenance-path-state" id="maintenance-hub-status-state" data-tone="muted">…</span>
             <span class="maintenance-path-arrow" aria-hidden="true">→</span>
           </span>

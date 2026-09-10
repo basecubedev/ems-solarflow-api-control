@@ -2735,14 +2735,17 @@ def test_maintenance_hub_orders_guided_upgrade_first():
         hub.index('data-maintenance-path="backup"'),
     ]
     assert order == sorted(order)
-    # Guided upgrade is a navigation button with the recommended/primary treatment.
+    # Guided upgrade is a navigation button and holds the recommendation badge,
+    # but the badge and the primary treatment are applied by the hub verdict —
+    # a highlight that never moves recommends an update to a broken install.
     upgrade_tag = hub.split('data-maintenance-path="upgrade"', 1)[0].rsplit("<", 1)[1]
     assert upgrade_tag.startswith("button")
-    assert "is-primary" in upgrade_tag
+    assert "is-primary" not in upgrade_tag
     upgrade = hub.split('data-maintenance-path="upgrade"', 1)[1].split(
         'data-maintenance-path="status"', 1
     )[0]
     assert "Recommended path" in upgrade
+    assert 'id="maintenance-hub-upgrade-badge"' in upgrade
 
 
 def _maintenance_hub(html):

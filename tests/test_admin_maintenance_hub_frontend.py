@@ -135,3 +135,66 @@ def test_opening_the_hub_reads_state_without_mutating_anything():
     assert '"/api/admin/maintenance/overview"' in body
     assert '"/api/admin/maintenance/backups"' in body
     assert "method:" not in body, "the hub must only read"
+
+
+# --- which door to open first ---------------------------------------------
+
+
+def test_an_admin_deployed_installation_is_healthy():
+    """A successful Admin deployment writes the marker and is standard.
+
+    Reading only "standard_install" reported every Admin-deployed system as
+    "Needs setup" — the one shape the console produces itself.
+    """
+
+    view = _view(_overview(state="admin_prepared_install"))
+    assert view["tone"] == "ok"
+    assert view["state"] == "EMS running"
+
+
+@pytest.mark.parametrize(
+    "overview",
+    [
+        _overview(state="compose_only"),
+        _overview(running=False),
+        _overview(warnings=["EMS is running an unknown image"]),
+        None,
+    ],
+)
+def test_a_system_that_needs_a_look_points_at_the_status_page(overview):
+    assert _view(overview)["recommended"] == "status"
+
+
+def test_a_healthy_system_points_at_the_guided_upgrade():
+    assert _view(_overview())["recommended"] == "upgrade"
+
+
+def test_the_recommendation_is_not_hard_coded_in_the_markup():
+    """The badge used to sit on the upgrade card whatever the system said."""
+
+    html = _read("index.html")
+    hub = html.split('id="maintenance-hub"', 1)[1].split(
+        'id="maintenance-status-panel"', 1
+    )[0]
+    assert hub, "hub slice is empty"
+    for marker in (
+        'id="maintenance-hub-upgrade-badge"',
+        'id="maintenance-hub-status-badge"',
+    ):
+        assert marker in hub
+    badges = [
+        hub.split(marker, 1)[1].split(">", 1)[0]
+        for marker in (
+            'id="maintenance-hub-upgrade-badge"',
+            'id="maintenance-hub-status-badge"',
+        )
+    ]
+    assert all("hidden" in badge for badge in badges), "no badge shows before a verdict"
+    assert "is-primary" not in hub, "the highlight follows the verdict too"
+
+
+def test_the_hub_moves_the_badge_and_the_highlight_together():
+    js = _read("admin.js")
+    body = js.split("function renderMaintenanceHubState", 1)[1].split("\n}", 1)[0]
+    assert "view.recommended" in body
+    assert "is-primary" in body

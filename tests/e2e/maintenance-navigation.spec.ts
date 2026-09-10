@@ -91,3 +91,29 @@ test.describe("Maintenance: navigation", { tag: ["@maintenance"] }, () => {
     await expect(page.locator("#maintenance-hub h2")).toBeFocused();
   });
 });
+
+// The hub used to print "Recommended path" on the Guided upgrade card whatever
+// the system said — including for an installation it could not see running.
+test.describe("Maintenance: hub recommendation", { tag: ["@maintenance"] }, () => {
+  test.beforeEach(async ({ page, seedAdminScenario }) => {
+    const login = new LoginPage(page);
+    await login.open();
+    await login.authenticate();
+    await seedAdminScenario("mixed_transports");
+    await page.reload();
+  });
+
+  test("an installation that needs a look recommends the status page", async ({
+    page,
+  }) => {
+    await page.locator('[data-start-path="manage_existing"]').click();
+    await expect(page.locator("#maintenance-hub-status-badge")).toBeVisible();
+    await expect(page.locator("#maintenance-hub-upgrade-badge")).toBeHidden();
+    await expect(page.locator("#maintenance-open-status")).toHaveClass(
+      /is-primary/,
+    );
+    await expect(page.locator("#maintenance-open-upgrade")).not.toHaveClass(
+      /is-primary/,
+    );
+  });
+});

@@ -14,6 +14,14 @@ const source = fs.readFileSync(
   "utf8"
 );
 
+function extractBlock(marker, terminator) {
+  const start = source.indexOf(marker);
+  if (start === -1) throw new Error("not found in admin.js: " + marker);
+  const end = source.indexOf(terminator, start);
+  if (end === -1) throw new Error("unterminated block: " + marker);
+  return source.slice(start, end + terminator.length);
+}
+
 function extractFunction(name) {
   const marker = "function " + name + "(";
   const start = source.indexOf(marker);
@@ -39,6 +47,8 @@ const scope = {};
 new Function(
   "scope",
   '"use strict";\n' +
+    extractBlock("const MAINTENANCE_HEALTHY_STATES = [", "];") +
+    "\n" +
     extractFunction("maintenanceHubView") +
     "\nscope.maintenanceHubView = maintenanceHubView;"
 )(scope);

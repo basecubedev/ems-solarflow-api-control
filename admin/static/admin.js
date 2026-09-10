@@ -10225,6 +10225,14 @@ const maintenanceHubEls = {
   statusState: document.getElementById("maintenance-hub-status-state"),
   settingsState: document.getElementById("maintenance-hub-settings-state"),
   backupState: document.getElementById("maintenance-hub-backup-state"),
+  badges: {
+    status: document.getElementById("maintenance-hub-status-badge"),
+    upgrade: document.getElementById("maintenance-hub-upgrade-badge"),
+  },
+  cards: {
+    status: document.getElementById("maintenance-open-status"),
+    upgrade: document.getElementById("maintenance-open-upgrade"),
+  },
 };
 
 // What the hub can prove from the read-only overview alone. It deliberately
@@ -10237,17 +10245,19 @@ function maintenanceHubView(overview) {
       verdict: "This installation could not be read.",
       tone: "warn",
       state: "Unknown",
+      recommended: "status",
     };
   }
   const install = overview.install_state || {};
   const ems = (overview.containers || {}).ems || {};
   const version = ems.tag || (overview.components || {}).ems?.tag || null;
   const warnings = Array.isArray(overview.warnings) ? overview.warnings : [];
-  if (install.state !== "standard_install") {
+  if (!MAINTENANCE_HEALTHY_STATES.includes(install.state)) {
     return {
       verdict: install.label || "This installation is not complete.",
       tone: "warn",
       state: "Needs setup",
+      recommended: "status",
     };
   }
   if (!ems.running) {
@@ -10255,6 +10265,7 @@ function maintenanceHubView(overview) {
       verdict: "EMS is installed but not running.",
       tone: "warn",
       state: "EMS stopped",
+      recommended: "status",
     };
   }
   const parts = ["EMS is running"];
@@ -10263,6 +10274,7 @@ function maintenanceHubView(overview) {
     verdict: parts.join(" · ") + ".",
     tone: warnings.length ? "warn" : "ok",
     state: warnings.length ? "Needs a look" : "EMS running",
+    recommended: warnings.length ? "status" : "upgrade",
   };
 }
 
@@ -10276,6 +10288,16 @@ function renderMaintenanceHubState(overview) {
     maintenanceHubEls.statusState.textContent = view.state;
     maintenanceHubEls.statusState.dataset.tone = view.tone;
   }
+  // The badge and the primary treatment mark the same door, and only once the
+  // overview has been read: a highlight that never moves is decoration, and a
+  // console that recommends an update to a system it cannot even see running is
+  // worse than one that recommends nothing.
+  Object.entries(maintenanceHubEls.badges).forEach(([path, badge]) => {
+    if (badge) badge.hidden = path !== view.recommended;
+  });
+  Object.entries(maintenanceHubEls.cards).forEach(([path, card]) => {
+    if (card) card.classList.toggle("is-primary", path === view.recommended);
+  });
 }
 
 // The unsaved pill appears only once this session actually holds a draft with
