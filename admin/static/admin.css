@@ -2494,3 +2494,7 @@ code {
   font-weight: 600;
   color: var(--text);
 }
+
+/* Backups live on this machine; the transfer block is what lets one leave it. */
+.backup-transfer { display: flex; flex-direction: column; gap: 8px; }
+.backup-import-label { display: inline-flex; align-items: center; cursor: pointer; }

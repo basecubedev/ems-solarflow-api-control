@@ -2229,6 +2229,21 @@
           <section class="setup-block">
             <div id="backup-list" class="backup-list" role="list"></div>
           </section>
+          <section class="setup-block backup-transfer">
+            <h4 class="config-subsection-title">Keep a copy somewhere else</h4>
+            <p class="future-note">
+              Backups live on this machine. If the card or disk fails, they fail
+              with it — so download the ones that matter, and bring one back here
+              when you need it.
+            </p>
+            <div class="mconfig-actions">
+              <label class="secondary-button compact backup-import-label" for="backup-import-input">
+                Bring a backup back
+                <input id="backup-import-input" type="file" accept=".gz,.enc,application/gzip" hidden>
+              </label>
+            </div>
+            <p id="backup-transfer-status" class="maintenance-note" role="status" aria-live="polite" hidden></p>
+          </section>
         </section>
 
         <section class="control-pipeline-stage backup-stage" id="backup-details-stage" aria-label="Backup details" hidden>

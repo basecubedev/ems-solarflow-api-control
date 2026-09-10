@@ -225,6 +225,80 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+// Error codes are stable machine identifiers, not owner-facing text. Two thirds
+// of the server's error responses already carry a written sentence beside the
+// code; the client's old `data.error || "sentence"` printed the code and threw
+// that sentence away. These are the codes an owner can actually reach that
+// arrive with no sentence of their own.
+const ADMIN_ERROR_MESSAGES = {
+  system_transition_in_progress:
+    "Another system change is already running. Wait for it to finish, then try again.",
+  system_alignment_incomplete:
+    "Admin and EMS are not aligned yet. Finish the current System Build step first.",
+  setup_operation_required:
+    "Confirm the System Build before this step; it decides what gets installed.",
+  operation_mismatch:
+    "This page belongs to an older attempt. Reload and start the step again.",
+  system_build_mismatch:
+    "The selected System Build changed. Pick it again so Admin and EMS match.",
+  system_build_alignment_required:
+    "Align Admin to the target System Build before continuing.",
+  system_build_registry_rate_limited:
+    "The container registry is rate-limiting this machine. Wait a few minutes and try again.",
+  image_pull_rate_limited:
+    "The container registry is rate-limiting this machine. Wait a few minutes and try again.",
+  confirmation_required: "Confirm this step before it can run.",
+  acknowledgement_required: "Acknowledge the warning before this step can run.",
+  docker_cli_missing:
+    "Docker is not installed on this machine, so containers cannot be managed.",
+  docker_daemon_unreachable:
+    "The Docker daemon is not reachable. Check that it is running.",
+  docker_permission_denied:
+    "Docker refused this account. The Admin Console needs access to the Docker socket.",
+  docker_compose_unsupported:
+    "This Docker installation has no usable Compose plugin.",
+  workspace_permission_denied:
+    "The install directory cannot be written. Check its owner and permissions.",
+  compose_port_conflict:
+    "Another program already uses one of the ports EMS needs.",
+  compose_container_name_conflict:
+    "A container with that name already exists. Remove it or rename the service.",
+  compose_image_unavailable:
+    "That image could not be pulled. Check the release and this machine's internet access.",
+  refresh_failed: "That source could not be re-read. Check the connection and try again.",
+  checksum_invalid:
+    "This archive does not match its own checksums, so it will not be restored.",
+  conflicts_require_policy:
+    "The restore would overwrite files. Choose how to handle them, then preview again.",
+  influxdb_preview_failed:
+    "The analytics part of this backup could not be previewed.",
+  not_configured: "This is not configured yet.",
+  device_list_failed: "The device list could not be read.",
+};
+
+// The precedence authMessage has always used, generalised: the server's own
+// sentence first, then a code we have words for, then a plain fallback. Some
+// payloads carry the code under "reason", and a job status carries it as an
+// object, so the value is what is resolved here, never one fixed field name.
+function humanErrorText(data, fallback) {
+  const payload = data && typeof data === "object" ? data : {};
+  const raw =
+    payload.error === undefined || payload.error === null
+      ? payload.reason
+      : payload.error;
+  const nested = raw && typeof raw === "object" ? raw : null;
+  const message = payload.message || (nested && nested.message);
+  if (typeof message === "string" && message) return message;
+  const code = nested ? nested.code : raw;
+  if (typeof code === "string" && code) {
+    if (ADMIN_ERROR_MESSAGES[code]) return ADMIN_ERROR_MESSAGES[code];
+    // A third of the server's "error" values are already English sentences sent
+    // in the same key. A machine code never contains a space.
+    if (code.indexOf(" ") !== -1) return code;
+  }
+  return fallback || "Something went wrong. Please try again.";
+}
+
 function renderCredentialRollbackWarning(payload) {
   // The backend only sets credential_rollback when rolling back staged MQTT
   // credential changes itself failed, so the operator must be told manual
@@ -12497,6 +12571,8 @@ const backupEls = {
   latest: document.getElementById("backup-latest"),
   statusWarnings: document.getElementById("backup-status-warnings"),
   refreshBtn: document.getElementById("backup-refresh"),
+  importInput: document.getElementById("backup-import-input"),
+  transferStatus: document.getElementById("backup-transfer-status"),
   scopeInputs: Array.from(document.querySelectorAll("[data-backup-scope]")),
   influxDesc: document.getElementById("backup-scope-influxdb-desc"),
   createBtn: document.getElementById("backup-create"),
@@ -12704,6 +12780,7 @@ function renderBackupRow(backup) {
     '<div class="backup-row-meta" aria-label="Backup metadata">' + facts.join("") + "</div>" +
     '<div class="backup-row-actions">' +
     '<button type="button" class="secondary-button compact" data-backup-action="details" data-backup-id="' + id + '" data-backup-kind="archive">Details</button>' +
+    '<button type="button" class="secondary-button compact" data-backup-action="export" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-name="' + escapeHtml(backupName) + '">Download</button>' +
     '<button type="button" class="secondary-button compact" data-backup-action="restore" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-type="' + escapeHtml(backup.backup_type || "config") + '"' + restoreAttrs + ">Restore preview</button>" +
     '<button type="button" class="secondary-button compact" data-backup-action="delete" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-name="' + escapeHtml(backup.name) + '">Delete</button>' +
     "</div>" +
@@ -13072,6 +13149,79 @@ async function deleteBackup(id, kind, name) {
   }
 }
 
+function setBackupTransferStatus(text, tone) {
+  const el = backupEls.transferStatus;
+  if (!el) return;
+  el.hidden = !text;
+  el.textContent = text || "";
+  if (tone) el.dataset.tone = tone;
+  else delete el.dataset.tone;
+}
+
+// A backup that cannot leave this machine is not a backup: the card it lives on
+// is the one a failed upgrade asks you to re-flash. The archive is fetched as a
+// blob rather than linked, so the download keeps the CSRF-gated POST.
+async function exportBackup(id, name) {
+  setBackupTransferStatus("Preparing " + (name || "backup") + "…", null);
+  try {
+    const res = await fetch("/api/admin/maintenance/backups/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(humanErrorText(data, "The backup could not be read."));
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name || "ems-backup.tar.gz";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setBackupTransferStatus("Downloaded " + (name || "backup") + ".", "ok");
+  } catch (err) {
+    setBackupTransferStatus(err.message || String(err), "error");
+  }
+}
+
+async function importBackup(file) {
+  if (!file) return;
+  setBackupTransferStatus("Uploading " + file.name + "…", null);
+  try {
+    const res = await fetch("/api/admin/maintenance/backups/import", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Backup-Filename": file.name,
+      },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok !== true) {
+      throw new Error(humanErrorText(data, "The backup could not be added."));
+    }
+    setBackupTransferStatus(
+      data.name + " is here now. Use Restore preview to put it back.",
+      "ok"
+    );
+    await loadBackups();
+  } catch (err) {
+    setBackupTransferStatus(err.message || String(err), "error");
+  }
+}
+
+if (backupEls.importInput) {
+  backupEls.importInput.addEventListener("change", (event) => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = "";
+    importBackup(file);
+  });
+}
+
 if (backupEls.list) {
   backupEls.list.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-backup-action]");
@@ -13086,6 +13236,8 @@ if (backupEls.list) {
       selectBackup(id, kind, button.dataset.backupType);
       backupEls.restoreStage.hidden = false;
       previewRestore();
+    } else if (action === "export") {
+      exportBackup(id, button.dataset.backupName);
     } else if (action === "delete") {
       deleteBackup(id, kind, button.dataset.backupName);
     }
