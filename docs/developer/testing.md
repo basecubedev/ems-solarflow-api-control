@@ -20,6 +20,22 @@ areas that can write to real hardware, not a claim that every historical line of
 the project was produced under strict test-driven development. The canonical
 project requirement and scope are defined in [agent-rules.md](agent-rules.md).
 
+## Before a broad run: scratch space
+
+A full run writes tens of GB of temporary data — appliance packages, disk
+images, database snapshots. Point `TMPDIR` at a filesystem with room:
+
+```bash
+export TMPDIR=/path/with/room
+```
+
+`tests/conftest.py` refuses a broad selection that does not fit and names the
+fix, because a temporary filesystem that fills part-way through kills the run
+with an internal error rather than a test failure, and leaves the host unusable
+until it is cleaned. A targeted tier is never refused — the check runs after
+marker deselection, so it judges what will actually run. `EMS_ALLOW_SMALL_SCRATCH=1`
+overrides it.
+
 ## Quick local loop
 
 Compile check (run after any change to the entry script, `ems/`, `emsctl.py` or

@@ -245,6 +245,21 @@ Zendure devices, LAN mDNS, unprovisioned MQTT brokers, developer config,
 browser-session leftovers, test order, or prior test state. Setup/reset MUST
 leave no cross-test state. Use exact bytes or hashes when preservation matters.
 
+### Scratch space
+
+A broad run writes tens of GB of temporary data. A temporary filesystem that
+fills part-way through does not produce a test failure: the run dies with an
+internal error and every later command on the host fails for reasons unrelated
+to the code, which makes real failures indistinguishable from environment noise.
+
+Point `TMPDIR` at a filesystem with room before a broad run. `tests/conftest.py`
+refuses one that cannot fit and names the fix; `EMS_ALLOW_SMALL_SCRATCH=1`
+overrides it deliberately. Leftover `pytest-of-*` and appliance e2e directories
+are disposable scratch.
+
+Host-specific paths belong in the operator's own always-loaded configuration,
+not here: this file has to stay true on a machine that is not the maintainer's.
+
 ### Playwright
 
 - Do not use arbitrary `waitForTimeout`; use response, event or locator

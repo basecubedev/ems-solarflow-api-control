@@ -77,6 +77,12 @@ jobs:
         run: sudo apt-get install -y --no-install-recommends mtools e2fsprogs
 
       - name: Run full test suite (excludes real-Docker e2e, covered by CI workflow)
+        # The scratch guard in tests/conftest.py protects a developer machine,
+        # where filling a small tmpfs wedges the whole host. A runner's disk is
+        # provisioned by its image and this selection has always fitted, so the
+        # guard is opted out of here rather than turned into a CI flake.
+        env:
+          EMS_ALLOW_SMALL_SCRATCH: "1"
         run: |
           pytest -q -m "not docker" tests/
 

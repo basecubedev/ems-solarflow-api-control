@@ -2,11 +2,14 @@
 """Shared pytest fixtures for the EMS test suite."""
 
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
 
 from ems import paths
+from tests.scratch_guard import scratch_shortfall
 
 # Focused Zendure MQTT development-release gate: the fast, hardware-free subset
 # that must pass on every feature/development build without running the full
@@ -72,6 +75,23 @@ def pytest_collection_modifyitems(config, items):
         name = getattr(module, "__name__", "").rsplit(".", 1)[-1]
         if name in MQTT_RELEASE_MODULES:
             item.add_marker(marker)
+
+
+def pytest_collection_finish(session):
+    """Refuse a broad run that cannot fit its own scratch data.
+
+    This is the last hook before anything is written and the first one that
+    sees the *final* selection: marker deselection happens inside
+    ``pytest_collection_modifyitems``, so counting there would refuse a targeted
+    tier for the size of the suite it was filtered out of.
+    """
+
+    temp_dir = tempfile.gettempdir()
+    shortfall = scratch_shortfall(
+        shutil.disk_usage(temp_dir).free, len(session.items), temp_dir
+    )
+    if shortfall:
+        raise pytest.UsageError(shortfall)
 
 
 @pytest.fixture
