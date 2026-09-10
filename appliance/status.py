@@ -232,7 +232,7 @@ class StatusService:
                         FINDING_WARNING,
                         VIEW_DIAGNOSTICS,
                         f"{label} status could not be read",
-                        f"{name} status is unavailable",
+                        "The probe that reads it failed, so this part of the overview is missing.",
                         "Open Diagnostics and read the appliance log for the probe that failed.",
                     )
                 )
@@ -247,7 +247,7 @@ class StatusService:
                         FINDING_ERROR,
                         VIEW_DIAGNOSTICS,
                         "Docker is not running",
-                        "the Docker daemon is not running",
+                        f"The container engine reports {daemon.get('state') or 'no state'}.",
                         "Nothing containerised runs without it. Collect a support archive in "
                         "Diagnostics; a restart from the Overview is the usual repair.",
                     )
@@ -262,7 +262,7 @@ class StatusService:
                         FINDING_ERROR,
                         VIEW_ADMIN,
                         "No EMS Admin is installed",
-                        "the EMS Admin container is missing",
+                        "No Admin container exists here, so nothing on this appliance runs the EMS.",
                         "Open Admin and install it; that is where an EMS is set up.",
                     )
                 )
@@ -273,7 +273,7 @@ class StatusService:
                         FINDING_ERROR,
                         VIEW_ADMIN,
                         "EMS Admin is not answering",
-                        "the EMS Admin container is not healthy",
+                        "The container is there, but its health check is failing.",
                         "Open Admin and restart it. Repair reinstalls the container if a "
                         "restart does not bring it back.",
                     )
@@ -283,13 +283,18 @@ class StatusService:
         if updates.get("status") == SECTION_OK:
             if updates.get("security_count"):
                 count = updates["security_count"]
+                plural = (
+                    "package has a security update"
+                    if count == 1
+                    else "packages have security updates"
+                )
                 findings.append(
                     finding(
                         "security_updates_pending",
                         FINDING_WARNING,
                         VIEW_UPDATES,
                         "Security updates are waiting",
-                        f"{count} security update(s) available",
+                        f"{count} {plural} available.",
                         "Open System Updates and install them.",
                     )
                 )
@@ -300,7 +305,7 @@ class StatusService:
                         FINDING_WARNING,
                         VIEW_OVERVIEW,
                         "A restart is needed to finish the updates",
-                        "a reboot is required to finish updates",
+                        "Some of the installed packages only take effect after a restart.",
                         "Restart the Raspberry Pi from the power actions on this page.",
                     )
                 )
@@ -311,7 +316,7 @@ class StatusService:
                         FINDING_ERROR,
                         VIEW_UPDATES,
                         "The package manager needs recovery",
-                        "the package manager needs recovery",
+                        "dpkg or apt is in a state that refuses further installs.",
                         "No update can install until it is repaired. Open System Updates and "
                         "run the repair.",
                     )
@@ -346,7 +351,7 @@ class StatusService:
                             FINDING_ERROR,
                             VIEW_DIAGNOSTICS,
                             title,
-                            f"{label} is nearly full",
+                            f"More than 90% of {label} is in use.",
                             "Writes fail once it is full, including backups and updates. "
                             "Open Diagnostics to collect a support archive before freeing space.",
                         )

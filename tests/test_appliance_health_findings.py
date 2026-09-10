@@ -76,6 +76,21 @@ def test_every_finding_says_how_bad_it_is_and_what_to_do_next(tmp_path):
         assert finding["next_step"].strip(), finding
 
 
+def test_a_message_adds_something_the_title_did_not_say(tmp_path):
+    """Title and message are two lines on the same card.
+
+    The messages started as warning phrases -- "the Docker daemon is not
+    running" under a title reading "Docker is not running" -- which costs a
+    line and tells the reader nothing they had not read a moment earlier.
+    """
+
+    for finding in every_finding(tmp_path):
+        title = finding["title"].rstrip(".").lower()
+        message = finding["message"].rstrip(".").lower()
+        assert message != title, finding
+        assert not message.startswith(title), finding
+
+
 def test_the_health_level_is_the_worst_finding_rather_than_a_second_judgement(tmp_path):
     """One judgement, read twice.
 

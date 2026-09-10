@@ -79,8 +79,53 @@ test.describe("overview @smoke", () => {
 
   test("every section keeps its heading structure", async ({ page }) => {
     await signIn(page);
+    // One product name, then one page heading below it. The page heading is
+    // what a keyboard user is put on when they pick a section, so every view
+    // has exactly one and it is focusable.
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Appliance Manager");
-    await expect(page.getByRole("heading", { level: 2, name: "Warnings" })).toBeVisible();
+    await expect(page.locator("#main .page-title")).toHaveCount(1);
+    await expect(page.locator("#main .page-title")).toHaveAttribute("tabindex", "-1");
+  });
+
+  test("the page leads with a verdict and what needs attention", async ({ page }) => {
+    await signIn(page);
+    const verdict = page.locator('[data-test="overview-verdict"]');
+    await expect(verdict).toBeVisible();
+    await expect(verdict).toHaveAttribute("data-tone", /ok|warn|bad/);
+
+    // The fixture host has security updates pending, so there is one finding
+    // and it offers the page that installs them.
+    const findings = page.locator('[data-test="findings"]');
+    await expect(findings).toBeVisible();
+    await expect(findings.locator(".finding")).toHaveCount(1);
+    await expect(findings.locator(".finding-title")).toHaveText("Security updates are waiting");
+    await expect(findings.locator('[data-test="finding-open-updates"]')).toBeVisible();
+  });
+
+  test("a finding takes you to the page that can act on it", async ({ page }) => {
+    await signIn(page);
+    await page.locator('[data-test="finding-open-updates"]').click();
+    await expect(page.locator('[data-test="nav-updates"]')).toHaveAttribute("aria-current", "page");
+    await expect(page.locator("#main .page-title")).toHaveText("System updates");
+  });
+
+  test("the navigation marks the section that needs attention", async ({ page }) => {
+    await signIn(page);
+    const mark = page.locator('[data-test="nav-updates"] .nav-mark');
+    await expect(mark).toHaveAttribute("data-severity", "warning");
+    // Never colour alone: the same fact is in the button's accessible name.
+    await expect(page.locator('[data-test="nav-updates"]')).toContainText("needs attention");
+    await expect(page.locator('[data-test="nav-network"] .nav-mark')).not.toHaveAttribute(
+      "data-severity",
+      /.*/,
+    );
+  });
+
+  test("switching section moves focus to that page's heading", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "network");
+    await expect(page.locator("#main .page-title")).toBeFocused();
+    await expect(page.locator("#main .page-title")).toHaveText("Network");
   });
 });
 
@@ -681,9 +726,9 @@ test.describe("truthful host state @smoke", () => {
 
     // Authentication is a recovery path: it must still work.
     await expect(page.locator("#shell")).toBeVisible();
-    const notice = page.locator('[data-test="audit-degraded"]');
+    const notice = page.locator('.finding[data-code="security_audit_degraded"]');
     await expect(notice).toBeVisible();
-    await expect(notice).toContainText("Security audit degraded");
+    await expect(notice).toContainText("Sign-ins are not being recorded");
     await expect(notice).toContainText("unrecorded");
 
     await openView(page, "settings");
@@ -694,7 +739,7 @@ test.describe("truthful host state @smoke", () => {
 
   test("a healthy audit trail shows no warning", async ({ page }) => {
     await signIn(page);
-    await expect(page.locator('[data-test="audit-degraded"]')).toHaveCount(0);
+    await expect(page.locator('.finding[data-code="security_audit_degraded"]')).toHaveCount(0);
     await openView(page, "settings");
     await expect(page.locator('[data-test="settings-audit"]')).toContainText("healthy");
   });

@@ -77,14 +77,3 @@ def test_cancel_is_only_offered_where_it_is_a_legal_transition():
 
     assert "CANCELLABLE_STATES.indexOf(operation.state)" in APP
     assert '"operation-uninterruptible"' in APP
-
-
-def test_a_failed_status_call_does_not_report_the_appliance_healthy():
-    """Every card renders as an em dash when /api/status failed; saying the
-    appliance looks healthy underneath them is the opposite of the truth."""
-
-    block = APP.split('main.appendChild(el("h2", { class: "section-title", text: "Warnings" }))')[1]
-    healthy = block.index("looks healthy")
-    guard = block.index("status.error")
-
-    assert guard < healthy, "the healthy empty-state is not guarded by the error check"

@@ -23,7 +23,7 @@ export async function signIn(page: Page) {
     page.locator("#gate-submit").click(),
   ]);
   await expect(page.locator("#shell")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Appliance overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: "Overview" })).toBeVisible();
 }
 
 export async function openView(page: Page, view: string) {
