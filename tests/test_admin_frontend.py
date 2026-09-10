@@ -2817,9 +2817,11 @@ def test_js_back_navigation_returns_to_landing_and_hub():
     # Returning to landing re-shows the gate and drops workspace routing.
     assert "startEls.gate" in landing
     assert "workspaceRevealed = false" in landing
-    # Hash routing is inert while the landing gate is showing.
+    # A bookmarked maintenance address opens its page from the gate; every
+    # other address — including the empty hash showLanding() leaves behind —
+    # reveals nothing, so returning to landing cannot re-open what it closed.
     route = js.split("function applyHashRoute", 1)[1].split("\n}", 1)[0]
-    assert "if (!workspaceRevealed) return" in route
+    assert 'if (view !== "maintenance") return;' in route
     # The back controls are wired from the shared data-back attribute.
     assert '[data-back]' in js
 
@@ -8617,6 +8619,7 @@ async function loadSystemAlignmentStatus() {{
     stage: "resources_verified", system_tag: "v0.8.0"}}}};
 }}
 function revealWorkspace() {{ calls.push("workspace"); }}
+function applyHashRoute() {{ calls.push("route"); }}
 function setAdminView(value) {{ calls.push("view:" + value); }}
 function setActiveStep(value) {{ calls.push("step:" + value); }}
 async function validateSelectedSystemBuild() {{ calls.push("validate"); }}
@@ -8851,6 +8854,7 @@ function hideReconnectOverlay() {{ overlayHidden += 1; }}
 function reloadForReplacedAdmin() {{}}
 function showManualReloadHint() {{ throw new Error("unexpected timeout"); }}
 function showAuthView(mode) {{ authView = mode; }}
+function applyHashRoute() {{}}
 function bootstrapAuthenticatedAppOnce() {{}}
 function sleep() {{ return Promise.resolve(); }}
 async function loadSystemAlignmentStatus() {{

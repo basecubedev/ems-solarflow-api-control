@@ -1,0 +1,93 @@
+import { test, expect } from "./fixtures/admin";
+import type { Page } from "@playwright/test";
+import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
+
+// Two navigation promises the console did not keep. A bookmarked address was
+// dropped on a cold load, because the hash router only ever ran on a hashchange
+// and never once the start gate revealed the workspace. And every page switch
+// left keyboard focus on a control that had just been hidden, so a keyboard or
+// screen-reader owner heard nothing and restarted from the document top.
+
+test.describe("Maintenance: navigation", { tag: ["@maintenance"] }, () => {
+  test.beforeEach(async ({ page, seedAdminScenario }) => {
+    const login = new LoginPage(page);
+    await login.open();
+    await login.authenticate();
+    await seedAdminScenario("mixed_transports");
+  });
+
+  // A bookmark visit is a fresh document. Navigating from "/" to "/#..." is a
+  // same-document hash change that never re-boots the app, so the reload is
+  // what makes this a cold load rather than a hashchange in disguise.
+  const coldLoad = async (page: Page, hash: string) => {
+    await page.goto("/" + hash);
+    await page.reload();
+  };
+
+  test("a bookmarked settings tab opens that tab on a cold load", async ({
+    page,
+  }) => {
+    await coldLoad(page, "#maintenance-settings-safety");
+    await expect(page.locator("#maintenance-settings-panel")).toBeVisible();
+    await expect(page.locator('[data-settings-pane="safety"]')).toBeVisible();
+    await expect(page.locator("#view-start")).toBeHidden();
+    expect(new URL(page.url()).hash).toBe("#maintenance-settings-safety");
+  });
+
+  test("a bookmarked status page opens on a cold load", async ({ page }) => {
+    await coldLoad(page, "#maintenance-manual");
+    await expect(page.locator("#maintenance-status-panel")).toBeVisible();
+    await expect(page.locator("#view-start")).toBeHidden();
+  });
+
+  test("an address that names no workspace view still shows the start gate", async ({
+    page,
+  }) => {
+    await coldLoad(page, "#not-a-view");
+    await expect(page.locator("#view-start")).toBeVisible();
+    await expect(page.locator("#maintenance-status-panel")).toBeHidden();
+  });
+
+  // Guided Setup is a workflow, and its truth is the durable transition. An
+  // address must not resurrect an unconfirmed wizard; only a server-side
+  // transition resumes it.
+  test("a setup address does not open the wizard from the gate", async ({
+    page,
+  }) => {
+    await coldLoad(page, "#setup");
+    await expect(page.locator("#view-start")).toBeVisible();
+    await expect(page.locator('[data-admin-view-panel="setup"]')).toBeHidden();
+  });
+
+  // The gate is showing and the owner pastes a bookmarked address: no document
+  // load happens, only a hashchange, and that has to open the page too.
+  test("typing a maintenance address at the start gate opens that page", async ({
+    page,
+  }) => {
+    await expect(page.locator("#view-start")).toBeVisible();
+    await page.evaluate(() => {
+      window.location.hash = "maintenance-settings-expert";
+    });
+    await expect(page.locator("#maintenance-settings-panel")).toBeVisible();
+    await expect(page.locator('[data-settings-pane="expert"]')).toBeVisible();
+  });
+
+  test("opening a door moves focus to the heading of the page it opened", async ({
+    page,
+  }) => {
+    const maintenance = new MaintenancePage(page);
+    await maintenance.openStatus();
+    await expect(page.locator("#maintenance-status-panel h2")).toBeFocused();
+  });
+
+  test("going back to the hub moves focus to the hub heading", async ({
+    page,
+  }) => {
+    const maintenance = new MaintenancePage(page);
+    await maintenance.openSettings();
+    await page.locator("#maintenance-back-settings").click();
+    await expect(page.locator("#maintenance-hub")).toBeVisible();
+    await expect(page.locator("#maintenance-hub h2")).toBeFocused();
+  });
+});

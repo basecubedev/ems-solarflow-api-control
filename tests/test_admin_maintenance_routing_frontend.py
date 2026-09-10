@@ -146,3 +146,53 @@ def test_leaving_the_settings_page_returns_its_borrowed_forms():
     parked = body.index("parkMaintenanceSourceConfigs()")
     panels = body.index("MAINTENANCE_PANEL_IDS")
     assert parked < panels, "park before the panels are hidden, not after"
+
+
+# --- cold deep links and focus --------------------------------------------
+
+
+def test_a_bookmarked_maintenance_address_reveals_the_workspace():
+    """A cold load fires no hashchange, so the router has to reveal itself."""
+
+    js = _read("admin.js")
+    body = js.split("function applyHashRoute", 1)[1].split("\nfunction ", 1)[0]
+    assert "if (!workspaceRevealed) {" in body
+    assert "revealWorkspace()" in body
+
+
+def test_only_maintenance_opens_from_an_address():
+    """Guided Setup resumes from its durable transition, never from a bookmark.
+
+    Revealing the wizard for a "#setup" address would resurrect an unconfirmed
+    selection that no server-side transition backs.
+    """
+
+    js = _read("admin.js")
+    body = js.split("function applyHashRoute", 1)[1].split("\nfunction ", 1)[0]
+    guard = body.split("if (!workspaceRevealed) {", 1)[1].split("}", 1)[0]
+    assert 'if (view !== "maintenance") return;' in guard
+
+
+def test_the_authenticated_app_asks_the_router_before_showing_the_gate():
+    js = _read("admin.js")
+    body = js.split("function showAuthenticatedApp", 1)[1].split("\nfunction ", 1)[0]
+    routed = body.index("applyHashRoute()")
+    gate = body.index("startEls.gate.hidden = false")
+    assert routed < gate, "route first; the gate is the fallback"
+
+
+def test_every_maintenance_page_heading_can_take_focus():
+    """Panel switches move focus, so the headings must be focus targets."""
+
+    html = _read("index.html")
+    assert html.count('<h2 class="maintenance-title" tabindex="-1">') == 5
+    assert '<h2 class="maintenance-title">' not in html
+
+
+def test_switching_pages_moves_focus_to_the_new_heading():
+    js = _read("admin.js")
+    body = js.split("function setMaintenancePath", 1)[1].split("\nfunction ", 1)[0]
+    assert "focusMaintenanceHeading(next)" in body
+    helper = js.split("function focusMaintenanceHeading", 1)[1].split("\nfunction ", 1)[0]
+    assert ".maintenance-title" in helper
+    assert "heading.focus()" in helper

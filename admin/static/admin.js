@@ -7709,6 +7709,7 @@ function setMaintenancePath(path, pinnedTag, settingsTab) {
   // other maintenance sub-panel parks and hides the workflow immediately, and a
   // synthetic preview from another task never follows in.
   rescopeSystemBuildForNavigation();
+  focusMaintenanceHeading(next);
   if (next === "hub") {
     return loadMaintenanceHubState();
   }
@@ -7727,6 +7728,15 @@ function setMaintenancePath(path, pinnedTag, settingsTab) {
     return loadBackups();
   }
   return undefined;
+}
+
+// A panel switch is a navigation, so it has to move focus: otherwise the
+// keyboard owner stays parked on the control that was just hidden and a screen
+// reader announces nothing about the page that opened.
+function focusMaintenanceHeading(path) {
+  const panel = document.getElementById(MAINTENANCE_PANEL_IDS[path]);
+  const heading = panel ? panel.querySelector(".maintenance-title") : null;
+  if (heading) heading.focus();
 }
 
 function currentHashView() {
@@ -7753,13 +7763,20 @@ function maintenanceSettingsTabForHash(hash) {
 }
 
 // Deep links (#maintenance, #maintenance-manual, #maintenance-settings-safety)
-// still resolve to the right panel, but only once the start gate has revealed
-// the workspace — while the landing gate is showing, hash changes must not
-// un-hide a workspace panel.
+// resolve to the right panel even from the landing gate: the gate is a landing
+// screen, not a wall a bookmark has to get past. Only Maintenance opens this
+// way. Guided Setup is a workflow whose truth is the durable transition, so an
+// address must never resurrect an unconfirmed wizard — that resume belongs to
+// resumeGuidedSetupFromTransition. An address naming no maintenance view
+// reveals nothing, which is what keeps showLanding()'s cleared hash from
+// re-opening the panel it just closed.
 function applyHashRoute() {
-  if (!workspaceRevealed) return;
   const hash = currentHashView();
   const view = adminViewForHash(hash);
+  if (!workspaceRevealed) {
+    if (view !== "maintenance") return;
+    revealWorkspace();
+  }
   setAdminView(view);
   if (view === "maintenance") {
     setMaintenancePath(
@@ -19983,7 +20000,14 @@ async function resumeAuthenticatedWorkflows() {
 function showAuthenticatedApp() {
   if (authEls.view) authEls.view.hidden = true;
   if (authEls.logout) authEls.logout.hidden = false;
-  if (startEls.gate && !workspaceRevealed) startEls.gate.hidden = false;
+  if (!workspaceRevealed) {
+    // A cold load fires no hashchange, so the router has to be asked once. It
+    // reveals nothing unless the address names a maintenance page; a durable
+    // server-side transition still wins, because the workflow resume below sets
+    // its own view afterwards.
+    applyHashRoute();
+    if (!workspaceRevealed && startEls.gate) startEls.gate.hidden = false;
+  }
   bootstrapAuthenticatedAppOnce();
   if (
     authenticatedWorkflowResumeCompleted &&
