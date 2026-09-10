@@ -1985,7 +1985,7 @@ async function pollMdns() {
     const status = await statusRes.json();
     const result = await devicesRes.json();
     if (!statusRes.ok || !devicesRes.ok) {
-      throw new Error(status.last_error || result.error || "discovery status failed");
+      throw new Error(status.last_error || humanErrorText(result, "discovery status failed"));
     }
     renderMdnsStatus(status);
     for (const device of Array.isArray(result.devices) ? result.devices : []) {
@@ -2186,7 +2186,7 @@ async function loadMqttBrokers() {
   try {
     const res = await fetch("/api/discovery/mqtt-brokers");
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "broker discovery failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "broker discovery failed"));
     mqttBrokers.clear();
     for (const broker of Array.isArray(data.candidates) ? data.candidates : []) {
       mqttBrokers.set(String(broker.host) + ":" + String(broker.port), broker);
@@ -2519,7 +2519,7 @@ async function loadMqttProposals() {
     if (requestId !== mqttProposalsRequest || generation !== guidedSetupGeneration) {
       return;
     }
-    if (!res.ok) throw new Error(data.error || "proposal discovery failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "proposal discovery failed"));
     els.mqttProposalsMessage.hidden = true;
     renderMqttProposals(data.proposals);
     // Proposals may arrive after HTTP auto-add; reconcile the draft so a
@@ -3274,7 +3274,7 @@ async function probeMqttNetworks(cidrs) {
           body: JSON.stringify({ cidr }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "broker probe failed");
+        if (!res.ok) throw new Error(humanErrorText(data, "broker probe failed"));
         return { found: Number(data.found) || 0, error: null };
       } catch (err) {
         return { found: 0, error: err.message || String(err) };
@@ -3300,7 +3300,7 @@ async function refreshMqttBrokers() {
       method: "POST",
     }, context);
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "broker refresh failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "broker refresh failed"));
     els.mqttMessage.textContent =
       "Broker discovery refreshed. " +
       String(data.reachable || 0) +
@@ -3366,7 +3366,7 @@ async function loadMqttCredentials() {
   try {
     const res = await fetch("/api/discovery/connections/mqtt-credentials");
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "credentials load failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "credentials load failed"));
     renderMqttCredentials(data.credentials);
   } catch (err) {
     els.mqttCredentialMessage.textContent =
@@ -3400,7 +3400,7 @@ async function saveMqttCredential(event) {
       context
     );
     const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || "save failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "save failed"));
     els.mqttCredentialForm.reset();
     els.mqttCredentialMessage.textContent = "Credential saved.";
     renderMqttCredentials((data.local_mqtt || {}).credentials);
@@ -3422,7 +3422,7 @@ async function deleteMqttCredential(id) {
       context
     );
     const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || "delete failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "delete failed"));
     els.mqttCredentialMessage.textContent = "Credential removed.";
     await loadMqttCredentials();
   } catch (err) {
@@ -3528,7 +3528,7 @@ async function loadZendureCloudSettings() {
   try {
     const res = await fetch(ZENDURE_CLOUD_BASE + "/settings");
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "settings failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "settings failed"));
     applyZendureCloudSettings(data);
   } catch (err) {
     els.zendureCloudMessage.textContent =
@@ -3554,7 +3554,7 @@ async function saveZendureCloudToken(event) {
     }, context);
     const data = await res.json();
     if (!res.ok || data.ok === false) {
-      throw new Error(data.message || data.error || "save failed");
+      throw new Error(humanErrorText(data, "save failed"));
     }
     els.zendureCloudTokenInput.value = "";
     els.zendureCloudMessage.textContent = data.message || "Zendure credential saved.";
@@ -3581,7 +3581,7 @@ async function testZendureCloudToken() {
     }, context);
     const data = await res.json();
     if (!res.ok || data.ok === false) {
-      throw new Error(data.message || data.error || "test failed");
+      throw new Error(humanErrorText(data, "test failed"));
     }
     els.zendureCloudMessage.textContent =
       "Zendure credential OK: " +
@@ -3610,7 +3610,7 @@ async function refreshZendureCloudDiscovery() {
     }, context);
     const data = await res.json();
     if (!res.ok || data.ok === false) {
-      throw new Error(data.message || data.error || "refresh failed");
+      throw new Error(humanErrorText(data, "refresh failed"));
     }
     zendureCloudDevices.length = 0;
     for (const device of Array.isArray(data.candidates) ? data.candidates : []) {
@@ -3656,7 +3656,7 @@ async function forgetZendureCloudToken() {
     }, context);
     const data = await res.json();
     if (!res.ok || data.ok === false) {
-      throw new Error(data.message || data.error || "delete failed");
+      throw new Error(humanErrorText(data, "delete failed"));
     }
     zendureCloudDevices.length = 0;
     renderZendureCloudDevices();
@@ -7201,7 +7201,7 @@ async function requestConfigPreview() {
       return;
     }
     if (!res.ok) {
-      throw new Error(data.message || data.error || "Config preview unavailable.");
+      throw new Error(humanErrorText(data, "Config preview unavailable."));
     }
     latestConfigPreview = data;
     setSetupPreviewId(data.config_preview_id || null);
@@ -8448,7 +8448,7 @@ function renderDeploymentControls() {
   }
   if (setupEls.deploymentErrorLine) {
     setupEls.deploymentErrorLine.hidden = !dep.error;
-    setupEls.deploymentErrorLine.textContent = dep.error || "";
+    setupEls.deploymentErrorLine.textContent = humanErrorText(dep, "");
   }
   if (setupEls.deploymentErrorDetails) {
     setupEls.deploymentErrorDetails.hidden = !dep.error_detail;
@@ -8582,7 +8582,7 @@ async function prepareDeployment(overwrite) {
       return;
     }
     if (!res.ok || data.ok === false) {
-      throw new Error(data.message || data.error || "Could not start preparation.");
+      throw new Error(humanErrorText(data, "Could not start preparation."));
     }
     applyDeploymentJob(data);
     if (data.job_id) pollDeploymentJob(data.job_id);
@@ -8623,7 +8623,7 @@ function pollDeploymentJob(jobId) {
       const job = await res.json();
       // "Start over" invalidates an in-flight poll so it cannot revive state.
       if (generation !== guidedSetupGeneration) return;
-      if (!res.ok) throw new Error(job.error || "Job status unavailable.");
+      if (!res.ok) throw new Error(humanErrorText(job, "Job status unavailable."));
       applyDeploymentJob(job);
       if (job.status === "running") {
         deploymentJobTimer = window.setTimeout(tick, 800);
@@ -8863,7 +8863,7 @@ function renderStartControls() {
   }
   if (setupEls.startErrorLine) {
     setupEls.startErrorLine.hidden = !start.error;
-    setupEls.startErrorLine.textContent = start.error || "";
+    setupEls.startErrorLine.textContent = humanErrorText(start, "");
   }
   if (setupEls.startErrorDetails) {
     setupEls.startErrorDetails.hidden = !start.error_detail;
@@ -8977,7 +8977,7 @@ async function startDeployment() {
     if (!res.ok || data.ok === false) {
       start.status = "failed";
       start.error_code = data.reason || null;
-      start.error = data.message || data.error || "Could not start EMS.";
+      start.error = humanErrorText(data, "Could not start EMS.");
       start.error_detail = data.detail || null;
       renderStart();
       return;
@@ -9030,7 +9030,7 @@ async function repairWorkspacePermissions() {
     if (!res.ok || data.ok === false) {
       start.status = "failed";
       start.error_code = data.reason || "workspace_permission_repair_failed";
-      start.error = data.message || data.error || "Could not repair permissions.";
+      start.error = humanErrorText(data, "Could not repair permissions.");
       start.error_detail = data.detail || null;
       return;
     }
@@ -9071,7 +9071,7 @@ async function resolveContainerConflict() {
     });
     const data = await res.json();
     if (!res.ok || data.ok === false) {
-      throw new Error(data.message || data.error || "Could not resolve the container conflict.");
+      throw new Error(humanErrorText(data, "Could not resolve the container conflict."));
     }
     if (data && data.transition) renderSystemAlignmentStatus(data);
     start.conflict = data.conflict || null;
@@ -9103,7 +9103,7 @@ function pollStartJob(jobId) {
       );
       const job = await res.json();
       if (generation !== guidedSetupGeneration) return;
-      if (!res.ok) throw new Error(job.error || "Job status unavailable.");
+      if (!res.ok) throw new Error(humanErrorText(job, "Job status unavailable."));
       applyStartJob(job);
       if (job.status === "running") {
         startJobTimer = window.setTimeout(tick, 900);
@@ -9626,7 +9626,7 @@ async function startGuidedSetupOver() {
     }
     if (!res.ok || data.ok !== true) {
       throw new Error(
-        data.message || data.error || "The setup state could not be cleared."
+        humanErrorText(data, "The setup state could not be cleared.")
       );
     }
   } catch (err) {
@@ -10198,7 +10198,7 @@ function renderMaintenance(data) {
     "muted"
   );
   if (maintenanceEls.dockerNote) {
-    maintenanceEls.dockerNote.textContent = docker.available ? "" : docker.error || "";
+    maintenanceEls.dockerNote.textContent = docker.available ? "" : humanErrorText(docker, "");
   }
 
   const components = data.components || {};
@@ -10963,7 +10963,7 @@ async function applyMqttMigration() {
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || !data.ok) {
-      const error = new Error(data.message || data.error || "Migration apply failed.");
+      const error = new Error(humanErrorText(data, "Migration apply failed."));
       error.status = data.status || "error";
       throw error;
     }
@@ -11310,7 +11310,7 @@ function setUpgradeReleaseStatus() {
   }
   if (upgradeEls.releaseError) {
     upgradeEls.releaseError.hidden = !upgradeState.error;
-    upgradeEls.releaseError.textContent = upgradeState.error || "";
+    upgradeEls.releaseError.textContent = humanErrorText(upgradeState, "");
   }
   if (upgradeEls.prepareBtn) {
     const release = upgradeSelectedRelease();
@@ -12753,7 +12753,7 @@ function renderBackupRow(backup) {
   ];
   const isInflux = backup.backup_type === "influxdb";
   const flags = [];
-  if (!backup.valid) flags.push(backupValidationItem("error", backup.error || "invalid archive"));
+  if (!backup.valid) flags.push(backupValidationItem("error", humanErrorText(backup, "invalid archive")));
   if (backup.locked) flags.push(backupValidationItem("warn", "encrypted — password required"));
   if (isInflux) {
     flags.push(backupValidationItem(
@@ -13003,7 +13003,14 @@ function renderRestorePlan(plan) {
 
   const notes = [];
   if (plan.blocked) {
-    notes.push("Restore is blocked: " + (plan.block_reason || "resolve the issues above") + ".");
+    // block_reason is a machine code; the shared resolver turns the ones an
+    // owner can hit into a sentence and never prints the code itself.
+    notes.push(
+      humanErrorText(
+        { error: plan.block_reason },
+        "This restore is blocked. Resolve the issues above and preview again."
+      )
+    );
   }
   if (!backupEls.rollback.checked) {
     notes.push("Rollback backup is disabled — the current state will not be captured.");
@@ -16088,7 +16095,7 @@ async function maintenanceScanNetwork(
   }, session.mode);
   const started = await start.json();
   if (!start.ok || !started.scan_id) {
-    throw new Error(started.error || "scan request failed");
+    throw new Error(humanErrorText(started, "scan request failed"));
   }
   const deadline = Date.now() + POLL_MAX_MS;
   while (Date.now() < deadline) {
@@ -16096,7 +16103,7 @@ async function maintenanceScanNetwork(
       "/api/discovery/result/" + encodeURIComponent(started.scan_id)
     );
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "scan result unavailable");
+    if (!response.ok) throw new Error(humanErrorText(result, "scan result unavailable"));
     if (onProgress && result.progress) onProgress(result.progress);
     if (result.status !== "running") {
       return Array.isArray(result.devices) ? result.devices : [];
@@ -16190,7 +16197,7 @@ async function startMaintenanceDiscovery() {
         const settingsResponse = await fetch(ZENDURE_CLOUD_BASE + "/settings");
         const settings = await settingsResponse.json();
         if (!settingsResponse.ok) {
-          throw new Error(settings.error || "cloud settings unavailable");
+          throw new Error(humanErrorText(settings, "cloud settings unavailable"));
         }
         if (settings.token_saved) {
           const refresh = await fetch(ZENDURE_CLOUD_BASE + "/refresh", { method: "POST" });
@@ -16207,7 +16214,7 @@ async function startMaintenanceDiscovery() {
       try {
         const response = await fetch("/api/discovery/mqtt-proposals");
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "mqtt proposals unavailable");
+        if (!response.ok) throw new Error(humanErrorText(data, "mqtt proposals unavailable"));
         if (generation !== session.generation) return;
         session.mqttProposals = Array.isArray(data.proposals) ? data.proposals : [];
       } catch (err) {
@@ -16229,7 +16236,7 @@ async function startMaintenanceDiscovery() {
         if (!refresh.ok) throw new Error("mDNS refresh failed");
         const response = await fetch("/api/discovery/devices");
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "mDNS results unavailable");
+        if (!response.ok) throw new Error(humanErrorText(data, "mDNS results unavailable"));
         if (generation !== session.generation) return;
         (Array.isArray(data.devices) ? data.devices : []).forEach((device) =>
           mergeDiscoveryDevice(session, device, "mdns")
@@ -16244,7 +16251,7 @@ async function startMaintenanceDiscovery() {
       try {
         const response = await fetch("/api/discovery/networks");
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "network discovery failed");
+        if (!response.ok) throw new Error(humanErrorText(data, "network discovery failed"));
         if (generation !== session.generation) return;
         const cidrs = (Array.isArray(data.networks) ? data.networks : [])
           .filter((network) => network.scan_recommended && !network.is_docker_like)
@@ -16439,7 +16446,7 @@ async function addManualMaintenanceMqttDevice() {
       );
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.message || data.error || "credential save failed");
+        throw new Error(humanErrorText(data, "credential save failed"));
       }
       const credentials = (data.local_mqtt || {}).credentials || [];
       const match = credentials.find((entry) => String(entry.id) === broker.ref);
@@ -17310,7 +17317,7 @@ async function applyMaintenanceConfig() {
     const data = await resp.json().catch(() => ({}));
     showCredentialRollbackWarning(mconfigEls.applyRollback, data);
     if (!resp.ok || !data.ok) {
-      throw new Error(data.message || data.error || "Could not apply the config draft.");
+      throw new Error(humanErrorText(data, "Could not apply the config draft."));
     }
     const successMessage =
       "Config updated at " + data.path +
@@ -17513,7 +17520,7 @@ async function syncMaintenanceContainers(statusEl, reason = "manual") {
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || !data.ok) {
-      throw new Error(data.message || data.error || "Container sync failed.");
+      throw new Error(humanErrorText(data, "Container sync failed."));
     }
     const stepSummary = formatContainerSyncSteps(data.steps);
     if (statusEl) {
@@ -18403,7 +18410,7 @@ async function retrySetupCleanup() {
       return;
     }
     if (!res.ok || data.ok !== true) {
-      throw new Error(data.message || data.error || "Cleanup did not finish.");
+      throw new Error(humanErrorText(data, "Cleanup did not finish."));
     }
     showSetupCleanupIncomplete(null);
     setSetupWorkflowId(null);
@@ -18864,7 +18871,7 @@ async function supersedeSetupBuild(nextTag, previousTag) {
   });
   const status = await statusRes.json().catch(() => ({}));
   if (!statusRes.ok) {
-    throw new Error(status.message || status.error || "transition status is unavailable");
+    throw new Error(humanErrorText(status, "transition status is unavailable"));
   }
   const transition = status && status.transition;
   if (
@@ -19074,7 +19081,7 @@ async function resumeSelectedSystemBuildResources(operationId, tag, generation) 
           return;
         }
         throw new Error(
-          data.message || data.error || "System Build resource recovery failed."
+          humanErrorText(data, "System Build resource recovery failed.")
         );
       }
       renderSystemAlignmentStatus(data);
@@ -19953,7 +19960,7 @@ async function loadSystemAlignmentStatus() {
   try {
     const res = await fetch("/api/admin/system-alignment/status", { cache: "no-store" });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || "Status unavailable.");
+    if (!res.ok) throw new Error(humanErrorText(data, "Status unavailable."));
     // Drop a stale status response: polling was stopped or rescheduled (task,
     // owner or selection change, auth loss) while this request was in flight.
     if (pollGeneration !== systemAlignmentPollGeneration) return null;
@@ -20002,7 +20009,7 @@ async function resumeSystemAlignment() {
       body: JSON.stringify(body),
     });
     let data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || "Resume failed.");
+    if (!res.ok) throw new Error(humanErrorText(data, "Resume failed."));
     // Render the reconnect/alignment mutation before starting the next durable
     // resource-verification mutation.
     renderSystemAlignmentStatus(data);
@@ -20014,7 +20021,7 @@ async function resumeSystemAlignment() {
       });
       data = await verifyRes.json();
       if (!verifyRes.ok) {
-        throw new Error(data.message || data.error || "Resource verification failed.");
+        throw new Error(humanErrorText(data, "Resource verification failed."));
       }
       renderSystemAlignmentStatus(data);
     }
@@ -20047,7 +20054,7 @@ async function returnToRunningSystemBuild() {
       body: JSON.stringify({ operation_id: transition.operation_id, confirm: true }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || "Return failed.");
+    if (!res.ok) throw new Error(humanErrorText(data, "Return failed."));
     renderSystemAlignmentStatus(data);
     if (data.reconnect !== false) {
       showReconnectOverlay(data.message || "Returning to the running System Build…");

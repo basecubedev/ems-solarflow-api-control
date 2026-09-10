@@ -6600,6 +6600,10 @@ def _run_start_over_node(setup):
         )
     )
     helpers += "\n" + _extract_fn(js, "resumeGuidedSetupLifecycle")
+    # The refusal path renders through the shared error resolver.
+    helpers += "\nconst ADMIN_ERROR_MESSAGES = {"
+    helpers += js.split("const ADMIN_ERROR_MESSAGES = {", 1)[1].split("\n};", 1)[0]
+    helpers += "\n};\n" + _extract_fn(js, "humanErrorText")
     # Extracted async-aware: startGuidedSetupOver awaits the backend abandon, so
     # dropping its `async` keyword would not even parse.
     header = "async function startGuidedSetupOver"
