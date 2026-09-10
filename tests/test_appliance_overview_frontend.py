@@ -29,13 +29,21 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNNER = os.path.join(ROOT, "tests", "js", "appliance_overview_runner.js")
 
 
-def _render(status, view="overview"):
+def _render(status, view="overview", durations=(), sizes=(), percentages=()):
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not available")
     result = subprocess.run(
         [node, RUNNER],
-        input=json.dumps({"status": status, "view": view}),
+        input=json.dumps(
+            {
+                "status": status,
+                "view": view,
+                "durations": list(durations),
+                "sizes": list(sizes),
+                "percentages": list(percentages),
+            }
+        ),
         text=True,
         capture_output=True,
         check=False,
@@ -204,3 +212,51 @@ def test_the_navigation_marks_the_sections_that_need_attention():
         )
     )
     assert view["attention"] == {"admin": "error", "updates": "warning"}
+
+
+def test_a_session_limit_is_shown_in_the_unit_a_person_thinks_in():
+    """The configuration file holds seconds; "1800 s" is a number to convert
+    before it answers "how long until I am signed out".
+
+    Only a unit the value divides into exactly is used. Rounding 5400 seconds
+    to "2 hours" would hide half an hour of a session that ends at 90 minutes,
+    and a limit is the one number nobody should have to distrust.
+    """
+
+    seconds = [1, 45, 90, 1800, 5400, 43200, 172800, 0, None, 1.5]
+    assert _render(_status(), durations=seconds)["durations"] == [
+        "1 second",
+        "45 seconds",
+        "90 seconds",
+        "30 minutes",
+        "90 minutes",
+        "12 hours",
+        "2 days",
+        None,
+        None,
+        None,
+    ]
+
+
+def test_a_size_reads_the_same_on_every_page():
+    """The overview divided by 1024 inline and Diagnostics printed raw
+    megabytes, so one filesystem was 149 GB on one page and 152473 MB on the
+    next."""
+
+    assert _render(_status(), sizes=[152473, 5859, 512, 0, None])["sizes"] == [
+        "149 GB",
+        "5.7 GB",
+        "0.5 GB",
+        None,
+        None,
+    ]
+
+
+def test_a_percentage_says_what_it_is_a_percentage_of():
+    """ "27.8 %" on a storage card answers neither how full nor how free."""
+
+    assert _render(_status(), percentages=[27.8, 0, None])["percentages"] == [
+        "27.8 % used",
+        "0 % used",
+        "—",
+    ]

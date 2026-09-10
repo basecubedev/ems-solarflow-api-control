@@ -67,6 +67,14 @@ new Function(
     "\n" +
     extractFunction("format") +
     "\n" +
+    extractFunction("plural") +
+    "\n" +
+    extractFunction("duration") +
+    "\n" +
+    extractFunction("gigabytes") +
+    "\n" +
+    extractFunction("usedPercent") +
+    "\n" +
     extractFunction("viewLabel") +
     "\n" +
     extractFunction("rankSeverity") +
@@ -86,6 +94,9 @@ new Function(
     extractFunction("attentionBySection") +
     "\nscope.findingsView = findingsView;" +
     "\nscope.overviewVerdict = overviewVerdict;" +
+    "\nscope.duration = duration;" +
+    "\nscope.gigabytes = gigabytes;" +
+    "\nscope.usedPercent = usedPercent;" +
     "\nscope.verdictAnnouncement = verdictAnnouncement;" +
     "\nscope.findingAction = findingAction;" +
     "\nscope.attentionBySection = attentionBySection;"
@@ -108,6 +119,9 @@ process.stdout.write(
     actions: findings.findings.map(function (item) {
       return scope.findingAction(item, view);
     }),
-    attention: scope.attentionBySection(status)
+    attention: scope.attentionBySection(status),
+    durations: (input.durations || []).map(scope.duration),
+    sizes: (input.sizes || []).map(scope.gigabytes),
+    percentages: (input.percentages || []).map(scope.usedPercent)
   }) + "\n"
 );

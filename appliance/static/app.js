@@ -91,6 +91,38 @@
     return String(value);
   }
 
+  /* Session limits arrive in seconds because that is what the configuration
+     file holds. "1800 s" is a number to convert before it is an answer. */
+  function duration(seconds) {
+    var total = Number(seconds);
+    if (!total || total < 0 || total !== Math.floor(total)) return null;
+    /* Only a unit the value divides into exactly: 5400 seconds rounded to
+       "2 hours" hides half an hour of a session that ends at 90 minutes. */
+    if (total >= 86400 && total % 86400 === 0) return plural(total / 86400, "day");
+    if (total >= 3600 && total % 3600 === 0) return plural(total / 3600, "hour");
+    if (total >= 60 && total % 60 === 0) return plural(total / 60, "minute");
+    return plural(total, "second");
+  }
+
+  /* Megabytes are what the host reports and gigabytes are what a person reads.
+     One helper, so the same filesystem is not 149 GB on one page and 152473 MB
+     on the next. */
+  function gigabytes(megabytes) {
+    var value = Number(megabytes);
+    if (!value || value < 0) return null;
+    return (value >= 10240 ? Math.round(value / 1024) : (value / 1024).toFixed(1)) + " GB";
+  }
+
+  /* A bare percentage on a storage card answers neither "how full" nor "how
+     free". The word is the difference between a reading and an answer. */
+  function usedPercent(value) {
+    return value === null || value === undefined ? "—" : value + " % used";
+  }
+
+  function plural(count, unit) {
+    return count + " " + unit + (count === 1 ? "" : "s");
+  }
+
   function card(title, children, testId) {
     return el("section", { class: "status-card", "data-test": testId || null }, [
       el("h3", { text: title })
@@ -979,7 +1011,7 @@
         fact("OS", (system.operating_system || {}).name),
         fact("Uptime", (system.uptime || {}).days !== undefined ? (system.uptime.days + " days") : null),
         fact("Temperature", (system.temperature || {}).celsius ? system.temperature.celsius + " °C" : null),
-        fact("Free storage", ((system.storage || {}).root || {}).free_mb ? Math.round(system.storage.root.free_mb / 1024) + " GB" : null)
+        fact("Free storage", gigabytes(((system.storage || {}).root || {}).free_mb))
       ], "card-host"),
 
       card("Docker", [
@@ -1334,8 +1366,9 @@
     ]));
     wrapper.appendChild(tagField);
     if (!opts.bootstrap) {
-      wrapper.appendChild(el("div", { class: "fact-row" }, [
-        el("label", { for: "install-reinstall", text: "Reinstall the same version" }), reinstall
+      wrapper.appendChild(el("div", { class: "field-check" }, [
+        reinstall,
+        el("label", { for: "install-reinstall", text: "Reinstall the same version" })
       ]));
     }
 
@@ -1758,7 +1791,10 @@
         fact("Type", item.type),
         fact("Addresses", (item.addresses || []).join(", "))
       ];
-      if (item.type === "wifi") facts.push(fact("SSID", item.ssid), fact("Signal", item.signal));
+      if (item.type === "wifi") {
+        facts.push(fact("SSID", item.ssid));
+        facts.push(fact("Signal", item.signal === undefined ? null : item.signal + " %"));
+      }
       if (expert()) facts.push(fact("Gateway", item.gateway), fact("DNS", (item.dns || []).join(", ")));
       cards.push(card(item.device, facts, "network-interface"));
     });
@@ -1805,8 +1841,9 @@
 
     wrapper.appendChild(el("div", { class: "field" }, [el("label", { for: "wifi-ssid", text: "SSID" }), ssidInput]));
     wrapper.appendChild(el("div", { class: "field" }, [el("label", { for: "wifi-pass", text: "Passphrase" }), passInput]));
-    wrapper.appendChild(el("div", { class: "fact-row" }, [
-      el("label", { for: "wifi-hidden", text: "Hidden network" }), hidden
+    wrapper.appendChild(el("div", { class: "field-check" }, [
+      hidden,
+      el("label", { for: "wifi-hidden", text: "Hidden network" })
     ]));
     wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: "Stored passphrases are never shown again." }));
     wrapper.appendChild(el("div", { class: "control-stage-actions" }, [
@@ -2126,16 +2163,16 @@
         el("p", { class: "status-value", text: (system.temperature || {}).celsius ? system.temperature.celsius + " °C" : "—" })
       ], "diag-temperature"),
       card("Memory", [
-        el("p", { class: "status-value", text: (system.memory || {}).used_percent !== null && (system.memory || {}).used_percent !== undefined ? system.memory.used_percent + " %" : "—" }),
-        fact("Total", (system.memory || {}).total_mb ? system.memory.total_mb + " MB" : null),
-        fact("Available", (system.memory || {}).available_mb ? system.memory.available_mb + " MB" : null)
+        el("p", { class: "status-value", text: usedPercent((system.memory || {}).used_percent) }),
+        fact("Total", gigabytes((system.memory || {}).total_mb)),
+        fact("Available", gigabytes((system.memory || {}).available_mb))
       ], "diag-memory"),
       card("Root filesystem", [
-        el("p", { class: "status-value", text: ((system.storage || {}).root || {}).used_percent !== undefined ? system.storage.root.used_percent + " %" : "—" }),
-        fact("Free", ((system.storage || {}).root || {}).free_mb ? system.storage.root.free_mb + " MB" : null)
+        el("p", { class: "status-value", text: usedPercent(((system.storage || {}).root || {}).used_percent) }),
+        fact("Free", gigabytes(((system.storage || {}).root || {}).free_mb))
       ], "diag-storage"),
       card("EMS data", [
-        el("p", { class: "status-value", text: ((system.storage || {}).ems_data || {}).used_percent !== undefined ? system.storage.ems_data.used_percent + " %" : "—" }),
+        el("p", { class: "status-value", text: usedPercent(((system.storage || {}).ems_data || {}).used_percent) }),
         fact("Path", ((system.storage || {}).ems_data || {}).path, { mono: true })
       ], "diag-ems-data"),
       expert() ? card("Kernel", [
@@ -2237,8 +2274,8 @@
         fact("Configuration", settings.configuration_file, { mono: true })
       ], "settings-appliance"),
       card("Sessions", [
-        fact("Idle timeout", settings.session_timeout_seconds ? settings.session_timeout_seconds + " s" : null),
-        fact("Absolute maximum", settings.session_absolute_max_seconds ? settings.session_absolute_max_seconds + " s" : null)
+        fact("Signed out after", duration(settings.session_timeout_seconds)),
+        fact("Signed out at the latest after", duration(settings.session_absolute_max_seconds))
       ], "settings-sessions"),
       card("Updates", [
         fact("Automatic security updates", settings.automatic_security_updates),

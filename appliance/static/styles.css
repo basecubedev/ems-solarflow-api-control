@@ -125,6 +125,20 @@ a { color: var(--accent2); }
 
 .field { display: grid; gap: 5px; }
 
+/* A checkbox is a control, not a label/value pair: it sits next to its label
+   rather than at the far edge of a fact row, and the label reads as a sentence
+   instead of as an uppercase field name. */
+.field-check { display: flex; align-items: center; gap: 8px; }
+.field-check input { width: auto; min-height: 0; margin: 0; }
+.field-check label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+  cursor: pointer;
+}
+
 label {
   font-size: 10px;
   font-weight: 700;
