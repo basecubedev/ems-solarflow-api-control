@@ -2498,3 +2498,8 @@ code {
 /* Backups live on this machine; the transfer block is what lets one leave it. */
 .backup-transfer { display: flex; flex-direction: column; gap: 8px; }
 .backup-import-label { display: inline-flex; align-items: center; cursor: pointer; }
+
+/* Guided Setup states the write gates as their own block instead of leaving
+   them inside an "Advanced settings" disclosure. */
+.setup-safety-group + .setup-safety-group { margin-top: 12px; }
+.setup-safety-group .config-subsection-title { margin: 0 0 2px; }

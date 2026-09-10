@@ -49,7 +49,7 @@ const scope = {};
 new Function(
   "scope",
   '"use strict";\n' +
-    extractBlock("const MAINTENANCE_SAFETY_GROUPS = [", "];") +
+    extractBlock("const SAFETY_CATALOG_GROUPS = [", "];") +
     "\n" +
     extractFunction("mconfigIsSafetyField") +
     "\n" +

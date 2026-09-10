@@ -162,8 +162,7 @@ def test_the_safety_tab_does_not_hide_a_gate_behind_a_disclosure():
 def test_the_safety_tab_takes_its_grouping_from_the_catalog():
     js = _read("admin.js")
     assert (
-        'const MAINTENANCE_SAFETY_GROUPS = ["safety_gates", "safety_holds", "limits"]'
-        in js
+        'const SAFETY_CATALOG_GROUPS = ["safety_gates", "safety_holds", "limits"]' in js
     )
     body = js.split("function renderMaintenanceSafetyGroups", 1)[1].split("\n}", 1)[0]
     # Titles and order come from the catalog entry, never from a copy here.

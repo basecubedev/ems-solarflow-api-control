@@ -3751,6 +3751,7 @@ const configEls = {
   featureSettings: document.getElementById("config-feature-settings"),
   featureLists: {
     features: document.getElementById("config-feature-list-features"),
+    safety: document.getElementById("config-feature-list-safety"),
     advanced: document.getElementById("config-feature-list-advanced"),
   },
   featureEmpty: document.getElementById("config-feature-empty"),
@@ -6656,6 +6657,9 @@ function visibleFeatureFields(section, selectedType) {
   return fields.filter((field) => {
     if (field.path === enabledPath) return false; // shown as the row toggle
     if (FEATURE_LEVELS_HIDDEN.has(field.level)) return false;
+    // The safety groups have their own block; rendering them twice would give
+    // one setting two controls that disagree until the second one is touched.
+    if (setupIsSafetyField(field)) return false;
     return true;
   });
 }
@@ -6674,6 +6678,49 @@ function featureStatusText(section) {
 // Grid meter and devices live under Hardware; devices keep their dedicated draft
 // UI, so only the grid meter section renders as a Hardware feature row here.
 const SETUP_GROUP_ORDER = ["hardware", "features", "advanced"];
+
+// The catalog groups that answer "what may EMS do to my hardware". Guided Setup
+// and Maintenance read the same list: two copies of it would be two answers.
+// Both render them flat, because the field levels put five of the seven write
+// gates behind an "Advanced settings" disclosure and that is the bug, not the
+// layout.
+const SAFETY_CATALOG_GROUPS = ["safety_gates", "safety_holds", "limits"];
+
+function setupIsSafetyField(field) {
+  return SAFETY_CATALOG_GROUPS.includes(field && field.group);
+}
+
+// Setup builds HTML strings and delegates events by data-feature-path, so this
+// deliberately does not reuse the Maintenance renderer, which builds DOM nodes
+// and binds closures.
+function renderSetupSafetyGroups() {
+  const blocks = [];
+  for (const section of featureSections()) {
+    for (const group of section.groups || []) {
+      if (!SAFETY_CATALOG_GROUPS.includes(group.id)) continue;
+      const fields = (section.fields || []).filter(
+        (field) => field.group === group.id && !FEATURE_LEVELS_HIDDEN.has(field.level)
+      );
+      if (fields.length) blocks.push({ group, fields });
+    }
+  }
+  blocks.sort((a, b) => (a.group.order || 0) - (b.group.order || 0));
+  return blocks
+    .map(
+      ({ group, fields }) =>
+        '<div class="setup-safety-group" role="listitem">' +
+        '<h4 class="config-subsection-title">' +
+        escapeHtml(group.title || group.id) +
+        "</h4>" +
+        '<p class="future-note">' +
+        escapeHtml(group.summary || "") +
+        "</p>" +
+        '<div class="feature-fields">' +
+        fields.map(renderFeatureField).join("") +
+        "</div></div>"
+    )
+    .join("");
+}
 
 function setupGroupOrder() {
   if (setupCatalog && Array.isArray(setupCatalog.groups) && setupCatalog.groups.length) {
@@ -6698,6 +6745,13 @@ function renderFeatureSettings() {
     const groupSections = sectionsForGroup(groupId);
     list.hidden = groupSections.length === 0;
     list.innerHTML = groupSections.map(renderFeatureRow).join("");
+  }
+  // Rendered outside the group loop: safety is a field-group axis, not one of
+  // the catalog's own hardware/features/advanced section groups.
+  if (lists.safety) {
+    const safety = renderSetupSafetyGroups();
+    lists.safety.innerHTML = safety;
+    lists.safety.hidden = !safety;
   }
   if (configEls.featureEmpty) configEls.featureEmpty.hidden = hasCatalog;
 }
@@ -16578,10 +16632,10 @@ function renderMaintenanceFeatureSection(section) {
 
 // The catalog decides which settings are safety-relevant, not this file: the
 // groups are declared in ems/config_catalog.py and read here by name only.
-const MAINTENANCE_SAFETY_GROUPS = ["safety_gates", "safety_holds", "limits"];
+
 
 function mconfigIsSafetyField(field) {
-  return MAINTENANCE_SAFETY_GROUPS.includes(field && field.group);
+  return SAFETY_CATALOG_GROUPS.includes(field && field.group);
 }
 
 // Every catalog section lands on exactly one tab, keyed on the catalog's own
@@ -16599,7 +16653,7 @@ function renderMaintenanceSafetyGroups(sections) {
   const blocks = [];
   sections.forEach((section) => {
     (section.groups || [])
-      .filter((group) => MAINTENANCE_SAFETY_GROUPS.includes(group.id))
+      .filter((group) => SAFETY_CATALOG_GROUPS.includes(group.id))
       .forEach((group) => {
         const fields = (section.fields || []).filter(
           (field) => field.group === group.id
