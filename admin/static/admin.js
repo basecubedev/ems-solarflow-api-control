@@ -7861,10 +7861,13 @@ function setMaintenancePath(path, pinnedTag, settingsTab) {
 // A panel switch is a navigation, so it has to move focus: otherwise the
 // keyboard owner stays parked on the control that was just hidden and a screen
 // reader announces nothing about the page that opened.
-function focusMaintenanceHeading(path) {
-  const panel = document.getElementById(MAINTENANCE_PANEL_IDS[path]);
-  const heading = panel ? panel.querySelector(".maintenance-title") : null;
+function focusPageHeading(container) {
+  const heading = container ? container.querySelector(".maintenance-title") : null;
   if (heading) heading.focus();
+}
+
+function focusMaintenanceHeading(path) {
+  focusPageHeading(document.getElementById(MAINTENANCE_PANEL_IDS[path]));
 }
 
 function currentHashView() {
@@ -10157,45 +10160,79 @@ function maintenancePathFact(entry) {
   return { text: exists ? "found" : "missing", tone: exists ? "ok" : "warn" };
 }
 
+const FINDING_SEVERITY_ORDER = ["error", "warning", "info"];
+
+// The worst severity present names the whole list. "ok" only when it is empty.
+function findingsStatus(findings) {
+  return (
+    FINDING_SEVERITY_ORDER.find((severity) =>
+      findings.some((finding) => finding.severity === severity)
+    ) || "ok"
+  );
+}
+
 function maintenanceFindingsHeadline(findings) {
   if (!findings.length) return "Nothing needs your attention.";
   if (findings.length === 1) return "1 thing needs your attention.";
   return findings.length + " things need your attention.";
 }
 
-// The page's own headline promises "what is wrong". The server ranks the answer;
-// this renders it in that order, because a second sort here would be a second
-// ranking rule. An unreadable block is reported as unreadable, never as healthy.
-function renderMaintenanceFindings(health) {
-  const section = maintenanceEls.findings;
-  const headline = maintenanceEls.findingsHeadline;
-  const list = maintenanceEls.findingsList;
+// One findings list for every Admin page that opens with "what needs your
+// attention". The caller owns the ranking and the wording; this draws them in
+// that order, and a finding without a next step gets no empty line for one.
+function renderFindingsPanel(els, view) {
+  const section = els.section;
+  const headline = els.headline;
+  const list = els.list;
   if (!section || !headline || !list) return;
-  const readable = Boolean(health) && Array.isArray(health.findings);
-  const findings = readable ? health.findings.filter(Boolean) : [];
-  section.hidden = false;
-  section.dataset.status = readable ? String(health.status || "ok") : "error";
-  headline.textContent = readable
-    ? maintenanceFindingsHeadline(findings)
-    : "This installation could not be read.";
+  section.hidden = Boolean(view.hidden);
+  section.dataset.status = view.status;
+  headline.textContent = view.headline;
   list.replaceChildren(
-    ...findings.map((finding) => {
+    ...view.findings.map((finding) => {
       const item = document.createElement("li");
       item.className = "maintenance-finding";
       item.dataset.code = String(finding.code || "");
       item.dataset.severity = String(finding.severity || "info");
-      const title = document.createElement("p");
-      title.className = "maintenance-finding-title";
-      title.textContent = String(finding.title || "");
-      const message = document.createElement("p");
-      message.className = "maintenance-finding-message";
-      message.textContent = String(finding.message || "");
-      const next = document.createElement("p");
-      next.className = "maintenance-finding-next";
-      next.textContent = String(finding.next_step || "");
-      item.append(title, message, next);
+      item.append(
+        ...[
+          ["maintenance-finding-title", finding.title],
+          ["maintenance-finding-message", finding.message],
+          ["maintenance-finding-next", finding.next_step],
+        ]
+          .filter((line) => line[1])
+          .map((line) => {
+            const paragraph = document.createElement("p");
+            paragraph.className = line[0];
+            paragraph.textContent = String(line[1]);
+            return paragraph;
+          })
+      );
       return item;
     })
+  );
+}
+
+// The page's own headline promises "what is wrong". The server ranks the answer;
+// this renders it in that order, because a second sort here would be a second
+// ranking rule. An unreadable block is reported as unreadable, never as healthy.
+function renderMaintenanceFindings(health) {
+  const readable = Boolean(health) && Array.isArray(health.findings);
+  const findings = readable ? health.findings.filter(Boolean) : [];
+  renderFindingsPanel(
+    {
+      section: maintenanceEls.findings,
+      headline: maintenanceEls.findingsHeadline,
+      list: maintenanceEls.findingsList,
+    },
+    {
+      hidden: false,
+      status: readable ? String(health.status || "ok") : "error",
+      headline: readable
+        ? maintenanceFindingsHeadline(findings)
+        : "This installation could not be read.",
+      findings,
+    }
   );
 }
 
@@ -17630,17 +17667,72 @@ if (maintenanceEls.runtimeDiagnostics) {
 // recommends the safest of the only two flows (set up new / manage existing).
 // The setup wizard must not auto-run when an install already exists, so its
 // network-touching init is deferred until the user chooses "Set up a new
-// system". Every server-provided path/message passes through escapeHtml.
+// system". Every server-provided message is written with textContent.
 
-const RECOMMEND_LABELS = {
+const START_PATH_LABELS = {
   setup_new: "Guided setup",
   manage_existing: "Maintenance",
 };
 
+// What the landing may say about this host. install_state.py classifies the
+// install root and picks the safest path; this maps that verdict onto one
+// sentence and one pill, and re-derives neither.
+const START_INSTALL_VERDICTS = {
+  none: {
+    verdict: "No EMS installation was found on this host.",
+    tone: "ok",
+    state: "Nothing installed",
+  },
+  standard_install: {
+    verdict: "An EMS installation was found on this host.",
+    tone: "ok",
+    state: "Installed",
+  },
+  admin_prepared_install: {
+    verdict: "An EMS installation prepared by this console was found.",
+    tone: "ok",
+    state: "Installed",
+  },
+  standard_config_only: {
+    verdict: "A config file is here, but nothing has been deployed yet.",
+    tone: "warn",
+    state: "Not deployed",
+  },
+  compose_only: {
+    verdict: "A docker-compose.yml is here, but no config file was found.",
+    tone: "warn",
+    state: "Incomplete",
+  },
+  legacy_root_config: {
+    verdict: "A legacy root config.json was found and can be migrated.",
+    tone: "warn",
+    state: "Legacy layout",
+  },
+  partial_install: {
+    verdict: "This installation is incomplete.",
+    tone: "warn",
+    state: "Incomplete",
+  },
+};
+
 const startEls = {
   gate: document.getElementById("view-start"),
-  recommend: document.getElementById("start-recommend"),
+  verdict: document.getElementById("start-verdict"),
+  installState: document.getElementById("start-install-state"),
   error: document.getElementById("start-path-error"),
+  findings: {
+    section: document.getElementById("start-findings"),
+    headline: document.getElementById("start-findings-headline"),
+    list: document.getElementById("start-findings-list"),
+  },
+  badges: {
+    setup_new: document.getElementById("start-setup-badge"),
+    manage_existing: document.getElementById("start-maintenance-badge"),
+  },
+  cards: {
+    setup_new: document.getElementById("start-open-setup"),
+    manage_existing: document.getElementById("start-open-maintenance"),
+  },
 };
 
 let workspaceRevealed = false;
@@ -17658,42 +17750,80 @@ function setStartError(message) {
   startEls.error.textContent = message;
 }
 
-function renderRecommendation(state) {
-  const recommended = state.recommended_path;
-  const label = escapeHtml(RECOMMEND_LABELS[recommended] || "Maintenance");
-  const notes = []
-    .concat(Array.isArray(state.reasons) ? state.reasons : [])
-    .concat(Array.isArray(state.warnings) ? state.warnings : []);
-  let html = '<p class="start-recommend-line">Recommended: <strong>' + label + "</strong></p>";
-  if (notes.length) {
-    html +=
-      '<ul class="start-recommend-notes">' +
-      notes.map((note) => "<li>" + escapeHtml(note) + "</li>").join("") +
-      "</ul>";
+// An unreadable or unclassified state says so and marks no door: recommending a
+// path for an installation the console cannot see is worse than recommending
+// none. Warnings outrank the classification reasons in the list below it.
+function startGateView(state) {
+  if (!state || typeof state !== "object") {
+    return {
+      verdict: "This installation could not be read. Choose how to continue.",
+      tone: "warn",
+      recommended: null,
+      installState: { text: "Unknown", tone: "warn" },
+      findings: [],
+    };
   }
-  startEls.recommend.innerHTML = html;
-  highlightRecommendedChoice(recommended);
+  const classified = START_INSTALL_VERDICTS[state.state] || {
+    verdict: "This installation could not be classified.",
+    tone: "warn",
+    state: "Unknown",
+  };
+  const warnings = Array.isArray(state.warnings) ? state.warnings : [];
+  const reasons = Array.isArray(state.reasons) ? state.reasons : [];
+  const findings = warnings
+    .map((message) => ({ severity: "warning", message: String(message) }))
+    .concat(
+      reasons.map((message) => ({ severity: "info", message: String(message) }))
+    );
+  const tone = warnings.length ? "warn" : classified.tone;
+  return {
+    verdict: classified.verdict,
+    tone,
+    recommended: START_PATH_LABELS[state.recommended_path]
+      ? state.recommended_path
+      : null,
+    installState: { text: classified.state, tone },
+    findings,
+  };
 }
 
-// Highlight the recommended landing card. Falls back to leaving the static
-// default (Guided setup) highlighted if the recommendation is unknown.
-function highlightRecommendedChoice(recommended) {
-  const cards = document.querySelectorAll(".start-choice-nav");
-  if (!cards.length || !RECOMMEND_LABELS[recommended]) return;
-  cards.forEach((card) => {
-    card.classList.toggle("is-recommended", card.dataset.startPath === recommended);
+function startFindingsView(findings) {
+  return {
+    hidden: findings.length === 0,
+    status: findingsStatus(findings),
+    headline: maintenanceFindingsHeadline(findings),
+    findings,
+  };
+}
+
+function renderStartGate(state) {
+  const view = startGateView(state);
+  if (startEls.verdict) {
+    startEls.verdict.textContent = view.verdict;
+    startEls.verdict.dataset.tone = view.tone;
+  }
+  if (startEls.installState) {
+    startEls.installState.textContent = view.installState.text;
+    startEls.installState.dataset.tone = view.installState.tone;
+  }
+  // Exactly one door carries the badge and the primary treatment, and only once
+  // install-state has been read: a highlight that never moves is decoration.
+  Object.entries(startEls.badges).forEach(([path, badge]) => {
+    if (badge) badge.hidden = path !== view.recommended;
   });
+  Object.entries(startEls.cards).forEach(([path, card]) => {
+    if (card) card.classList.toggle("is-primary", path === view.recommended);
+  });
+  renderFindingsPanel(startEls.findings, startFindingsView(view.findings));
 }
 
 async function loadInstallState() {
   try {
     const resp = await fetch("/api/admin/install-state");
     if (!resp.ok) throw new Error("install-state request failed");
-    const state = await resp.json();
-    renderRecommendation(state);
+    renderStartGate(await resp.json());
   } catch (err) {
-    startEls.recommend.textContent =
-      "Could not detect the current installation. Choose an option to continue.";
+    renderStartGate(null);
   }
 }
 
@@ -17710,6 +17840,7 @@ function showLanding() {
   });
   if (startEls.gate) startEls.gate.hidden = false;
   workspaceRevealed = false;
+  focusPageHeading(startEls.gate);
   if (window.location.hash) {
     history.replaceState(null, "", window.location.pathname + window.location.search);
   }

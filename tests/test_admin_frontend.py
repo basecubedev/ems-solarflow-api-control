@@ -755,46 +755,6 @@ def test_start_gate_is_the_default_screen():
     assert 'data-admin-view-panel="maintenance" hidden' in html
 
 
-def test_start_gate_has_exactly_two_choices():
-    html = _read("index.html")
-    assert html.count("data-start-path=") == 2
-    assert 'data-start-path="setup_new"' in html
-    assert 'data-start-path="manage_existing"' in html
-    assert "Guided setup" in html
-    assert "Maintenance" in html
-    # Guided setup is the primary, first option.
-    assert html.index('data-start-path="setup_new"') < html.index(
-        'data-start-path="manage_existing"'
-    )
-    assert html.index("Guided setup") < html.index(
-        '<span class="start-choice-title">Maintenance</span>'
-    )
-    # Docker bootstrap / developer setup stay documentation-only paths.
-    assert "Docker bootstrap" not in html
-    assert "Developer setup" not in html
-
-
-def test_start_gate_paths_are_clickable_cards_without_next_button():
-    html = _read("index.html")
-    # The landing page opens each path directly from its card; there is no
-    # separate submit/Next action between the cards and the docs hint.
-    assert 'id="start-continue"' not in html
-    assert ">Next<" not in html.split('id="view-setup"', 1)[0]
-    # Both paths are real, keyboard-accessible button controls.
-    assert (
-        '<button type="button" class="start-choice start-choice-nav is-recommended" '
-        'data-start-path="setup_new"' in html
-    )
-    assert (
-        '<button type="button" class="start-choice start-choice-nav" '
-        'data-start-path="manage_existing">' in html
-    )
-    # Each card carries a navigation affordance.
-    assert html.count('class="start-choice-arrow"') == 2
-    # The docs hint stays visible and secondary below the cards.
-    assert "See the setup paths in the documentation." in html
-
-
 def test_start_gate_cards_open_via_post_start_path_safety_flow():
     js = _read("admin.js")
     fn = js.split("async function startPath(", 1)[1].split("\nfunction ", 1)[0]
@@ -1386,13 +1346,19 @@ def test_js_step_05_service_values_use_safe_dom_text():
     assert "innerHTML" not in render
 
 
-def test_admin_header_copy_describes_docker_deployment():
+def test_admin_header_is_chrome_and_leaves_the_copy_to_each_page():
     html = _read("index.html")
     header = html.split('<header class="admin-header">', 1)[1].split(
         "</header>", 1
     )[0]
-    assert "Guided Docker setup for local EMS deployments." in header
+    # The header stays app chrome: product name and logout. It used to carry a
+    # sentence describing Guided Setup, which was wrong on every other page.
+    assert "EMS SolarFlow Admin" in header
+    assert 'id="auth-logout"' in header
+    assert "admin-subtitle" not in html
     assert "Read-only" not in header
+    # Every page states its own job in its own header instead.
+    assert html.count('class="maintenance-subtitle"') >= 3
 
 
 def test_config_preview_uses_backend_generation_and_compact_summary():
@@ -4232,11 +4198,14 @@ def test_js_maintenance_dynamic_values_are_escaped_or_text_only():
     assert "innerHTML" not in setter
     # The findings list replaced the innerHTML warnings paragraph: every value
     # it renders goes through textContent, so nothing needs escaping by hand.
+    # Maintenance and the landing share one renderer, so this holds for both.
     findings = js.split("function renderMaintenanceFindings", 1)[1].split(
         "\nfunction ", 1
     )[0]
     assert "innerHTML" not in findings
-    assert "textContent" in findings
+    panel = js.split("function renderFindingsPanel", 1)[1].split("\nfunction ", 1)[0]
+    assert "innerHTML" not in panel
+    assert "textContent" in panel
 
 
 def test_js_maintenance_card_tone_helper_uses_dataset():

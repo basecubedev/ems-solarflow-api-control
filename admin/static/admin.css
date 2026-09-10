@@ -1792,25 +1792,9 @@ code {
 }
 
 /* --- start gate (Admin router) ------------------------------------------- */
-.start-gate { gap: 14px; }
-.start-gate-recommend { padding: 12px 14px; border: 1px solid rgba(34, 211, 238, 0.32); border-radius: 12px; background: linear-gradient(180deg, rgba(34, 211, 238, 0.10), rgba(139, 92, 246, 0.06)); color: var(--text); }
-.start-recommend-line { margin: 0; font-size: 14px; }
-.start-recommend-notes { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
-.start-choices { display: flex; flex-direction: column; gap: 10px; border: none; margin: 0; padding: 0; }
-.start-choices-legend { padding: 0; margin: 0 0 4px; color: var(--muted); font-size: 12px; font-weight: 850; text-transform: uppercase; letter-spacing: .04em; }
-/* Landing paths are full-width navigation cards: the whole card is a button that
-   opens the flow, mirroring the maintenance hub (.maintenance-path-nav). */
-.start-choice { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid rgba(148,163,184,.20); border-radius: 12px; background: rgba(255,255,255,.03); cursor: pointer; transition: border-color .16s ease, background .16s ease, transform .1s ease; }
-.start-choice-nav { appearance: none; width: 100%; text-align: left; color: inherit; font: inherit; }
-.start-choice:hover { border-color: var(--output); }
-.start-choice-nav:active { transform: translateY(1px); }
-.start-choice-nav:focus-visible { outline: 2px solid var(--output); outline-offset: 2px; }
-.start-choice.is-recommended { border-color: rgba(34, 211, 238, 0.55); background: linear-gradient(180deg, rgba(34, 211, 238, 0.12), rgba(139, 92, 246, 0.08)); }
-.start-choice.is-recommended:hover { border-color: var(--output); }
-.start-choice-body { display: flex; flex-direction: column; gap: 3px; }
-.start-choice-title { font-size: 14px; font-weight: 850; color: var(--text); }
-.start-choice-desc { font-size: 12px; color: var(--muted); }
-.start-choice-arrow { margin-left: auto; font-size: 18px; color: var(--output); }
+/* The landing wears the maintenance hub's furniture — one verdict line, the
+   findings list and full-width path cards. Only the docs hint is its own. */
+.start-gate { gap: 10px; }
 .start-gate-hint { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 
 /* Catalog-driven setup feature accordion. Reuses the Control/Energy stage
@@ -2459,6 +2443,7 @@ code {
   font-weight: 700;
   color: var(--muted);
 }
+.maintenance-findings[hidden] { display: none; }
 .maintenance-findings[data-status="error"] .maintenance-findings-headline { color: var(--danger); }
 .maintenance-findings[data-status="warning"] .maintenance-findings-headline { color: var(--pv); }
 .maintenance-findings[data-status="ok"] .maintenance-findings-headline { color: var(--output); }

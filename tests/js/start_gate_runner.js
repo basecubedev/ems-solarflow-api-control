@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Renders the real admin.js findings list against a minimal DOM, so the status
-// page's leading answer is tested against the shipped code rather than a copy.
+// Evaluates the real admin.js landing verdict and draws its findings list, so
+// "the landing never claims more than install-state proves" is tested against
+// the shipped code rather than a copy of it.
 //
-// Input  (stdin JSON): {"health": {...}}
-// Output (stdout JSON): {"hidden", "headline", "items": [...], "html"}
+// Input  (stdin JSON): {"state": <install-state payload>|null}
+// Output (stdout JSON): {"view": {...}, "findings": {...}}
 "use strict";
 
 const fs = require("fs");
@@ -13,6 +14,14 @@ const source = fs.readFileSync(
   path.join(__dirname, "..", "..", "admin", "static", "admin.js"),
   "utf8"
 );
+
+function extractBlock(marker, terminator) {
+  const start = source.indexOf(marker);
+  if (start === -1) throw new Error("not found in admin.js: " + marker);
+  const end = source.indexOf(terminator, start);
+  if (end === -1) throw new Error("unterminated block: " + marker);
+  return source.slice(start, end + terminator.length);
+}
 
 function extractFunction(name) {
   const marker = "function " + name + "(";
@@ -38,7 +47,7 @@ function extractFunction(name) {
 // A DOM small enough to be obvious and real enough that innerHTML would show:
 // textContent escapes, so anything that reached the markup as tags is a bug.
 function makeElement(tag) {
-  const node = {
+  return {
     tagName: String(tag).toUpperCase(),
     children: [],
     dataset: {},
@@ -57,18 +66,10 @@ function makeElement(tag) {
     append(...nodes) {
       nodes.forEach((child) => this.children.push(child));
     },
-    appendChild(child) {
-      this.children.push(child);
-      return child;
-    },
     replaceChildren(...nodes) {
       this.children = nodes.slice();
     },
-    setAttribute(name, value) {
-      this.dataset["attr:" + name] = String(value);
-    },
   };
-  return node;
 }
 
 function escapeText(value) {
@@ -85,55 +86,62 @@ function serialize(node) {
   const inner = node.children.length
     ? node.children.map(serialize).join("")
     : escapeText(node._text);
-  return (
-    "<" + node.tagName.toLowerCase() + attrs + ">" + inner +
-    "</" + node.tagName.toLowerCase() + ">"
-  );
+  const tag = node.tagName.toLowerCase();
+  return "<" + tag + attrs + ">" + inner + "</" + tag + ">";
 }
 
 const section = makeElement("section");
 const headline = makeElement("p");
 const list = makeElement("ul");
-// The real markup nests both inside the section, so serializing the section
-// shows everything the renderer wrote.
 section.append(headline, list);
-
-const maintenanceEls = {
-  findings: section,
-  findingsHeadline: headline,
-  findingsList: list,
-};
 
 const scope = {};
 new Function(
   "scope",
-  "maintenanceEls",
   "document",
   '"use strict";\n' +
+    extractBlock("const START_PATH_LABELS = {", "};") +
+    "\n" +
+    extractBlock("const START_INSTALL_VERDICTS = {", "\n};") +
+    "\n" +
+    extractBlock("const FINDING_SEVERITY_ORDER = [", "];") +
+    "\n" +
+    extractFunction("findingsStatus") +
+    "\n" +
     extractFunction("maintenanceFindingsHeadline") +
     "\n" +
-    extractFunction("renderFindingsPanel") +
+    extractFunction("startGateView") +
     "\n" +
-    extractFunction("renderMaintenanceFindings") +
-    "\nscope.renderMaintenanceFindings = renderMaintenanceFindings;"
-)(scope, maintenanceEls, { createElement: makeElement });
+    extractFunction("startFindingsView") +
+    "\n" +
+    extractFunction("renderFindingsPanel") +
+    "\nscope.startGateView = startGateView;" +
+    "\nscope.startFindingsView = startFindingsView;" +
+    "\nscope.renderFindingsPanel = renderFindingsPanel;"
+)(scope, { createElement: makeElement });
 
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
-scope.renderMaintenanceFindings(input.health);
-
-const items = list.children.map((item) => ({
-  code: item.dataset.code,
-  severity: item.dataset.severity,
-  title: (item.children[0] || { textContent: "" }).textContent,
-  message: (item.children[1] || { textContent: "" }).textContent,
-  nextStep: (item.children[2] || { textContent: "" }).textContent,
-}));
+const view = scope.startGateView(input.state);
+scope.renderFindingsPanel(
+  { section, headline, list },
+  scope.startFindingsView(view.findings)
+);
 
 process.stdout.write(
   JSON.stringify({
-    hidden: Boolean(section.hidden),
-    headline: headline.textContent,
-    items,
-    html: serialize(section),
+    view,
+    findings: {
+      hidden: Boolean(section.hidden),
+      status: section.dataset.status,
+      headline: headline.textContent,
+      items: list.children.map((item) => ({
+        severity: item.dataset.severity,
+        lines: item.children.map((line) => ({
+          className: line.className,
+          text: line.textContent,
+        })),
+      })),
+      html: serialize(section),
+    },
   }) + "\n"
 );

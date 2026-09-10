@@ -32,10 +32,6 @@
     <header class="admin-header">
       <p class="eyebrow">ems-solarflow-api-control</p>
       <h1 class="admin-title">EMS SolarFlow Admin</h1>
-      <p class="admin-subtitle">
-        Guided Docker setup for local EMS deployments.
-        Pick a release, discover devices, generate config, and deploy safely.
-      </p>
       <button type="button" id="auth-logout" class="secondary-button compact admin-logout" hidden>
         Logout
       </button>
@@ -87,34 +83,49 @@
       </div>
     </section>
 
-    <section class="admin-view start-gate" id="view-start" aria-label="Choose how to continue" hidden>
-      <div class="start-gate-recommend" id="start-recommend" role="status" aria-live="polite">
-        Checking the current installation…
-      </div>
-      <div class="start-gate-form">
-        <div class="start-choices" role="group" aria-label="How do you want to continue?">
-          <p class="start-choices-legend">How do you want to continue?</p>
-          <button type="button" class="start-choice start-choice-nav is-recommended" data-start-path="setup_new" data-testid="start-fresh-install">
-            <span class="start-choice-body">
-              <span class="start-choice-title">Guided setup</span>
-              <span class="start-choice-desc">Fresh install or clean Docker setup. Recommended for first-time users.</span>
-            </span>
-            <span class="start-choice-arrow" aria-hidden="true">→</span>
-          </button>
-          <button type="button" class="start-choice start-choice-nav" data-start-path="manage_existing">
-            <span class="start-choice-body">
-              <span class="start-choice-title">Maintenance</span>
-              <span class="start-choice-desc">Manage, update, repair or back up an existing EMS installation.</span>
-            </span>
-            <span class="start-choice-arrow" aria-hidden="true">→</span>
-          </button>
+    <section class="admin-view start-gate" id="view-start" hidden>
+      <header class="maintenance-head">
+        <div class="maintenance-head-titles">
+          <h2 class="maintenance-title" tabindex="-1">Admin Console</h2>
+          <p class="maintenance-subtitle">Set up a new EMS installation, or manage the one already on this host</p>
         </div>
-        <p id="start-path-error" class="scan-error" role="alert" hidden></p>
-        <p class="start-gate-hint">
-          Prefer shell-based Docker setup or a local developer checkout?
-          See the setup paths in the documentation.
-        </p>
-      </div>
+      </header>
+
+      <p class="maintenance-hub-verdict" id="start-verdict" role="status" aria-live="polite">Checking this installation…</p>
+
+      <section class="maintenance-findings" id="start-findings" aria-label="What was found on this host" role="status" aria-live="polite" hidden>
+        <p class="maintenance-findings-headline" id="start-findings-headline"></p>
+        <ul class="maintenance-findings-list" id="start-findings-list"></ul>
+      </section>
+
+      <button type="button" class="control-pipeline-stage maintenance-path-card maintenance-path-nav" data-start-path="setup_new" data-testid="start-fresh-install" id="start-open-setup" aria-label="Open guided setup">
+        <span class="control-stage-head">
+          <span class="control-stage-title-block">
+            <span class="control-stage-title">Guided setup</span>
+            <span class="control-stage-subtitle">Install a new EMS on this host, step by step</span>
+          </span>
+          <span class="maintenance-recommended-badge" id="start-setup-badge" hidden>Recommended path</span>
+          <span class="maintenance-path-arrow" aria-hidden="true">→</span>
+        </span>
+      </button>
+
+      <button type="button" class="control-pipeline-stage maintenance-path-card maintenance-path-nav" data-start-path="manage_existing" id="start-open-maintenance" aria-label="Open maintenance">
+        <span class="control-stage-head">
+          <span class="control-stage-title-block">
+            <span class="control-stage-title">Maintenance</span>
+            <span class="control-stage-subtitle">Manage, update, repair or back up an existing EMS installation</span>
+          </span>
+          <span class="maintenance-recommended-badge" id="start-maintenance-badge" hidden>Recommended path</span>
+          <span class="maintenance-path-state" id="start-install-state" data-tone="muted">…</span>
+          <span class="maintenance-path-arrow" aria-hidden="true">→</span>
+        </span>
+      </button>
+
+      <p id="start-path-error" class="scan-error" role="alert" hidden></p>
+      <p class="start-gate-hint">
+        Prefer shell-based Docker setup or a local developer checkout?
+        See the setup paths in the documentation.
+      </p>
     </section>
 
     <div class="admin-view" id="view-setup" data-admin-view-panel="setup" hidden>
