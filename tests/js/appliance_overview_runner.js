@@ -79,11 +79,14 @@ new Function(
     "\n" +
     extractFunction("overviewVerdict") +
     "\n" +
+    extractFunction("verdictAnnouncement") +
+    "\n" +
     extractFunction("findingAction") +
     "\n" +
     extractFunction("attentionBySection") +
     "\nscope.findingsView = findingsView;" +
     "\nscope.overviewVerdict = overviewVerdict;" +
+    "\nscope.verdictAnnouncement = verdictAnnouncement;" +
     "\nscope.findingAction = findingAction;" +
     "\nscope.attentionBySection = attentionBySection;"
 )(scope);
@@ -96,6 +99,11 @@ const findings = scope.findingsView(status);
 process.stdout.write(
   JSON.stringify({
     verdict: scope.overviewVerdict(status),
+    announcement: {
+      first: scope.verdictAnnouncement(undefined, "This appliance is healthy."),
+      unchanged: scope.verdictAnnouncement("This appliance is healthy.", "This appliance is healthy."),
+      changed: scope.verdictAnnouncement("This appliance is healthy.", "Something on this appliance is not working.")
+    },
     findings: findings,
     actions: findings.findings.map(function (item) {
       return scope.findingAction(item, view);

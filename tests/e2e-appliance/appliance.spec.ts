@@ -129,6 +129,49 @@ test.describe("overview @smoke", () => {
   });
 });
 
+test.describe("the two-second poll", () => {
+  // The poll exists so a running operation's progress stays live, and it
+  // rebuilds the page to do it. Anything the operator was holding on to has to
+  // survive that: a field keeps its text, and a control keeps the focus. Both
+  // are waited on by response, never by a clock.
+  test("a control keeps the focus it was given", async ({ page }) => {
+    await signIn(page);
+    const button = page.locator('[data-test="quick-restart-admin"]');
+    await button.focus();
+    await expect(button).toBeFocused();
+
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+    await expect(button).toBeFocused();
+  });
+
+  test("the verdict is not read out again on every rebuild", async ({ page }) => {
+    await signIn(page);
+    // Not a live region of its own: this node is replaced every two seconds.
+    await expect(page.locator('[data-test="overview-verdict"]')).not.toHaveAttribute(
+      "aria-live",
+      /.*/,
+    );
+    // The shell's live region stays silent while the verdict is unchanged.
+    await expect(page.locator("#live-region")).toBeEmpty();
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await expect(page.locator("#live-region")).toBeEmpty();
+  });
+
+  test("the page heading keeps the focus a section change gave it", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "diagnostics");
+    await expect(page.locator("#main .page-title")).toBeFocused();
+
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+    await expect(page.locator("#main .page-title")).toBeFocused();
+  });
+});
+
 test.describe("basic and expert mode", () => {
   test("basic mode hides image digests and raw package details", async ({ page }) => {
     await signIn(page);

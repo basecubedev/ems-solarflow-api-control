@@ -27,7 +27,8 @@
     pending: null,
     pollTimer: null,
     busy: false,
-    securityAudit: null
+    securityAudit: null,
+    lastVerdict: undefined
   };
 
   /* ---------------------------------------------------------------- DOM */
@@ -115,7 +116,7 @@
   function pageHead(title, subtitle, actions) {
     return el("header", { class: "page-head" }, [
       el("div", { class: "page-head-titles" }, [
-        el("h2", { class: "page-title", tabindex: "-1", text: title }),
+        el("h2", { class: "page-title", "data-test": "page-title", tabindex: "-1", text: title }),
         subtitle ? el("p", { class: "page-subtitle", text: subtitle }) : null
       ])
     ].concat(actions || []));
@@ -128,19 +129,47 @@
     ]);
   }
 
+  /* Rebuilding #main drops whatever had focus onto the document body, and the
+     poll rebuilds it every two seconds -- long enough that a control could not
+     be tabbed to and pressed. What survives a rebuild is the element's test id
+     or its id, not the node, so focus is re-taken through that. A field is a
+     different problem and is handled by not re-rendering at all. */
+  function focusAnchor(main) {
+    var active = document.activeElement;
+    if (!active || !main || !main.contains(active)) return null;
+    var test = active.getAttribute("data-test");
+    var selector = test ? '[data-test="' + test + '"]' : (active.id ? "#" + active.id : null);
+    if (!selector) return null;
+    var matches = Array.prototype.slice.call(main.querySelectorAll(selector));
+    return { selector: selector, index: Math.max(0, matches.indexOf(active)) };
+  }
+
+  function restoreFocus(main, anchor) {
+    if (!anchor) return;
+    var matches = main.querySelectorAll(anchor.selector);
+    var target = matches[anchor.index] || matches[0];
+    if (target) target.focus();
+  }
+
   function focusPageHeading() {
     var heading = document.querySelector("#main .page-title");
     if (heading) heading.focus();
   }
 
+  /* The verdict is not its own live region. This node is rebuilt by the
+     two-second poll, and a live region that is replaced rather than edited can
+     be read out again on every rebuild -- the same sentence, every two seconds.
+     The shell's one live region speaks instead, and only when the sentence
+     itself changed. */
   function verdictLine(status) {
     var verdict = overviewVerdict(status);
+    var spoken = verdictAnnouncement(state.lastVerdict, verdict.text);
+    state.lastVerdict = verdict.text;
+    if (spoken) announce(spoken);
     return el("p", {
       class: "hub-verdict",
       "data-tone": verdict.tone,
       "data-test": "overview-verdict",
-      role: "status",
-      "aria-live": "polite",
       text: verdict.text
     });
   }
@@ -387,11 +416,13 @@
 
   function render() {
     var main = document.getElementById("main");
+    var anchor = focusAnchor(main);
     clear(main);
     var view = VIEWS.filter(function (item) { return item.id === state.view; })[0] || VIEWS[0];
     main.appendChild(renderOperationBanner());
     view.render(main);
     updateNavMarks();
+    restoreFocus(main, anchor);
   }
 
   /* --------------------------------------------------------- operations */
@@ -879,6 +910,11 @@
       headline: findingsHeadline(findings),
       findings: findings
     };
+  }
+
+  function verdictAnnouncement(previous, text) {
+    if (previous === undefined || previous === text) return null;
+    return text;
   }
 
   function overviewVerdict(status) {

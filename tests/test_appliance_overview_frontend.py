@@ -100,6 +100,20 @@ def test_a_status_that_could_not_be_read_is_never_reported_as_healthy():
     assert "agent_unavailable" in view["findings"]["findings"][0]["message"]
 
 
+def test_the_verdict_is_spoken_only_when_it_changes():
+    """The verdict line is rebuilt by the two-second poll.
+
+    Marking that node as a live region would have it read out again on every
+    rebuild -- the same sentence, every two seconds. The shell's one live region
+    speaks instead, and only when the sentence itself is new.
+    """
+
+    spoken = _render(_status())["announcement"]
+    assert spoken["first"] is None, "arriving on the page is not a change"
+    assert spoken["unchanged"] is None
+    assert spoken["changed"] == "Something on this appliance is not working."
+
+
 # --- the findings ----------------------------------------------------------
 
 
