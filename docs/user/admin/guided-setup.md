@@ -101,8 +101,8 @@ connection that can still control it.
 
 ![Guided setup step 03 Config with hardware, grid meter, inverter cards and expanded feature settings](../../assets/screenshots/admin/admin-guided-setup-config-preview.png)
 
-**What you see:** *Hardware* (grid meter, inverters), *Features*, *Advanced /
-System settings*, and a *Config validation* box.
+**What you see:** *Hardware* (grid meter, inverters), *Features*, *Control &
+safety*, *Advanced / System settings*, and a *Config validation* box.
 
 **What you enter:**
 
@@ -111,9 +111,25 @@ System settings*, and a *Config validation* box.
   identifier used in `config.json`, logs and the dashboard. Edit it now if you
   want a different one.
 - **Features** — winter mode, energy savings, full-charge assist and so on.
+- **Control & safety** — what EMS will be allowed to do once it starts, and the
+  output limits it must stay inside.
 
 **What it changes:** still nothing on disk. This builds a draft, and the
 validation box is a **preview** of it.
+
+**About Control & safety.** These switches are on by default, so a finished
+setup actually controls your system — you do not have to enable anything. They
+exist to *stop* EMS: turn one off for read-only validation, or turn on *Dry run*
+while you check a setup. Read the group heading before the checkbox, because the
+two groups point in opposite directions:
+
+| Group | On means |
+| --- | --- |
+| **What EMS may change** | allowed |
+| **Hold EMS back** | blocked, whatever the group above allows |
+
+The same settings are on the [Maintenance](maintenance.md#control--safety--the-switches-that-let-ems-act)
+Control & safety tab afterwards.
 
 **Expected result:** validation shows no errors and **Continue** is enabled.
 

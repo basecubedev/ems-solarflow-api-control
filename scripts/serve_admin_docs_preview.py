@@ -91,6 +91,24 @@ def _with_live_catalog(config_payload):
     return payload
 
 
+def _with_live_health(overview_payload):
+    """Derive the status page's findings list instead of freezing one.
+
+    ``health`` is a projection of the rest of the overview, so a fixture copy of
+    it would be a second answer that drifts. Deriving it here keeps the
+    screenshot honest about what the shipped synthesis says for this demo
+    installation.
+    """
+
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+    from admin.maintenance_health import build_maintenance_health
+
+    payload = copy.deepcopy(overview_payload)
+    payload["health"] = build_maintenance_health(payload)
+    return payload
+
+
 def build_routes():
     """Map (method, api-path) to the demo JSON payload the SPA expects."""
 
@@ -108,7 +126,7 @@ def build_routes():
         "/api/discovery/devices": common["mdns_devices"],
         "/api/discovery/mqtt-brokers": common["mqtt_brokers"],
         "/api/admin/maintenance/admin-update/resume": common["admin_update_resume"],
-        "/api/admin/maintenance/overview": overview["overview"],
+        "/api/admin/maintenance/overview": _with_live_health(overview["overview"]),
         "/api/admin/maintenance/config": _with_live_catalog(overview["config"]),
         "/api/admin/maintenance/containers/plan": overview["containers_plan"],
         "/api/admin/maintenance/backups": backups["backups_list"],

@@ -61,6 +61,28 @@ format.
 > **Backups may contain secrets and private energy data.** Copy them somewhere
 > safe off this host, and treat them like credentials.
 
+### 3b — Take a copy off this machine, and bring one back
+
+A backup that only exists on this machine does not survive the machine. If the
+disk or SD card fails — the situation a backup is for — it fails with it.
+
+**Download**, on any backup in the list, hands you that archive. Keep the ones
+that matter somewhere else.
+
+**Bring a backup back** puts such a file into `data/backups/`, where the normal
+flow finds it: inspect it, preview a restore, restore it. Importing only adds
+the file; it never restores anything on its own.
+
+An import is refused unless the file is what its name says it is. It must carry
+the name a backup was created under
+(`ems-<type>-<purpose>-<timestamp>.tar.gz`, optionally `.enc`), and an
+unencrypted archive must contain a manifest of that type — the restore path
+reads the type from the name, so a renamed archive would be restored the wrong
+way. An import never overwrites a stored backup: a name that already exists is
+kept beside it.
+
+Encrypted archives import as they are; unlocking one still needs its password.
+
 ## Inspecting and restoring
 
 ### 4 — Inspect a backup

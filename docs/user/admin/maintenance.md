@@ -34,6 +34,11 @@ running, whether you have unsaved changes, and when the last backup was made.
 The unsaved marker appears only once you have actually edited something. A card
 whose state could not be read says so rather than showing an all-clear.
 
+One card is marked as the place to start, and which one depends on what the hub
+found. An installation that is incomplete, stopped, unreadable or carrying a
+warning points at **System status**; only a healthy, running installation with
+nothing to report points at **Guided upgrade**.
+
 Use **← Maintenance** in a page header to return to this hub without ending
 anything.
 
@@ -41,6 +46,12 @@ anything.
 > the settings page never restarts anything. The older address
 > `#maintenance-manual` still opens the status page, so existing links and
 > bookmarks keep working.
+
+Every maintenance page has its own address and can be bookmarked, including a
+single settings tab (`#maintenance-settings-safety`). Opening such a bookmark
+goes straight to that page. Guided Setup deliberately does not open from an
+address: an unfinished setup resumes from what the server recorded, never from
+what a browser tab remembered.
 
 ## What each area changes
 
@@ -71,9 +82,10 @@ confirmation.
 
 ![System status page with the control-and-safety statement and the collapsed cards](../../assets/screenshots/admin/admin-maintenance-overview.png)
 
-**What you see:** first a **CONTROL & SAFETY** panel, then a **SYSTEM STATUS**
-line (install kind and EMS state), then collapsed cards, each with a
-one-line summary and an OK / INFO / ACTION / WARNING pill:
+**What you see:** first the answer to the page's own question — what needs your
+attention, worst first, each entry with a next step. Then a **CONTROL & SAFETY**
+panel, then a **SYSTEM STATUS** line (install kind and EMS state), then collapsed
+cards, each with a one-line summary and an OK / INFO / ACTION / WARNING pill:
 
 - **EMS services** — what is running, whether InfluxDB is enabled, and whether
   the running EMS already has the settings as they are saved. If that cannot be
@@ -94,6 +106,21 @@ not tell".
 
 **What it changes:** nothing. Opening and closing cards is display only. The
 one action on this page is **Restart EMS now**, in *EMS services*.
+
+### What needs your attention
+
+The list at the top of the page is the ranked answer, not a second opinion: it
+is built from the same read-only overview the cards below show, and it says
+"nothing needs your attention" when that is what the overview proves. Each entry
+names what is wrong, why it matters and what to do next.
+
+Errors come before warnings, warnings before notes. One entry is easy to miss
+and worth knowing about: **saved settings are newer than the running EMS**.
+Saving settings writes the file; EMS reads it when it starts. Until you restart
+EMS, part of what you saved is not in effect.
+
+If the overview itself cannot be read, the list says so. It never reports a
+healthy system on missing information.
 
 ### Control & safety
 
@@ -195,6 +222,16 @@ adding, editing, disabling and removing devices, and switching connections.
 This tab holds the settings that decide whether EMS may change your inverters at
 all, plus the output limits it must stay inside. Nothing here is hidden behind a
 disclosure: a switch you cannot find is a switch you cannot check.
+
+The switches come in two groups, because they point in opposite directions:
+
+| Group | On means |
+| --- | --- |
+| **What EMS may change** | allowed — EMS may act over that connection |
+| **Hold EMS back** | blocked — dry run and simulation mode suppress every hardware write, whatever the group above allows |
+
+Read the group heading before the checkbox. Both groups are checkboxes, but a
+tick means the opposite thing in each.
 
 **These switches are on by default.** A fresh installation controls your
 inverters without you enabling anything; the switches exist to *stop* it, for
