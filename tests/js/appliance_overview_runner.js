@@ -75,6 +75,18 @@ new Function(
     "\n" +
     extractFunction("usedPercent") +
     "\n" +
+    extractVar("PLAN_FIELD_LABELS") +
+    "\n" +
+    extractVar("PLAN_FIELD_ORDER") +
+    "\n" +
+    extractVar("PLAN_EXPERT_FIELDS") +
+    "\n" +
+    extractVar("PLAN_SKIP_FIELDS") +
+    "\n" +
+    extractFunction("planFieldRank") +
+    "\n" +
+    extractFunction("planFields") +
+    "\n" +
     extractFunction("viewLabel") +
     "\n" +
     extractFunction("rankSeverity") +
@@ -97,6 +109,7 @@ new Function(
     "\nscope.duration = duration;" +
     "\nscope.gigabytes = gigabytes;" +
     "\nscope.usedPercent = usedPercent;" +
+    "\nscope.planFields = planFields;" +
     "\nscope.verdictAnnouncement = verdictAnnouncement;" +
     "\nscope.findingAction = findingAction;" +
     "\nscope.attentionBySection = attentionBySection;"
@@ -122,6 +135,7 @@ process.stdout.write(
     attention: scope.attentionBySection(status),
     durations: (input.durations || []).map(scope.duration),
     sizes: (input.sizes || []).map(scope.gigabytes),
-    percentages: (input.percentages || []).map(scope.usedPercent)
+    percentages: (input.percentages || []).map(scope.usedPercent),
+    plan: input.plan ? scope.planFields(input.plan, Boolean(input.expert)) : null
   }) + "\n"
 );

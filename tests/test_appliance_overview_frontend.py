@@ -29,7 +29,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNNER = os.path.join(ROOT, "tests", "js", "appliance_overview_runner.js")
 
 
-def _render(status, view="overview", durations=(), sizes=(), percentages=()):
+def _render(
+    status, view="overview", durations=(), sizes=(), percentages=(), plan=None, expert=False
+):
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not available")
@@ -42,6 +44,8 @@ def _render(status, view="overview", durations=(), sizes=(), percentages=()):
                 "durations": list(durations),
                 "sizes": list(sizes),
                 "percentages": list(percentages),
+                "plan": plan,
+                "expert": expert,
             }
         ),
         text=True,
@@ -260,3 +264,95 @@ def test_a_percentage_says_what_it_is_a_percentage_of():
         "0 % used",
         "—",
     ]
+
+
+# --- the confirmation dialog -----------------------------------------------
+
+
+def _plan(**overrides):
+    payload = {
+        "type": "admin.install",
+        "bootstrap": False,
+        "repository": "ghcr.io/example/ems-solarflow-admin",
+        "target_tag": "v1.1.0",
+        "target_channel": "stable",
+        "target_digest": "sha256:" + "c" * 64,
+        "target_reference": "ghcr.io/example/admin@sha256:" + "c" * 64,
+        "target_revision": "",
+        "target_source": "",
+        "target_architecture": "",
+        "legacy_labels_accepted": "",
+        "reinstall": False,
+        "current_version": "v1.0.0",
+        "current_digest": "sha256:" + "d" * 64,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _fields(plan, expert=False):
+    return _render(_status(), plan=plan, expert=expert)["plan"]
+
+
+def test_a_plan_field_with_no_value_is_not_a_row():
+    """The dialog listed every scalar the plan carried, empty ones included.
+
+    "target revision —", "target source —", "legacy labels accepted —": four of
+    the thirteen rows in an install plan said nothing at all, in the one place
+    an operator is asked to read carefully before agreeing to a change.
+    """
+
+    labels = [field["label"] for field in _fields(_plan(), expert=True)]
+    assert "target revision" not in labels
+    assert "Source revision" not in labels
+    assert all(field["value"] not in ("", "—") for field in _fields(_plan(), expert=True))
+
+
+def test_a_plan_names_its_fields_in_words():
+    fields = {field["key"]: field["label"] for field in _fields(_plan(), expert=True)}
+    assert fields["target_tag"] == "Version to install"
+    assert fields["current_version"] == "Installed now"
+    assert fields["target_reference"] == "Exact image"
+    assert "_" not in " ".join(fields.values())
+
+
+def test_a_plan_leads_with_what_happens_not_with_image_identity():
+    keys = [field["key"] for field in _fields(_plan(), expert=True)]
+    assert keys.index("target_tag") < keys.index("target_digest")
+    assert keys.index("current_version") < keys.index("current_digest")
+
+
+def test_the_plan_fingerprint_is_named_and_kept_with_the_other_machine_detail():
+    """It seals the plan so a confirmation can only apply what was shown.
+
+    That makes it a mechanism rather than a statement about this appliance, so
+    it belongs where the digests are -- but it must still be reachable, because
+    it is what binds the button to the page.
+    """
+
+    assert "authority" not in [field["key"] for field in _fields(_plan(authority="a" * 64))]
+    expert = {
+        field["key"]: field["label"] for field in _fields(_plan(authority="a" * 64), expert=True)
+    }
+    assert expert["authority"] == "Plan fingerprint"
+
+
+def test_image_identity_stays_an_expert_detail():
+    """Unchanged from before: Basic mode shows the version, not the digest."""
+
+    basic = [field["key"] for field in _fields(_plan())]
+    assert "target_digest" not in basic
+    assert "target_reference" not in basic
+    assert "target_tag" in basic
+
+
+def test_a_plan_size_is_shown_in_gigabytes_like_everywhere_else():
+    fields = {field["key"]: field["value"] for field in _fields(_plan(free_megabytes=152473))}
+    assert fields["free_megabytes"] == "149 GB"
+
+
+def test_a_plan_still_shows_a_field_this_build_has_no_label_for():
+    """A new backend field must appear, badly named, rather than vanish."""
+
+    fields = {field["key"]: field["label"] for field in _fields(_plan(surprise_field="yes"))}
+    assert fields["surprise_field"] == "surprise field"

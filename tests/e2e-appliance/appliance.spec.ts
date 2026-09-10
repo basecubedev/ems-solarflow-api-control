@@ -231,9 +231,12 @@ test.describe("admin lifecycle @authority", () => {
 
     const dialog = page.locator("#dialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("target tag");
+    await expect(dialog).toContainText("Version to install");
     await expect(dialog).toContainText("v1.1.0");
-    await expect(dialog).toContainText("target digest");
+    await expect(dialog).toContainText("Image digest");
+    // What is about to happen is read before which image it happens with.
+    const body = await dialog.innerText();
+    expect(body.indexOf("Version to install")).toBeLessThan(body.indexOf("Image digest"));
     await expect(page.locator("#dialog-confirm")).toBeEnabled();
     await expect(page.locator('[data-test="admin-version"]')).toContainText("v1.0.0");
   });
@@ -492,8 +495,18 @@ test.describe("admin lifecycle @authority", () => {
       page.waitForResponse((response) => response.url().includes("/api/admin/plan-install")),
       page.locator('[data-test="install-plan"]').click(),
     ]);
-    await expect(page.locator("#dialog")).toContainText("target reference");
+    await expect(page.locator("#dialog")).toContainText("Exact image");
     await expect(page.locator("#dialog")).toContainText("@sha256:");
+    // A guard, not a reproduction: a digest has no break opportunity of its own,
+    // and a row wider than the dialog pushes Confirm past the edge. It holds
+    // today because those values are set in a breaking style; this fails if
+    // that stops being true.
+    const width = await page.locator("#dialog").evaluate((node) => ({
+      box: node.clientWidth,
+      content: node.scrollWidth,
+    }));
+    expect(width.content).toBeLessThanOrEqual(width.box);
+    await expect(page.locator("#dialog-confirm")).toBeInViewport();
     await page.locator("#dialog-cancel").click();
   });
 

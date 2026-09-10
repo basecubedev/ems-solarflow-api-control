@@ -405,7 +405,16 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
 }
 .fact-row:first-of-type { border-top: 0; padding-top: 0; }
 .fact-label { color: var(--muted2); }
-.fact-value { color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
+/* A digest or an image reference has no break opportunity of its own, so a
+   fact row's minimum width became the whole string: inside the confirmation
+   dialog that pushed the value and the Confirm button past the edge. */
+.fact-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .fact-value.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; word-break: break-all; }
 
 .tone {

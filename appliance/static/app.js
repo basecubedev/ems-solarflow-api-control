@@ -620,7 +620,7 @@
     }
     if (remaining.length && expert()) {
       wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: "Still failing:" }));
-      wrapper.appendChild(renderFindings(remaining));
+      wrapper.appendChild(renderRepairChecks(remaining));
     } else if (remaining.length) {
       wrapper.appendChild(el("p", {
         class: "warning-item severe",
@@ -739,19 +739,130 @@
     confirm.focus();
   }
 
+  /* The plan is what an operator agrees to before this appliance is changed,
+     so it is read as sentences rather than as the payload's own key names. An
+     unlabelled key still appears, spelled out: a field this build has no name
+     for is worth showing badly rather than hiding. */
+  var PLAN_FIELD_LABELS = {
+    type: "Operation",
+    action: "Action",
+    scope: "Scope",
+    container: "Container",
+    current_state: "Container state now",
+    repository: "Image repository",
+    target_tag: "Version to install",
+    target_channel: "Chosen from",
+    target_digest: "Image digest",
+    target_reference: "Exact image",
+    target_revision: "Source revision",
+    target_source: "Source repository",
+    target_architecture: "Architecture",
+    legacy_labels_accepted: "Legacy image labels accepted",
+    reinstall: "Reinstalling the same version",
+    current_version: "Installed now",
+    current_digest: "Installed image digest",
+    image_available_locally: "Image already on this appliance",
+    new_version: "New version",
+    package_count: "Packages",
+    security_count: "Security packages",
+    normal_count: "Other packages",
+    reboot_required: "Needs a restart afterwards",
+    reboot_required_before: "A restart was already pending",
+    free_megabytes: "Free space",
+    minimum_free_megabytes: "Space required",
+    lock_state: "Package-manager lock",
+    healthy: "Nothing to repair",
+    hostname: "New hostname",
+    ssid: "Network name",
+    direction: "Direction",
+    kept_version: "Package it would put back",
+    authority: "Plan fingerprint",
+    authority_plan: "Plan fingerprint"
+  };
+
+  /* What is about to happen comes before which image it happens with. */
+  var PLAN_FIELD_ORDER = [
+    "type",
+    "action",
+    "scope",
+    "direction",
+    "container",
+    "current_state",
+    "current_version",
+    "target_tag",
+    "new_version",
+    "kept_version",
+    "target_channel",
+    "reinstall",
+    "hostname",
+    "ssid",
+    "security_count",
+    "normal_count",
+    "package_count",
+    "reboot_required",
+    "reboot_required_before",
+    "minimum_free_megabytes",
+    "free_megabytes",
+    "lock_state",
+    "healthy",
+    "repository",
+    "target_reference",
+    "target_digest",
+    "current_digest",
+    "target_revision",
+    "target_source",
+    "target_architecture",
+    "legacy_labels_accepted",
+    "image_available_locally",
+    "authority",
+    "authority_plan"
+  ];
+
+  /* The fingerprint seals the plan so a confirmation can only apply the plan
+     that was shown. It is a mechanism rather than a statement about this
+     appliance, so it sits with the digests in Expert. */
+  var PLAN_EXPERT_FIELDS = [
+    "authority",
+    "authority_plan",
+    "target_digest",
+    "target_architecture",
+    "current_digest",
+    "legacy_labels_accepted",
+    "target_reference",
+    "target_source"
+  ];
+
+  var PLAN_SKIP_FIELDS = ["blockers", "findings", "packages", "keys", "bootstrap"];
+
+  function planFieldRank(key) {
+    var index = PLAN_FIELD_ORDER.indexOf(key);
+    return index === -1 ? PLAN_FIELD_ORDER.length : index;
+  }
+
+  function planFields(plan, isExpert) {
+    var keys = Object.keys(plan || {}).filter(function (key) {
+      if (PLAN_SKIP_FIELDS.indexOf(key) !== -1) return false;
+      if (!isExpert && PLAN_EXPERT_FIELDS.indexOf(key) !== -1) return false;
+      var value = plan[key];
+      if (value === null || value === undefined || value === "") return false;
+      return typeof value !== "object";
+    });
+    keys.sort(function (left, right) { return planFieldRank(left) - planFieldRank(right); });
+    return keys.map(function (key) {
+      var value = plan[key];
+      return {
+        key: key,
+        label: PLAN_FIELD_LABELS[key] || key.replace(/_/g, " "),
+        value: /_megabytes$/.test(key) ? (gigabytes(value) || format(value)) : format(value),
+        mono: /digest|revision|reference|authority/.test(key)
+      };
+    });
+  }
+
   function renderPlan(plan) {
     var wrapper = el("div", {}, []);
-    var rows = [];
-
-    Object.keys(plan).forEach(function (key) {
-      var value = plan[key];
-      if (key === "blockers" || key === "findings" || key === "packages" || key === "keys") return;
-      if (value === null || typeof value === "object") return;
-      if (!expert() && (key === "target_digest" || key === "target_architecture" ||
-        key === "current_digest" || key === "legacy_labels_accepted" ||
-        key === "target_reference" || key === "target_source")) return;
-      if (key === "bootstrap") return;
-      rows.push(fact(key.replace(/_/g, " "), value, { mono: /digest|revision/.test(key) }));
+    var rows = planFields(plan, expert()).map(function (field) {
+      return fact(field.label, field.value, { mono: field.mono });
     });
     wrapper.appendChild(el("div", { class: "control-result" }, rows));
 
@@ -775,7 +886,7 @@
     });
 
     if ((plan.findings || []).length) {
-      wrapper.appendChild(renderFindings(plan.findings));
+      wrapper.appendChild(renderRepairChecks(plan.findings));
     }
 
     if ((plan.packages || []).length) {
@@ -2348,7 +2459,7 @@
     ]);
   }
 
-  function renderFindings(findings) {
+  function renderRepairChecks(findings) {
     return el("div", { class: "table-wrap" }, [
       el("table", { class: "data", "data-test": "repair-findings" }, [
         el("thead", {}, [el("tr", {}, [
