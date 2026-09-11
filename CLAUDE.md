@@ -306,6 +306,11 @@ backup/restore workflow), `technical/admin-architecture.md` (architecture
 rules), and `technical/admin-discovery.md` (full Admin reference).
 Update the relevant doc when changing behavior described there.
 
+<!-- The block below is written by GitNexus. `scripts/gitnexus-project` passes
+     --skip-agents-md, so it is no longer refreshed: the symbol and relationship
+     counts in it are deliberately stale. Nothing reads them, and updating them
+     on a branch conflicts with every other branch that did the same. The project
+     name and the tool rules are what the block is for, and neither changes. -->
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 

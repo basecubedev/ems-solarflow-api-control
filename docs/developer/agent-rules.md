@@ -305,6 +305,12 @@ Repository-local GitNexus CLI and MCP invocations MUST use
 Repository-local analyze invocations MUST pass `--force` until the documented
 GitNexus 1.6.9 incremental LadybugDB/FTS failure is resolved.
 
+The GitNexus block in `AGENTS.md` and `CLAUDE.md` is **frozen on purpose**:
+`scripts/gitnexus-project` passes `--skip-agents-md`, and the symbol and
+relationship counts in it are stale by design. Nothing reads them, and a commit
+that refreshes them collides with every other branch that did the same. Refresh
+the index; do not commit its counts.
+
 A stale index is an agent's to fix, not to work around: re-running the analysis
 through `scripts/gitnexus-project` is pre-authorized and needs no separate
 instruction. Report that it was refreshed and against which revision.
