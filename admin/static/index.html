@@ -5,6 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>EMS SolarFlow Admin</title>
+  <script src="/admin-theme.js"></script>
   <link rel="stylesheet" href="/admin.css">
 </head>
 <body>
@@ -32,9 +33,15 @@
     <header class="admin-header">
       <p class="eyebrow">ems-solarflow-api-control</p>
       <h1 class="admin-title">EMS SolarFlow Admin</h1>
-      <button type="button" id="auth-logout" class="secondary-button compact admin-logout" hidden>
-        Logout
-      </button>
+      <div class="admin-header-actions">
+        <div class="admin-theme">
+          <label class="admin-theme-label" for="theme-select">Theme</label>
+          <select id="theme-select" class="admin-theme-select"></select>
+        </div>
+        <button type="button" id="auth-logout" class="secondary-button compact admin-logout" hidden>
+          Logout
+        </button>
+      </div>
     </header>
 
 

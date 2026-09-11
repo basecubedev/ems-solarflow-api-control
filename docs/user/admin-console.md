@@ -80,6 +80,33 @@ videos or screenshots for a new release, see the
 [capture guide](../assets/screenshots/admin/README.md) and
 [docs/assets/videos/admin/README.md](../assets/videos/admin/README.md).
 
+## Appearance
+
+A **Theme** menu sits at the top right, next to the sign-out button. It is there
+before you sign in, so you can set it on the login page.
+
+Twelve themes, all dark:
+
+| | |
+| --- | --- |
+| **Signal** | the default, and what the console has always looked like |
+| **Instrument**, **Graphite** | neutral greys, no colour cast in the background |
+| **Fjord**, **Blueprint**, **Indigo** | cool blues, from slate to deep violet |
+| **Viridian**, **Phosphor** | green: an instrument panel, and a CRT |
+| **Copper**, **Oxide** | warm metal and rust |
+| **Contrast** | the hardest separation between text and background |
+| **Void** | near-black, with the accent carrying the light |
+
+A theme changes colour only. Nothing moves, no control changes what it does, and
+no reading changes its meaning — a warning stays a warning in every one of them.
+
+The choice is stored **in your browser**, so it follows neither your login nor
+the appliance: another browser, or another machine, starts at Signal again.
+Clearing site data resets it.
+
+It is applied before the page is drawn, so switching and reloading does not flash
+the default first.
+
 ## It does not replace EMS
 
 - EMS still runs the control loop and remains the source of truth.
