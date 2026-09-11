@@ -548,7 +548,6 @@ table.data th {
 }
 table.data td.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; word-break: break-all; }
 
-.expert-only { border-left: 2px solid rgba(139, 92, 246, 0.4); padding-left: 10px; }
 
 .inline-form { display: grid; gap: 10px; }
 
