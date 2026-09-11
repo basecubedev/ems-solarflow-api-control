@@ -20,6 +20,7 @@
   --danger: #ff6b7a;
   --accent: #8b5cf6;
   --accent2: #22d3ee;
+  --ink-shadow: rgba(0, 0, 0, 0.42);
   /* Shared "setup block" card treatment (frosted raised surface + lift shadow),
      reused by every content block across Setup and Maintenance. */
   --surface-raised: rgba(255, 255, 255, 0.035);
@@ -47,6 +48,15 @@
   --o-control-radius: 10px;
   --o-inner-radius: 8px;
   --o-pill-radius: 999px;
+  /* Object treatment. A palette says what things are made of; a treatment says
+     how they are built: how heavy the frame is, whether there is a fill at all,
+     what carries the edge. The ones that are uniform across the card family sit
+     here; --o-fill and --o-shadow do not, because the family really does have
+     several fills, and each rule names its own as the fallback. A treatment
+     that sets them overrides all of them at once, which is the point. */
+  --o-border: 1px;
+  --o-rail: 0px;
+  --o-divider: 0px;
   --o-badge-pad: 2px 8px;
   --o-pill-pad: 3px 10px;
   --o-control-pad: 5px 12px;
@@ -76,6 +86,7 @@
   --danger: #ff6b7a;
   --accent: #8b5cf6;
   --accent2: #22d3ee;
+  --ink-shadow: rgba(0, 0, 0, 0.42);
   --surface-raised: rgba(255, 255, 255, 0.035);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.28);
 }
@@ -97,6 +108,7 @@
   --danger: #e0616f;
   --accent: #6d7fd4;
   --accent2: #58b4dc;
+  --ink-shadow: rgba(0, 0, 0, 0.40);
   --surface-raised: rgba(255, 255, 255, 0.025);
   --card-lift: 0 6px 18px rgba(0, 0, 0, 0.30);
 }
@@ -118,6 +130,7 @@
   --danger: #fa4d56;
   --accent: #4589ff;
   --accent2: #78a9ff;
+  --ink-shadow: rgba(0, 0, 0, 0.46);
   --surface-raised: rgba(255, 255, 255, 0.03);
   --card-lift: 0 2px 6px rgba(0, 0, 0, 0.34);
 }
@@ -139,6 +152,7 @@
   --danger: #bf616a;
   --accent: #5e81ac;
   --accent2: #88c0d0;
+  --ink-shadow: rgba(0, 0, 0, 0.34);
   --surface-raised: rgba(236, 239, 244, 0.045);
   --card-lift: 0 8px 20px rgba(0, 0, 0, 0.28);
 }
@@ -160,6 +174,7 @@
   --danger: #ff8a95;
   --accent: #2f6fa8;
   --accent2: #7fd4ff;
+  --ink-shadow: rgba(0, 0, 0, 0.42);
   --surface-raised: rgba(180, 220, 255, 0.05);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.35);
 }
@@ -181,6 +196,7 @@
   --danger: #ff7a8c;
   --accent: #4a4fb5;
   --accent2: #ffb454;
+  --ink-shadow: rgba(0, 0, 0, 0.48);
   --surface-raised: rgba(220, 225, 255, 0.045);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.40);
 }
@@ -202,6 +218,7 @@
   --danger: #ef6a72;
   --accent: #1f7a5a;
   --accent2: #3fd9a0;
+  --ink-shadow: rgba(0, 0, 0, 0.44);
   --surface-raised: rgba(220, 255, 238, 0.04);
   --card-lift: 0 8px 20px rgba(0, 0, 0, 0.36);
 }
@@ -223,6 +240,7 @@
   --danger: #e05a4c;
   --accent: #b4531f;
   --accent2: #e28a3f;
+  --ink-shadow: rgba(0, 0, 0, 0.50);
   --surface-raised: rgba(255, 242, 220, 0.035);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.42);
 }
@@ -244,6 +262,7 @@
   --danger: #e8483a;
   --accent: #9c3a1c;
   --accent2: #ff7a45;
+  --ink-shadow: rgba(0, 0, 0, 0.52);
   --surface-raised: rgba(255, 230, 210, 0.04);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.46);
 }
@@ -265,8 +284,9 @@
   --danger: #ff5d4d;
   --accent: #a86a10;
   --accent2: #ffb03c;
+  --ink-shadow: rgba(255, 176, 60, 0.20);
   --surface-raised: rgba(255, 176, 60, 0.05);
-  --card-lift: none;
+  --card-lift: 0 0 0 transparent;
 }
 
 :root[data-theme="contrast"] {  /* maximum separation */
@@ -286,8 +306,9 @@
   --danger: #ff7b85;
   --accent: #9d8bff;
   --accent2: #4fd1ff;
+  --ink-shadow: rgba(255, 255, 255, 0.30);
   --surface-raised: rgba(255, 255, 255, 0.07);
-  --card-lift: none;
+  --card-lift: 0 0 0 transparent;
 }
 
 :root[data-theme="void"] {  /* near-black, light carried by the accent */
@@ -307,8 +328,167 @@
   --danger: #ff6f7d;
   --accent: #7c6bff;
   --accent2: #4fd1ff;
+  --ink-shadow: rgba(255, 255, 255, 0.30);
   --surface-raised: rgba(255, 255, 255, 0.045);
   --card-lift: 0 10px 30px rgba(255, 255, 255, 0.16);
+}
+
+/* --- Object treatments --------------------------------------------------
+   The second axis, ported from the demo's thirteen. A palette says what things
+   are made of; a treatment says how they are built -- how heavy the frame is,
+   whether there is a fill at all, what carries the edge.
+
+   `glass` sets only the corner roles, so every rule keeps the fill and shadow
+   it declares as its own fallback. The other twelve set --o-fill and --o-shadow
+   and thereby answer for the whole card family at once.
+
+   Two of the demo's dimensions are deliberately not here. Its --o-py/--o-px and
+   --o-title-* assume one card with one padding and one title size; this product
+   has a card family with a real size hierarchy -- a sign-in card is not a
+   device row -- and a single pair would flatten it rather than restyle it.
+   Density is its own axis, and the demo treated it as one. */
+
+:root[data-style="glass"] {  /* today's product, unchanged */
+  --o-surface-radius: 16px;
+  --o-card-radius: 14px;
+  --o-control-radius: 10px;
+  --o-inner-radius: 8px;
+  --o-pill-radius: 999px;
+}
+:root[data-style="console"] {  /* a terminal: hairline frame, no fill, a rail down the left */
+  --o-surface-radius: 6px;
+  --o-card-radius: 5px;
+  --o-control-radius: 4px;
+  --o-inner-radius: 3px;
+  --o-pill-radius: 3px;
+  --o-border: 1px;
+  --o-fill: transparent;
+  --o-shadow: 0 0 0 transparent;
+  --o-rail: 2px;
+}
+:root[data-style="instrument"] {  /* a panel front: raised fill and a thin crown along the top */
+  --o-surface-radius: 10px;
+  --o-card-radius: 9px;
+  --o-control-radius: 7px;
+  --o-inner-radius: 6px;
+  --o-pill-radius: 4px;
+  --o-border: 1px;
+  --o-fill: var(--surface-raised);
+  --o-shadow: 0 0 0 transparent;
+  --o-layers: linear-gradient(var(--border-strong), var(--border-strong)) 0 0 / 100% 2px no-repeat;
+}
+:root[data-style="rail"] {  /* no frame at all; the left edge and a divider carry the structure */
+  --o-surface-radius: 0;
+  --o-card-radius: 0;
+  --o-control-radius: 0;
+  --o-inner-radius: 0;
+  --o-pill-radius: 2px;
+  --o-border: 0px;
+  --o-fill: transparent;
+  --o-shadow: 0 0 0 transparent;
+  --o-rail: 3px;
+  --o-divider: 1px;
+}
+:root[data-style="tab"] {  /* a filing tab: a fill with a heavier crown above it */
+  --o-surface-radius: 9px;
+  --o-card-radius: 8px;
+  --o-control-radius: 6px;
+  --o-inner-radius: 5px;
+  --o-pill-radius: 4px;
+  --o-border: 1px;
+  --o-fill: var(--panel);
+  --o-shadow: 0 0 0 transparent;
+  --o-layers: linear-gradient(var(--border-strong), var(--border-strong)) 0 0 / 44px 3px no-repeat;
+}
+:root[data-style="underline"] {  /* a list, not a stack of cards: one rule between rows */
+  --o-surface-radius: 0;
+  --o-card-radius: 0;
+  --o-control-radius: 0;
+  --o-inner-radius: 0;
+  --o-pill-radius: 4px;
+  --o-border: 0px;
+  --o-fill: transparent;
+  --o-shadow: 0 0 0 transparent;
+  --o-divider: 1px;
+}
+:root[data-style="bracket"] {  /* a technical drawing: corner ticks instead of a frame */
+  --o-surface-radius: 0;
+  --o-card-radius: 0;
+  --o-control-radius: 0;
+  --o-inner-radius: 0;
+  --o-pill-radius: 0;
+  --o-border: 0px;
+  --o-fill: transparent;
+  --o-shadow: 0 0 0 transparent;
+  --o-layers:
+    linear-gradient(var(--border-strong), var(--border-strong)) 0 0 / 13px 1px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 0 0 / 1px 13px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 100% 0 / 13px 1px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 100% 0 / 1px 13px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 0 100% / 13px 1px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 0 100% / 1px 13px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 100% 100% / 13px 1px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 100% 100% / 1px 13px no-repeat;
+}
+:root[data-style="inset"] {  /* pressed into the page rather than laid on it */
+  --o-surface-radius: 11px;
+  --o-card-radius: 10px;
+  --o-control-radius: 8px;
+  --o-inner-radius: 6px;
+  --o-pill-radius: 6px;
+  --o-border: 0px;
+  --o-fill: var(--bg2);
+  --o-shadow: inset 0 2px 5px var(--ink-shadow), inset 0 0 0 1px var(--border);
+}
+:root[data-style="slab"] {  /* solid blocks, no frame, no rounding */
+  --o-surface-radius: 0;
+  --o-card-radius: 0;
+  --o-control-radius: 0;
+  --o-inner-radius: 0;
+  --o-pill-radius: 0;
+  --o-border: 0px;
+  --o-fill: var(--panel-strong);
+  --o-shadow: 0 0 0 transparent;
+}
+:root[data-style="halo"] {  /* lifted, with the light coming from underneath */
+  --o-surface-radius: 16px;
+  --o-card-radius: 14px;
+  --o-control-radius: 10px;
+  --o-inner-radius: 8px;
+  --o-pill-radius: 999px;
+  --o-border: 1px;
+  --o-fill: var(--panel-strong);
+  --o-shadow: 0 9px 26px color-mix(in srgb, var(--text) 16%, transparent);
+}
+:root[data-style="soft"] {  /* further from the corner, and floating */
+  --o-surface-radius: 20px;
+  --o-card-radius: 18px;
+  --o-control-radius: 14px;
+  --o-inner-radius: 12px;
+  --o-pill-radius: 999px;
+  --o-border: 0px;
+  --o-fill: var(--panel-strong);
+  --o-shadow: 0 8px 28px var(--ink-shadow);
+}
+:root[data-style="outline"] {  /* the frame does all the work */
+  --o-surface-radius: 9px;
+  --o-card-radius: 8px;
+  --o-control-radius: 6px;
+  --o-inner-radius: 5px;
+  --o-pill-radius: 6px;
+  --o-border: 1px;
+  --o-fill: transparent;
+  --o-shadow: 0 0 0 transparent;
+}
+:root[data-style="brutal"] {  /* a heavy frame and a hard shadow, square everywhere */
+  --o-surface-radius: 0;
+  --o-card-radius: 0;
+  --o-control-radius: 0;
+  --o-inner-radius: 0;
+  --o-pill-radius: 0;
+  --o-border: 2px;
+  --o-fill: var(--panel-strong);
+  --o-shadow: 4px 4px 0 var(--border-strong);
 }
 
 * { box-sizing: border-box; }
@@ -318,7 +498,7 @@ body {
   min-height: 100vh;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
   background:
-    radial-gradient(1200px 700px at 80% -10%, color-mix(in srgb, var(--output) 8%, transparent), transparent),
+   radial-gradient(1200px 700px at 80% -10%, color-mix(in srgb, var(--output) 8%, transparent), transparent),
     linear-gradient(140deg, var(--bg), var(--bg2) 52%, var(--bg));
   color: var(--text);
   line-height: 1.5;
@@ -370,13 +550,16 @@ body {
 .admin-auth-card {
   width: 100%;
   max-width: 420px;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--o-layers, none), var(--o-fill, var(--panel));
+  border: var(--o-border) solid var(--border);
   border-radius: var(--o-surface-radius);
   padding: 24px 20px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .admin-auth-title { margin: 0; font-size: 18px; font-weight: 800; }
 .admin-auth-copy { margin: 0; color: var(--muted); font-size: 13px; }
@@ -407,11 +590,13 @@ code {
 
 /* Control / Energy stage cards (scan workflow + future placeholder). */
 .control-pipeline-stage {
-  background: linear-gradient(180deg, var(--panel-strong), var(--panel));
-  border: 1px solid var(--border);
+  background: var(--o-layers, none), var(--o-fill, linear-gradient(180deg, var(--panel-strong), var(--panel)));
+  border: var(--o-border) solid var(--border);
   border-radius: var(--o-surface-radius);
   padding: 16px;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--o-shadow, 0 18px 40px rgba(0, 0, 0, 0.35));
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .control-stage-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .control-stage-step {
@@ -593,10 +778,13 @@ code {
   justify-content: space-between;
   align-items: baseline;
   gap: 12px;
-  border: 1px solid var(--border);
+  border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
-  background: var(--panel);
+  background: var(--o-layers, none), var(--o-fill, var(--panel));
   padding: 10px 12px;
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .maintenance-status-label {
   color: var(--muted);
@@ -731,6 +919,8 @@ code {
   outline: 2px solid var(--accent2);
   outline-offset: 4px;
   border-radius: var(--o-card-radius);
+  background: var(--o-layers, none), var(--o-fill, transparent);
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
 }
 .maintenance-card:hover .maintenance-caret,
 .maintenance-card[data-open="true"] .maintenance-caret {
@@ -752,12 +942,15 @@ code {
 }
 .maintenance-warnings {
   margin: 0;
-  border: 1px solid var(--danger);
+  border: var(--o-border) solid var(--danger);
   border-radius: var(--o-card-radius);
   padding: 10px 12px;
   color: var(--danger);
   font-size: 12px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--o-layers, none), var(--o-fill, rgba(255, 255, 255, 0.03));
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .maintenance-facts { display: flex; flex-direction: column; gap: 6px; }
 .maintenance-fact {
@@ -911,9 +1104,12 @@ code {
 .mconfig-sync-card {
   margin-top: 12px;
   padding: 10px;
-  border: 1px solid var(--border);
+  border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent2) 10%, transparent), var(--surface-sunken-strong));
+  background: var(--o-layers, none), var(--o-fill, linear-gradient(135deg, color-mix(in srgb, var(--accent2) 10%, transparent), var(--surface-sunken-strong)));
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .maintenance-container-actions { margin-top: 10px; }
 .mconfig-backup-choice { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; }
@@ -1256,10 +1452,12 @@ code {
 .mconfig-group:not(.advanced-details),
 .setup-block {
   padding: 16px;
-  border: 1px solid var(--border-strong);
+  border: var(--o-border) solid var(--border-strong);
   border-radius: var(--o-card-radius);
-  background: var(--surface-raised);
-  box-shadow: var(--card-lift);
+  background: var(--o-layers, none), var(--o-fill, var(--surface-raised));
+  box-shadow: var(--o-shadow, var(--card-lift));
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 /* Even spacing between one `.setup-block` and the previous element. The card
    padding supplies the inner spacing, so neutralise the leading child's own top
@@ -1427,13 +1625,16 @@ code {
   font-size: 12px;
 }
 .mqtt-device-card {
-  border: 1px solid var(--border);
+  border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
   padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--o-layers, none), var(--o-fill, rgba(255, 255, 255, 0.02));
   display: flex;
   flex-direction: column;
   gap: 8px;
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .mqtt-device-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .mqtt-device-title { font-size: 13px; font-weight: 800; }
@@ -1490,12 +1691,16 @@ code {
 .pill.muted { background: rgba(255, 255, 255, 0.04); color: var(--muted); }
 
 .results-empty {
-  border: 1px dashed var(--border);
+  border: var(--o-border) dashed var(--border);
   border-radius: var(--o-card-radius);
   padding: 22px 16px;
   text-align: center;
   color: var(--muted);
   font-size: 13px;
+  background: var(--o-layers, none), var(--o-fill, transparent);
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 
 /* Aggregate / Device style cards for each discovered device. */
@@ -1505,13 +1710,16 @@ code {
   gap: 8px;
 }
 .device-card {
-  background: linear-gradient(180deg, var(--panel-strong), var(--panel));
-  border: 1px solid var(--border);
+  background: var(--o-layers, none), var(--o-fill, linear-gradient(180deg, var(--panel-strong), var(--panel)));
+  border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .device-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .device-name { font-size: 14px; font-weight: 800; }
@@ -1609,14 +1817,17 @@ code {
   gap: 2px;
   align-items: flex-start;
   text-align: left;
-  background: var(--surface-sunken);
-  border: 1px solid var(--border);
+  background: var(--o-layers, none), var(--o-fill, var(--surface-sunken));
+  border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
   padding: 10px 12px;
   color: var(--muted);
   font: inherit;
   cursor: pointer;
   transition: border-color .16s ease, background .16s ease;
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .setup-step:hover:not(:disabled) { border-color: var(--border-strong); }
 .setup-step.active {
@@ -1670,18 +1881,21 @@ code {
 .config-validation-card {
   margin: 10px 0 12px;
   padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--output) 32%, var(--border));
+  border: var(--o-border) solid color-mix(in srgb, var(--output) 32%, var(--border));
   border-radius: var(--o-card-radius);
   background:
-    radial-gradient(circle at 4% 0%, color-mix(in srgb, var(--output) 8%, transparent), transparent 42%),
-    var(--surface-sunken-strong);
+    var(--o-layers, none),
+     var(--o-fill, radial-gradient(circle at 4% 0%, color-mix(in srgb, var(--output) 8%, transparent), transparent 42%),
+    var(--surface-sunken-strong));
   /* Same lift as the shared setup block cards so step 03 reads as one family. */
-  box-shadow: var(--card-lift);
+  box-shadow: var(--o-shadow, var(--card-lift));
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .config-validation-card[data-tone="ready"] {
   border-color: color-mix(in srgb, var(--battery) 38%, var(--border));
   background:
-    radial-gradient(circle at 4% 0%, color-mix(in srgb, var(--battery) 8%, transparent), transparent 42%),
+   radial-gradient(circle at 4% 0%, color-mix(in srgb, var(--battery) 8%, transparent), transparent 42%),
     var(--surface-sunken-strong);
 }
 .config-validation-card[data-tone="warn"] {
@@ -1762,14 +1976,16 @@ code {
 .config-grid-selection { margin-bottom: 12px; }
 .config-grid-hint { margin: 0; color: var(--muted); font-size: 12px; font-weight: 700; }
 .config-grid-selection-card {
-  border: 1px solid color-mix(in srgb, var(--grid) 45%, var(--border));
+  border: var(--o-border) solid color-mix(in srgb, var(--grid) 45%, var(--border));
   border-left: 3px solid color-mix(in srgb, var(--grid) 70%, var(--border));
   border-radius: var(--o-card-radius);
   padding: 12px;
-  background: color-mix(in srgb, var(--grid) 7%, transparent);
+  background: var(--o-layers, none), var(--o-fill, color-mix(in srgb, var(--grid) 7%, transparent));
   display: flex;
   flex-direction: column;
   gap: 8px;
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .config-grid-selection-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .config-grid-selection-title { color: var(--grid); font-size: 12px; font-weight: 850; }
@@ -1829,14 +2045,16 @@ code {
   margin-bottom: 12px;
 }
 .config-switch-confirmation {
-  border: 1px solid color-mix(in srgb, var(--pv) 45%, var(--border));
+  border: var(--o-border) solid color-mix(in srgb, var(--pv) 45%, var(--border));
   border-left: 3px solid color-mix(in srgb, var(--pv) 70%, var(--border));
   border-radius: var(--o-card-radius);
   padding: 12px;
-  background: color-mix(in srgb, var(--pv) 7%, transparent);
+  background: var(--o-layers, none), var(--o-fill, color-mix(in srgb, var(--pv) 7%, transparent));
   display: flex;
   flex-direction: column;
   gap: 8px;
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .config-switch-confirmation-title {
   margin: 0;
@@ -1894,11 +2112,13 @@ code {
 .config-mqtt-device-row .config-mqtt-device-remove { margin-left: auto; }
 
 .hardware-card {
-  border: 1px solid var(--border);
+  border: var(--o-border) solid var(--border);
   border-left: 3px solid var(--border-strong);
   border-radius: var(--o-card-radius);
-  background: var(--panel);
+  background: var(--o-layers, none), var(--o-fill, var(--panel));
   overflow: hidden;
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .hardware-card-grid-meter {
   border-left-color: var(--grid);
@@ -2023,15 +2243,18 @@ code {
 
 .config-preview {
   margin: 0;
-  border: 1px solid var(--border);
+  border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
-  background: var(--surface-sunken-strong);
+  background: var(--o-layers, none), var(--o-fill, var(--surface-sunken-strong));
   padding: 12px 14px;
   color: var(--text);
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   overflow-x: auto;
   white-space: pre;
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 
 .deployment-image-row {
@@ -2129,10 +2352,13 @@ code {
 .feature-list { display: flex; flex-direction: column; gap: 8px; }
 .feature-list:empty { display: none; }
 .feature-row {
-  border: 1px solid var(--border);
+  border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
-  background: var(--panel);
+  background: var(--o-layers, none), var(--o-fill, var(--panel));
   overflow: hidden;
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .feature-row[data-open="true"] { border-color: var(--border-strong); }
 .feature-row-head { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; }
@@ -2422,10 +2648,12 @@ code {
   width: 100%;
   text-align: center;
   padding: 28px 26px;
-  border: 1px solid var(--border-strong);
+  border: var(--o-border) solid var(--border-strong);
   border-radius: var(--o-surface-radius);
-  background: var(--panel-strong);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  background: var(--o-layers, none), var(--o-fill, var(--panel-strong));
+  box-shadow: var(--o-shadow, 0 18px 40px rgba(0, 0, 0, 0.45));
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .admin-update-overlay-spinner {
   display: inline-block;
@@ -2541,7 +2769,6 @@ code {
   .system-alignment-stages { grid-template-columns: 1fr; }
 }
 
-
 /* --- Maintenance settings page ------------------------------------------
    The settings card is the whole page here, so it drops the accordion chrome:
    no caret, no toggle, a body that cannot be collapsed shut. It stays a
@@ -2639,10 +2866,12 @@ code {
   gap: 8px;
   margin-top: 4px;
   padding: 11px 13px;
-  border: 1px solid color-mix(in srgb, var(--output) 30%, var(--border));
+  border: var(--o-border) solid color-mix(in srgb, var(--output) 30%, var(--border));
   border-radius: var(--o-card-radius);
-  background: linear-gradient(180deg, var(--panel-strong), var(--bg2));
-  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.45);
+  background: var(--o-layers, none), var(--o-fill, linear-gradient(180deg, var(--panel-strong), var(--bg2)));
+  box-shadow: var(--o-shadow, 0 -10px 30px rgba(0, 0, 0, 0.45));
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .mconfig-footer .mconfig-actions { margin: 0; }
 .mconfig-footer-count { margin: 0; font-size: 13px; font-weight: 750; }

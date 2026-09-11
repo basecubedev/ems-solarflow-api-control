@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 from tests import theming_contracts
+from tests.theming_contracts import SHAPE_PREFIX
 
 pytestmark = [pytest.mark.contract]
 
@@ -100,6 +101,146 @@ def test_the_surfaces_that_offer_palettes_offer_the_same_ones(declared):
     offered = {surface: sorted(palettes) for surface, palettes in themed(declared).items()}
     assert len(offered) >= 2, f"only {sorted(offered)} declares palettes; nothing to compare"
     assert len(set(map(tuple, offered.values()))) == 1, f"the palette lists differ: {offered}"
+
+
+@pytest.mark.parametrize("surface", sorted(SURFACES))
+def test_the_stylesheet_parses(surface):
+    """Every other test in this file reads the stylesheet with regular
+    expressions, which is why they all stayed green while a stylesheet was
+    missing a closing brace and the page rendered as unstyled HTML. Balanced
+    braces is the cheapest thing that would have caught it, and the only
+    structural claim these tests can make without a real parser.
+    """
+
+    css = (ROOT / SURFACES[surface]).read_text(encoding="utf-8")
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    depth, opened = 0, 0
+    for character in css:
+        if character == "{":
+            depth += 1
+            opened += 1
+        elif character == "}":
+            depth -= 1
+            assert depth >= 0, f"{surface}: a rule closes that was never opened"
+    assert depth == 0, f"{surface}: {depth} of {opened} rules are never closed"
+
+
+# --- the object styles -----------------------------------------------------
+#
+# The second axis. A palette says what things are made of; an object style says
+# what shape they are. Every combination of the two has to render, which is only
+# true while neither reaches into the other -- so a style sets corner roles and
+# nothing else, and a palette sets colours and nothing else.
+#
+# Only the corner roles vary. The pill measurements and the paddings are density
+# rather than shape, and a style that moved the height of every fact tile would
+# be moving the layout rather than restyling it.
+
+DEFAULT_STYLE = "glass"
+
+
+def styled():
+    found = {
+        surface: theming_contracts.object_styles((ROOT / path).read_text(encoding="utf-8"))
+        for surface, path in SURFACES.items()
+    }
+    return {surface: styles for surface, styles in found.items() if styles}
+
+
+@pytest.mark.parametrize("surface", sorted(SURFACES))
+def test_every_object_style_sets_every_corner_role(surface):
+    """A role a style leaves out keeps its :root value, so "edge" would render
+    with one rounded corner somewhere and look like a bug rather than a choice.
+    """
+
+    css = (ROOT / SURFACES[surface]).read_text(encoding="utf-8")
+    expected = set(theming_contracts.radius_tokens(css))
+    assert expected, f"{surface} declares no corner roles"
+    incomplete = {
+        name: sorted(expected - set(tokens))
+        for name, tokens in theming_contracts.object_styles(css).items()
+    }
+    incomplete = {name: missing for name, missing in incomplete.items() if missing}
+    assert incomplete == {}, f"{surface} styles that would inherit a corner: {incomplete}"
+
+
+@pytest.mark.parametrize("surface", sorted(SURFACES))
+def test_no_object_style_reaches_into_the_palette(surface):
+    css = (ROOT / SURFACES[surface]).read_text(encoding="utf-8")
+    trespassing = {
+        name: sorted(token for token in tokens if not token.startswith(SHAPE_PREFIX))
+        for name, tokens in theming_contracts.object_styles(css).items()
+    }
+    trespassing = {name: extra for name, extra in trespassing.items() if extra}
+    assert trespassing == {}, f"{surface} styles setting something else: {trespassing}"
+
+
+@pytest.mark.parametrize("surface", sorted(SURFACES))
+def test_the_default_object_style_changes_nothing(surface):
+    """Choosing "rounded" must look exactly like choosing nothing."""
+
+    css = (ROOT / SURFACES[surface]).read_text(encoding="utf-8")
+    base = theming_contracts.radius_tokens(css)
+    default = theming_contracts.object_styles(css).get(DEFAULT_STYLE)
+    assert default, f"{surface} does not declare the default style {DEFAULT_STYLE!r}"
+    differing = {
+        name: (base[name], default.get(name))
+        for name in base
+        if base[name] != default.get(name)
+    }
+    assert differing == {}, f"{surface}: {DEFAULT_STYLE} differs from :root: {differing}"
+
+
+SPECS = {
+    "admin": "tests/e2e/admin-theme.spec.ts",
+    "appliance": "tests/e2e-appliance/theme.spec.ts",
+}
+
+
+@pytest.mark.parametrize("surface", sorted(SPECS))
+def test_the_browser_tests_name_palettes_and_styles_that_exist(surface):
+    """Renaming the four first styles to the demo's thirteen left two browser
+    tests selecting `crisp` and `edge`, which no longer existed. Playwright
+    reported it as "did not find some options" after six minutes of browser
+    time; this says the same thing in a tenth of a second.
+    """
+
+    spec = (ROOT / SPECS[surface]).read_text(encoding="utf-8")
+    css = (ROOT / SURFACES[surface]).read_text(encoding="utf-8")
+    known = {
+        "style": set(theming_contracts.object_styles(css)),
+        "theme": set(theming_contracts.themes(css)),
+    }
+    used = {"style": set(), "theme": set()}
+    for axis in used:
+        used[axis] |= set(re.findall(rf'"#{axis}-select",\s*"([a-z0-9-]+)"', spec))
+        used[axis] |= set(re.findall(rf'"data-{axis}",\s*"([a-z0-9-]+)"', spec))
+    # A name the build is meant not to know is the point of one of the tests.
+    used["theme"] -= {"harlequin"}
+    unknown = {axis: sorted(names - known[axis]) for axis, names in used.items()}
+    unknown = {axis: names for axis, names in unknown.items() if names}
+    assert unknown == {}, f"{surface} browser tests name what the stylesheet has not: {unknown}"
+
+
+def test_the_surfaces_that_offer_styles_offer_the_same_ones():
+    offered = {surface: sorted(styles) for surface, styles in styled().items()}
+    assert len(offered) == len(SURFACES), f"only {sorted(offered)} declares object styles"
+    assert len(set(map(tuple, offered.values()))) == 1, f"the style lists differ: {offered}"
+
+
+def test_a_style_has_one_value_for_a_corner_everywhere():
+    """Three copies of a five-by-four table is exactly the kind of thing that
+    drifts by one value and is never noticed again."""
+
+    styles = styled()
+    drift = {}
+    for left, right in itertools.combinations(sorted(styles), 2):
+        for name in sorted(set(styles[left]) & set(styles[right])):
+            one, other = styles[left][name], styles[right][name]
+            for token in sorted(set(one) & set(other)):
+                if one[token] != other[token]:
+                    drift[f"{name}.{token}"] = {left: one[token], right: other[token]}
+    assert drift == {}, f"object styles that drifted between surfaces: {drift}"
 
 
 def test_a_palette_has_one_value_for_a_shared_token(declared):

@@ -38,7 +38,10 @@ MUTED_MIN_CONTRAST = 4.5
 NEUTRAL = re.compile(r"rgba?\(\s*(?:255,\s*255,\s*255|0,\s*0,\s*0)\b|#000\b|#fff\b", re.I)
 COLOUR = re.compile(r"#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)")
 
-ROOT_BLOCK = r':root(\[data-theme="[a-z0-9-]+"\])?\s*\{.*?\}'
+# Both axes hang off the root element, so both kinds of block are "not a rule":
+# `:root[data-theme=…]` declares a palette and `:root[data-style=…]` an object
+# style, and neither is a place where a page decides how something looks.
+ROOT_BLOCK = r':root(\[data-(?:theme|style)="[a-z0-9-]+"\])?\s*\{.*?\}'
 
 
 def declarations(block):
@@ -58,6 +61,21 @@ def themes(css):
     return {
         name: declarations(body)
         for name, body in re.findall(r':root\[data-theme="([a-z0-9-]+)"\]\s*\{(.*?)\}', css, re.S)
+    }
+
+
+def object_styles(css):
+    return {
+        name: declarations(block)
+        for name, block in re.findall(r':root\[data-style="([a-z0-9-]+)"\]\s*\{(.*?)\}', css, re.S)
+    }
+
+
+def radius_tokens(css):
+    return {
+        name: value
+        for name, value in shape_tokens(css).items()
+        if name.endswith("-radius")
     }
 
 

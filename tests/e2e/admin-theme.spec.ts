@@ -52,4 +52,35 @@ test.describe("theme switching", () => {
     await expect(page.locator("#view-auth")).toBeVisible();
     await expect(page.locator("#theme-select")).toBeVisible();
   });
+
+  test("an object style is a second axis, not a second theme", async ({ page }) => {
+    // The point of two attributes: any palette can be worn with any style, and
+    // choosing one must not disturb the other.
+    await page.goto("/");
+    await page.selectOption("#theme-select", "void");
+    await page.selectOption("#style-select", "slab");
+
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "void");
+    await expect(page.locator("html")).toHaveAttribute("data-style", "slab");
+
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "void");
+    await expect(page.locator("html")).toHaveAttribute("data-style", "slab");
+    await expect(page.locator("#theme-select")).toHaveValue("void");
+    await expect(page.locator("#style-select")).toHaveValue("slab");
+  });
+
+  test("the object style reaches an actual corner", async ({ page }) => {
+    // Reading the token back would only prove the token changed. This reads a
+    // rendered corner, which is the thing a person sees. expect.poll resolves
+    // the locator afresh each attempt, so a re-render cannot detach it midway.
+    const corner = () =>
+      page.locator(".admin-auth-card").evaluate((node) => getComputedStyle(node).borderTopLeftRadius);
+
+    await page.goto("/");
+    await expect.poll(corner).not.toBe("0px");
+
+    await page.selectOption("#style-select", "slab");
+    await expect.poll(corner).toBe("0px");
+  });
 });

@@ -20,6 +20,8 @@
   --danger: #ff6b7a;
   --accent: #8b5cf6;
   --accent2: #22d3ee;
+  --surface-raised: rgba(255, 255, 255, 0.035);
+  --ink-shadow: rgba(0, 0, 0, 0.42);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.28);
   /* Derived from the palette above, declared once: a custom property resolves
      where it is used, so these follow whichever theme is active without being
@@ -37,6 +39,15 @@
   --o-control-radius: 10px;
   --o-inner-radius: 8px;
   --o-pill-radius: 999px;
+  /* Object treatment. A palette says what things are made of; a treatment says
+     how they are built: how heavy the frame is, whether there is a fill at all,
+     what carries the edge. The ones that are uniform across the card family sit
+     here; --o-fill and --o-shadow do not, because the family really does have
+     several fills, and each rule names its own as the fallback. A treatment
+     that sets them overrides all of them at once, which is the point. */
+  --o-border: 1px;
+  --o-rail: 0px;
+  --o-divider: 0px;
   --o-badge-pad: 2px 8px;
   --o-pill-pad: 3px 10px;
   --o-control-pad: 5px 12px;
@@ -65,6 +76,8 @@
   --danger: #ff6b7a;
   --accent: #8b5cf6;
   --accent2: #22d3ee;
+  --surface-raised: rgba(255, 255, 255, 0.035);
+  --ink-shadow: rgba(0, 0, 0, 0.42);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.28);
 }
 :root[data-theme="instrument"] {  /* muted laboratory greys */
@@ -84,6 +97,8 @@
   --danger: #e0616f;
   --accent: #6d7fd4;
   --accent2: #58b4dc;
+  --surface-raised: rgba(255, 255, 255, 0.025);
+  --ink-shadow: rgba(0, 0, 0, 0.40);
   --card-lift: 0 6px 18px rgba(0, 0, 0, 0.30);
 }
 :root[data-theme="graphite"] {  /* neutral, no hue in the ground */
@@ -103,6 +118,8 @@
   --danger: #fa4d56;
   --accent: #4589ff;
   --accent2: #78a9ff;
+  --surface-raised: rgba(255, 255, 255, 0.03);
+  --ink-shadow: rgba(0, 0, 0, 0.46);
   --card-lift: 0 2px 6px rgba(0, 0, 0, 0.34);
 }
 :root[data-theme="fjord"] {  /* cool nordic slate */
@@ -122,6 +139,8 @@
   --danger: #bf616a;
   --accent: #5e81ac;
   --accent2: #88c0d0;
+  --surface-raised: rgba(236, 239, 244, 0.045);
+  --ink-shadow: rgba(0, 0, 0, 0.34);
   --card-lift: 0 8px 20px rgba(0, 0, 0, 0.28);
 }
 :root[data-theme="blueprint"] {  /* drawing-office blue */
@@ -141,6 +160,8 @@
   --danger: #ff8a95;
   --accent: #2f6fa8;
   --accent2: #7fd4ff;
+  --surface-raised: rgba(180, 220, 255, 0.05);
+  --ink-shadow: rgba(0, 0, 0, 0.42);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.35);
 }
 :root[data-theme="indigo"] {  /* deep violet-blue */
@@ -160,6 +181,8 @@
   --danger: #ff7a8c;
   --accent: #4a4fb5;
   --accent2: #ffb454;
+  --surface-raised: rgba(220, 225, 255, 0.045);
+  --ink-shadow: rgba(0, 0, 0, 0.48);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.40);
 }
 :root[data-theme="viridian"] {  /* green instrument panel */
@@ -179,6 +202,8 @@
   --danger: #ef6a72;
   --accent: #1f7a5a;
   --accent2: #3fd9a0;
+  --surface-raised: rgba(220, 255, 238, 0.04);
+  --ink-shadow: rgba(0, 0, 0, 0.44);
   --card-lift: 0 8px 20px rgba(0, 0, 0, 0.36);
 }
 :root[data-theme="copper"] {  /* warm metal */
@@ -198,6 +223,8 @@
   --danger: #e05a4c;
   --accent: #b4531f;
   --accent2: #e28a3f;
+  --surface-raised: rgba(255, 242, 220, 0.035);
+  --ink-shadow: rgba(0, 0, 0, 0.50);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.42);
 }
 :root[data-theme="oxide"] {  /* rust and iron */
@@ -217,6 +244,8 @@
   --danger: #e8483a;
   --accent: #9c3a1c;
   --accent2: #ff7a45;
+  --surface-raised: rgba(255, 230, 210, 0.04);
+  --ink-shadow: rgba(0, 0, 0, 0.52);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.46);
 }
 :root[data-theme="phosphor"] {  /* green CRT */
@@ -236,7 +265,9 @@
   --danger: #ff5d4d;
   --accent: #a86a10;
   --accent2: #ffb03c;
-  --card-lift: none;
+  --surface-raised: rgba(255, 176, 60, 0.05);
+  --ink-shadow: rgba(255, 176, 60, 0.20);
+  --card-lift: 0 0 0 transparent;
 }
 :root[data-theme="contrast"] {  /* maximum separation */
   --bg: #000000;
@@ -255,7 +286,9 @@
   --danger: #ff7b85;
   --accent: #9d8bff;
   --accent2: #4fd1ff;
-  --card-lift: none;
+  --surface-raised: rgba(255, 255, 255, 0.07);
+  --ink-shadow: rgba(255, 255, 255, 0.30);
+  --card-lift: 0 0 0 transparent;
 }
 :root[data-theme="void"] {  /* near-black, light carried by the accent */
   --bg: #000000;
@@ -274,7 +307,167 @@
   --danger: #ff6f7d;
   --accent: #7c6bff;
   --accent2: #4fd1ff;
+  --surface-raised: rgba(255, 255, 255, 0.045);
+  --ink-shadow: rgba(255, 255, 255, 0.30);
   --card-lift: 0 10px 30px rgba(255, 255, 255, 0.16);
+}
+
+/* --- Object treatments --------------------------------------------------
+   The second axis, ported from the demo's thirteen. A palette says what things
+   are made of; a treatment says how they are built -- how heavy the frame is,
+   whether there is a fill at all, what carries the edge.
+
+   `glass` sets only the corner roles, so every rule keeps the fill and shadow
+   it declares as its own fallback. The other twelve set --o-fill and --o-shadow
+   and thereby answer for the whole card family at once.
+
+   Two of the demo's dimensions are deliberately not here. Its --o-py/--o-px and
+   --o-title-* assume one card with one padding and one title size; this product
+   has a card family with a real size hierarchy -- a sign-in card is not a
+   device row -- and a single pair would flatten it rather than restyle it.
+   Density is its own axis, and the demo treated it as one. */
+
+:root[data-style="glass"] {  /* today's product, unchanged */
+  --o-surface-radius: 16px;
+  --o-card-radius: 14px;
+  --o-control-radius: 10px;
+  --o-inner-radius: 8px;
+  --o-pill-radius: 999px;
+}
+:root[data-style="console"] {  /* a terminal: hairline frame, no fill, a rail down the left */
+  --o-surface-radius: 6px;
+  --o-card-radius: 5px;
+  --o-control-radius: 4px;
+  --o-inner-radius: 3px;
+  --o-pill-radius: 3px;
+  --o-border: 1px;
+  --o-fill: transparent;
+  --o-shadow: 0 0 0 transparent;
+  --o-rail: 2px;
+}
+:root[data-style="instrument"] {  /* a panel front: raised fill and a thin crown along the top */
+  --o-surface-radius: 10px;
+  --o-card-radius: 9px;
+  --o-control-radius: 7px;
+  --o-inner-radius: 6px;
+  --o-pill-radius: 4px;
+  --o-border: 1px;
+  --o-fill: var(--surface-raised);
+  --o-shadow: 0 0 0 transparent;
+  --o-layers: linear-gradient(var(--border-strong), var(--border-strong)) 0 0 / 100% 2px no-repeat;
+}
+:root[data-style="rail"] {  /* no frame at all; the left edge and a divider carry the structure */
+  --o-surface-radius: 0;
+  --o-card-radius: 0;
+  --o-control-radius: 0;
+  --o-inner-radius: 0;
+  --o-pill-radius: 2px;
+  --o-border: 0px;
+  --o-fill: transparent;
+  --o-shadow: 0 0 0 transparent;
+  --o-rail: 3px;
+  --o-divider: 1px;
+}
+:root[data-style="tab"] {  /* a filing tab: a fill with a heavier crown above it */
+  --o-surface-radius: 9px;
+  --o-card-radius: 8px;
+  --o-control-radius: 6px;
+  --o-inner-radius: 5px;
+  --o-pill-radius: 4px;
+  --o-border: 1px;
+  --o-fill: var(--panel);
+  --o-shadow: 0 0 0 transparent;
+  --o-layers: linear-gradient(var(--border-strong), var(--border-strong)) 0 0 / 44px 3px no-repeat;
+}
+:root[data-style="underline"] {  /* a list, not a stack of cards: one rule between rows */
+  --o-surface-radius: 0;
+  --o-card-radius: 0;
+  --o-control-radius: 0;
+  --o-inner-radius: 0;
+  --o-pill-radius: 4px;
+  --o-border: 0px;
+  --o-fill: transparent;
+  --o-shadow: 0 0 0 transparent;
+  --o-divider: 1px;
+}
+:root[data-style="bracket"] {  /* a technical drawing: corner ticks instead of a frame */
+  --o-surface-radius: 0;
+  --o-card-radius: 0;
+  --o-control-radius: 0;
+  --o-inner-radius: 0;
+  --o-pill-radius: 0;
+  --o-border: 0px;
+  --o-fill: transparent;
+  --o-shadow: 0 0 0 transparent;
+  --o-layers:
+    linear-gradient(var(--border-strong), var(--border-strong)) 0 0 / 13px 1px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 0 0 / 1px 13px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 100% 0 / 13px 1px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 100% 0 / 1px 13px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 0 100% / 13px 1px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 0 100% / 1px 13px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 100% 100% / 13px 1px no-repeat,
+    linear-gradient(var(--border-strong), var(--border-strong)) 100% 100% / 1px 13px no-repeat;
+}
+:root[data-style="inset"] {  /* pressed into the page rather than laid on it */
+  --o-surface-radius: 11px;
+  --o-card-radius: 10px;
+  --o-control-radius: 8px;
+  --o-inner-radius: 6px;
+  --o-pill-radius: 6px;
+  --o-border: 0px;
+  --o-fill: var(--bg2);
+  --o-shadow: inset 0 2px 5px var(--ink-shadow), inset 0 0 0 1px var(--border);
+}
+:root[data-style="slab"] {  /* solid blocks, no frame, no rounding */
+  --o-surface-radius: 0;
+  --o-card-radius: 0;
+  --o-control-radius: 0;
+  --o-inner-radius: 0;
+  --o-pill-radius: 0;
+  --o-border: 0px;
+  --o-fill: var(--panel-strong);
+  --o-shadow: 0 0 0 transparent;
+}
+:root[data-style="halo"] {  /* lifted, with the light coming from underneath */
+  --o-surface-radius: 16px;
+  --o-card-radius: 14px;
+  --o-control-radius: 10px;
+  --o-inner-radius: 8px;
+  --o-pill-radius: 999px;
+  --o-border: 1px;
+  --o-fill: var(--panel-strong);
+  --o-shadow: 0 9px 26px color-mix(in srgb, var(--text) 16%, transparent);
+}
+:root[data-style="soft"] {  /* further from the corner, and floating */
+  --o-surface-radius: 20px;
+  --o-card-radius: 18px;
+  --o-control-radius: 14px;
+  --o-inner-radius: 12px;
+  --o-pill-radius: 999px;
+  --o-border: 0px;
+  --o-fill: var(--panel-strong);
+  --o-shadow: 0 8px 28px var(--ink-shadow);
+}
+:root[data-style="outline"] {  /* the frame does all the work */
+  --o-surface-radius: 9px;
+  --o-card-radius: 8px;
+  --o-control-radius: 6px;
+  --o-inner-radius: 5px;
+  --o-pill-radius: 6px;
+  --o-border: 1px;
+  --o-fill: transparent;
+  --o-shadow: 0 0 0 transparent;
+}
+:root[data-style="brutal"] {  /* a heavy frame and a hard shadow, square everywhere */
+  --o-surface-radius: 0;
+  --o-card-radius: 0;
+  --o-control-radius: 0;
+  --o-inner-radius: 0;
+  --o-pill-radius: 0;
+  --o-border: 2px;
+  --o-fill: var(--panel-strong);
+  --o-shadow: 4px 4px 0 var(--border-strong);
 }
 
 * { box-sizing: border-box; }
@@ -287,7 +480,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background:
-    linear-gradient(115deg, color-mix(in srgb, var(--accent2) 6%, transparent), transparent 34%),
+   linear-gradient(115deg, color-mix(in srgb, var(--accent2) 6%, transparent), transparent 34%),
     linear-gradient(245deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 38%),
     linear-gradient(180deg, var(--bg2), var(--bg));
   color: var(--text);
@@ -338,11 +531,13 @@ a { color: var(--accent2); }
 
 .gate-panel {
   width: min(420px, 100%);
-  background: var(--panel-strong);
-  border: 1px solid var(--border);
+  background: var(--o-layers, none), var(--o-fill, var(--panel-strong));
+  border: var(--o-border) solid var(--border);
   border-radius: var(--o-surface-radius);
-  box-shadow: var(--card-lift);
+  box-shadow: var(--o-shadow, var(--card-lift));
   padding: 28px;
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 
 .brand-line {
@@ -649,14 +844,17 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
 }
 
 .status-card {
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--o-layers, none), var(--o-fill, var(--panel));
+  border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
   padding: 12px 13px;
   min-height: 108px;
   display: grid;
   align-content: start;
   gap: 7px;
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 
 .status-card h3 {
@@ -740,13 +938,16 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
 }
 
 .action-card {
-  background: var(--panel-strong);
-  border: 1px solid var(--border);
+  background: var(--o-layers, none), var(--o-fill, var(--panel-strong));
+  border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
   padding: 12px 13px;
   display: grid;
   align-content: start;
   gap: 9px;
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 
 .action-card-head { display: flex; flex-direction: column; gap: 2px; }
@@ -825,15 +1026,18 @@ table.data th {
 }
 table.data td.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; word-break: break-all; }
 
-
 .inline-form { display: grid; gap: 10px; }
 
 .empty-state {
-  border: 1px dashed var(--border-strong);
+  border: var(--o-border) dashed var(--border-strong);
   border-radius: var(--o-card-radius);
   padding: 14px;
   color: var(--muted);
   font-size: 12px;
+  background: var(--o-layers, none), var(--o-fill, transparent);
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 
 /* --- dialog ------------------------------------------------------------ */
@@ -852,13 +1056,15 @@ table.data td.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; fon
   width: min(560px, 100%);
   max-height: 86vh;
   overflow: auto;
-  background: var(--panel-strong);
-  border: 1px solid var(--border-strong);
+  background: var(--o-layers, none), var(--o-fill, var(--panel-strong));
+  border: var(--o-border) solid var(--border-strong);
   border-radius: var(--o-surface-radius);
-  box-shadow: var(--card-lift);
+  box-shadow: var(--o-shadow, var(--card-lift));
   padding: 20px;
   display: grid;
   gap: 12px;
+  border-left-width: calc(var(--o-border) + var(--o-rail));
+  border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 
 .dialog-title { margin: 0; font-size: 15px; font-weight: 650; }

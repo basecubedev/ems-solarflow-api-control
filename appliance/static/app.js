@@ -2599,6 +2599,63 @@
     return theme;
   }
 
+  /* ------------------------------------------------------ object style */
+  /* The second axis. The palette above says what things are made of; this says
+     what shape they are, and the two never touch -- which is the whole point:
+     any of the twelve palettes can be worn with any of these four. Only the
+     corner roles vary; the paddings and pill heights are density rather than
+     shape, and moving those would be moving the layout. */
+
+  var STYLE_KEY = "ems-appliance-style";
+  var STYLE_DEFAULT = "glass";
+
+  var STYLES = [
+    { id: "glass", label: "Glass" },
+    { id: "console", label: "Console" },
+    { id: "instrument", label: "Instrument" },
+    { id: "rail", label: "Rail" },
+    { id: "tab", label: "Tab" },
+    { id: "underline", label: "Underline" },
+    { id: "bracket", label: "Bracket" },
+    { id: "inset", label: "Inset" },
+    { id: "slab", label: "Slab" },
+    { id: "halo", label: "Halo" },
+    { id: "soft", label: "Soft" },
+    { id: "outline", label: "Outline" },
+    { id: "brutal", label: "Brutal" }
+  ];
+
+  function knownStyle(id) {
+    return STYLES.some(function (style) { return style.id === id; }) ? id : STYLE_DEFAULT;
+  }
+
+  function storedStyle() {
+    try {
+      return knownStyle(window.localStorage.getItem(STYLE_KEY));
+    } catch (exc) {
+      return STYLE_DEFAULT;
+    }
+  }
+
+  function applyStyle(id) {
+    var style = knownStyle(id);
+    document.documentElement.setAttribute("data-style", style);
+    try {
+      window.localStorage.setItem(STYLE_KEY, style);
+    } catch (exc) { /* private mode; the choice holds for this page */ }
+    return style;
+  }
+
+  function initStyleSwitcher() {
+    var select = document.getElementById("style-select");
+    if (!select) return;
+    select.replaceChildren.apply(select, STYLES.map(function (style) {
+      return el("option", { value: style.id, text: style.label });
+    }));
+    select.value = applyStyle(storedStyle());
+    select.addEventListener("change", function () { applyStyle(select.value); });
+  }
+
   function initThemeSwitcher() {
     var select = document.getElementById("theme-select");
     if (!select) return;
@@ -2617,6 +2674,7 @@
     } catch (exc) { /* private mode */ }
 
     initThemeSwitcher();
+    initStyleSwitcher();
 
     document.getElementById("gate-form").addEventListener("submit", submitGate);
     document.getElementById("logout-button").addEventListener("click", logout);

@@ -343,3 +343,46 @@ def test_a_theme_never_redefines_a_derived_token():
     }
     trespassing = {name: found for name, found in trespassing.items() if found}
     assert trespassing == {}, f"themes redefining a derived token: {trespassing}"
+
+
+# --- the object style ------------------------------------------------------
+
+STYLE_STORAGE_KEY = "ems-admin-style"
+
+
+def styles_offered():
+    block = re.search(r"const STYLES = \[(.*?)\];", JS, re.S)
+    assert block, "admin.js declares no STYLES table"
+    return dict(re.findall(r'id:\s*"([a-z0-9-]+)",\s*label:\s*"([^"]+)"', block.group(1)))
+
+
+def test_the_style_switcher_offers_exactly_the_styles_the_stylesheet_has():
+    """The same two lists that cannot see each other as the palettes have, and
+    the same reason to keep them honest: a style in the CSS nobody can pick is
+    dead weight, one in the menu with no CSS silently does nothing."""
+
+    styled, listed = set(measure.object_styles(CSS)), set(styles_offered())
+    assert styled == listed, (
+        f"only in the stylesheet: {sorted(styled - listed)}; "
+        f"only in the menu: {sorted(listed - styled)}"
+    )
+
+
+def test_the_stored_style_is_applied_before_the_first_paint():
+    """Both axes or neither: a page that painted the right colours on the wrong
+    corners and then corrected itself would be worse than one that waited."""
+
+    early = EARLY.read_text(encoding="utf-8")
+    assert "data-style" in early, "the early script never sets data-style"
+    assert STYLE_STORAGE_KEY in early, f"the early script does not read {STYLE_STORAGE_KEY!r}"
+
+
+def test_both_halves_agree_on_where_the_style_is_stored():
+    assert STYLE_STORAGE_KEY in JS, f"admin.js does not write {STYLE_STORAGE_KEY!r}"
+
+
+def test_the_two_axes_are_stored_apart():
+    """One key for both would make "void, but square" unrepresentable -- the
+    thing the whole arrangement exists for."""
+
+    assert STYLE_STORAGE_KEY != STORAGE_KEY

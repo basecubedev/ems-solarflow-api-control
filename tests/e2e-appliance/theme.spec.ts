@@ -65,4 +65,37 @@ test.describe("theme switching @smoke", () => {
     await expect(page.locator("#theme-select")).toHaveValue("signal");
     await expect(page.locator("html")).toHaveAttribute("data-theme", "signal");
   });
+
+  test("an object style is a second axis, not a second palette", async ({ page }) => {
+    await signIn(page);
+    await page.selectOption("#theme-select", "void");
+    await page.selectOption("#style-select", "console");
+    // Both attributes before the reload: the point of the test is that the
+    // reload finds what was stored, not that the selects accepted a value.
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "void");
+    await expect(page.locator("html")).toHaveAttribute("data-style", "console");
+
+    await page.reload();
+    await expect(page.locator("#shell")).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "void");
+    await expect(page.locator("html")).toHaveAttribute("data-style", "console");
+    await expect(page.locator("#theme-select")).toHaveValue("void");
+    await expect(page.locator("#style-select")).toHaveValue("console");
+  });
+
+  test("the object style reaches an actual corner", async ({ page }) => {
+    // The Manager re-renders on every poll, so a locator handle can detach
+    // between resolving and evaluating. expect.poll resolves the locator afresh
+    // on each attempt, which is waiting on the page rather than on a clock.
+    const corner = () =>
+      page
+        .locator('[data-test="card-admin"]')
+        .evaluate((node) => getComputedStyle(node).borderTopLeftRadius);
+
+    await signIn(page);
+    await expect.poll(corner).not.toBe("0px");
+
+    await page.selectOption("#style-select", "slab");
+    await expect.poll(corner).toBe("0px");
+  });
 });
