@@ -6177,6 +6177,73 @@ function initSessionHeartbeat() {
   });
 }
 
+/* --- theme ---------------------------------------------------------------
+   The stylesheet holds one :root[data-theme="…"] block per palette and cannot
+   hand JavaScript a label for it, so the menu is written here and a contract
+   test keeps the two lists from drifting. The stored name is applied before the
+   first paint by theme.js; this half is the menu and the writing.
+
+   The key is the cockpit's own. Three surfaces, three origins: one localStorage
+   cannot serve them all, and a shared name would suggest a choice carries over
+   when it cannot. */
+
+const THEME_STORAGE_KEY = "ems-dashboard-theme";
+const THEME_DEFAULT = "signal";
+
+const THEMES = [
+  { id: "signal", label: "Signal" },
+  { id: "instrument", label: "Instrument" },
+  { id: "graphite", label: "Graphite" },
+  { id: "fjord", label: "Fjord" },
+  { id: "blueprint", label: "Blueprint" },
+  { id: "indigo", label: "Indigo" },
+  { id: "viridian", label: "Viridian" },
+  { id: "copper", label: "Copper" },
+  { id: "oxide", label: "Oxide" },
+  { id: "phosphor", label: "Phosphor" },
+  { id: "contrast", label: "Contrast" },
+  { id: "void", label: "Void" },
+];
+
+function knownTheme(id) {
+  return THEMES.some((theme) => theme.id === id) ? id : THEME_DEFAULT;
+}
+
+function storedTheme() {
+  try {
+    return knownTheme(window.localStorage.getItem(THEME_STORAGE_KEY));
+  } catch (err) {
+    /* localStorage may be unavailable; the default palette still applies. */
+    return THEME_DEFAULT;
+  }
+}
+
+function applyTheme(id) {
+  const theme = knownTheme(id);
+  document.documentElement.setAttribute("data-theme", theme);
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch (err) {
+    /* localStorage may be unavailable; the choice holds for this page. */
+  }
+  return theme;
+}
+
+function initThemeSwitcher() {
+  const select = document.getElementById("themeSelect");
+  if (!select) return;
+  select.replaceChildren(
+    ...THEMES.map((theme) => {
+      const option = document.createElement("option");
+      option.value = theme.id;
+      option.textContent = theme.label;
+      return option;
+    })
+  );
+  select.value = applyTheme(storedTheme());
+  select.addEventListener("change", () => applyTheme(select.value));
+}
+
 function initDashboardApp() {
   const rangeTabSelector = ".range-tabs button";
   document.querySelectorAll(rangeTabSelector).forEach((button) => {
@@ -6265,6 +6332,7 @@ function initDashboardApp() {
     }
   });
 
+  initThemeSwitcher();
   initFlowViewSwitch();
   initFlowTiles();
   initAuthControls();

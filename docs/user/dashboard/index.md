@@ -43,6 +43,32 @@ The dashboard is a cockpit, not a second controller.
 - Write actions are protected by authentication **and** CSRF on the server. A
   visible button is never what authorizes a write.
 
+## Appearance
+
+A **Theme** menu sits in the header, next to the connection pill. The twelve
+palettes are the same ones the Admin Console and the Appliance Manager offer,
+all dark:
+
+| | |
+| --- | --- |
+| **Signal** | the default, and what the cockpit has always looked like |
+| **Instrument**, **Graphite** | neutral greys, no colour cast in the background |
+| **Fjord**, **Blueprint**, **Indigo** | cool blues, from slate to deep violet |
+| **Viridian**, **Phosphor** | green: an instrument panel, and a CRT |
+| **Copper**, **Oxide** | warm metal and rust |
+| **Contrast** | the hardest separation between text and background |
+| **Void** | near-black, with the accent carrying the light |
+
+Only the colours change. The meaning of a colour does not: PV stays the warm
+one, battery the green one, grid the violet one, and a blocked write stays red
+on every palette.
+
+The choice is remembered by the browser you made it in, which is what you want
+for a screen that stays on in one room -- it is not installation state, so a
+tablet in the hall and a laptop at the desk can each have their own. It does not
+carry over from the Admin Console either: those are separate addresses, and a
+browser keeps such a preference per address.
+
 ## Navigation
 
 Eight tabs, in the order they appear:

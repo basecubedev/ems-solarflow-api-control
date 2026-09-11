@@ -1248,11 +1248,14 @@ def test_device_flow_mobile_layout_does_not_force_horizontal_scroll():
     assert ".demo-pill" in styles
     assert ".control-device-panels" in styles
     assert ".control-summary-flow" not in styles
-    assert ".tone-skip {\n  border-color: rgba(148,163,184,.14);" in styles
+    assert (
+        '.tone-skip {\n  border-color: color-mix(in srgb, var(--muted) 14%, transparent);'
+        in styles
+    )
     assert ".tone-skip,\n.tone-warn" not in styles
     tone_send = styles.split(".tone-send {", 1)[1].split(".tone-skip {", 1)[0]
-    assert "rgba(34,211,238,.28)" in tone_send
-    assert "rgba(57,229,140,.30)" not in tone_send
+    assert "color-mix(in srgb, var(--accent2) 28%, transparent)" in tone_send
+    assert "color-mix(in srgb, var(--battery) 30%, transparent)" not in tone_send
     assert "grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));" in styles
     assert ".control-device-decision-flow {\n  grid-template-columns: repeat(5, minmax(142px, 1fr));" in styles
     assert ".control-stage:not(:last-child)::after" in styles
