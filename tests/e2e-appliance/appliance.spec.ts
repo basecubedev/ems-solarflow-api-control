@@ -146,6 +146,90 @@ test.describe("the two-second poll", () => {
     await expect(button).toBeFocused();
   });
 
+  // Restoring focus has to be invisible. Moving focus on a deliberate view
+  // change may scroll -- landing at the top of the page you just opened is
+  // right -- but re-taking it after a rebuild must not, or the page walks back
+  // to whatever had focus every two seconds. The tallest page shows it first.
+  test("the page stays where the reader scrolled it", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "access");
+    await expect(page.locator("#main .page-title")).toBeFocused();
+
+    const parked = await page.evaluate(() => {
+      window.scrollTo(0, document.body.scrollHeight);
+      return Math.round(window.scrollY);
+    });
+    expect(parked).toBeGreaterThan(0);
+
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+    expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(parked);
+  });
+
+  test("a control deep in the page does not pull the page to it", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "access");
+    await page.locator('[data-test="key-add"]').focus();
+
+    const parked = await page.evaluate(() => {
+      window.scrollTo(0, document.body.scrollHeight);
+      return Math.round(window.scrollY);
+    });
+    expect(parked).toBeGreaterThan(0);
+
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+    expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(parked);
+    await expect(page.locator('[data-test="key-add"]')).toBeFocused();
+  });
+
+  // Every section, not only the one that happens to be tall enough today. The
+  // viewport is shrunk so that each page scrolls, and the list comes from the
+  // navigation rather than from here, so a section added later is covered
+  // without anyone remembering to add it. The parked > 0 check is what keeps
+  // this honest: a page that stops being scrollable would otherwise pass
+  // without ever exercising the guard.
+  test("no section walks the page while the poll rebuilds it", async ({ page }) => {
+    await page.setViewportSize({ width: 1180, height: 360 });
+    await signIn(page);
+
+    const views = await page
+      .locator("#nav-list [data-test^='nav-']")
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-test").slice(4)));
+    expect(views.length).toBeGreaterThan(4);
+
+    for (const view of views) {
+      await openView(page, view);
+      const parked = await page.evaluate(() => {
+        window.scrollTo(0, document.body.scrollHeight);
+        return Math.round(window.scrollY);
+      });
+      expect(parked, `${view} does not scroll at 360px, so it proves nothing`).toBeGreaterThan(0);
+
+      await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+      expect(await page.evaluate(() => Math.round(window.scrollY)), `${view} moved`).toBe(parked);
+    }
+  });
+
+  test("opening another section still starts at the top of it", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "access");
+    const parked = await page.evaluate(() => {
+      window.scrollTo(0, document.body.scrollHeight);
+      return Math.round(window.scrollY);
+    });
+    expect(parked).toBeGreaterThan(0);
+
+    // The rebuild keeps the position; a view change is not a rebuild, it is a
+    // move, and reading a page you just opened starts at its heading.
+    await openView(page, "diagnostics");
+    expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(0);
+    await expect(page.locator("#main .page-title")).toBeFocused();
+  });
+
   test("the verdict is not read out again on every rebuild", async ({ page }) => {
     await signIn(page);
     // Not a live region of its own: this node is replaced every two seconds.

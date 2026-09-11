@@ -176,11 +176,17 @@
     return { selector: selector, index: Math.max(0, matches.indexOf(active)) };
   }
 
+  /* preventScroll, because this is a restore and not a move. focus() scrolls
+     its target into view, so re-taking focus after a rebuild walked the page
+     back to whatever held it -- every two seconds, and all the way to the top
+     when that was the page heading a view change had just focused. Moving
+     focus deliberately, in focusPageHeading below, still scrolls: landing at
+     the top of the page you just opened is the point. */
   function restoreFocus(main, anchor) {
     if (!anchor) return;
     var matches = main.querySelectorAll(anchor.selector);
     var target = matches[anchor.index] || matches[0];
-    if (target) target.focus();
+    if (target) target.focus({ preventScroll: true });
   }
 
   function focusPageHeading() {
@@ -446,15 +452,23 @@
     render();
   }
 
+  /* A rebuild the reader did not ask for has to be invisible, and focus is only
+     half of that: emptying #main and filling it again also moves the page --
+     through the browser's own scroll anchoring, and through whatever it does
+     when the element that had focus is removed. Rather than chase each of
+     those, the position is taken before and put back after. A rebuild the
+     reader *did* ask for, a view change, still starts at the top. */
   function render() {
     var main = document.getElementById("main");
     var anchor = focusAnchor(main);
+    var scrolled = window.scrollY;
     clear(main);
     var view = VIEWS.filter(function (item) { return item.id === state.view; })[0] || VIEWS[0];
     main.appendChild(renderOperationBanner());
     view.render(main);
     updateNavMarks();
     restoreFocus(main, anchor);
+    if (window.scrollY !== scrolled) window.scrollTo(0, scrolled);
   }
 
   /* --------------------------------------------------------- operations */
