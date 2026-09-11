@@ -23,80 +23,45 @@ from pathlib import Path
 
 import pytest
 
+from tests import theming_contracts as measure
+from tests.theming_contracts import (
+    DARK_MAX_LUMA,
+    MUTED_MIN_CONTRAST,
+    SHAPE_PREFIX,
+    TEXT_MIN_CONTRAST,
+    channels,
+    contrast,
+    luma,
+)
+
 pytestmark = [pytest.mark.contract, pytest.mark.admin]
 
 ROOT = Path(__file__).resolve().parents[1]
 CSS = (ROOT / "admin" / "static" / "admin.css").read_text(encoding="utf-8")
 
 DEFAULT_THEME = "signal"
-# Rec. 709 luma; a ground this dark cannot be mistaken for a light theme.
-DARK_MAX_LUMA = 90
-
-
-def declarations(block):
-    return {
-        name: " ".join(value.split())
-        for name, value in re.findall(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", block)
-    }
 
 
 def base_tokens():
-    block = re.search(r":root\s*\{(.*?)\}", CSS, re.S)
-    assert block, "admin.css has no :root block"
-    return declarations(block.group(1))
+    return measure.base_tokens(CSS)
 
 
 def themes():
-    found = {
-        name: declarations(body)
-        for name, body in re.findall(r':root\[data-theme="([a-z0-9-]+)"\]\s*\{(.*?)\}', CSS, re.S)
-    }
+    found = measure.themes(CSS)
     assert found, "admin.css declares no :root[data-theme=…] blocks"
     return found
 
 
-def luma(value):
-    match = re.fullmatch(r"#([0-9a-fA-F]{6})", value.strip())
-    assert match, f"a theme background must be a plain hex colour, got {value!r}"
-    red, green, blue = (int(match.group(1)[i : i + 2], 16) for i in (0, 2, 4))
-    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
-
-
-# Colour and shape are independent axes: a palette says what things are made of,
-# an object style says what shape they are. Keeping them apart is what makes
-# "void palette, square corners" possible at all, so shape tokens carry their own
-# prefix and no theme is allowed to set one.
-#
-# The prefix is the demo's (`--o-`, for object), so the object styles worked out
-# there transfer without renaming anything later.
-SHAPE_PREFIX = "--o-"
-
-
 def derived_tokens():
-    """Tokens whose value is built from another token.
-
-    `--surface-sunken` is `--bg` at half strength, so it follows every palette
-    without being written twelve times. A theme that redefined one would break
-    exactly the derivation that makes it work.
-    """
-
-    return {
-        name: value
-        for name, value in base_tokens().items()
-        if "var(--" in value and not name.startswith(SHAPE_PREFIX)
-    }
+    return measure.derived_tokens(CSS)
 
 
 def palette_tokens():
-    return {
-        name: value
-        for name, value in base_tokens().items()
-        if not name.startswith(SHAPE_PREFIX) and "var(--" not in value
-    }
+    return measure.palette_tokens(CSS)
 
 
 def shape_tokens():
-    return {name: value for name, value in base_tokens().items() if name.startswith(SHAPE_PREFIX)}
+    return measure.shape_tokens(CSS)
 
 
 def test_every_theme_redefines_the_whole_token_set():
@@ -243,12 +208,7 @@ LITERAL_CORNERS = {"50%", ".25rem"}
 
 
 def corners():
-    body = re.sub(r':root(\[data-theme="[a-z0-9-]+"\])?\s*\{.*?\}', "", CSS, flags=re.S)
-    found = []
-    for selector, block in re.findall(r"([^{}]+)\{([^{}]*)\}", body):
-        for value in re.findall(r"(?<![a-z-])border-radius:\s*([^;}]+)", block):
-            found.append((" ".join(selector.split())[:44], " ".join(value.split())))
-    return found
+    return measure.corners(CSS)
 
 
 def test_every_corner_reads_a_role():
@@ -298,33 +258,6 @@ def test_badges_of_the_same_size_share_one_padding():
 
 
 # --- readability -----------------------------------------------------------
-
-# WCAG 2.1: 4.5:1 is the floor for normal text, 7:1 is the enhanced level. Body
-# copy is held to the enhanced one because every palette already clears it by a
-# wide margin; muted copy is held to the floor, which is what it is for.
-TEXT_MIN_CONTRAST = 7.0
-MUTED_MIN_CONTRAST = 4.5
-
-
-def channels(value):
-    match = re.fullmatch(r"#([0-9a-fA-F]{6})", value.strip())
-    assert match, f"expected a plain hex colour, got {value!r}"
-    return tuple(int(match.group(1)[index : index + 2], 16) for index in (0, 2, 4))
-
-
-def relative_luminance(rgb):
-    def linear(channel):
-        ratio = channel / 255
-        return ratio / 12.92 if ratio <= 0.03928 else ((ratio + 0.055) / 1.055) ** 2.4
-
-    red, green, blue = (linear(channel) for channel in rgb)
-    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
-
-
-def contrast(foreground, background):
-    lighter = max(relative_luminance(foreground), relative_luminance(background))
-    darker = min(relative_luminance(foreground), relative_luminance(background))
-    return (lighter + 0.05) / (darker + 0.05)
 
 
 def test_every_theme_stays_readable():
@@ -377,22 +310,8 @@ def test_pill_shaped_controls_share_one_padding():
 # white veil lifts any dark surface and means the same on all twelve. Anything
 # with a hue does not -- it was mixed for one particular background, and on the
 # next theme it is simply the wrong colour sitting there.
-NEUTRAL = re.compile(r"rgba?\(\s*(?:255,\s*255,\s*255|0,\s*0,\s*0)\b|#000\b|#fff\b", re.I)
-COLOUR = re.compile(r"#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)")
-
-
 def hued_literals():
-    body = re.sub(r':root(\[data-theme="[a-z0-9-]+"\])?\s*\{.*?\}', "", CSS, flags=re.S)
-    found = []
-    for selector, block in re.findall(r"([^{}]+)\{([^{}]*)\}", body):
-        for declaration in block.split(";"):
-            if ":" not in declaration:
-                continue
-            _, _, value = declaration.partition(":")
-            for literal in COLOUR.findall(value):
-                if not NEUTRAL.search(literal):
-                    found.append((" ".join(selector.split())[:44], literal.strip()))
-    return found
+    return measure.hued_literals(CSS)
 
 
 def test_no_rule_mixes_its_own_colour():
