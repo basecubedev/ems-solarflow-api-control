@@ -2550,12 +2550,73 @@
     });
   }
 
+  /* ------------------------------------------------------------- theme */
+  /* The stylesheet holds one :root[data-theme="…"] block per palette and cannot
+     hand JavaScript a label for it, so the menu is written here and a contract
+     test keeps the two lists from drifting. The stored name is applied before
+     the first paint by theme.js; this half is the menu and the writing.
+
+     The key is the Manager's own: Admin runs on a different origin, so one
+     localStorage cannot serve both, and sharing the name would only suggest
+     otherwise. */
+
+  var THEME_KEY = "ems-appliance-theme";
+  var THEME_DEFAULT = "signal";
+
+  var THEMES = [
+    { id: "signal", label: "Signal" },
+    { id: "instrument", label: "Instrument" },
+    { id: "graphite", label: "Graphite" },
+    { id: "fjord", label: "Fjord" },
+    { id: "blueprint", label: "Blueprint" },
+    { id: "indigo", label: "Indigo" },
+    { id: "viridian", label: "Viridian" },
+    { id: "copper", label: "Copper" },
+    { id: "oxide", label: "Oxide" },
+    { id: "phosphor", label: "Phosphor" },
+    { id: "contrast", label: "Contrast" },
+    { id: "void", label: "Void" }
+  ];
+
+  function knownTheme(id) {
+    return THEMES.some(function (theme) { return theme.id === id; }) ? id : THEME_DEFAULT;
+  }
+
+  function storedTheme() {
+    try {
+      return knownTheme(window.localStorage.getItem(THEME_KEY));
+    } catch (exc) {
+      return THEME_DEFAULT;
+    }
+  }
+
+  function applyTheme(id) {
+    var theme = knownTheme(id);
+    document.documentElement.setAttribute("data-theme", theme);
+    try {
+      window.localStorage.setItem(THEME_KEY, theme);
+    } catch (exc) { /* private mode; the choice holds for this page */ }
+    return theme;
+  }
+
+  function initThemeSwitcher() {
+    var select = document.getElementById("theme-select");
+    if (!select) return;
+    select.replaceChildren.apply(select, THEMES.map(function (theme) {
+      return el("option", { value: theme.id, text: theme.label });
+    }));
+    select.value = applyTheme(storedTheme());
+    select.addEventListener("change", function () { applyTheme(select.value); });
+  }
+
   function init() {
     try {
       state.mode = window.localStorage.getItem(MODE_KEY) === "expert" ? "expert" : "basic";
       var storedView = window.localStorage.getItem(VIEW_KEY);
       if (storedView) state.view = storedView;
     } catch (exc) { /* private mode */ }
+
+    initThemeSwitcher();
 
     document.getElementById("gate-form").addEventListener("submit", submitGate);
     document.getElementById("logout-button").addEventListener("click", logout);

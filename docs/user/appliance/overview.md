@@ -87,6 +87,27 @@ The switch at the top right changes how much is shown. Expert adds digests,
 container IDs, exact release tags and the recovery details. It does not unlock
 anything — the same actions are available in both.
 
+## Appearance
+
+A **Theme** menu sits in the header, next to Basic/Expert. The twelve palettes
+are the same ones the Admin Console offers, all dark:
+
+| | |
+| --- | --- |
+| **Signal** | the default, and what the Manager has always looked like |
+| **Instrument**, **Graphite** | neutral greys, no colour cast in the background |
+| **Fjord**, **Blueprint**, **Indigo** | cool blues, from slate to deep violet |
+| **Viridian**, **Phosphor** | green: an instrument panel, and a CRT |
+| **Copper**, **Oxide** | warm metal and rust |
+| **Contrast** | the hardest separation between text and background |
+| **Void** | near-black, with the accent carrying the light |
+
+The choice is remembered by the browser you made it in, and it applies to the
+sign-in screen as well. It is not appliance state: another browser, or another
+device, starts at Signal again. Choosing one in the Admin Console does not
+carry over here either — they are separate addresses, and a browser keeps such
+a preference per address.
+
 ## Next
 
 - [Updates](updates.md)

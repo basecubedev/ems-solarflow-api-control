@@ -6,6 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>EMS SolarFlow Appliance Manager</title>
+  <script src="/static/theme.js"></script>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
@@ -42,6 +43,10 @@
         <p class="badge">HOST MANAGEMENT</p>
       </div>
       <div class="header-actions">
+        <div class="theme-field">
+          <label class="theme-label" for="theme-select">Theme</label>
+          <select id="theme-select" class="theme-select"></select>
+        </div>
         <div class="mode-switch" role="group" aria-label="Detail level">
           <button type="button" id="mode-basic" class="mode-button" aria-pressed="true">Basic</button>
           <button type="button" id="mode-expert" class="mode-button" aria-pressed="false">Expert</button>
