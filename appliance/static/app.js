@@ -1356,7 +1356,7 @@
     ].filter(Boolean)));
 
     main.appendChild(el("div", { class: "action-grid" }, [
-      actionCard("Lifecycle", "Start, stop or restart the running container", [
+      actionCard("Start, stop or restart", "The container itself, leaving its version alone", [
         el("div", { class: "control-stage-actions" }, [
           lifecycleButton("start", "Start"),
           lifecycleButton("stop", "Stop"),
@@ -1364,7 +1364,7 @@
         ])
       ], "admin-lifecycle"),
 
-      actionCard("Install version", "Pull, validate and replace the Admin image", [
+      actionCard("Install a version", "Pull, validate and replace the Admin image", [
         renderInstallForm(releases)
       ], "admin-install"),
 
@@ -1952,9 +1952,9 @@
     main.appendChild(el("div", { class: "card-grid" }, cards));
 
     main.appendChild(el("div", { class: "action-grid" }, [
-      actionCard("WLAN", "Scan, select and apply with automatic revert", [renderWifiForm()], "network-wifi"),
-      actionCard("Hostname", "Changes the appliance and Admin URLs", [renderHostnameForm()], "network-hostname-stage"),
-      actionCard("Timezone", "Decides when the EMS opens an hour-based control window",
+      actionCard("Change the WLAN", "Scan, select and apply with automatic revert", [renderWifiForm()], "network-wifi"),
+      actionCard("Change the hostname", "This changes the appliance and Admin URLs", [renderHostnameForm()], "network-hostname-stage"),
+      actionCard("Change the timezone", "Decides when the EMS opens an hour-based control window",
         [renderTimezoneForm()], "network-timezone-stage")
     ]));
   }
@@ -2129,7 +2129,7 @@
     ]));
 
     main.appendChild(el("div", { class: "action-grid" }, [
-      actionCard("SSH service", "Enable or disable key-based remote access", [
+      actionCard("Turn SSH on or off", "Key-based remote access to this appliance", [
         el("div", { class: "control-stage-actions" }, [
           el("button", {
             type: "button", class: "primary-button compact", "data-test": "ssh-enable", text: "Enable SSH",
@@ -2427,7 +2427,7 @@
         fact("Signed out after", duration(settings.session_timeout_seconds)),
         fact("Signed out at the latest after", duration(settings.session_absolute_max_seconds))
       ], "settings-sessions"),
-      card("Updates", [
+      card("Update policy", [
         fact("Automatic security updates", settings.automatic_security_updates),
         fact("Admin repository", settings.admin_repository, { mono: true }),
         fact("Prereleases allowed", settings.allow_prerelease)
