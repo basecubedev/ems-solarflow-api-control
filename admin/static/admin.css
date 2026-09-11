@@ -24,11 +24,6 @@
      reused by every content block across Setup and Maintenance. */
   --surface-raised: rgba(255, 255, 255, 0.035);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.28);
-  /* Shape axis, independent of the palette above: a theme says what things are
-     made of, an object style says what shape they are. The `--o-` prefix is the
-     demo's, so the object styles worked out there transfer without renaming.
-     Pill height follows font size, which is why the small badges and the
-     regular pills are two values and not one. */
   /* Derived from the palette above, declared once: a custom property resolves
      where it is used, so these follow whichever theme is active without being
      written out twelve times. That is also why no theme may redefine one. */
@@ -37,6 +32,20 @@
   --surface-overlay: color-mix(in srgb, var(--bg) 82%, transparent);
   --on-accent: var(--bg);
 
+  /* Shape axis, independent of the palette above: a theme says what things are
+     made of, an object style says what shape they are. The `--o-` prefix is the
+     demo's, so the object styles worked out there transfer without renaming.
+     The corners name roles, not values: cards had drifted across 12, 14 and
+     16px and rows across 7, 8, 9 and 10px, and a token named after a pixel
+     count would only make that permanent. A role is what an object style can
+     answer -- "square the cards, leave the pills" is a sentence; "square the
+     ten-pixel ones" is not.
+     Pill height follows font size, which is why the small badges and the
+     regular pills are two values and not one. */
+  --o-surface-radius: 16px;
+  --o-card-radius: 14px;
+  --o-control-radius: 10px;
+  --o-inner-radius: 8px;
   --o-pill-radius: 999px;
   --o-badge-pad: 2px 8px;
   --o-pill-pad: 3px 10px;
@@ -363,7 +372,7 @@ body {
   max-width: 420px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--o-surface-radius);
   padding: 24px 20px;
   display: flex;
   flex-direction: column;
@@ -400,7 +409,7 @@ code {
 .control-pipeline-stage {
   background: linear-gradient(180deg, var(--panel-strong), var(--panel));
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--o-surface-radius);
   padding: 16px;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
 }
@@ -411,7 +420,7 @@ code {
   justify-content: center;
   width: 22px;
   height: 22px;
-  border-radius: 8px;
+  border-radius: var(--o-inner-radius);
   background: color-mix(in srgb, var(--output) 14%, transparent);
   color: var(--output);
   font-size: 11px;
@@ -423,7 +432,7 @@ code {
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: 9px;
+  border-radius: var(--o-inner-radius);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent2);
   font-size: 14px;
@@ -585,7 +594,7 @@ code {
   align-items: baseline;
   gap: 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--o-card-radius);
   background: var(--panel);
   padding: 10px 12px;
 }
@@ -675,7 +684,7 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 9px;
+  border-radius: var(--o-inner-radius);
   color: var(--muted);
   font-size: 14px;
   background: color-mix(in srgb, var(--muted) 8%, transparent);
@@ -721,7 +730,7 @@ code {
 .maintenance-card-summary:focus-visible {
   outline: 2px solid var(--accent2);
   outline-offset: 4px;
-  border-radius: 12px;
+  border-radius: var(--o-card-radius);
 }
 .maintenance-card:hover .maintenance-caret,
 .maintenance-card[data-open="true"] .maintenance-caret {
@@ -744,7 +753,7 @@ code {
 .maintenance-warnings {
   margin: 0;
   border: 1px solid var(--danger);
-  border-radius: 12px;
+  border-radius: var(--o-card-radius);
   padding: 10px 12px;
   color: var(--danger);
   font-size: 12px;
@@ -771,7 +780,7 @@ code {
    status pill, a duration, and a collapsed raw-output drawer. */
 .maintenance-diagnostics-checks { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .maintenance-diagnostics-checks:empty { display: none; }
-.maintenance-check { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.maintenance-check { border: 1px solid var(--border); border-radius: var(--o-inner-radius); padding: 8px 10px; }
 .maintenance-check-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .maintenance-check-label { font-weight: 700; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .maintenance-check-duration { color: var(--muted); font-size: 11px; flex: 0 0 auto; }
@@ -800,7 +809,7 @@ code {
   overflow: auto;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--o-inner-radius);
   padding: 8px;
   font-size: 11px;
   white-space: pre-wrap;
@@ -852,7 +861,7 @@ code {
   flex-direction: column;
   gap: 3px;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--o-inner-radius);
   padding: 8px 10px;
   color: var(--muted);
   font-size: 11px;
@@ -903,7 +912,7 @@ code {
   margin-top: 12px;
   padding: 10px;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--o-card-radius);
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent2) 10%, transparent), var(--surface-sunken-strong));
 }
 .maintenance-container-actions { margin-top: 10px; }
@@ -936,7 +945,7 @@ code {
   font-size: 12px;
   padding: 4px 6px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--o-inner-radius);
 }
 .mconfig-change-path { color: var(--muted); overflow-wrap: anywhere; }
 .mconfig-change-value { font-weight: 700; text-align: right; overflow-wrap: anywhere; }
@@ -950,7 +959,7 @@ code {
   overflow: auto;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--o-inner-radius);
   padding: 8px;
   font-size: 11px;
   white-space: pre-wrap;
@@ -972,7 +981,7 @@ code {
   margin: 0 0 6px;
   border: 1px solid color-mix(in srgb, var(--pv) 45%, var(--border));
   background: color-mix(in srgb, var(--pv) 8%, transparent);
-  border-radius: 10px;
+  border-radius: var(--o-inner-radius);
   padding: 8px 10px;
   color: var(--pv);
   font-size: 12px;
@@ -1000,7 +1009,7 @@ code {
   gap: 4px;
   background: linear-gradient(180deg, var(--panel-strong), var(--panel));
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-inner-radius);
   padding: 8px 10px;
 }
 .network-chip.is-recommended { border-color: color-mix(in srgb, var(--output) 45%, var(--border)); }
@@ -1035,7 +1044,7 @@ code {
 /* Collapsed advanced sections (Docker/container nets, silent gateway probes). */
 .advanced-details {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-control-radius);
   padding: 6px 10px;
   margin-bottom: 14px;
   background: var(--surface-sunken);
@@ -1062,7 +1071,7 @@ code {
   font-size: 13px;
   padding: 9px 6px;
   color: var(--text);
-  border-radius: 8px;
+  border-radius: var(--o-inner-radius);
 }
 .add-devices-details > summary:hover { background: rgba(255, 255, 255, 0.05); }
 
@@ -1092,7 +1101,7 @@ code {
 .field input {
   min-height: 36px;
   padding: 0 12px;
-  border-radius: 10px;
+  border-radius: var(--o-control-radius);
   border: 1px solid var(--border);
   background: var(--surface-sunken-strong);
   color: var(--text);
@@ -1103,7 +1112,7 @@ code {
 
 .primary-button {
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: var(--o-control-radius);
   background: linear-gradient(180deg, var(--output), var(--accent2));
   color: var(--on-accent);
   font-weight: 800;
@@ -1160,7 +1169,7 @@ code {
   gap: 10px;
   background: var(--surface-sunken);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-control-radius);
   padding: 9px 10px;
 }
 .mdns-control-copy { flex: 1 1 auto; min-width: 0; }
@@ -1176,7 +1185,7 @@ code {
 .mdns-message { margin: 3px 0 0; color: var(--muted2); font-size: 11px; }
 .ignored-devices {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-control-radius);
   background: var(--surface-sunken);
   color: var(--muted);
 }
@@ -1190,7 +1199,7 @@ code {
 .ignored-row {
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--o-inner-radius);
   font-size: 10px;
 }
 .ignored-row-head { display: flex; justify-content: space-between; gap: 8px; color: var(--text); }
@@ -1198,7 +1207,7 @@ code {
 .ignored-reason { margin-top: 3px; color: var(--pv); }
 .secondary-button {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-control-radius);
   background: var(--panel-strong);
   color: var(--text);
   font-weight: 700;
@@ -1248,7 +1257,7 @@ code {
 .setup-block {
   padding: 16px;
   border: 1px solid var(--border-strong);
-  border-radius: 14px;
+  border-radius: var(--o-card-radius);
   background: var(--surface-raised);
   box-shadow: var(--card-lift);
 }
@@ -1295,7 +1304,7 @@ code {
   gap: 10px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-inner-radius);
   background: rgba(255, 255, 255, 0.02);
 }
 .prep-source-row.is-disabled { opacity: 0.6; }
@@ -1341,7 +1350,7 @@ code {
   margin-left: 32px;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-inner-radius);
   background: rgba(255, 255, 255, 0.03);
 }
 .prep-config-status {
@@ -1419,7 +1428,7 @@ code {
 }
 .mqtt-device-card {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--o-card-radius);
   padding: 10px 12px;
   background: rgba(255, 255, 255, 0.02);
   display: flex;
@@ -1448,7 +1457,7 @@ code {
 .proposal-fragment pre {
   margin: 8px 0 0;
   padding: 8px;
-  border-radius: 8px;
+  border-radius: var(--o-inner-radius);
   background: rgba(255, 255, 255, 0.03);
   font-size: 11px;
   overflow-x: auto;
@@ -1482,7 +1491,7 @@ code {
 
 .results-empty {
   border: 1px dashed var(--border);
-  border-radius: 14px;
+  border-radius: var(--o-card-radius);
   padding: 22px 16px;
   text-align: center;
   color: var(--muted);
@@ -1498,7 +1507,7 @@ code {
 .device-card {
   background: linear-gradient(180deg, var(--panel-strong), var(--panel));
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--o-card-radius);
   padding: 14px;
   display: flex;
   flex-direction: column;
@@ -1526,7 +1535,7 @@ code {
   gap: 2px;
   background: var(--surface-sunken);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--o-inner-radius);
   padding: 6px 8px;
   min-height: 32px;
 }
@@ -1571,7 +1580,7 @@ code {
   gap: 8px;
   background: var(--surface-sunken);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--o-inner-radius);
   padding: 6px 10px;
   min-height: 32px;
 }
@@ -1602,7 +1611,7 @@ code {
   text-align: left;
   background: var(--surface-sunken);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--o-card-radius);
   padding: 10px 12px;
   color: var(--muted);
   font: inherit;
@@ -1646,7 +1655,7 @@ code {
   box-sizing: border-box;
   min-height: 36px;
   padding: 0 10px;
-  border-radius: 10px;
+  border-radius: var(--o-control-radius);
   border: 1px solid var(--border);
   background: var(--surface-sunken-strong);
   color: var(--text);
@@ -1662,7 +1671,7 @@ code {
   margin: 10px 0 12px;
   padding: 16px;
   border: 1px solid color-mix(in srgb, var(--output) 32%, var(--border));
-  border-radius: 14px;
+  border-radius: var(--o-card-radius);
   background:
     radial-gradient(circle at 4% 0%, color-mix(in srgb, var(--output) 8%, transparent), transparent 42%),
     var(--surface-sunken-strong);
@@ -1755,7 +1764,7 @@ code {
 .config-grid-selection-card {
   border: 1px solid color-mix(in srgb, var(--grid) 45%, var(--border));
   border-left: 3px solid color-mix(in srgb, var(--grid) 70%, var(--border));
-  border-radius: 12px;
+  border-radius: var(--o-card-radius);
   padding: 12px;
   background: color-mix(in srgb, var(--grid) 7%, transparent);
   display: flex;
@@ -1783,7 +1792,7 @@ code {
 .config-manual {
   margin-top: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-control-radius);
   padding: 6px 10px;
   background: var(--surface-sunken);
 }
@@ -1802,7 +1811,7 @@ code {
 .config-manual-form select {
   min-height: 34px;
   padding: 0 10px;
-  border-radius: 10px;
+  border-radius: var(--o-control-radius);
   border: 1px solid var(--border);
   background: var(--surface-sunken-strong);
   color: var(--text);
@@ -1822,7 +1831,7 @@ code {
 .config-switch-confirmation {
   border: 1px solid color-mix(in srgb, var(--pv) 45%, var(--border));
   border-left: 3px solid color-mix(in srgb, var(--pv) 70%, var(--border));
-  border-radius: 12px;
+  border-radius: var(--o-card-radius);
   padding: 12px;
   background: color-mix(in srgb, var(--pv) 7%, transparent);
   display: flex;
@@ -1854,7 +1863,7 @@ code {
   gap: 10px;
   padding: 6px 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-inner-radius);
   background: var(--surface-sunken);
 }
 .config-mqtt-device-title { font-size: 13px; font-weight: 600; }
@@ -1871,7 +1880,7 @@ code {
 .migration-stage-list li {
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--o-inner-radius);
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
@@ -1887,7 +1896,7 @@ code {
 .hardware-card {
   border: 1px solid var(--border);
   border-left: 3px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--o-card-radius);
   background: var(--panel);
   overflow: hidden;
 }
@@ -2015,7 +2024,7 @@ code {
 .config-preview {
   margin: 0;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--o-card-radius);
   background: var(--surface-sunken-strong);
   padding: 12px 14px;
   color: var(--text);
@@ -2030,7 +2039,7 @@ code {
   align-items: baseline;
   gap: 8px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-inner-radius);
   background: var(--surface-sunken);
   padding: 8px 12px;
   margin-bottom: 6px;
@@ -2121,7 +2130,7 @@ code {
 .feature-list:empty { display: none; }
 .feature-row {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--o-card-radius);
   background: var(--panel);
   overflow: hidden;
 }
@@ -2195,7 +2204,7 @@ code {
 .feature-input {
   min-height: 34px;
   padding: 0 10px;
-  border-radius: 10px;
+  border-radius: var(--o-control-radius);
   border: 1px solid var(--border);
   background: var(--surface-sunken-strong);
   color: var(--text);
@@ -2270,7 +2279,7 @@ code {
 }
 .feature-advanced, .feature-expert {
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-control-radius);
   padding: 8px 10px;
 }
 .feature-advanced > summary, .feature-expert > summary {
@@ -2303,7 +2312,7 @@ code {
   min-height: 34px;
   padding: 7px 11px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-inner-radius);
   background: var(--surface-raised);
 }
 .backup-stage .control-pipeline-fact .maintenance-fact-label {
@@ -2414,7 +2423,7 @@ code {
   text-align: center;
   padding: 28px 26px;
   border: 1px solid var(--border-strong);
-  border-radius: 16px;
+  border-radius: var(--o-surface-radius);
   background: var(--panel-strong);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
 }
@@ -2467,7 +2476,7 @@ code {
   min-width: 0;
   padding: 8px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-inner-radius);
   color: var(--muted);
   font-size: 10px;
   font-weight: 750;
@@ -2608,7 +2617,7 @@ code {
   min-width: 0;
   background: var(--surface-sunken-strong);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--o-control-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -2631,7 +2640,7 @@ code {
   margin-top: 4px;
   padding: 11px 13px;
   border: 1px solid color-mix(in srgb, var(--output) 30%, var(--border));
-  border-radius: 14px;
+  border-radius: var(--o-card-radius);
   background: linear-gradient(180deg, var(--panel-strong), var(--bg2));
   box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.45);
 }
@@ -2756,7 +2765,7 @@ code {
 .maintenance-finding {
   border: 1px solid var(--border);
   border-left-width: 3px;
-  border-radius: 10px;
+  border-radius: var(--o-inner-radius);
   padding: 9px 12px;
   background: var(--panel);
 }

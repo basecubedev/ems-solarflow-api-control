@@ -236,6 +236,50 @@ def test_no_pill_carries_its_own_radius():
     assert "--o-pill-radius" in shape_tokens(), "the pill radius is not declared in :root"
 
 
+# Two corners are not roles. A spinner is a circle because it turns, and an
+# object style that squared it would break the animation rather than restyle it;
+# `code` is a run of text, not a component with edges.
+LITERAL_CORNERS = {"50%", ".25rem"}
+
+
+def corners():
+    body = re.sub(r':root(\[data-theme="[a-z0-9-]+"\])?\s*\{.*?\}', "", CSS, flags=re.S)
+    found = []
+    for selector, block in re.findall(r"([^{}]+)\{([^{}]*)\}", body):
+        for value in re.findall(r"(?<![a-z-])border-radius:\s*([^;}]+)", block):
+            found.append((" ".join(selector.split())[:44], " ".join(value.split())))
+    return found
+
+
+def test_every_corner_reads_a_role():
+    """Radii drifted into values nobody chose: cards at 12, 14 and 16px, rows at
+    7, 8, 9 and 10px. Naming the value would freeze the drift -- `--o-r10` says
+    nothing an object style can act on. Naming the *role* is what lets one say
+    "square everything", because it can then answer for cards and rows
+    separately, which is the whole point of the second axis.
+    """
+
+    strays = [
+        (selector, value)
+        for selector, value in corners()
+        if not value.startswith("var(--o-") and value not in LITERAL_CORNERS
+    ]
+    assert strays == [], f"{len(strays)} rules still choose their own corner: {strays[:8]}"
+
+
+def test_the_shape_axis_names_every_role_it_uses():
+    """A role read but never declared resolves to nothing, and the corner
+    silently becomes square."""
+
+    declared = set(shape_tokens())
+    used = {
+        match
+        for _, value in corners()
+        for match in re.findall(r"var\((--o-[a-z0-9-]+)\)", value)
+    }
+    assert used <= declared, f"corners reading tokens :root does not declare: {sorted(used - declared)}"
+
+
 def test_badges_of_the_same_size_share_one_padding():
     """Badges drifted between `1px 7px`, `1px 8px` and `2px 8px` for the same
     kind of label. Height follows font size, so the small ones are one group."""
