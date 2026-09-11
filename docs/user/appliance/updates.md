@@ -23,6 +23,12 @@ itself changes nothing.
 
 ![A plan dialog naming what will be installed, waiting for confirmation](../../assets/screenshots/appliance/appliance-update-plan.png)
 
+The plan is written to be read: every line is named in words, a field with no
+value is left out rather than shown as a dash, and what is about to happen comes
+before which image it happens with. Expert adds the image identity — digest,
+exact reference, architecture — and the fingerprint that binds your confirmation
+to the plan you were shown.
+
 Confirm, and the page follows along — a banner names the stage it is in, and it
 survives a reload or a closed browser.
 

@@ -2,11 +2,37 @@
 
 What the main page tells you, and what you can do from it.
 
-![The overview page with status tiles for the board, Docker, EMS Admin, EMS, updates and the network](../../assets/screenshots/appliance/appliance-overview.png)
+![The overview page: one verdict, then what needs attention, then status tiles for the board, Docker, EMS Admin, EMS, updates and the network](../../assets/screenshots/appliance/appliance-overview.png)
 
-## The tiles
+## The page, top to bottom
 
-Six of them, in this order:
+The overview answers three questions in order, and the order is the point.
+
+### 1. One verdict
+
+A single line says what this appliance is: healthy, running with something
+waiting for you, or not working. That sentence is the appliance's own judgement,
+not a colour you have to interpret.
+
+### 2. What needs your attention
+
+Below it, anything wrong is listed worst first. Each entry says what it is, what
+was observed, and what to do about it — and carries a button to the page that
+can act on it, so you are never told to "open System Updates" and left to find
+it. An appliance with nothing to report shows nothing here at all.
+
+The navigation carries the same information: a section with something waiting
+gets a dot, and the button also says "needs attention" for anyone not reading
+colour.
+
+If the appliance could not be read at all, that is itself the first entry, and
+it says that nothing below it came from the appliance. The tiles underneath
+still appear, filled with dashes — but you are told why before you read them,
+instead of being left to guess whether an empty tile means empty or unknown.
+
+### 3. What the box currently reads
+
+Six tiles, in this order:
 
 | Tile | Reading it |
 | --- | --- |
@@ -28,7 +54,8 @@ cannot distinguish is never the only signal.
 ## The operation banner
 
 Anything that changes the box runs as an *operation*, and one appears at the top
-while it runs: what it is doing, which step it reached, and what it ended as.
+while it runs: what it is doing, named in words rather than by its internal
+identifier, which step it reached, and what it ended as.
 
 The important property: **nothing starts without you confirming a plan.** You
 press an action, the appliance works out what it would do, shows you that, and
@@ -38,14 +65,18 @@ statement of what will be attempted.
 When an operation ends, its result stays on the page until you acknowledge it.
 That is deliberate: a result nobody read is a result nobody acted on.
 
-## Quick actions
+## Actions
+
+Three groups at the bottom of the page. They are alternatives, not steps — do
+the one that applies.
 
 | Action | What it does |
 | --- | --- |
 | **Restart Admin** | Restarts the Admin container. First thing to try when Admin is unreachable but the box is fine |
 | **Repair Admin** | Inspects the Admin deployment and previews what it would fix |
-| **Install Admin** | Appears only while no Admin is installed |
-| **Reboot** / **Shut down** | The whole box. EMS control stops while it is down |
+| **Install Admin** | Replaces the two above while no Admin is installed; there is nothing to restart yet |
+| **Install security updates** | The pending security packages, without the rest |
+| **Restart** / **Shut down** | The whole box. EMS control stops while it is down |
 
 Always use **Shut down** before pulling power. A card that loses power
 mid-write is the most common way an appliance breaks.

@@ -27,7 +27,8 @@
     pending: null,
     pollTimer: null,
     busy: false,
-    securityAudit: null
+    securityAudit: null,
+    lastVerdict: undefined
   };
 
   /* ---------------------------------------------------------------- DOM */
@@ -90,22 +91,163 @@
     return String(value);
   }
 
+  /* Session limits arrive in seconds because that is what the configuration
+     file holds. "1800 s" is a number to convert before it is an answer. */
+  function duration(seconds) {
+    var total = Number(seconds);
+    if (!total || total < 0 || total !== Math.floor(total)) return null;
+    /* Only a unit the value divides into exactly: 5400 seconds rounded to
+       "2 hours" hides half an hour of a session that ends at 90 minutes. */
+    if (total >= 86400 && total % 86400 === 0) return plural(total / 86400, "day");
+    if (total >= 3600 && total % 3600 === 0) return plural(total / 3600, "hour");
+    if (total >= 60 && total % 60 === 0) return plural(total / 60, "minute");
+    return plural(total, "second");
+  }
+
+  /* Megabytes are what the host reports and gigabytes are what a person reads.
+     One helper, so the same filesystem is not 149 GB on one page and 152473 MB
+     on the next. */
+  function gigabytes(megabytes) {
+    var value = Number(megabytes);
+    if (!value || value < 0) return null;
+    return (value >= 10240 ? Math.round(value / 1024) : (value / 1024).toFixed(1)) + " GB";
+  }
+
+  /* A bare percentage on a storage card answers neither "how full" nor "how
+     free". The word is the difference between a reading and an answer. */
+  function usedPercent(value) {
+    return value === null || value === undefined ? "—" : value + " % used";
+  }
+
+  function plural(count, unit) {
+    return count + " " + unit + (count === 1 ? "" : "s");
+  }
+
   function card(title, children, testId) {
     return el("section", { class: "status-card", "data-test": testId || null }, [
       el("h3", { text: title })
     ].concat(children.filter(Boolean)));
   }
 
-  function stage(step, title, subtitle, children, testId) {
-    return el("section", { class: "control-stage", "data-test": testId || null }, [
-      el("div", { class: "control-stage-head" }, [
-        el("span", { class: "control-stage-step", "aria-hidden": "true", text: String(step) }),
-        el("div", {}, [
-          el("h3", { class: "control-stage-title", text: title }),
-          subtitle ? el("p", { class: "control-stage-subtitle", text: subtitle }) : null
-        ])
+  /* An action card, not a pipeline step. These cards used to be numbered, which
+     said "do these in order" about a set of alternatives -- restart, repair and
+     roll back are three answers to one question, not steps one to three. The
+     one thing here that really is ordered, an operation, renders as progress. */
+  function actionCard(title, subtitle, children, testId) {
+    return el("section", { class: "action-card", "data-test": testId || null }, [
+      el("div", { class: "action-card-head" }, [
+        el("h3", { class: "action-card-title", text: title }),
+        subtitle ? el("p", { class: "action-card-subtitle", text: subtitle }) : null
       ])
     ].concat(children.filter(Boolean)));
+  }
+
+  /* One head per page: what this page is, and a heading that can take focus
+     when the operator switches to it. Without it a keyboard or screen-reader
+     user who picks a section lands wherever the previous page left them. */
+  function pageHead(title, subtitle, actions) {
+    return el("header", { class: "page-head" }, [
+      el("div", { class: "page-head-titles" }, [
+        el("h2", { class: "page-title", "data-test": "page-title", tabindex: "-1", text: title }),
+        subtitle ? el("p", { class: "page-subtitle", text: subtitle }) : null
+      ])
+    ].concat(actions || []));
+  }
+
+  function sectionHead(title, hint, testId) {
+    return el("header", { class: "section-head", "data-test": testId || null }, [
+      el("h3", { class: "section-title", text: title }),
+      hint ? el("p", { class: "section-hint", text: hint }) : null
+    ]);
+  }
+
+  /* Rebuilding #main drops whatever had focus onto the document body, and the
+     poll rebuilds it every two seconds -- long enough that a control could not
+     be tabbed to and pressed. What survives a rebuild is the element's test id
+     or its id, not the node, so focus is re-taken through that. A field is a
+     different problem and is handled by not re-rendering at all. */
+  function focusAnchor(main) {
+    var active = document.activeElement;
+    if (!active || !main || !main.contains(active)) return null;
+    var test = active.getAttribute("data-test");
+    var selector = test ? '[data-test="' + test + '"]' : (active.id ? "#" + active.id : null);
+    if (!selector) return null;
+    var matches = Array.prototype.slice.call(main.querySelectorAll(selector));
+    return { selector: selector, index: Math.max(0, matches.indexOf(active)) };
+  }
+
+  /* preventScroll, because this is a restore and not a move. focus() scrolls
+     its target into view, so re-taking focus after a rebuild walked the page
+     back to whatever held it -- every two seconds, and all the way to the top
+     when that was the page heading a view change had just focused. Moving
+     focus deliberately, in focusPageHeading below, still scrolls: landing at
+     the top of the page you just opened is the point. */
+  function restoreFocus(main, anchor) {
+    if (!anchor) return;
+    var matches = main.querySelectorAll(anchor.selector);
+    var target = matches[anchor.index] || matches[0];
+    if (target) target.focus({ preventScroll: true });
+  }
+
+  function focusPageHeading() {
+    var heading = document.querySelector("#main .page-title");
+    if (heading) heading.focus();
+  }
+
+  /* The verdict is not its own live region. This node is rebuilt by the
+     two-second poll, and a live region that is replaced rather than edited can
+     be read out again on every rebuild -- the same sentence, every two seconds.
+     The shell's one live region speaks instead, and only when the sentence
+     itself changed. */
+  function verdictLine(status) {
+    var verdict = overviewVerdict(status);
+    var spoken = verdictAnnouncement(state.lastVerdict, verdict.text);
+    state.lastVerdict = verdict.text;
+    if (spoken) announce(spoken);
+    return el("p", {
+      class: "hub-verdict",
+      "data-tone": verdict.tone,
+      "data-test": "overview-verdict",
+      text: verdict.text
+    });
+  }
+
+  function findingsPanel(status, currentView) {
+    var view = findingsView(status, sessionFindings());
+    return el("section", {
+      class: "findings",
+      "data-test": "findings",
+      "data-status": view.status,
+      hidden: view.hidden || null,
+      "aria-label": "What needs your attention"
+    }, [
+      el("p", { class: "findings-headline", text: view.headline }),
+      el("ul", { class: "findings-list" }, view.findings.map(function (item) {
+        return findingItem(item, currentView);
+      }))
+    ]);
+  }
+
+  function findingItem(item, currentView) {
+    var action = findingAction(item, currentView);
+    return el("li", {
+      class: "finding",
+      "data-severity": item.severity,
+      "data-code": item.code
+    }, [
+      el("div", { class: "finding-head" }, [
+        el("p", { class: "finding-title", text: item.title }),
+        action ? el("button", {
+          type: "button",
+          class: "ghost-button compact finding-open",
+          "data-test": "finding-open-" + action.view,
+          text: action.label,
+          onclick: function () { selectView(action.view); }
+        }) : null
+      ]),
+      item.message ? el("p", { class: "finding-message", text: item.message }) : null,
+      item.next_step ? el("p", { class: "finding-next", text: item.next_step }) : null
+    ]);
   }
 
   function expert() {
@@ -180,21 +322,27 @@
 
   /* The appliance must never imply an authentication event reached the
      authoritative audit log when the agent could not record it. */
-  function renderAuditNotice() {
+  /* The audit log is where a sign-in is recorded. When it cannot be written,
+     that is a finding about this appliance like any other -- it was a separate
+     bullet above the warning list, which is where an operator stops reading. */
+  function auditFinding() {
     var audit = state.securityAudit;
     if (!audit || !audit.degraded) return null;
-    return el("div", { class: "warning-item severe", "data-test": "audit-degraded", role: "status" }, [
-      el("strong", { text: "Security audit degraded: " }),
-      el("span", {
-        text: audit.message ||
-          "Authentication events could not be written to the audit log."
-      }),
-      el("span", {
-        class: "fact-value",
-        text: " " + format(audit.unrecorded_events) + " event(s) unrecorded" +
-          (audit.last_error ? " (" + audit.last_error + ")" : "")
-      })
-    ]);
+    return {
+      code: "security_audit_degraded",
+      severity: "error",
+      section: "settings",
+      title: "Sign-ins are not being recorded",
+      message: (audit.message || "Authentication events could not be written to the audit log.")
+        + " " + format(audit.unrecorded_events) + " event(s) unrecorded"
+        + (audit.last_error ? " (" + audit.last_error + ")" : "") + ".",
+      next_step: "Open Settings for the audit state. Until it is fixed there is no "
+        + "record of who signed in."
+    };
+  }
+
+  function sessionFindings() {
+    return [auditFinding()].filter(Boolean);
   }
 
   function submitGate(event) {
@@ -259,11 +407,31 @@
         type: "button",
         class: "nav-button",
         "data-test": "nav-" + view.id,
-        text: view.label,
         onclick: function () { selectView(view.id); }
-      });
+      }, [
+        el("span", { text: view.label }),
+        el("span", { class: "nav-mark", "data-view": view.id, "aria-hidden": "true" }),
+        el("span", { class: "visually-hidden", "data-mark-text": view.id })
+      ]);
       if (view.id === state.view) button.setAttribute("aria-current", "page");
       list.appendChild(el("li", {}, [button]));
+    });
+    updateNavMarks();
+  }
+
+  /* The marks are updated in place rather than by rebuilding the navigation.
+     The status is re-read every two seconds, and replacing a button the
+     operator has tabbed to drops their focus to the top of the document. */
+  function updateNavMarks() {
+    var marks = attentionBySection(state.data.status || {}, sessionFindings());
+    VIEWS.forEach(function (view) {
+      var dot = document.querySelector('.nav-mark[data-view="' + view.id + '"]');
+      var label = document.querySelector('[data-mark-text="' + view.id + '"]');
+      if (!dot || !label) return;
+      var severity = marks[view.id] || "";
+      if (severity) dot.setAttribute("data-severity", severity);
+      else dot.removeAttribute("data-severity");
+      label.textContent = severity ? " — needs attention" : "";
     });
   }
 
@@ -272,6 +440,7 @@
     try { window.localStorage.setItem(VIEW_KEY, id); } catch (exc) { /* private mode */ }
     renderNav();
     render();
+    focusPageHeading();
   }
 
   function setMode(mode) {
@@ -283,15 +452,65 @@
     render();
   }
 
+  /* A rebuild the reader did not ask for has to be invisible, and focus is only
+     half of that: emptying #main and filling it again also moves the page --
+     through the browser's own scroll anchoring, and through whatever it does
+     when the element that had focus is removed. Rather than chase each of
+     those, the position is taken before and put back after. A rebuild the
+     reader *did* ask for, a view change, still starts at the top. */
   function render() {
     var main = document.getElementById("main");
+    var anchor = focusAnchor(main);
+    var scrolled = window.scrollY;
     clear(main);
     var view = VIEWS.filter(function (item) { return item.id === state.view; })[0] || VIEWS[0];
     main.appendChild(renderOperationBanner());
     view.render(main);
+    updateNavMarks();
+    restoreFocus(main, anchor);
+    if (window.scrollY !== scrolled) window.scrollTo(0, scrolled);
   }
 
   /* --------------------------------------------------------- operations */
+
+  /* The banner is what an operator watches while their appliance is being
+     changed, and it led with the payload's own identifier: "admin.install ·
+     verifying". The type is a closed set and gets a sentence; the stage is
+     whatever the executor reported, so it is spelled out rather than mapped --
+     a stage nobody named must still be readable. */
+  var OPERATION_TITLES = {
+    "admin.install": "Installing EMS Admin",
+    "admin.rollback": "Rolling back EMS Admin",
+    "admin.repair": "Repairing the EMS Admin deployment",
+    "admin.lifecycle": "EMS Admin container",
+    "updates.install": "Installing operating-system updates",
+    "updates.repair": "Repairing the package manager",
+    "manager.update": "Updating the Appliance Manager",
+    "manager.revert": "Going back to the kept Appliance Manager",
+    "network.wifi": "Changing the WLAN",
+    "network.hostname": "Changing the hostname",
+    "system.timezone": "Changing the timezone",
+    "system.reboot": "Restarting the Raspberry Pi",
+    "system.shutdown": "Shutting down the Raspberry Pi",
+    "ssh.service": "Changing the SSH service",
+    "ssh.key_add": "Adding a public key",
+    "ssh.key_remove": "Removing a public key",
+    "ssh.revoke_all": "Revoking every public key",
+    "support.archive": "Creating a support archive"
+  };
+
+  function operationTitle(operation) {
+    var type = String((operation || {}).type || "");
+    return OPERATION_TITLES[type] || type.replace(/[._]/g, " ") || "Current operation";
+  }
+
+  /* The pill beside it already carries the state. When the executor has not
+     reported a finer stage than that, the line would say it twice. */
+  function operationStage(operation) {
+    var stage = String((operation || {}).stage || "").replace(/_/g, " ");
+    var state = String((operation || {}).state || "").replace(/_/g, " ");
+    return stage === state ? "" : stage;
+  }
 
   function renderOperationBanner() {
     var wrapper = el("div", { "data-test": "operation-banner" });
@@ -316,7 +535,7 @@
     var progress = el("ol", { class: "progress-list" },
       (operation.progress || []).slice(-6).map(function (entry) {
         return el("li", { class: "progress-item" }, [
-          el("span", { text: entry.stage }),
+          el("span", { text: String(entry.stage || "").replace(/_/g, " ") }),
           el("span", { text: entry.detail || "" })
         ]);
       }));
@@ -340,10 +559,9 @@
       }));
     }
 
-    wrapper.appendChild(stage(
-      "!",
-      "Current operation",
-      operation.type + " · " + operation.stage,
+    wrapper.appendChild(actionCard(
+      operationTitle(operation),
+      operationStage(operation),
       [
         el("div", { "data-test": "operation-outcome" }, [tone(level, outcome.label)]),
         operation.error ? el("p", { class: "control-result", text: operation.error.message }) : null,
@@ -455,7 +673,7 @@
     }
     if (remaining.length && expert()) {
       wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: "Still failing:" }));
-      wrapper.appendChild(renderFindings(remaining));
+      wrapper.appendChild(renderRepairChecks(remaining));
     } else if (remaining.length) {
       wrapper.appendChild(el("p", {
         class: "warning-item severe",
@@ -574,19 +792,130 @@
     confirm.focus();
   }
 
+  /* The plan is what an operator agrees to before this appliance is changed,
+     so it is read as sentences rather than as the payload's own key names. An
+     unlabelled key still appears, spelled out: a field this build has no name
+     for is worth showing badly rather than hiding. */
+  var PLAN_FIELD_LABELS = {
+    type: "Operation",
+    action: "Action",
+    scope: "Scope",
+    container: "Container",
+    current_state: "Container state now",
+    repository: "Image repository",
+    target_tag: "Version to install",
+    target_channel: "Chosen from",
+    target_digest: "Image digest",
+    target_reference: "Exact image",
+    target_revision: "Source revision",
+    target_source: "Source repository",
+    target_architecture: "Architecture",
+    legacy_labels_accepted: "Legacy image labels accepted",
+    reinstall: "Reinstalling the same version",
+    current_version: "Installed now",
+    current_digest: "Installed image digest",
+    image_available_locally: "Image already on this appliance",
+    new_version: "New version",
+    package_count: "Packages",
+    security_count: "Security packages",
+    normal_count: "Other packages",
+    reboot_required: "Needs a restart afterwards",
+    reboot_required_before: "A restart was already pending",
+    free_megabytes: "Free space",
+    minimum_free_megabytes: "Space required",
+    lock_state: "Package-manager lock",
+    healthy: "Nothing to repair",
+    hostname: "New hostname",
+    ssid: "Network name",
+    direction: "Direction",
+    kept_version: "Package it would put back",
+    authority: "Plan fingerprint",
+    authority_plan: "Plan fingerprint"
+  };
+
+  /* What is about to happen comes before which image it happens with. */
+  var PLAN_FIELD_ORDER = [
+    "type",
+    "action",
+    "scope",
+    "direction",
+    "container",
+    "current_state",
+    "current_version",
+    "target_tag",
+    "new_version",
+    "kept_version",
+    "target_channel",
+    "reinstall",
+    "hostname",
+    "ssid",
+    "security_count",
+    "normal_count",
+    "package_count",
+    "reboot_required",
+    "reboot_required_before",
+    "minimum_free_megabytes",
+    "free_megabytes",
+    "lock_state",
+    "healthy",
+    "repository",
+    "target_reference",
+    "target_digest",
+    "current_digest",
+    "target_revision",
+    "target_source",
+    "target_architecture",
+    "legacy_labels_accepted",
+    "image_available_locally",
+    "authority",
+    "authority_plan"
+  ];
+
+  /* The fingerprint seals the plan so a confirmation can only apply the plan
+     that was shown. It is a mechanism rather than a statement about this
+     appliance, so it sits with the digests in Expert. */
+  var PLAN_EXPERT_FIELDS = [
+    "authority",
+    "authority_plan",
+    "target_digest",
+    "target_architecture",
+    "current_digest",
+    "legacy_labels_accepted",
+    "target_reference",
+    "target_source"
+  ];
+
+  var PLAN_SKIP_FIELDS = ["blockers", "findings", "packages", "keys", "bootstrap"];
+
+  function planFieldRank(key) {
+    var index = PLAN_FIELD_ORDER.indexOf(key);
+    return index === -1 ? PLAN_FIELD_ORDER.length : index;
+  }
+
+  function planFields(plan, isExpert) {
+    var keys = Object.keys(plan || {}).filter(function (key) {
+      if (PLAN_SKIP_FIELDS.indexOf(key) !== -1) return false;
+      if (!isExpert && PLAN_EXPERT_FIELDS.indexOf(key) !== -1) return false;
+      var value = plan[key];
+      if (value === null || value === undefined || value === "") return false;
+      return typeof value !== "object";
+    });
+    keys.sort(function (left, right) { return planFieldRank(left) - planFieldRank(right); });
+    return keys.map(function (key) {
+      var value = plan[key];
+      return {
+        key: key,
+        label: PLAN_FIELD_LABELS[key] || key.replace(/_/g, " "),
+        value: /_megabytes$/.test(key) ? (gigabytes(value) || format(value)) : format(value),
+        mono: /digest|revision|reference|authority/.test(key)
+      };
+    });
+  }
+
   function renderPlan(plan) {
     var wrapper = el("div", {}, []);
-    var rows = [];
-
-    Object.keys(plan).forEach(function (key) {
-      var value = plan[key];
-      if (key === "blockers" || key === "findings" || key === "packages" || key === "keys") return;
-      if (value === null || typeof value === "object") return;
-      if (!expert() && (key === "target_digest" || key === "target_architecture" ||
-        key === "current_digest" || key === "legacy_labels_accepted" ||
-        key === "target_reference" || key === "target_source")) return;
-      if (key === "bootstrap") return;
-      rows.push(fact(key.replace(/_/g, " "), value, { mono: /digest|revision/.test(key) }));
+    var rows = planFields(plan, expert()).map(function (field) {
+      return fact(field.label, field.value, { mono: field.mono });
     });
     wrapper.appendChild(el("div", { class: "control-result" }, rows));
 
@@ -610,7 +939,7 @@
     });
 
     if ((plan.findings || []).length) {
-      wrapper.appendChild(renderFindings(plan.findings));
+      wrapper.appendChild(renderRepairChecks(plan.findings));
     }
 
     if ((plan.packages || []).length) {
@@ -726,6 +1055,99 @@
     return section && section.status === "ok";
   }
 
+  /* --------------------------------------------------------- findings */
+
+  var FINDING_SEVERITY_ORDER = ["error", "warning", "info"];
+
+  function viewLabel(id) {
+    for (var i = 0; i < VIEWS.length; i += 1) {
+      if (VIEWS[i].id === id) return VIEWS[i].label;
+    }
+    return "";
+  }
+
+  function rankSeverity(severity) {
+    var index = FINDING_SEVERITY_ORDER.indexOf(severity);
+    return index === -1 ? FINDING_SEVERITY_ORDER.length : index;
+  }
+
+  /* A status call that failed is itself the finding. The page used to print the
+     tiles anyway, every value an em dash, which reads as a healthy appliance
+     with nothing installed rather than as an appliance nobody could ask. */
+  function rankedFindings(status, extra) {
+    var payload = status || {};
+    if (payload.error) {
+      return [{
+        code: "status_unavailable",
+        severity: "error",
+        section: "diagnostics",
+        title: "The appliance status could not be read",
+        message: "Asking the appliance for its state answered " + format(payload.error) + ".",
+        next_step: "Nothing on this page has been read from the appliance. "
+          + "Open Diagnostics to collect a support archive."
+      }];
+    }
+    return ((payload.health || {}).warnings || []).concat(extra || []).sort(function (left, right) {
+      return rankSeverity(left.severity) - rankSeverity(right.severity);
+    });
+  }
+
+  function findingsHeadline(findings) {
+    if (!findings.length) return "Nothing needs your attention.";
+    if (findings.length === 1) return "1 thing needs your attention.";
+    return findings.length + " things need your attention.";
+  }
+
+  function findingsView(status, extra) {
+    var findings = rankedFindings(status, extra);
+    return {
+      hidden: findings.length === 0,
+      status: findings.length ? findings[0].severity : "ok",
+      headline: findingsHeadline(findings),
+      findings: findings
+    };
+  }
+
+  function verdictAnnouncement(previous, text) {
+    if (previous === undefined || previous === text) return null;
+    return text;
+  }
+
+  function overviewVerdict(status) {
+    var payload = status || {};
+    if (payload.error) return { text: "This appliance could not be read.", tone: "bad" };
+    var level = (payload.health || {}).level;
+    if (level === "degraded") {
+      return { text: "Something on this appliance is not working.", tone: "bad" };
+    }
+    if (level === "attention") {
+      return { text: "This appliance is running and needs a little attention.", tone: "warn" };
+    }
+    if (level === "healthy") return { text: "This appliance is healthy.", tone: "ok" };
+    return { text: "This appliance could not be classified.", tone: "warn" };
+  }
+
+  /* The destination is the backend's, and it is offered only when going there
+     changes the page. "Open Overview" on the overview is a button that does
+     nothing, and a section this build has no page for is not a next step. */
+  function findingAction(finding, currentView) {
+    var section = (finding || {}).section;
+    if (!section || section === currentView) return null;
+    var label = viewLabel(section);
+    return label ? { view: section, label: "Open " + label } : null;
+  }
+
+  function attentionBySection(status, extra) {
+    var marks = {};
+    rankedFindings(status, extra).forEach(function (item) {
+      if (!item.section) return;
+      if (!marks[item.section] || rankSeverity(item.severity) < rankSeverity(marks[item.section])) {
+        marks[item.section] = item.severity;
+      }
+    });
+    return marks;
+  }
+
   /* ------------------------------------------------------------ views */
 
   function renderOverview(main) {
@@ -737,11 +1159,14 @@
     var updates = status.updates || {};
     var network = status.network || {};
 
-    main.appendChild(el("h2", { class: "section-title", text: "Appliance overview" }));
-    main.appendChild(el("p", {
-      class: "section-hint",
-      text: "Host management for this Raspberry Pi. EMS configuration and devices stay in the EMS Admin Console."
-    }));
+    main.appendChild(el("div", { class: "page-intro" }, [
+      pageHead(
+        "Overview",
+        "What this Raspberry Pi is doing, and anything that needs you. EMS configuration and devices stay in the EMS Admin Console."
+      ),
+      verdictLine(status),
+      findingsPanel(status, "overview")
+    ]));
 
     var cards = el("div", { class: "card-grid" }, [
       card("Raspberry Pi", [
@@ -750,7 +1175,7 @@
         fact("OS", (system.operating_system || {}).name),
         fact("Uptime", (system.uptime || {}).days !== undefined ? (system.uptime.days + " days") : null),
         fact("Temperature", (system.temperature || {}).celsius ? system.temperature.celsius + " °C" : null),
-        fact("Free storage", ((system.storage || {}).root || {}).free_mb ? Math.round(system.storage.root.free_mb / 1024) + " GB" : null)
+        fact("Free storage", gigabytes(((system.storage || {}).root || {}).free_mb))
       ], "card-host"),
 
       card("Docker", [
@@ -793,29 +1218,6 @@
     ]);
     main.appendChild(cards);
 
-    main.appendChild(el("h2", { class: "section-title", text: "Warnings" }));
-    var auditNotice = renderAuditNotice();
-    if (auditNotice) main.appendChild(el("ul", { class: "warning-list" }, [auditNotice]));
-    var warnings = health.warnings || [];
-    if (status.error) {
-      main.appendChild(el("p", {
-        class: "empty-state", "data-test": "status-unavailable",
-        text: "Appliance status is unavailable (" + format(status.error) + "). "
-          + "Nothing below has been read from the appliance."
-      }));
-    } else if (!warnings.length && !auditNotice) {
-      main.appendChild(el("p", { class: "empty-state", text: "No warnings. The appliance looks healthy." }));
-    } else if (warnings.length) {
-      main.appendChild(el("ul", { class: "warning-list", "data-test": "warnings" },
-        warnings.map(function (warning) {
-          var severe = /unhealthy|not_running|not_installed|storage_low|package_manager/.test(warning.code);
-          return el("li", { class: "warning-item" + (severe ? " severe" : "") }, [
-            el("strong", { text: warning.code.replace(/_/g, " ") + ": " }),
-            el("span", { text: warning.message })
-          ]);
-        })));
-    }
-
     main.appendChild(quickActions());
   }
 
@@ -846,9 +1248,9 @@
     /* Nothing is deployed yet: restarting and repairing have no target, so the
        one action offered is the one that applies. */
     var bootstrap = ((state.data.status || {}).admin || {}).bootstrap_required === true;
-    return el("div", { class: "stage-grid" }, [
-      stage(1, "Admin recovery", bootstrap
-        ? "No EMS Admin is installed on this appliance yet"
+    return el("div", { class: "action-grid" }, [
+      actionCard(bootstrap ? "Install EMS Admin" : "Admin recovery", bootstrap
+        ? "Nothing is deployed yet, so there is nothing to restart or repair"
         : "Restart, repair or update the EMS Admin container", [
         el("div", { class: "control-stage-actions" }, bootstrap ? [
           el("button", {
@@ -878,7 +1280,7 @@
         ])
       ], "quick-admin"),
 
-      stage(2, "Operating system", "Install pending security updates", [
+      actionCard("Operating system", "Install pending security updates", [
         el("div", { class: "control-stage-actions" }, [
           el("button", {
             type: "button", class: "primary-button compact", "data-test": "quick-security-updates",
@@ -893,7 +1295,7 @@
         ])
       ], "quick-updates"),
 
-      stage(3, "Power", "Restart or shut down the Raspberry Pi", [
+      actionCard("Power", "Restart or shut down the Raspberry Pi", [
         el("div", { class: "control-stage-actions" }, [
           el("button", {
             type: "button", class: "ghost-button compact", "data-test": "quick-reboot",
@@ -924,7 +1326,10 @@
       loadInto("releases", "/api/admin/releases");
     }
 
-    main.appendChild(el("h2", { class: "section-title", text: "EMS Admin" }));
+    main.appendChild(pageHead(
+      "EMS Admin",
+      "Install, reinstall, restart, repair and roll back the EMS Admin container. The Appliance Manager stays reachable throughout."
+    ));
 
     if ((admin.transition || {}).state === "live") {
       main.appendChild(el("p", { class: "empty-state", "data-test": "admin-transition-live" }, [
@@ -941,11 +1346,6 @@
       renderAdminBootstrap(main, releases);
       return;
     }
-
-    main.appendChild(el("p", {
-      class: "section-hint",
-      text: "Install, reinstall, restart, repair and roll back the EMS Admin container. The Appliance Manager stays reachable throughout."
-    }));
 
     main.appendChild(el("div", { class: "card-grid" }, [
       card("Installed version", [
@@ -969,8 +1369,8 @@
       ], "admin-known-good")
     ].filter(Boolean)));
 
-    main.appendChild(el("div", { class: "stage-grid" }, [
-      stage(1, "Lifecycle", "Start, stop or restart the running container", [
+    main.appendChild(el("div", { class: "action-grid" }, [
+      actionCard("Start, stop or restart", "The container itself, leaving its version alone", [
         el("div", { class: "control-stage-actions" }, [
           lifecycleButton("start", "Start"),
           lifecycleButton("stop", "Stop"),
@@ -978,11 +1378,11 @@
         ])
       ], "admin-lifecycle"),
 
-      stage(2, "Install version", "Pull, validate and replace the Admin image", [
+      actionCard("Install a version", "Pull, validate and replace the Admin image", [
         renderInstallForm(releases)
       ], "admin-install"),
 
-      stage(3, "Repair", "Inspect the deployment and preview the repair", [
+      actionCard("Repair", "Inspect the deployment and preview the repair", [
         el("div", { class: "control-stage-actions" }, [
           el("button", {
             type: "button", class: "primary-button compact", "data-test": "admin-repair",
@@ -994,7 +1394,7 @@
         ])
       ], "admin-repair-stage"),
 
-      stage(4, "Rollback", "Restore the previous known-good version", [
+      actionCard("Rollback", "Restore the previous known-good version", [
         el("p", { class: "control-stage-subtitle", text: "Rollback restores the recorded digest, not just a tag." }),
         el("div", { class: "control-stage-actions" }, [
           el("button", {
@@ -1017,7 +1417,7 @@
      so the page offers the one thing that applies — creating it. */
   function renderAdminBootstrap(main, releases) {
     main.appendChild(el("p", {
-      class: "section-hint",
+      class: "section-note",
       text: "No EMS Admin installation was found on this appliance. Installing it creates the deployment under /opt/ems-solarflow and starts the version you choose. EMS itself is set up afterwards from Admin's own guided setup."
     }));
 
@@ -1029,8 +1429,8 @@
       ], "admin-bootstrap-state")
     ]));
 
-    main.appendChild(el("div", { class: "stage-grid" }, [
-      stage(1, "Install Admin", "Choose a version, then review the plan before anything is written", [
+    main.appendChild(el("div", { class: "action-grid" }, [
+      actionCard("Install Admin", "Choose a version, then review the plan before anything is written", [
         renderInstallForm(releases, { bootstrap: true })
       ], "admin-bootstrap-install")
     ]));
@@ -1130,8 +1530,9 @@
     ]));
     wrapper.appendChild(tagField);
     if (!opts.bootstrap) {
-      wrapper.appendChild(el("div", { class: "fact-row" }, [
-        el("label", { for: "install-reinstall", text: "Reinstall the same version" }), reinstall
+      wrapper.appendChild(el("div", { class: "field-check" }, [
+        reinstall,
+        el("label", { for: "install-reinstall", text: "Reinstall the same version" })
       ]));
     }
 
@@ -1162,6 +1563,10 @@
   function renderUpdates(main) {
     var updates = (state.data.status || {}).updates || {};
 
+    main.appendChild(pageHead(
+      "System updates",
+      "Two things update from this page: this appliance's own manager package, and the Raspberry Pi OS packages."
+    ));
     renderManagerUpdates(main);
     renderPackageUpdates(main, updates);
   }
@@ -1289,12 +1694,11 @@
     var manager = state.data.manager;
     var actions = managerActions(manager, applianceNow());
     if (manager === undefined || manager === null) {
-      main.appendChild(el("h2", { class: "section-title", text: "Appliance Manager" }));
-      main.appendChild(el("p", { class: "section-hint", text: "Reading the manager state\u2026" }));
+      main.appendChild(sectionHead("Appliance Manager", "Reading the manager state\u2026"));
       return;
     }
     if (manager.error) {
-      main.appendChild(el("h2", { class: "section-title", text: "Appliance Manager" }));
+      main.appendChild(sectionHead("Appliance Manager"));
       main.appendChild(el("p", { class: "empty-state", "data-test": "manager-unavailable" }, [
         el("strong", { text: "The manager state is unavailable: " }),
         el("span", { text: format(manager.error) })
@@ -1307,12 +1711,11 @@
     var verify = manager.verify || {};
     var verdict = manager.verdict || {};
 
-    main.appendChild(el("h2", { class: "section-title", text: "Appliance Manager" }));
-    main.appendChild(el("p", {
-      class: "section-hint",
-      text: "The package this console runs from. It updates only when you ask it to, and the "
+    main.appendChild(sectionHead(
+      "Appliance Manager",
+      "The package this console runs from. It updates only when you ask it to, and the "
         + "same control installs an older package as readily as a newer one."
-    }));
+    ));
 
     main.appendChild(el("div", { class: "card-grid" }, [
       card("Installed", [
@@ -1376,11 +1779,11 @@
       loadInto("managerSources", "/api/manager/sources");
     }
 
-    main.appendChild(el("div", { class: "stage-grid" }, [
-      stage(1, "Update the Appliance Manager", "Fetched over HTTPS, then verified against the appliance keyring", [
+    main.appendChild(el("div", { class: "action-grid" }, [
+      actionCard("Update the Appliance Manager", "Fetched over HTTPS, then verified against the appliance keyring", [
         renderManagerSources(sources, manager)
       ], "manager-stage-update"),
-      stage(2, "Go back to the kept package", "The package this appliance ran before the last install", [
+      actionCard("Go back to the kept package", "The package this appliance ran before the last install", [
         el("div", { class: "control-stage-actions" }, [
           el("button", {
             type: "button", class: "ghost-button compact", "data-test": "manager-plan-revert",
@@ -1409,12 +1812,11 @@
   function renderPackageUpdates(main, updates) {
     var manager = updates.package_manager || {};
 
-    main.appendChild(el("h2", { class: "section-title", text: "System updates" }));
-    main.appendChild(el("p", {
-      class: "section-hint",
-      text: "Raspberry Pi OS packages. Major distribution upgrades are not performed here."
-    }));
-    main.appendChild(el("p", { class: "section-hint", "data-test": "updates-recovery" }, [
+    main.appendChild(sectionHead(
+      "Operating system",
+      "Raspberry Pi OS packages. Major distribution upgrades are not performed here."
+    ));
+    main.appendChild(el("p", { class: "section-note", "data-test": "updates-recovery" }, [
       el("span", {
         text: "The operating system is patched in place. There is no second copy to fall back "
           + "to, so a failed OS upgrade is recovered by writing the card again and restoring a "
@@ -1445,7 +1847,7 @@
     ]));
 
     var stages = [
-      stage(1, "Install security updates", "Only packages from a security archive", [
+      actionCard("Install security updates", "Only packages from a security archive", [
         el("div", { class: "control-stage-actions" }, [
           el("button", {
             type: "button", class: "primary-button compact", "data-test": "updates-install-security",
@@ -1459,7 +1861,7 @@
     ];
 
     if (expert()) {
-      stages.push(stage(2, "Install all updates", "Every available package upgrade", [
+      stages.push(actionCard("Install all updates", "Every available package upgrade", [
         el("div", { class: "control-stage-actions" }, [
           el("button", {
             type: "button", class: "ghost-button compact", "data-test": "updates-install-all",
@@ -1471,7 +1873,7 @@
         ])
       ], "updates-stage-all"));
 
-      stages.push(stage(3, "Package-manager recovery", "Strictly defined repair actions", [
+      stages.push(actionCard("Package-manager recovery", "Strictly defined repair actions", [
         el("div", { class: "control-stage-actions" }, [
           repairButton("configure_pending", "Complete pending configuration"),
           repairButton("fix_broken", "Repair dependencies"),
@@ -1481,10 +1883,10 @@
       ], "updates-stage-repair"));
     }
 
-    main.appendChild(el("div", { class: "stage-grid" }, stages));
+    main.appendChild(el("div", { class: "action-grid" }, stages));
 
     if (expert() && (updates.security_updates || []).length) {
-      main.appendChild(el("h2", { class: "section-title", text: "Pending security packages" }));
+      main.appendChild(sectionHead("Pending security packages"));
       main.appendChild(renderPackageTable(updates.security_updates, 100));
     }
 
@@ -1534,11 +1936,10 @@
   function renderNetwork(main) {
     var network = (state.data.status || {}).network || {};
 
-    main.appendChild(el("h2", { class: "section-title", text: "Network" }));
-    main.appendChild(el("p", {
-      class: "section-hint",
-      text: "A WLAN change can disconnect this session. The previous profile is kept and restored automatically when the new network fails."
-    }));
+    main.appendChild(pageHead(
+      "Network",
+      "A WLAN change can disconnect this session. The previous profile is kept and restored automatically when the new network fails."
+    ));
 
     var cards = [
       card("Hostname", [
@@ -1554,17 +1955,20 @@
         fact("Type", item.type),
         fact("Addresses", (item.addresses || []).join(", "))
       ];
-      if (item.type === "wifi") facts.push(fact("SSID", item.ssid), fact("Signal", item.signal));
+      if (item.type === "wifi") {
+        facts.push(fact("SSID", item.ssid));
+        facts.push(fact("Signal", item.signal === undefined ? null : item.signal + " %"));
+      }
       if (expert()) facts.push(fact("Gateway", item.gateway), fact("DNS", (item.dns || []).join(", ")));
       cards.push(card(item.device, facts, "network-interface"));
     });
 
     main.appendChild(el("div", { class: "card-grid" }, cards));
 
-    main.appendChild(el("div", { class: "stage-grid" }, [
-      stage(1, "WLAN", "Scan, select and apply with automatic revert", [renderWifiForm()], "network-wifi"),
-      stage(2, "Hostname", "Changes the appliance and Admin URLs", [renderHostnameForm()], "network-hostname-stage"),
-      stage(3, "Timezone", "Decides when the EMS opens an hour-based control window",
+    main.appendChild(el("div", { class: "action-grid" }, [
+      actionCard("Change the WLAN", "Scan, select and apply with automatic revert", [renderWifiForm()], "network-wifi"),
+      actionCard("Change the hostname", "This changes the appliance and Admin URLs", [renderHostnameForm()], "network-hostname-stage"),
+      actionCard("Change the timezone", "Decides when the EMS opens an hour-based control window",
         [renderTimezoneForm()], "network-timezone-stage")
     ]));
   }
@@ -1601,8 +2005,9 @@
 
     wrapper.appendChild(el("div", { class: "field" }, [el("label", { for: "wifi-ssid", text: "SSID" }), ssidInput]));
     wrapper.appendChild(el("div", { class: "field" }, [el("label", { for: "wifi-pass", text: "Passphrase" }), passInput]));
-    wrapper.appendChild(el("div", { class: "fact-row" }, [
-      el("label", { for: "wifi-hidden", text: "Hidden network" }), hidden
+    wrapper.appendChild(el("div", { class: "field-check" }, [
+      hidden,
+      el("label", { for: "wifi-hidden", text: "Hidden network" })
     ]));
     wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: "Stored passphrases are never shown again." }));
     wrapper.appendChild(el("div", { class: "control-stage-actions" }, [
@@ -1690,11 +2095,14 @@
       loadInto("backup", "/api/backup");
     }
 
-    main.appendChild(el("h2", { class: "section-title", text: "SSH & backup access" }));
+    main.appendChild(pageHead(
+      "SSH & backup access",
+      "Shell access for you, and a read-only account that can copy files off this appliance."
+    ));
     /* The hint states the design; what is actually in force is reported by the
        export card below, from the policy sshd applies. */
     main.appendChild(el("p", {
-      class: "section-hint",
+      class: "section-note",
       text: "Key-based SSH only. The backup account is meant to be chrooted into the read-only export root and restricted to SFTP. The Appliance Manager never enables password logins and never handles private keys."
     }));
 
@@ -1734,8 +2142,8 @@
       ], "backup-export")
     ]));
 
-    main.appendChild(el("div", { class: "stage-grid" }, [
-      stage(1, "SSH service", "Enable or disable key-based remote access", [
+    main.appendChild(el("div", { class: "action-grid" }, [
+      actionCard("Turn SSH on or off", "Key-based remote access to this appliance", [
         el("div", { class: "control-stage-actions" }, [
           el("button", {
             type: "button", class: "primary-button compact", "data-test": "ssh-enable", text: "Enable SSH",
@@ -1747,11 +2155,11 @@
           })
         ])
       ], "ssh-stage-service"),
-      stage(2, "Add public key", "Paste an OpenSSH public key", [renderKeyForm(ssh)], "ssh-stage-add")
+      actionCard("Add public key", "Paste an OpenSSH public key", [renderKeyForm(ssh)], "ssh-stage-add")
     ]));
 
     (ssh.accounts || []).forEach(function (account) {
-      main.appendChild(el("h2", { class: "section-title", text: "Keys for " + account.name }));
+      main.appendChild(sectionHead("Keys for " + account.name));
       if (!account.exists) {
         main.appendChild(el("p", { class: "empty-state", text: "The host account " + account.name + " does not exist yet." }));
         return;
@@ -1789,7 +2197,7 @@
     });
 
     if (backup && (backup.paths || []).length) {
-      main.appendChild(el("h2", { class: "section-title", text: "Readable paths" }));
+      main.appendChild(sectionHead("Readable paths"));
       main.appendChild(el("div", { class: "table-wrap" }, [
         el("table", { class: "data", "data-test": "backup-paths" }, [
           el("thead", {}, [el("tr", {}, [
@@ -1810,14 +2218,13 @@
         ])
       ]));
 
-      main.appendChild(el("h2", { class: "section-title", text: "Copy files from this appliance" }));
-      main.appendChild(el("p", {
-        class: "section-hint",
-        text: "The backup account accepts SFTP only; rsync and scp need a remote shell it does not have."
-      }));
-      main.appendChild(el("div", { class: "stage-grid" },
-        (backup.examples || []).map(function (example, index) {
-          return stage(index + 1, example.title, "Run this on your own computer", [
+      main.appendChild(sectionHead(
+        "Copy files from this appliance",
+        "The backup account accepts SFTP only; rsync and scp need a remote shell it does not have."
+      ));
+      main.appendChild(el("div", { class: "action-grid" },
+        (backup.examples || []).map(function (example) {
+          return actionCard(example.title, "Run this on your own computer", [
             el("pre", { class: "log-view", text: example.command })
           ], "backup-example");
         })));
@@ -1910,24 +2317,26 @@
     var status = state.data.status || {};
     var system = status.system || {};
 
-    main.appendChild(el("h2", { class: "section-title", text: "Diagnostics" }));
-    main.appendChild(el("p", { class: "section-hint", text: "Bounded, redacted host information." }));
+    main.appendChild(pageHead(
+      "Diagnostics",
+      "Bounded, redacted host information, and the support archive that carries it off the box."
+    ));
 
     main.appendChild(el("div", { class: "card-grid" }, [
       card("Temperature", [
         el("p", { class: "status-value", text: (system.temperature || {}).celsius ? system.temperature.celsius + " °C" : "—" })
       ], "diag-temperature"),
       card("Memory", [
-        el("p", { class: "status-value", text: (system.memory || {}).used_percent !== null && (system.memory || {}).used_percent !== undefined ? system.memory.used_percent + " %" : "—" }),
-        fact("Total", (system.memory || {}).total_mb ? system.memory.total_mb + " MB" : null),
-        fact("Available", (system.memory || {}).available_mb ? system.memory.available_mb + " MB" : null)
+        el("p", { class: "status-value", text: usedPercent((system.memory || {}).used_percent) }),
+        fact("Total", gigabytes((system.memory || {}).total_mb)),
+        fact("Available", gigabytes((system.memory || {}).available_mb))
       ], "diag-memory"),
       card("Root filesystem", [
-        el("p", { class: "status-value", text: ((system.storage || {}).root || {}).used_percent !== undefined ? system.storage.root.used_percent + " %" : "—" }),
-        fact("Free", ((system.storage || {}).root || {}).free_mb ? system.storage.root.free_mb + " MB" : null)
+        el("p", { class: "status-value", text: usedPercent(((system.storage || {}).root || {}).used_percent) }),
+        fact("Free", gigabytes(((system.storage || {}).root || {}).free_mb))
       ], "diag-storage"),
       card("EMS data", [
-        el("p", { class: "status-value", text: ((system.storage || {}).ems_data || {}).used_percent !== undefined ? system.storage.ems_data.used_percent + " %" : "—" }),
+        el("p", { class: "status-value", text: usedPercent(((system.storage || {}).ems_data || {}).used_percent) }),
         fact("Path", ((system.storage || {}).ems_data || {}).path, { mono: true })
       ], "diag-ems-data"),
       expert() ? card("Kernel", [
@@ -1942,8 +2351,8 @@
       ], "diag-services")
     ].filter(Boolean)));
 
-    main.appendChild(el("div", { class: "stage-grid" }, [
-      stage(1, "Support archive", "Bounded, redacted diagnostics for support", [
+    main.appendChild(el("div", { class: "action-grid" }, [
+      actionCard("Support archive", "Bounded, redacted diagnostics for support", [
         el("p", { class: "control-stage-subtitle", text: "Passwords, tokens, private keys and EMS secrets are excluded." }),
         el("div", { class: "control-stage-actions" }, [
           el("button", {
@@ -1962,10 +2371,9 @@
   }
 
   function logPanel(source, title, sources) {
-    var wrapper = el("section", { class: "control-stage", "data-test": "log-panel" }, [
-      el("div", { class: "control-stage-head" }, [
-        el("span", { class: "control-stage-step", "aria-hidden": "true", text: "L" }),
-        el("h3", { class: "control-stage-title", text: title })
+    var wrapper = el("section", { class: "action-card", "data-test": "log-panel" }, [
+      el("div", { class: "action-card-head" }, [
+        el("h3", { class: "action-card-title", text: title })
       ])
     ]);
 
@@ -2017,8 +2425,10 @@
     settings = settings || {};
     var auditState = settings.security_audit || state.securityAudit || {};
 
-    main.appendChild(el("h2", { class: "section-title", text: "Settings" }));
-    main.appendChild(el("p", { class: "section-hint", text: "Host settings live in the appliance configuration file and are read-only here." }));
+    main.appendChild(pageHead(
+      "Settings",
+      "The appliance password, and the host settings that live in the configuration file and are read-only here."
+    ));
 
     main.appendChild(el("div", { class: "card-grid" }, [
       card("Appliance", [
@@ -2028,10 +2438,10 @@
         fact("Configuration", settings.configuration_file, { mono: true })
       ], "settings-appliance"),
       card("Sessions", [
-        fact("Idle timeout", settings.session_timeout_seconds ? settings.session_timeout_seconds + " s" : null),
-        fact("Absolute maximum", settings.session_absolute_max_seconds ? settings.session_absolute_max_seconds + " s" : null)
+        fact("Signed out after", duration(settings.session_timeout_seconds)),
+        fact("Signed out at the latest after", duration(settings.session_absolute_max_seconds))
       ], "settings-sessions"),
-      card("Updates", [
+      card("Update policy", [
         fact("Automatic security updates", settings.automatic_security_updates),
         fact("Admin repository", settings.admin_repository, { mono: true }),
         fact("Prereleases allowed", settings.allow_prerelease)
@@ -2047,15 +2457,15 @@
       ], "settings-audit")
     ]));
 
-    main.appendChild(el("div", { class: "stage-grid" }, [
-      stage(1, "Detail level", "Basic hides host internals, Expert shows them", [
+    main.appendChild(el("div", { class: "action-grid" }, [
+      actionCard("Detail level", "Basic hides host internals, Expert shows them", [
         el("p", { class: "control-stage-subtitle", text: "The preference is stored in this browser only." }),
         el("div", { class: "control-stage-actions" }, [
           el("button", { type: "button", class: "ghost-button compact", text: "Use Basic mode", onclick: function () { setMode("basic"); } }),
           el("button", { type: "button", class: "ghost-button compact", text: "Use Expert mode", onclick: function () { setMode("expert"); } })
         ])
       ], "settings-mode"),
-      stage(2, "Appliance password", "Independent from the EMS Admin password", [renderPasswordForm()], "settings-password")
+      actionCard("Appliance password", "Independent from the EMS Admin password", [renderPasswordForm()], "settings-password")
     ]));
   }
 
@@ -2102,7 +2512,7 @@
     ]);
   }
 
-  function renderFindings(findings) {
+  function renderRepairChecks(findings) {
     return el("div", { class: "table-wrap" }, [
       el("table", { class: "data", "data-test": "repair-findings" }, [
         el("thead", {}, [el("tr", {}, [

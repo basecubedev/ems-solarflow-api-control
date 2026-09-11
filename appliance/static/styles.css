@@ -125,6 +125,20 @@ a { color: var(--accent2); }
 
 .field { display: grid; gap: 5px; }
 
+/* A checkbox is a control, not a label/value pair: it sits next to its label
+   rather than at the far edge of a fact row, and the label reads as a sentence
+   instead of as an uppercase field name. */
+.field-check { display: flex; align-items: center; gap: 8px; }
+.field-check input { width: auto; min-height: 0; margin: 0; }
+.field-check label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+  cursor: pointer;
+}
+
 label {
   font-size: 10px;
   font-weight: 700;
@@ -267,6 +281,21 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
   font-weight: 600;
   cursor: pointer;
 }
+/* A section with something wrong carries a dot; the same fact is in the button
+   text for anyone who cannot see it, because colour alone is never the signal. */
+.nav-mark {
+  display: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+.nav-mark[data-severity] { display: inline-block; }
+.nav-mark[data-severity="error"] { background: var(--danger); }
+.nav-mark[data-severity="warning"] { background: var(--pv); }
+.nav-mark[data-severity="info"] { background: var(--output); }
+
 .nav-button[aria-current="page"] {
   border-color: var(--accent2);
   color: var(--accent2);
@@ -275,6 +304,53 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
 
 .app-main { display: grid; gap: 16px; }
 
+/* --- one head, one verdict, then what needs attention ------------------ */
+
+/* The head, the verdict and the findings are one block: they answer "what is
+   this page" and "what is wrong here" together, so they sit closer than the
+   main grid's gap between unrelated sections. */
+.page-intro { display: flex; flex-direction: column; gap: 8px; }
+
+.page-head { display: flex; align-items: flex-start; gap: 10px; }
+.page-head-titles { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.page-title { margin: 0; font-size: 18px; font-weight: 800; }
+.page-title:focus-visible { outline: 2px solid var(--output); outline-offset: 4px; border-radius: 4px; }
+.page-subtitle { margin: 0; color: var(--muted); font-size: 12px; }
+
+.hub-verdict {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.hub-verdict[data-tone="ok"] { color: var(--output); }
+.hub-verdict[data-tone="warn"] { color: var(--pv); }
+.hub-verdict[data-tone="bad"] { color: var(--danger); }
+
+.findings { display: flex; flex-direction: column; gap: 8px; }
+.findings[hidden] { display: none; }
+.findings-headline { margin: 0; font-size: 13px; font-weight: 700; color: var(--muted); }
+.findings[data-status="error"] .findings-headline { color: var(--danger); }
+.findings[data-status="warning"] .findings-headline { color: var(--pv); }
+.findings[data-status="info"] .findings-headline { color: var(--output); }
+.findings-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+
+.finding {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 10px;
+  padding: 9px 12px;
+  background: var(--panel);
+}
+.finding[data-severity="error"] { border-left-color: var(--danger); }
+.finding[data-severity="warning"] { border-left-color: var(--pv); }
+.finding[data-severity="info"] { border-left-color: var(--output); }
+.finding-head { display: flex; align-items: center; gap: 10px; }
+.finding-title { margin: 0; font-size: 13px; font-weight: 700; }
+.finding-message { margin: 3px 0 0; font-size: 12px; color: var(--muted); }
+.finding-next { margin: 4px 0 0; font-size: 12px; font-weight: 600; color: var(--text); }
+.finding-open { margin-left: auto; flex: 0 0 auto; }
+
 .section-title {
   margin: 0 0 4px;
   font-size: 13px;
@@ -282,7 +358,10 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
   letter-spacing: 0.04em;
 }
 
-.section-hint { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+.section-head { display: flex; flex-direction: column; gap: 2px; }
+.section-hint { margin: 0; color: var(--muted); font-size: 12px; }
+/* A note is an aside under a page or section head, not the head's own subtitle. */
+.section-note { margin: 0; color: var(--muted); font-size: 12px; }
 
 /* --- Aggregate / Device style: status cards ---------------------------- */
 
@@ -326,7 +405,16 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
 }
 .fact-row:first-of-type { border-top: 0; padding-top: 0; }
 .fact-label { color: var(--muted2); }
-.fact-value { color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
+/* A digest or an image reference has no break opportunity of its own, so a
+   fact row's minimum width became the whole string: inside the confirmation
+   dialog that pushed the value and the Confirm button past the edge. */
+.fact-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .fact-value.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; word-break: break-all; }
 
 .tone {
@@ -368,13 +456,13 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
 
 /* --- Control / Energy stage style: mutation workflows ------------------ */
 
-.stage-grid {
+.action-grid {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
 }
 
-.control-stage {
+.action-card {
   background: var(--panel-strong);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -384,31 +472,18 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
   gap: 9px;
 }
 
-.control-stage-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+.action-card-head { display: flex; flex-direction: column; gap: 2px; }
 
-.control-stage-step {
-  min-width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  background: rgba(34, 211, 238, 0.12);
-  border: 1px solid rgba(34, 211, 238, 0.45);
-  color: var(--accent2);
-  font-size: 11px;
+.action-card-title {
+  margin: 0;
+  font-size: 13px;
   font-weight: 700;
 }
 
-.control-stage-title {
+.action-card-subtitle {
   margin: 0;
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  color: var(--muted2);
 }
 
 .control-stage-subtitle {
@@ -473,7 +548,6 @@ table.data th {
 }
 table.data td.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; word-break: break-all; }
 
-.expert-only { border-left: 2px solid rgba(139, 92, 246, 0.4); padding-left: 10px; }
 
 .inline-form { display: grid; gap: 10px; }
 
@@ -517,7 +591,7 @@ table.data td.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; fon
 @media (max-width: 640px) {
   .app-header { flex-direction: column; align-items: stretch; }
   .header-actions { justify-content: flex-start; }
-  .card-grid, .stage-grid { grid-template-columns: 1fr; }
+  .card-grid, .action-grid { grid-template-columns: 1fr; }
   .dialog-actions { flex-direction: column-reverse; }
   .dialog-actions button { width: 100%; }
 }

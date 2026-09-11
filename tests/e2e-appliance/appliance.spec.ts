@@ -79,8 +79,180 @@ test.describe("overview @smoke", () => {
 
   test("every section keeps its heading structure", async ({ page }) => {
     await signIn(page);
+    // One product name, then one page heading below it. The page heading is
+    // what a keyboard user is put on when they pick a section, so every view
+    // has exactly one and it is focusable.
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Appliance Manager");
-    await expect(page.getByRole("heading", { level: 2, name: "Warnings" })).toBeVisible();
+    await expect(page.locator("#main .page-title")).toHaveCount(1);
+    await expect(page.locator("#main .page-title")).toHaveAttribute("tabindex", "-1");
+  });
+
+  test("the page leads with a verdict and what needs attention", async ({ page }) => {
+    await signIn(page);
+    const verdict = page.locator('[data-test="overview-verdict"]');
+    await expect(verdict).toBeVisible();
+    await expect(verdict).toHaveAttribute("data-tone", /ok|warn|bad/);
+
+    // The fixture host has security updates pending, so there is one finding
+    // and it offers the page that installs them.
+    const findings = page.locator('[data-test="findings"]');
+    await expect(findings).toBeVisible();
+    await expect(findings.locator(".finding")).toHaveCount(1);
+    await expect(findings.locator(".finding-title")).toHaveText("Security updates are waiting");
+    await expect(findings.locator('[data-test="finding-open-updates"]')).toBeVisible();
+  });
+
+  test("a finding takes you to the page that can act on it", async ({ page }) => {
+    await signIn(page);
+    await page.locator('[data-test="finding-open-updates"]').click();
+    await expect(page.locator('[data-test="nav-updates"]')).toHaveAttribute("aria-current", "page");
+    await expect(page.locator("#main .page-title")).toHaveText("System updates");
+  });
+
+  test("the navigation marks the section that needs attention", async ({ page }) => {
+    await signIn(page);
+    const mark = page.locator('[data-test="nav-updates"] .nav-mark');
+    await expect(mark).toHaveAttribute("data-severity", "warning");
+    // Never colour alone: the same fact is in the button's accessible name.
+    await expect(page.locator('[data-test="nav-updates"]')).toContainText("needs attention");
+    await expect(page.locator('[data-test="nav-network"] .nav-mark')).not.toHaveAttribute(
+      "data-severity",
+      /.*/,
+    );
+  });
+
+  test("switching section moves focus to that page's heading", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "network");
+    await expect(page.locator("#main .page-title")).toBeFocused();
+    await expect(page.locator("#main .page-title")).toHaveText("Network");
+  });
+});
+
+test.describe("the two-second poll", () => {
+  // The poll exists so a running operation's progress stays live, and it
+  // rebuilds the page to do it. Anything the operator was holding on to has to
+  // survive that: a field keeps its text, and a control keeps the focus. Both
+  // are waited on by response, never by a clock.
+  test("a control keeps the focus it was given", async ({ page }) => {
+    await signIn(page);
+    const button = page.locator('[data-test="quick-restart-admin"]');
+    await button.focus();
+    await expect(button).toBeFocused();
+
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+    await expect(button).toBeFocused();
+  });
+
+  // Restoring focus has to be invisible. Moving focus on a deliberate view
+  // change may scroll -- landing at the top of the page you just opened is
+  // right -- but re-taking it after a rebuild must not, or the page walks back
+  // to whatever had focus every two seconds. The tallest page shows it first.
+  test("the page stays where the reader scrolled it", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "access");
+    await expect(page.locator("#main .page-title")).toBeFocused();
+
+    const parked = await page.evaluate(() => {
+      window.scrollTo(0, document.body.scrollHeight);
+      return Math.round(window.scrollY);
+    });
+    expect(parked).toBeGreaterThan(0);
+
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+    expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(parked);
+  });
+
+  test("a control deep in the page does not pull the page to it", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "access");
+    await page.locator('[data-test="key-add"]').focus();
+
+    const parked = await page.evaluate(() => {
+      window.scrollTo(0, document.body.scrollHeight);
+      return Math.round(window.scrollY);
+    });
+    expect(parked).toBeGreaterThan(0);
+
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+    expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(parked);
+    await expect(page.locator('[data-test="key-add"]')).toBeFocused();
+  });
+
+  // Every section, not only the one that happens to be tall enough today. The
+  // viewport is shrunk so that each page scrolls, and the list comes from the
+  // navigation rather than from here, so a section added later is covered
+  // without anyone remembering to add it. The parked > 0 check is what keeps
+  // this honest: a page that stops being scrollable would otherwise pass
+  // without ever exercising the guard.
+  test("no section walks the page while the poll rebuilds it", async ({ page }) => {
+    await page.setViewportSize({ width: 1180, height: 360 });
+    await signIn(page);
+
+    const views = await page
+      .locator("#nav-list [data-test^='nav-']")
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-test").slice(4)));
+    expect(views.length).toBeGreaterThan(4);
+
+    for (const view of views) {
+      await openView(page, view);
+      const parked = await page.evaluate(() => {
+        window.scrollTo(0, document.body.scrollHeight);
+        return Math.round(window.scrollY);
+      });
+      expect(parked, `${view} does not scroll at 360px, so it proves nothing`).toBeGreaterThan(0);
+
+      await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+      expect(await page.evaluate(() => Math.round(window.scrollY)), `${view} moved`).toBe(parked);
+    }
+  });
+
+  test("opening another section still starts at the top of it", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "access");
+    const parked = await page.evaluate(() => {
+      window.scrollTo(0, document.body.scrollHeight);
+      return Math.round(window.scrollY);
+    });
+    expect(parked).toBeGreaterThan(0);
+
+    // The rebuild keeps the position; a view change is not a rebuild, it is a
+    // move, and reading a page you just opened starts at its heading.
+    await openView(page, "diagnostics");
+    expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(0);
+    await expect(page.locator("#main .page-title")).toBeFocused();
+  });
+
+  test("the verdict is not read out again on every rebuild", async ({ page }) => {
+    await signIn(page);
+    // Not a live region of its own: this node is replaced every two seconds.
+    await expect(page.locator('[data-test="overview-verdict"]')).not.toHaveAttribute(
+      "aria-live",
+      /.*/,
+    );
+    // The shell's live region stays silent while the verdict is unchanged.
+    await expect(page.locator("#live-region")).toBeEmpty();
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await expect(page.locator("#live-region")).toBeEmpty();
+  });
+
+  test("the page heading keeps the focus a section change gave it", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "diagnostics");
+    await expect(page.locator("#main .page-title")).toBeFocused();
+
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+    await expect(page.locator("#main .page-title")).toBeFocused();
   });
 });
 
@@ -143,9 +315,12 @@ test.describe("admin lifecycle @authority", () => {
 
     const dialog = page.locator("#dialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("target tag");
+    await expect(dialog).toContainText("Version to install");
     await expect(dialog).toContainText("v1.1.0");
-    await expect(dialog).toContainText("target digest");
+    await expect(dialog).toContainText("Image digest");
+    // What is about to happen is read before which image it happens with.
+    const body = await dialog.innerText();
+    expect(body.indexOf("Version to install")).toBeLessThan(body.indexOf("Image digest"));
     await expect(page.locator("#dialog-confirm")).toBeEnabled();
     await expect(page.locator('[data-test="admin-version"]')).toContainText("v1.0.0");
   });
@@ -179,7 +354,7 @@ test.describe("admin lifecycle @authority", () => {
 
     const banner = page.locator('[data-test="operation-stage"]');
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText("admin.install");
+    await expect(banner).toContainText("Installing EMS Admin");
     await expect(banner).toContainText("succeeded", { timeout: 20_000 });
     await expect(page.locator('[data-test="acknowledge-operation"]')).toBeVisible();
   });
@@ -404,8 +579,18 @@ test.describe("admin lifecycle @authority", () => {
       page.waitForResponse((response) => response.url().includes("/api/admin/plan-install")),
       page.locator('[data-test="install-plan"]').click(),
     ]);
-    await expect(page.locator("#dialog")).toContainText("target reference");
+    await expect(page.locator("#dialog")).toContainText("Exact image");
     await expect(page.locator("#dialog")).toContainText("@sha256:");
+    // A guard, not a reproduction: a digest has no break opportunity of its own,
+    // and a row wider than the dialog pushes Confirm past the edge. It holds
+    // today because those values are set in a breaking style; this fails if
+    // that stops being true.
+    const width = await page.locator("#dialog").evaluate((node) => ({
+      box: node.clientWidth,
+      content: node.scrollWidth,
+    }));
+    expect(width.content).toBeLessThanOrEqual(width.box);
+    await expect(page.locator("#dialog-confirm")).toBeInViewport();
     await page.locator("#dialog-cancel").click();
   });
 
@@ -681,9 +866,9 @@ test.describe("truthful host state @smoke", () => {
 
     // Authentication is a recovery path: it must still work.
     await expect(page.locator("#shell")).toBeVisible();
-    const notice = page.locator('[data-test="audit-degraded"]');
+    const notice = page.locator('.finding[data-code="security_audit_degraded"]');
     await expect(notice).toBeVisible();
-    await expect(notice).toContainText("Security audit degraded");
+    await expect(notice).toContainText("Sign-ins are not being recorded");
     await expect(notice).toContainText("unrecorded");
 
     await openView(page, "settings");
@@ -694,7 +879,7 @@ test.describe("truthful host state @smoke", () => {
 
   test("a healthy audit trail shows no warning", async ({ page }) => {
     await signIn(page);
-    await expect(page.locator('[data-test="audit-degraded"]')).toHaveCount(0);
+    await expect(page.locator('.finding[data-code="security_audit_degraded"]')).toHaveCount(0);
     await openView(page, "settings");
     await expect(page.locator('[data-test="settings-audit"]')).toContainText("healthy");
   });

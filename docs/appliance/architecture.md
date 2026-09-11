@@ -149,6 +149,29 @@ proves it, so a new one cannot arrive unmentioned.
 | A rollback costs no downtime unless it must | preflight before the stop, in `_execute_rollback` |
 | "Installed" means usable | `install_check.verify_installation`, run last by the postinst |
 
+## What the appliance says is wrong
+
+`status.py` produces one list of findings and one health level, and the level is
+the worst finding rather than a second opinion written beside it. Each finding
+carries everything the interface needs to present it, so no consumer has to
+judge a code by its spelling:
+
+| Field | Meaning |
+|---|---|
+| `code` | Stable identifier. A log line and a test anchor, never shown to an operator |
+| `severity` | `error`, `warning` or `info`. The only severity judgement in the project |
+| `section` | The manager view that can act on it, in the interface's own view ids |
+| `title` | One short sentence a person reads first |
+| `message` | What was observed |
+| `next_step` | What to do about it, naming the page that does it |
+
+`health.level` follows from the severities: any `error` is `degraded`, any
+`warning` is `attention`, nothing is `healthy`. Adding a finding therefore
+cannot raise the level and forget to say so, or say so and forget to raise it.
+
+The field is still called `warnings` in the payload, because it is a published
+shape the host CLI also reads.
+
 ## Operation model
 
 Every mutating action is a durable operation record, not a request or a thread:
