@@ -87,6 +87,12 @@ new Function(
     "\n" +
     extractFunction("planFields") +
     "\n" +
+    extractVar("OPERATION_TITLES") +
+    "\n" +
+    extractFunction("operationTitle") +
+    "\n" +
+    extractFunction("operationStage") +
+    "\n" +
     extractFunction("viewLabel") +
     "\n" +
     extractFunction("rankSeverity") +
@@ -110,6 +116,8 @@ new Function(
     "\nscope.gigabytes = gigabytes;" +
     "\nscope.usedPercent = usedPercent;" +
     "\nscope.planFields = planFields;" +
+    "\nscope.operationTitle = operationTitle;" +
+    "\nscope.operationStage = operationStage;" +
     "\nscope.verdictAnnouncement = verdictAnnouncement;" +
     "\nscope.findingAction = findingAction;" +
     "\nscope.attentionBySection = attentionBySection;"
@@ -136,6 +144,9 @@ process.stdout.write(
     durations: (input.durations || []).map(scope.duration),
     sizes: (input.sizes || []).map(scope.gigabytes),
     percentages: (input.percentages || []).map(scope.usedPercent),
-    plan: input.plan ? scope.planFields(input.plan, Boolean(input.expert)) : null
+    plan: input.plan ? scope.planFields(input.plan, Boolean(input.expert)) : null,
+    operations: (input.operations || []).map(function (item) {
+      return { title: scope.operationTitle(item), stage: scope.operationStage(item) };
+    })
   }) + "\n"
 );

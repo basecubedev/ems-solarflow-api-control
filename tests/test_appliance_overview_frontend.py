@@ -30,7 +30,14 @@ RUNNER = os.path.join(ROOT, "tests", "js", "appliance_overview_runner.js")
 
 
 def _render(
-    status, view="overview", durations=(), sizes=(), percentages=(), plan=None, expert=False
+    status,
+    view="overview",
+    durations=(),
+    sizes=(),
+    percentages=(),
+    plan=None,
+    expert=False,
+    operations=(),
 ):
     node = shutil.which("node")
     if not node:
@@ -46,6 +53,7 @@ def _render(
                 "percentages": list(percentages),
                 "plan": plan,
                 "expert": expert,
+                "operations": list(operations),
             }
         ),
         text=True,
@@ -356,3 +364,39 @@ def test_a_plan_still_shows_a_field_this_build_has_no_label_for():
 
     fields = {field["key"]: field["label"] for field in _fields(_plan(surprise_field="yes"))}
     assert fields["surprise_field"] == "surprise field"
+
+
+# --- the operation banner --------------------------------------------------
+
+
+def _operations(*items):
+    return _render(_status(), operations=list(items))["operations"]
+
+
+def test_the_banner_names_the_operation_rather_than_its_identifier():
+    banner = _operations({"type": "admin.install", "stage": "pulling_image", "state": "running"})[0]
+    assert banner["title"] == "Installing EMS Admin"
+    assert banner["stage"] == "pulling image"
+
+
+def test_an_operation_type_this_build_does_not_know_is_still_readable():
+    """Spelled out rather than hidden: an identifier beats a blank banner."""
+
+    banner = _operations({"type": "future.thing", "stage": "x", "state": "running"})[0]
+    assert banner["title"] == "future thing"
+
+
+def test_the_stage_line_is_dropped_when_it_only_repeats_the_state():
+    """The pill beside it already says the state."""
+
+    repeated = _operations(
+        {
+            "type": "admin.lifecycle",
+            "stage": "awaiting_confirmation",
+            "state": "awaiting_confirmation",
+        }
+    )[0]
+    assert repeated["stage"] == ""
+
+    distinct = _operations({"type": "admin.lifecycle", "stage": "verifying", "state": "running"})[0]
+    assert distinct["stage"] == "verifying"

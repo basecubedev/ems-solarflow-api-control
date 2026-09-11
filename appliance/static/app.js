@@ -459,6 +459,45 @@
 
   /* --------------------------------------------------------- operations */
 
+  /* The banner is what an operator watches while their appliance is being
+     changed, and it led with the payload's own identifier: "admin.install ·
+     verifying". The type is a closed set and gets a sentence; the stage is
+     whatever the executor reported, so it is spelled out rather than mapped --
+     a stage nobody named must still be readable. */
+  var OPERATION_TITLES = {
+    "admin.install": "Installing EMS Admin",
+    "admin.rollback": "Rolling back EMS Admin",
+    "admin.repair": "Repairing the EMS Admin deployment",
+    "admin.lifecycle": "EMS Admin container",
+    "updates.install": "Installing operating-system updates",
+    "updates.repair": "Repairing the package manager",
+    "manager.update": "Updating the Appliance Manager",
+    "manager.revert": "Going back to the kept Appliance Manager",
+    "network.wifi": "Changing the WLAN",
+    "network.hostname": "Changing the hostname",
+    "system.timezone": "Changing the timezone",
+    "system.reboot": "Restarting the Raspberry Pi",
+    "system.shutdown": "Shutting down the Raspberry Pi",
+    "ssh.service": "Changing the SSH service",
+    "ssh.key_add": "Adding a public key",
+    "ssh.key_remove": "Removing a public key",
+    "ssh.revoke_all": "Revoking every public key",
+    "support.archive": "Creating a support archive"
+  };
+
+  function operationTitle(operation) {
+    var type = String((operation || {}).type || "");
+    return OPERATION_TITLES[type] || type.replace(/[._]/g, " ") || "Current operation";
+  }
+
+  /* The pill beside it already carries the state. When the executor has not
+     reported a finer stage than that, the line would say it twice. */
+  function operationStage(operation) {
+    var stage = String((operation || {}).stage || "").replace(/_/g, " ");
+    var state = String((operation || {}).state || "").replace(/_/g, " ");
+    return stage === state ? "" : stage;
+  }
+
   function renderOperationBanner() {
     var wrapper = el("div", { "data-test": "operation-banner" });
     var operation = state.operation;
@@ -482,7 +521,7 @@
     var progress = el("ol", { class: "progress-list" },
       (operation.progress || []).slice(-6).map(function (entry) {
         return el("li", { class: "progress-item" }, [
-          el("span", { text: entry.stage }),
+          el("span", { text: String(entry.stage || "").replace(/_/g, " ") }),
           el("span", { text: entry.detail || "" })
         ]);
       }));
@@ -507,8 +546,8 @@
     }
 
     wrapper.appendChild(actionCard(
-      "Current operation",
-      operation.type + " · " + operation.stage,
+      operationTitle(operation),
+      operationStage(operation),
       [
         el("div", { "data-test": "operation-outcome" }, [tone(level, outcome.label)]),
         operation.error ? el("p", { class: "control-result", text: operation.error.message }) : null,

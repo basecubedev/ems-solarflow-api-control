@@ -270,7 +270,7 @@ test.describe("admin lifecycle @authority", () => {
 
     const banner = page.locator('[data-test="operation-stage"]');
     await expect(banner).toBeVisible();
-    await expect(banner).toContainText("admin.install");
+    await expect(banner).toContainText("Installing EMS Admin");
     await expect(banner).toContainText("succeeded", { timeout: 20_000 });
     await expect(page.locator('[data-test="acknowledge-operation"]')).toBeVisible();
   });

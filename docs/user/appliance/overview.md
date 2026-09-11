@@ -25,9 +25,10 @@ The navigation carries the same information: a section with something waiting
 gets a dot, and the button also says "needs attention" for anyone not reading
 colour.
 
-If the appliance could not be read at all, that is itself the first entry. The
-tiles below it are then empty, and the page says so rather than showing you six
-tiles of dashes.
+If the appliance could not be read at all, that is itself the first entry, and
+it says that nothing below it came from the appliance. The tiles underneath
+still appear, filled with dashes — but you are told why before you read them,
+instead of being left to guess whether an empty tile means empty or unknown.
 
 ### 3. What the box currently reads
 
@@ -53,7 +54,8 @@ cannot distinguish is never the only signal.
 ## The operation banner
 
 Anything that changes the box runs as an *operation*, and one appears at the top
-while it runs: what it is doing, which step it reached, and what it ended as.
+while it runs: what it is doing, named in words rather than by its internal
+identifier, which step it reached, and what it ended as.
 
 The important property: **nothing starts without you confirming a plan.** You
 press an action, the appliance works out what it would do, shows you that, and
