@@ -1,6 +1,7 @@
 import { type Page, type Route } from "@playwright/test";
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
 
 // Route-to-serial identity enrichment: a serial-less Cloud MQTT device already
 // in the config must be recognized as the SAME inverter when the identical Cloud
@@ -51,28 +52,6 @@ async function mockDiscovery(page: Page, state: DiscoveryState) {
   await page.route("**/api/discovery/result/**", (route) =>
     json(route, { status: "complete", devices: [] }),
   );
-}
-
-async function openMaintenanceEditor(page: Page) {
-  await expect(page.locator("#view-start")).toBeVisible();
-  await page.locator('[data-start-path="manage_existing"]').click();
-  await page.locator('[data-open-maintenance-path="manual"]').click();
-  const toggle = page.locator(
-    '[data-maintenance-toggle="maintenance-config-card"]',
-  );
-  const editor = page.locator("#maintenance-config-editor");
-  await expect(toggle).toContainText(/inverter/);
-  await expect(async () => {
-    if (!(await editor.isVisible())) await toggle.click();
-    await expect(editor).toBeVisible({ timeout: 1_000 });
-  }).toPass();
-  const sources = page.locator("#maintenance-discovery-sources");
-  await expect(async () => {
-    if (!(await sources.isVisible())) {
-      await page.locator("#maintenance-add-devices > summary").click();
-    }
-    await expect(sources).toBeVisible({ timeout: 1_000 });
-  }).toPass();
 }
 
 async function runDiscovery(page: Page) {
@@ -150,7 +129,7 @@ test("route-to-serial: a serial-bearing rediscovery of a serial-less Cloud route
   await loadRealMqttProposals(page, state);
 
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   // One API inverter + the serial-less Cloud device.
   await expect(configuredCards(page)).toHaveCount(2);
   await expect(cardByText(page, "Roof Serial-less")).toHaveCount(1);
@@ -178,7 +157,7 @@ test("route-to-serial: a serial-bearing rediscovery of a serial-less Cloud route
   await previewAndApply(page);
 
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(configuredCards(page)).toHaveCount(2);
   await expect(cardByText(page, "Roof Enriched")).toHaveCount(1);
   await expect(page.locator("body")).not.toContainText(CLOUD_ROUTE);

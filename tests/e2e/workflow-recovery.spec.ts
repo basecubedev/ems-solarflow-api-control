@@ -42,7 +42,7 @@ async function openManualPanel(page: Page) {
   const loaded = page.waitForResponse((response) =>
     response.url().endsWith("/api/admin/workflow-lifecycle/recovery/preview"),
   );
-  await page.locator('[data-open-maintenance-path="manual"]').click();
+  await page.locator('[data-open-maintenance-path="status"]').click();
   expect((await loaded).ok()).toBeTruthy();
 }
 

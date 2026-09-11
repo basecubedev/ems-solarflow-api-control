@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
 import { SetupPage } from "./pages/setup-page";
 import {
   currentWorkflow,
@@ -292,8 +293,10 @@ async function installedDigests(page) {
 }
 
 async function verifyUpgradeTarget(page) {
-  await page.locator('[data-start-path="manage_existing"]').click();
-  await page.locator('[data-open-maintenance-path="upgrade"]').click();
+  // This runs after a reload, and a reload keeps the address: once the upgrade
+  // page has been opened once, the reload lands straight back on it and the
+  // start gate never appears. The page object handles either starting point.
+  await new MaintenancePage(page).openUpgrade();
   const select = page.locator("#upgrade-release-select");
   await expect(select).toBeEnabled();
   await select.selectOption("v9.9.10");

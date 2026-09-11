@@ -15,6 +15,8 @@ import hashlib
 import hmac
 import json
 import os
+import shutil
+import tempfile
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -259,6 +261,11 @@ from ems.external_status import (
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 MAX_JSON_BODY_BYTES = 4 * 1024
+
+# A backup archive is the one request body that is not JSON. It is streamed to
+# disk rather than buffered, so the ceiling is about the install's own disk, not
+# about memory.
+MAX_BACKUP_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 MAX_CONFIG_PREVIEW_BODY_BYTES = 64 * 1024
 
 SETUP_CONFIG_STALE = "stale_setup_config"
@@ -1363,6 +1370,12 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/maintenance/backups/create":
             self._handle_backup_create()
+            return
+        if path == "/api/admin/maintenance/backups/export":
+            self._handle_backup_export()
+            return
+        if path == "/api/admin/maintenance/backups/import":
+            self._handle_backup_import()
             return
         if path == "/api/admin/maintenance/backups/inspect":
             self._handle_backup_inspect()
@@ -2918,8 +2931,11 @@ class AdminHandler(BaseHTTPRequestHandler):
         body = self._read_json_body(MAX_CONFIG_PREVIEW_BODY_BYTES)
         if body is None:
             return
-        if not isinstance(body, dict):
+        if not isinstance(body, dict) or set(body) - {"targets", "confirm"}:
             self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        if body.get("confirm") is not True:
+            self._send_json({"error": "confirmation_required"}, status=400)
             return
         targets = body.get("targets")
         if not isinstance(targets, list) or not targets:
@@ -3990,6 +4006,80 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "unknown job_id"}, status=404)
             return
         self._send_json({"ok": True, **job})
+
+    def _handle_backup_export(self):
+        """Hand one stored archive to the browser.
+
+        A POST rather than a GET so it keeps the CSRF gate: a download link the
+        address bar can follow would be reachable by any authenticated
+        same-site navigation.
+        """
+
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict) or set(body) - {"id"}:
+            self._send_json({"error": "unsupported export field"}, status=400)
+            return
+        try:
+            path, name = self.server.backup_service.export_backup(body.get("id"))
+        except BackupRestoreError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        self._send_file(path, "application/gzip", name)
+
+    def _handle_backup_import(self):
+        """Take an archive back, so a re-flashed machine can be restored.
+
+        The upload is streamed into the backup directory as a temporary file and
+        only adopted once it verifies. Every refusal removes that file before it
+        answers, so a caller that reads the directory the moment it gets the
+        reply never sees a leftover.
+        """
+
+        if self._reject_unrelated_transition_write():
+            self.close_connection = True
+            return
+        name = self.headers.get("X-Backup-Filename", "")
+        service = self.server.backup_service
+        try:
+            backup_dir = service.backup_directory()
+            accepted = service.accepts_import_name(name)
+        except BackupRestoreError as exc:
+            self._refuse_upload({"ok": False, "error": str(exc)}, 400)
+            return
+        if not accepted:
+            self._refuse_upload(
+                {"ok": False, "error": "that is not an EMS backup file name"}, 400
+            )
+            return
+        length = self._upload_length(MAX_BACKUP_UPLOAD_BYTES)
+        if length is None:
+            return
+
+        os.makedirs(backup_dir, exist_ok=True)
+        handle = tempfile.NamedTemporaryFile(
+            dir=backup_dir, prefix=".import-", suffix=".part", delete=False
+        )
+        temp_path = handle.name
+        result = None
+        error = None
+        try:
+            if self._copy_body(handle, length):
+                handle.close()
+                result = service.import_backup(name, temp_path)
+            else:
+                error = "the upload ended early"
+        except BackupRestoreError as exc:
+            error = str(exc)
+        finally:
+            handle.close()
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        if error is not None:
+            self._send_json({"ok": False, "error": error}, status=400)
+            return
+        self._send_json(result)
 
     def _handle_backup_inspect(self):
         body = self._read_json_body()
@@ -6885,6 +6975,77 @@ class AdminHandler(BaseHTTPRequestHandler):
             status=status,
             headers=headers,
         )
+
+    def _refuse_upload(self, payload, status):
+        """Answer a non-JSON upload without reading its body.
+
+        _drain_body stops at the JSON ceiling, so it silently does not drain an
+        archive. Leaving those bytes unread would desynchronise the next request
+        on this connection, so a refused upload ends the connection instead.
+        """
+
+        self.close_connection = True
+        self._send_json(payload, status=status)
+
+    def _upload_length(self, max_bytes):
+        """Validate a non-JSON body's declared size before anything is written.
+
+        Returns the length, or ``None`` once it has already answered.
+        """
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            self._refuse_upload({"ok": False, "error": "invalid Content-Length"}, 400)
+            return None
+        if length <= 0:
+            self._refuse_upload({"ok": False, "error": "empty request body"}, 400)
+            return None
+        if length > max_bytes:
+            self._refuse_upload({"ok": False, "error": "request body too large"}, 413)
+            return None
+        return length
+
+    def _copy_body(self, handle, length):
+        """Copy exactly ``length`` bytes of the request body into ``handle``."""
+
+        remaining = length
+        while remaining > 0:
+            chunk = self.rfile.read(min(64 * 1024, remaining))
+            if not chunk:
+                self.close_connection = True
+                return False
+            handle.write(chunk)
+            remaining -= len(chunk)
+        return True
+
+    def _send_file(self, path, content_type, filename):
+        """Stream a file from disk instead of buffering it into the response."""
+
+        try:
+            size = os.path.getsize(path)
+            handle = open(path, "rb")
+        except OSError:
+            self._send_json({"ok": False, "error": "unknown backup id"}, status=400)
+            return
+        with handle:
+            self.send_response(200)
+            for key, value in SECURITY_HEADERS.items():
+                self.send_header(key, value)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header(
+                "Content-Disposition",
+                'attachment; filename="' + os.path.basename(filename) + '"',
+            )
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            try:
+                shutil.copyfileobj(handle, self.wfile, 64 * 1024)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
     def _send_bytes(self, body, content_type, status=200, headers=None):
         self.send_response(status)

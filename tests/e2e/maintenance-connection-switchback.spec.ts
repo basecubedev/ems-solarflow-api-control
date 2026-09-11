@@ -1,6 +1,7 @@
 import { type Page, type Route } from "@playwright/test";
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
 
 // Reversible maintenance connection switching: one physical inverter moves back
 // and forth between its discovered connections inside a single discovery
@@ -113,28 +114,6 @@ async function login(page: Page) {
   const loginPage = new LoginPage(page);
   await loginPage.open();
   await loginPage.authenticate();
-}
-
-async function openMaintenanceEditor(page: Page) {
-  await expect(page.locator("#view-start")).toBeVisible();
-  await page.locator('[data-start-path="manage_existing"]').click();
-  await page.locator('[data-open-maintenance-path="manual"]').click();
-  const toggle = page.locator(
-    '[data-maintenance-toggle="maintenance-config-card"]',
-  );
-  const editor = page.locator("#maintenance-config-editor");
-  await expect(toggle).toContainText(/inverter/);
-  await expect(async () => {
-    if (!(await editor.isVisible())) await toggle.click();
-    await expect(editor).toBeVisible({ timeout: 1_000 });
-  }).toPass();
-  const sources = page.locator("#maintenance-discovery-sources");
-  await expect(async () => {
-    if (!(await sources.isVisible())) {
-      await page.locator("#maintenance-add-devices > summary").click();
-    }
-    await expect(sources).toBeVisible({ timeout: 1_000 });
-  }).toPass();
 }
 
 async function runDiscovery(page: Page) {
@@ -256,7 +235,7 @@ test("Local MQTT b1 -> b2 -> b1 switches back without a rescan", { tag: ["@maint
   await login(page);
   await seedAdminScenario("maintenance_local_broker_switchback");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expectOneInverter(page, "local_mqtt");
 
   await runDiscovery(page);
@@ -320,7 +299,7 @@ test("Local MQTT -> Zendure MQTT -> Local MQTT switches back without a rescan", 
   await login(page);
   await seedAdminScenario("maintenance_local_cloud_switchback");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expectOneInverter(page, "local_mqtt");
 
   await runDiscovery(page);
@@ -366,7 +345,7 @@ test("Zendure MQTT -> Local MQTT -> Zendure MQTT switches back without a rescan"
   await login(page);
   await seedAdminScenario("maintenance_cloud_local_switchback");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expectOneInverter(page, "zendure_mqtt");
 
   await runDiscovery(page);
@@ -406,7 +385,7 @@ test("API -> Zendure MQTT -> API switches back in one session", { tag: ["@mainte
   await login(page);
   await seedAdminScenario("maintenance_api_cloud_switchback");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expectOneInverter(page, "local_api");
 
   await runDiscovery(page);
@@ -438,7 +417,7 @@ test("Zendure MQTT -> API -> Zendure MQTT switches back in one session", { tag: 
   await login(page);
   await seedAdminScenario("maintenance_cloud_api_switchback");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
 
   // The installed config states no mqtt.source; the broker profile resolves it,
   // so the configured card names Zendure MQTT before any discovery has run.
@@ -478,7 +457,7 @@ test("a connection switch without its proposal id is refused", { tag: ["@mainten
   await login(page);
   await seedAdminScenario("maintenance_local_broker_switchback");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
 
   await runDiscovery(page);
   await useTheOfferedConnection(page);
@@ -507,7 +486,7 @@ test("a connection switch without its proposal id is refused", { tag: ["@mainten
   // Nothing was written: the reloaded config still uses the stored connection.
   await page.unroute("**/api/admin/maintenance/config/preview");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expectOneInverter(page, "local_mqtt");
   await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
     ROUTE_B1,
@@ -548,7 +527,7 @@ for (const tampering of [
     await login(page);
     await seedAdminScenario("maintenance_foreign_inverter_proposal");
     await page.reload();
-    await openMaintenanceEditor(page);
+    await new MaintenancePage(page).openEditor();
     await runDiscovery(page);
 
     const proposal = await foreignProposal(page);
@@ -602,7 +581,7 @@ for (const tampering of [
     // Nothing landed: the stored connection is still the configured one.
     await page.unroute("**/api/admin/maintenance/config/preview");
     await page.reload();
-    await openMaintenanceEditor(page);
+    await new MaintenancePage(page).openEditor();
     await expectOneInverter(page, "local_mqtt");
     await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
       ROUTE_B1,

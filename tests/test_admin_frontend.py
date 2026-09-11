@@ -755,46 +755,6 @@ def test_start_gate_is_the_default_screen():
     assert 'data-admin-view-panel="maintenance" hidden' in html
 
 
-def test_start_gate_has_exactly_two_choices():
-    html = _read("index.html")
-    assert html.count("data-start-path=") == 2
-    assert 'data-start-path="setup_new"' in html
-    assert 'data-start-path="manage_existing"' in html
-    assert "Guided setup" in html
-    assert "Maintenance" in html
-    # Guided setup is the primary, first option.
-    assert html.index('data-start-path="setup_new"') < html.index(
-        'data-start-path="manage_existing"'
-    )
-    assert html.index("Guided setup") < html.index(
-        '<span class="start-choice-title">Maintenance</span>'
-    )
-    # Docker bootstrap / developer setup stay documentation-only paths.
-    assert "Docker bootstrap" not in html
-    assert "Developer setup" not in html
-
-
-def test_start_gate_paths_are_clickable_cards_without_next_button():
-    html = _read("index.html")
-    # The landing page opens each path directly from its card; there is no
-    # separate submit/Next action between the cards and the docs hint.
-    assert 'id="start-continue"' not in html
-    assert ">Next<" not in html.split('id="view-setup"', 1)[0]
-    # Both paths are real, keyboard-accessible button controls.
-    assert (
-        '<button type="button" class="start-choice start-choice-nav is-recommended" '
-        'data-start-path="setup_new"' in html
-    )
-    assert (
-        '<button type="button" class="start-choice start-choice-nav" '
-        'data-start-path="manage_existing">' in html
-    )
-    # Each card carries a navigation affordance.
-    assert html.count('class="start-choice-arrow"') == 2
-    # The docs hint stays visible and secondary below the cards.
-    assert "See the setup paths in the documentation." in html
-
-
 def test_start_gate_cards_open_via_post_start_path_safety_flow():
     js = _read("admin.js")
     fn = js.split("async function startPath(", 1)[1].split("\nfunction ", 1)[0]
@@ -1147,7 +1107,10 @@ def test_setup_has_blocked_step_05_start_ems_panel():
     assert 'data-setup-step="start"' in setup
     assert ">05<" in setup
     assert '<span class="setup-step-label">Start EMS</span>' in setup
-    assert 'id="step-status-start">Locked</span>' in setup
+    # The chip's disabled state is what says "not yet"; its status line stays
+    # empty until the step opens (tests/test_admin_setup_shell_frontend.py).
+    assert 'id="step-status-start"></span>' in setup
+    assert 'data-setup-step="start" role="tab" aria-selected="false" disabled' in setup
     assert 'data-setup-step-panel="start" hidden' in setup
     assert "Prepare deployment first before starting EMS." in start
     for marker in (
@@ -1171,7 +1134,13 @@ def test_js_step_05_unlocks_only_after_prepare_completes():
     assert 'step === "start"' in locked
     assert "!deploymentReady()" in locked
     render = js.split("function renderStepper", 1)[1].split("\nfunction ", 1)[0]
-    assert "setupEls.stepStatus.start" in render
+    # One status text per step, from one mapping, so a locked step cannot show
+    # a stale label the chip's disabled state contradicts.
+    assert "SETUP_STEPS.forEach" in render
+    assert "setupEls.stepStatus[step]" in render
+    status = js.split("function setupStepStatusText", 1)[1].split("\nfunction ", 1)[0]
+    assert 'step === "start"' in status
+    assert "stepLocked(step)" in status
 
 
 def test_js_step_05_starts_and_polls_backend_job():
@@ -1386,13 +1355,19 @@ def test_js_step_05_service_values_use_safe_dom_text():
     assert "innerHTML" not in render
 
 
-def test_admin_header_copy_describes_docker_deployment():
+def test_admin_header_is_chrome_and_leaves_the_copy_to_each_page():
     html = _read("index.html")
     header = html.split('<header class="admin-header">', 1)[1].split(
         "</header>", 1
     )[0]
-    assert "Guided Docker setup for local EMS deployments." in header
+    # The header stays app chrome: product name and logout. It used to carry a
+    # sentence describing Guided Setup, which was wrong on every other page.
+    assert "EMS SolarFlow Admin" in header
+    assert 'id="auth-logout"' in header
+    assert "admin-subtitle" not in html
     assert "Read-only" not in header
+    # Every page states its own job in its own header instead.
+    assert html.count('class="maintenance-subtitle"') >= 3
 
 
 def test_config_preview_uses_backend_generation_and_compact_summary():
@@ -2052,8 +2027,7 @@ def test_setup_release_step_has_version_controls():
     assert 'id="release-download"' not in release
     assert 'id="release-status"' in release
     assert 'id="release-error"' in release
-    assert "Docker-based EMS installations" in release
-    assert "from v0.6.0 onward" in release
+    assert "Docker releases from v0.6.0 onward" in release
     assert 'id="release-badges"' in release
 
 
@@ -2690,33 +2664,33 @@ def test_index_has_maintenance_view_panel():
     assert 'data-admin-view="maintenance"' not in html
 
 
-def test_maintenance_opens_hub_before_manual_editor():
+def test_maintenance_opens_hub_before_its_pages():
     html = _read("index.html")
     maintenance = _maintenance_section(html)
-    # The hub is shown first; the detailed editor lives in a hidden nested panel.
+    # The hub is shown first; each page lives in its own hidden nested panel.
     assert 'id="maintenance-hub"' in maintenance
-    assert 'id="maintenance-manual-panel" hidden' in maintenance
-    assert maintenance.index('id="maintenance-hub"') < maintenance.index(
-        'id="maintenance-manual-panel"'
-    )
+    for panel in ("maintenance-status-panel", "maintenance-settings-panel"):
+        assert 'id="' + panel + '" hidden' in maintenance
+        assert maintenance.index('id="maintenance-hub"') < maintenance.index(
+            'id="' + panel + '"'
+        )
 
 
-def test_maintenance_hub_exposes_three_user_paths():
-    hub = _read("index.html").split('id="maintenance-hub"', 1)[1].split(
-        'id="maintenance-manual-panel"', 1
-    )[0]
+def test_maintenance_hub_exposes_four_user_paths():
+    hub = _maintenance_hub(_read("index.html"))
     for path, label in (
-        ("manual", "Your system"),
+        ("status", "System status"),
+        ("settings", "Settings &amp; devices"),
         ("upgrade", "Guided upgrade"),
         ("backup", "Backup / restore"),
     ):
         assert 'data-maintenance-path="' + path + '"' in hub
         assert label in hub
-    # The manual path is a full-page navigation button (drills into its own page),
-    # not an inline "open" toggle.
-    assert 'id="maintenance-open-manual"' in hub
-    open_tag = hub.split('id="maintenance-open-manual"', 1)[0].rsplit("<", 1)[1]
-    assert open_tag.startswith("button")
+    # Reading and editing are two doors now, not one page holding both.
+    for marker in ("maintenance-open-status", "maintenance-open-settings"):
+        assert 'id="' + marker + '"' in hub
+        open_tag = hub.split('id="' + marker + '"', 1)[0].rsplit("<", 1)[1]
+        assert open_tag.startswith("button")
     assert "maintenance-path-nav" in hub
     assert "Open manual maintenance" not in hub
     # Backup / restore is a shipped workflow now; no "Planned" badge remains.
@@ -2726,30 +2700,34 @@ def test_maintenance_hub_exposes_three_user_paths():
 
 def test_maintenance_hub_orders_guided_upgrade_first():
     html = _read("index.html")
-    hub = html.split('id="maintenance-hub"', 1)[1].split(
-        'id="maintenance-manual-panel"', 1
-    )[0]
-    # DOM order (not CSS): guided upgrade, then manual config, then backup.
+    hub = _maintenance_hub(html)
+    # DOM order (not CSS): guided upgrade, status, settings, then backup.
     order = [
         hub.index('data-maintenance-path="upgrade"'),
-        hub.index('data-maintenance-path="manual"'),
+        hub.index('data-maintenance-path="status"'),
+        hub.index('data-maintenance-path="settings"'),
         hub.index('data-maintenance-path="backup"'),
     ]
     assert order == sorted(order)
-    # Guided upgrade is a navigation button with the recommended/primary treatment.
+    # Guided upgrade is a navigation button and holds the recommendation badge,
+    # but the badge and the primary treatment are applied by the hub verdict —
+    # a highlight that never moves recommends an update to a broken install.
     upgrade_tag = hub.split('data-maintenance-path="upgrade"', 1)[0].rsplit("<", 1)[1]
     assert upgrade_tag.startswith("button")
-    assert "is-primary" in upgrade_tag
+    assert "is-primary" not in upgrade_tag
     upgrade = hub.split('data-maintenance-path="upgrade"', 1)[1].split(
-        'data-maintenance-path="manual"', 1
+        'data-maintenance-path="status"', 1
     )[0]
     assert "Recommended path" in upgrade
+    assert 'id="maintenance-hub-upgrade-badge"' in upgrade
 
 
 def _maintenance_hub(html):
-    return html.split('id="maintenance-hub"', 1)[1].split(
-        'id="maintenance-manual-panel"', 1
+    hub = html.split('id="maintenance-hub"', 1)[1].split(
+        'id="maintenance-status-panel"', 1
     )[0]
+    assert hub, "maintenance hub slice is empty"
+    return hub
 
 
 def test_maintenance_hub_cards_are_navigation_without_step_numbers():
@@ -2759,7 +2737,7 @@ def test_maintenance_hub_cards_are_navigation_without_step_numbers():
     for badge in ("01", "02", "03"):
         assert ">" + badge + "<" not in hub
     # Each card stays a full-card clickable navigation control with an arrow.
-    for path in ("upgrade", "manual", "backup"):
+    for path in ("upgrade", "status", "settings", "backup"):
         card = hub.split('data-maintenance-path="' + path + '"', 1)[1].split(
             "</button>", 1
         )[0]
@@ -2772,9 +2750,9 @@ def test_maintenance_hub_copy_is_current_and_drops_planned():
     assert "Plan and validate an EMS update" in hub
     assert "Planned upgrade workflow" not in hub
     assert "Planned" not in hub
-    # Backup / restore keeps active wording.
+    # Backup / restore keeps active wording, in the owner's words.
     backup = hub.split('data-maintenance-path="backup"', 1)[1]
-    assert "Create, inspect, restore or delete EMS backups" in backup
+    assert "Save your settings, or put an older copy back" in backup
 
 
 def test_true_maintenance_workflows_keep_numbered_steps():
@@ -2794,17 +2772,15 @@ def test_workspace_pages_have_back_navigation():
     # goes back to the maintenance hub.
     setup = _setup_panel(html)
     assert 'data-back="landing"' in setup
-    hub = html.split('id="maintenance-hub"', 1)[1].split(
-        'id="maintenance-manual-panel"', 1
-    )[0]
+    hub = _maintenance_hub(html)
     assert 'data-back="landing"' in hub
-    manual = html.split('id="maintenance-manual-panel"', 1)[1].split(
-        "</main>", 1
-    )[0]
-    assert 'data-back="maintenance-hub"' in manual
-    assert 'id="maintenance-back-hub"' in manual
+    status = _maintenance_status_panel(html)
+    settings = _maintenance_settings_panel(html)
+    assert 'id="maintenance-back-hub"' in status
+    assert 'id="maintenance-back-settings"' in settings
     # Back controls are real buttons, never clickable divs.
-    for segment in (setup, hub, manual):
+    for segment in (setup, hub, status, settings):
+        assert 'data-back="' in segment
         marker = segment.split('data-back="', 1)[0].rsplit("<", 1)[1]
         assert marker.startswith("button")
 
@@ -2818,27 +2794,38 @@ def test_js_back_navigation_returns_to_landing_and_hub():
     # Returning to landing re-shows the gate and drops workspace routing.
     assert "startEls.gate" in landing
     assert "workspaceRevealed = false" in landing
-    # Hash routing is inert while the landing gate is showing.
+    # A bookmarked maintenance address opens its page from the gate; every
+    # other address — including the empty hash showLanding() leaves behind —
+    # reveals nothing, so returning to landing cannot re-open what it closed.
     route = js.split("function applyHashRoute", 1)[1].split("\n}", 1)[0]
-    assert "if (!workspaceRevealed) return" in route
+    assert 'if (view !== "maintenance") return;' in route
     # The back controls are wired from the shared data-back attribute.
     assert '[data-back]' in js
 
 
-def test_maintenance_manual_panel_keeps_detailed_markup():
+def test_the_two_maintenance_pages_keep_their_detailed_markup():
     html = _read("index.html")
-    manual = html.split('id="maintenance-manual-panel"', 1)[1].split(
-        "</main>", 1
-    )[0]
+    status = _maintenance_status_panel(html)
+    settings = _maintenance_settings_panel(html)
     for marker in (
         'id="maintenance-refresh"',
         'id="maintenance-config"',
         'id="maintenance-ems"',
         'id="maintenance-diagnostics"',
-        'id="maintenance-config-card"',
+        'id="maintenance-control-state"',
         'id="maintenance-back-hub"',
     ):
-        assert marker in manual
+        assert marker in status
+    # The editor moved whole: the element survives so setMaintenanceCardTone(),
+    # a silent no-op on a missing id, keeps reaching its three warnings.
+    for marker in (
+        'id="maintenance-config-card"',
+        'id="maintenance-config-editor"',
+        'id="maintenance-settings-tabs"',
+        'id="maintenance-back-settings"',
+    ):
+        assert marker in settings
+    assert 'id="maintenance-config-card"' not in status
 
 
 def test_maintenance_endpoints_are_unchanged():
@@ -2855,23 +2842,20 @@ def test_maintenance_endpoints_are_unchanged():
         assert endpoint in js
 
 
-def test_js_maintenance_path_helper_only_manual_loads_overview():
+def test_js_maintenance_path_helper_loads_one_page_per_path():
     js = _read("admin.js")
-    assert 'const MAINTENANCE_PATHS = ["hub", "manual", "upgrade", "backup"]' in js
-    # Every path maps to exactly one panel via a registry, not manual-only toggling.
-    registry = js.split("const MAINTENANCE_PANEL_IDS = {", 1)[1].split("};", 1)[0]
-    for key, panel in (
-        ("hub", "maintenance-hub"),
-        ("manual", "maintenance-manual-panel"),
-        ("upgrade", "maintenance-upgrade-panel"),
-        ("backup", "maintenance-backup-panel"),
-    ):
-        assert key + ': "' + panel + '"' in registry
+    assert (
+        'const MAINTENANCE_PATHS = ["hub", "status", "settings", "upgrade", "backup"]'
+        in js
+    )
     path = js.split("function setMaintenancePath", 1)[1].split("\nfunction ", 1)[0]
-    # The helper drives panels from the registry; only manual loads the overview.
+    # The helper drives panels from the registry; the status page loads the
+    # overview and the settings page loads the draft editor.
     assert "MAINTENANCE_PANEL_IDS" in path
-    assert 'next === "manual"' in path
+    assert 'next === "status"' in path
     assert "loadMaintenanceOverview()" in path
+    assert 'next === "settings"' in path
+    assert "loadMaintenanceSettings(settingsTab)" in path
 
 
 def test_js_maintenance_cards_use_generic_open_navigation():
@@ -2880,7 +2864,10 @@ def test_js_maintenance_cards_use_generic_open_navigation():
     assert "[data-open-maintenance-path]" in js
     handler = js.split("[data-open-maintenance-path]", 1)[1].split("});", 1)[0]
     assert "openMaintenancePath" in handler
-    assert 'window.location.hash = "maintenance-" + path' in handler
+    # The target is resolved through the hash router, so a tab suffix
+    # ("settings-safety") is validated exactly the way a deep link is.
+    assert "maintenancePathForHash(hash)" in handler
+    assert "window.location.hash = hash" in handler
 
 
 def test_maintenance_subpages_are_full_page_siblings_of_hub():
@@ -2889,7 +2876,8 @@ def test_maintenance_subpages_are_full_page_siblings_of_hub():
     # Each path has its own full-page panel, all hidden by default and siblings
     # of the hub under view-maintenance (never rendered below the hub).
     for panel in (
-        "maintenance-manual-panel",
+        "maintenance-status-panel",
+        "maintenance-settings-panel",
         "maintenance-upgrade-panel",
         "maintenance-backup-panel",
     ):
@@ -2909,7 +2897,8 @@ def test_css_hidden_maintenance_panels_beat_hub_flex_layout():
     # restore hidden semantics for the hub and each full-page panel.
     for selector in (
         ".maintenance-hub[hidden]",
-        "#maintenance-manual-panel[hidden]",
+        "#maintenance-status-panel[hidden]",
+        "#maintenance-settings-panel[hidden]",
         "#maintenance-upgrade-panel[hidden]",
         "#maintenance-backup-panel[hidden]",
     ):
@@ -4111,7 +4100,9 @@ def test_maintenance_view_has_three_overview_sections():
         assert 'aria-label="' + label + '"' in maintenance
     for title in ("Files on this machine", "EMS services", "Version &amp; dashboard"):
         assert title in maintenance
-    assert "What is installed, what is running, and what you can change" in maintenance
+    # The status page reads and repairs; changing settings is its own page now.
+    assert "What is installed, what is running, and what is wrong" in maintenance
+    assert "and what you can change" not in maintenance
 
 
 def test_maintenance_view_has_layout_container_and_version_facts():
@@ -4129,7 +4120,7 @@ def test_maintenance_view_has_layout_container_and_version_facts():
         'id="maintenance-ems-image"',
         'id="maintenance-influx-image"',
         'id="maintenance-dashboard"',
-        'id="maintenance-warnings"',
+        'id="maintenance-findings"',
     ):
         assert marker in maintenance
 
@@ -4141,9 +4132,12 @@ def test_maintenance_limits_mutations_to_guarded_workflows():
     # The detailed controls live in the manual panel; the hub only holds planned
     # placeholders (verified separately to carry no endpoints), whose descriptive
     # text mentions backup/restore/upgrade without exposing any action.
-    manual = maintenance.split('id="maintenance-manual-panel"', 1)[1].split(
+    # Both pages sit between the status panel and the upgrade panel, so this
+    # slice still covers every control the split moved.
+    manual = maintenance.split('id="maintenance-status-panel"', 1)[1].split(
         'id="maintenance-upgrade-panel"', 1
     )[0]
+    assert manual, "maintenance page slice is empty"
     # The guided container-sync workflow is the one sanctioned mutating action
     # (explicit confirm, no delete). Exclude its label before asserting that no
     # other arbitrary EMS lifecycle controls exist.
@@ -4193,9 +4187,9 @@ def test_js_maintenance_routes_to_hub_not_overview():
     # Switching the admin panel no longer auto-loads the overview.
     switch = js.split("function setAdminView", 1)[1].split("\nfunction ", 1)[0]
     assert "loadMaintenanceOverview()" not in switch
-    # Only opening the manual path loads the detailed overview.
+    # Only opening the status page loads the detailed overview.
     path = js.split("function setMaintenancePath", 1)[1].split("\nfunction ", 1)[0]
-    assert 'next === "manual"' in path
+    assert 'next === "status"' in path
     assert "loadMaintenanceOverview()" in path
 
 
@@ -4210,11 +4204,16 @@ def test_js_maintenance_dynamic_values_are_escaped_or_text_only():
     setter = js.split("function setMaintenanceFact", 1)[1].split("\nfunction ", 1)[0]
     assert "el.textContent = text" in setter
     assert "innerHTML" not in setter
-    # Warnings are the only innerHTML path and pass through escapeHtml.
-    warnings = js.split("function renderMaintenanceWarnings", 1)[1].split(
+    # The findings list replaced the innerHTML warnings paragraph: every value
+    # it renders goes through textContent, so nothing needs escaping by hand.
+    # Maintenance and the landing share one renderer, so this holds for both.
+    findings = js.split("function renderMaintenanceFindings", 1)[1].split(
         "\nfunction ", 1
     )[0]
-    assert "escapeHtml(note)" in warnings
+    assert "innerHTML" not in findings
+    panel = js.split("function renderFindingsPanel", 1)[1].split("\nfunction ", 1)[0]
+    assert "innerHTML" not in panel
+    assert "textContent" in panel
 
 
 def test_js_maintenance_card_tone_helper_uses_dataset():
@@ -4264,21 +4263,34 @@ def test_maintenance_card_has_tone_accent_styles():
         assert '.maintenance-card[data-tone="' + tone + '"]::before' in css
 
 
+# The settings card is no longer one of these: it is the settings page now, so
+# it has no accordion to collapse (see test_the_settings_card_is_a_page).
 MAINTENANCE_OVERVIEW_CARDS = (
     ("maintenance-layout", "maintenance-layout-summary"),
     ("maintenance-containers", "maintenance-containers-summary"),
     ("maintenance-versions", "maintenance-versions-summary"),
     ("maintenance-diagnostics", "maintenance-diagnostics-summary"),
-    ("maintenance-config-card", "maintenance-config-summary"),
 )
 
 
-def _maintenance_manual_panel(html):
-    return (
+def _maintenance_status_panel(html):
+    panel = (
         _maintenance_section(html)
-        .split('id="maintenance-manual-panel"', 1)[1]
+        .split('id="maintenance-status-panel"', 1)[1]
+        .split('id="maintenance-settings-panel"', 1)[0]
+    )
+    assert panel, "maintenance status panel slice is empty"
+    return panel
+
+
+def _maintenance_settings_panel(html):
+    panel = (
+        _maintenance_section(html)
+        .split('id="maintenance-settings-panel"', 1)[1]
         .split('id="maintenance-upgrade-panel"', 1)[0]
     )
+    assert panel, "maintenance settings panel slice is empty"
+    return panel
 
 
 def _overview_card_head(panel, card_id):
@@ -4288,8 +4300,8 @@ def _overview_card_head(panel, card_id):
 
 def test_maintenance_overview_rows_are_finished_status_accordions():
     html = _read("index.html")
-    assert 'id="maintenance-manual-panel"' in _maintenance_section(html)
-    panel = _maintenance_manual_panel(html)
+    assert 'id="maintenance-status-panel"' in _maintenance_section(html)
+    panel = _maintenance_status_panel(html)
     for card_id, summary_id in MAINTENANCE_OVERVIEW_CARDS:
         head = _overview_card_head(panel, card_id)
         # The overview rows are not numbered process steps.
@@ -4321,9 +4333,9 @@ def test_maintenance_cards_are_collapsed_by_default_with_summaries():
     html = _read("index.html")
     maintenance = _maintenance_section(html)
     # Each card starts collapsed: closed state + hidden body + a toggle button
-    # carrying a one-line summary in the header. (7 overview cards plus the
-    # static Zendure MQTT broker hardware card in the config editor.)
-    assert maintenance.count('data-open="false"') == 9
+    # carrying a one-line summary in the header. The settings card is not one of
+    # them any more — it is the settings page, so it is always open.
+    assert maintenance.count('data-open="false"') == 8
     for card in (
         "maintenance-layout",
         "maintenance-containers",
@@ -4497,34 +4509,50 @@ def test_js_diagnostics_is_not_auto_run_on_view_switch():
     assert 'diagnosticsEls.run.addEventListener("click", runDiagnostics)' in js
 
 
-def test_index_has_config_and_hardware_card_collapsed_by_default():
+def test_the_settings_card_is_a_page_not_an_accordion():
+    """It kept its id and its tone hooks, and lost the chrome of a card.
+
+    setMaintenanceCardTone() is getElementById(...); if (!card) return; — a
+    silent no-op on a missing id, called on this element three times, once for
+    "the applied config is inert until EMS restarts". Dissolving the element
+    would delete that warning while the test that greps for it kept passing.
+    """
+
     html = _read("index.html")
-    assert 'id="maintenance-config-card"' in html
-    assert "Settings &amp; devices" in html
-    # collapsed by default: the card body is hidden and the toggle is not expanded
-    card = html.split('id="maintenance-config-card"', 1)[1].split("</section>", 1)[0]
-    assert 'data-open="false"' in card
-    assert 'id="maintenance-config-card-body"' in card
-    assert 'aria-expanded="false"' in card
+    card = _config_card(html)
+    assert "Settings &amp; devices" in card
+    assert 'data-card-mode="panel"' in card
+    assert 'data-open="true"' in card
+    # Always open: no collapsed body, no caret, nothing to toggle shut.
     body_tag = card.split('id="maintenance-config-card-body"', 1)[1].split(">", 1)[0]
-    assert "hidden" in body_tag
+    assert "hidden" not in body_tag
+    assert "maintenance-caret" not in card
+    assert 'data-maintenance-toggle="maintenance-config-card"' not in card
 
 
 def test_index_config_card_shows_safe_preview_and_apply_actions():
     html = _read("index.html")
-    card = html.split('id="maintenance-config-card"', 1)[1].split("</section>", 1)[0]
+    card = _config_card(html)
     assert 'id="maintenance-config-source"' in card
     assert "Review changes" in card
     assert "Discard my changes" in card
     assert "Save and apply" in card
-    assert "Create a backup before applying (recommended)" in card
+    assert "Back up my settings first (recommended)" in card
     for banned in (">Save<", ">Restart<", ">Restore<", ">Upgrade<"):
         assert banned not in card, f"unexpected write control {banned}"
 
 
+def _config_card(html):
+    card = _maintenance_settings_panel(html).split(
+        'id="maintenance-config-card"', 1
+    )[1].split("</section>", 1)[0]
+    assert card, "settings card slice is empty"
+    return card
+
+
 def test_maintenance_config_uses_setup_hardware_and_feature_groups():
     html = _read("index.html")
-    card = html.split('id="maintenance-config-card"', 1)[1].split("</section>", 1)[0]
+    card = _config_card(html)
     assert 'id="maintenance-config-hardware"' in card
     assert 'class="mconfig-hardware-list"' in card
     assert "Add more devices" in card
@@ -4532,8 +4560,8 @@ def test_maintenance_config_uses_setup_hardware_and_feature_groups():
     assert "Add an inverter" in card
     assert 'id="maintenance-config-features"' in card
     assert 'class="feature-list"' in card
-    assert "Advanced / System settings" in card
-    # Advanced / System settings renders as an open setup-group card (same style
+    assert "Expert &amp; system settings" in card
+    # Expert & system settings renders as an open setup-group card (same style
     # as Features), not a collapsed <details>.
     assert (
         'class="setup-group mconfig-group" id="maintenance-config-advanced-section"'
@@ -6549,6 +6577,10 @@ def _run_start_over_node(setup):
         )
     )
     helpers += "\n" + _extract_fn(js, "resumeGuidedSetupLifecycle")
+    # The refusal path renders through the shared error resolver.
+    helpers += "\nconst ADMIN_ERROR_MESSAGES = {"
+    helpers += js.split("const ADMIN_ERROR_MESSAGES = {", 1)[1].split("\n};", 1)[0]
+    helpers += "\n};\n" + _extract_fn(js, "humanErrorText")
     # Extracted async-aware: startGuidedSetupOver awaits the backend abandon, so
     # dropping its `async` keyword would not even parse.
     header = "async function startGuidedSetupOver"
@@ -7691,7 +7723,7 @@ def test_setup_channel_guidance_copy_sits_directly_above_the_selector():
     text = " ".join(help_block.split())
     # A short lead-in plus a semantic description list of the four channels,
     # led by the rolling ``latest`` line.
-    assert "Choose the System Build you want to install." in text
+    assert "Docker releases from v0.6.0 onward can be installed here" in text
     for term, blurb in (
         (
             "Latest",
@@ -8573,6 +8605,7 @@ async function loadSystemAlignmentStatus() {{
     stage: "resources_verified", system_tag: "v0.8.0"}}}};
 }}
 function revealWorkspace() {{ calls.push("workspace"); }}
+function applyHashRoute() {{ calls.push("route"); }}
 function setAdminView(value) {{ calls.push("view:" + value); }}
 function setActiveStep(value) {{ calls.push("step:" + value); }}
 async function validateSelectedSystemBuild() {{ calls.push("validate"); }}
@@ -8807,6 +8840,7 @@ function hideReconnectOverlay() {{ overlayHidden += 1; }}
 function reloadForReplacedAdmin() {{}}
 function showManualReloadHint() {{ throw new Error("unexpected timeout"); }}
 function showAuthView(mode) {{ authView = mode; }}
+function applyHashRoute() {{}}
 function bootstrapAuthenticatedAppOnce() {{}}
 function sleep() {{ return Promise.resolve(); }}
 async function loadSystemAlignmentStatus() {{
@@ -8901,10 +8935,13 @@ def test_release_stage_frames_selection_as_paired_system_build():
     release = _release_stage(_read("index.html"))
     # The heading no longer sells this as an EMS-version-only choice.
     assert "Select one paired Admin + EMS System Build" in release
-    intro = release.split('id="release-system-build-intro"', 1)[1].split(
-        "</div>", 1
-    )[0]
-    text = re.sub(r"\s+", " ", intro)
+    assert 'id="release-system-build-intro"' in release
+    # Everything an installer needs before choosing a build stays visible above
+    # the selector: no disclosure may hide what the Admin container update does
+    # to this page or to the data on this host.
+    before_select = release.split('id="release-select"', 1)[0]
+    text = re.sub(r"\s+", " ", before_select)
+    assert "<details" not in text
     # A compact pre-click explanation of the paired build and its consequences.
     assert "matching Admin Console and EMS images" in text
     assert "updated and recreated first" in text

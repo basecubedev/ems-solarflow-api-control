@@ -8,7 +8,7 @@ and recovery.
 New here? Read [what the Admin Console is](../admin-console.md) first — product
 overview, install command, login, networking and HTTPS.
 
-![Admin Console start page recommending Maintenance, with Guided setup and Maintenance as the two choices](../../assets/screenshots/admin/admin-landing.png)
+![Admin Console start page stating what was found on this host, with a Recommended path badge on Maintenance](../../assets/screenshots/admin/admin-landing.png)
 
 ## Choose your path
 

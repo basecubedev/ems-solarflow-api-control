@@ -516,6 +516,7 @@ _SECTIONS = [
                 "EMS control enabled",
                 "Turns EMS live control on or off. Disable this when you want EMS installed without actively controlling devices.",
                 "boolean",
+                            group="safety_gates",
             ),
             _field(
                 "system.dry_run",
@@ -523,6 +524,7 @@ _SECTIONS = [
                 "Runs the control logic without sending hardware writes. Useful for checking a setup safely.",
                 "boolean",
                 level="advanced",
+                            group="safety_holds",
             ),
             _field(
                 "system.simulation_mode",
@@ -530,6 +532,7 @@ _SECTIONS = [
                 "Uses simulated values instead of real hardware. Useful for development and testing.",
                 "boolean",
                 level="advanced",
+                            group="safety_holds",
             ),
             _field(
                 "system.allow_hardware_writes",
@@ -537,6 +540,7 @@ _SECTIONS = [
                 "Allows EMS to send control changes to devices over the local API. Turn this off for read-only validation.",
                 "boolean",
                 level="advanced",
+                            group="safety_gates",
             ),
             _field(
                 "system.allow_mqtt_local_control_writes",
@@ -544,6 +548,7 @@ _SECTIONS = [
                 "Allows EMS to send output control to devices via a local MQTT broker. Turn this off for read-only validation.",
                 "boolean",
                 level="advanced",
+                            group="safety_gates",
             ),
             _field(
                 "system.allow_mqtt_zendure_control_writes",
@@ -551,6 +556,7 @@ _SECTIONS = [
                 "Allows EMS to send output control via the Zendure cloud MQTT broker. Turn this off for read-only validation.",
                 "boolean",
                 level="advanced",
+                            group="safety_gates",
             ),
             _field(
                 "system.allow_state_reconciliation_writes",
@@ -558,6 +564,7 @@ _SECTIONS = [
                 "Allows EMS to correct known device state values when it starts.",
                 "boolean",
                 level="advanced",
+                            group="safety_gates",
             ),
             _field(
                 "system.reconcile_ac_mode_on_start",
@@ -589,6 +596,7 @@ _SECTIONS = [
                 unit="W",
                 minimum=0,
                 risk="control_stability",
+                            group="limits",
             ),
             _field(
                 "system.loop_interval",
@@ -673,6 +681,7 @@ _SECTIONS = [
                 unit="W",
                 minimum=0,
                 risk="control_stability",
+                            group="limits",
             ),
             _field(
                 "system.runtime_state_path",
@@ -690,6 +699,7 @@ _SECTIONS = [
                 unit="W",
                 minimum=0,
                 risk="control_stability",
+                            group="limits",
             ),
             _field(
                 "system.output_control.load_deadband_w",
@@ -891,12 +901,45 @@ _SECTIONS = [
         kind="system",
         groups=[
             _group(
+                "safety_gates",
+                "system",
+                "What EMS may change",
+                "Turned on, each of these lets EMS act. Turned off, it cannot.",
+                "Every write to hardware passes these gates. Turning one on lets EMS "
+                "change device output; turning one off makes that transport read-only.",
+                1,
+                level="normal",
+                risk="control_stability",
+            ),
+            _group(
+                "safety_holds",
+                "system",
+                "Hold EMS back",
+                "The opposite direction: turned on, each of these stops EMS from "
+                "writing, whatever the switches above allow.",
+                "Dry run and simulation mode suppress every hardware write without "
+                "changing the gates, so a setup can be checked before it acts.",
+                2,
+                level="normal",
+                risk="control_stability",
+            ),
+            _group(
+                "limits",
+                "system",
+                "Output limits",
+                "The physical envelope EMS must stay inside.",
+                "Upper and lower bounds for what EMS may request from the inverters.",
+                3,
+                level="normal",
+                risk="control_stability",
+            ),
+            _group(
                 "output_control",
                 "system.output_control",
                 "Expert control tuning",
                 "Fine tuning for smoothing, ramps, and fast response.",
                 "Changes how quickly and smoothly EMS reacts. Wrong values can make control unstable.",
-                1,
+                4,
                 level="expert",
                 risk="control_stability",
             )

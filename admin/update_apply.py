@@ -403,7 +403,7 @@ def apply_admin_update(
         pending = store.read()
     except PendingUpdateStateError as exc:
         logger.write(f"cannot read pending state: {exc.message}")
-        return {"ok": False, "error": exc.reason}
+        return {"ok": False, "error": exc.reason, "message": exc.message}
     if pending is None or pending.get("id") != plan_id:
         logger.write("no matching pending plan; nothing to do")
         return {"ok": False, "error": "unknown_plan"}

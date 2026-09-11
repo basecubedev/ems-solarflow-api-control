@@ -13,6 +13,7 @@ from ems.config_catalog import (
     build_default_template,
     get_config_catalog,
     get_config_feature_field_index,
+    get_config_feature_sections,
     grid_meter_variant_field_spec,
     render_default_template,
 )
@@ -252,3 +253,127 @@ def test_template_preserves_documented_assist_power_default_mismatch():
     ]["default"]
     assert template_default == 600
     assert BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["ac_charge_power"] == 200
+
+
+# --- the safety axis the Maintenance console navigates by -------------------
+# Admin must not decide which settings are safety-relevant: that is a property
+# of the configuration, so the catalog names it and the console reads it.
+
+# "On" means allowed here.
+SAFETY_GATE_PATHS = {
+    "system.enabled",
+    "system.allow_hardware_writes",
+    "system.allow_mqtt_local_control_writes",
+    "system.allow_mqtt_zendure_control_writes",
+    "system.allow_state_reconciliation_writes",
+}
+
+# "On" means blocked here — the opposite polarity, so its own group.
+SAFETY_HOLD_PATHS = {
+    "system.dry_run",
+    "system.simulation_mode",
+}
+
+ENVELOPE_PATHS = {
+    "system.max_total_power",
+    "system.max_device_power",
+    "system.min_output_limit",
+}
+
+
+def _system_section():
+    section = next(
+        item
+        for item in get_config_feature_sections("maintenance")
+        if item["id"] == "system"
+    )
+    return section
+
+
+def _group_by_id(section, group_id):
+    return next(
+        (group for group in section.get("groups", []) if group["id"] == group_id),
+        None,
+    )
+
+
+def test_the_write_gates_are_one_named_catalog_group():
+    """Every switch that decides whether EMS may write is addressable at once."""
+
+    section = _system_section()
+    group = _group_by_id(section, "safety_gates")
+    assert group is not None, "system section has no safety_gates group"
+    members = {
+        field["path"]
+        for field in section["fields"]
+        if field.get("group") == "safety_gates"
+    }
+    assert members == SAFETY_GATE_PATHS
+
+
+def test_the_physical_envelope_is_its_own_named_group():
+    section = _system_section()
+    group = _group_by_id(section, "limits")
+    assert group is not None, "system section has no limits group"
+    members = {
+        field["path"] for field in section["fields"] if field.get("group") == "limits"
+    }
+    assert members == ENVELOPE_PATHS
+
+
+def test_the_switches_that_hold_ems_back_are_their_own_group():
+    """Mixed polarity in one list is a comprehension hazard on a safety panel.
+
+    "Allow hardware writes" on means EMS writes; "Dry run" on means it writes
+    nothing. Rendered as one list of seven checkboxes, the same gesture means
+    opposite things, so the two polarities are two groups.
+    """
+
+    section = _system_section()
+    group = _group_by_id(section, "safety_holds")
+    assert group is not None, "system section has no safety_holds group"
+    members = {
+        field["path"]
+        for field in section["fields"]
+        if field.get("group") == "safety_holds"
+    }
+    assert members == SAFETY_HOLD_PATHS
+    assert not (SAFETY_GATE_PATHS & SAFETY_HOLD_PATHS)
+
+
+def test_the_safety_groups_are_not_hidden_behind_a_disclosure():
+    """A gate the owner cannot find is a gate they cannot check."""
+
+    section = _system_section()
+    for group_id in ("safety_gates", "safety_holds", "limits"):
+        assert _group_by_id(section, group_id)["level"] == "normal"
+
+
+def test_the_safety_groups_do_not_relevel_the_fields_themselves():
+    """Guided Setup partitions on field level; re-levelling here would move it.
+
+    The group is a second, independent axis. tests/e2e/setup-config-tuning.spec.ts
+    pins the promoted control tuning, and system.allow_* must not become
+    always-visible for a first-time installer.
+    """
+
+    fields = get_config_feature_field_index()
+    for path in (SAFETY_GATE_PATHS | SAFETY_HOLD_PATHS) - {
+        "system.enabled",
+        "system.dry_run",
+    }:
+        assert fields[path]["level"] == "advanced"
+    assert fields["system.enabled"]["level"] == "normal"
+    assert fields["system.dry_run"]["level"] == "normal"
+
+
+def test_no_setting_belongs_to_two_groups_at_once():
+    """One owner per field, so a tabbed console can render each exactly once."""
+
+    for section in get_config_feature_sections("maintenance"):
+        known = {group["id"] for group in section.get("groups", [])}
+        for field in section["fields"]:
+            group = field.get("group")
+            if group is None:
+                continue
+            assert group in known, f"{field['path']} names an undeclared group"

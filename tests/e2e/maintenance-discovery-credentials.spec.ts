@@ -1,6 +1,7 @@
 import { type Page, type Request, type Route } from "@playwright/test";
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
 
 // Maintenance credential management must not depend on Guided Setup operation
 // state: after the reset fixture there is no transition and no browser-side
@@ -32,29 +33,6 @@ function trackSetupAliasRequests(page: Page): string[] {
     }
   });
   return seen;
-}
-
-async function openMaintenanceAddDevices(page: Page) {
-  await page.locator('[data-start-path="manage_existing"]').click();
-  await page.locator('[data-open-maintenance-path="manual"]').click();
-  const toggle = page.locator(
-    '[data-maintenance-toggle="maintenance-config-card"]',
-  );
-  const editor = page.locator("#maintenance-config-editor");
-  await expect(toggle).toContainText("inverters");
-  await expect(async () => {
-    if (!(await editor.isVisible())) await toggle.click();
-    await expect(editor).toBeVisible({ timeout: 1_000 });
-  }).toPass();
-  // The async config load re-renders the editor; retry until the details stays
-  // open (same pattern as the card toggle above, no fixed waits).
-  const sources = page.locator("#maintenance-discovery-sources");
-  await expect(async () => {
-    if (!(await sources.isVisible())) {
-      await page.locator("#maintenance-add-devices > summary").click();
-    }
-    await expect(sources).toBeVisible({ timeout: 1_000 });
-  }).toPass();
 }
 
 async function openMaintenanceSourceRow(page: Page, source: string, formId: string) {
@@ -125,7 +103,7 @@ test("Maintenance Zendure credential lifecycle stays on generic discovery routes
   await login.authenticate();
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceAddDevices(page);
+  await new MaintenancePage(page).openEditor();
 
   await openMaintenanceSourceRow(page, "zendure_mqtt", "zendure-cloud-token-form");
 
@@ -197,7 +175,7 @@ test("Maintenance local MQTT credential save and delete use the real generic rou
   await login.authenticate();
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceAddDevices(page);
+  await new MaintenancePage(page).openEditor();
 
   await openMaintenanceSourceRow(page, "local_mqtt", "mqtt-credential-form");
 

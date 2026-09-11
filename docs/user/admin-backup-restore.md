@@ -126,6 +126,29 @@ backup requires the password; it is used for that request only and is never
 logged or persisted. Without the password, an encrypted backup cannot be
 restored.
 
+## Getting a backup off this machine
+
+Backups are written to the backup directory on the machine EMS runs on. If that
+disk or SD card fails, they fail with it — and re-flashing after a failed OS
+upgrade is exactly the situation a backup is for.
+
+**Download** on any listed backup hands you the archive byte for byte. Keep the
+ones that matter somewhere else.
+
+**Bring a backup back** takes one of those files and puts it into the backup
+directory, where the normal flow picks it up: inspect it, preview a restore,
+restore it. Import only adds the file; it never restores anything by itself.
+
+An import is refused unless it is what it claims to be. The file must carry the
+name a backup was created under (`ems-<type>-<purpose>-<timestamp>.tar.gz`,
+optionally `.enc`), and an unencrypted archive must contain a manifest of that
+type — restore routing reads the type from the name, so a renamed archive would
+be restored the wrong way. An import never overwrites an existing backup: a name
+that is already there is stored beside it.
+
+Encrypted archives can be imported as they are; unlocking them still needs the
+password, exactly as for one created here.
+
 ## Delete
 
 Deletion always requires explicit confirmation and can only remove backups

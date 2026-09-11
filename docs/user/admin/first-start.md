@@ -83,10 +83,12 @@ overwrite it for you.
 
 ### 4 — Pick a task
 
-![Task selection with a Recommended Maintenance banner and the Guided setup and Maintenance choices](../../assets/screenshots/admin/admin-landing.png)
+![Admin Console start page stating what was found on this host, with a Recommended path badge on Maintenance](../../assets/screenshots/admin/admin-landing.png)
 
-**What you see:** a *Recommended:* banner naming the flow that fits your current
-install state and why, then **Guided setup** and **Maintenance**.
+**What you see:** one sentence saying what is on this host, anything that needs
+attention listed under it, then **Guided setup** and **Maintenance**. The flow
+that fits your install state carries a *Recommended path* badge; if the console
+cannot read the install state, it says so and marks neither.
 
 **What you select:** the recommended flow, unless you deliberately want the
 other one.

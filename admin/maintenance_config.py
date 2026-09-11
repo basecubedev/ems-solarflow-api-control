@@ -13,7 +13,7 @@ import hmac
 import json
 
 from admin.config_preview import _GRID_TYPE_CHOICES, _valid_host
-from admin.config_runtime_overlap import overlap_provenance_for_context
+from admin.config_runtime_overlap import applies_live, overlap_provenance_for_context
 from admin.connection_planner import (
     INTENT_SWITCH_CONNECTION,
     plan_connection_change,
@@ -1981,12 +1981,18 @@ def summarize_config_changes(before, after):
     UI rendering.
     """
 
-    return mutation_diff(
+    diff = mutation_diff(
         before,
         after,
         is_secret_leaf=_is_secret_leaf,
         bound_value=_bounded,
     )
+    # Which rows are live at once is Admin's half of the answer, and it comes
+    # from the one module that owns the config/runtime overlap.
+    for bucket in ("changes", "added", "removed"):
+        for entry in diff.get(bucket) or []:
+            entry["applies_live"] = applies_live(entry["path"])
+    return diff
 
 
 __all__ = [

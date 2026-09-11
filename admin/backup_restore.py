@@ -797,6 +797,83 @@ class BackupRestoreService:
             "warnings": warnings,
         }
 
+    def backup_directory(self):
+        """Where archives live for the current install root."""
+
+        return self._env().backup_dir
+
+    def accepts_import_name(self, name):
+        """Whether an uploaded name may become a path at all.
+
+        The HTTP layer asks before it streams a body to disk; the same rule is
+        applied again when the file is adopted, so this is a fast refusal, not a
+        second authority.
+        """
+
+        return backup_mod.parse_backup_archive_name(name) is not None
+
+    def export_backup(self, backup_id):
+        """Resolve a listed backup id to the archive that may be handed over.
+
+        Resolution goes through ``BackupStore.resolve``, so the id is matched
+        against the directory listing and never becomes a path of its own.
+        """
+
+        env = self._env()
+        path = BackupStore(env).resolve(backup_id)
+        return path, os.path.basename(path)
+
+    def import_backup(self, name, source_path):
+        """Adopt an uploaded archive so the normal restore flow can read it.
+
+        The archive is verified before it is adopted and lands under its own
+        canonical name in the backup directory, which is what makes it visible
+        to list/inspect/preview/restore without a second authority. Restore
+        routing reads the backup type from the file name, so a name that does
+        not match the manifest is refused rather than silently rerouted.
+        """
+
+        env = self._env()
+        parsed = backup_mod.parse_backup_archive_name(name)
+        if parsed is None:
+            raise BackupRestoreError("that is not an EMS backup file name")
+        os.makedirs(env.backup_dir, exist_ok=True)
+        self._verify_import(source_path, parsed, env.backup_dir)
+        try:
+            final = backup_mod.adopt_backup_archive(source_path, env.backup_dir, name)
+        except backup_mod.BackupError as exc:
+            raise BackupRestoreError(str(exc)) from exc
+        stored = os.path.basename(final)
+        return {"ok": True, "name": stored, "id": _safe_id(stored)}
+
+    def _verify_import(self, source_path, parsed, backup_dir):
+        """Refuse anything that is not the archive its name claims to be."""
+
+        try:
+            encrypted = backup_mod.is_encrypted(source_path, allowed_root=backup_dir)
+        except Exception as exc:  # noqa: BLE001 - any read failure is a refusal
+            raise BackupRestoreError("the uploaded file could not be read") from exc
+        if encrypted != parsed["encrypted"]:
+            raise BackupRestoreError(
+                "the file name and the archive disagree about encryption"
+            )
+        if encrypted:
+            # An encrypted archive cannot be opened without its password, so the
+            # name is all there is. It is still the canonical shape.
+            return
+        try:
+            manifest = backup_mod.inspect_backup(
+                source_path, allowed_root=backup_dir
+            ).get("manifest") or {}
+        except Exception as exc:  # noqa: BLE001 - any read failure is a refusal
+            raise BackupRestoreError("that file is not an EMS backup archive") from exc
+        if manifest.get("backup_type") != parsed["backup_type"]:
+            raise BackupRestoreError(
+                "the file name says this is a "
+                + parsed["backup_type"]
+                + " backup, but the archive does not"
+            )
+
     def inspect_backup(self, backup_id, password=None):
         store = self._store()
         path = store.resolve(backup_id)

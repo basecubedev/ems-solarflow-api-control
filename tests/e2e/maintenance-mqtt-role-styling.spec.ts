@@ -1,6 +1,7 @@
 import { type Locator, type Page, type Route } from "@playwright/test";
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
 
 // Maintenance reuses the one shared hardware-role card system: a recognized
 // inverter is blue and a recognized grid meter purple over Local MQTT and
@@ -150,28 +151,6 @@ async function login(page: Page) {
   await loginPage.authenticate();
 }
 
-async function openMaintenanceEditor(page: Page) {
-  await expect(page.locator("#view-start")).toBeVisible();
-  await page.locator('[data-start-path="manage_existing"]').click();
-  await page.locator('[data-open-maintenance-path="manual"]').click();
-  const toggle = page.locator(
-    '[data-maintenance-toggle="maintenance-config-card"]',
-  );
-  const editor = page.locator("#maintenance-config-editor");
-  await expect(toggle).toContainText(/inverter/);
-  await expect(async () => {
-    if (!(await editor.isVisible())) await toggle.click();
-    await expect(editor).toBeVisible({ timeout: 1_000 });
-  }).toPass();
-  const sources = page.locator("#maintenance-discovery-sources");
-  await expect(async () => {
-    if (!(await sources.isVisible())) {
-      await page.locator("#maintenance-add-devices > summary").click();
-    }
-    await expect(sources).toBeVisible({ timeout: 1_000 });
-  }).toPass();
-}
-
 async function runDiscovery(page: Page) {
   await page.locator("#maintenance-discovery-start").click();
   await expect(page.locator("#maintenance-discovery-status")).toContainText(
@@ -237,7 +216,7 @@ test("Maintenance discovery: MQTT proposals take their card colour from the hard
   await login(page);
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await runDiscovery(page);
 
   const localInverter = proposalCard(page, "Local MQTT inverter");
@@ -295,7 +274,7 @@ test("Maintenance draft: an added MQTT inverter keeps the inverter card through 
   await login(page);
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   const before = await configuredCards(page).count();
 
   await runDiscovery(page);
@@ -320,7 +299,7 @@ test("Maintenance draft: an added MQTT inverter keeps the inverter card through 
   );
 
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(configuredCards(page)).toHaveCount(before + 1);
   const persisted = configuredCards(page).nth(before);
   await expect(persisted).toHaveClass(/hardware-card-inverter/);
@@ -337,7 +316,7 @@ test("Maintenance: configured API and MQTT inverters share one inverter card", {
   await login(page);
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
 
   const cards = configuredCards(page);
   await expect(cards.first()).toBeVisible();

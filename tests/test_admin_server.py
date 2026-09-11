@@ -175,7 +175,7 @@ def test_root_serves_html(server):
         assert resp.headers["X-Content-Type-Options"] == "nosniff"
         body = resp.read().decode("utf-8")
         assert "EMS SolarFlow Admin" in body
-        assert "Guided Docker setup for local EMS deployments." in body
+        assert "Set up a new EMS installation, or manage the one already" in body
 
 
 def test_static_assets_have_content_types(server):

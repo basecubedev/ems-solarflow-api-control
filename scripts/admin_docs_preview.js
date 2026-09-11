@@ -122,15 +122,34 @@
     };
   }
 
-  // Open the manual-maintenance panel with exactly one card expanded, so each
-  // documented card gets a focused screenshot instead of the whole panel.
+  // Open the status page with exactly one card expanded, so each documented
+  // card gets a focused screenshot instead of the whole page.
   function maintenanceCardScreen(cardId) {
     return function () {
-      openMaintenance("manual");
+      openMaintenance("status");
       expandMaintenanceCard(cardId);
       window.setTimeout(function () {
         expandMaintenanceCard(cardId);
       }, 500);
+    };
+  }
+
+  // Open the settings page on one tab, once the draft editor has rendered.
+  function maintenanceSettingsScreen(tab) {
+    return function () {
+      openMaintenance("settings");
+      whenReady(
+        function () {
+          return (
+            typeof mconfigState !== "undefined" &&
+            mconfigState.loaded === true &&
+            typeof setMaintenanceSettingsTab === "function"
+          );
+        },
+        function () {
+          setMaintenanceSettingsTab(tab);
+        }
+      );
     };
   }
 
@@ -290,11 +309,12 @@
       openMaintenance("hub");
     },
     "maintenance-overview": function () {
-      openMaintenance("manual");
+      openMaintenance("status");
       window.setTimeout(expandMaintenanceCards, 500);
     },
     "maintenance-diagnostics": maintenanceCardScreen("maintenance-diagnostics"),
-    "maintenance-config-hardware": maintenanceCardScreen("maintenance-config-card"),
+    "maintenance-config-hardware": maintenanceSettingsScreen("devices"),
+    "maintenance-safety": maintenanceSettingsScreen("safety"),
     "maintenance-mqtt": maintenanceCardScreen("maintenance-zendure-mqtt"),
     "maintenance-recovery": maintenanceCardScreen("maintenance-workflow-recovery"),
     "backup-restore": function () {

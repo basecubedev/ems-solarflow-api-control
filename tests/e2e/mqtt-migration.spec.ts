@@ -17,8 +17,8 @@ async function openMigration(
   await expect(page.locator("#view-start")).toBeVisible();
   await page.locator('[data-start-path="manage_existing"]').click();
   await expect(page.locator("#maintenance-hub")).toBeVisible();
-  await page.locator('[data-open-maintenance-path="manual"]').click();
-  await expect(page.locator("#maintenance-manual-panel")).toBeVisible();
+  await page.locator('[data-open-maintenance-path="status"]').click();
+  await expect(page.locator("#maintenance-status-panel")).toBeVisible();
   await page
     .locator('[data-maintenance-toggle="maintenance-mqtt-migration"]')
     .click();

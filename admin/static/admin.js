@@ -225,6 +225,80 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+// Error codes are stable machine identifiers, not owner-facing text. Two thirds
+// of the server's error responses already carry a written sentence beside the
+// code; the client's old `data.error || "sentence"` printed the code and threw
+// that sentence away. These are the codes an owner can actually reach that
+// arrive with no sentence of their own.
+const ADMIN_ERROR_MESSAGES = {
+  system_transition_in_progress:
+    "Another system change is already running. Wait for it to finish, then try again.",
+  system_alignment_incomplete:
+    "Admin and EMS are not aligned yet. Finish the current System Build step first.",
+  setup_operation_required:
+    "Confirm the System Build before this step; it decides what gets installed.",
+  operation_mismatch:
+    "This page belongs to an older attempt. Reload and start the step again.",
+  system_build_mismatch:
+    "The selected System Build changed. Pick it again so Admin and EMS match.",
+  system_build_alignment_required:
+    "Align Admin to the target System Build before continuing.",
+  system_build_registry_rate_limited:
+    "The container registry is rate-limiting this machine. Wait a few minutes and try again.",
+  image_pull_rate_limited:
+    "The container registry is rate-limiting this machine. Wait a few minutes and try again.",
+  confirmation_required: "Confirm this step before it can run.",
+  acknowledgement_required: "Acknowledge the warning before this step can run.",
+  docker_cli_missing:
+    "Docker is not installed on this machine, so containers cannot be managed.",
+  docker_daemon_unreachable:
+    "The Docker daemon is not reachable. Check that it is running.",
+  docker_permission_denied:
+    "Docker refused this account. The Admin Console needs access to the Docker socket.",
+  docker_compose_unsupported:
+    "This Docker installation has no usable Compose plugin.",
+  workspace_permission_denied:
+    "The install directory cannot be written. Check its owner and permissions.",
+  compose_port_conflict:
+    "Another program already uses one of the ports EMS needs.",
+  compose_container_name_conflict:
+    "A container with that name already exists. Remove it or rename the service.",
+  compose_image_unavailable:
+    "That image could not be pulled. Check the release and this machine's internet access.",
+  refresh_failed: "That source could not be re-read. Check the connection and try again.",
+  checksum_invalid:
+    "This archive does not match its own checksums, so it will not be restored.",
+  conflicts_require_policy:
+    "The restore would overwrite files. Choose how to handle them, then preview again.",
+  influxdb_preview_failed:
+    "The analytics part of this backup could not be previewed.",
+  not_configured: "This is not configured yet.",
+  device_list_failed: "The device list could not be read.",
+};
+
+// The precedence authMessage has always used, generalised: the server's own
+// sentence first, then a code we have words for, then a plain fallback. Some
+// payloads carry the code under "reason", and a job status carries it as an
+// object, so the value is what is resolved here, never one fixed field name.
+function humanErrorText(data, fallback) {
+  const payload = data && typeof data === "object" ? data : {};
+  const raw =
+    payload.error === undefined || payload.error === null
+      ? payload.reason
+      : payload.error;
+  const nested = raw && typeof raw === "object" ? raw : null;
+  const message = payload.message || (nested && nested.message);
+  if (typeof message === "string" && message) return message;
+  const code = nested ? nested.code : raw;
+  if (typeof code === "string" && code) {
+    if (ADMIN_ERROR_MESSAGES[code]) return ADMIN_ERROR_MESSAGES[code];
+    // A third of the server's "error" values are already English sentences sent
+    // in the same key. A machine code never contains a space.
+    if (code.indexOf(" ") !== -1) return code;
+  }
+  return fallback || "Something went wrong. Please try again.";
+}
+
 function renderCredentialRollbackWarning(payload) {
   // The backend only sets credential_rollback when rolling back staged MQTT
   // credential changes itself failed, so the operator must be told manual
@@ -1911,7 +1985,7 @@ async function pollMdns() {
     const status = await statusRes.json();
     const result = await devicesRes.json();
     if (!statusRes.ok || !devicesRes.ok) {
-      throw new Error(status.last_error || result.error || "discovery status failed");
+      throw new Error(status.last_error || humanErrorText(result, "discovery status failed"));
     }
     renderMdnsStatus(status);
     for (const device of Array.isArray(result.devices) ? result.devices : []) {
@@ -2112,7 +2186,7 @@ async function loadMqttBrokers() {
   try {
     const res = await fetch("/api/discovery/mqtt-brokers");
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "broker discovery failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "broker discovery failed"));
     mqttBrokers.clear();
     for (const broker of Array.isArray(data.candidates) ? data.candidates : []) {
       mqttBrokers.set(String(broker.host) + ":" + String(broker.port), broker);
@@ -2445,7 +2519,7 @@ async function loadMqttProposals() {
     if (requestId !== mqttProposalsRequest || generation !== guidedSetupGeneration) {
       return;
     }
-    if (!res.ok) throw new Error(data.error || "proposal discovery failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "proposal discovery failed"));
     els.mqttProposalsMessage.hidden = true;
     renderMqttProposals(data.proposals);
     // Proposals may arrive after HTTP auto-add; reconcile the draft so a
@@ -3200,7 +3274,7 @@ async function probeMqttNetworks(cidrs) {
           body: JSON.stringify({ cidr }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "broker probe failed");
+        if (!res.ok) throw new Error(humanErrorText(data, "broker probe failed"));
         return { found: Number(data.found) || 0, error: null };
       } catch (err) {
         return { found: 0, error: err.message || String(err) };
@@ -3226,7 +3300,7 @@ async function refreshMqttBrokers() {
       method: "POST",
     }, context);
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "broker refresh failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "broker refresh failed"));
     els.mqttMessage.textContent =
       "Broker discovery refreshed. " +
       String(data.reachable || 0) +
@@ -3292,7 +3366,7 @@ async function loadMqttCredentials() {
   try {
     const res = await fetch("/api/discovery/connections/mqtt-credentials");
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "credentials load failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "credentials load failed"));
     renderMqttCredentials(data.credentials);
   } catch (err) {
     els.mqttCredentialMessage.textContent =
@@ -3326,7 +3400,7 @@ async function saveMqttCredential(event) {
       context
     );
     const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || "save failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "save failed"));
     els.mqttCredentialForm.reset();
     els.mqttCredentialMessage.textContent = "Credential saved.";
     renderMqttCredentials((data.local_mqtt || {}).credentials);
@@ -3348,7 +3422,7 @@ async function deleteMqttCredential(id) {
       context
     );
     const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || "delete failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "delete failed"));
     els.mqttCredentialMessage.textContent = "Credential removed.";
     await loadMqttCredentials();
   } catch (err) {
@@ -3454,7 +3528,7 @@ async function loadZendureCloudSettings() {
   try {
     const res = await fetch(ZENDURE_CLOUD_BASE + "/settings");
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "settings failed");
+    if (!res.ok) throw new Error(humanErrorText(data, "settings failed"));
     applyZendureCloudSettings(data);
   } catch (err) {
     els.zendureCloudMessage.textContent =
@@ -3480,7 +3554,7 @@ async function saveZendureCloudToken(event) {
     }, context);
     const data = await res.json();
     if (!res.ok || data.ok === false) {
-      throw new Error(data.message || data.error || "save failed");
+      throw new Error(humanErrorText(data, "save failed"));
     }
     els.zendureCloudTokenInput.value = "";
     els.zendureCloudMessage.textContent = data.message || "Zendure credential saved.";
@@ -3507,7 +3581,7 @@ async function testZendureCloudToken() {
     }, context);
     const data = await res.json();
     if (!res.ok || data.ok === false) {
-      throw new Error(data.message || data.error || "test failed");
+      throw new Error(humanErrorText(data, "test failed"));
     }
     els.zendureCloudMessage.textContent =
       "Zendure credential OK: " +
@@ -3536,7 +3610,7 @@ async function refreshZendureCloudDiscovery() {
     }, context);
     const data = await res.json();
     if (!res.ok || data.ok === false) {
-      throw new Error(data.message || data.error || "refresh failed");
+      throw new Error(humanErrorText(data, "refresh failed"));
     }
     zendureCloudDevices.length = 0;
     for (const device of Array.isArray(data.candidates) ? data.candidates : []) {
@@ -3582,7 +3656,7 @@ async function forgetZendureCloudToken() {
     }, context);
     const data = await res.json();
     if (!res.ok || data.ok === false) {
-      throw new Error(data.message || data.error || "delete failed");
+      throw new Error(humanErrorText(data, "delete failed"));
     }
     zendureCloudDevices.length = 0;
     renderZendureCloudDevices();
@@ -3677,6 +3751,7 @@ const configEls = {
   featureSettings: document.getElementById("config-feature-settings"),
   featureLists: {
     features: document.getElementById("config-feature-list-features"),
+    safety: document.getElementById("config-feature-list-safety"),
     advanced: document.getElementById("config-feature-list-advanced"),
   },
   featureEmpty: document.getElementById("config-feature-empty"),
@@ -6582,6 +6657,9 @@ function visibleFeatureFields(section, selectedType) {
   return fields.filter((field) => {
     if (field.path === enabledPath) return false; // shown as the row toggle
     if (FEATURE_LEVELS_HIDDEN.has(field.level)) return false;
+    // The safety groups have their own block; rendering them twice would give
+    // one setting two controls that disagree until the second one is touched.
+    if (setupIsSafetyField(field)) return false;
     return true;
   });
 }
@@ -6600,6 +6678,49 @@ function featureStatusText(section) {
 // Grid meter and devices live under Hardware; devices keep their dedicated draft
 // UI, so only the grid meter section renders as a Hardware feature row here.
 const SETUP_GROUP_ORDER = ["hardware", "features", "advanced"];
+
+// The catalog groups that answer "what may EMS do to my hardware". Guided Setup
+// and Maintenance read the same list: two copies of it would be two answers.
+// Both render them flat, because the field levels put five of the seven write
+// gates behind an "Advanced settings" disclosure and that is the bug, not the
+// layout.
+const SAFETY_CATALOG_GROUPS = ["safety_gates", "safety_holds", "limits"];
+
+function setupIsSafetyField(field) {
+  return SAFETY_CATALOG_GROUPS.includes(field && field.group);
+}
+
+// Setup builds HTML strings and delegates events by data-feature-path, so this
+// deliberately does not reuse the Maintenance renderer, which builds DOM nodes
+// and binds closures.
+function renderSetupSafetyGroups() {
+  const blocks = [];
+  for (const section of featureSections()) {
+    for (const group of section.groups || []) {
+      if (!SAFETY_CATALOG_GROUPS.includes(group.id)) continue;
+      const fields = (section.fields || []).filter(
+        (field) => field.group === group.id && !FEATURE_LEVELS_HIDDEN.has(field.level)
+      );
+      if (fields.length) blocks.push({ group, fields });
+    }
+  }
+  blocks.sort((a, b) => (a.group.order || 0) - (b.group.order || 0));
+  return blocks
+    .map(
+      ({ group, fields }) =>
+        '<div class="setup-safety-group" role="listitem">' +
+        '<h4 class="config-subsection-title">' +
+        escapeHtml(group.title || group.id) +
+        "</h4>" +
+        '<p class="future-note">' +
+        escapeHtml(group.summary || "") +
+        "</p>" +
+        '<div class="feature-fields">' +
+        fields.map(renderFeatureField).join("") +
+        "</div></div>"
+    )
+    .join("");
+}
 
 function setupGroupOrder() {
   if (setupCatalog && Array.isArray(setupCatalog.groups) && setupCatalog.groups.length) {
@@ -6624,6 +6745,13 @@ function renderFeatureSettings() {
     const groupSections = sectionsForGroup(groupId);
     list.hidden = groupSections.length === 0;
     list.innerHTML = groupSections.map(renderFeatureRow).join("");
+  }
+  // Rendered outside the group loop: safety is a field-group axis, not one of
+  // the catalog's own hardware/features/advanced section groups.
+  if (lists.safety) {
+    const safety = renderSetupSafetyGroups();
+    lists.safety.innerHTML = safety;
+    lists.safety.hidden = !safety;
   }
   if (configEls.featureEmpty) configEls.featureEmpty.hidden = hasCatalog;
 }
@@ -7127,7 +7255,7 @@ async function requestConfigPreview() {
       return;
     }
     if (!res.ok) {
-      throw new Error(data.message || data.error || "Config preview unavailable.");
+      throw new Error(humanErrorText(data, "Config preview unavailable."));
     }
     latestConfigPreview = data;
     setSetupPreviewId(data.config_preview_id || null);
@@ -7647,7 +7775,14 @@ const ADMIN_VIEWS = ["setup", "maintenance"];
 
 // Maintenance is a small hub with three nested paths. Only "manual" opens the
 // detailed editor and touches the backend; the placeholders never do.
-const MAINTENANCE_PATHS = ["hub", "manual", "upgrade", "backup"];
+const MAINTENANCE_PATHS = ["hub", "status", "settings", "upgrade", "backup"];
+
+// #maintenance-manual was the published address of the manual maintenance page.
+// It stays a permanent alias for the status page so bookmarks and the click
+// paths printed in the documentation keep landing somewhere real.
+const MAINTENANCE_PATH_ALIASES = { manual: "status" };
+
+const MAINTENANCE_SETTINGS_TABS = ["devices", "features", "safety", "expert"];
 
 function setAdminView(view) {
   const next = ADMIN_VIEWS.includes(view) ? view : "setup";
@@ -7673,11 +7808,13 @@ function setAdminView(view) {
   rescopeSystemBuildForNavigation();
 }
 
-// Each maintenance path maps to exactly one full-page panel. "manual" loads the
-// read-only overview; "upgrade" loads its own read-only planning data.
+// Each maintenance path maps to exactly one full-page panel. "status" loads the
+// read-only overview; "settings" holds the draft editor; "upgrade" loads its own
+// read-only planning data.
 const MAINTENANCE_PANEL_IDS = {
   hub: "maintenance-hub",
-  manual: "maintenance-manual-panel",
+  status: "maintenance-status-panel",
+  settings: "maintenance-settings-panel",
   upgrade: "maintenance-upgrade-panel",
   backup: "maintenance-backup-panel",
 };
@@ -7686,8 +7823,12 @@ const MAINTENANCE_PANEL_IDS = {
 // the load promise so a caller (e.g. a resume that must select the transition
 // tag before continuing) can await full completion; ``pinnedTag`` is forwarded
 // to the upgrade planning load.
-function setMaintenancePath(path, pinnedTag) {
+function setMaintenancePath(path, pinnedTag, settingsTab) {
   const next = MAINTENANCE_PATHS.includes(path) ? path : "hub";
+  // The borrowed singleton forms go home before the panel that holds them is
+  // hidden: parkInlineConfigs() refuses to reclaim a node mounted elsewhere, so
+  // parking afterwards strands them for the rest of the session.
+  if (next !== "settings") parkMaintenanceSourceConfigs();
   Object.entries(MAINTENANCE_PANEL_IDS).forEach(([key, id]) => {
     const panel = document.getElementById(id);
     if (panel) panel.hidden = key !== next;
@@ -7696,8 +7837,15 @@ function setMaintenancePath(path, pinnedTag) {
   // other maintenance sub-panel parks and hides the workflow immediately, and a
   // synthetic preview from another task never follows in.
   rescopeSystemBuildForNavigation();
-  if (next === "manual") {
+  focusMaintenanceHeading(next);
+  if (next === "hub") {
+    return loadMaintenanceHubState();
+  }
+  if (next === "status") {
     return loadMaintenanceOverview();
+  }
+  if (next === "settings") {
+    return loadMaintenanceSettings(settingsTab);
   }
   if (next === "upgrade") {
     // Same-session navigation may keep an existing verification for the same
@@ -7710,6 +7858,18 @@ function setMaintenancePath(path, pinnedTag) {
   return undefined;
 }
 
+// A panel switch is a navigation, so it has to move focus: otherwise the
+// keyboard owner stays parked on the control that was just hidden and a screen
+// reader announces nothing about the page that opened.
+function focusPageHeading(container) {
+  const heading = container ? container.querySelector(".maintenance-title") : null;
+  if (heading) heading.focus();
+}
+
+function focusMaintenanceHeading(path) {
+  focusPageHeading(document.getElementById(MAINTENANCE_PANEL_IDS[path]));
+}
+
 function currentHashView() {
   return (window.location.hash || "").replace(/^#/, "");
 }
@@ -7720,19 +7880,42 @@ function adminViewForHash(hash) {
 }
 
 function maintenancePathForHash(hash) {
-  if (hash.startsWith("maintenance-")) return hash.slice("maintenance-".length);
-  return "hub";
+  if (!hash.startsWith("maintenance-")) return "hub";
+  const head = hash.slice("maintenance-".length).split("-")[0];
+  return MAINTENANCE_PATH_ALIASES[head] || head;
 }
 
-// Deep links (#maintenance, #maintenance-manual) still resolve to the
-// right panel, but only once the start gate has revealed the workspace — while
-// the landing gate is showing, hash changes must not un-hide a workspace panel.
+// #maintenance-settings-safety deep links straight to one tab of the editor.
+function maintenanceSettingsTabForHash(hash) {
+  const prefix = "maintenance-settings-";
+  if (!hash.startsWith(prefix)) return null;
+  const tab = hash.slice(prefix.length);
+  return MAINTENANCE_SETTINGS_TABS.includes(tab) ? tab : null;
+}
+
+// Deep links (#maintenance, #maintenance-manual, #maintenance-settings-safety)
+// resolve to the right panel even from the landing gate: the gate is a landing
+// screen, not a wall a bookmark has to get past. Only Maintenance opens this
+// way. Guided Setup is a workflow whose truth is the durable transition, so an
+// address must never resurrect an unconfirmed wizard — that resume belongs to
+// resumeGuidedSetupFromTransition. An address naming no maintenance view
+// reveals nothing, which is what keeps showLanding()'s cleared hash from
+// re-opening the panel it just closed.
 function applyHashRoute() {
-  if (!workspaceRevealed) return;
   const hash = currentHashView();
   const view = adminViewForHash(hash);
+  if (!workspaceRevealed) {
+    if (view !== "maintenance") return;
+    revealWorkspace();
+  }
   setAdminView(view);
-  if (view === "maintenance") setMaintenancePath(maintenancePathForHash(hash));
+  if (view === "maintenance") {
+    setMaintenancePath(
+      maintenancePathForHash(hash),
+      undefined,
+      maintenanceSettingsTabForHash(hash),
+    );
+  }
 }
 window.addEventListener("hashchange", applyHashRoute);
 
@@ -7907,6 +8090,7 @@ const setupEls = {
   startConflictResolve: document.getElementById("start-conflict-resolve"),
   startSuccess: document.getElementById("start-success"),
   startDashboardLink: document.getElementById("start-dashboard-link"),
+  verdict: document.getElementById("setup-verdict"),
   stepStatus: {
     release: document.getElementById("step-status-release"),
     devices: document.getElementById("step-status-devices"),
@@ -7964,10 +8148,66 @@ function stepLocked(step) {
 }
 
 function deviceStepStatusText() {
-  if (stepLocked("devices")) return "Locked";
   if (setupState.devices.status === "discovering") return "Discovering…";
   const count = setupState.devices.supported_count;
   return count ? plural(count, "device") : "No devices yet";
+}
+
+const SETUP_STEP_TITLES = {
+  release: "Choose a System Build",
+  devices: "Find your devices",
+  config: "Check the generated config",
+  deployment: "Prepare the deployment",
+  start: "Start EMS",
+};
+
+// A locked step says nothing: the chip is already dimmed and disabled, and the
+// hub dropped the same repeated label from its own state pills.
+function setupStepStatusText(step) {
+  if (stepLocked(step)) return "";
+  if (step === "release") {
+    return RELEASE_STATUS_TEXT[setupState.release.status] || "Not started";
+  }
+  if (step === "devices") return deviceStepStatusText();
+  if (step === "config") {
+    return CONFIG_STATUS_TEXT[setupState.config.status] || "Empty";
+  }
+  if (step === "deployment") {
+    return setupState.deployment.generated_ready ? "Config ready" : "Pending";
+  }
+  if (step === "start") return startStepStatusText();
+  return "";
+}
+
+// The tone comes from the same state that produced the text, never from
+// matching on the text itself.
+function setupStepTone(step) {
+  if (step === "release") {
+    return setupState.release.status === "failed" ? "warn" : "";
+  }
+  if (step === "config") {
+    return setupState.config.status === "needs_attention" ? "warn" : "";
+  }
+  if (step === "start") {
+    if (setupState.start.status === "failed") return "warn";
+    return setupState.start.running ? "ok" : "";
+  }
+  return "";
+}
+
+// Where the installer stands, in the place the maintenance hub states its
+// verdict. It is handed the active step's own status text rather than
+// recomputing it, so the sentence and the chip cannot drift apart.
+function setupProgressView(step, statusText, tone) {
+  const index = SETUP_STEPS.indexOf(step);
+  if (index < 0) return { verdict: "Guided setup is starting…", tone: "" };
+  const number = (value) => String(value).padStart(2, "0");
+  const parts = [
+    "Step " + number(index + 1) + " of " + number(SETUP_STEPS.length),
+    SETUP_STEP_TITLES[step],
+  ];
+  if (statusText) parts.push(statusText);
+  return { verdict: parts.join(" · ") + ".", tone: tone || "" };
 }
 
 function computeSetupStatus() {
@@ -8005,29 +8245,19 @@ function computeSetupStatus() {
 
 function renderStepper() {
   computeSetupStatus();
-  setSummary(
-    setupEls.stepStatus.release,
-    RELEASE_STATUS_TEXT[setupState.release.status] || "Not started"
+  SETUP_STEPS.forEach((step) =>
+    setSummary(setupEls.stepStatus[step], setupStepStatusText(step))
   );
-  setSummary(setupEls.stepStatus.devices, deviceStepStatusText());
-  setSummary(
-    setupEls.stepStatus.config,
-    stepLocked("config")
-      ? "Locked"
-      : CONFIG_STATUS_TEXT[setupState.config.status] || "Empty"
+  const activeStep = setupState.activeStep;
+  const progress = setupProgressView(
+    activeStep,
+    setupStepStatusText(activeStep),
+    setupStepTone(activeStep)
   );
-  setSummary(
-    setupEls.stepStatus.deployment,
-    stepLocked("deployment")
-      ? "Locked"
-      : setupState.deployment.generated_ready
-      ? "Config ready"
-      : "Pending"
-  );
-  setSummary(
-    setupEls.stepStatus.start,
-    stepLocked("start") ? "Locked" : startStepStatusText()
-  );
+  if (setupEls.verdict) {
+    setupEls.verdict.textContent = progress.verdict;
+    setupEls.verdict.dataset.tone = progress.tone;
+  }
   document.querySelectorAll("[data-setup-step]").forEach((button) => {
     const step = button.dataset.setupStep;
     const active = step === setupState.activeStep;
@@ -8322,7 +8552,7 @@ function renderDeploymentControls() {
   }
   if (setupEls.deploymentErrorLine) {
     setupEls.deploymentErrorLine.hidden = !dep.error;
-    setupEls.deploymentErrorLine.textContent = dep.error || "";
+    setupEls.deploymentErrorLine.textContent = humanErrorText(dep, "");
   }
   if (setupEls.deploymentErrorDetails) {
     setupEls.deploymentErrorDetails.hidden = !dep.error_detail;
@@ -8456,7 +8686,7 @@ async function prepareDeployment(overwrite) {
       return;
     }
     if (!res.ok || data.ok === false) {
-      throw new Error(data.message || data.error || "Could not start preparation.");
+      throw new Error(humanErrorText(data, "Could not start preparation."));
     }
     applyDeploymentJob(data);
     if (data.job_id) pollDeploymentJob(data.job_id);
@@ -8497,7 +8727,7 @@ function pollDeploymentJob(jobId) {
       const job = await res.json();
       // "Start over" invalidates an in-flight poll so it cannot revive state.
       if (generation !== guidedSetupGeneration) return;
-      if (!res.ok) throw new Error(job.error || "Job status unavailable.");
+      if (!res.ok) throw new Error(humanErrorText(job, "Job status unavailable."));
       applyDeploymentJob(job);
       if (job.status === "running") {
         deploymentJobTimer = window.setTimeout(tick, 800);
@@ -8737,7 +8967,7 @@ function renderStartControls() {
   }
   if (setupEls.startErrorLine) {
     setupEls.startErrorLine.hidden = !start.error;
-    setupEls.startErrorLine.textContent = start.error || "";
+    setupEls.startErrorLine.textContent = humanErrorText(start, "");
   }
   if (setupEls.startErrorDetails) {
     setupEls.startErrorDetails.hidden = !start.error_detail;
@@ -8851,7 +9081,7 @@ async function startDeployment() {
     if (!res.ok || data.ok === false) {
       start.status = "failed";
       start.error_code = data.reason || null;
-      start.error = data.message || data.error || "Could not start EMS.";
+      start.error = humanErrorText(data, "Could not start EMS.");
       start.error_detail = data.detail || null;
       renderStart();
       return;
@@ -8904,7 +9134,7 @@ async function repairWorkspacePermissions() {
     if (!res.ok || data.ok === false) {
       start.status = "failed";
       start.error_code = data.reason || "workspace_permission_repair_failed";
-      start.error = data.message || data.error || "Could not repair permissions.";
+      start.error = humanErrorText(data, "Could not repair permissions.");
       start.error_detail = data.detail || null;
       return;
     }
@@ -8945,7 +9175,7 @@ async function resolveContainerConflict() {
     });
     const data = await res.json();
     if (!res.ok || data.ok === false) {
-      throw new Error(data.message || data.error || "Could not resolve the container conflict.");
+      throw new Error(humanErrorText(data, "Could not resolve the container conflict."));
     }
     if (data && data.transition) renderSystemAlignmentStatus(data);
     start.conflict = data.conflict || null;
@@ -8977,7 +9207,7 @@ function pollStartJob(jobId) {
       );
       const job = await res.json();
       if (generation !== guidedSetupGeneration) return;
-      if (!res.ok) throw new Error(job.error || "Job status unavailable.");
+      if (!res.ok) throw new Error(humanErrorText(job, "Job status unavailable."));
       applyStartJob(job);
       if (job.status === "running") {
         startJobTimer = window.setTimeout(tick, 900);
@@ -9500,7 +9730,7 @@ async function startGuidedSetupOver() {
     }
     if (!res.ok || data.ok !== true) {
       throw new Error(
-        data.message || data.error || "The setup state could not be cleared."
+        humanErrorText(data, "The setup state could not be cleared.")
       );
     }
   } catch (err) {
@@ -9690,8 +9920,10 @@ async function restoreSetupWorkflowFromServer() {
 // mutating action is exposed yet.
 
 const maintenanceEls = {
-  warnings: document.getElementById("maintenance-warnings"),
   systemStatus: document.getElementById("maintenance-system-status"),
+  findings: document.getElementById("maintenance-findings"),
+  findingsHeadline: document.getElementById("maintenance-findings-headline"),
+  findingsList: document.getElementById("maintenance-findings-list"),
   controlState: document.getElementById("maintenance-control-state"),
   controlVerdict: document.getElementById("maintenance-control-verdict"),
   controlTransports: document.getElementById("maintenance-control-transports"),
@@ -9975,17 +10207,80 @@ function maintenancePathFact(entry) {
   return { text: exists ? "found" : "missing", tone: exists ? "ok" : "warn" };
 }
 
-function renderMaintenanceWarnings(warnings) {
-  const el = maintenanceEls.warnings;
-  if (!el) return;
-  const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
-  if (!list.length) {
-    el.hidden = true;
-    el.innerHTML = "";
-    return;
-  }
-  el.hidden = false;
-  el.innerHTML = list.map((note) => "<span>" + escapeHtml(note) + "</span>").join("<br>");
+const FINDING_SEVERITY_ORDER = ["error", "warning", "info"];
+
+// The worst severity present names the whole list. "ok" only when it is empty.
+function findingsStatus(findings) {
+  return (
+    FINDING_SEVERITY_ORDER.find((severity) =>
+      findings.some((finding) => finding.severity === severity)
+    ) || "ok"
+  );
+}
+
+function maintenanceFindingsHeadline(findings) {
+  if (!findings.length) return "Nothing needs your attention.";
+  if (findings.length === 1) return "1 thing needs your attention.";
+  return findings.length + " things need your attention.";
+}
+
+// One findings list for every Admin page that opens with "what needs your
+// attention". The caller owns the ranking and the wording; this draws them in
+// that order, and a finding without a next step gets no empty line for one.
+function renderFindingsPanel(els, view) {
+  const section = els.section;
+  const headline = els.headline;
+  const list = els.list;
+  if (!section || !headline || !list) return;
+  section.hidden = Boolean(view.hidden);
+  section.dataset.status = view.status;
+  headline.textContent = view.headline;
+  list.replaceChildren(
+    ...view.findings.map((finding) => {
+      const item = document.createElement("li");
+      item.className = "maintenance-finding";
+      item.dataset.code = String(finding.code || "");
+      item.dataset.severity = String(finding.severity || "info");
+      item.append(
+        ...[
+          ["maintenance-finding-title", finding.title],
+          ["maintenance-finding-message", finding.message],
+          ["maintenance-finding-next", finding.next_step],
+        ]
+          .filter((line) => line[1])
+          .map((line) => {
+            const paragraph = document.createElement("p");
+            paragraph.className = line[0];
+            paragraph.textContent = String(line[1]);
+            return paragraph;
+          })
+      );
+      return item;
+    })
+  );
+}
+
+// The page's own headline promises "what is wrong". The server ranks the answer;
+// this renders it in that order, because a second sort here would be a second
+// ranking rule. An unreadable block is reported as unreadable, never as healthy.
+function renderMaintenanceFindings(health) {
+  const readable = Boolean(health) && Array.isArray(health.findings);
+  const findings = readable ? health.findings.filter(Boolean) : [];
+  renderFindingsPanel(
+    {
+      section: maintenanceEls.findings,
+      headline: maintenanceEls.findingsHeadline,
+      list: maintenanceEls.findingsList,
+    },
+    {
+      hidden: false,
+      status: readable ? String(health.status || "ok") : "error",
+      headline: readable
+        ? maintenanceFindingsHeadline(findings)
+        : "This installation could not be read.",
+      findings,
+    }
+  );
 }
 
 function renderMaintenanceImage(el, image) {
@@ -10041,7 +10336,7 @@ function renderMaintenance(data) {
     "muted"
   );
   if (maintenanceEls.dockerNote) {
-    maintenanceEls.dockerNote.textContent = docker.available ? "" : docker.error || "";
+    maintenanceEls.dockerNote.textContent = docker.available ? "" : humanErrorText(docker, "");
   }
 
   const components = data.components || {};
@@ -10061,7 +10356,7 @@ function renderMaintenance(data) {
   const dashboard = data.links && data.links.dashboard_url;
   renderMaintenanceDashboard(dashboard);
   renderMaintenanceSummaries(data);
-  renderMaintenanceWarnings(data.warnings);
+  renderMaintenanceFindings(data.health);
 }
 
 // The dashboard link href is set through the DOM property (never innerHTML) so
@@ -10163,9 +10458,138 @@ function renderMaintenanceError() {
   ].forEach((el) => setMaintenanceFact(el, "unavailable", "muted"));
   renderMaintenanceDashboard(null);
   if (maintenanceEls.stateMessage) maintenanceEls.stateMessage.textContent = "";
-  renderMaintenanceWarnings([
-    "Could not load the Maintenance overview. The Admin server may be unavailable.",
-  ]);
+  renderMaintenanceFindings(null);
+}
+
+const maintenanceHubEls = {
+  verdict: document.getElementById("maintenance-hub-verdict"),
+  statusState: document.getElementById("maintenance-hub-status-state"),
+  settingsState: document.getElementById("maintenance-hub-settings-state"),
+  backupState: document.getElementById("maintenance-hub-backup-state"),
+  badges: {
+    status: document.getElementById("maintenance-hub-status-badge"),
+    upgrade: document.getElementById("maintenance-hub-upgrade-badge"),
+  },
+  cards: {
+    status: document.getElementById("maintenance-open-status"),
+    upgrade: document.getElementById("maintenance-open-upgrade"),
+  },
+};
+
+// What the hub can prove from the read-only overview alone. It deliberately
+// never says whether EMS is *controlling*: that verdict needs the saved config
+// and the transport gates, and it is stated once, on the status page. Saying it
+// twice from two inputs is how the two start to disagree.
+function maintenanceHubView(overview) {
+  if (!overview || typeof overview !== "object") {
+    return {
+      verdict: "This installation could not be read.",
+      tone: "warn",
+      state: "Unknown",
+      recommended: "status",
+    };
+  }
+  const install = overview.install_state || {};
+  const ems = (overview.containers || {}).ems || {};
+  const version = ems.tag || (overview.components || {}).ems?.tag || null;
+  const warnings = Array.isArray(overview.warnings) ? overview.warnings : [];
+  if (!MAINTENANCE_HEALTHY_STATES.includes(install.state)) {
+    return {
+      verdict: install.label || "This installation is not complete.",
+      tone: "warn",
+      state: "Needs setup",
+      recommended: "status",
+    };
+  }
+  if (!ems.running) {
+    return {
+      verdict: "EMS is installed but not running.",
+      tone: "warn",
+      state: "EMS stopped",
+      recommended: "status",
+    };
+  }
+  const parts = ["EMS is running"];
+  if (version) parts.push(version);
+  return {
+    verdict: parts.join(" · ") + ".",
+    tone: warnings.length ? "warn" : "ok",
+    state: warnings.length ? "Needs a look" : "EMS running",
+    recommended: warnings.length ? "status" : "upgrade",
+  };
+}
+
+function renderMaintenanceHubState(overview) {
+  const view = maintenanceHubView(overview);
+  if (maintenanceHubEls.verdict) {
+    maintenanceHubEls.verdict.textContent = view.verdict;
+    maintenanceHubEls.verdict.dataset.tone = view.tone;
+  }
+  if (maintenanceHubEls.statusState) {
+    maintenanceHubEls.statusState.textContent = view.state;
+    maintenanceHubEls.statusState.dataset.tone = view.tone;
+  }
+  // The badge and the primary treatment mark the same door, and only once the
+  // overview has been read: a highlight that never moves is decoration, and a
+  // console that recommends an update to a system it cannot even see running is
+  // worse than one that recommends nothing.
+  Object.entries(maintenanceHubEls.badges).forEach(([path, badge]) => {
+    if (badge) badge.hidden = path !== view.recommended;
+  });
+  Object.entries(maintenanceHubEls.cards).forEach(([path, card]) => {
+    if (card) card.classList.toggle("is-primary", path === view.recommended);
+  });
+}
+
+// The unsaved pill appears only once this session actually holds a draft with
+// changes in it. Before that the hub has nothing to report, and "no unsaved
+// changes" about an editor that was never opened is noise, not an answer.
+function renderMaintenanceHubDraftState() {
+  const pill = maintenanceHubEls.settingsState;
+  if (!pill) return;
+  const count = mconfigDraftChangeCount(mconfigState);
+  pill.hidden = count === 0;
+  pill.textContent = count + " unsaved";
+}
+
+function renderMaintenanceHubBackupState(data) {
+  const pill = maintenanceHubEls.backupState;
+  if (!pill) return;
+  const latest = ((data || {}).summary || {}).latest_created_at;
+  if (!latest) {
+    pill.textContent = "No backup yet";
+    pill.dataset.tone = "action";
+    return;
+  }
+  pill.textContent = "Last backup " + latest;
+  pill.dataset.tone = "muted";
+}
+
+let maintenanceHubLoading = false;
+
+// Two read-only reads, both endpoints the pages behind these cards use anyway.
+// Either failing renders its own card as unknown and never the other's.
+async function loadMaintenanceHubState() {
+  if (maintenanceHubLoading) return;
+  maintenanceHubLoading = true;
+  renderMaintenanceHubDraftState();
+  try {
+    const resp = await fetch("/api/admin/maintenance/overview");
+    if (!resp.ok) throw new Error("maintenance overview request failed");
+    renderMaintenanceHubState(await resp.json());
+  } catch (err) {
+    renderMaintenanceHubState(null);
+  }
+  try {
+    const resp = await fetch("/api/admin/maintenance/backups");
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error("backup list unavailable");
+    renderMaintenanceHubBackupState(data);
+  } catch (err) {
+    renderMaintenanceHubBackupState(null);
+  } finally {
+    maintenanceHubLoading = false;
+  }
 }
 
 function setMaintenanceCardOpen(id, open) {
@@ -10677,7 +11101,7 @@ async function applyMqttMigration() {
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || !data.ok) {
-      const error = new Error(data.message || data.error || "Migration apply failed.");
+      const error = new Error(humanErrorText(data, "Migration apply failed."));
       error.status = data.status || "error";
       throw error;
     }
@@ -11024,7 +11448,7 @@ function setUpgradeReleaseStatus() {
   }
   if (upgradeEls.releaseError) {
     upgradeEls.releaseError.hidden = !upgradeState.error;
-    upgradeEls.releaseError.textContent = upgradeState.error || "";
+    upgradeEls.releaseError.textContent = humanErrorText(upgradeState, "");
   }
   if (upgradeEls.prepareBtn) {
     const release = upgradeSelectedRelease();
@@ -12285,6 +12709,8 @@ const backupEls = {
   latest: document.getElementById("backup-latest"),
   statusWarnings: document.getElementById("backup-status-warnings"),
   refreshBtn: document.getElementById("backup-refresh"),
+  importInput: document.getElementById("backup-import-input"),
+  transferStatus: document.getElementById("backup-transfer-status"),
   scopeInputs: Array.from(document.querySelectorAll("[data-backup-scope]")),
   influxDesc: document.getElementById("backup-scope-influxdb-desc"),
   createBtn: document.getElementById("backup-create"),
@@ -12465,7 +12891,7 @@ function renderBackupRow(backup) {
   ];
   const isInflux = backup.backup_type === "influxdb";
   const flags = [];
-  if (!backup.valid) flags.push(backupValidationItem("error", backup.error || "invalid archive"));
+  if (!backup.valid) flags.push(backupValidationItem("error", humanErrorText(backup, "invalid archive")));
   if (backup.locked) flags.push(backupValidationItem("warn", "encrypted — password required"));
   if (isInflux) {
     flags.push(backupValidationItem(
@@ -12492,6 +12918,7 @@ function renderBackupRow(backup) {
     '<div class="backup-row-meta" aria-label="Backup metadata">' + facts.join("") + "</div>" +
     '<div class="backup-row-actions">' +
     '<button type="button" class="secondary-button compact" data-backup-action="details" data-backup-id="' + id + '" data-backup-kind="archive">Details</button>' +
+    '<button type="button" class="secondary-button compact" data-backup-action="export" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-name="' + escapeHtml(backupName) + '">Download</button>' +
     '<button type="button" class="secondary-button compact" data-backup-action="restore" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-type="' + escapeHtml(backup.backup_type || "config") + '"' + restoreAttrs + ">Restore preview</button>" +
     '<button type="button" class="secondary-button compact" data-backup-action="delete" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-name="' + escapeHtml(backup.name) + '">Delete</button>' +
     "</div>" +
@@ -12714,7 +13141,14 @@ function renderRestorePlan(plan) {
 
   const notes = [];
   if (plan.blocked) {
-    notes.push("Restore is blocked: " + (plan.block_reason || "resolve the issues above") + ".");
+    // block_reason is a machine code; the shared resolver turns the ones an
+    // owner can hit into a sentence and never prints the code itself.
+    notes.push(
+      humanErrorText(
+        { error: plan.block_reason },
+        "This restore is blocked. Resolve the issues above and preview again."
+      )
+    );
   }
   if (!backupEls.rollback.checked) {
     notes.push("Rollback backup is disabled — the current state will not be captured.");
@@ -12860,6 +13294,79 @@ async function deleteBackup(id, kind, name) {
   }
 }
 
+function setBackupTransferStatus(text, tone) {
+  const el = backupEls.transferStatus;
+  if (!el) return;
+  el.hidden = !text;
+  el.textContent = text || "";
+  if (tone) el.dataset.tone = tone;
+  else delete el.dataset.tone;
+}
+
+// A backup that cannot leave this machine is not a backup: the card it lives on
+// is the one a failed upgrade asks you to re-flash. The archive is fetched as a
+// blob rather than linked, so the download keeps the CSRF-gated POST.
+async function exportBackup(id, name) {
+  setBackupTransferStatus("Preparing " + (name || "backup") + "…", null);
+  try {
+    const res = await fetch("/api/admin/maintenance/backups/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(humanErrorText(data, "The backup could not be read."));
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name || "ems-backup.tar.gz";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setBackupTransferStatus("Downloaded " + (name || "backup") + ".", "ok");
+  } catch (err) {
+    setBackupTransferStatus(err.message || String(err), "error");
+  }
+}
+
+async function importBackup(file) {
+  if (!file) return;
+  setBackupTransferStatus("Uploading " + file.name + "…", null);
+  try {
+    const res = await fetch("/api/admin/maintenance/backups/import", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Backup-Filename": file.name,
+      },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok !== true) {
+      throw new Error(humanErrorText(data, "The backup could not be added."));
+    }
+    setBackupTransferStatus(
+      data.name + " is here now. Use Restore preview to put it back.",
+      "ok"
+    );
+    await loadBackups();
+  } catch (err) {
+    setBackupTransferStatus(err.message || String(err), "error");
+  }
+}
+
+if (backupEls.importInput) {
+  backupEls.importInput.addEventListener("change", (event) => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = "";
+    importBackup(file);
+  });
+}
+
 if (backupEls.list) {
   backupEls.list.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-backup-action]");
@@ -12874,6 +13381,8 @@ if (backupEls.list) {
       selectBackup(id, kind, button.dataset.backupType);
       backupEls.restoreStage.hidden = false;
       previewRestore();
+    } else if (action === "export") {
+      exportBackup(id, button.dataset.backupName);
     } else if (action === "delete") {
       deleteBackup(id, kind, button.dataset.backupName);
     }
@@ -13130,6 +13639,12 @@ const mconfigEls = {
   discoveryProgressText: document.getElementById("maintenance-discovery-progress-text"),
   features: document.getElementById("maintenance-config-features"),
   advanced: document.getElementById("maintenance-config-advanced"),
+  safety: document.getElementById("maintenance-config-safety"),
+  settingsState: document.getElementById("maintenance-settings-state"),
+  settingsCount: document.getElementById("maintenance-settings-count"),
+  settingsSearch: document.getElementById("maintenance-settings-search"),
+  settingsSearchCount: document.getElementById("maintenance-settings-search-count"),
+  settingsEditorRoot: document.getElementById("maintenance-config-editor"),
   previewBtn: document.getElementById("maintenance-config-preview-btn"),
   resetBtn: document.getElementById("maintenance-config-reset-btn"),
   resetRuntimeBtn: document.getElementById("maintenance-config-reset-runtime-btn"),
@@ -13167,6 +13682,7 @@ const mconfigState = {
   openHardware: new Set(),
   openFeatures: new Set(),
   discoveryDraftChanges: 0,
+  settingsTab: "devices",
 };
 
 function mconfigClone(value) {
@@ -13181,10 +13697,14 @@ const MCONFIG_FIELD_RISK_LABELS = {
     title:
       "Changing this can make the control loop oscillate or react too slowly. "
       + "Change it in small steps and watch the dashboard afterwards.",
+    shared: "Every setting here affects control stability. Change them in small "
+      + "steps and watch the dashboard afterwards.",
   },
   data_loss: {
     text: "can discard stored data",
     title: "Changing this can drop history or analytics data that is already stored.",
+    shared: "Every setting here can drop history or analytics data that is "
+      + "already stored.",
   },
   secret: {
     text: "secret",
@@ -13207,6 +13727,26 @@ function mconfigFieldRiskBadge(field) {
   badge.textContent = risk.text;
   badge.setAttribute("title", risk.title);
   return badge;
+}
+
+// A badge that repeats on every row of a block stops being a warning and
+// becomes wallpaper. When a whole block shares one consequence it is stated
+// once above the block and the per-row badges come off.
+function mconfigHoistSharedRisk(list, fields) {
+  if (fields.length < 2) return list;
+  const risk = fields[0].risk;
+  const label = risk && MCONFIG_FIELD_RISK_LABELS[risk];
+  if (!label || !label.shared) return list;
+  if (!fields.every((field) => field.risk === risk)) return list;
+  list.querySelectorAll(".mconfig-risk-badge").forEach((badge) => badge.remove());
+  const note = document.createElement("p");
+  note.className = "mconfig-block-risk";
+  note.dataset.risk = risk;
+  note.textContent = label.shared;
+  const wrap = document.createElement("div");
+  wrap.className = "mconfig-block";
+  wrap.append(note, list);
+  return wrap;
 }
 
 function mconfigLabelRow(labelText, control, description, unit) {
@@ -13283,7 +13823,18 @@ function mconfigDeviceCatalogFields() {
 
 function mconfigCatalogControl(field, value, onChange, opts) {
   if (field.type === "boolean") {
-    return mconfigCheckboxControl(value, onChange);
+    // A switch the config does not store resolves to the catalog default, so
+    // that is what the box has to show. Four of the five write gates default to
+    // on and are absent from most config files: rendering them unchecked told
+    // the owner their inverters were safe while EMS was free to drive them.
+    // The draft still stores nothing until the box is actually toggled.
+    const unset = value === null || value === undefined;
+    const control = mconfigCheckboxControl(
+      unset && field.default !== undefined ? field.default : value,
+      onChange
+    );
+    if (unset && field.default !== undefined) control.dataset.fromDefault = "true";
+    return control;
   }
   if (Array.isArray(field.options) && field.options.length) {
     const current = value == null ? "" : String(value);
@@ -13305,8 +13856,13 @@ function mconfigCatalogControl(field, value, onChange, opts) {
   const numeric = field.type === "integer" || field.type === "number";
   const display = Array.isArray(value) ? value.join(", ") : value;
   const input = mconfigTextControl(display, onChange, numeric ? "number" : "text");
-  if (opts && opts.defaultValue != null && (value == null || value === "")) {
-    input.placeholder = String(opts.defaultValue) + " (default)";
+  // Same rule as the checkbox above: a field the config does not store falls
+  // back to the catalog default, so an empty box states which value applies
+  // instead of reading as "nothing set, nothing happens".
+  const fallback =
+    opts && opts.defaultValue != null ? opts.defaultValue : field.default;
+  if (fallback != null && (value == null || value === "")) {
+    input.placeholder = String(fallback) + " (default)";
   }
   return input;
 }
@@ -13321,6 +13877,9 @@ function mconfigCatalogRow(field, value, onChange, opts) {
   if (field.path) row.dataset.path = field.path;
   if (field.level) row.dataset.level = field.level;
   if (field.risk) row.dataset.risk = field.risk;
+  if (row.querySelector('[data-from-default="true"]')) {
+    row.dataset.fromDefault = "true";
+  }
   const badge = mconfigFieldRiskBadge(field);
   if (badge) row.appendChild(badge);
   return row;
@@ -13386,7 +13945,7 @@ function mconfigLevelledFields(fields, renderRow) {
   const normal = document.createElement("div");
   normal.className = "mconfig-fields feature-fields";
   levels.normal.forEach((field) => normal.appendChild(renderRow(field)));
-  body.appendChild(normal);
+  body.appendChild(mconfigHoistSharedRisk(normal, levels.normal));
   [
     ["advanced", "Advanced settings", "feature-advanced"],
     ["expert", "Developer / expert settings", "feature-expert"],
@@ -13399,7 +13958,7 @@ function mconfigLevelledFields(fields, renderRow) {
     const list = document.createElement("div");
     list.className = "mconfig-fields feature-fields";
     levels[level].forEach((field) => list.appendChild(renderRow(field)));
-    details.append(summary, list);
+    details.append(summary, mconfigHoistSharedRisk(list, levels[level]));
     body.appendChild(details);
   });
   return body;
@@ -15674,7 +16233,7 @@ async function maintenanceScanNetwork(
   }, session.mode);
   const started = await start.json();
   if (!start.ok || !started.scan_id) {
-    throw new Error(started.error || "scan request failed");
+    throw new Error(humanErrorText(started, "scan request failed"));
   }
   const deadline = Date.now() + POLL_MAX_MS;
   while (Date.now() < deadline) {
@@ -15682,7 +16241,7 @@ async function maintenanceScanNetwork(
       "/api/discovery/result/" + encodeURIComponent(started.scan_id)
     );
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "scan result unavailable");
+    if (!response.ok) throw new Error(humanErrorText(result, "scan result unavailable"));
     if (onProgress && result.progress) onProgress(result.progress);
     if (result.status !== "running") {
       return Array.isArray(result.devices) ? result.devices : [];
@@ -15776,7 +16335,7 @@ async function startMaintenanceDiscovery() {
         const settingsResponse = await fetch(ZENDURE_CLOUD_BASE + "/settings");
         const settings = await settingsResponse.json();
         if (!settingsResponse.ok) {
-          throw new Error(settings.error || "cloud settings unavailable");
+          throw new Error(humanErrorText(settings, "cloud settings unavailable"));
         }
         if (settings.token_saved) {
           const refresh = await fetch(ZENDURE_CLOUD_BASE + "/refresh", { method: "POST" });
@@ -15793,7 +16352,7 @@ async function startMaintenanceDiscovery() {
       try {
         const response = await fetch("/api/discovery/mqtt-proposals");
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "mqtt proposals unavailable");
+        if (!response.ok) throw new Error(humanErrorText(data, "mqtt proposals unavailable"));
         if (generation !== session.generation) return;
         session.mqttProposals = Array.isArray(data.proposals) ? data.proposals : [];
       } catch (err) {
@@ -15815,7 +16374,7 @@ async function startMaintenanceDiscovery() {
         if (!refresh.ok) throw new Error("mDNS refresh failed");
         const response = await fetch("/api/discovery/devices");
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "mDNS results unavailable");
+        if (!response.ok) throw new Error(humanErrorText(data, "mDNS results unavailable"));
         if (generation !== session.generation) return;
         (Array.isArray(data.devices) ? data.devices : []).forEach((device) =>
           mergeDiscoveryDevice(session, device, "mdns")
@@ -15830,7 +16389,7 @@ async function startMaintenanceDiscovery() {
       try {
         const response = await fetch("/api/discovery/networks");
         const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "network discovery failed");
+        if (!response.ok) throw new Error(humanErrorText(data, "network discovery failed"));
         if (generation !== session.generation) return;
         const cidrs = (Array.isArray(data.networks) ? data.networks : [])
           .filter((network) => network.scan_recommended && !network.is_docker_like)
@@ -16025,7 +16584,7 @@ async function addManualMaintenanceMqttDevice() {
       );
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.message || data.error || "credential save failed");
+        throw new Error(humanErrorText(data, "credential save failed"));
       }
       const credentials = (data.local_mqtt || {}).credentials || [];
       const match = credentials.find((entry) => String(entry.id) === broker.ref);
@@ -16081,7 +16640,7 @@ function mconfigFeatureBody(section) {
   const enabledPath = featureEnabledPath(section);
   const features = mconfigState.draft.features || (mconfigState.draft.features = {});
   const fields = (section.fields || []).filter(
-    (field) => field.path !== enabledPath
+    (field) => field.path !== enabledPath && !mconfigIsSafetyField(field)
   );
   return mconfigLevelledFields(fields, (field) =>
     mconfigAttachOverrideBadge(
@@ -16155,14 +16714,95 @@ function renderMaintenanceFeatureSection(section) {
   return card;
 }
 
+// The catalog decides which settings are safety-relevant, not this file: the
+// groups are declared in ems/config_catalog.py and read here by name only.
+
+
+function mconfigIsSafetyField(field) {
+  return SAFETY_CATALOG_GROUPS.includes(field && field.group);
+}
+
+// Every catalog section lands on exactly one tab, keyed on the catalog's own
+// audience axis rather than on a list of section ids kept here.
+function mconfigSectionTab(section) {
+  return section && section.setup_group === "advanced" ? "expert" : "features";
+}
+
+// The safety tab is flat on purpose: the level disclosure would hide four of
+// the five write gates behind "Advanced settings", which is the arrangement
+// this page exists to correct. docs/user/safety.md names the same floor.
+function renderMaintenanceSafetyGroups(sections) {
+  const wrap = document.createElement("div");
+  const features = mconfigState.draft.features || (mconfigState.draft.features = {});
+  const blocks = [];
+  sections.forEach((section) => {
+    (section.groups || [])
+      .filter((group) => SAFETY_CATALOG_GROUPS.includes(group.id))
+      .forEach((group) => {
+        const fields = (section.fields || []).filter(
+          (field) => field.group === group.id
+        );
+        if (fields.length) blocks.push({ group, fields });
+      });
+  });
+  blocks.sort((a, b) => (a.group.order || 0) - (b.group.order || 0));
+  blocks.forEach(({ group, fields }) => {
+    const block = document.createElement("div");
+    block.className = "mconfig-safety-group";
+    block.dataset.groupId = group.id;
+    const title = document.createElement("h4");
+    title.className = "config-section-title";
+    title.textContent = group.title || group.id;
+    const note = document.createElement("p");
+    note.className = "future-note";
+    note.textContent = group.summary || "";
+    const list = document.createElement("div");
+    list.className = "mconfig-fields feature-fields";
+    fields.forEach((field) => {
+      list.appendChild(
+        mconfigAttachOverrideBadge(
+          mconfigCatalogRow(field, features[field.path], (value) => {
+            features[field.path] = value;
+          }),
+          mconfigOverrideEntry(field.path)
+        )
+      );
+    });
+    block.append(title, note, mconfigHoistSharedRisk(list, fields));
+    wrap.appendChild(block);
+  });
+  return wrap;
+}
+
 function renderMaintenanceFeatures() {
   const sections = (mconfigState.catalog && mconfigState.catalog.feature_sections) || [];
-  if (mconfigEls.features) mconfigEls.features.textContent = "";
-  if (mconfigEls.advanced) mconfigEls.advanced.textContent = "";
+  [mconfigEls.features, mconfigEls.advanced, mconfigEls.safety].forEach((target) => {
+    if (target) target.textContent = "";
+  });
+  if (mconfigEls.safety) {
+    const safety = renderMaintenanceSafetyGroups(sections);
+    // A tab about the switches that let EMS drive hardware must never be a
+    // silent empty box: an EMS whose catalog does not name the groups leaves
+    // those settings in Expert, and the page has to say so rather than imply
+    // there is nothing to see.
+    if (!safety.childNodes.length) {
+      const note = document.createElement("p");
+      note.className = "maintenance-note";
+      note.id = "maintenance-config-safety-empty";
+      note.textContent =
+        "This EMS version does not group its safety settings. They are in the "
+        + "Expert tab, and the Control & safety panel on the status page still "
+        + "states what is allowed.";
+      safety.appendChild(note);
+    }
+    mconfigEls.safety.appendChild(safety);
+  }
   for (const section of sections) {
-    const target = section.setup_group === "advanced" ? mconfigEls.advanced : mconfigEls.features;
+    const target =
+      mconfigSectionTab(section) === "expert" ? mconfigEls.advanced : mconfigEls.features;
     if (target) target.appendChild(renderMaintenanceFeatureSection(section));
   }
+  applyMaintenanceSettingsSearch();
 }
 
 // --- load / render --------------------------------------------------------
@@ -16174,7 +16814,22 @@ function mconfigSummaryLine(summary) {
   return parts.join(" · ");
 }
 
-function renderMaintenanceConfig(data) {
+// A reload must never destroy edits the operator has not saved yet: they are
+// only in the browser, and nothing on the page announces that they went. Only
+// an explicit discard replaces the draft, and a draft we cannot compare counts
+// as unsaved.
+function mconfigShouldKeepDraft(state, options) {
+  if (options && options.discardDraft === true) return false;
+  if (!state || state.loaded !== true) return false;
+  if (!state.pristine || !state.draft) return false;
+  try {
+    return JSON.stringify(state.draft) !== JSON.stringify(state.pristine);
+  } catch (err) {
+    return true;
+  }
+}
+
+function renderMaintenanceConfig(data, options) {
   if (data.status !== "ok") {
     mconfigState.loaded = false;
     if (mconfigEls.editor) mconfigEls.editor.hidden = true;
@@ -16188,6 +16843,7 @@ function renderMaintenanceConfig(data) {
     return;
   }
 
+  const keepDraft = mconfigShouldKeepDraft(mconfigState, options);
   mconfigState.loaded = true;
   mconfigState.catalog = data.catalog || {
     feature_sections: [],
@@ -16195,21 +16851,27 @@ function renderMaintenanceConfig(data) {
     grid_meter_variants: {},
   };
   mconfigState.overrides = data.overrides || {};
-  mconfigState.revision = data.revision || null;
   mconfigState.previewFingerprint = null;
-  mconfigState.discoveryDraftChanges = 0;
-  mconfigState.pristine = mconfigClone(data.draft || {});
-  mconfigState.draft = mconfigClone(data.draft || {});
-  mconfigNormalizeDraftMqttControl(mconfigState.draft);
-  mconfigState.openHardware.clear();
-  mconfigState.openFeatures.clear();
-  seedDefaultOpenFeatureSections(
-    mconfigState.catalog.feature_sections,
-    mconfigState.openFeatures,
-  );
+  if (!keepDraft) {
+    mconfigState.revision = data.revision || null;
+    mconfigState.discoveryDraftChanges = 0;
+    mconfigState.pristine = mconfigClone(data.draft || {});
+    mconfigState.draft = mconfigClone(data.draft || {});
+    mconfigNormalizeDraftMqttControl(mconfigState.draft);
+    mconfigState.openHardware.clear();
+    mconfigState.openFeatures.clear();
+    seedDefaultOpenFeatureSections(
+      mconfigState.catalog.feature_sections,
+      mconfigState.openFeatures,
+    );
+  }
 
   setMaintenanceFact(mconfigEls.source, data.config_path || "—", "muted");
-  if (mconfigEls.message) mconfigEls.message.textContent = "";
+  if (mconfigEls.message) {
+    mconfigEls.message.textContent = keepDraft
+      ? "Your unsaved changes were kept. Discard them to load the saved settings."
+      : "";
+  }
   if (mconfigEls.editor) mconfigEls.editor.hidden = false;
   if (mconfigEls.result) mconfigEls.result.hidden = true;
   if (mconfigEls.applyPanel) mconfigEls.applyPanel.hidden = true;
@@ -16225,23 +16887,204 @@ function renderMaintenanceConfig(data) {
   renderMaintenanceFeatures();
   mconfigUpdateResetRuntimeButton();
 
+  // Loading normalizes the draft: MQTT control capability is re-derived and the
+  // broker password field is reset. Neither is an operator edit, so the
+  // baseline that decides "unsaved" is the draft as the editor first showed it.
+  if (!keepDraft) mconfigState.pristine = mconfigClone(mconfigState.draft);
+
   renderMaintenanceControlState((data.summary || {}).control);
   const line = mconfigSummaryLine(data.summary || {});
   mconfigState.summaryLine = line;
-  setMaintenanceFact(mconfigEls.summary, line + " · preview not run", null);
-  setMaintenanceCardTone("maintenance-config-card", "ok");
+  setMaintenanceFact(
+    mconfigEls.summary,
+    line + (keepDraft ? " · unsaved changes kept" : " · preview not run"),
+    null,
+  );
+  setMaintenanceCardTone("maintenance-config-card", keepDraft ? "action" : "ok");
+  renderMaintenanceSettingsState();
+  renderMaintenanceHubDraftState();
+}
+
+// Four doors over one draft. Switching a tab only toggles [hidden]: it never
+// reloads and never touches mconfigState.draft, so an unsaved edit made on one
+// tab is still there after visiting another.
+function setMaintenanceSettingsTab(tab) {
+  const next = MAINTENANCE_SETTINGS_TABS.includes(tab)
+    ? tab
+    : mconfigState.settingsTab || "devices";
+  mconfigState.settingsTab = next;
+  document.querySelectorAll("[data-settings-tab]").forEach((button) => {
+    button.setAttribute(
+      "aria-selected",
+      button.dataset.settingsTab === next ? "true" : "false"
+    );
+  });
+  document.querySelectorAll("[data-settings-pane]").forEach((pane) => {
+    pane.hidden = pane.dataset.settingsPane !== next;
+  });
+}
+
+document.querySelectorAll("[data-settings-tab]").forEach((button) => {
+  button.addEventListener("click", () => {
+    setMaintenanceSettingsTab(button.dataset.settingsTab);
+  });
+});
+
+// How many things the operator changed and has not applied. This is a browser
+// projection for the footer and the hub pill only — the authoritative diff is
+// the server's, computed at preview against the file on disk.
+function mconfigDraftChangeCount(state) {
+  if (!state || state.loaded !== true || !state.draft || !state.pristine) return 0;
+  const draft = state.draft;
+  const pristine = state.pristine;
+  let count = 0;
+  const draftFeatures = draft.features || {};
+  const pristineFeatures = pristine.features || {};
+  const paths = new Set(
+    Object.keys(draftFeatures).concat(Object.keys(pristineFeatures))
+  );
+  paths.forEach((path) => {
+    if (JSON.stringify(draftFeatures[path]) !== JSON.stringify(pristineFeatures[path])) {
+      count += 1;
+    }
+  });
+  const draftDevices = Array.isArray(draft.devices) ? draft.devices : [];
+  const pristineDevices = Array.isArray(pristine.devices) ? pristine.devices : [];
+  const total = Math.max(draftDevices.length, pristineDevices.length);
+  for (let index = 0; index < total; index += 1) {
+    if (
+      JSON.stringify(draftDevices[index] || null) !==
+      JSON.stringify(pristineDevices[index] || null)
+    ) {
+      count += 1;
+    }
+  }
+  ["grid_meter", "zendure_mqtt"].forEach((key) => {
+    if (JSON.stringify(draft[key] || null) !== JSON.stringify(pristine[key] || null)) {
+      count += 1;
+    }
+  });
+  return count;
+}
+
+function mconfigChangeSentence(count) {
+  if (count === 1) return "1 unsaved change.";
+  return count + " unsaved changes.";
+}
+
+function renderMaintenanceSettingsState() {
+  const count = mconfigDraftChangeCount(mconfigState);
+  const tone = count > 0 ? "action" : "ok";
+  if (mconfigEls.settingsCount) {
+    mconfigEls.settingsCount.textContent = count
+      ? mconfigChangeSentence(count) + " They survive a refresh until you apply or discard them."
+      : "No unsaved changes.";
+    mconfigEls.settingsCount.dataset.tone = tone;
+  }
+  // Discarding nothing does nothing, and the primary treatment belongs to the
+  // action that has something to do.
+  if (mconfigEls.resetBtn) mconfigEls.resetBtn.disabled = count === 0;
+  if (mconfigEls.previewBtn) {
+    mconfigEls.previewBtn.classList.toggle("primary-button", count > 0);
+    mconfigEls.previewBtn.classList.toggle("secondary-button", count === 0);
+  }
+  if (mconfigEls.settingsState) {
+    mconfigEls.settingsState.textContent = count ? count + " unsaved" : "No unsaved";
+    mconfigEls.settingsState.dataset.tone = tone;
+  }
+  renderMaintenanceHubDraftState();
+}
+
+// Client-side search over what is already rendered. It hides rows rather than
+// re-rendering, so nothing in the draft moves and no preview is invalidated.
+function maintenanceSettingsSearchTerms(row) {
+  const parts = [row.dataset.path || ""];
+  row.querySelectorAll(".feature-field-label, .feature-field-desc, .feature-title, .feature-desc")
+    .forEach((node) => parts.push(node.textContent || ""));
+  if (!parts.join("").trim()) parts.push(row.textContent || "");
+  return parts.join(" ").toLowerCase();
+}
+
+function applyMaintenanceSettingsSearch() {
+  const root = mconfigEls.settingsEditorRoot;
+  if (!root) return;
+  const query = ((mconfigEls.settingsSearch && mconfigEls.settingsSearch.value) || "")
+    .trim()
+    .toLowerCase();
+  root.classList.toggle("mconfig-searching", query !== "");
+  const rows = root.querySelectorAll(".feature-field-row");
+  let hits = 0;
+  rows.forEach((row) => {
+    const hit = query === "" || maintenanceSettingsSearchTerms(row).includes(query);
+    row.dataset.searchHit = hit ? "true" : "false";
+    if (hit && query !== "") hits += 1;
+  });
+  root.querySelectorAll(".feature-row, .hardware-card").forEach((card) => {
+    if (query === "") {
+      card.dataset.searchHit = "true";
+      return;
+    }
+    const own = maintenanceSettingsSearchTerms(card).includes(query);
+    const child = card.querySelector('.feature-field-row[data-search-hit="true"]');
+    card.dataset.searchHit = own || child ? "true" : "false";
+  });
+  document.querySelectorAll("[data-settings-pane]").forEach((pane) => {
+    const paneHits = query === ""
+      ? 0
+      : pane.querySelectorAll('.feature-field-row[data-search-hit="true"]').length;
+    const status = document.getElementById(
+      "maintenance-settings-tab-" + pane.dataset.settingsPane + "-status"
+    );
+    if (!status) return;
+    if (query === "") {
+      status.textContent = status.dataset.restText || status.textContent;
+      return;
+    }
+    if (!status.dataset.restText) status.dataset.restText = status.textContent;
+    status.textContent = paneHits + (paneHits === 1 ? " match" : " matches");
+  });
+  if (mconfigEls.settingsSearchCount) {
+    mconfigEls.settingsSearchCount.hidden = query === "";
+    mconfigEls.settingsSearchCount.textContent =
+      hits + (hits === 1 ? " setting" : " settings");
+  }
+}
+
+if (mconfigEls.settingsSearch) {
+  mconfigEls.settingsSearch.addEventListener("input", applyMaintenanceSettingsSearch);
+}
+
+// Every control writes straight into the draft, so the page's summary of that
+// draft has to redraw from the same events. Delegating from the editor covers
+// controls that do not exist yet; without it the unsaved count — and the
+// actions gated on it — lag one edit behind.
+if (mconfigEls.editor) {
+  ["input", "change"].forEach((event) =>
+    mconfigEls.editor.addEventListener(event, () =>
+      renderMaintenanceSettingsState()
+    )
+  );
+}
+
+// The settings page owns the draft editor. It loads the config only when there
+// is none yet: arriving from the status page must not re-render over an edit.
+async function loadMaintenanceSettings(tab) {
+  setMaintenanceSettingsTab(tab);
+  if (!mconfigState.loaded) await loadMaintenanceConfig();
+  renderMaintenanceSettingsState();
+  return undefined;
 }
 
 let mconfigLoading = false;
 
-async function loadMaintenanceConfig() {
+async function loadMaintenanceConfig(options) {
   if (mconfigLoading) return null;
   mconfigLoading = true;
   try {
     const resp = await fetch("/api/admin/maintenance/config");
     if (!resp.ok) throw new Error("maintenance config request failed");
     const data = await resp.json();
-    renderMaintenanceConfig(data);
+    renderMaintenanceConfig(data, options);
     return data;
   } catch (err) {
     if (mconfigEls.editor) mconfigEls.editor.hidden = true;
@@ -16276,7 +17119,59 @@ function renderMaintenanceConfigChange(entry, kind) {
     value.textContent = "− " + mconfigDisplayValue(entry.before);
   }
   row.appendChild(value);
+  row.dataset.appliesLive = entry.applies_live === true ? "true" : "false";
   return row;
+}
+
+// Two groups, never a filter: the preview shows every row it was given. A
+// change the console dropped is a change the operator applied without seeing.
+const MCONFIG_DIFF_GROUPS = [
+  ["live", "Takes effect immediately"],
+  ["restart", "Needs an EMS restart"],
+];
+
+function mconfigDiffEntries(diff) {
+  return []
+    .concat((diff.changes || []).map((entry) => [entry, "changed"]))
+    .concat((diff.added || []).map((entry) => [entry, "added"]))
+    .concat((diff.removed || []).map((entry) => [entry, "removed"]));
+}
+
+function renderMaintenanceConfigChangeGroups(container, diff) {
+  container.textContent = "";
+  const entries = mconfigDiffEntries(diff);
+  MCONFIG_DIFF_GROUPS.forEach(([when, label]) => {
+    const rows = entries.filter(
+      ([entry]) => (entry.applies_live === true) === (when === "live")
+    );
+    if (!rows.length) return;
+    const group = document.createElement("div");
+    group.className = "mconfig-diff-group";
+    group.dataset.when = when;
+    const title = document.createElement("h4");
+    title.className = "mconfig-diff-title";
+    title.textContent = label + " (" + rows.length + ")";
+    group.appendChild(title);
+    rows.forEach(([entry, kind]) => {
+      group.appendChild(renderMaintenanceConfigChange(entry, kind));
+    });
+    container.appendChild(group);
+  });
+  return entries.length;
+}
+
+function mconfigDiffCounts(diff) {
+  const entries = mconfigDiffEntries(diff);
+  const live = entries.filter(([entry]) => entry.applies_live === true).length;
+  return { total: entries.length, live, restart: entries.length - live };
+}
+
+function mconfigChangeSummaryText(counts) {
+  if (!counts.total) return "no changes";
+  const parts = [counts.total + " change(s)"];
+  if (counts.live) parts.push(counts.live + " immediate");
+  if (counts.restart) parts.push(counts.restart + " need a restart");
+  return parts.join(" · ");
 }
 
 function mconfigDisplayValue(value) {
@@ -16315,18 +17210,16 @@ function renderMaintenanceConfigPreview(data) {
   );
 
   const diff = data.diff || { changes: [], added: [], removed: [] };
-  const total = (diff.changes || []).length + (diff.added || []).length + (diff.removed || []).length;
+  const counts = mconfigDiffCounts(diff);
+  const total = counts.total;
   setMaintenanceFact(
     mconfigEls.changeSummary,
-    data.changed ? total + " change(s)" : "no changes",
+    data.changed ? mconfigChangeSummaryText(counts) : "no changes",
     data.changed ? "ok" : "muted"
   );
 
   if (mconfigEls.changes) {
-    mconfigEls.changes.textContent = "";
-    (diff.changes || []).forEach((e) => mconfigEls.changes.appendChild(renderMaintenanceConfigChange(e, "changed")));
-    (diff.added || []).forEach((e) => mconfigEls.changes.appendChild(renderMaintenanceConfigChange(e, "added")));
-    (diff.removed || []).forEach((e) => mconfigEls.changes.appendChild(renderMaintenanceConfigChange(e, "removed")));
+    renderMaintenanceConfigChangeGroups(mconfigEls.changes, diff);
   }
 
   if (mconfigEls.warnings) {
@@ -16348,7 +17241,9 @@ function renderMaintenanceConfigPreview(data) {
 
   setMaintenanceFact(
     mconfigEls.summary,
-    (ok ? "config valid" : "config invalid") + " · " + (data.changed ? total + " change(s)" : "no changes"),
+    (ok ? "config valid" : "config invalid") +
+      " · " +
+      (data.changed ? mconfigChangeSummaryText(counts) : "no changes"),
     ok ? "ok" : "warn"
   );
 }
@@ -16475,7 +17370,7 @@ async function resetMaintenanceRuntimeOverrides() {
     const resp = await fetch("/api/admin/maintenance/config/reset-runtime", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targets }),
+      body: JSON.stringify({ targets, confirm: true }),
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
@@ -16560,12 +17455,13 @@ async function applyMaintenanceConfig() {
     const data = await resp.json().catch(() => ({}));
     showCredentialRollbackWarning(mconfigEls.applyRollback, data);
     if (!resp.ok || !data.ok) {
-      throw new Error(data.message || data.error || "Could not apply the config draft.");
+      throw new Error(humanErrorText(data, "Could not apply the config draft."));
     }
     const successMessage =
       "Config updated at " + data.path +
       (data.backup_path ? " · backup: " + data.backup_path : " · no backup created");
-    await loadMaintenanceConfig();
+    // The draft is what was just written; reload it as the new saved state.
+    await loadMaintenanceConfig({ discardDraft: true });
     // Refresh the overview facts only: config + container plan are handled
     // explicitly below so the guided post-apply panel is not reset.
     await loadMaintenanceOverview({
@@ -16762,7 +17658,7 @@ async function syncMaintenanceContainers(statusEl, reason = "manual") {
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || !data.ok) {
-      throw new Error(data.message || data.error || "Container sync failed.");
+      throw new Error(humanErrorText(data, "Container sync failed."));
     }
     const stepSummary = formatContainerSyncSteps(data.steps);
     if (statusEl) {
@@ -16818,17 +17714,72 @@ if (maintenanceEls.runtimeDiagnostics) {
 // recommends the safest of the only two flows (set up new / manage existing).
 // The setup wizard must not auto-run when an install already exists, so its
 // network-touching init is deferred until the user chooses "Set up a new
-// system". Every server-provided path/message passes through escapeHtml.
+// system". Every server-provided message is written with textContent.
 
-const RECOMMEND_LABELS = {
+const START_PATH_LABELS = {
   setup_new: "Guided setup",
   manage_existing: "Maintenance",
 };
 
+// What the landing may say about this host. install_state.py classifies the
+// install root and picks the safest path; this maps that verdict onto one
+// sentence and one pill, and re-derives neither.
+const START_INSTALL_VERDICTS = {
+  none: {
+    verdict: "No EMS installation was found on this host.",
+    tone: "ok",
+    state: "Nothing installed",
+  },
+  standard_install: {
+    verdict: "An EMS installation was found on this host.",
+    tone: "ok",
+    state: "Installed",
+  },
+  admin_prepared_install: {
+    verdict: "An EMS installation prepared by this console was found.",
+    tone: "ok",
+    state: "Installed",
+  },
+  standard_config_only: {
+    verdict: "A config file is here, but nothing has been deployed yet.",
+    tone: "warn",
+    state: "Not deployed",
+  },
+  compose_only: {
+    verdict: "A docker-compose.yml is here, but no config file was found.",
+    tone: "warn",
+    state: "Incomplete",
+  },
+  legacy_root_config: {
+    verdict: "A legacy root config.json was found and can be migrated.",
+    tone: "warn",
+    state: "Legacy layout",
+  },
+  partial_install: {
+    verdict: "This installation is incomplete.",
+    tone: "warn",
+    state: "Incomplete",
+  },
+};
+
 const startEls = {
   gate: document.getElementById("view-start"),
-  recommend: document.getElementById("start-recommend"),
+  verdict: document.getElementById("start-verdict"),
+  installState: document.getElementById("start-install-state"),
   error: document.getElementById("start-path-error"),
+  findings: {
+    section: document.getElementById("start-findings"),
+    headline: document.getElementById("start-findings-headline"),
+    list: document.getElementById("start-findings-list"),
+  },
+  badges: {
+    setup_new: document.getElementById("start-setup-badge"),
+    manage_existing: document.getElementById("start-maintenance-badge"),
+  },
+  cards: {
+    setup_new: document.getElementById("start-open-setup"),
+    manage_existing: document.getElementById("start-open-maintenance"),
+  },
 };
 
 let workspaceRevealed = false;
@@ -16846,42 +17797,80 @@ function setStartError(message) {
   startEls.error.textContent = message;
 }
 
-function renderRecommendation(state) {
-  const recommended = state.recommended_path;
-  const label = escapeHtml(RECOMMEND_LABELS[recommended] || "Maintenance");
-  const notes = []
-    .concat(Array.isArray(state.reasons) ? state.reasons : [])
-    .concat(Array.isArray(state.warnings) ? state.warnings : []);
-  let html = '<p class="start-recommend-line">Recommended: <strong>' + label + "</strong></p>";
-  if (notes.length) {
-    html +=
-      '<ul class="start-recommend-notes">' +
-      notes.map((note) => "<li>" + escapeHtml(note) + "</li>").join("") +
-      "</ul>";
+// An unreadable or unclassified state says so and marks no door: recommending a
+// path for an installation the console cannot see is worse than recommending
+// none. Warnings outrank the classification reasons in the list below it.
+function startGateView(state) {
+  if (!state || typeof state !== "object") {
+    return {
+      verdict: "This installation could not be read. Choose how to continue.",
+      tone: "warn",
+      recommended: null,
+      installState: { text: "Unknown", tone: "warn" },
+      findings: [],
+    };
   }
-  startEls.recommend.innerHTML = html;
-  highlightRecommendedChoice(recommended);
+  const classified = START_INSTALL_VERDICTS[state.state] || {
+    verdict: "This installation could not be classified.",
+    tone: "warn",
+    state: "Unknown",
+  };
+  const warnings = Array.isArray(state.warnings) ? state.warnings : [];
+  const reasons = Array.isArray(state.reasons) ? state.reasons : [];
+  const findings = warnings
+    .map((message) => ({ severity: "warning", message: String(message) }))
+    .concat(
+      reasons.map((message) => ({ severity: "info", message: String(message) }))
+    );
+  const tone = warnings.length ? "warn" : classified.tone;
+  return {
+    verdict: classified.verdict,
+    tone,
+    recommended: START_PATH_LABELS[state.recommended_path]
+      ? state.recommended_path
+      : null,
+    installState: { text: classified.state, tone },
+    findings,
+  };
 }
 
-// Highlight the recommended landing card. Falls back to leaving the static
-// default (Guided setup) highlighted if the recommendation is unknown.
-function highlightRecommendedChoice(recommended) {
-  const cards = document.querySelectorAll(".start-choice-nav");
-  if (!cards.length || !RECOMMEND_LABELS[recommended]) return;
-  cards.forEach((card) => {
-    card.classList.toggle("is-recommended", card.dataset.startPath === recommended);
+function startFindingsView(findings) {
+  return {
+    hidden: findings.length === 0,
+    status: findingsStatus(findings),
+    headline: maintenanceFindingsHeadline(findings),
+    findings,
+  };
+}
+
+function renderStartGate(state) {
+  const view = startGateView(state);
+  if (startEls.verdict) {
+    startEls.verdict.textContent = view.verdict;
+    startEls.verdict.dataset.tone = view.tone;
+  }
+  if (startEls.installState) {
+    startEls.installState.textContent = view.installState.text;
+    startEls.installState.dataset.tone = view.installState.tone;
+  }
+  // Exactly one door carries the badge and the primary treatment, and only once
+  // install-state has been read: a highlight that never moves is decoration.
+  Object.entries(startEls.badges).forEach(([path, badge]) => {
+    if (badge) badge.hidden = path !== view.recommended;
   });
+  Object.entries(startEls.cards).forEach(([path, card]) => {
+    if (card) card.classList.toggle("is-primary", path === view.recommended);
+  });
+  renderFindingsPanel(startEls.findings, startFindingsView(view.findings));
 }
 
 async function loadInstallState() {
   try {
     const resp = await fetch("/api/admin/install-state");
     if (!resp.ok) throw new Error("install-state request failed");
-    const state = await resp.json();
-    renderRecommendation(state);
+    renderStartGate(await resp.json());
   } catch (err) {
-    startEls.recommend.textContent =
-      "Could not detect the current installation. Choose an option to continue.";
+    renderStartGate(null);
   }
 }
 
@@ -16898,6 +17887,11 @@ function showLanding() {
   });
   if (startEls.gate) startEls.gate.hidden = false;
   workspaceRevealed = false;
+  focusPageHeading(startEls.gate);
+  // The landing's whole job is to say what this host has right now, and coming
+  // back is exactly when that answer may have changed — a finished setup, a
+  // restored backup. Reading it once at bootstrap left it stating the past.
+  loadInstallState();
   if (window.location.hash) {
     history.replaceState(null, "", window.location.pathname + window.location.search);
   }
@@ -16912,6 +17906,7 @@ function enterSetup() {
   if (!setupInitialized) initSetupWizard();
   window.location.hash = "setup";
   setAdminView("setup");
+  focusPageHeading(document.getElementById("view-setup"));
 }
 
 function enterMaintenance() {
@@ -16925,9 +17920,13 @@ function enterMaintenance() {
 // and the single overview load so opening a panel never double-fetches.
 document.querySelectorAll("[data-open-maintenance-path]").forEach((button) => {
   button.addEventListener("click", () => {
-    const path = button.dataset.openMaintenancePath;
+    // The attribute may carry a tab suffix ("settings-safety"); the hash router
+    // owns the split, so the target is validated the way a deep link is.
+    const target = button.dataset.openMaintenancePath;
+    const hash = "maintenance-" + target;
+    const path = maintenancePathForHash(hash);
     if (!MAINTENANCE_PATHS.includes(path) || path === "hub") return;
-    window.location.hash = "maintenance-" + path;
+    window.location.hash = hash;
   });
 });
 
@@ -17648,7 +18647,7 @@ async function retrySetupCleanup() {
       return;
     }
     if (!res.ok || data.ok !== true) {
-      throw new Error(data.message || data.error || "Cleanup did not finish.");
+      throw new Error(humanErrorText(data, "Cleanup did not finish."));
     }
     showSetupCleanupIncomplete(null);
     setSetupWorkflowId(null);
@@ -18109,7 +19108,7 @@ async function supersedeSetupBuild(nextTag, previousTag) {
   });
   const status = await statusRes.json().catch(() => ({}));
   if (!statusRes.ok) {
-    throw new Error(status.message || status.error || "transition status is unavailable");
+    throw new Error(humanErrorText(status, "transition status is unavailable"));
   }
   const transition = status && status.transition;
   if (
@@ -18319,7 +19318,7 @@ async function resumeSelectedSystemBuildResources(operationId, tag, generation) 
           return;
         }
         throw new Error(
-          data.message || data.error || "System Build resource recovery failed."
+          humanErrorText(data, "System Build resource recovery failed.")
         );
       }
       renderSystemAlignmentStatus(data);
@@ -19198,7 +20197,7 @@ async function loadSystemAlignmentStatus() {
   try {
     const res = await fetch("/api/admin/system-alignment/status", { cache: "no-store" });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || "Status unavailable.");
+    if (!res.ok) throw new Error(humanErrorText(data, "Status unavailable."));
     // Drop a stale status response: polling was stopped or rescheduled (task,
     // owner or selection change, auth loss) while this request was in flight.
     if (pollGeneration !== systemAlignmentPollGeneration) return null;
@@ -19247,7 +20246,7 @@ async function resumeSystemAlignment() {
       body: JSON.stringify(body),
     });
     let data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || "Resume failed.");
+    if (!res.ok) throw new Error(humanErrorText(data, "Resume failed."));
     // Render the reconnect/alignment mutation before starting the next durable
     // resource-verification mutation.
     renderSystemAlignmentStatus(data);
@@ -19259,7 +20258,7 @@ async function resumeSystemAlignment() {
       });
       data = await verifyRes.json();
       if (!verifyRes.ok) {
-        throw new Error(data.message || data.error || "Resource verification failed.");
+        throw new Error(humanErrorText(data, "Resource verification failed."));
       }
       renderSystemAlignmentStatus(data);
     }
@@ -19292,7 +20291,7 @@ async function returnToRunningSystemBuild() {
       body: JSON.stringify({ operation_id: transition.operation_id, confirm: true }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.message || data.error || "Return failed.");
+    if (!res.ok) throw new Error(humanErrorText(data, "Return failed."));
     renderSystemAlignmentStatus(data);
     if (data.reconnect !== false) {
       showReconnectOverlay(data.message || "Returning to the running System Build…");
@@ -19491,7 +20490,14 @@ async function resumeAuthenticatedWorkflows() {
 function showAuthenticatedApp() {
   if (authEls.view) authEls.view.hidden = true;
   if (authEls.logout) authEls.logout.hidden = false;
-  if (startEls.gate && !workspaceRevealed) startEls.gate.hidden = false;
+  if (!workspaceRevealed) {
+    // A cold load fires no hashchange, so the router has to be asked once. It
+    // reveals nothing unless the address names a maintenance page; a durable
+    // server-side transition still wins, because the workflow resume below sets
+    // its own view afterwards.
+    applyHashRoute();
+    if (!workspaceRevealed && startEls.gate) startEls.gate.hidden = false;
+  }
   bootstrapAuthenticatedAppOnce();
   if (
     authenticatedWorkflowResumeCompleted &&

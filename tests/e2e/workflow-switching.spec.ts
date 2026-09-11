@@ -223,7 +223,7 @@ test.describe("Guided workflow switching", { tag: ["@smoke", "@authority", "@wor
       const loaded = page.waitForResponse((response) =>
         response.url().endsWith("/api/admin/workflow-lifecycle/recovery/preview"),
       );
-      await page.locator('[data-open-maintenance-path="manual"]').click();
+      await page.locator('[data-open-maintenance-path="status"]').click();
       expect((await loaded).ok()).toBeTruthy();
       await page
         .locator('[data-maintenance-toggle="maintenance-workflow-recovery"]')

@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import sqlite3
 import tarfile
@@ -575,6 +576,48 @@ def backup_filename(backup_type, backup_purpose, encrypted, timestamp):
 
 
 _BACKUP_SUFFIXES = (".tar.gz.enc", ".tar.gz")
+
+# The one shape an EMS archive file name may have. Admin validates an uploaded
+# name against this before it is allowed to become a path: the listing globs on
+# both consoles are fnmatch patterns, which accept far more than this, and are
+# not input validation.
+_ARCHIVE_NAME_RE = re.compile(
+    r"\Aems-([a-z0-9]+)-([a-z0-9]+)-(\d{4}-\d{2}-\d{2}-\d{6})(?:-\d+)?"
+    r"\.tar\.gz(\.enc)?\Z"
+)
+
+
+def parse_backup_archive_name(name):
+    """Describe a canonical archive name, or ``None`` when it is not one."""
+
+    if not isinstance(name, str) or name != os.path.basename(name):
+        return None
+    match = _ARCHIVE_NAME_RE.fullmatch(name)
+    if match is None:
+        return None
+    backup_type, backup_purpose, timestamp, encrypted = match.groups()
+    if backup_type not in BACKUP_TYPES or backup_purpose not in BACKUP_PURPOSES:
+        return None
+    return {
+        "backup_type": backup_type,
+        "backup_purpose": backup_purpose,
+        "timestamp": timestamp,
+        "encrypted": bool(encrypted),
+    }
+
+
+def adopt_backup_archive(source_path, backup_dir, name):
+    """Place an existing archive file into ``backup_dir`` under ``name``.
+
+    Import reuses the same no-overwrite guarantee as create: ``os.link`` is
+    atomic and fails if the target exists, so an imported archive can never
+    clobber a stored one.
+    """
+
+    if parse_backup_archive_name(name) is None:
+        raise BackupError("not a canonical EMS backup archive name")
+    os.makedirs(backup_dir, exist_ok=True)
+    return _link_unique(source_path, os.path.join(backup_dir, name))
 
 
 def _split_backup_suffix(path):

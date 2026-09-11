@@ -1,25 +1,12 @@
 import { type Page } from "@playwright/test";
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
 
 const SECRET_VALUES = [
   "e2e-local-broker-secret",
   "e2e-cloud-broker-secret",
 ];
-
-async function openMaintenanceConfig(page: Page) {
-  await page.locator('[data-start-path="manage_existing"]').click();
-  await page.locator('[data-open-maintenance-path="manual"]').click();
-  const toggle = page.locator(
-    '[data-maintenance-toggle="maintenance-config-card"]',
-  );
-  const editor = page.locator("#maintenance-config-editor");
-  await expect(toggle).toContainText("inverters");
-  await expect(async () => {
-    if (!(await editor.isVisible())) await toggle.click();
-    await expect(editor).toBeVisible({ timeout: 1_000 });
-  }).toPass();
-}
 
 async function readDraft(page: Page) {
   const response = await page.request.get("/api/admin/maintenance/config");
@@ -36,7 +23,7 @@ test("mixed API, Local MQTT and Cloud MQTT identities survive save and reload", 
   await login.authenticate();
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceConfig(page);
+  await new MaintenancePage(page).openEditor({ discovery: false });
 
   const apiCard = page.locator('[data-source-id="maintenance-inverter-0"]');
   const localCard = page.locator('[data-source-id="maintenance-mqtt-device-1"]');
@@ -88,7 +75,7 @@ test("mixed API, Local MQTT and Cloud MQTT identities survive save and reload", 
   }
 
   await page.reload();
-  await openMaintenanceConfig(page);
+  await new MaintenancePage(page).openEditor({ discovery: false });
   await expect(
     page.locator('[data-source-id="maintenance-inverter-0"]'),
   ).toContainText("Local API inverter edited");
@@ -109,7 +96,9 @@ test("Maintenance additions use one compact sequence without renaming existing d
   await login.authenticate();
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceConfig(page);
+  // This test adds devices by hand, so the add-devices disclosure has to be
+  // open: it used to be opened by a stray second click from the old helper.
+  await new MaintenancePage(page).openEditor();
 
   const before = await readDraft(page);
   const existingNames = before.devices.map((device: { name: string }) => device.name);

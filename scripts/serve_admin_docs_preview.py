@@ -28,6 +28,7 @@ auth files, config or the dashboard database. It binds to loopback by default.
 
 import argparse
 import base64
+import copy
 import json
 import os
 import sys
@@ -72,6 +73,42 @@ def _load_fixture(name):
         return json.load(handle)
 
 
+def _with_live_catalog(config_payload):
+    """Serve the shipped settings catalog instead of a frozen copy of one.
+
+    The fixture describes the demo *installation*; which settings exist, how
+    they are grouped and what they default to belongs to ems.config_catalog. A
+    snapshot of that in the fixture goes stale silently — a settings tab added
+    to the catalog would photograph as an empty box.
+    """
+
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+    from admin.maintenance_config import _catalog
+
+    payload = copy.deepcopy(config_payload)
+    payload["catalog"] = _catalog()
+    return payload
+
+
+def _with_live_health(overview_payload):
+    """Derive the status page's findings list instead of freezing one.
+
+    ``health`` is a projection of the rest of the overview, so a fixture copy of
+    it would be a second answer that drifts. Deriving it here keeps the
+    screenshot honest about what the shipped synthesis says for this demo
+    installation.
+    """
+
+    if ROOT not in sys.path:
+        sys.path.insert(0, ROOT)
+    from admin.maintenance_health import build_maintenance_health
+
+    payload = copy.deepcopy(overview_payload)
+    payload["health"] = build_maintenance_health(payload)
+    return payload
+
+
 def build_routes():
     """Map (method, api-path) to the demo JSON payload the SPA expects."""
 
@@ -89,8 +126,8 @@ def build_routes():
         "/api/discovery/devices": common["mdns_devices"],
         "/api/discovery/mqtt-brokers": common["mqtt_brokers"],
         "/api/admin/maintenance/admin-update/resume": common["admin_update_resume"],
-        "/api/admin/maintenance/overview": overview["overview"],
-        "/api/admin/maintenance/config": overview["config"],
+        "/api/admin/maintenance/overview": _with_live_health(overview["overview"]),
+        "/api/admin/maintenance/config": _with_live_catalog(overview["config"]),
         "/api/admin/maintenance/containers/plan": overview["containers_plan"],
         "/api/admin/maintenance/backups": backups["backups_list"],
         "/api/admin/maintenance/zendure-mqtt/runtime-status": zendure_mqtt["runtime_status"],

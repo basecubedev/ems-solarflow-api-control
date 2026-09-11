@@ -1,6 +1,7 @@
 import { type Locator, type Page, type Route } from "@playwright/test";
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
 
 // A Maintenance MQTT proposal the backend classified as a grid meter is adopted
 // as the central grid meter — never as an inverter. The purple role card offers
@@ -178,28 +179,6 @@ async function login(page: Page) {
   await loginPage.authenticate();
 }
 
-async function openMaintenanceEditor(page: Page) {
-  await expect(page.locator("#view-start")).toBeVisible();
-  await page.locator('[data-start-path="manage_existing"]').click();
-  await page.locator('[data-open-maintenance-path="manual"]').click();
-  const toggle = page.locator(
-    '[data-maintenance-toggle="maintenance-config-card"]',
-  );
-  const editor = page.locator("#maintenance-config-editor");
-  await expect(toggle).toContainText(/inverter/);
-  await expect(async () => {
-    if (!(await editor.isVisible())) await toggle.click();
-    await expect(editor).toBeVisible({ timeout: 1_000 });
-  }).toPass();
-  const sources = page.locator("#maintenance-discovery-sources");
-  await expect(async () => {
-    if (!(await sources.isVisible())) {
-      await page.locator("#maintenance-add-devices > summary").click();
-    }
-    await expect(sources).toBeVisible({ timeout: 1_000 });
-  }).toPass();
-}
-
 async function runDiscovery(page: Page) {
   await page.locator("#maintenance-discovery-start").click();
   await expect(page.locator("#maintenance-discovery-status")).toContainText(
@@ -277,7 +256,7 @@ test("Maintenance: a D0 grid meter on an unknown broker is provisioned through p
   await login(page);
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   const invertersBefore = await page
     .locator("#maintenance-config-inverters .hardware-card")
     .count();
@@ -312,7 +291,7 @@ test("Maintenance: a D0 grid meter on an unknown broker is provisioned through p
 
   await applyDraft(page);
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(gridMeterCard(page)).toContainText(`Broker profile ${NEW_BROKER}`);
 
   // Reloaded from disk: the profile persisted exactly once beside the seeded ones.
@@ -344,7 +323,7 @@ test("Maintenance: a grid meter on a configured broker adds no second profile", 
   await login(page);
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await runDiscovery(page);
 
   await adoptAsGridMeter(page, proposalCard(page, "Known broker smart meter D0"));
@@ -357,7 +336,7 @@ test("Maintenance: a grid meter on a configured broker adds no second profile", 
 
   await applyDraft(page);
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await expect(gridMeterCard(page)).toContainText(`Broker profile ${LOCAL_BROKER}`);
   const persisted = await previewConfig(page);
   expect(Object.keys(brokerProfiles(persisted)).sort()).toEqual(
@@ -385,7 +364,7 @@ test("Maintenance: declining the grid-meter replacement leaves no broker profile
   await login(page);
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await runDiscovery(page);
 
   const meterCard = proposalCard(page, "New broker smart meter D0");
@@ -421,7 +400,7 @@ test("Maintenance: a Local MQTT D0 proposal is adopted as the grid meter, not as
   await login(page);
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   const invertersBefore = await page
     .locator("#maintenance-config-inverters .hardware-card")
     .count();
@@ -474,7 +453,7 @@ test("Maintenance: a Local MQTT D0 proposal is adopted as the grid meter, not as
 
   await applyDraft(page);
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   const persisted = gridMeterCard(page);
   await expect(persisted).toHaveClass(/hardware-card-grid-meter/);
   await expect(persisted).toContainText("Zendure SmartMeter D0 via MQTT");
@@ -494,7 +473,7 @@ test("Maintenance: a Local MQTT 3CT grid meter uses the same adoption action", {
   await login(page);
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await runDiscovery(page);
 
   const card = proposalCard(page, "Local MQTT Smart Meter 3CT");
@@ -520,7 +499,7 @@ test("Maintenance: a Zendure MQTT grid meter is never offered as an inverter", {
   await login(page);
   await seedAdminScenario("mixed_transports");
   await page.reload();
-  await openMaintenanceEditor(page);
+  await new MaintenancePage(page).openEditor();
   await runDiscovery(page);
 
   const cloud = proposalCard(page, "Cloud MQTT grid meter");

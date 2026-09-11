@@ -30,6 +30,7 @@ def make_overview(
     compose_exists=True,
     ems=None,
     influx=None,
+    config_modified_at=None,
 ):
     return {
         "docker": {"available": docker_available},
@@ -37,6 +38,7 @@ def make_overview(
             "config": {
                 "path": "/install/config/config.json",
                 "exists": config_exists,
+                "modified_at": config_modified_at,
             },
             "compose": {
                 "path": "/install/docker-compose.yml",
@@ -510,3 +512,93 @@ def test_sync_unavailable_when_docker_missing(tmp_path):
     assert result["ok"] is False
     assert result["status"] == "unavailable"
     assert compose.calls == []
+
+
+# --- has the running EMS read the saved settings? -------------------------
+# The plan used to answer "Config changed and EMS should reload it." whenever
+# EMS was desired running — a claim about the past that nothing had checked, on
+# a page whose job is to tell an owner what state their system is in.
+
+
+def _running_ems(started_at=None):
+    ems = {
+        "found": True,
+        "running": True,
+        "status": "running",
+        "name": "ems-solarflow-api-control",
+    }
+    if started_at is not None:
+        ems["started_at"] = started_at
+    return ems
+
+
+def _ems_reason(plan):
+    return _actions(plan)["ems"]["reason"]
+
+
+def test_settings_saved_after_ems_started_are_reported_as_pending():
+    plan = build_container_sync_plan(
+        {},
+        make_overview(
+            ems=_running_ems("2026-09-09T10:00:00+00:00"),
+            config_modified_at="2026-09-09T10:05:00+00:00",
+        ),
+    )
+    assert plan["config_state"]["state"] == "pending"
+    assert "changed after EMS started" in _ems_reason(plan)
+
+
+def test_an_ems_started_after_the_last_save_is_not_told_it_missed_a_change():
+    plan = build_container_sync_plan(
+        {},
+        make_overview(
+            ems=_running_ems("2026-09-09T10:05:00+00:00"),
+            config_modified_at="2026-09-09T10:00:00+00:00",
+        ),
+    )
+    assert plan["config_state"]["state"] == "current"
+    assert "changed" not in _ems_reason(plan)
+    assert "changed" not in plan["summary"]
+
+
+@pytest.mark.parametrize(
+    "ems, config_modified_at",
+    [
+        (_running_ems(), "2026-09-09T10:00:00+00:00"),
+        (_running_ems("2026-09-09T10:00:00+00:00"), None),
+        (_running_ems("not a timestamp"), "2026-09-09T10:00:00+00:00"),
+        (_running_ems("2026-09-09T10:00:00+00:00"), "not a timestamp"),
+        (
+            {
+                "found": True,
+                "running": False,
+                "status": "exited",
+                "name": "ems-solarflow-api-control",
+            },
+            "2026-09-09T10:00:00+00:00",
+        ),
+    ],
+)
+def test_an_unprovable_answer_is_unknown_and_never_a_claim(ems, config_modified_at):
+    plan = build_container_sync_plan(
+        {}, make_overview(ems=ems, config_modified_at=config_modified_at)
+    )
+    assert plan["config_state"]["state"] == "unknown"
+    assert "changed" not in _ems_reason(plan)
+    assert "changed" not in plan["summary"]
+
+
+@pytest.mark.parametrize(
+    "config_modified_at", ["2026-09-09T10:05:00+00:00", "2026-09-09T09:55:00+00:00", None]
+)
+def test_the_restart_stays_available_whatever_the_answer_is(config_modified_at):
+    """Recreating EMS is also how an owner restarts it; no verdict removes that."""
+
+    plan = build_container_sync_plan(
+        {},
+        make_overview(
+            ems=_running_ems("2026-09-09T10:00:00+00:00"),
+            config_modified_at=config_modified_at,
+        ),
+    )
+    assert _actions(plan)["ems"]["action"] == "recreate"
