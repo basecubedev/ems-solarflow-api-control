@@ -20705,9 +20705,10 @@ function initThemeSwitcher() {
 /* --- object style --------------------------------------------------------
    The second axis. The palette above says what things are made of; this says
    what shape they are, and the two never touch -- which is the whole point:
-   any of the twelve palettes can be worn with any of these four. Only the
-   corner roles vary; the paddings and pill heights are density rather than
-   shape, and moving those would be moving the layout. */
+   any of the twelve palettes can be worn with any of these thirteen. Only the
+   corner roles and the frame vary; the distances between things are the
+   density axis below, and the pill heights are neither -- they are fitted to
+   the text they hold. */
 
 const STYLE_STORAGE_KEY = "ems-admin-style";
 const STYLE_DEFAULT = "glass";
@@ -20767,8 +20768,66 @@ function initStyleSwitcher() {
   select.addEventListener("change", () => applyStyle(select.value));
 }
 
+
+/* --- density -------------------------------------------------------------
+   The third axis. The palette says what things are made of, the object style
+   what shape they are, and this how much room they take: one unitless number
+   that every distance in the stylesheet is multiplied by. A density is a
+   single number rather than a table of distances because the spacings were
+   tuned against one another -- multiplying them all keeps that, redefining
+   them one at a time would not. */
+
+const DENSITY_STORAGE_KEY = "ems-admin-density";
+const DENSITY_DEFAULT = "normal";
+
+const DENSITIES = [
+  { id: "compact", label: "Compact" },
+  { id: "normal", label: "Normal" },
+  { id: "roomy", label: "Roomy" },
+];
+
+function knownDensity(id) {
+  return DENSITIES.some((density) => density.id === id) ? id : DENSITY_DEFAULT;
+}
+
+function storedDensity() {
+  try {
+    return knownDensity(window.localStorage.getItem(DENSITY_STORAGE_KEY));
+  } catch (err) {
+    /* localStorage may be unavailable; the default density still applies. */
+    return DENSITY_DEFAULT;
+  }
+}
+
+function applyDensity(id) {
+  const density = knownDensity(id);
+  document.documentElement.setAttribute("data-density", density);
+  try {
+    window.localStorage.setItem(DENSITY_STORAGE_KEY, density);
+  } catch (err) {
+    /* localStorage may be unavailable; the choice holds for this page. */
+  }
+  return density;
+}
+
+function initDensitySwitcher() {
+  const select = document.getElementById("density-select");
+  if (!select) return;
+  select.replaceChildren(
+    ...DENSITIES.map((density) => {
+      const option = document.createElement("option");
+      option.value = density.id;
+      option.textContent = density.label;
+      return option;
+    })
+  );
+  select.value = applyDensity(storedDensity());
+  select.addEventListener("change", () => applyDensity(select.value));
+}
+
 initThemeSwitcher();
 initStyleSwitcher();
+initDensitySwitcher();
 
 if (authEls.createForm) authEls.createForm.addEventListener("submit", submitCreatePassword);
 if (authEls.loginForm) authEls.loginForm.addEventListener("submit", submitLogin);

@@ -4,10 +4,30 @@ This guide documents the visual primitives used by the live dashboard. New
 dashboard work should extend these patterns instead of adding another card or
 form language.
 
+## Three axes, and what a new rule owes each of them
+
+The cockpit is themeable along three independent axes, and a rule that ignores
+one of them does not fail loudly -- it simply stops responding when a reader
+picks that setting. Contract tests in `tests/test_dashboard_themes.py` say so in
+a tenth of a second; the rules are short enough to follow by hand.
+
+| Axis | Attribute | What a rule must do |
+| --- | --- | --- |
+| Palette | `data-theme` | take every colour from a token. No literal outside a plain white or black veil. |
+| Object style | `data-style` | name the corner's *role* -- `--o-surface-radius`, `--o-card-radius`, `--o-control-radius`, `--o-inner-radius`, `--o-pill-radius`. Never a pixel count, never `999px`. |
+| Density | `data-density` | multiply every distance: `padding: calc(8px * var(--d))`, and the same for `gap` and `margin`. |
+
+Zero, `auto` and negative values stay as they are -- they are not distances.
+So do the pill paddings (`--o-badge-pad`, `--o-pill-pad`, `--o-control-pad` and
+the dashboard's own `--o-note-pad`/`--o-fact-pad`) and the pill heights: those
+are fitted to the text they hold, and a density that moved them would undo that
+fit in one setting out of three.
+
 ## Core Layout
 
-- Dashboard panels use the existing glass panel shell with a `16px` radius.
-- Dense operational views should use compact grids with `8px` gaps.
+- Dashboard panels use the existing glass panel shell at `--o-surface-radius`.
+- Dense operational views should use compact grids with
+  `gap: calc(8px * var(--d))`.
 - Repeated dashboard tiles should keep stable dimensions so live values,
   validation text, hover states, and actions do not shift the layout.
 - Avoid unrelated color palettes. Use the existing CSS variables in

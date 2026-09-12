@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Choosing a theme, and the part of it that cannot be checked by reading files:
-// that the stored choice is in place before anything paints, and that it comes
-// from the early script rather than from admin.js noticing later.
+// Choosing a palette, an object style and a density, and the part of it that
+// cannot be checked by reading files: that the stored choice is in place before
+// anything paints, that it comes from the early script rather than from admin.js
+// noticing later, and that each axis leaves the other two alone.
 import { expect, test } from "@playwright/test";
 
 const STORAGE_KEY = "ems-admin-theme";
@@ -82,5 +83,44 @@ test.describe("theme switching", () => {
 
     await page.selectOption("#style-select", "slab");
     await expect.poll(corner).toBe("0px");
+  });
+
+  test("density is a third axis, independent of the other two", async ({ page }) => {
+    // Three attributes on one element, and the test that matters is that
+    // setting one leaves the other two exactly where they were.
+    await page.goto("/");
+    await page.selectOption("#theme-select", "void");
+    await page.selectOption("#style-select", "slab");
+    await page.selectOption("#density-select", "compact");
+
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "void");
+    await expect(page.locator("html")).toHaveAttribute("data-style", "slab");
+    await expect(page.locator("html")).toHaveAttribute("data-density", "compact");
+
+    await page.reload();
+    await expect(page.locator("#theme-select")).toHaveValue("void");
+    await expect(page.locator("#style-select")).toHaveValue("slab");
+    await expect(page.locator("#density-select")).toHaveValue("compact");
+  });
+
+  test("the density reaches an actual distance", async ({ page }) => {
+    // Reading the scalar back would only prove the scalar changed. This reads
+    // a rendered padding, which is the thing a person sees, and it reads it in
+    // all three settings because a density that only tightened would be half
+    // an axis.
+    const padding = () =>
+      page
+        .locator(".admin-auth-card")
+        .evaluate((node) => parseFloat(getComputedStyle(node).paddingTop));
+
+    await page.goto("/");
+    await expect.poll(padding).toBeGreaterThan(0);
+    const normal = await padding();
+
+    await page.selectOption("#density-select", "compact");
+    await expect.poll(padding).toBeLessThan(normal);
+
+    await page.selectOption("#density-select", "roomy");
+    await expect.poll(padding).toBeGreaterThan(normal);
   });
 });

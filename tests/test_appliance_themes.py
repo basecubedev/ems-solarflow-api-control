@@ -22,6 +22,7 @@ import pytest
 from tests import theming_contracts as measure
 from tests.theming_contracts import (
     DARK_MAX_LUMA,
+    DENSITY_SCALAR,
     MUTED_MIN_CONTRAST,
     SHAPE_PREFIX,
     TEXT_MIN_CONTRAST,
@@ -311,3 +312,116 @@ def test_the_two_axes_are_stored_apart():
     thing the whole arrangement exists for."""
 
     assert STYLE_STORAGE_KEY != STORAGE_KEY
+
+
+# --- density, the third axis ------------------------------------------------
+#
+# Colour says what things are made of, an object style what shape they are, and
+# a density how much room they take. The third axis is a single unitless number
+# rather than a table of distances, and that is deliberate: the spacings in this
+# stylesheet were tuned against one another, so a density free to redefine them
+# one at a time would be free to break that relationship. Multiplying them all
+# keeps it, and `calc(8px * var(--d))` still says 8px to whoever reads the rule.
+
+DENSITY_STORAGE_KEY = "ems-appliance-density"
+DEFAULT_DENSITY = "normal"
+
+# What the density does not reach, and why. Nothing is on this list for being
+# awkward to convert; each entry is measured against something other than the
+# rhythm of the page.
+UNSCALED = set()
+
+
+def densities():
+    found = measure.densities(CSS)
+    assert found, "styles.css declares no :root[data-density=…] blocks"
+    return found
+
+
+def densities_offered():
+    block = re.search(r"var DENSITIES = \[(.*?)\];", JS, re.S)
+    assert block, "app.js declares no DENSITIES table"
+    return dict(re.findall(r'id:\s*"([a-z0-9-]+)",\s*label:\s*"([^"]+)"', block.group(1)))
+
+
+def test_every_spacing_answers_to_the_density_axis():
+    """A density that reached half the distances would not read as denser, only
+    as broken: the card would tighten while the gap between cards held, and the
+    page would lose its rhythm instead of its slack.
+
+    Zero, `auto` and negative values are excluded because they are not
+    distances -- `auto` is a centring instruction and a negative margin is a
+    hairline or hanging-indent trick that has to keep matching the border or
+    the icon column it was measured against.
+    """
+
+    deaf = [
+        (selector, prop, value)
+        for selector, prop, value in measure.spacings(CSS)
+        if DENSITY_SCALAR not in value and (selector, prop) not in UNSCALED
+    ]
+    assert deaf == [], f"{len(deaf)} spacings ignore the density, e.g. {deaf[:6]}"
+
+
+def test_the_default_density_changes_nothing():
+    """Choosing "normal" must look exactly like choosing nothing, for the same
+    reason `signal` and `glass` must: a default you can see is a default that
+    was never really the default."""
+
+    assert densities().get(DEFAULT_DENSITY) == {DENSITY_SCALAR: "1"}
+
+
+def test_a_density_sets_nothing_but_the_scalar():
+    """One number or it is not a density. A block that also set a colour or a
+    corner would make "compact, but square" depend on the order they were
+    chosen in, which is exactly what three separate axes exist to prevent."""
+
+    trespassing = {
+        name: sorted(token for token in tokens if token != DENSITY_SCALAR)
+        for name, tokens in densities().items()
+    }
+    trespassing = {name: found for name, found in trespassing.items() if found}
+    assert trespassing == {}, f"densities setting more than the scalar: {trespassing}"
+
+
+def test_neither_of_the_other_axes_sets_the_density():
+    """The mirror of the rule above, and the one that actually gets broken:
+    a palette or a style is the natural place to sneak a little more air in."""
+
+    trespassing = {
+        f"{kind}:{name}": tokens[DENSITY_SCALAR]
+        for kind, axis in (("theme", measure.themes(CSS)), ("style", measure.object_styles(CSS)))
+        for name, tokens in axis.items()
+        if DENSITY_SCALAR in tokens
+    }
+    assert trespassing == {}, f"a palette or style setting the density: {trespassing}"
+
+
+def test_the_density_switcher_offers_exactly_the_densities_the_stylesheet_has():
+    listed, declared = set(densities_offered()), set(densities())
+    assert declared == listed, (
+        f"only in the stylesheet: {sorted(declared - listed)}; "
+        f"only in the menu: {sorted(listed - declared)}"
+    )
+
+
+def test_the_stored_density_is_applied_before_the_first_paint():
+    """All three axes or none. A page that painted the right colours at the
+    wrong spacing and reflowed a moment later would be worse than one that
+    waited, because a reflow moves what the reader is already looking at."""
+
+    early = EARLY.read_text(encoding="utf-8")
+    assert "data-density" in early, "the early script never sets data-density"
+    assert DENSITY_STORAGE_KEY in early, f"the early script does not read {DENSITY_STORAGE_KEY!r}"
+
+
+def test_both_halves_agree_on_where_the_density_is_stored():
+    assert DENSITY_STORAGE_KEY in JS, f"app.js does not write {DENSITY_STORAGE_KEY!r}"
+
+
+def test_the_three_axes_are_stored_apart():
+    """Three keys, because the three choices are independent. One key for all
+    of them would make "void, square, compact" unrepresentable -- the thing the
+    whole arrangement exists for."""
+
+    assert len({STORAGE_KEY, STYLE_STORAGE_KEY, DENSITY_STORAGE_KEY}) == 3

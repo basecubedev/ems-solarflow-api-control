@@ -125,11 +125,28 @@ be worn with any of these thirteen:
 A style never moves anything. Padding, spacing and text size are the same in
 all thirteen, so a layout that fits in one fits in all of them.
 
-Both choices are remembered by the browser you made them in, and both apply to
-the sign-in screen as well. Neither is appliance state: another browser, or
-another device, starts at Signal and Glass again. Choosing one in the Admin Console does not
-carry over here either — they are separate addresses, and a browser keeps such
-a preference per address.
+Third is a **Density** menu. It changes neither colour nor shape but how much
+room everything takes -- one setting that multiplies every distance on the page
+at once:
+
+| | |
+| --- | --- |
+| **Compact** | three quarters of the spacing; more on screen at a time |
+| **Normal** | the default, and what the product has always looked like |
+| **Roomy** | a quarter more spacing, for a screen you read from further away |
+
+Density moves things; that is what it is for. It does not change type size, and
+it leaves the pills and badges alone, because those are fitted to the words
+they hold rather than to the rhythm of the page.
+
+The three menus are independent: any of the twelve palettes can be worn with
+any of the thirteen styles at any of the three densities.
+
+All three choices are remembered by the browser you made them in, and all three
+apply to the sign-in screen as well. None of them is appliance state: another
+browser, or another device, starts at Signal, Glass and Normal again. Choosing
+one in the Admin Console does not carry over here either — they are separate
+addresses, and a browser keeps such a preference per address.
 
 ## Next
 

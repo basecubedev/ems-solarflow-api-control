@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Choosing a palette in the Manager, and the part of it that cannot be checked
-// by reading files: that the stored choice is in place before anything paints,
-// and that it comes from the early script rather than from app.js noticing
-// later.
+// Choosing a palette, an object style and a density in the Manager, and the
+// part of it that cannot be checked by reading files: that the stored choice is
+// in place before anything paints, that it comes from the early script rather
+// than from app.js noticing later, and that each axis leaves the other two
+// alone.
 import { expect, test } from "@playwright/test";
 import { resetAppliance, signIn } from "./helpers";
 
@@ -97,5 +98,42 @@ test.describe("theme switching @smoke", () => {
 
     await page.selectOption("#style-select", "slab");
     await expect.poll(corner).toBe("0px");
+  });
+
+  test("density is a third axis, independent of the other two", async ({ page }) => {
+    await signIn(page);
+    await page.selectOption("#theme-select", "void");
+    await page.selectOption("#style-select", "console");
+    await page.selectOption("#density-select", "roomy");
+
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "void");
+    await expect(page.locator("html")).toHaveAttribute("data-style", "console");
+    await expect(page.locator("html")).toHaveAttribute("data-density", "roomy");
+
+    await page.reload();
+    await expect(page.locator("#shell")).toBeVisible();
+    await expect(page.locator("#theme-select")).toHaveValue("void");
+    await expect(page.locator("#style-select")).toHaveValue("console");
+    await expect(page.locator("#density-select")).toHaveValue("roomy");
+  });
+
+  test("the density reaches an actual distance", async ({ page }) => {
+    // Reading the scalar back would only prove the scalar changed. This reads
+    // a rendered padding, which is what a person sees. The Manager re-renders
+    // on every poll, so expect.poll resolves the locator afresh each attempt.
+    const padding = () =>
+      page
+        .locator('[data-test="card-admin"]')
+        .evaluate((node) => parseFloat(getComputedStyle(node).paddingTop));
+
+    await signIn(page);
+    await expect.poll(padding).toBeGreaterThan(0);
+    const normal = await padding();
+
+    await page.selectOption("#density-select", "compact");
+    await expect.poll(padding).toBeLessThan(normal);
+
+    await page.selectOption("#density-select", "roomy");
+    await expect.poll(padding).toBeGreaterThan(normal);
   });
 });

@@ -2602,9 +2602,10 @@
   /* ------------------------------------------------------ object style */
   /* The second axis. The palette above says what things are made of; this says
      what shape they are, and the two never touch -- which is the whole point:
-     any of the twelve palettes can be worn with any of these four. Only the
-     corner roles vary; the paddings and pill heights are density rather than
-     shape, and moving those would be moving the layout. */
+     any of the twelve palettes can be worn with any of these thirteen. Only the
+     corner roles and the frame vary; the distances between things are the
+     density axis below, and the pill heights are neither -- they are fitted to
+     the text they hold. */
 
   var STYLE_KEY = "ems-appliance-style";
   var STYLE_DEFAULT = "glass";
@@ -2656,6 +2657,55 @@
     select.addEventListener("change", function () { applyStyle(select.value); });
   }
 
+
+  /* ----------------------------------------------------------- density */
+  /* The third axis. The palette says what things are made of, the object style
+     what shape they are, and this how much room they take: one unitless number
+     that every distance in the stylesheet is multiplied by. A density is a
+     single number rather than a table of distances because the spacings were
+     tuned against one another -- multiplying them all keeps that, redefining
+     them one at a time would not. */
+
+  var DENSITY_KEY = "ems-appliance-density";
+  var DENSITY_DEFAULT = "normal";
+
+  var DENSITIES = [
+    { id: "compact", label: "Compact" },
+    { id: "normal", label: "Normal" },
+    { id: "roomy", label: "Roomy" }
+  ];
+
+  function knownDensity(id) {
+    return DENSITIES.some(function (density) { return density.id === id; }) ? id : DENSITY_DEFAULT;
+  }
+
+  function storedDensity() {
+    try {
+      return knownDensity(window.localStorage.getItem(DENSITY_KEY));
+    } catch (exc) {
+      return DENSITY_DEFAULT;
+    }
+  }
+
+  function applyDensity(id) {
+    var density = knownDensity(id);
+    document.documentElement.setAttribute("data-density", density);
+    try {
+      window.localStorage.setItem(DENSITY_KEY, density);
+    } catch (exc) { /* private mode; the choice holds for this page */ }
+    return density;
+  }
+
+  function initDensitySwitcher() {
+    var select = document.getElementById("density-select");
+    if (!select) return;
+    select.replaceChildren.apply(select, DENSITIES.map(function (density) {
+      return el("option", { value: density.id, text: density.label });
+    }));
+    select.value = applyDensity(storedDensity());
+    select.addEventListener("change", function () { applyDensity(select.value); });
+  }
+
   function initThemeSwitcher() {
     var select = document.getElementById("theme-select");
     if (!select) return;
@@ -2675,6 +2725,7 @@
 
     initThemeSwitcher();
     initStyleSwitcher();
+    initDensitySwitcher();
 
     document.getElementById("gate-form").addEventListener("submit", submitGate);
     document.getElementById("logout-button").addEventListener("click", logout);

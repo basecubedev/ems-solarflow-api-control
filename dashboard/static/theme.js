@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* Applies the stored palette and object style before the stylesheet paints, so
-   the cockpit does not show the defaults first and visibly change a moment
-   later. Two axes, two keys, two attributes, and neither knows about the other. It is a file of
-   its own rather than three lines inline because the CSP is `script-src 'self'`,
-   and it is requested ahead of styles.css for the same reason it exists.
+/* Applies the stored palette, object style and density before the stylesheet
+   paints, so the cockpit does not show the defaults first and visibly change a
+   moment later. Three axes, three keys, three attributes, and none of them
+   knows about the others. It is a file of its own rather than three lines
+   inline because the CSP is `script-src 'self'`, and it is requested ahead of
+   styles.css for the same reason it exists.
 
    This matters more here than on the other two surfaces: the cockpit is the one
    that gets left on a screen, and a flash on every reload is something a room
@@ -17,6 +18,7 @@
 
   var THEME_KEY = "ems-dashboard-theme";
   var STYLE_KEY = "ems-dashboard-style";
+  var DENSITY_KEY = "ems-dashboard-density";
 
   function restore(key, attribute) {
     var stored = window.localStorage.getItem(key);
@@ -28,6 +30,7 @@
   try {
     restore(THEME_KEY, "data-theme");
     restore(STYLE_KEY, "data-style");
+    restore(DENSITY_KEY, "data-density");
   } catch (exc) {
     /* Private mode and blocked site data both throw here. The default palette is
        the right answer, not a failure before the first paint. */

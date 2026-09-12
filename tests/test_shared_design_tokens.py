@@ -198,7 +198,7 @@ SPECS = {
 
 
 @pytest.mark.parametrize("surface", sorted(SPECS))
-def test_the_browser_tests_name_palettes_and_styles_that_exist(surface):
+def test_the_browser_tests_name_palettes_styles_and_densities_that_exist(surface):
     """Renaming the four first styles to the demo's thirteen left two browser
     tests selecting `crisp` and `edge`, which no longer existed. Playwright
     reported it as "did not find some options" after six minutes of browser
@@ -210,8 +210,9 @@ def test_the_browser_tests_name_palettes_and_styles_that_exist(surface):
     known = {
         "style": set(theming_contracts.object_styles(css)),
         "theme": set(theming_contracts.themes(css)),
+        "density": set(theming_contracts.densities(css)),
     }
-    used = {"style": set(), "theme": set()}
+    used = {"style": set(), "theme": set(), "density": set()}
     for axis in used:
         used[axis] |= set(re.findall(rf'"#{axis}-select",\s*"([a-z0-9-]+)"', spec))
         used[axis] |= set(re.findall(rf'"data-{axis}",\s*"([a-z0-9-]+)"', spec))
@@ -256,3 +257,55 @@ def test_a_palette_has_one_value_for_a_shared_token(declared):
                 if one[token] != other[token]:
                     drift[f"{name}.{token}"] = {left: one[token], right: other[token]}
     assert drift == {}, f"palettes that drifted between surfaces: {drift}"
+
+
+# --- density, the third axis ------------------------------------------------
+
+DEFAULT_DENSITY = "normal"
+
+
+def dense():
+    found = {
+        surface: theming_contracts.densities((ROOT / path).read_text(encoding="utf-8"))
+        for surface, path in SURFACES.items()
+    }
+    return {surface: densities for surface, densities in found.items() if densities}
+
+
+def test_the_surfaces_that_offer_densities_offer_the_same_ones():
+    """Three separate deployables on three origins cannot share a stylesheet,
+    so they share a vocabulary instead and this is what keeps the copies
+    honest. A density the Manager has and the cockpit has not is not a smaller
+    feature; it is the same word meaning two things."""
+
+    offered = {surface: sorted(densities) for surface, densities in dense().items()}
+    assert len(offered) == len(SURFACES), f"only {sorted(offered)} declares densities"
+    assert len(set(map(tuple, offered.values()))) == 1, f"the density lists differ: {offered}"
+
+
+def test_a_density_means_the_same_number_everywhere():
+    """"Compact" has to be one amount of compact. Three copies of three numbers
+    is small enough to look safe and exactly the kind of thing that drifts by a
+    hundredth and is never noticed again."""
+
+    densities = dense()
+    drift = {}
+    for left, right in itertools.combinations(sorted(densities), 2):
+        for name in sorted(set(densities[left]) & set(densities[right])):
+            one, other = densities[left][name], densities[right][name]
+            for token in sorted(set(one) & set(other)):
+                if one[token] != other[token]:
+                    drift[f"{name}.{token}"] = {left: one[token], right: other[token]}
+    assert drift == {}, f"densities that drifted between surfaces: {drift}"
+
+
+@pytest.mark.parametrize("surface", sorted(SURFACES))
+def test_the_default_density_changes_nothing(surface):
+    """The same rule the default palette and the default object style live
+    under: a default anyone can see was never the default."""
+
+    css = (ROOT / SURFACES[surface]).read_text(encoding="utf-8")
+    declared = theming_contracts.densities(css)
+    assert declared.get(DEFAULT_DENSITY) == {theming_contracts.DENSITY_SCALAR: "1"}, (
+        f"{surface}: {DEFAULT_DENSITY} is not the scalar's own value"
+    )

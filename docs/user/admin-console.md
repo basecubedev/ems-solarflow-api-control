@@ -82,8 +82,8 @@ videos or screenshots for a new release, see the
 
 ## Appearance
 
-A **Theme** menu sits at the top right, next to the sign-out button. It is there
-before you sign in, so you can set it on the login page.
+Three menus sit at the top right, next to the sign-out button. They are there
+before you sign in, so you can set them on the login page.
 
 Twelve themes, all dark:
 
@@ -120,13 +120,30 @@ be worn with any of these thirteen:
 A style never moves anything. Padding, spacing and text size are the same in
 all thirteen, so a layout that fits in one fits in all of them.
 
-A theme changes colour only, and a style changes shape only. Nothing moves, no
-control changes what it does, and no reading changes its meaning — a warning
-stays a warning in every combination of the two.
+Third is a **Density** menu. It changes neither colour nor shape but how much
+room everything takes -- one setting that multiplies every distance on the page
+at once:
 
-Both choices are stored **in your browser**, so they follow neither your login
-nor the appliance: another browser, or another machine, starts at Signal and
-Glass again. Clearing site data resets them.
+| | |
+| --- | --- |
+| **Compact** | three quarters of the spacing; more on screen at a time |
+| **Normal** | the default, and what the product has always looked like |
+| **Roomy** | a quarter more spacing, for a screen you read from further away |
+
+Density moves things; that is what it is for. It does not change type size, and
+it leaves the pills and badges alone, because those are fitted to the words
+they hold rather than to the rhythm of the page.
+
+The three menus are independent: any of the twelve palettes can be worn with
+any of the thirteen styles at any of the three densities.
+
+A theme changes colour only, a style changes shape only, and a density changes
+distance only. No control changes what it does and no reading changes its
+meaning — a warning stays a warning in every combination of the three.
+
+All three choices are stored **in your browser**, so they follow neither your
+login nor the appliance: another browser, or another machine, starts at Signal,
+Glass and Normal again. Clearing site data resets them.
 
 They are applied before the page is drawn, so switching and reloading does not
 flash the defaults first.

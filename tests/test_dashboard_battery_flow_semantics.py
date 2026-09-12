@@ -1197,7 +1197,7 @@ def test_device_flow_mobile_layout_does_not_force_horizontal_scroll():
     assert "min-width: 820px" not in styles
     assert "min-width: 840px" not in styles
     assert "max-width: 100%;" in styles
-    assert ".device-flow-view { padding: 6px; overflow-x: hidden; }" in styles
+    assert ".device-flow-view { padding: calc(6px * var(--d)); overflow-x: hidden; }" in styles
     assert ".device-flow-svg { min-width: 0; width: 100%; }" in styles
     assert ".flow-wrap.view-control,\n.flow-wrap.view-energy { overflow: visible; }" in styles
     assert ".flow-wrap.view-energy .energy-stats-view { display: block !important; }" in styles

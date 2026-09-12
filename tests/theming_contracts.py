@@ -38,10 +38,28 @@ MUTED_MIN_CONTRAST = 4.5
 NEUTRAL = re.compile(r"rgba?\(\s*(?:255,\s*255,\s*255|0,\s*0,\s*0)\b|#000\b|#fff\b", re.I)
 COLOUR = re.compile(r"#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)")
 
-# Both axes hang off the root element, so both kinds of block are "not a rule":
-# `:root[data-theme=…]` declares a palette and `:root[data-style=…]` an object
-# style, and neither is a place where a page decides how something looks.
-ROOT_BLOCK = r':root(\[data-(?:theme|style)="[a-z0-9-]+"\])?\s*\{.*?\}'
+# Density is the third axis, and unlike the other two it is a single number:
+# the spacings were tuned against each other, so a density that redefined each
+# one separately would be free to break that relationship. Multiplying them all
+# keeps it. The scalar is unitless, which is what lets `calc(8px * var(--d))`
+# stay a length.
+DENSITY_SCALAR = "--d"
+
+# All three axes hang off the root element, so all three kinds of block are
+# "not a rule": `:root[data-theme=…]` declares a palette, `:root[data-style=…]`
+# an object style and `:root[data-density=…]` a density, and none of them is a
+# place where a page decides how something looks.
+ROOT_BLOCK = r':root(\[data-(?:theme|style|density)="[a-z0-9-]+"\])?\s*\{.*?\}'
+
+# What a spacing is measured in. Three kinds never scale, and each for its own
+# reason: zero is already nothing, `auto` is a centring instruction rather than
+# a distance, and a negative margin is a hairline or hanging-indent trick whose
+# whole point is that it matches a border or an icon column exactly.
+SPACING_PROPERTIES = (
+    "padding", "padding-top", "padding-bottom", "padding-left", "padding-right",
+    "gap", "row-gap", "column-gap",
+    "margin", "margin-top", "margin-bottom", "margin-left", "margin-right",
+)
 
 
 def declarations(block):
@@ -61,6 +79,15 @@ def themes(css):
     return {
         name: declarations(body)
         for name, body in re.findall(r':root\[data-theme="([a-z0-9-]+)"\]\s*\{(.*?)\}', css, re.S)
+    }
+
+
+def densities(css):
+    return {
+        name: declarations(block)
+        for name, block in re.findall(
+            r':root\[data-density="([a-z0-9-]+)"\]\s*\{(.*?)\}', css, re.S
+        )
     }
 
 
@@ -100,15 +127,22 @@ def derived_tokens(css):
     return {
         name: value
         for name, value in base_tokens(css).items()
-        if "var(--" in value and not name.startswith(SHAPE_PREFIX)
+        if "var(--" in value and not name.startswith(SHAPE_PREFIX) and name != DENSITY_SCALAR
     }
 
 
 def palette_tokens(css):
+    """What a theme redefines: colour, and nothing else.
+
+    The other two axes are excluded by name rather than by shape -- shape
+    tokens by their prefix, the density scalar because it is one token and a
+    prefix for it would be a prefix over a single name.
+    """
+
     return {
         name: value
         for name, value in base_tokens(css).items()
-        if not name.startswith(SHAPE_PREFIX) and "var(--" not in value
+        if not name.startswith(SHAPE_PREFIX) and "var(--" not in value and name != DENSITY_SCALAR
     }
 
 
@@ -126,6 +160,28 @@ def hued_literals(css):
             for literal in COLOUR.findall(value):
                 if not NEUTRAL.search(literal):
                     found.append((" ".join(selector.split())[:44], literal.strip()))
+    return found
+
+
+def spacings(css):
+    """Every distance a rule puts around or between things.
+
+    Returns `(selector, property, value)` for the declarations that could carry
+    a density and do not already read a token -- the ones above are excluded
+    because they are not distances, not because they were overlooked.
+    """
+
+    found = []
+    for selector, block in rules(re.sub(r"/\*.*?\*/", "", css, flags=re.S)):
+        for prop, value in re.findall(r"(?<![a-z-])([a-z-]+)\s*:\s*([^;}]+)", block):
+            if prop not in SPACING_PROPERTIES:
+                continue
+            value = " ".join(value.split())
+            if "auto" in value or re.search(r"-\d", value):
+                continue
+            if not re.search(r"\d*\.?\d+(?:px|r?em|ch|v[wh]|%|pt)", value):
+                continue
+            found.append((" ".join(selector.split())[:44], prop, value))
     return found
 
 
