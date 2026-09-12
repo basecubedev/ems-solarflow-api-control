@@ -821,7 +821,7 @@ h2 { display: inline-flex; align-items: center; gap: calc(7px * var(--d)); }
 .section-heading { position: relative; justify-content: space-between; gap: calc(10px * var(--d)); margin-bottom: calc(7px * var(--d)); }
 .flow-wrap {
   position: relative; overflow: hidden; min-height: 242px; border: var(--o-border) solid color-mix(in srgb, var(--muted) 12%, transparent); border-radius: var(--o-surface-radius);
-  background: var(--o-layers, none), var(--o-fill, radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--accent2) 10%, transparent), transparent 34%), linear-gradient(180deg, color-mix(in srgb, var(--veil) 4%, transparent), color-mix(in srgb, var(--veil) 1.8%, transparent)));
+  background: var(--o-layers, none), var(--o-fill, radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--accent2) 10%, transparent), transparent 34%), color-mix(in srgb, var(--bg) 46%, transparent));
   box-shadow: var(--o-shadow, 0 0 0 transparent);
   border-left-width: calc(var(--o-border) + var(--o-rail));
   border-bottom-width: max(var(--o-border), var(--o-divider));
@@ -1297,7 +1297,7 @@ h2 { display: inline-flex; align-items: center; gap: calc(7px * var(--d)); }
   padding: calc(6px * var(--d)) calc(7px * var(--d));
   border: var(--o-border) solid color-mix(in srgb, var(--muted) 9.5%, transparent);
   border-radius: var(--o-surface-radius);
-  background: var(--o-layers, none), var(--o-fill, linear-gradient(180deg, color-mix(in srgb, var(--veil) 3.8%, transparent), color-mix(in srgb, var(--veil) 1.8%, transparent)));
+  background: var(--o-layers, none), var(--o-fill, color-mix(in srgb, var(--bg) 46%, transparent));
   box-shadow: var(--o-shadow, 0 0 0 transparent);
   border-left-width: calc(var(--o-border) + var(--o-rail));
   border-bottom-width: max(var(--o-border), var(--o-divider));
@@ -1706,7 +1706,7 @@ h2 { display: inline-flex; align-items: center; gap: calc(7px * var(--d)); }
   padding: calc(6px * var(--d)) calc(7px * var(--d));
   border: var(--o-border) solid color-mix(in srgb, var(--muted) 9.5%, transparent);
   border-radius: var(--o-surface-radius);
-  background: var(--o-layers, none), var(--o-fill, linear-gradient(180deg, color-mix(in srgb, var(--veil) 3.8%, transparent), color-mix(in srgb, var(--veil) 1.8%, transparent)));
+  background: var(--o-layers, none), var(--o-fill, color-mix(in srgb, var(--bg) 46%, transparent));
   box-shadow: var(--o-shadow, 0 0 0 transparent);
   border-left-width: calc(var(--o-border) + var(--o-rail));
   border-bottom-width: max(var(--o-border), var(--o-divider));
@@ -2408,7 +2408,7 @@ h2 { display: inline-flex; align-items: center; gap: calc(7px * var(--d)); }
 
 .range-tabs { gap: calc(5px * var(--d)); }
 .flow-heading-controls { justify-content: flex-end; gap: calc(7px * var(--d)); flex-wrap: wrap; }
-.flow-view-tabs { gap: calc(3px * var(--d)); padding: calc(3px * var(--d)); border: 1px solid color-mix(in srgb, var(--muted) 16%, transparent); border-radius: var(--o-pill-radius); background: color-mix(in srgb, var(--veil) 3.5%, transparent); flex-wrap: wrap; row-gap: calc(3px * var(--d)); }
+.flow-view-tabs { gap: calc(3px * var(--d)); padding: calc(3px * var(--d)); border: 1px solid color-mix(in srgb, var(--muted) 16%, transparent); border-radius: var(--o-pill-radius); background: color-mix(in srgb, var(--bg) 40%, transparent); flex-wrap: wrap; row-gap: calc(3px * var(--d)); }
 .range-tabs button,
 .flow-view-tabs button { min-width: 36px; height: var(--o-control-height); border: 1px solid var(--border); border-radius: var(--o-pill-radius); background: color-mix(in srgb, var(--veil) 4.5%, transparent); color: var(--muted); font: inherit; font-size: 12px; font-weight: 850; cursor: pointer; transition: transform .16s ease, border-color .16s ease, background .16s ease; }
 .flow-view-tabs button { min-width: 78px; height: 24px; border-color: transparent; background: transparent; font-size: 11px; }
