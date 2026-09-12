@@ -43,6 +43,95 @@ The dashboard is a cockpit, not a second controller.
 - Write actions are protected by authentication **and** CSRF on the server. A
   visible button is never what authorizes a write.
 
+## Appearance
+
+A **Theme** menu sits in the header, next to the connection pill. The twelve
+palettes are the same ones the Admin Console and the Appliance Manager offer,
+all dark:
+
+| | |
+| --- | --- |
+| **Signal** | the default, and what the cockpit has always looked like |
+| **Instrument**, **Graphite** | neutral greys, no colour cast in the background |
+| **Fjord**, **Blueprint**, **Indigo** | cool blues, from slate to deep violet |
+| **Viridian**, **Phosphor** | green: an instrument panel, and a CRT |
+| **Copper**, **Oxide** | warm metal and rust |
+| **Contrast** | the hardest separation between text and background |
+| **Void** | near-black, with the accent carrying the light |
+
+Beside it sits a **Style** menu. It changes how things are built, not what
+colour they are, and the two are independent -- any of the twelve palettes can
+be worn with any of these thirteen:
+
+| | |
+| --- | --- |
+| **Glass** | the default, and what the product has always looked like |
+| **Console** | a terminal: hairline frame, no fill, a rail down the left |
+| **Instrument** | a panel front: raised fill, a thin crown along the top |
+| **Rail** | no frame at all; the left edge and a divider carry the structure |
+| **Tab** | a filing tab: a fill with a heavier crown above it |
+| **Underline** | a list rather than a stack of cards: one rule between rows |
+| **Bracket** | a technical drawing: corner ticks instead of a frame |
+| **Inset** | pressed into the page rather than laid on it |
+| **Slab** | solid blocks, no frame, no rounding |
+| **Halo** | lifted, with the light coming from underneath |
+| **Soft** | further from the corner, and floating |
+| **Outline** | the frame does all the work |
+| **Brutal** | a heavy frame and a hard shadow, square everywhere |
+
+A style never moves anything. Padding, spacing and text size are the same in
+all thirteen, so a layout that fits in one fits in all of them.
+
+Third is a **Density** menu. It changes neither colour nor shape but how much
+room everything takes -- one setting that multiplies every distance on the page
+at once:
+
+| | |
+| --- | --- |
+| **Compact** | three quarters of the spacing; more on screen at a time |
+| **Normal** | the default, and what the product has always looked like |
+| **Roomy** | a quarter more spacing, for a screen you read from further away |
+
+Density moves things; that is what it is for. It does not change type size, and
+it leaves the pills and badges alone, because those are fitted to the words
+they hold rather than to the rhythm of the page.
+
+The three menus are independent: any of the twelve palettes can be worn with
+any of the thirteen styles at any of the three densities.
+
+### What the three choices look like
+
+Each strip below is the same page three times, with one axis changed and the
+other two left at their defaults.
+
+**Palettes** — left to right: **Signal**, **Void**, **Copper**. Only colour
+changes; nothing moves and nothing changes shape.
+
+![Three palettes on the same cockpit: Signal, Void and Copper](../../assets/screenshots/dashboard/dashboard-appearance-palettes.png)
+
+**Object styles** — left to right: **Glass**, **Console**, **Brutal**. The
+colours are identical in all three; what changes is the frame, the fill and the
+corners.
+
+![Three object styles on the same cockpit: Glass, Console and Brutal](../../assets/screenshots/dashboard/dashboard-appearance-styles.png)
+
+**Densities** — left to right: **Compact**, **Normal**, **Roomy**. Same colour,
+same shape, different amount of room. Compact fits more on the screen at once;
+Roomy is easier to read from further away.
+
+![Three densities on the same cockpit: Compact, Normal and Roomy](../../assets/screenshots/dashboard/dashboard-appearance-density.png)
+
+The meaning of a colour never changes: PV stays the warm one, battery the green
+one, grid the violet one, and a blocked write stays red on every palette, at
+every shape and at every density.
+
+All three choices are remembered by the browser you made them in, which is what
+you want for a screen that stays on in one room -- none of them is installation
+state, so a tablet in the hall and a laptop at the desk can each have their own.
+Compact suits the tablet and Roomy the screen across the room. They do not carry
+over from the Admin Console either: those are separate addresses, and a browser
+keeps such a preference per address.
+
 ## Navigation
 
 Eight tabs, in the order they appear:

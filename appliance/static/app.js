@@ -2550,12 +2550,182 @@
     });
   }
 
+  /* ------------------------------------------------------------- theme */
+  /* The stylesheet holds one :root[data-theme="…"] block per palette and cannot
+     hand JavaScript a label for it, so the menu is written here and a contract
+     test keeps the two lists from drifting. The stored name is applied before
+     the first paint by theme.js; this half is the menu and the writing.
+
+     The key is the Manager's own: Admin runs on a different origin, so one
+     localStorage cannot serve both, and sharing the name would only suggest
+     otherwise. */
+
+  var THEME_KEY = "ems-appliance-theme";
+  var THEME_DEFAULT = "signal";
+
+  var THEMES = [
+    { id: "signal", label: "Signal" },
+    { id: "instrument", label: "Instrument" },
+    { id: "graphite", label: "Graphite" },
+    { id: "fjord", label: "Fjord" },
+    { id: "blueprint", label: "Blueprint" },
+    { id: "indigo", label: "Indigo" },
+    { id: "viridian", label: "Viridian" },
+    { id: "copper", label: "Copper" },
+    { id: "oxide", label: "Oxide" },
+    { id: "phosphor", label: "Phosphor" },
+    { id: "contrast", label: "Contrast" },
+    { id: "void", label: "Void" }
+  ];
+
+  function knownTheme(id) {
+    return THEMES.some(function (theme) { return theme.id === id; }) ? id : THEME_DEFAULT;
+  }
+
+  function storedTheme() {
+    try {
+      return knownTheme(window.localStorage.getItem(THEME_KEY));
+    } catch (exc) {
+      return THEME_DEFAULT;
+    }
+  }
+
+  function applyTheme(id) {
+    var theme = knownTheme(id);
+    document.documentElement.setAttribute("data-theme", theme);
+    try {
+      window.localStorage.setItem(THEME_KEY, theme);
+    } catch (exc) { /* private mode; the choice holds for this page */ }
+    return theme;
+  }
+
+  /* ------------------------------------------------------ object style */
+  /* The second axis. The palette above says what things are made of; this says
+     what shape they are, and the two never touch -- which is the whole point:
+     any of the twelve palettes can be worn with any of these thirteen. Only the
+     corner roles and the frame vary; the distances between things are the
+     density axis below, and the pill heights are neither -- they are fitted to
+     the text they hold. */
+
+  var STYLE_KEY = "ems-appliance-style";
+  var STYLE_DEFAULT = "glass";
+
+  var STYLES = [
+    { id: "glass", label: "Glass" },
+    { id: "console", label: "Console" },
+    { id: "instrument", label: "Instrument" },
+    { id: "rail", label: "Rail" },
+    { id: "tab", label: "Tab" },
+    { id: "underline", label: "Underline" },
+    { id: "bracket", label: "Bracket" },
+    { id: "inset", label: "Inset" },
+    { id: "slab", label: "Slab" },
+    { id: "halo", label: "Halo" },
+    { id: "soft", label: "Soft" },
+    { id: "outline", label: "Outline" },
+    { id: "brutal", label: "Brutal" }
+  ];
+
+  function knownStyle(id) {
+    return STYLES.some(function (style) { return style.id === id; }) ? id : STYLE_DEFAULT;
+  }
+
+  function storedStyle() {
+    try {
+      return knownStyle(window.localStorage.getItem(STYLE_KEY));
+    } catch (exc) {
+      return STYLE_DEFAULT;
+    }
+  }
+
+  function applyStyle(id) {
+    var style = knownStyle(id);
+    document.documentElement.setAttribute("data-style", style);
+    try {
+      window.localStorage.setItem(STYLE_KEY, style);
+    } catch (exc) { /* private mode; the choice holds for this page */ }
+    return style;
+  }
+
+  function initStyleSwitcher() {
+    var select = document.getElementById("style-select");
+    if (!select) return;
+    select.replaceChildren.apply(select, STYLES.map(function (style) {
+      return el("option", { value: style.id, text: style.label });
+    }));
+    select.value = applyStyle(storedStyle());
+    select.addEventListener("change", function () { applyStyle(select.value); });
+  }
+
+
+  /* ----------------------------------------------------------- density */
+  /* The third axis. The palette says what things are made of, the object style
+     what shape they are, and this how much room they take: one unitless number
+     that every distance in the stylesheet is multiplied by. A density is a
+     single number rather than a table of distances because the spacings were
+     tuned against one another -- multiplying them all keeps that, redefining
+     them one at a time would not. */
+
+  var DENSITY_KEY = "ems-appliance-density";
+  var DENSITY_DEFAULT = "normal";
+
+  var DENSITIES = [
+    { id: "compact", label: "Compact" },
+    { id: "normal", label: "Normal" },
+    { id: "roomy", label: "Roomy" }
+  ];
+
+  function knownDensity(id) {
+    return DENSITIES.some(function (density) { return density.id === id; }) ? id : DENSITY_DEFAULT;
+  }
+
+  function storedDensity() {
+    try {
+      return knownDensity(window.localStorage.getItem(DENSITY_KEY));
+    } catch (exc) {
+      return DENSITY_DEFAULT;
+    }
+  }
+
+  function applyDensity(id) {
+    var density = knownDensity(id);
+    document.documentElement.setAttribute("data-density", density);
+    try {
+      window.localStorage.setItem(DENSITY_KEY, density);
+    } catch (exc) { /* private mode; the choice holds for this page */ }
+    return density;
+  }
+
+  function initDensitySwitcher() {
+    var select = document.getElementById("density-select");
+    if (!select) return;
+    select.replaceChildren.apply(select, DENSITIES.map(function (density) {
+      return el("option", { value: density.id, text: density.label });
+    }));
+    select.value = applyDensity(storedDensity());
+    select.addEventListener("change", function () { applyDensity(select.value); });
+  }
+
+  function initThemeSwitcher() {
+    var select = document.getElementById("theme-select");
+    if (!select) return;
+    select.replaceChildren.apply(select, THEMES.map(function (theme) {
+      return el("option", { value: theme.id, text: theme.label });
+    }));
+    select.value = applyTheme(storedTheme());
+    select.addEventListener("change", function () { applyTheme(select.value); });
+  }
+
   function init() {
     try {
       state.mode = window.localStorage.getItem(MODE_KEY) === "expert" ? "expert" : "basic";
       var storedView = window.localStorage.getItem(VIEW_KEY);
       if (storedView) state.view = storedView;
     } catch (exc) { /* private mode */ }
+
+    initThemeSwitcher();
+    initStyleSwitcher();
+    initDensitySwitcher();
 
     document.getElementById("gate-form").addEventListener("submit", submitGate);
     document.getElementById("logout-button").addEventListener("click", logout);

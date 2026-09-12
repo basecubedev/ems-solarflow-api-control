@@ -1197,7 +1197,7 @@ def test_device_flow_mobile_layout_does_not_force_horizontal_scroll():
     assert "min-width: 820px" not in styles
     assert "min-width: 840px" not in styles
     assert "max-width: 100%;" in styles
-    assert ".device-flow-view { padding: 6px; overflow-x: hidden; }" in styles
+    assert ".device-flow-view { padding: calc(6px * var(--d)); overflow-x: hidden; }" in styles
     assert ".device-flow-svg { min-width: 0; width: 100%; }" in styles
     assert ".flow-wrap.view-control,\n.flow-wrap.view-energy { overflow: visible; }" in styles
     assert ".flow-wrap.view-energy .energy-stats-view { display: block !important; }" in styles
@@ -1248,11 +1248,14 @@ def test_device_flow_mobile_layout_does_not_force_horizontal_scroll():
     assert ".demo-pill" in styles
     assert ".control-device-panels" in styles
     assert ".control-summary-flow" not in styles
-    assert ".tone-skip {\n  border-color: rgba(148,163,184,.14);" in styles
+    assert (
+        '.tone-skip {\n  border-color: color-mix(in srgb, var(--muted) 14%, transparent);'
+        in styles
+    )
     assert ".tone-skip,\n.tone-warn" not in styles
     tone_send = styles.split(".tone-send {", 1)[1].split(".tone-skip {", 1)[0]
-    assert "rgba(34,211,238,.28)" in tone_send
-    assert "rgba(57,229,140,.30)" not in tone_send
+    assert "color-mix(in srgb, var(--accent2) 28%, transparent)" in tone_send
+    assert "color-mix(in srgb, var(--battery) 30%, transparent)" not in tone_send
     assert "grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));" in styles
     assert ".control-device-decision-flow {\n  grid-template-columns: repeat(5, minmax(142px, 1fr));" in styles
     assert ".control-stage:not(:last-child)::after" in styles

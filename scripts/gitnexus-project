@@ -59,6 +59,18 @@ case ${2:-} in
     ;;
 esac
 
+# The symbol counts in AGENTS.md and CLAUDE.md are deliberately left stale. They
+# are the one line in that block nothing reads -- no decision has ever turned on
+# "34272 symbols" -- and refreshing them on a feature branch conflicts with every
+# other branch that did the same. Twice in one day, both times resolved by
+# dropping the commit. What the block is actually for is the project name, which
+# GitNexus needs when more than one repository is indexed, and the tool rules
+# above it. Neither changes with the index.
+case " $* " in
+  *" --skip-agents-md "*) ;;
+  *) set -- "$@" --skip-agents-md ;;
+esac
+
 LOCK_FILE=$LOG_DIR/analyze-writer.lock
 exec 9>"$LOCK_FILE" || exit 1
 LOCK_TIMEOUT=${GITNEXUS_ANALYZE_LOCK_TIMEOUT:-60}

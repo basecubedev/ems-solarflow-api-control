@@ -38,6 +38,7 @@ from appliance.web_audit import WebAuditReporter
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 STATIC_FILES = {
     "app.js": "application/javascript; charset=utf-8",
+    "theme.js": "application/javascript; charset=utf-8",
     "styles.css": "text/css; charset=utf-8",
 }
 MAX_BODY_BYTES = 64 * 1024

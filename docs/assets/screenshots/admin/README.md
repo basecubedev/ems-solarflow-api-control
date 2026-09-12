@@ -40,6 +40,15 @@ hostnames.
 | `admin-upgrade-running.png` | Guided upgrade — live validation | `upgrade-run-3` |
 | `admin-upgrade-completed.png` | Guided upgrade — completed | `upgrade-done` |
 | `admin-admin-update-reconnect.png` | Admin Console self-update reconnect overlay | `admin-update-reconnect` |
+| `admin-appearance-palettes.png` | Appearance — the same console in Signal, Void and Copper | `appearance gallery` |
+| `admin-appearance-styles.png` | Appearance — the same console in Glass, Console and Brutal | `appearance gallery` |
+| `admin-appearance-density.png` | Appearance — the same console at Compact, Normal and Roomy | `appearance gallery` |
+
+The three `*-appearance-*` strips are written by
+[`scripts/capture_appearance_gallery.py`](../../../../scripts/capture_appearance_gallery.py)
+rather than by the capture script above: each is one page photographed three
+times with a single appearance axis changed, which is the only way to document
+a choice whose entire effect is how something looks.
 
 ## How to refresh
 

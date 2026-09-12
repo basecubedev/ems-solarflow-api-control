@@ -29,6 +29,15 @@ by `scripts/capture_dashboard_previews.py`.
 | `dashboard-diagnose.png` | Diagnose | `write-mode` |
 | `dashboard-logs.png` | Logs | `write-mode` |
 | `dashboard-maintenance.png` | Maintenance — backup / restore / config upgrade | `write-mode` |
+| `dashboard-appearance-palettes.png` | Appearance — the same cockpit in Signal, Void and Copper | `appearance gallery` |
+| `dashboard-appearance-styles.png` | Appearance — the same cockpit in Glass, Console and Brutal | `appearance gallery` |
+| `dashboard-appearance-density.png` | Appearance — the same cockpit at Compact, Normal and Roomy | `appearance gallery` |
+
+The three `*-appearance-*` strips are written by
+[`scripts/capture_appearance_gallery.py`](../../../../scripts/capture_appearance_gallery.py)
+rather than by the capture script above: each is one page photographed three
+times with a single appearance axis changed, which is the only way to document
+a choice whose entire effect is how something looks.
 
 ## How to refresh
 

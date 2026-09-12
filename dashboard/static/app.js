@@ -6177,6 +6177,196 @@ function initSessionHeartbeat() {
   });
 }
 
+/* --- theme ---------------------------------------------------------------
+   The stylesheet holds one :root[data-theme="…"] block per palette and cannot
+   hand JavaScript a label for it, so the menu is written here and a contract
+   test keeps the two lists from drifting. The stored name is applied before the
+   first paint by theme.js; this half is the menu and the writing.
+
+   The key is the cockpit's own. Three surfaces, three origins: one localStorage
+   cannot serve them all, and a shared name would suggest a choice carries over
+   when it cannot. */
+
+const THEME_STORAGE_KEY = "ems-dashboard-theme";
+const THEME_DEFAULT = "signal";
+
+const THEMES = [
+  { id: "signal", label: "Signal" },
+  { id: "instrument", label: "Instrument" },
+  { id: "graphite", label: "Graphite" },
+  { id: "fjord", label: "Fjord" },
+  { id: "blueprint", label: "Blueprint" },
+  { id: "indigo", label: "Indigo" },
+  { id: "viridian", label: "Viridian" },
+  { id: "copper", label: "Copper" },
+  { id: "oxide", label: "Oxide" },
+  { id: "phosphor", label: "Phosphor" },
+  { id: "contrast", label: "Contrast" },
+  { id: "void", label: "Void" },
+];
+
+function knownTheme(id) {
+  return THEMES.some((theme) => theme.id === id) ? id : THEME_DEFAULT;
+}
+
+function storedTheme() {
+  try {
+    return knownTheme(window.localStorage.getItem(THEME_STORAGE_KEY));
+  } catch (err) {
+    /* localStorage may be unavailable; the default palette still applies. */
+    return THEME_DEFAULT;
+  }
+}
+
+function applyTheme(id) {
+  const theme = knownTheme(id);
+  document.documentElement.setAttribute("data-theme", theme);
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch (err) {
+    /* localStorage may be unavailable; the choice holds for this page. */
+  }
+  return theme;
+}
+
+function initThemeSwitcher() {
+  const select = document.getElementById("themeSelect");
+  if (!select) return;
+  select.replaceChildren(
+    ...THEMES.map((theme) => {
+      const option = document.createElement("option");
+      option.value = theme.id;
+      option.textContent = theme.label;
+      return option;
+    })
+  );
+  select.value = applyTheme(storedTheme());
+  select.addEventListener("change", () => applyTheme(select.value));
+}
+
+/* --- object style --------------------------------------------------------
+   The second axis. The palette above says what things are made of; this says
+   what shape they are, and the two never touch -- which is the whole point:
+   any of the twelve palettes can be worn with any of these thirteen. Only the
+   corner roles and the frame vary; the distances between things are the
+   density axis below, and the pill heights are neither -- they are fitted to
+   the text they hold. */
+
+const STYLE_STORAGE_KEY = "ems-dashboard-style";
+const STYLE_DEFAULT = "glass";
+
+const STYLES = [
+  { id: "glass", label: "Glass" },
+  { id: "console", label: "Console" },
+  { id: "instrument", label: "Instrument" },
+  { id: "rail", label: "Rail" },
+  { id: "tab", label: "Tab" },
+  { id: "underline", label: "Underline" },
+  { id: "bracket", label: "Bracket" },
+  { id: "inset", label: "Inset" },
+  { id: "slab", label: "Slab" },
+  { id: "halo", label: "Halo" },
+  { id: "soft", label: "Soft" },
+  { id: "outline", label: "Outline" },
+  { id: "brutal", label: "Brutal" },
+];
+
+function knownStyle(id) {
+  return STYLES.some((style) => style.id === id) ? id : STYLE_DEFAULT;
+}
+
+function storedStyle() {
+  try {
+    return knownStyle(window.localStorage.getItem(STYLE_STORAGE_KEY));
+  } catch (err) {
+    /* localStorage may be unavailable; the default style still applies. */
+    return STYLE_DEFAULT;
+  }
+}
+
+function applyStyle(id) {
+  const style = knownStyle(id);
+  document.documentElement.setAttribute("data-style", style);
+  try {
+    window.localStorage.setItem(STYLE_STORAGE_KEY, style);
+  } catch (err) {
+    /* localStorage may be unavailable; the choice holds for this page. */
+  }
+  return style;
+}
+
+function initStyleSwitcher() {
+  const select = document.getElementById("styleSelect");
+  if (!select) return;
+  select.replaceChildren(
+    ...STYLES.map((style) => {
+      const option = document.createElement("option");
+      option.value = style.id;
+      option.textContent = style.label;
+      return option;
+    })
+  );
+  select.value = applyStyle(storedStyle());
+  select.addEventListener("change", () => applyStyle(select.value));
+}
+
+
+/* --- density -------------------------------------------------------------
+   The third axis. The palette says what things are made of, the object style
+   what shape they are, and this how much room they take: one unitless number
+   that every distance in the stylesheet is multiplied by. A density is a
+   single number rather than a table of distances because the spacings were
+   tuned against one another -- multiplying them all keeps that, redefining
+   them one at a time would not. */
+
+const DENSITY_STORAGE_KEY = "ems-dashboard-density";
+const DENSITY_DEFAULT = "normal";
+
+const DENSITIES = [
+  { id: "compact", label: "Compact" },
+  { id: "normal", label: "Normal" },
+  { id: "roomy", label: "Roomy" },
+];
+
+function knownDensity(id) {
+  return DENSITIES.some((density) => density.id === id) ? id : DENSITY_DEFAULT;
+}
+
+function storedDensity() {
+  try {
+    return knownDensity(window.localStorage.getItem(DENSITY_STORAGE_KEY));
+  } catch (err) {
+    /* localStorage may be unavailable; the default density still applies. */
+    return DENSITY_DEFAULT;
+  }
+}
+
+function applyDensity(id) {
+  const density = knownDensity(id);
+  document.documentElement.setAttribute("data-density", density);
+  try {
+    window.localStorage.setItem(DENSITY_STORAGE_KEY, density);
+  } catch (err) {
+    /* localStorage may be unavailable; the choice holds for this page. */
+  }
+  return density;
+}
+
+function initDensitySwitcher() {
+  const select = document.getElementById("densitySelect");
+  if (!select) return;
+  select.replaceChildren(
+    ...DENSITIES.map((density) => {
+      const option = document.createElement("option");
+      option.value = density.id;
+      option.textContent = density.label;
+      return option;
+    })
+  );
+  select.value = applyDensity(storedDensity());
+  select.addEventListener("change", () => applyDensity(select.value));
+}
+
 function initDashboardApp() {
   const rangeTabSelector = ".range-tabs button";
   document.querySelectorAll(rangeTabSelector).forEach((button) => {
@@ -6265,6 +6455,9 @@ function initDashboardApp() {
     }
   });
 
+  initThemeSwitcher();
+  initStyleSwitcher();
+  initDensitySwitcher();
   initFlowViewSwitch();
   initFlowTiles();
   initAuthControls();

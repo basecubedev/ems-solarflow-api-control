@@ -5,6 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>EMS SolarFlow API Control</title>
+  <script src="/theme.js"></script>
   <link rel="stylesheet" href="/uPlot.min.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
@@ -17,6 +18,12 @@
         <p class="brand-subtitle">Read-only energy cockpit</p>
       </div>
       <div class="status-cluster">
+        <label class="theme-label" for="themeSelect">Theme</label>
+        <select id="themeSelect" class="theme-select"></select>
+        <label class="theme-label" for="styleSelect">Style</label>
+        <select id="styleSelect" class="theme-select"></select>
+        <label class="theme-label" for="densitySelect">Density</label>
+        <select id="densitySelect" class="theme-select"></select>
         <span id="connectionState" class="pill muted">Connecting</span>
         <span id="lastUpdated" class="timestamp">--</span>
         <span id="writeModeState" class="pill muted">Read-only</span>

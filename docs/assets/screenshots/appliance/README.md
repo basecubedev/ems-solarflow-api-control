@@ -27,6 +27,15 @@ and in the RC tier ahead of a clean-tree check -- can never overwrite them.
 | `appliance-network-wifi` | WLAN scan and the revert warning | [network.md](../../../user/appliance/network.md) |
 | `appliance-backup-access` | Backup account state and export paths | [backup.md](../../../user/appliance/backup.md) |
 | `appliance-recovery` | The Admin section, where most recovery starts | [recovery.md](../../../user/appliance/recovery.md) |
+| `appliance-appearance-palettes` | Appearance — the same console in Signal, Void and Copper | [overview.md](../../../user/appliance/overview.md) |
+| `appliance-appearance-styles` | Appearance — the same console in Glass, Console and Brutal | [overview.md](../../../user/appliance/overview.md) |
+| `appliance-appearance-density` | Appearance — the same console at Compact, Normal and Roomy | [overview.md](../../../user/appliance/overview.md) |
+
+The three `*-appearance-*` strips are written by
+[`scripts/capture_appearance_gallery.py`](../../../../scripts/capture_appearance_gallery.py)
+rather than by the capture spec above: each is one page photographed three
+times with a single appearance axis changed, which is the only way to document
+a choice whose entire effect is how something looks.
 
 ## Why these are deterministic
 

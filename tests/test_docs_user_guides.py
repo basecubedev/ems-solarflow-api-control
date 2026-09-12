@@ -234,7 +234,20 @@ def _capture_outputs(module_path):
 
 
 def test_capture_manifest_matches_the_committed_screenshots():
+    """Two scripts write into this directory, so the manifest is the union.
+
+    capture_admin_docs.py photographs the console's pages; the appearance
+    gallery photographs the same page three times with one axis changed. A
+    single-writer check would have read the gallery's output as an orphan and
+    the gallery's manifest as a lie.
+    """
+
     declared = _capture_outputs(ROOT / "scripts" / "capture_admin_docs.py")
+    declared |= {
+        name
+        for name in _capture_outputs(ROOT / "scripts" / "capture_appearance_gallery.py")
+        if name.startswith("admin-")
+    }
     committed = {p.name for p in ADMIN_SHOTS.glob("*.png")}
     assert declared == committed, (
         f"admin capture manifest drifted: only declared={sorted(declared - committed)} "
@@ -242,6 +255,11 @@ def test_capture_manifest_matches_the_committed_screenshots():
     )
 
     declared = _capture_outputs(ROOT / "scripts" / "capture_dashboard_docs.py")
+    declared |= {
+        name
+        for name in _capture_outputs(ROOT / "scripts" / "capture_appearance_gallery.py")
+        if name.startswith("dashboard-")
+    }
     committed = {p.name for p in DASHBOARD_SHOTS.glob("*.png")}
     assert declared == committed, (
         f"dashboard capture manifest drifted: only declared={sorted(declared - committed)} "

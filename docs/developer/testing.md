@@ -198,8 +198,8 @@ Gates: static checks, the full non-Docker Python suite, the
 `simulation and power_control` gate, the authority regressions, the security
 regressions, the System Build tier, the Docker-first tier, the full Chromium
 and Firefox Admin suites, the Admin replacement/recovery suite, the Appliance
-Manager browser suite, the generated config template and a clean-working-tree
-check. `./scripts/test-rc.sh --list` prints them, and that list is the
+Manager browser suite, the Dashboard cockpit suite, the generated config
+template and a clean-working-tree check. `./scripts/test-rc.sh --list` prints them, and that list is the
 authority. The RC tier never deselects a known failure.
 
 ### Playwright groups
@@ -216,6 +216,55 @@ npx playwright test --project=chromium               # full Admin suite
 
 Tags: `@smoke` (fast critical journeys), `@setup`, `@maintenance`,
 `@authority`, `@workflow`, `@system-build`.
+
+### Documentation screenshots
+
+```bash
+./scripts/capture-docs-screenshots.sh            # Admin + Dashboard pages
+npx playwright test --config=playwright.appliance.config.ts capture-docs \
+    # with EMS_APPLIANCE_CAPTURE_DOCS=1        # Appliance Manager pages
+python3 scripts/capture_appearance_gallery.py    # the appearance strips
+```
+
+The first two photograph the product's pages. The third photographs one page
+three times with a single appearance axis changed -- palette, object style,
+density -- because a choice whose entire effect is how something looks cannot be
+documented in prose. All three use the same deterministic servers as the browser
+suites, so no capture contains a real host, address, serial or key.
+
+Each screenshot directory carries a `README.md` listing every image, and
+contract tests refuse a capture that is not listed or a listing without an
+image. Two writers now share the Admin and Appliance directories, so those
+manifests are a union; add a row when you add a capture.
+
+### The other two surfaces
+
+Three deployables, three origins, three browser suites. They share nothing --
+not a config, not a server, not a port -- because the products do not share
+anything either.
+
+```bash
+npx playwright test --config=playwright.appliance.config.ts   # Appliance Manager
+npx playwright test --config=playwright.dashboard.config.ts   # EMS Dashboard
+```
+
+Each brings its own deterministic server: the Manager's is the scripted
+`EMS_APPLIANCE_TEST_MODE` host, the cockpit's is
+`scripts/serve_dashboard_preview.py`, which serves the real `dashboard/static/`
+assets with synthetic API payloads -- no hardware, no MQTT, no history
+database, no secrets.
+
+Three things are worth knowing before adding a spec to either:
+
+- **Measure with a real exit code.** `npx playwright test | tail -20` reports
+  the exit status of `tail`, which is always zero, and the `N failed` line sits
+  above the window. Write to a log and read `$?` straight after.
+- **WebKit is not installed everywhere.** The default config lists it, so
+  locally pass `--project=chromium --project=firefox` or collect a few hundred
+  "Executable doesn't exist" failures.
+- **The cockpit's network is never idle.** `/api/events` is an open SSE stream,
+  so `waitUntil: "networkidle"` sits out its timeout on every navigation. Wait
+  for an element.
 
 ### Prerequisites
 

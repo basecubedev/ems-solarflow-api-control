@@ -90,8 +90,10 @@ def test_add_more_devices_summary_is_a_prominent_menu_row():
     css = _read("admin.css")
     rule = css.split(".add-devices-details > summary {", 1)[1].split("}", 1)[0]
     # Larger text and extra vertical padding make the row taller and clearer.
+    # The padding reads the density scalar, as every distance in this stylesheet
+    # does; at the default density it is the 9px this test has always meant.
     assert "font-size: 13px" in rule
-    assert "padding: 9px" in rule
+    assert "padding: calc(9px * var(--d))" in rule
     assert "var(--text)" in rule
     # Both flows share the same menu-row class so they cannot drift apart.
     html = _read("index.html")
@@ -5701,8 +5703,9 @@ def test_auth_password_inputs_have_no_length_requirement():
 def test_auth_form_is_compact_and_pins_fields_to_content_height():
     css = _read("admin.css")
     form = css.split(".admin-auth-form {", 1)[1].split("}", 1)[0]
-    # Fields stack with a tight 8-10px rhythm instead of the wide default gap.
-    assert "gap: 10px" in form
+    # Fields stack with a tight 8-10px rhythm instead of the wide default gap,
+    # multiplied by the density scalar like every other distance here.
+    assert "gap: calc(10px * var(--d))" in form
     # The shared .field flex-basis is neutralised inside the auth form so fields
     # size to their content and the submit button sits right below them.
     field = css.split(".admin-auth-form .field {", 1)[1].split("}", 1)[0]
