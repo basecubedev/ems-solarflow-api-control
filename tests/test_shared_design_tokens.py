@@ -194,6 +194,7 @@ def test_the_default_object_style_changes_nothing(surface):
 SPECS = {
     "admin": "tests/e2e/admin-theme.spec.ts",
     "appliance": "tests/e2e-appliance/theme.spec.ts",
+    "dashboard": "tests/e2e-dashboard/theme.spec.ts",
 }
 
 
@@ -214,7 +215,10 @@ def test_the_browser_tests_name_palettes_styles_and_densities_that_exist(surface
     }
     used = {"style": set(), "theme": set(), "density": set()}
     for axis in used:
+        # Two select-id spellings, because the surfaces do not share one: the
+        # Admin and the Manager use `#theme-select`, the cockpit `#themeSelect`.
         used[axis] |= set(re.findall(rf'"#{axis}-select",\s*"([a-z0-9-]+)"', spec))
+        used[axis] |= set(re.findall(rf'"#{axis}Select",\s*"([a-z0-9-]+)"', spec))
         used[axis] |= set(re.findall(rf'"data-{axis}",\s*"([a-z0-9-]+)"', spec))
     # A name the build is meant not to know is the point of one of the tests.
     used["theme"] -= {"harlequin"}
