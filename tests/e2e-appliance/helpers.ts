@@ -42,11 +42,11 @@ export async function openView(page: Page, view: string) {
 // scroll itself rather than for a clock. The caller has to leave focus
 // somewhere that does not consume End -- a text field would take it as a caret
 // move and the page would not scroll at all, which the poll then reports.
-export async function parkAtBottom(page: Page) {
+export async function parkAtBottom(page: Page, what = "this page") {
   const bottom = await page.evaluate(() =>
     Math.round(document.documentElement.scrollHeight - window.innerHeight),
   );
-  expect(bottom).toBeGreaterThan(0);
+  expect(bottom, `${what} does not scroll here, so parking it proves nothing`).toBeGreaterThan(0);
   await page.keyboard.press("End");
   await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(bottom);
   return bottom;

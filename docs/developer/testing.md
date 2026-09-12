@@ -254,7 +254,7 @@ Each brings its own deterministic server: the Manager's is the scripted
 assets with synthetic API payloads -- no hardware, no MQTT, no history
 database, no secrets.
 
-Three things are worth knowing before adding a spec to either:
+Four things are worth knowing before adding a spec to either:
 
 - **Measure with a real exit code.** `npx playwright test | tail -20` reports
   the exit status of `tail`, which is always zero, and the `N failed` line sits
@@ -265,6 +265,18 @@ Three things are worth knowing before adding a spec to either:
 - **The cockpit's network is never idle.** `/api/events` is an open SSE stream,
   so `waitUntil: "networkidle"` sits out its timeout on every navigation. Wait
   for an element.
+- **Do not park a page with `window.scrollTo`.** In Firefox a `focus()` that had
+  to bring its target on screen leaves a scroll-into-view pending, and that
+  pending scroll is applied on top of the next *programmatic* scroll one frame
+  later. A test that scrolls and writes down `window.scrollY` records a position
+  the page left fifteen milliseconds afterwards, and then fails somewhere else
+  entirely -- the appliance case was named after a two-second poll that had not
+  run yet. A reflow clears the pending scroll, so a heavier page hides it and a
+  lighter one exposes it, which makes it look like a flake and look like it
+  belongs to whatever last touched the CSS. Real input is not undone in either
+  engine: press a key. `tests/e2e-appliance/helpers.ts` has `parkAtBottom`,
+  which presses `End` and then waits for the page to actually arrive instead of
+  assuming it did.
 
 ### Prerequisites
 
