@@ -8,9 +8,9 @@ theme's red on its own background and nobody sees a failure, only something
 slightly wrong. Every theme therefore has to redefine the whole set.
 
 The first pass is deliberately dark-only. Light grounds are not a token swap:
-the neutral veils (`rgba(255,255,255,.035)` to lift a surface, dark rgba to sink
-one) assume something dark underneath and invert their meaning on paper. That is
-its own piece of work, and this test is what keeps it from being started by
+the veils (`--veil` at a few percent to lift a surface, dark rgba to sink one)
+assume something dark underneath and invert their meaning on paper. That is its
+own piece of work, and this test is what keeps it from being started by
 accident.
 
 `signal` is today's Admin. It is a theme like the others so the switcher has a

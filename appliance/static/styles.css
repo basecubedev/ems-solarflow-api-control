@@ -27,6 +27,15 @@
   /* Derived from the palette above, declared once: a custom property resolves
      where it is used, so these follow whichever theme is active without being
      written out twelve times. That is also why no theme may redefine one. */
+  /* The colour a film is made of. A rule that lifts a surface a little -- a
+     hover, an inset highlight, the inside of a fact tile -- used to reach for
+     plain white, and the reason was sound: white lifts any dark ground by the
+     same amount, so it survives a palette swap where a chosen hue would not.
+     It survives it without ever joining it, though. On copper the lift was
+     grey while everything else on the page was warm, and there were 106 of
+     them. --text is the palette's own light, tinted in eleven of the twelve,
+     so a film built from it belongs to the ground it is lying on. */
+  --veil: var(--text);
   --surface-sunken: color-mix(in srgb, var(--bg) 50%, transparent);
   --surface-sunken-strong: color-mix(in srgb, var(--bg) 70%, transparent);
   --surface-overlay: color-mix(in srgb, var(--bg) 82%, transparent);

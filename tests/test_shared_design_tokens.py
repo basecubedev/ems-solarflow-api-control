@@ -177,6 +177,30 @@ def test_a_wash_is_a_wash_and_not_a_second_ground(surface):
     assert solid == {}, f"{surface}: palettes whose wash is not a gradient: {solid}"
 
 
+@pytest.mark.parametrize("surface", sorted(SURFACES))
+def test_no_rule_lays_plain_white_on_a_palette(surface):
+    """A film takes its colour from the palette it is lying on.
+
+    `hued_literals` let a rule keep a literal as long as it was neutral, and
+    the reasoning was half right: black sinks a surface toward every palette's
+    own ground, because every ground here is dark. White lifts it toward a
+    colour no palette has. There were 106 of them -- hovers, inset highlights,
+    the inside of a fact tile -- and on copper they measured grey while the
+    rest of the page was warm. They read `--veil` now, which is the palette's
+    own light and is tinted in eleven of the twelve.
+
+    This is one test for three stylesheets rather than three, because there is
+    nothing surface-specific left to allow: the count is zero everywhere.
+    """
+
+    css = (ROOT / SURFACES[surface]).read_text(encoding="utf-8")
+    remaining = theming_contracts.white_films(css)
+    assert remaining == [], (
+        f"{surface}: {len(remaining)} rules still paint plain white: "
+        f"{sorted(set(remaining))[:6]}"
+    )
+
+
 # --- the object styles -----------------------------------------------------
 #
 # The second axis. A palette says what things are made of; an object style says
