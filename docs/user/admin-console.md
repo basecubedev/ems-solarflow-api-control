@@ -82,10 +82,11 @@ videos or screenshots for a new release, see the
 
 ## Appearance
 
-Three menus sit at the top right, next to the sign-out button. They are there
-before you sign in, so you can set them on the login page.
+Three menus sit at the top right, next to the sign-out button: **Theme**,
+**Style** and **Density**. They are there before you sign in, so you can set
+them on the login page.
 
-Twelve themes, all dark:
+The **Theme** menu offers twelve palettes, all dark:
 
 | | |
 | --- | --- |
@@ -97,7 +98,7 @@ Twelve themes, all dark:
 | **Contrast** | the hardest separation between text and background |
 | **Void** | near-black, with the accent carrying the light |
 
-Beside it sits a **Style** menu. It changes how things are built, not what
+Beside it sits the **Style** menu. It changes how things are built, not what
 colour they are, and the two are independent -- any of the twelve palettes can
 be worn with any of these thirteen:
 
@@ -136,6 +137,28 @@ they hold rather than to the rhythm of the page.
 
 The three menus are independent: any of the twelve palettes can be worn with
 any of the thirteen styles at any of the three densities.
+
+### What the three choices look like
+
+Each strip below is the same page three times, with one axis changed and the
+other two left at their defaults.
+
+**Palettes** — left to right: **Signal**, **Void**, **Copper**. Only colour
+changes; nothing moves and nothing changes shape.
+
+![Three palettes on the same console: Signal, Void and Copper](../assets/screenshots/admin/admin-appearance-palettes.png)
+
+**Object styles** — left to right: **Glass**, **Console**, **Brutal**. The
+colours are identical in all three; what changes is the frame, the fill and the
+corners.
+
+![Three object styles on the same console: Glass, Console and Brutal](../assets/screenshots/admin/admin-appearance-styles.png)
+
+**Densities** — left to right: **Compact**, **Normal**, **Roomy**. Same colour,
+same shape, different amount of room. Compact fits more on the screen at once;
+Roomy is easier to read from further away.
+
+![Three densities on the same console: Compact, Normal and Roomy](../assets/screenshots/admin/admin-appearance-density.png)
 
 A theme changes colour only, a style changes shape only, and a density changes
 distance only. No control changes what it does and no reading changes its

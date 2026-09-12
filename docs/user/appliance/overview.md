@@ -142,6 +142,28 @@ they hold rather than to the rhythm of the page.
 The three menus are independent: any of the twelve palettes can be worn with
 any of the thirteen styles at any of the three densities.
 
+### What the three choices look like
+
+Each strip below is the same page three times, with one axis changed and the
+other two left at their defaults.
+
+**Palettes** — left to right: **Signal**, **Void**, **Copper**. Only colour
+changes; nothing moves and nothing changes shape.
+
+![Three palettes on the same console: Signal, Void and Copper](../../assets/screenshots/appliance/appliance-appearance-palettes.png)
+
+**Object styles** — left to right: **Glass**, **Console**, **Brutal**. The
+colours are identical in all three; what changes is the frame, the fill and the
+corners.
+
+![Three object styles on the same console: Glass, Console and Brutal](../../assets/screenshots/appliance/appliance-appearance-styles.png)
+
+**Densities** — left to right: **Compact**, **Normal**, **Roomy**. Same colour,
+same shape, different amount of room. Compact fits more on the screen at once;
+Roomy is easier to read from further away.
+
+![Three densities on the same console: Compact, Normal and Roomy](../../assets/screenshots/appliance/appliance-appearance-density.png)
+
 All three choices are remembered by the browser you made them in, and all three
 apply to the sign-in screen as well. None of them is appliance state: another
 browser, or another device, starts at Signal, Glass and Normal again. Choosing

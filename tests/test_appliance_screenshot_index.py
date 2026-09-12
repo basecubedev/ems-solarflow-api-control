@@ -31,8 +31,24 @@ def images():
     return {path.stem for path in SHOTS.glob("*.png")}
 
 
+GALLERY = ROOT / "scripts" / "capture_appearance_gallery.py"
+
+
 def captures():
-    return set(re.findall(r'test\("(appliance-[a-z0-9-]+)"', SPEC.read_text("utf-8")))
+    """Every image this directory is supposed to contain, from both writers.
+
+    The docs spec photographs the Manager's pages. The appearance gallery
+    photographs one page three times with a single axis changed, which is the
+    only way to document a choice whose whole effect is how something looks.
+    """
+
+    written = set(re.findall(r'test\("(appliance-[a-z0-9-]+)"', SPEC.read_text("utf-8")))
+    manifest = GALLERY.read_text("utf-8").split("SCREENS = {", 1)[1].split("\n}", 1)[0]
+    written |= {
+        name[: -len(".png")]
+        for name in re.findall(r'"(appliance-[a-z0-9-]+\.png)"', manifest)
+    }
+    return written
 
 
 def test_every_image_is_described():

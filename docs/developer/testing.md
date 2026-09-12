@@ -217,6 +217,26 @@ npx playwright test --project=chromium               # full Admin suite
 Tags: `@smoke` (fast critical journeys), `@setup`, `@maintenance`,
 `@authority`, `@workflow`, `@system-build`.
 
+### Documentation screenshots
+
+```bash
+./scripts/capture-docs-screenshots.sh            # Admin + Dashboard pages
+npx playwright test --config=playwright.appliance.config.ts capture-docs \
+    # with EMS_APPLIANCE_CAPTURE_DOCS=1        # Appliance Manager pages
+python3 scripts/capture_appearance_gallery.py    # the appearance strips
+```
+
+The first two photograph the product's pages. The third photographs one page
+three times with a single appearance axis changed -- palette, object style,
+density -- because a choice whose entire effect is how something looks cannot be
+documented in prose. All three use the same deterministic servers as the browser
+suites, so no capture contains a real host, address, serial or key.
+
+Each screenshot directory carries a `README.md` listing every image, and
+contract tests refuse a capture that is not listed or a listing without an
+image. Two writers now share the Admin and Appliance directories, so those
+manifests are a union; add a row when you add a capture.
+
 ### The other two surfaces
 
 Three deployables, three origins, three browser suites. They share nothing --

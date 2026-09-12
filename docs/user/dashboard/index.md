@@ -99,6 +99,28 @@ they hold rather than to the rhythm of the page.
 The three menus are independent: any of the twelve palettes can be worn with
 any of the thirteen styles at any of the three densities.
 
+### What the three choices look like
+
+Each strip below is the same page three times, with one axis changed and the
+other two left at their defaults.
+
+**Palettes** — left to right: **Signal**, **Void**, **Copper**. Only colour
+changes; nothing moves and nothing changes shape.
+
+![Three palettes on the same cockpit: Signal, Void and Copper](../../assets/screenshots/dashboard/dashboard-appearance-palettes.png)
+
+**Object styles** — left to right: **Glass**, **Console**, **Brutal**. The
+colours are identical in all three; what changes is the frame, the fill and the
+corners.
+
+![Three object styles on the same cockpit: Glass, Console and Brutal](../../assets/screenshots/dashboard/dashboard-appearance-styles.png)
+
+**Densities** — left to right: **Compact**, **Normal**, **Roomy**. Same colour,
+same shape, different amount of room. Compact fits more on the screen at once;
+Roomy is easier to read from further away.
+
+![Three densities on the same cockpit: Compact, Normal and Roomy](../../assets/screenshots/dashboard/dashboard-appearance-density.png)
+
 The meaning of a colour never changes: PV stays the warm one, battery the green
 one, grid the violet one, and a blocked write stays red on every palette, at
 every shape and at every density.
