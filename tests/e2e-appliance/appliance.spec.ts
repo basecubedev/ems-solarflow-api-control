@@ -2,7 +2,7 @@
 // Appliance Manager UI journeys against the deterministic test server.
 // Every assertion waits on a locator or a response, never on a fixed timeout.
 import { expect, test } from "@playwright/test";
-import { PASSWORD, PUBLIC_KEY, openView, resetAppliance, setMode, signIn } from "./helpers";
+import { PASSWORD, PUBLIC_KEY, openView, parkAtBottom, resetAppliance, setMode, signIn } from "./helpers";
 
 // Playwright gives every test its own browser context, so localStorage and
 // cookies start empty; only the shared server state needs resetting.
@@ -167,16 +167,18 @@ test.describe("the two-second poll", () => {
     expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(parked);
   });
 
+  // The park is a key press here, not a window.scrollTo, because focusing the
+  // control first is what this test is about: in Firefox that focus leaves a
+  // scroll-into-view pending, and the next programmatic scroll is undone by it
+  // a frame later -- fifteen milliseconds in, two seconds before the poll this
+  // test is named after has run once. Real input is not undone, so parkAtBottom
+  // parks the way the reader whose position this protects would.
   test("a control deep in the page does not pull the page to it", async ({ page }) => {
     await signIn(page);
     await openView(page, "access");
     await page.locator('[data-test="key-add"]').focus();
 
-    const parked = await page.evaluate(() => {
-      window.scrollTo(0, document.body.scrollHeight);
-      return Math.round(window.scrollY);
-    });
-    expect(parked).toBeGreaterThan(0);
+    const parked = await parkAtBottom(page);
 
     await page.waitForResponse((response) => response.url().includes("/api/operations"));
     await page.waitForResponse((response) => response.url().includes("/api/operations"));

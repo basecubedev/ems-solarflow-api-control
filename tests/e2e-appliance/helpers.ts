@@ -31,6 +31,27 @@ export async function openView(page: Page, view: string) {
   await expect(page.locator(`[data-test="nav-${view}"]`)).toHaveAttribute("aria-current", "page");
 }
 
+// Park the page at its bottom the way a reader does, and read back where it
+// actually came to rest. A programmatic window.scrollTo is not the same act: a
+// scroll-into-view -- the one focus() performs when it has to bring its target
+// on screen -- stays pending in Gecko until the next reflow, and it is applied
+// on top of the next programmatic scroll, one frame later. A park made that way
+// is silently undone before anything under test has run, and the position the
+// caller wrote down was never the position of the page. A key press is real
+// input, it is not undone in either engine, and expect.poll waits for the
+// scroll itself rather than for a clock. The caller has to leave focus
+// somewhere that does not consume End -- a text field would take it as a caret
+// move and the page would not scroll at all, which the poll then reports.
+export async function parkAtBottom(page: Page) {
+  const bottom = await page.evaluate(() =>
+    Math.round(document.documentElement.scrollHeight - window.innerHeight),
+  );
+  expect(bottom).toBeGreaterThan(0);
+  await page.keyboard.press("End");
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(bottom);
+  return bottom;
+}
+
 export async function setMode(page: Page, mode: "basic" | "expert") {
   await page.locator(`#mode-${mode}`).click();
   await expect(page.locator(`#mode-${mode}`)).toHaveAttribute("aria-pressed", "true");
