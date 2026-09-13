@@ -307,7 +307,10 @@ def test_muted_copy_stays_readable_on_the_surface_it_sits_on(surface):
     share = theming_contracts.mix_share(base["--tone-inner"])
     failures = {}
     for name, tokens in palettes.items():
-        read = lambda token: tokens.get(token, base.get(token))
+
+        def read(token, tokens=tokens):
+            return tokens.get(token, base.get(token))
+
         ground = theming_contracts.channels(read("--bg"))
         light = theming_contracts.channels(read("--text"))
         inner = tuple(light[i] * share + ground[i] * (1 - share) for i in range(3))
