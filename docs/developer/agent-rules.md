@@ -76,6 +76,24 @@ Where the deployment shape prevents a real import, a copy plus a contract test
 comparing the blocks is the accepted substitute — the test is what makes it one
 source rather than three.
 
+How far a surface sits off the ground is one of those shared values, and there
+are four of them: `--tone-well` is the page's own ground showing through
+something cut into a surface, `--tone-card` is anything that sits on the page,
+`--tone-inner` is anything that sits on one of those, and `--tone-hover` is
+either of them under the pointer. A rule names one. Tinting one is how a surface
+says something about itself — `color-mix(in srgb, var(--grid) 5%,
+var(--tone-card))` is a card that is about the grid meter — but choosing the
+level is not a rule's decision to make.
+
+The prohibited pattern is a fill written into a rule: `color-mix(in srgb,
+var(--veil) 3.5%, transparent)` and its forty relatives. Each is invisible on
+its own and they are ruinous together — measured on the cockpit's Control view,
+they turned twenty painted surfaces into thirteen tones two units apart, which
+is a page with no levels at all and reads as a haze. A container that only holds
+things — a rail, a tab bar, a wrapper — paints nothing and is separated by its
+frame and its spacing; painting it is how a page grows a tone for something that
+is not an object.
+
 ### Workflow ownership invariant
 
 An artifact may enter a workflow cleanup scope only through one of these

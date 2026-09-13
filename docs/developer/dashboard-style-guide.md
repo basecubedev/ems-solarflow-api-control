@@ -13,7 +13,7 @@ a tenth of a second; the rules are short enough to follow by hand.
 
 | Axis | Attribute | What a rule must do |
 | --- | --- | --- |
-| Palette | `data-theme` | take every colour from a token. No literal outside a plain white or black veil. |
+| Palette | `data-theme` | take every colour from a token. No literal: a film that lifts a surface is built from `--veil`, the palette's own light. |
 | Object style | `data-style` | name the corner's *role* -- `--o-surface-radius`, `--o-card-radius`, `--o-control-radius`, `--o-inner-radius`, `--o-pill-radius`. Never a pixel count, never `999px`. |
 | Density | `data-density` | multiply every distance: `padding: calc(8px * var(--d))`, and the same for `gap` and `margin`. |
 
@@ -22,6 +22,36 @@ So do the pill paddings (`--o-badge-pad`, `--o-pill-pad`, `--o-control-pad` and
 the dashboard's own `--o-note-pad`/`--o-fact-pad`) and the pill heights: those
 are fitted to the text they hold, and a density that moved them would undo that
 fit in one setting out of three.
+
+## The four tones
+
+A rule does not decide how far off the ground its surface sits. There are four
+levels, they are shared with Admin and the Appliance Manager, and a rule names
+one:
+
+| Token | What it is | Where it lands |
+| --- | --- | --- |
+| `--tone-well` | the page's ground showing through something cut into a surface | the Live Flow canvas, a chart, a text area, an input, a log pane |
+| `--tone-card` | anything that sits on the page | a panel, a stage card, a device card, a modal, a control in the topbar |
+| `--tone-inner` | anything that sits on one of those | a fact tile, a chip, a row, a button on a card |
+| `--tone-hover` | either of them under the pointer | |
+
+They are opaque — mixed into `--bg` rather than laid over it — so a fact tile is
+the same tone two levels deep or four, and a palette's `--glow` cannot raise a
+card by half a step on its way past.
+
+Tinting a tone is how a surface says something about itself:
+`color-mix(in srgb, var(--grid) 5%, var(--tone-card))` is a card that is about
+the grid meter, and an accent gradient over `var(--tone-card)` is a result chip.
+Mixing your own level is not, and
+`tests/test_shared_design_tokens.py::test_a_rule_names_a_tone_instead_of_inventing_one`
+refuses it. A container that only holds things — `.flow-view-tabs`,
+`.control-context-rail` — paints nothing at all: its frame and its spacing are
+what separate it, and a fill would buy the page a tone for something that is
+not an object.
+
+Measured on the Control view in copper, that is the difference between thirteen
+tones two units apart and three, thirteen apart.
 
 ## Core Layout
 
