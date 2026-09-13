@@ -321,8 +321,16 @@ NESTED_CONTAINERS = {
 }
 
 
-def test_a_container_inside_a_card_recesses_instead_of_lifting():
-    """Their fill is built from --bg, the palette's floor, not from --veil."""
+def test_a_container_inside_a_card_does_not_lift():
+    """A container holds objects; it is not one.
+
+    The first version of this asked for a fill built from --bg, which was the
+    right idea and one level too specific: three of the four now paint nothing
+    at all, which recesses them further than any percentage of --bg could. What
+    is still forbidden is the thing that was actually wrong -- reaching for
+    --veil and coming out brighter than the card the container sits in, so the
+    page grows a tone for something that is not an object.
+    """
 
     blocks = {}
     for selector, body in measure.rules(CSS):
@@ -330,16 +338,21 @@ def test_a_container_inside_a_card_recesses_instead_of_lifting():
         # several of these to change their layout -- so collect them all rather
         # than letting the last one win, which is how this first read nothing.
         blocks.setdefault(" ".join(selector.split()), []).append(body)
+    allowed = {"transparent", "none", "var(--tone-well)"}
     lifting = {}
     for selector, what in NESTED_CONTAINERS.items():
         bodies = blocks.get(selector)
         assert bodies, f"{selector} is gone, so this contract reads nothing: {what}"
         painted = re.findall(r"(?<![a-z-])background:\s*([^;]+)", " ".join(bodies))
-        assert painted, f"{selector} paints nothing any more: {what}"
+        assert painted, f"{selector} declares no background any more: {what}"
         fill = " ".join(" ".join(painted).split())
-        if "var(--veil)" in fill or "var(--bg)" not in fill:
-            lifting[selector] = fill[:90]
-    assert lifting == {}, f"containers lifting instead of recessing: {lifting}"
+        # What is left once the object-style wrapper and its `none` layer are
+        # taken off is the fill this surface answers for.
+        own = re.sub(r"var\(--o-layers,\s*none\),\s*", "", fill)
+        own = re.sub(r"^var\(--o-fill,\s*(.*)\)$", r"\1", own.strip())
+        if own not in allowed:
+            lifting[selector] = own[:90]
+    assert lifting == {}, f"containers that are surfaces of their own: {lifting}"
 
 
 # --- the object style ------------------------------------------------------

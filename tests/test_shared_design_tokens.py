@@ -65,9 +65,10 @@ def test_a_shared_token_has_the_same_value_everywhere(declared):
 
     The comparison is pairwise rather than over the three-way intersection: a
     token Admin and the Manager both read is shared between them whether or not
-    the Dashboard has heard of it, and `--surface-sunken` is exactly that -- the
-    derived tokens reached the Manager with the palettes and the Dashboard has
-    none of them yet.
+    the Dashboard has heard of it. `--on-accent` is exactly that, and
+    `--surface-sunken` was until the four tones replaced it -- two names for a
+    recess, both translucent, so a sunken surface landed on a different tone
+    depending on what it sank into.
     """
 
     drift = {}
@@ -221,6 +222,58 @@ def styled():
         for surface, path in SURFACES.items()
     }
     return {surface: styles for surface, styles in found.items() if styles}
+
+
+# A rule may draw on a surface -- a sheen, a hairline grid, an accent tint --
+# but the surface itself is one of four named tones. What is on this list is not
+# a surface: `select option` is the native dropdown popup, which the browser
+# paints in its own chrome and CSS reaches only to keep it from rendering black
+# text on a white ground.
+NOT_A_SURFACE = {
+    "admin": set(),
+    "appliance": set(),
+    "dashboard": {"select option, select optgroup"},
+}
+
+
+@pytest.mark.parametrize("surface", sorted(SURFACES))
+def test_a_rule_names_a_tone_instead_of_inventing_one(surface):
+    """Four tones, and nothing else decides how far from the ground a surface is.
+
+    This is the contract the appearance work was actually missing. Every rule
+    was free to mix its own fill, and they did: forty-one different neutral
+    lifts in the Dashboard alone, at 2.2%, 2.5%, 2.6%, 3%, 3.2%, 3.5%, 3.6%,
+    3.8%, 4%, 4.5%, 5%, 5.5% and 16%. No two of those are distinguishable and
+    all of them together were, measured on the Control view in copper, twenty
+    painted surfaces resolving to thirteen tones two units apart -- which is
+    what "it is not clear" looks like when you count it.
+
+    Tinting a tone is still allowed and is how a card says something about
+    itself: `color-mix(in srgb, var(--grid) 5%, var(--tone-card))` is a card
+    that is about the grid meter. What is forbidden is deciding the level.
+    """
+
+    css = (ROOT / SURFACES[surface]).read_text(encoding="utf-8")
+    invented = {
+        selector: base
+        for selector, base in theming_contracts.surface_fills(css)
+        if theming_contracts.invents_a_tone(base) and selector not in NOT_A_SURFACE[surface]
+    }
+    assert invented == {}, f"{surface} rules mixing their own surface level: {invented}"
+
+
+@pytest.mark.parametrize("surface", sorted(SURFACES))
+def test_the_four_tones_are_the_same_four_everywhere(surface):
+    """A tone is a product-wide level, so the Manager's inner tile and the
+    cockpit's have to be the same distance off the ground. The values are
+    compared across surfaces by the shared-token contract above; this one is
+    here so a surface cannot quietly stop declaring one and fall back to
+    whatever `var()` does with an unknown name, which is nothing."""
+
+    css = (ROOT / SURFACES[surface]).read_text(encoding="utf-8")
+    declared = theming_contracts.base_tokens(css)
+    missing = [name for name in theming_contracts.TONES if name not in declared]
+    assert missing == [], f"{surface} declares no {missing}"
 
 
 @pytest.mark.parametrize("surface", sorted(SURFACES))
