@@ -35,7 +35,15 @@ MUTED_MIN_CONTRAST = 4.5
 # A veil of plain white or black lifts or sinks a surface by the same amount on
 # any dark ground, so it survives a palette swap. Anything else is a hue chosen
 # against one background that will be wrong on the next.
+#
+# Only half of that reasoning held up. Black still sinks a surface toward every
+# palette's own ground, because every palette's ground is dark. White lifts it
+# toward a colour no palette has: measured on the cockpit in copper, the films
+# were grey where the whole page was warm. So white is no longer a way out --
+# see `white_films` -- and a rule that wants to lift something reads `--veil`,
+# which is the palette's own light.
 NEUTRAL = re.compile(r"rgba?\(\s*(?:255,\s*255,\s*255|0,\s*0,\s*0)\b|#000\b|#fff\b", re.I)
+PLAIN_WHITE = re.compile(r"rgba?\(\s*255\s*,\s*255\s*,\s*255\b|#fff(?:fff)?\b", re.I)
 COLOUR = re.compile(r"#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)|hsla?\([^)]*\)")
 
 # Density is the third axis, and unlike the other two it is a single number:
@@ -160,6 +168,26 @@ def hued_literals(css):
             for literal in COLOUR.findall(value):
                 if not NEUTRAL.search(literal):
                     found.append((" ".join(selector.split())[:44], literal.strip()))
+    return found
+
+
+def white_films(css):
+    """Every place a rule still paints plain white on a themed surface.
+
+    Returns `(selector, property, literal)`. A palette block is not a rule, so
+    a palette naming `#ffffff` as its own `--text` -- which `contrast` does, on
+    purpose -- is not counted here.
+    """
+
+    found = []
+    for selector, block in rules(css):
+        for declaration in block.split(";"):
+            if ":" not in declaration:
+                continue
+            prop, _, value = declaration.partition(":")
+            for literal in COLOUR.findall(value):
+                if PLAIN_WHITE.search(literal):
+                    found.append((" ".join(selector.split())[:44], prop.strip(), literal.strip()))
     return found
 
 

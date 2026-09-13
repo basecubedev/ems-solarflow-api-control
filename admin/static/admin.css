@@ -25,9 +25,19 @@
      reused by every content block across Setup and Maintenance. */
   --surface-raised: rgba(255, 255, 255, 0.035);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.28);
+  --glow: radial-gradient(1200px 700px at 80% -10%, rgba(56, 213, 255, 0.08), transparent);
   /* Derived from the palette above, declared once: a custom property resolves
      where it is used, so these follow whichever theme is active without being
      written out twelve times. That is also why no theme may redefine one. */
+  /* The colour a film is made of. A rule that lifts a surface a little -- a
+     hover, an inset highlight, the inside of a fact tile -- used to reach for
+     plain white, and the reason was sound: white lifts any dark ground by the
+     same amount, so it survives a palette swap where a chosen hue would not.
+     It survives it without ever joining it, though. On copper the lift was
+     grey while everything else on the page was warm, and there were 106 of
+     them. --text is the palette's own light, tinted in eleven of the twelve,
+     so a film built from it belongs to the ground it is lying on. */
+  --veil: var(--text);
   --surface-sunken: color-mix(in srgb, var(--bg) 50%, transparent);
   --surface-sunken-strong: color-mix(in srgb, var(--bg) 70%, transparent);
   --surface-overlay: color-mix(in srgb, var(--bg) 82%, transparent);
@@ -94,6 +104,7 @@
   --ink-shadow: rgba(0, 0, 0, 0.42);
   --surface-raised: rgba(255, 255, 255, 0.035);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.28);
+  --glow: radial-gradient(1200px 700px at 80% -10%, rgba(56, 213, 255, 0.08), transparent);
 }
 
 :root[data-theme="instrument"] {  /* muted laboratory greys */
@@ -116,6 +127,7 @@
   --ink-shadow: rgba(0, 0, 0, 0.40);
   --surface-raised: rgba(255, 255, 255, 0.025);
   --card-lift: 0 6px 18px rgba(0, 0, 0, 0.30);
+  --glow: none;
 }
 
 :root[data-theme="graphite"] {  /* neutral, no hue in the ground */
@@ -138,6 +150,7 @@
   --ink-shadow: rgba(0, 0, 0, 0.46);
   --surface-raised: rgba(255, 255, 255, 0.03);
   --card-lift: 0 2px 6px rgba(0, 0, 0, 0.34);
+  --glow: none;
 }
 
 :root[data-theme="fjord"] {  /* cool nordic slate */
@@ -160,6 +173,7 @@
   --ink-shadow: rgba(0, 0, 0, 0.34);
   --surface-raised: rgba(236, 239, 244, 0.045);
   --card-lift: 0 8px 20px rgba(0, 0, 0, 0.28);
+  --glow: none;
 }
 
 :root[data-theme="blueprint"] {  /* drawing-office blue */
@@ -182,6 +196,7 @@
   --ink-shadow: rgba(0, 0, 0, 0.42);
   --surface-raised: rgba(180, 220, 255, 0.05);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.35);
+  --glow: none;
 }
 
 :root[data-theme="indigo"] {  /* deep violet-blue */
@@ -204,6 +219,7 @@
   --ink-shadow: rgba(0, 0, 0, 0.48);
   --surface-raised: rgba(220, 225, 255, 0.045);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.40);
+  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(255, 180, 84, 0.06), transparent);
 }
 
 :root[data-theme="viridian"] {  /* green instrument panel */
@@ -226,6 +242,7 @@
   --ink-shadow: rgba(0, 0, 0, 0.44);
   --surface-raised: rgba(220, 255, 238, 0.04);
   --card-lift: 0 8px 20px rgba(0, 0, 0, 0.36);
+  --glow: none;
 }
 
 :root[data-theme="copper"] {  /* warm metal */
@@ -248,6 +265,7 @@
   --ink-shadow: rgba(0, 0, 0, 0.50);
   --surface-raised: rgba(255, 242, 220, 0.035);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.42);
+  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(226, 138, 63, 0.09), transparent);
 }
 
 :root[data-theme="oxide"] {  /* rust and iron */
@@ -270,6 +288,7 @@
   --ink-shadow: rgba(0, 0, 0, 0.52);
   --surface-raised: rgba(255, 230, 210, 0.04);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.46);
+  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(255, 122, 69, 0.07), transparent);
 }
 
 :root[data-theme="phosphor"] {  /* green CRT */
@@ -292,6 +311,7 @@
   --ink-shadow: rgba(255, 176, 60, 0.20);
   --surface-raised: rgba(255, 176, 60, 0.05);
   --card-lift: 0 0 0 transparent;
+  --glow: none;
 }
 
 :root[data-theme="contrast"] {  /* maximum separation */
@@ -314,6 +334,7 @@
   --ink-shadow: rgba(255, 255, 255, 0.30);
   --surface-raised: rgba(255, 255, 255, 0.07);
   --card-lift: 0 0 0 transparent;
+  --glow: none;
 }
 
 :root[data-theme="void"] {  /* near-black, light carried by the accent */
@@ -336,6 +357,7 @@
   --ink-shadow: rgba(255, 255, 255, 0.30);
   --surface-raised: rgba(255, 255, 255, 0.045);
   --card-lift: 0 10px 30px rgba(255, 255, 255, 0.16);
+  --glow: none;
 }
 
 /* --- Object treatments --------------------------------------------------
@@ -524,9 +546,14 @@ body {
   margin: 0;
   min-height: 100vh;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  background:
-   radial-gradient(1200px 700px at 80% -10%, color-mix(in srgb, var(--output) 8%, transparent), transparent),
-    linear-gradient(140deg, var(--bg), var(--bg2) 52%, var(--bg));
+  /* The ground is the palette's own --bg, and nothing else is laid over it.
+     It used to be a gradient from --bg through --bg2 and back, under two
+     full-viewport accent washes. Measured on the cockpit in copper, that lifted
+     the darkest tone on the page from L12 -- which is what --bg actually is --
+     to L17.6, and left `void` without a single black pixel to its name. A wash
+     is now something a palette chooses (--glow): four carry one, eight set it
+     to none, which is the proportion the demo arrived at. */
+  background: var(--glow), var(--bg);
   color: var(--text);
   line-height: 1.5;
 }
@@ -609,7 +636,7 @@ body {
 .admin-view[hidden] { display: none; }
 .admin-subtitle { margin: calc(6px * var(--d)) 0 0; color: var(--muted); font-size: 13px; max-width: 62ch; }
 code {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--veil) 6%, transparent);
   padding: .1rem .35rem;
   border-radius: .25rem;
   font-size: .9em;
@@ -974,7 +1001,7 @@ code {
   padding: calc(10px * var(--d)) calc(12px * var(--d));
   color: var(--danger);
   font-size: 12px;
-  background: var(--o-layers, none), var(--o-fill, rgba(255, 255, 255, 0.03));
+  background: var(--o-layers, none), var(--o-fill, color-mix(in srgb, var(--veil) 3%, transparent));
   box-shadow: var(--o-shadow, 0 0 0 transparent);
   border-left-width: calc(var(--o-border) + var(--o-rail));
   border-bottom-width: max(var(--o-border), var(--o-divider));
@@ -1027,7 +1054,7 @@ code {
   margin: calc(6px * var(--d)) 0 0;
   max-height: 220px;
   overflow: auto;
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--veil) 3%, transparent);
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
   padding: calc(8px * var(--d));
@@ -1180,7 +1207,7 @@ code {
   margin: calc(6px * var(--d)) 0 0;
   max-height: 240px;
   overflow: auto;
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--veil) 3%, transparent);
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
   padding: calc(8px * var(--d));
@@ -1190,14 +1217,14 @@ code {
 }
 .stage-actions { margin-left: auto; display: flex; align-items: center; gap: calc(8px * var(--d)); }
 .refresh-button {
-  background: rgba(255, 255, 255, 0.06);
+  background: color-mix(in srgb, var(--veil) 6%, transparent);
   color: var(--text);
   border: 1px solid var(--border);
   min-height: 28px;
   padding: 0 calc(12px * var(--d));
   font-size: 11px;
 }
-.refresh-button:hover { filter: none; background: rgba(255, 255, 255, 0.12); }
+.refresh-button:hover { filter: none; background: color-mix(in srgb, var(--veil) 12%, transparent); }
 
 .networks-warnings { margin-bottom: calc(12px * var(--d)); }
 .network-warning {
@@ -1296,7 +1323,7 @@ code {
   color: var(--text);
   border-radius: var(--o-inner-radius);
 }
-.add-devices-details > summary:hover { background: rgba(255, 255, 255, 0.05); }
+.add-devices-details > summary:hover { background: color-mix(in srgb, var(--veil) 5%, transparent); }
 
 /* Gateway candidate probe (runs automatically with network detection). */
 .gateway-probe-hint { margin: 0 0 calc(12px * var(--d)); color: var(--muted2); font-size: 11px; max-width: 62ch; }
@@ -1371,7 +1398,7 @@ code {
 .primary-button.is-cancel.is-scanning { cursor: pointer; }
 .primary-button.is-cancel {
   background: linear-gradient(180deg, var(--danger), color-mix(in srgb, var(--danger) 45%, var(--bg)));
-  color: #fff;
+  color: var(--text);
 }
 
 .scan-status { margin: calc(12px * var(--d)) 0 0; color: var(--muted); font-size: 12px; }
@@ -1530,7 +1557,7 @@ code {
   padding: calc(8px * var(--d)) calc(10px * var(--d));
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
-  background: rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--veil) 2%, transparent);
 }
 .prep-source-row.is-disabled { opacity: 0.6; }
 .prep-source-rank {
@@ -1576,7 +1603,7 @@ code {
   padding: calc(10px * var(--d)) calc(12px * var(--d));
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--veil) 3%, transparent);
 }
 .prep-config-status {
   display: flex;
@@ -1655,7 +1682,7 @@ code {
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
   padding: calc(10px * var(--d)) calc(12px * var(--d));
-  background: var(--o-layers, none), var(--o-fill, rgba(255, 255, 255, 0.02));
+  background: var(--o-layers, none), var(--o-fill, color-mix(in srgb, var(--veil) 2%, transparent));
   display: flex;
   flex-direction: column;
   gap: calc(8px * var(--d));
@@ -1676,7 +1703,7 @@ code {
   padding: calc(10px * var(--d)) calc(12px * var(--d));
 }
 .proposal-safety { display: flex; flex-wrap: wrap; gap: calc(6px * var(--d)); }
-.proposal-safety-pill { background: rgba(255, 255, 255, 0.04); color: var(--muted); }
+.proposal-safety-pill { background: color-mix(in srgb, var(--veil) 4%, transparent); color: var(--muted); }
 .proposal-warnings { display: flex; flex-wrap: wrap; gap: calc(6px * var(--d)); }
 .proposal-warning-pill { color: var(--pv); border-color: color-mix(in srgb, var(--pv) 45%, var(--border)); }
 .proposal-action { display: flex; flex-wrap: wrap; align-items: center; gap: calc(8px * var(--d)); }
@@ -1686,7 +1713,7 @@ code {
   margin: calc(8px * var(--d)) 0 0;
   padding: calc(8px * var(--d));
   border-radius: var(--o-inner-radius);
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--veil) 3%, transparent);
   font-size: 11px;
   overflow-x: auto;
 }
@@ -1715,7 +1742,7 @@ code {
   font-size: 11px;
   font-weight: 700;
 }
-.pill.muted { background: rgba(255, 255, 255, 0.04); color: var(--muted); }
+.pill.muted { background: color-mix(in srgb, var(--veil) 4%, transparent); color: var(--muted); }
 
 .results-empty {
   border: var(--o-border) dashed var(--border);

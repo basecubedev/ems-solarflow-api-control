@@ -2,7 +2,7 @@
 // Appliance Manager UI journeys against the deterministic test server.
 // Every assertion waits on a locator or a response, never on a fixed timeout.
 import { expect, test } from "@playwright/test";
-import { PASSWORD, PUBLIC_KEY, openView, resetAppliance, setMode, signIn } from "./helpers";
+import { PASSWORD, PUBLIC_KEY, openView, parkAtBottom, resetAppliance, setMode, signIn } from "./helpers";
 
 // Playwright gives every test its own browser context, so localStorage and
 // cookies start empty; only the shared server state needs resetting.
@@ -146,6 +146,18 @@ test.describe("the two-second poll", () => {
     await expect(button).toBeFocused();
   });
 
+  // Every test below parks the page with parkAtBottom, which presses a key.
+  // None of them parks with window.scrollTo any more, and the reason is not
+  // style: in Firefox a focus() that had to bring its target on screen leaves a
+  // scroll-into-view pending, and that pending scroll is applied on top of the
+  // next programmatic scroll one frame later. A park made that way is undone
+  // fifteen milliseconds in -- two seconds before the poll these tests are
+  // named after has run once -- and the number the test wrote down was never
+  // where the page was. Real input is not undone, in either engine. Only one of
+  // these tests focuses a control first, so only that one used to fail; the
+  // other three were passing because nothing had armed the trap, which is luck
+  // rather than proof.
+  //
   // Restoring focus has to be invisible. Moving focus on a deliberate view
   // change may scroll -- landing at the top of the page you just opened is
   // right -- but re-taking it after a rebuild must not, or the page walks back
@@ -155,11 +167,7 @@ test.describe("the two-second poll", () => {
     await openView(page, "access");
     await expect(page.locator("#main .page-title")).toBeFocused();
 
-    const parked = await page.evaluate(() => {
-      window.scrollTo(0, document.body.scrollHeight);
-      return Math.round(window.scrollY);
-    });
-    expect(parked).toBeGreaterThan(0);
+    const parked = await parkAtBottom(page);
 
     await page.waitForResponse((response) => response.url().includes("/api/operations"));
     await page.waitForResponse((response) => response.url().includes("/api/operations"));
@@ -172,11 +180,7 @@ test.describe("the two-second poll", () => {
     await openView(page, "access");
     await page.locator('[data-test="key-add"]').focus();
 
-    const parked = await page.evaluate(() => {
-      window.scrollTo(0, document.body.scrollHeight);
-      return Math.round(window.scrollY);
-    });
-    expect(parked).toBeGreaterThan(0);
+    const parked = await parkAtBottom(page);
 
     await page.waitForResponse((response) => response.url().includes("/api/operations"));
     await page.waitForResponse((response) => response.url().includes("/api/operations"));
@@ -188,9 +192,9 @@ test.describe("the two-second poll", () => {
   // Every section, not only the one that happens to be tall enough today. The
   // viewport is shrunk so that each page scrolls, and the list comes from the
   // navigation rather than from here, so a section added later is covered
-  // without anyone remembering to add it. The parked > 0 check is what keeps
-  // this honest: a page that stops being scrollable would otherwise pass
-  // without ever exercising the guard.
+  // without anyone remembering to add it. parkAtBottom refuses a page that does
+  // not scroll, which is what keeps this honest: a section that stopped being
+  // taller than 360px would otherwise pass without exercising the guard once.
   test("no section walks the page while the poll rebuilds it", async ({ page }) => {
     await page.setViewportSize({ width: 1180, height: 360 });
     await signIn(page);
@@ -202,11 +206,7 @@ test.describe("the two-second poll", () => {
 
     for (const view of views) {
       await openView(page, view);
-      const parked = await page.evaluate(() => {
-        window.scrollTo(0, document.body.scrollHeight);
-        return Math.round(window.scrollY);
-      });
-      expect(parked, `${view} does not scroll at 360px, so it proves nothing`).toBeGreaterThan(0);
+      const parked = await parkAtBottom(page, `${view} at 360px`);
 
       await page.waitForResponse((response) => response.url().includes("/api/operations"));
 
@@ -217,11 +217,7 @@ test.describe("the two-second poll", () => {
   test("opening another section still starts at the top of it", async ({ page }) => {
     await signIn(page);
     await openView(page, "access");
-    const parked = await page.evaluate(() => {
-      window.scrollTo(0, document.body.scrollHeight);
-      return Math.round(window.scrollY);
-    });
-    expect(parked).toBeGreaterThan(0);
+    await parkAtBottom(page);
 
     // The rebuild keeps the position; a view change is not a rebuild, it is a
     // move, and reading a page you just opened starts at its heading.

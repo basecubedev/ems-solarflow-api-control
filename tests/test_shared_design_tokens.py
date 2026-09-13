@@ -125,6 +125,82 @@ def test_the_stylesheet_parses(surface):
     assert depth == 0, f"{surface}: {depth} of {opened} rules are never closed"
 
 
+# --- the ground ------------------------------------------------------------
+#
+# The one surface every palette is judged against, and the one that used to be
+# nobody's: each stylesheet blended --bg into --bg2 and laid its own accent
+# washes over that, so the colour a palette names as its ground was never the
+# colour on screen.
+
+GROUND = "var(--glow), var(--bg)"
+
+
+@pytest.mark.parametrize("surface", sorted(SURFACES))
+def test_the_ground_is_the_palette_and_a_wash_the_palette_chose(surface):
+    """`body` paints --bg, and over it only what the palette asked for.
+
+    Nothing about the old ground failed loudly. Measured on the cockpit in
+    copper, it lifted the darkest tone on the page to L17.6 where --bg is
+    L12.1, and left `void` -- a palette whose whole idea is #000 -- without a
+    single black pixel. The wash moved into --glow, which a palette sets like
+    any other colour, so a palette that wants a flat ground can have one; eight
+    of the twelve do.
+    """
+
+    css = re.sub(r"/\*.*?\*/", "", (ROOT / SURFACES[surface]).read_text(encoding="utf-8"), flags=re.S)
+    rule = re.search(r"^body \{(.*?)^\}", css, re.S | re.M)
+    assert rule, f"{surface}: no body rule to read"
+    painted = [
+        " ".join(value.split())
+        for value in re.findall(r"(?<![a-z-])background:\s*([^;]+);", rule.group(1))
+    ]
+    assert painted == [GROUND], f"{surface}: body paints {painted}, not [{GROUND!r}]"
+
+
+@pytest.mark.parametrize("surface", sorted(SURFACES))
+def test_a_wash_is_a_wash_and_not_a_second_ground(surface):
+    """--glow is laid over --bg, so it has to be something you can see through.
+
+    A palette that put a solid colour there would cover the ground instead of
+    tinting it, and --bg would quietly stop meaning anything on that palette --
+    while still passing every contract that reads --bg as a value.
+    """
+
+    css = (ROOT / SURFACES[surface]).read_text(encoding="utf-8")
+    palettes = theming_contracts.themes(css)
+    assert palettes, f"{surface} declares no palettes"
+    solid = {
+        name: tokens["--glow"]
+        for name, tokens in palettes.items()
+        if tokens["--glow"] != "none" and not tokens["--glow"].startswith("radial-gradient(")
+    }
+    assert solid == {}, f"{surface}: palettes whose wash is not a gradient: {solid}"
+
+
+@pytest.mark.parametrize("surface", sorted(SURFACES))
+def test_no_rule_lays_plain_white_on_a_palette(surface):
+    """A film takes its colour from the palette it is lying on.
+
+    `hued_literals` let a rule keep a literal as long as it was neutral, and
+    the reasoning was half right: black sinks a surface toward every palette's
+    own ground, because every ground here is dark. White lifts it toward a
+    colour no palette has. There were 106 of them -- hovers, inset highlights,
+    the inside of a fact tile -- and on copper they measured grey while the
+    rest of the page was warm. They read `--veil` now, which is the palette's
+    own light and is tinted in eleven of the twelve.
+
+    This is one test for three stylesheets rather than three, because there is
+    nothing surface-specific left to allow: the count is zero everywhere.
+    """
+
+    css = (ROOT / SURFACES[surface]).read_text(encoding="utf-8")
+    remaining = theming_contracts.white_films(css)
+    assert remaining == [], (
+        f"{surface}: {len(remaining)} rules still paint plain white: "
+        f"{sorted(set(remaining))[:6]}"
+    )
+
+
 # --- the object styles -----------------------------------------------------
 #
 # The second axis. A palette says what things are made of; an object style says

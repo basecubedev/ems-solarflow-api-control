@@ -291,6 +291,57 @@ def test_no_rule_mixes_its_own_colour():
     )
 
 
+# --- nesting ---------------------------------------------------------------
+#
+# A container that sits inside a card and holds things is a well, not a second
+# card. Lifting it lays a film on a surface that already carries one, and the
+# deeper it sits the brighter it gets -- which is backwards, and is what made
+# the cockpit read as milky on a laptop LCD whatever palette was chosen.
+#
+# Measured on the Control view in copper. A card is --panel over --bg, L24.8.
+# The containers nested inside one rendered at:
+#
+#     .flow-wrap            39.9 -> 24.1
+#     .control-context-rail 42.5 -> 18.1
+#     .flow-view-tabs       38.0 -> 31.0
+#
+# and the tiles they hold came down with them: .control-context-item 46.7 ->
+# 22.2. The ground is 15.6 and the one deliberately bright thing on the view,
+# the result tile, is 58.2 with a chroma of 41 -- an accent, not a veil, which
+# is why it is not in this list.
+#
+# The list is written out because the stylesheet has no way of saying "this is
+# inside a card". A fifth container added later will not be caught here; it
+# will be caught by looking at the page, the way these four were.
+NESTED_CONTAINERS = {
+    ".flow-wrap": "the Live Flow diagram's well, inside .flow-panel",
+    ".control-context-rail": "the Control view's context strip, inside a stage card",
+    ".energy-context-rail": "the same strip on the Energy view",
+    ".flow-view-tabs": "the view switcher, a track holding its buttons",
+}
+
+
+def test_a_container_inside_a_card_recesses_instead_of_lifting():
+    """Their fill is built from --bg, the palette's floor, not from --veil."""
+
+    blocks = {}
+    for selector, body in measure.rules(CSS):
+        # A selector can carry more than one rule -- the media queries restate
+        # several of these to change their layout -- so collect them all rather
+        # than letting the last one win, which is how this first read nothing.
+        blocks.setdefault(" ".join(selector.split()), []).append(body)
+    lifting = {}
+    for selector, what in NESTED_CONTAINERS.items():
+        bodies = blocks.get(selector)
+        assert bodies, f"{selector} is gone, so this contract reads nothing: {what}"
+        painted = re.findall(r"(?<![a-z-])background:\s*([^;]+)", " ".join(bodies))
+        assert painted, f"{selector} paints nothing any more: {what}"
+        fill = " ".join(" ".join(painted).split())
+        if "var(--veil)" in fill or "var(--bg)" not in fill:
+            lifting[selector] = fill[:90]
+    assert lifting == {}, f"containers lifting instead of recessing: {lifting}"
+
+
 # --- the object style ------------------------------------------------------
 
 STYLE_STORAGE_KEY = "ems-dashboard-style"
