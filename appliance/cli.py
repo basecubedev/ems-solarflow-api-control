@@ -13,7 +13,7 @@ import json
 import os
 import sys
 
-from appliance.agent import AgentHandlers, AgentServer, operation_names
+from appliance.agent import AgentHandlers, operation_names, serve_agent
 from appliance.agent_client import AgentCallError, AgentClient, AgentUnavailableError, InProcessAgentClient
 from appliance.auth import AuthError, AuthStore
 from appliance.config import load_config
@@ -537,14 +537,7 @@ def command_agent(args):
     restored = services.network.recover_revert()
     if restored:
         print(f"restored the previous WLAN profile {restored}")
-    server = AgentServer(services, socket_path=args.socket or paths.agent_socket)
-    print(f"appliance agent listening on {server.socket_path}")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+    serve_agent(services, args.socket or paths.agent_socket)
     return EXIT_OK
 
 
