@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 from tests import theming_contracts
-from tests.theming_contracts import SHAPE_PREFIX
+from tests.theming_contracts import MUTED_MIN_CONTRAST, SHAPE_PREFIX, TEXT_MIN_CONTRAST
 
 pytestmark = [pytest.mark.contract]
 
@@ -274,6 +274,48 @@ def test_the_four_tones_are_the_same_four_everywhere(surface):
     declared = theming_contracts.base_tokens(css)
     missing = [name for name in theming_contracts.TONES if name not in declared]
     assert missing == [], f"{surface} declares no {missing}"
+
+
+
+@pytest.mark.parametrize("surface", sorted(SURFACES))
+def test_muted_copy_stays_readable_on_the_surface_it_sits_on(surface):
+    """The ground is not where most text lands.
+
+    `test_every_theme_stays_readable` holds --text and --muted against --bg,
+    which is the darkest thing on the page and therefore the easy case. Text
+    sits on a card and, more often, on a tile inside one -- and raising a tone
+    is now a single edit that would quietly take the contrast down with it on
+    every palette at once. So the check is against --tone-inner, the brightest
+    surface ordinary copy sits on.
+
+    --muted2 is deliberately not held to this. It is the faintest of the three
+    tiers, used for a tiny uppercase label beside the value it labels, and it
+    has never cleared 4.5 on a tile in any palette -- 3.0 to 7.4 before the
+    tones and 2.8 to 7.2 after. Writing a floor it does not meet would be a
+    failing test rather than a contract; what this pins is that the tier
+    ordinary copy uses does not join it.
+    """
+
+    css = (ROOT / SURFACES[surface]).read_text(encoding="utf-8")
+    base = theming_contracts.base_tokens(css)
+    palettes = theming_contracts.themes(css)
+    if not palettes:
+        pytest.skip(f"{surface} offers no palettes")
+    # Read the strength out of the token rather than repeating it here. Writing
+    # 0.11 into this test would have made it blind to the one edit it exists to
+    # catch -- raising --tone-inner to 26% left it passing.
+    share = theming_contracts.mix_share(base["--tone-inner"])
+    failures = {}
+    for name, tokens in palettes.items():
+        read = lambda token: tokens.get(token, base.get(token))
+        ground = theming_contracts.channels(read("--bg"))
+        light = theming_contracts.channels(read("--text"))
+        inner = tuple(light[i] * share + ground[i] * (1 - share) for i in range(3))
+        text = theming_contracts.contrast(light, inner)
+        muted = theming_contracts.contrast(theming_contracts.channels(read("--muted")), inner)
+        if text < TEXT_MIN_CONTRAST or muted < MUTED_MIN_CONTRAST:
+            failures[name] = {"text": round(text, 2), "muted": round(muted, 2)}
+    assert failures == {}, f"{surface} palettes that are hard to read on a tile: {failures}"
 
 
 @pytest.mark.parametrize("surface", sorted(SURFACES))

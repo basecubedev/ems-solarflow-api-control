@@ -258,6 +258,21 @@ def surface_fills(css):
     return found
 
 
+def mix_share(value):
+    """How much of the first colour a two-colour `color-mix` carries, as 0..1.
+
+    `--tone-inner` is `color-mix(in srgb, var(--veil) 11%, var(--bg))`, and a
+    test that wants to know how bright a tile is has to read the 11 rather than
+    carry a copy of it -- a copy is exactly what stops it noticing the number
+    changing.
+    """
+
+    found = re.search(r"color-mix\(in srgb,\s*var\(--[a-z0-9-]+\)\s*([\d.]+)%", value)
+    if not found:
+        raise ValueError(f"not a two-colour srgb mix: {value!r}")
+    return float(found.group(1)) / 100
+
+
 def invents_a_tone(base):
     """Whether a base layer mixes its own surface colour instead of naming one.
 
