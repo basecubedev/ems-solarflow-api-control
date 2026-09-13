@@ -20,10 +20,9 @@
   --danger: #ff6b7a;
   --accent: #8b5cf6;
   --accent2: #22d3ee;
-  --surface-raised: rgba(255, 255, 255, 0.035);
   --ink-shadow: rgba(0, 0, 0, 0.42);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.28);
-  --glow: radial-gradient(1200px 700px at 80% -10%, rgba(56, 213, 255, 0.08), transparent);
+  --glow: radial-gradient(1200px 700px at 80% -10%, rgba(56, 213, 255, 0.04), transparent);
   /* Derived from the palette above, declared once: a custom property resolves
      where it is used, so these follow whichever theme is active without being
      written out twelve times. That is also why no theme may redefine one. */
@@ -36,8 +35,33 @@
      them. --text is the palette's own light, tinted in eleven of the twelve,
      so a film built from it belongs to the ground it is lying on. */
   --veil: var(--text);
-  --surface-sunken: color-mix(in srgb, var(--bg) 50%, transparent);
-  --surface-sunken-strong: color-mix(in srgb, var(--bg) 70%, transparent);
+  /* Every tone a surface is allowed to be, and there are four.
+
+     A page is built by choosing one of these, never by inventing a percentage.
+     --tone-well is the ground showing through something cut into a surface;
+     --tone-card is anything that sits on the page; --tone-inner is anything
+     that sits on one of those; --tone-hover is either of them under the
+     pointer. Nothing is a fifth tone.
+
+     It used to be chosen, forty-one different ways. The Dashboard lifted
+     surfaces by 2.2%, 2.5%, 2.6%, 3%, 3.2%, 3.5%, 3.6%, 3.8%, 4%, 4.5%, 5%,
+     5.5% and 16%, and nobody can see the difference between any two of those.
+     What they did together is the whole complaint: measured on the Control
+     view in copper, twenty painted surfaces resolved to thirteen tones a
+     reader can tell apart, and the gap between one and the next was two. The
+     demo these palettes came from shows three, twelve apart. Thirteen tones
+     two units apart is not richness, it is a page with no levels at all --
+     which is exactly what "it is not clear" turned out to mean when counted.
+
+     They are mixed into --bg rather than laid over it as films, so they are
+     opaque: a fact tile is the same tone whether it sits two levels deep or
+     four, and a wash on the ground cannot raise a card by half a step on its
+     way past. That is the property the films did not have, and the reason a
+     card could be one tone at the top of the page and another further down. */
+  --tone-well: var(--bg);
+  --tone-card: color-mix(in srgb, var(--veil) 5.5%, var(--bg));
+  --tone-inner: color-mix(in srgb, var(--veil) 11%, var(--bg));
+  --tone-hover: color-mix(in srgb, var(--veil) 16.5%, var(--bg));
   --surface-overlay: color-mix(in srgb, var(--bg) 82%, transparent);
 
   /* Shape axis, independent of the palette above: a theme says what things are
@@ -91,10 +115,9 @@
   --danger: #ff6b7a;
   --accent: #8b5cf6;
   --accent2: #22d3ee;
-  --surface-raised: rgba(255, 255, 255, 0.035);
   --ink-shadow: rgba(0, 0, 0, 0.42);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.28);
-  --glow: radial-gradient(1200px 700px at 80% -10%, rgba(56, 213, 255, 0.08), transparent);
+  --glow: radial-gradient(1200px 700px at 80% -10%, rgba(56, 213, 255, 0.04), transparent);
 }
 :root[data-theme="instrument"] {  /* muted laboratory greys */
   --bg: #0b0e13;
@@ -113,7 +136,6 @@
   --danger: #e0616f;
   --accent: #6d7fd4;
   --accent2: #58b4dc;
-  --surface-raised: rgba(255, 255, 255, 0.025);
   --ink-shadow: rgba(0, 0, 0, 0.40);
   --card-lift: 0 6px 18px rgba(0, 0, 0, 0.30);
   --glow: none;
@@ -135,7 +157,6 @@
   --danger: #fa4d56;
   --accent: #4589ff;
   --accent2: #78a9ff;
-  --surface-raised: rgba(255, 255, 255, 0.03);
   --ink-shadow: rgba(0, 0, 0, 0.46);
   --card-lift: 0 2px 6px rgba(0, 0, 0, 0.34);
   --glow: none;
@@ -157,7 +178,6 @@
   --danger: #bf616a;
   --accent: #5e81ac;
   --accent2: #88c0d0;
-  --surface-raised: rgba(236, 239, 244, 0.045);
   --ink-shadow: rgba(0, 0, 0, 0.34);
   --card-lift: 0 8px 20px rgba(0, 0, 0, 0.28);
   --glow: none;
@@ -179,7 +199,6 @@
   --danger: #ff8a95;
   --accent: #2f6fa8;
   --accent2: #7fd4ff;
-  --surface-raised: rgba(180, 220, 255, 0.05);
   --ink-shadow: rgba(0, 0, 0, 0.42);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.35);
   --glow: none;
@@ -201,10 +220,9 @@
   --danger: #ff7a8c;
   --accent: #4a4fb5;
   --accent2: #ffb454;
-  --surface-raised: rgba(220, 225, 255, 0.045);
   --ink-shadow: rgba(0, 0, 0, 0.48);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.40);
-  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(255, 180, 84, 0.06), transparent);
+  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(255, 180, 84, 0.03), transparent);
 }
 :root[data-theme="viridian"] {  /* green instrument panel */
   --bg: #07120e;
@@ -223,7 +241,6 @@
   --danger: #ef6a72;
   --accent: #1f7a5a;
   --accent2: #3fd9a0;
-  --surface-raised: rgba(220, 255, 238, 0.04);
   --ink-shadow: rgba(0, 0, 0, 0.44);
   --card-lift: 0 8px 20px rgba(0, 0, 0, 0.36);
   --glow: none;
@@ -245,10 +262,9 @@
   --danger: #e05a4c;
   --accent: #b4531f;
   --accent2: #e28a3f;
-  --surface-raised: rgba(255, 242, 220, 0.035);
   --ink-shadow: rgba(0, 0, 0, 0.50);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.42);
-  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(226, 138, 63, 0.09), transparent);
+  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(226, 138, 63, 0.045), transparent);
 }
 :root[data-theme="oxide"] {  /* rust and iron */
   --bg: #14100e;
@@ -267,10 +283,9 @@
   --danger: #e8483a;
   --accent: #9c3a1c;
   --accent2: #ff7a45;
-  --surface-raised: rgba(255, 230, 210, 0.04);
   --ink-shadow: rgba(0, 0, 0, 0.52);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.46);
-  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(255, 122, 69, 0.07), transparent);
+  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(255, 122, 69, 0.035), transparent);
 }
 :root[data-theme="phosphor"] {  /* green CRT */
   --bg: #050505;
@@ -289,7 +304,6 @@
   --danger: #ff5d4d;
   --accent: #a86a10;
   --accent2: #ffb03c;
-  --surface-raised: rgba(255, 176, 60, 0.05);
   --ink-shadow: rgba(255, 176, 60, 0.20);
   --card-lift: 0 0 0 transparent;
   --glow: none;
@@ -311,7 +325,6 @@
   --danger: #ff7b85;
   --accent: #9d8bff;
   --accent2: #4fd1ff;
-  --surface-raised: rgba(255, 255, 255, 0.07);
   --ink-shadow: rgba(255, 255, 255, 0.30);
   --card-lift: 0 0 0 transparent;
   --glow: none;
@@ -333,7 +346,6 @@
   --danger: #ff6f7d;
   --accent: #7c6bff;
   --accent2: #4fd1ff;
-  --surface-raised: rgba(255, 255, 255, 0.045);
   --ink-shadow: rgba(255, 255, 255, 0.30);
   --card-lift: 0 10px 30px rgba(255, 255, 255, 0.16);
   --glow: none;
@@ -379,7 +391,7 @@
   --o-inner-radius: 6px;
   --o-pill-radius: 4px;
   --o-border: 1px;
-  --o-fill: var(--surface-raised);
+  --o-fill: var(--tone-card);
   --o-shadow: 0 0 0 transparent;
   --o-layers: linear-gradient(var(--border-strong), var(--border-strong)) 0 0 / 100% 2px no-repeat;
 }
@@ -561,7 +573,7 @@ a { color: var(--accent2); }
   left: -9999px;
   top: 0;
   padding: calc(8px * var(--d)) calc(12px * var(--d));
-  background: var(--panel-strong);
+  background: var(--tone-card);
   border: 1px solid var(--accent2);
   border-radius: var(--o-control-radius);
   z-index: 40;
@@ -584,7 +596,7 @@ a { color: var(--accent2); }
 
 .gate-panel {
   width: min(420px, 100%);
-  background: var(--o-layers, none), var(--o-fill, var(--panel-strong));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-card));
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-surface-radius);
   box-shadow: var(--o-shadow, var(--card-lift));
@@ -656,7 +668,7 @@ textarea {
   width: 100%;
   min-height: 34px;
   padding: calc(7px * var(--d)) calc(10px * var(--d));
-  background: var(--surface-sunken-strong);
+  background: var(--tone-well);
   border: 1px solid var(--border-strong);
   border-radius: var(--o-control-radius);
   color: var(--text);
@@ -753,7 +765,7 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
   color: var(--muted);
 }
 .theme-select {
-  background: var(--panel);
+  background: var(--tone-card);
   border: 1px solid var(--border);
   border-radius: var(--o-pill-radius);
   color: var(--text);
@@ -865,7 +877,7 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
   border-left-width: 3px;
   border-radius: var(--o-inner-radius);
   padding: calc(9px * var(--d)) calc(12px * var(--d));
-  background: var(--panel);
+  background: var(--tone-inner);
 }
 .finding[data-severity="error"] { border-left-color: var(--danger); }
 .finding[data-severity="warning"] { border-left-color: var(--pv); }
@@ -897,7 +909,7 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
 }
 
 .status-card {
-  background: var(--o-layers, none), var(--o-fill, var(--panel));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-card));
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
   padding: calc(12px * var(--d)) calc(13px * var(--d));
@@ -991,7 +1003,7 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
 }
 
 .action-card {
-  background: var(--o-layers, none), var(--o-fill, var(--panel-strong));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-card));
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
   padding: calc(12px * var(--d)) calc(13px * var(--d));
@@ -1029,7 +1041,7 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
   padding: calc(8px * var(--d)) calc(10px * var(--d));
-  background: var(--surface-sunken);
+  background: var(--tone-well);
   font-size: 12px;
 }
 
@@ -1048,7 +1060,7 @@ button[disabled] { opacity: 0.45; cursor: not-allowed; }
   padding: calc(10px * var(--d));
   max-height: 420px;
   overflow: auto;
-  background: var(--surface-sunken-strong);
+  background: var(--tone-well);
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -1109,7 +1121,7 @@ table.data td.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; fon
   width: min(560px, 100%);
   max-height: 86vh;
   overflow: auto;
-  background: var(--o-layers, none), var(--o-fill, var(--panel-strong));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-card));
   border: var(--o-border) solid var(--border-strong);
   border-radius: var(--o-surface-radius);
   box-shadow: var(--o-shadow, var(--card-lift));

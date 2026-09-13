@@ -23,9 +23,8 @@
   --ink-shadow: rgba(0, 0, 0, 0.42);
   /* Shared "setup block" card treatment (frosted raised surface + lift shadow),
      reused by every content block across Setup and Maintenance. */
-  --surface-raised: rgba(255, 255, 255, 0.035);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.28);
-  --glow: radial-gradient(1200px 700px at 80% -10%, rgba(56, 213, 255, 0.08), transparent);
+  --glow: radial-gradient(1200px 700px at 80% -10%, rgba(56, 213, 255, 0.04), transparent);
   /* Derived from the palette above, declared once: a custom property resolves
      where it is used, so these follow whichever theme is active without being
      written out twelve times. That is also why no theme may redefine one. */
@@ -38,8 +37,33 @@
      them. --text is the palette's own light, tinted in eleven of the twelve,
      so a film built from it belongs to the ground it is lying on. */
   --veil: var(--text);
-  --surface-sunken: color-mix(in srgb, var(--bg) 50%, transparent);
-  --surface-sunken-strong: color-mix(in srgb, var(--bg) 70%, transparent);
+  /* Every tone a surface is allowed to be, and there are four.
+
+     A page is built by choosing one of these, never by inventing a percentage.
+     --tone-well is the ground showing through something cut into a surface;
+     --tone-card is anything that sits on the page; --tone-inner is anything
+     that sits on one of those; --tone-hover is either of them under the
+     pointer. Nothing is a fifth tone.
+
+     It used to be chosen, forty-one different ways. The Dashboard lifted
+     surfaces by 2.2%, 2.5%, 2.6%, 3%, 3.2%, 3.5%, 3.6%, 3.8%, 4%, 4.5%, 5%,
+     5.5% and 16%, and nobody can see the difference between any two of those.
+     What they did together is the whole complaint: measured on the Control
+     view in copper, twenty painted surfaces resolved to thirteen tones a
+     reader can tell apart, and the gap between one and the next was two. The
+     demo these palettes came from shows three, twelve apart. Thirteen tones
+     two units apart is not richness, it is a page with no levels at all --
+     which is exactly what "it is not clear" turned out to mean when counted.
+
+     They are mixed into --bg rather than laid over it as films, so they are
+     opaque: a fact tile is the same tone whether it sits two levels deep or
+     four, and a wash on the ground cannot raise a card by half a step on its
+     way past. That is the property the films did not have, and the reason a
+     card could be one tone at the top of the page and another further down. */
+  --tone-well: var(--bg);
+  --tone-card: color-mix(in srgb, var(--veil) 5.5%, var(--bg));
+  --tone-inner: color-mix(in srgb, var(--veil) 11%, var(--bg));
+  --tone-hover: color-mix(in srgb, var(--veil) 16.5%, var(--bg));
   --surface-overlay: color-mix(in srgb, var(--bg) 82%, transparent);
   --on-accent: var(--bg);
 
@@ -102,9 +126,8 @@
   --accent: #8b5cf6;
   --accent2: #22d3ee;
   --ink-shadow: rgba(0, 0, 0, 0.42);
-  --surface-raised: rgba(255, 255, 255, 0.035);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.28);
-  --glow: radial-gradient(1200px 700px at 80% -10%, rgba(56, 213, 255, 0.08), transparent);
+  --glow: radial-gradient(1200px 700px at 80% -10%, rgba(56, 213, 255, 0.04), transparent);
 }
 
 :root[data-theme="instrument"] {  /* muted laboratory greys */
@@ -125,7 +148,6 @@
   --accent: #6d7fd4;
   --accent2: #58b4dc;
   --ink-shadow: rgba(0, 0, 0, 0.40);
-  --surface-raised: rgba(255, 255, 255, 0.025);
   --card-lift: 0 6px 18px rgba(0, 0, 0, 0.30);
   --glow: none;
 }
@@ -148,7 +170,6 @@
   --accent: #4589ff;
   --accent2: #78a9ff;
   --ink-shadow: rgba(0, 0, 0, 0.46);
-  --surface-raised: rgba(255, 255, 255, 0.03);
   --card-lift: 0 2px 6px rgba(0, 0, 0, 0.34);
   --glow: none;
 }
@@ -171,7 +192,6 @@
   --accent: #5e81ac;
   --accent2: #88c0d0;
   --ink-shadow: rgba(0, 0, 0, 0.34);
-  --surface-raised: rgba(236, 239, 244, 0.045);
   --card-lift: 0 8px 20px rgba(0, 0, 0, 0.28);
   --glow: none;
 }
@@ -194,7 +214,6 @@
   --accent: #2f6fa8;
   --accent2: #7fd4ff;
   --ink-shadow: rgba(0, 0, 0, 0.42);
-  --surface-raised: rgba(180, 220, 255, 0.05);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.35);
   --glow: none;
 }
@@ -217,9 +236,8 @@
   --accent: #4a4fb5;
   --accent2: #ffb454;
   --ink-shadow: rgba(0, 0, 0, 0.48);
-  --surface-raised: rgba(220, 225, 255, 0.045);
   --card-lift: 0 10px 26px rgba(0, 0, 0, 0.40);
-  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(255, 180, 84, 0.06), transparent);
+  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(255, 180, 84, 0.03), transparent);
 }
 
 :root[data-theme="viridian"] {  /* green instrument panel */
@@ -240,7 +258,6 @@
   --accent: #1f7a5a;
   --accent2: #3fd9a0;
   --ink-shadow: rgba(0, 0, 0, 0.44);
-  --surface-raised: rgba(220, 255, 238, 0.04);
   --card-lift: 0 8px 20px rgba(0, 0, 0, 0.36);
   --glow: none;
 }
@@ -263,9 +280,8 @@
   --accent: #b4531f;
   --accent2: #e28a3f;
   --ink-shadow: rgba(0, 0, 0, 0.50);
-  --surface-raised: rgba(255, 242, 220, 0.035);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.42);
-  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(226, 138, 63, 0.09), transparent);
+  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(226, 138, 63, 0.045), transparent);
 }
 
 :root[data-theme="oxide"] {  /* rust and iron */
@@ -286,9 +302,8 @@
   --accent: #9c3a1c;
   --accent2: #ff7a45;
   --ink-shadow: rgba(0, 0, 0, 0.52);
-  --surface-raised: rgba(255, 230, 210, 0.04);
   --card-lift: 0 8px 22px rgba(0, 0, 0, 0.46);
-  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(255, 122, 69, 0.07), transparent);
+  --glow: radial-gradient(1100px 640px at 78% -12%, rgba(255, 122, 69, 0.035), transparent);
 }
 
 :root[data-theme="phosphor"] {  /* green CRT */
@@ -309,7 +324,6 @@
   --accent: #a86a10;
   --accent2: #ffb03c;
   --ink-shadow: rgba(255, 176, 60, 0.20);
-  --surface-raised: rgba(255, 176, 60, 0.05);
   --card-lift: 0 0 0 transparent;
   --glow: none;
 }
@@ -332,7 +346,6 @@
   --accent: #9d8bff;
   --accent2: #4fd1ff;
   --ink-shadow: rgba(255, 255, 255, 0.30);
-  --surface-raised: rgba(255, 255, 255, 0.07);
   --card-lift: 0 0 0 transparent;
   --glow: none;
 }
@@ -355,7 +368,6 @@
   --accent: #7c6bff;
   --accent2: #4fd1ff;
   --ink-shadow: rgba(255, 255, 255, 0.30);
-  --surface-raised: rgba(255, 255, 255, 0.045);
   --card-lift: 0 10px 30px rgba(255, 255, 255, 0.16);
   --glow: none;
 }
@@ -400,7 +412,7 @@
   --o-inner-radius: 6px;
   --o-pill-radius: 4px;
   --o-border: 1px;
-  --o-fill: var(--surface-raised);
+  --o-fill: var(--tone-card);
   --o-shadow: 0 0 0 transparent;
   --o-layers: linear-gradient(var(--border-strong), var(--border-strong)) 0 0 / 100% 2px no-repeat;
 }
@@ -587,7 +599,7 @@ body {
   color: var(--muted);
 }
 .admin-theme-select {
-  background: var(--panel);
+  background: var(--tone-card);
   border: 1px solid var(--border);
   border-radius: var(--o-pill-radius);
   color: var(--text);
@@ -604,7 +616,7 @@ body {
 .admin-auth-card {
   width: 100%;
   max-width: 420px;
-  background: var(--o-layers, none), var(--o-fill, var(--panel));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-card));
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-surface-radius);
   padding: calc(24px * var(--d)) calc(20px * var(--d));
@@ -636,7 +648,7 @@ body {
 .admin-view[hidden] { display: none; }
 .admin-subtitle { margin: calc(6px * var(--d)) 0 0; color: var(--muted); font-size: 13px; max-width: 62ch; }
 code {
-  background: color-mix(in srgb, var(--veil) 6%, transparent);
+  background: var(--tone-inner);
   padding: .1rem .35rem;
   border-radius: .25rem;
   font-size: .9em;
@@ -644,7 +656,7 @@ code {
 
 /* Control / Energy stage cards (scan workflow + future placeholder). */
 .control-pipeline-stage {
-  background: var(--o-layers, none), var(--o-fill, linear-gradient(180deg, var(--panel-strong), var(--panel)));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-card));
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-surface-radius);
   padding: calc(16px * var(--d));
@@ -834,7 +846,7 @@ code {
   gap: calc(12px * var(--d));
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
-  background: var(--o-layers, none), var(--o-fill, var(--panel));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-card));
   padding: calc(10px * var(--d)) calc(12px * var(--d));
   box-shadow: var(--o-shadow, 0 0 0 transparent);
   border-left-width: calc(var(--o-border) + var(--o-rail));
@@ -929,7 +941,7 @@ code {
   border-radius: var(--o-inner-radius);
   color: var(--muted);
   font-size: 14px;
-  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  background: var(--tone-inner);
   border: 1px solid color-mix(in srgb, var(--muted) 12%, transparent);
 }
 .maintenance-card-body { padding: 0 calc(16px * var(--d)) calc(14px * var(--d)); }
@@ -1001,7 +1013,7 @@ code {
   padding: calc(10px * var(--d)) calc(12px * var(--d));
   color: var(--danger);
   font-size: 12px;
-  background: var(--o-layers, none), var(--o-fill, color-mix(in srgb, var(--veil) 3%, transparent));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-inner));
   box-shadow: var(--o-shadow, 0 0 0 transparent);
   border-left-width: calc(var(--o-border) + var(--o-rail));
   border-bottom-width: max(var(--o-border), var(--o-divider));
@@ -1054,7 +1066,7 @@ code {
   margin: calc(6px * var(--d)) 0 0;
   max-height: 220px;
   overflow: auto;
-  background: color-mix(in srgb, var(--veil) 3%, transparent);
+  background: var(--tone-well);
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
   padding: calc(8px * var(--d));
@@ -1090,7 +1102,7 @@ code {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--o-pill-radius);
-  background: var(--panel);
+  background: var(--tone-well);
 }
 .discovery-progress-track span {
   display: block;
@@ -1135,8 +1147,8 @@ code {
   color: color-mix(in srgb, var(--on-accent) 78%, var(--text));
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--output) 58%, var(--panel)),
-    color-mix(in srgb, var(--accent2) 52%, var(--panel))
+    color-mix(in srgb, var(--output) 58%, var(--tone-card)),
+    color-mix(in srgb, var(--accent2) 52%, var(--tone-card))
   );
   border-color: color-mix(in srgb, var(--accent2) 35%, var(--border));
 }
@@ -1145,12 +1157,12 @@ code {
 .mconfig-discovery-add-button.is-ignored:disabled {
   opacity: .58;
   color: var(--muted);
-  background: var(--panel-strong);
+  background: var(--tone-inner);
   border-color: var(--border);
 }
 .mconfig-discovery-add-button.is-transport-downgrade {
   color: var(--text);
-  background: var(--panel-strong);
+  background: var(--tone-inner);
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
 }
 .mconfig-apply { margin-top: calc(12px * var(--d)); border-top: 1px solid var(--border); padding-top: calc(10px * var(--d)); }
@@ -1160,7 +1172,7 @@ code {
   padding: calc(10px * var(--d));
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
-  background: var(--o-layers, none), var(--o-fill, linear-gradient(135deg, color-mix(in srgb, var(--accent2) 10%, transparent), var(--surface-sunken-strong)));
+  background: var(--o-layers, none), var(--o-fill, linear-gradient(135deg, color-mix(in srgb, var(--accent2) 10%, transparent), var(--tone-well)));
   box-shadow: var(--o-shadow, 0 0 0 transparent);
   border-left-width: calc(var(--o-border) + var(--o-rail));
   border-bottom-width: max(var(--o-border), var(--o-divider));
@@ -1207,7 +1219,7 @@ code {
   margin: calc(6px * var(--d)) 0 0;
   max-height: 240px;
   overflow: auto;
-  background: color-mix(in srgb, var(--veil) 3%, transparent);
+  background: var(--tone-well);
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
   padding: calc(8px * var(--d));
@@ -1217,14 +1229,14 @@ code {
 }
 .stage-actions { margin-left: auto; display: flex; align-items: center; gap: calc(8px * var(--d)); }
 .refresh-button {
-  background: color-mix(in srgb, var(--veil) 6%, transparent);
+  background: var(--tone-inner);
   color: var(--text);
   border: 1px solid var(--border);
   min-height: 28px;
   padding: 0 calc(12px * var(--d));
   font-size: 11px;
 }
-.refresh-button:hover { filter: none; background: color-mix(in srgb, var(--veil) 12%, transparent); }
+.refresh-button:hover { filter: none; background: var(--tone-hover); }
 
 .networks-warnings { margin-bottom: calc(12px * var(--d)); }
 .network-warning {
@@ -1257,7 +1269,7 @@ code {
   display: flex;
   flex-direction: column;
   gap: calc(4px * var(--d));
-  background: linear-gradient(180deg, var(--panel-strong), var(--panel));
+  background: var(--tone-inner);
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
   padding: calc(8px * var(--d)) calc(10px * var(--d));
@@ -1297,7 +1309,7 @@ code {
   border-radius: var(--o-control-radius);
   padding: calc(6px * var(--d)) calc(10px * var(--d));
   margin-bottom: calc(14px * var(--d));
-  background: var(--surface-sunken);
+  background: var(--tone-well);
 }
 .advanced-details > summary {
   cursor: pointer;
@@ -1323,7 +1335,7 @@ code {
   color: var(--text);
   border-radius: var(--o-inner-radius);
 }
-.add-devices-details > summary:hover { background: color-mix(in srgb, var(--veil) 5%, transparent); }
+.add-devices-details > summary:hover { background: var(--tone-hover); }
 
 /* Gateway candidate probe (runs automatically with network detection). */
 .gateway-probe-hint { margin: 0 0 calc(12px * var(--d)); color: var(--muted2); font-size: 11px; max-width: 62ch; }
@@ -1353,7 +1365,7 @@ code {
   padding: 0 calc(12px * var(--d));
   border-radius: var(--o-control-radius);
   border: 1px solid var(--border);
-  background: var(--surface-sunken-strong);
+  background: var(--tone-well);
   color: var(--text);
   font-size: 14px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1397,7 +1409,7 @@ code {
 .primary-button.is-cancel,
 .primary-button.is-cancel.is-scanning { cursor: pointer; }
 .primary-button.is-cancel {
-  background: linear-gradient(180deg, var(--danger), color-mix(in srgb, var(--danger) 45%, var(--bg)));
+  background: linear-gradient(180deg, var(--danger), color-mix(in srgb, var(--danger) 45%, var(--tone-card)));
   color: var(--text);
 }
 
@@ -1417,7 +1429,7 @@ code {
   flex-wrap: wrap;
   align-items: center;
   gap: calc(10px * var(--d));
-  background: var(--surface-sunken);
+  background: var(--tone-well);
   border: 1px solid var(--border);
   border-radius: var(--o-control-radius);
   padding: calc(9px * var(--d)) calc(10px * var(--d));
@@ -1436,7 +1448,7 @@ code {
 .ignored-devices {
   border: 1px solid var(--border);
   border-radius: var(--o-control-radius);
-  background: var(--surface-sunken);
+  background: var(--tone-well);
   color: var(--muted);
 }
 .ignored-devices summary {
@@ -1458,7 +1470,7 @@ code {
 .secondary-button {
   border: 1px solid var(--border);
   border-radius: var(--o-control-radius);
-  background: var(--panel-strong);
+  background: var(--tone-inner);
   color: var(--text);
   font-weight: 700;
   cursor: pointer;
@@ -1508,8 +1520,8 @@ code {
   padding: calc(16px * var(--d));
   border: var(--o-border) solid var(--border-strong);
   border-radius: var(--o-card-radius);
-  background: var(--o-layers, none), var(--o-fill, var(--surface-raised));
-  box-shadow: var(--o-shadow, var(--card-lift));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-well));
+  box-shadow: var(--o-shadow, 0 0 0 transparent);
   border-left-width: calc(var(--o-border) + var(--o-rail));
   border-bottom-width: max(var(--o-border), var(--o-divider));
 }
@@ -1557,7 +1569,7 @@ code {
   padding: calc(8px * var(--d)) calc(10px * var(--d));
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
-  background: color-mix(in srgb, var(--veil) 2%, transparent);
+  background: var(--tone-inner);
 }
 .prep-source-row.is-disabled { opacity: 0.6; }
 .prep-source-rank {
@@ -1603,7 +1615,7 @@ code {
   padding: calc(10px * var(--d)) calc(12px * var(--d));
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
-  background: color-mix(in srgb, var(--veil) 3%, transparent);
+  background: var(--tone-inner);
 }
 .prep-config-status {
   display: flex;
@@ -1682,7 +1694,7 @@ code {
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
   padding: calc(10px * var(--d)) calc(12px * var(--d));
-  background: var(--o-layers, none), var(--o-fill, color-mix(in srgb, var(--veil) 2%, transparent));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-inner));
   display: flex;
   flex-direction: column;
   gap: calc(8px * var(--d));
@@ -1703,7 +1715,7 @@ code {
   padding: calc(10px * var(--d)) calc(12px * var(--d));
 }
 .proposal-safety { display: flex; flex-wrap: wrap; gap: calc(6px * var(--d)); }
-.proposal-safety-pill { background: color-mix(in srgb, var(--veil) 4%, transparent); color: var(--muted); }
+.proposal-safety-pill { background: var(--tone-inner); color: var(--muted); }
 .proposal-warnings { display: flex; flex-wrap: wrap; gap: calc(6px * var(--d)); }
 .proposal-warning-pill { color: var(--pv); border-color: color-mix(in srgb, var(--pv) 45%, var(--border)); }
 .proposal-action { display: flex; flex-wrap: wrap; align-items: center; gap: calc(8px * var(--d)); }
@@ -1713,7 +1725,7 @@ code {
   margin: calc(8px * var(--d)) 0 0;
   padding: calc(8px * var(--d));
   border-radius: var(--o-inner-radius);
-  background: color-mix(in srgb, var(--veil) 3%, transparent);
+  background: var(--tone-well);
   font-size: 11px;
   overflow-x: auto;
 }
@@ -1742,7 +1754,7 @@ code {
   font-size: 11px;
   font-weight: 700;
 }
-.pill.muted { background: color-mix(in srgb, var(--veil) 4%, transparent); color: var(--muted); }
+.pill.muted { background: var(--tone-inner); color: var(--muted); }
 
 .results-empty {
   border: var(--o-border) dashed var(--border);
@@ -1764,7 +1776,7 @@ code {
   gap: calc(8px * var(--d));
 }
 .device-card {
-  background: var(--o-layers, none), var(--o-fill, linear-gradient(180deg, var(--panel-strong), var(--panel)));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-card));
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
   padding: calc(14px * var(--d));
@@ -1795,7 +1807,7 @@ code {
   display: flex;
   flex-direction: column;
   gap: calc(2px * var(--d));
-  background: var(--surface-sunken);
+  background: var(--tone-inner);
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
   padding: calc(6px * var(--d)) calc(8px * var(--d));
@@ -1840,7 +1852,7 @@ code {
   display: flex;
   align-items: baseline;
   gap: calc(8px * var(--d));
-  background: var(--surface-sunken);
+  background: var(--tone-well);
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
   padding: calc(6px * var(--d)) calc(10px * var(--d));
@@ -1871,7 +1883,7 @@ code {
   gap: calc(2px * var(--d));
   align-items: flex-start;
   text-align: left;
-  background: var(--o-layers, none), var(--o-fill, var(--surface-sunken));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-well));
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
   padding: calc(10px * var(--d)) calc(12px * var(--d));
@@ -1922,7 +1934,7 @@ code {
   padding: 0 calc(10px * var(--d));
   border-radius: var(--o-control-radius);
   border: 1px solid var(--border);
-  background: var(--surface-sunken-strong);
+  background: var(--tone-well);
   color: var(--text);
   font-size: 14px;
   overflow: hidden;
@@ -1940,7 +1952,7 @@ code {
   background:
     var(--o-layers, none),
      var(--o-fill, radial-gradient(circle at 4% 0%, color-mix(in srgb, var(--output) 8%, transparent), transparent 42%),
-    var(--surface-sunken-strong));
+    var(--tone-well));
   /* Same lift as the shared setup block cards so step 03 reads as one family. */
   box-shadow: var(--o-shadow, var(--card-lift));
   border-left-width: calc(var(--o-border) + var(--o-rail));
@@ -1950,7 +1962,7 @@ code {
   border-color: color-mix(in srgb, var(--battery) 38%, var(--border));
   background:
    radial-gradient(circle at 4% 0%, color-mix(in srgb, var(--battery) 8%, transparent), transparent 42%),
-    var(--surface-sunken-strong);
+    var(--tone-well);
 }
 .config-validation-card[data-tone="warn"] {
   border-color: color-mix(in srgb, var(--pv) 42%, var(--border));
@@ -2064,7 +2076,7 @@ code {
   border: 1px solid var(--border);
   border-radius: var(--o-control-radius);
   padding: calc(6px * var(--d)) calc(10px * var(--d));
-  background: var(--surface-sunken);
+  background: var(--tone-well);
 }
 .config-manual > summary {
   cursor: pointer;
@@ -2083,7 +2095,7 @@ code {
   padding: 0 calc(10px * var(--d));
   border-radius: var(--o-control-radius);
   border: 1px solid var(--border);
-  background: var(--surface-sunken-strong);
+  background: var(--tone-well);
   color: var(--text);
   font-size: 13px;
 }
@@ -2136,7 +2148,7 @@ code {
   padding: calc(6px * var(--d)) calc(10px * var(--d));
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
-  background: var(--surface-sunken);
+  background: var(--tone-well);
 }
 .config-mqtt-device-title { font-size: 13px; font-weight: 600; }
 .config-mqtt-device-meta { color: var(--muted); font-size: 12px; }
@@ -2169,18 +2181,18 @@ code {
   border: var(--o-border) solid var(--border);
   border-left: 3px solid var(--border-strong);
   border-radius: var(--o-card-radius);
-  background: var(--o-layers, none), var(--o-fill, var(--panel));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-card));
   overflow: hidden;
   box-shadow: var(--o-shadow, 0 0 0 transparent);
   border-bottom-width: max(var(--o-border), var(--o-divider));
 }
 .hardware-card-grid-meter {
   border-left-color: var(--grid);
-  background: color-mix(in srgb, var(--grid) 5%, var(--panel));
+  background: color-mix(in srgb, var(--grid) 5%, var(--tone-card));
 }
 .hardware-card-inverter {
   border-left-color: var(--output);
-  background: color-mix(in srgb, var(--output) 4%, var(--panel));
+  background: color-mix(in srgb, var(--output) 4%, var(--tone-card));
 }
 .hardware-card[data-open="true"] { border-color: var(--border-strong); }
 .hardware-card-grid-meter[data-open="true"] { border-left-color: var(--grid); }
@@ -2299,7 +2311,7 @@ code {
   margin: 0;
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
-  background: var(--o-layers, none), var(--o-fill, var(--surface-sunken-strong));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-well));
   padding: calc(12px * var(--d)) calc(14px * var(--d));
   color: var(--text);
   font-size: 12px;
@@ -2317,7 +2329,7 @@ code {
   gap: calc(8px * var(--d));
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
-  background: var(--surface-sunken);
+  background: var(--tone-well);
   padding: calc(8px * var(--d)) calc(12px * var(--d));
   margin-bottom: calc(6px * var(--d));
   font-size: 12px;
@@ -2408,7 +2420,7 @@ code {
 .feature-row {
   border: var(--o-border) solid var(--border);
   border-radius: var(--o-card-radius);
-  background: var(--o-layers, none), var(--o-fill, var(--panel));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-inner));
   overflow: hidden;
   box-shadow: var(--o-shadow, 0 0 0 transparent);
   border-left-width: calc(var(--o-border) + var(--o-rail));
@@ -2486,7 +2498,7 @@ code {
   padding: 0 calc(10px * var(--d));
   border-radius: var(--o-control-radius);
   border: 1px solid var(--border);
-  background: var(--surface-sunken-strong);
+  background: var(--tone-well);
   color: var(--text);
   font-size: 14px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -2593,7 +2605,7 @@ code {
   padding: calc(7px * var(--d)) calc(11px * var(--d));
   border: 1px solid var(--border);
   border-radius: var(--o-inner-radius);
-  background: var(--surface-raised);
+  background: var(--tone-inner);
 }
 .backup-stage .control-pipeline-fact .maintenance-fact-label {
   color: var(--muted);
@@ -2704,7 +2716,7 @@ code {
   padding: calc(28px * var(--d)) calc(26px * var(--d));
   border: var(--o-border) solid var(--border-strong);
   border-radius: var(--o-surface-radius);
-  background: var(--o-layers, none), var(--o-fill, var(--panel-strong));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-card));
   box-shadow: var(--o-shadow, 0 18px 40px rgba(0, 0, 0, 0.45));
   border-left-width: calc(var(--o-border) + var(--o-rail));
   border-bottom-width: max(var(--o-border), var(--o-divider));
@@ -2791,7 +2803,7 @@ code {
 .system-alignment-stages li[data-state="skipped"] {
   color: var(--muted2);
   border-style: dashed;
-  background: color-mix(in srgb, var(--muted2) 5%, transparent);
+  background: var(--tone-inner);
 }
 .system-alignment-stages li[data-state="failed"] {
   color: var(--danger);
@@ -2896,7 +2908,7 @@ code {
 .mconfig-search-input {
   flex: 1 1 220px;
   min-width: 0;
-  background: var(--surface-sunken-strong);
+  background: var(--tone-well);
   border: 1px solid var(--border);
   border-radius: var(--o-control-radius);
   color: var(--text);
@@ -2922,7 +2934,7 @@ code {
   padding: calc(11px * var(--d)) calc(13px * var(--d));
   border: var(--o-border) solid color-mix(in srgb, var(--output) 30%, var(--border));
   border-radius: var(--o-card-radius);
-  background: var(--o-layers, none), var(--o-fill, linear-gradient(180deg, var(--panel-strong), var(--bg2)));
+  background: var(--o-layers, none), var(--o-fill, var(--tone-card));
   box-shadow: var(--o-shadow, 0 -10px 30px rgba(0, 0, 0, 0.45));
   border-left-width: calc(var(--o-border) + var(--o-rail));
   border-bottom-width: max(var(--o-border), var(--o-divider));
@@ -3050,7 +3062,7 @@ code {
   border-left-width: 3px;
   border-radius: var(--o-inner-radius);
   padding: calc(9px * var(--d)) calc(12px * var(--d));
-  background: var(--panel);
+  background: var(--tone-inner);
 }
 .maintenance-finding[data-severity="error"] {
   border-left-color: var(--danger);
