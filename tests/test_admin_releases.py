@@ -869,6 +869,106 @@ def _identity_release(tmp_path, running_tag, images):
     )
 
 
+# --- a rolling install still knows where it stands -------------------------
+#
+# Reported from a live console: `latest` was installed and Maintenance ->
+# Upgrade proposed v0.7.0 by itself. `detect_active_release` deliberately calls a
+# rolling tag non-concrete, so there was no version on the running side, the
+# SemVer guard compared against nothing, and the default walked down the list to
+# the one release that happened to be downloaded already.
+
+
+def _rolling_install(tmp_path, *, cached="v0.7.0", resource_checker=None):
+    """A console running the rolling ``latest`` with one older release cached."""
+
+    data = tmp_path / "data"
+    _write_cached(data, cached)
+    return ReleaseManager(
+        data_dir=data,
+        project_dir=_project_compose(tmp_path, "latest"),
+        urlopen=_opener(),
+        resource_checker=resource_checker,
+    )
+
+
+def test_a_rolling_latest_is_placed_in_the_newest_release_line(tmp_path):
+    """``latest`` is built from main, so it sits at or above every published tag.
+
+    That is the only thing needed to answer "is this older than what I am
+    running", and without it every release in the catalogue passed the downgrade
+    guard unchallenged.
+    """
+
+    manager = _rolling_install(tmp_path, cached="v0.6.0")
+    by_tag = {item["tag"]: item for item in manager.list_releases()["releases"]}
+
+    assert by_tag["v0.6.0"]["selectable"] is False
+    assert "Downgrade" in by_tag["v0.6.0"]["reason"]
+
+
+def test_a_rolling_install_is_never_defaulted_to_an_older_release(tmp_path):
+    """The reported symptom: the console jumped to the older release on its own.
+
+    The newest release is unusable here, which is the state the failing console
+    was in for every release it had not already downloaded. The default used to
+    keep walking down the list until something was selectable and land on the
+    old cached one; there is no floor in that walk. Falling back to the rolling
+    channel that is already installed is the honest answer.
+    """
+
+    result = _rolling_install(
+        tmp_path, cached="v0.6.0", resource_checker=lambda ref: ref != "v0.6.1"
+    ).list_releases()
+
+    assert result["default_release"] == "latest"
+    assert result["default_release"] != "v0.6.0"
+    assert not any(
+        item["selectable"] for item in result["releases"] if item["tag"] == "v0.6.0"
+    )
+
+
+def test_evidence_about_the_running_build_outranks_the_rolling_inference(tmp_path):
+    """A build serial is read off the running image; the line placement is not.
+
+    Letting the inference win refused a target whose build serial proves it is
+    newer than the running ``latest`` -- which is the ordinary "move from the
+    rolling channel onto the release that was just cut" case.
+    """
+
+    manager = _identity_release(
+        tmp_path,
+        "latest",
+        {
+            _ref("latest"): _image(digest="sha256:l", build_serial=1200, channel="latest"),
+            _ref("v0.6.0"): _image(digest="sha256:s", build_serial=1300),
+        },
+    )
+    by_tag = {item["tag"]: item for item in manager.list_releases()["releases"]}
+
+    assert by_tag["v0.6.0"]["upgrade_state"] == "upgrade_available"
+    assert by_tag["v0.6.0"]["selectable"] is True
+
+
+def test_a_release_that_could_not_be_checked_stays_in_the_catalogue(tmp_path):
+    """"Could not be checked" is not "is not there".
+
+    The resource check is an unauthenticated GitHub call made once per eligible
+    tag, against a limit of sixty an hour per address. Treating its failure as a
+    missing release emptied the catalogue down to whatever was already
+    downloaded, and that is what put an older release in front of the operator.
+    """
+
+    def refuses(ref):
+        raise urllib.error.URLError("rate limit exceeded")
+
+    manager = _rolling_install(tmp_path, cached="v0.6.0", resource_checker=refuses)
+    by_tag = {item["tag"]: item for item in manager.list_releases()["releases"]}
+
+    assert by_tag["v0.6.1"]["docker_supported"] is False
+    assert by_tag["v0.6.1"]["selectable"] is True
+    assert "could not be verified" in by_tag["v0.6.1"]["reason"]
+
+
 def test_running_latest_blocks_older_build_serial_stable_target(tmp_path):
     manager = _identity_release(
         tmp_path,
