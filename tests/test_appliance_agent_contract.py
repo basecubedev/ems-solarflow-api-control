@@ -747,10 +747,16 @@ def test_the_socket_is_there_when_systemd_is_told_it_is(tmp_path, services, monk
     agent_socket = tmp_path / "agent.sock"
 
     serving = {}
+    # READY=1 is sent before serve_forever is entered -- that is the whole point
+    # of the ordering under test -- so the assertions below can finish before
+    # this has recorded the server. Without the event the teardown found nothing
+    # to shut down, left the thread serving, and failed on the join.
+    running = threading.Event()
     real_serve_forever = AgentServer.serve_forever
 
     def capture(self, *args, **kwargs):
         serving["server"] = self
+        running.set()
         return real_serve_forever(self, *args, **kwargs)
 
     monkeypatch.setattr(AgentServer, "serve_forever", capture)
@@ -770,9 +776,8 @@ def test_the_socket_is_there_when_systemd_is_told_it_is(tmp_path, services, monk
             caller.close()
     finally:
         listener.close()
-        server = serving.get("server")
-        if server is not None:
-            server.shutdown()
+        assert running.wait(10), "serve_forever was never reached"
+        serving["server"].shutdown()
         thread.join(timeout=10)
         assert not thread.is_alive()
 
