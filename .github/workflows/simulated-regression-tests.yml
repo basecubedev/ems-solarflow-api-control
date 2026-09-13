@@ -174,6 +174,13 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
 
+      # The system_build selection includes the real paired-image Docker
+      # contract, so this job builds both Dockerfiles. See the script: the pull
+      # is the retried half and the build below is not.
+      - name: Pull the base images before the build needs them
+        run: |
+          python3 scripts/prepull_base_images.py
+
       # Focused regression gate covering paired/legacy resource strategy, Admin
       # alignment and Continue gating, transition persistence, discovery
       # authorization, resource preparation and Known-Good — including the
@@ -194,6 +201,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Pull the base images before the build needs them
+        run: |
+          python3 scripts/prepull_base_images.py
 
       - name: Build runtime image
         run: |
@@ -244,6 +255,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Pull the base images before the build needs them
+        run: |
+          python3 scripts/prepull_base_images.py
 
       # Real Docker daemon tests only (docker marker): install-docker.sh
       # quickstarts, image-content checks, and update/backup flows. Tests build

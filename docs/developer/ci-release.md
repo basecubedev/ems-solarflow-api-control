@@ -110,6 +110,23 @@ at one name per workflow while new jobs are picked up by adding them to its
 `needs`. `tests/test_ci_gate_covers_every_job.py` fails when a job is added
 without being listed.
 
+The three jobs that build one of this repository's images — `Repo System Build
+compatibility`, `Repo docker smoke test` and `Repo docker-first setup e2e` —
+pull the Dockerfiles' base images in a step of their own first, through
+`scripts/prepull_base_images.py`. Both base images come anonymously from Docker
+Hub, and an anonymous pull fails for reasons that have nothing to do with the
+branch: on 2026-09-12 the token endpoint reset the connection twice in a row and
+the System Build gate died in `docker build` with "failed to resolve source
+metadata", after which the gate refused the whole run. The pull step is allowed
+to retry because pulling is all it does; the build after it is not, so a broken
+Dockerfile still fails on its first try instead of three times slower. Since
+`docker build` without `--pull` resolves a tag that is already in the local
+image store, a green pull step leaves the build with no registry to fail
+against. The images are read out of the `FROM` lines rather than listed in the
+script, so a base image bump needs no second edit, and
+`tests/test_ci_base_image_prepull.py` fails when a job that can build an image
+does not pull first.
+
 The offline power-control regression tests behind it are deterministic and need
 no hardware, network, or secrets.
 
