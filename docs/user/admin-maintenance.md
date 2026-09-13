@@ -111,8 +111,12 @@ The current-state preflight and the verified backup always run **under the
 Admin that is currently running**, before any Admin alignment. The target Admin
 is never assumed before the backup and preflight are complete.
 
-Guided upgrade only ever moves **forward**. It never removes containers, volumes,
-or data. Downgrades belong to the Backup / restore flow. The Admin Console asks
+Guided upgrade moves **forward**, or back by one or more patches inside the
+release line you are running — `v0.8.3` back to `v0.8.1`, so a bad patch can be
+undone. It never offers that by itself: the proposed build is always the newest
+one that is not behind what you are running. Going further back, to an older
+minor or major, belongs to the Backup / restore flow. It never removes
+containers, volumes, or data. The Admin Console asks
 for confirmation before changing config, compose files, containers, or data.
 
 **The release tag names the build; the runtime image is the verified digest.**

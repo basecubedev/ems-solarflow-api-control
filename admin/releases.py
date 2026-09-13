@@ -71,6 +71,15 @@ IDENTITY_UNVERIFIED_REASON = (
     "needed) before making any changes."
 )
 ALREADY_CURRENT_REASON = "Already running this EMS build."
+ROLLBACK_REASON = (
+    "Earlier patch in the release line you are running. Selectable as a "
+    "rollback; it is not an upgrade."
+)
+# What the identity assessment actually weighed. These two are readings of the
+# running image itself; every other basis is a comparison against something that
+# is not necessarily installed.
+PROVEN_BASES = frozenset({"digest", "build_serial"})
+
 BLOCKING_UPGRADE_REASONS = {
     OLDER_THAN_RUNNING_BUILD: OLDER_THAN_RUNNING_BUILD_REASON,
     DOWNGRADE_BLOCKED: OLDER_THAN_RUNNING_BUILD_REASON,
@@ -226,13 +235,53 @@ def _is_release_candidate(tag, github_prerelease=False):
     return bool(github_prerelease or (parsed and parsed[3][0] == 0))
 
 
-def _downgrade_baseline(active, prepared):
-    # A concrete installed release is the authoritative downgrade baseline; a
-    # prepared (downloaded, not installed) release never raises it above the
-    # installed one. Only with no concrete installed release (fresh install or a
-    # rolling ``latest``) does the prepared download gate re-preparing an older one.
+def _release_line(version):
+    """The ``(major, minor)`` a version belongs to."""
+
+    return version[:2] if version else None
+
+
+def _is_backwards(baseline, tag):
+    """Whether ``tag`` is a lower version than ``baseline``, where both are known."""
+
+    current = _version(baseline)
+    selected = _version(tag)
+    return bool(current and selected and selected < current)
+
+
+def _blocks_as_downgrade(baseline, tag):
+    """Whether moving from ``baseline`` to ``tag`` leaves its release line.
+
+    Only the patch may go backwards. Inside one line the two builds read the
+    same config schema and the same database, so undoing a bad patch is a move
+    an operator is allowed to make; a minor or major step down is not, and that
+    is where the one-way migrations are.
+    """
+
+    if not _is_backwards(baseline, tag):
+        return False
+    return _release_line(_version(tag)) != _release_line(_version(baseline))
+
+
+def _downgrade_baseline(active, prepared, rolling=None):
+    """Where the installation stands, as a tag the version policy can read.
+
+    A concrete installed release is authoritative; a prepared (downloaded, not
+    installed) release never raises the baseline above the installed one.
+
+    ``rolling`` is where a running rolling ``latest`` stands. ``latest`` is
+    built from main, so it sits at or above every published tag and belongs to
+    the line of the newest one: moving from it to another build in that line is
+    a patch move, and moving to an older line is the downgrade this exists to
+    refuse. Without it a running ``latest`` had no comparable version at all and
+    every older release passed the policy unchallenged -- which is how a console
+    running a v0.8 build came to offer v0.7.0 as its default.
+    """
+
     if active and _version(active):
         return active
+    if rolling and _version(rolling):
+        return rolling
     concrete = [tag for tag in (active, prepared) if _version(tag)]
     if concrete:
         return max(concrete, key=_version)
@@ -338,6 +387,10 @@ class ReleaseManager:
         self._known_downloads = {}
         self._resource_checks = {}
         self._prepare_lock = threading.Lock()
+        # Versioned tags this manager has seen in a catalogue fetch, so a
+        # later prepare places a running rolling `latest` the same way the
+        # listing that offered the target did.
+        self._newest_seen_tags = set()
 
     def list_releases(self, *, for_upgrade=True):
         """Return the release catalogue.
@@ -362,6 +415,9 @@ class ReleaseManager:
             warnings.extend(getattr(self, "_release_page_warnings", []))
 
         by_tag = {item["tag"]: item for item in remote}
+        self._newest_seen_tags.update(
+            tag for tag in by_tag if _version(tag) and _is_admin_version(tag)
+        )
         by_tag["latest"] = {
             "tag": "latest",
             "name": "latest",
@@ -395,6 +451,9 @@ class ReleaseManager:
         active = self.detect_active_release()
         prepared = self._selected_release(cached)
         baseline = _downgrade_baseline(active, prepared)
+        policy_baseline = _downgrade_baseline(
+            active, prepared, self._rolling_baseline(by_tag) if for_upgrade else None
+        )
         # A fresh install has no running build to compare against: skip the
         # (Docker-touching) identity read and let every supported release stand.
         running = self._running_identity() if for_upgrade else ImageIdentity()
@@ -429,6 +488,19 @@ class ReleaseManager:
                 if for_upgrade and not downgrade
                 else None
             )
+            # Only where nothing was proven does the rolling baseline get a
+            # say. A build serial or a digest is evidence about the running
+            # build and decides on its own; where `latest` stands on the version
+            # line is an inference from the fact that it is built from main, and
+            # inference must not overrule evidence -- doing that turned a target
+            # with a provably newer build serial into a refused downgrade.
+            #
+            # A "semver" verdict is not evidence here: with no concrete release
+            # installed it compares against whatever was last *downloaded*, so a
+            # rolling installation with v0.7.0 sitting in its cache was told
+            # v0.7.0 is what it is already running.
+            if assessment is not None and assessment.basis not in PROVEN_BASES:
+                downgrade = downgrade or self._is_downgrade(policy_baseline, tag)
             state = (
                 DOWNGRADE_BLOCKED if downgrade
                 else assessment.state if assessment
@@ -462,9 +534,18 @@ class ReleaseManager:
             item["prerelease"] = rc
             item["admin_supported"] = eligible
             item["docker_supported"] = bool(eligible and resources is True)
+            # "Could not be checked" is not "is not there". Both used to remove a
+            # release from the catalogue, and since the check is an
+            # unauthenticated GitHub call made once per eligible tag, a rate
+            # limit emptied the list down to whatever happened to be downloaded
+            # already -- which is how an installation running a v0.8 build was
+            # offered v0.7.0 as its default. An unverifiable release stays
+            # selectable and carries the reason; preparing it downloads the
+            # resources and fails with a real error if they are genuinely
+            # missing, which is a better answer than a silent disappearance.
             item["selectable"] = bool(
                 item["admin_supported"]
-                and item["docker_supported"]
+                and (resources is True or (resources is None and remote_available))
                 and not downgrade
                 and not identity_block
                 and not identity_noop
@@ -490,6 +571,8 @@ class ReleaseManager:
                 item["reason"] = ALREADY_CURRENT_REASON
             elif running_known and state == IDENTITY_UNKNOWN:
                 item["reason"] = IDENTITY_UNVERIFIED_REASON
+            elif _is_backwards(policy_baseline, tag):
+                item["reason"] = ROLLBACK_REASON
             elif warning:
                 item["reason"] = warning
             elif tag == "latest":
@@ -527,11 +610,18 @@ class ReleaseManager:
         local_item = self._local_release_item()
         if local_item is not None:
             releases.append(local_item)
+        # Selectable and proposed are not the same thing. A rollback has to be
+        # reachable, but the console never suggests one on its own, and it is
+        # the unbounded walk down this list that put an older release in front
+        # of an operator in the first place.
         stable = next(
             (
                 item["tag"]
                 for item in releases
-                if item["stable"] and item["selectable"] and item["channel"] == "stable"
+                if item["stable"]
+                and item["selectable"]
+                and item["channel"] == "stable"
+                and not _is_backwards(policy_baseline, item["tag"])
             ),
             None,
         )
@@ -565,7 +655,12 @@ class ReleaseManager:
         active = self.detect_active_release()
         prepared = self._selected_release(cached)
         baseline = _downgrade_baseline(active, prepared)
-        if self._is_downgrade(baseline, tag):
+        # The legacy test override is documented as covering what SemVer cannot
+        # settle and never a proven downgrade. Where `latest` stands on the
+        # version line is an inference, not a proof, so the override keeps
+        # reaching the legacy targets it exists for.
+        rolling = None if _legacy_unverified_override() else self._rolling_baseline(cached)
+        if self._is_downgrade(_downgrade_baseline(active, prepared, rolling), tag):
             raise ReleaseError(
                 "Downgrades are not supported by the setup assistant. "
                 "Use Backup/Restore flow instead.",
@@ -1567,9 +1662,31 @@ class ReleaseManager:
 
     @staticmethod
     def _is_downgrade(active, selected):
-        active_version = _version(active)
-        selected_version = _version(selected)
-        return bool(active_version and selected_version and selected_version < active_version)
+        return _blocks_as_downgrade(active, selected)
+
+    def _rolling_baseline(self, known_tags=()):
+        """Where a running rolling ``latest`` stands, or ``None``.
+
+        Only the newest release this manager has actually seen is used, never a
+        guess: with no catalogue and nothing cached there is nothing to compare
+        against, and the listing says so by keeping ``latest`` as its default
+        rather than proposing a version it cannot place.
+        """
+
+        if not self._running_is_rolling():
+            return None
+        candidates = [
+            tag
+            for tag in (*known_tags, *self._newest_seen_tags)
+            if _version(tag) and _is_admin_version(tag)
+        ]
+        return max(candidates, key=_version) if candidates else None
+
+    def _running_is_rolling(self):
+        """True when the installed EMS image is the rolling ``latest`` tag."""
+
+        ref = self._compose_image_ref() or ""
+        return ref.rsplit(":", 1)[-1] == "latest" if ":" in ref else False
 
     def _ready_payload(self, tag, manifest, reused):
         root = self.releases_dir / tag
