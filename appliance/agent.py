@@ -15,6 +15,7 @@ import shutil
 import socket
 import socketserver
 import struct
+import sys
 import threading
 
 from appliance import (
@@ -641,6 +642,62 @@ class AgentServer(socketserver.ThreadingUnixStreamServer):
             os.unlink(self.socket_path)
         except OSError:
             pass
+
+
+def notify_ready():
+    """Tell systemd the socket is bound, if systemd asked to be told.
+
+    This is `sd_notify(READY=1)` written out, because the appliance has no
+    systemd Python binding and does not need one: the protocol is a datagram on
+    the AF_UNIX address systemd puts in NOTIFY_SOCKET, and AF_UNIX is already
+    in the unit's RestrictAddressFamilies. A leading "@" is the abstract
+    namespace, which is a NUL in the sockaddr.
+
+    Returns whether a notification was sent. No NOTIFY_SOCKET means nobody is
+    listening -- the agent run by hand, or a unit that is not Type=notify --
+    and that is not a failure.
+    """
+
+    address = os.environ.get("NOTIFY_SOCKET")
+    if not address:
+        return False
+    if address.startswith("@"):
+        address = "\0" + address[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notifier:
+            notifier.connect(address)
+            notifier.sendall(b"READY=1")
+    except OSError as exc:
+        # The agent is serving either way, so this does not stop it. It is
+        # worth a line in the journal because the visible symptom is elsewhere:
+        # systemd waits for a readiness that never arrives and times the start
+        # out, which reads as "the agent failed to start".
+        print(f"could not notify systemd of readiness: {exc}", file=sys.stderr)
+        return False
+    return True
+
+
+def serve_agent(services, socket_path):
+    """Bind the socket, say so, then serve.
+
+    The order is the contract. `systemctl restart ems-appliance-agent.service`
+    returns the moment this unit is ready, and the package's postinst runs
+    `ems-appliance verify-install` right after it -- which asks whether the
+    socket exists and fails the whole installation if it does not. Under
+    Type=simple that was a race the agent lost often enough to abort a `dpkg`
+    run, so readiness is reported once the socket is bound, chmodded and
+    grouped, and never before.
+    """
+
+    server = AgentServer(services, socket_path=socket_path)
+    print(f"appliance agent listening on {server.socket_path}")
+    notify_ready()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 def default_allowed_uids(config):

@@ -15,6 +15,8 @@ Marked ``docker`` because both guests are containers.
 """
 
 import json
+import time
+from pathlib import Path
 
 import pytest
 
@@ -130,15 +132,77 @@ def test_an_upgrade_keeps_reporting_a_usable_appliance(host, package, tmp_path_f
     assert host.shell("/usr/bin/ems-appliance verify-install").returncode == 0
 
 
+# --- readiness is not a guess ----------------------------------------------
+
+
+def slow_the_agent_bind(host, seconds, scratch):
+    """Make the agent take a measurable time to reach its socket.
+
+    The real bind takes milliseconds, so whether the postinst's socket check
+    beats it is decided by luck and reproduces about one install in ten. Six
+    seconds turns the same race into an answer.
+
+    The drop-in is written here and copied in rather than printf-ed through a
+    shell, because the ExecStart it needs carries single quotes and building
+    that as a quoted shell argument is how the first attempt at this silently
+    produced a unit with no override at all -- which then looked like the fix
+    not working.
+    """
+
+    dropin = Path(scratch) / "slow-bind.conf"
+    dropin.write_text(
+        "[Service]\n"
+        "ExecStart=\n"
+        f"ExecStart=/bin/sh -c 'sleep {seconds}; exec /usr/bin/ems-appliance agent'\n",
+        encoding="utf-8",
+    )
+    host.shell(f"mkdir -p {DROPIN_DIR}/{AGENT_UNIT}.d", check=True, timeout=120)
+    host.copy_in(dropin, f"{DROPIN_DIR}/{AGENT_UNIT}.d/slow-bind.conf")
+    host.shell("systemctl daemon-reload", check=True, timeout=120)
+
+
+def test_a_restart_returns_only_once_the_socket_answers(host, tmp_path):
+    """What Type=notify buys, measured rather than assumed.
+
+    The postinst runs `systemctl restart ems-appliance-agent.service` and then
+    `ems-appliance verify-install`, whose socket check asks once. Under
+    Type=simple the restart returned as soon as ExecStart was forked and the
+    check raced the bind; a lost race aborts the `dpkg` run with "the
+    installation is not usable". With the bind slowed to six seconds the same
+    sequence is deterministic, and the restart has to absorb the delay.
+    """
+
+    slow_the_agent_bind(host, 6, tmp_path)
+    try:
+        host.shell(f"systemctl stop {AGENT_UNIT}", timeout=120)
+        host.shell(f"rm -f {SOCKET_PATH}")
+        started = time.monotonic()
+        restart = host.shell(f"systemctl restart {AGENT_UNIT}", timeout=200)
+        blocked = time.monotonic() - started
+        assert restart.returncode == 0, host.journal(AGENT_UNIT)
+        assert blocked >= 5, f"the restart returned after {blocked:.1f}s, so it did not wait for the bind"
+        verify = host.shell("/usr/bin/ems-appliance verify-install", timeout=300)
+        assert verify.returncode == 0, verify.stdout
+        assert "agent_socket" in verify.stdout
+        assert "failed  agent_socket" not in verify.stdout, verify.stdout
+    finally:
+        host.shell(f"rm -rf {DROPIN_DIR}/{AGENT_UNIT}.d && systemctl daemon-reload", timeout=120)
+        host.shell(f"systemctl restart {AGENT_UNIT}", timeout=180)
+    assert host.wait_for_unit(AGENT_UNIT), host.journal(AGENT_UNIT)
+
+
 # --- critical failures are not swallowed ------------------------------------
 
 
 @pytest.mark.parametrize("unit", [AGENT_UNIT, WEB_UNIT])
 def test_a_failing_service_startup_fails_the_package_configuration(host, unit):
-    """`systemctl restart` of a Type=simple unit returns before the process dies.
+    """Either the restart fails or the verification does; the package fails.
 
-    So a broken service is not always caught by the restart itself; the
-    post-install verification is what makes the package fail either way.
+    The two units answer differently now and the assertion covers both. The web
+    service is Type=simple, so `systemctl restart` returns before a doomed
+    process has died and the post-install verification is what catches it. The
+    agent is Type=notify, so a replacement ExecStart that exits without sending
+    READY=1 fails the restart itself.
     """
 
     break_unit(host, unit)
