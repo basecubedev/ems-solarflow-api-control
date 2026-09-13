@@ -64,6 +64,27 @@ def host(package):
         container.stop()
 
 
+@pytest.fixture(autouse=True)
+def a_fresh_start_budget(request):
+    """Every test begins with systemd willing to start the units again.
+
+    systemd refuses the sixth start of a unit within ten seconds
+    (DefaultStartLimitBurst=5, DefaultStartLimitIntervalSec=10s), and the
+    counter survives the daemon-reload the maintainer script runs before each
+    restart. Every configure restarts the agent and the web service and
+    re-arms the export path watcher, each unit with a counter of its own; the
+    live tests below configure once or twice each, and on a fast runner six
+    starts of one unit land inside one window. A test that did nothing wrong
+    is then told "start of the service was attempted too often". Nothing here
+    measures that limit, so each test starts with every counter cleared.
+    Tests that never touch the live host are left alone.
+    """
+
+    if "host" not in request.fixturenames:
+        return
+    request.getfixturevalue("host").reset_start_limit()
+
+
 def break_unit(host, unit, command="/bin/false"):
     host.shell(
         f"mkdir -p {DROPIN_DIR}/{unit}.d && "
@@ -88,6 +109,32 @@ def reconfigure(host):
         "DEBIAN_FRONTEND=noninteractive dpkg-reconfigure ems-appliance-manager 2>&1",
         timeout=900,
     )
+
+
+def reconfigure_cleanly(host):
+    """Reconfigure and require it to succeed, saying why when it does not.
+
+    `assert reconfigure(host).returncode == 0` reports "assert 1 == 0" and
+    nothing else: pytest abbreviates the command in the `where` clause, so the
+    maintainer script's own output is cut off mid-word and the journal is never
+    read. That is the one case where the reason matters, and a CI failure at
+    that line cost three experiments that each disproved a guess -- the answer
+    was in output that was thrown away.
+    """
+
+    result = reconfigure(host)
+    if result.returncode != 0:
+        raise AssertionError(
+            "dpkg-reconfigure failed\n"
+            f"--- maintainer script ---\n{result.stdout}\n"
+            # 200 lines, not the default 60: a restart cycle is six systemd
+            # lines and these tests do many, so the default window held nothing
+            # but start/stop chatter and cut off the one thing worth reading --
+            # whatever the process itself said before it exited.
+            f"--- {AGENT_UNIT} ---\n{host.journal(AGENT_UNIT, lines=200)}\n"
+            f"--- {WEB_UNIT} ---\n{host.journal(WEB_UNIT, lines=200)}"
+        )
+    return result
 
 
 # --- a clean live install ---------------------------------------------------
@@ -278,7 +325,7 @@ def test_a_fatal_migration_error_fails_the_package_configuration(host):
         assert "state migration failed" in result.stdout, result.stdout
     finally:
         host.shell(f"rm -f {STATE_DIR}/auth.json", timeout=60)
-    assert reconfigure(host).returncode == 0
+    reconfigure_cleanly(host)
 
 
 # --- an image-build root ------------------------------------------------------
@@ -409,7 +456,7 @@ def test_the_backup_account_cannot_remove_its_own_ownership_marker(host):
 def test_a_reinstall_keeps_the_ownership_marker_it_already_bound(host):
     before = record_field(host, "home_marker_nonce")
 
-    reconfigure(host)
+    reconfigure_cleanly(host)
 
     assert record_field(host, "home_marker_nonce") == before
     assert host.shell(f"test -f {HOME_MARKER}").returncode == 0
