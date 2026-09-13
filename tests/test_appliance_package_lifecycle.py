@@ -64,6 +64,27 @@ def host(package):
         container.stop()
 
 
+@pytest.fixture(autouse=True)
+def a_fresh_start_budget(request):
+    """Every test begins with systemd willing to start the units again.
+
+    systemd refuses the sixth start of a unit within ten seconds
+    (DefaultStartLimitBurst=5, DefaultStartLimitIntervalSec=10s), and the
+    counter survives the daemon-reload the maintainer script runs before each
+    restart. Every configure restarts the agent and the web service and
+    re-arms the export path watcher, each unit with a counter of its own; the
+    live tests below configure once or twice each, and on a fast runner six
+    starts of one unit land inside one window. A test that did nothing wrong
+    is then told "start of the service was attempted too often". Nothing here
+    measures that limit, so each test starts with every counter cleared.
+    Tests that never touch the live host are left alone.
+    """
+
+    if "host" not in request.fixturenames:
+        return
+    request.getfixturevalue("host").reset_start_limit()
+
+
 def break_unit(host, unit, command="/bin/false"):
     host.shell(
         f"mkdir -p {DROPIN_DIR}/{unit}.d && "

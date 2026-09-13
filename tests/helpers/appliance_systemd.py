@@ -338,6 +338,19 @@ class SystemdContainer:
             self.run(["sleep", "1"], timeout=30)
         return False
 
+    def reset_start_limit(self, *units):
+        """Clear the start counters, so systemd will start the units again.
+
+        `systemctl reset-failed` is the documented way out of "start of the
+        service was attempted too often", and it works on an active unit too.
+        It is also the only way: systemd 257 serializes the counter across
+        `daemon-reload`, so the reload a maintainer script runs before its
+        restart does not clear it. Without units every unit in the guest is
+        reset; the guest exists for this package alone.
+        """
+
+        self.run(["systemctl", "reset-failed", *units], check=True, timeout=60)
+
     def journal(self, unit, lines=60):
         return self.run(
             ["journalctl", "-u", unit, "-n", str(lines), "--no-pager"], timeout=120
