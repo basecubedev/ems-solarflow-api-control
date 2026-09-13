@@ -76,6 +76,24 @@ Where the deployment shape prevents a real import, a copy plus a contract test
 comparing the blocks is the accepted substitute — the test is what makes it one
 source rather than three.
 
+How far a surface sits off the ground is one of those shared values, and there
+are four of them: `--tone-well` is the page's own ground showing through
+something cut into a surface, `--tone-card` is anything that sits on the page,
+`--tone-inner` is anything that sits on one of those, and `--tone-hover` is
+either of them under the pointer. A rule names one. Tinting one is how a surface
+says something about itself — `color-mix(in srgb, var(--grid) 5%,
+var(--tone-card))` is a card that is about the grid meter — but choosing the
+level is not a rule's decision to make.
+
+The prohibited pattern is a fill written into a rule: `color-mix(in srgb,
+var(--veil) 3.5%, transparent)` and its forty relatives. Each is invisible on
+its own and they are ruinous together — measured on the cockpit's Control view,
+they turned twenty painted surfaces into thirteen tones two units apart, which
+is a page with no levels at all and reads as a haze. A container that only holds
+things — a rail, a tab bar, a wrapper — paints nothing and is separated by its
+frame and its spacing; painting it is how a page grows a tone for something that
+is not an object.
+
 ### Workflow ownership invariant
 
 An artifact may enter a workflow cleanup scope only through one of these
@@ -378,6 +396,15 @@ Preserve unrelated work. Never use `git reset --hard`, `git clean -fd`, a force
 checkout over user changes, unrelated stash mutation, history rewriting, or a
 push without explicit instruction.
 
+A file that is copied aside so it can be put back — a stylesheet perturbed to
+prove a contract bites, a config swapped to measure a baseline — is copied to a
+name of its own, and the restore is verified. `cp a/styles.css b/styles.css
+backup/` writes both to `backup/styles.css`: the second copy is refused, the
+first is silently the wrong file, and putting it back overwrites a file with its
+neighbour. This has cost work here. Back up to `backup/dashboard.css` and
+`backup/appliance.css`, and confirm the restore with `md5sum -c` rather than by
+reading the command that was meant to do it.
+
 Before commit, run `git diff --check`, `git status --short`, and
 `git diff --stat`, then inspect every changed file. Commits MUST be small,
 logical, in English, and have no Co-Author trailers. Use test-before-fix commits
@@ -405,11 +432,18 @@ Validation MUST match the changed risk. Use the applicable baseline:
 
 ```bash
 ruff check .
-python -m compileall -q admin ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
+python -m compileall -q admin appliance ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
 node --check admin/static/admin.js
 python tools/build_config_template.py --check
+python tools/check_third_party_licenses.py
 git diff --check
 ```
+
+That list is the "Repo static checks" job, in the order it runs them, so a green
+run here is the same evidence CI is about to produce. It used to leave out
+`appliance` and the licence inventory, which made the local baseline weaker than
+the gate it stands in for -- the failure mode being a push that looks validated
+and comes back red on something that was never run.
 
 EMS/control changes additionally require focused tests, simulation and the
 `power_control` gate, self-test, and the full non-Docker suite. Admin/frontend

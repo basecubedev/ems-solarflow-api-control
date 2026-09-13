@@ -127,9 +127,9 @@ def rules(css):
 def derived_tokens(css):
     """Tokens whose value is built from another token.
 
-    `--surface-sunken` is `--bg` at half strength, so it follows every palette
-    without being written twelve times. A theme that redefined one would break
-    exactly the derivation that makes it work.
+    `--tone-card` is `--bg` with a little of the palette's own light mixed in,
+    so it follows every palette without being written twelve times. A theme
+    that redefined one would break exactly the derivation that makes it work.
     """
 
     return {
@@ -189,6 +189,110 @@ def white_films(css):
                 if PLAIN_WHITE.search(literal):
                     found.append((" ".join(selector.split())[:44], prop.strip(), literal.strip()))
     return found
+
+
+TONES = ("--tone-well", "--tone-card", "--tone-inner", "--tone-hover")
+
+# What a palette is made of, as opposed to what it accents with. A fill built
+# from one of these is a surface tone; a fill built from --output or --danger
+# is a thing saying something about itself.
+NEUTRAL_TOKENS = ("veil", "muted", "muted2", "bg", "bg2", "panel", "panel-strong", "surface-raised", "text")
+
+
+def layers(value):
+    """A background's layers, split on the commas that separate them.
+
+    `background` takes a comma-separated list, and every layer in it may be a
+    function with commas of its own -- `color-mix(in srgb, var(--veil) 4%,
+    transparent)` has two. Splitting on every comma turns one layer into three.
+    """
+
+    parts, depth, current = [], 0, ""
+    for char in value:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        if char == "," and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += char
+    if current.strip():
+        parts.append(current.strip())
+    return parts
+
+
+def surface_fills(css):
+    """The bottom layer of every background a rule paints.
+
+    Layers are drawn over one another and the last one is the base -- the one
+    that decides what tone the surface is. A stage card is
+    `radial-gradient(...), var(--tone-card)`: the radial is what the card says
+    about itself, and --tone-card is what it is made of. Only the base is a
+    surface tone, so only the base is what this returns.
+
+    Yields `(selector, base)`; an object-style wrapper is unwrapped first, since
+    `var(--o-fill, X)` means "X unless a treatment answers for it" and X is the
+    fill this rule owns.
+    """
+
+    found = []
+    for selector, block in rules(css):
+        for declaration in block.split(";"):
+            prop, _, value = declaration.partition(":")
+            if prop.strip() not in ("background", "background-color", "background-image"):
+                continue
+            value = " ".join(value.split())
+            if not value:
+                continue
+            base = layers(value)[-1]
+            unwrapped = re.fullmatch(r"var\(--o-fill,\s*(.*)\)", base, re.S)
+            if unwrapped:
+                base = layers(unwrapped.group(1))[-1]
+            # `rules` splits on braces, so a comment sitting above a rule
+            # arrives as part of its selector. Strip it, or the selector this
+            # reports is prose and no exception list can name it.
+            name = re.sub(r"/\*.*?\*/", " ", selector, flags=re.S)
+            found.append((" ".join(name.split())[:60], base))
+    return found
+
+
+def mix_share(value):
+    """How much of the first colour a two-colour `color-mix` carries, as 0..1.
+
+    `--tone-inner` is `color-mix(in srgb, var(--veil) 11%, var(--bg))`, and a
+    test that wants to know how bright a tile is has to read the 11 rather than
+    carry a copy of it -- a copy is exactly what stops it noticing the number
+    changing.
+    """
+
+    found = re.search(r"color-mix\(in srgb,\s*var\(--[a-z0-9-]+\)\s*([\d.]+)%", value)
+    if not found:
+        raise ValueError(f"not a two-colour srgb mix: {value!r}")
+    return float(found.group(1)) / 100
+
+
+def invents_a_tone(base):
+    """Whether a base layer mixes its own surface colour instead of naming one.
+
+    A tone is flat. A gradient in the base position is a texture or a sheen --
+    the grid of hairlines behind the page, the highlight running off a button's
+    corner -- and those are drawings, not levels: they say nothing about how far
+    from the ground a surface sits, which is the only thing a tone says.
+    """
+
+    if any(f"var({name})" in base for name in TONES):
+        return False
+    if re.match(r"(linear|radial|conic|repeating-[a-z]+)-gradient\(", base):
+        # A sheen and a hairline grid fade out; that is what makes them
+        # drawings. A gradient with no transparent stop is a fill that happens
+        # to be written as two colours -- `linear-gradient(180deg,
+        # var(--panel-strong), var(--panel))` was the card level of this whole
+        # product, and it is a tone under a longer name.
+        if "transparent" in base:
+            return False
+    return any(re.search(rf"var\(--{token}\)", base) for token in NEUTRAL_TOKENS)
 
 
 def spacings(css):
