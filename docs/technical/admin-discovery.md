@@ -85,8 +85,17 @@ releases without the gate (`for_upgrade=False`): every supported release
 comparison below is skipped for Setup — the `< v0.6.0` filter and `latest`-first
 ordering are unchanged.
 
-In the upgrade flow, release selection only ever allows real upgrades; downgrades
-belong to the Backup/Restore flow. When the running EMS build can be inspected
+In the upgrade flow, release selection allows an upgrade or a rollback inside
+the running release line; anything further back belongs to the Backup/Restore
+flow. Only the patch may go backwards: inside one `major.minor` the two builds
+read the same config schema and the same database — the SQLite store grows by
+`CREATE TABLE IF NOT EXISTS` and `ADD COLUMN`, which an older build reads
+without noticing, and `ems.config` refuses a `config_schema_version` it does not
+know by name rather than misreading it — and a minor or major step down is where
+those two statements stop holding. A rollback is `rollback_available`,
+selectable, and never what the console proposes: the default is always the
+newest release that is not behind the running build, falling back to the rolling
+channel when there is none. When the running EMS build can be inspected
 (the running container's image, or the compose-declared image when it is stopped),
 each target is compared by build identity rather than tag name alone, because
 `latest` is a channel, not a version. In order: an identical image digest is
@@ -94,14 +103,24 @@ each target is compared by build identity rather than tag name alone, because
 `upgrade_available` (basis `channel`) unless it is that same image — it is never
 blocked as older-than-running or already-current, so the list never dead-ends when
 the running build is the newest stable; two comparable SemVer tags require the
-target to be `>=` current (a lower target is `downgrade_blocked`, even if its build
-serial is higher); when a running `latest` makes SemVer incomparable the monotonic
-`build_serial` decides (`upgrade_available` or `older_than_running_build`); and
+target to be `>=` current, or a lower patch in the same `major.minor`
+(`rollback_available`); any other lower target is `downgrade_blocked`, even if
+its build serial is higher; when a running `latest` makes SemVer incomparable the monotonic
+`build_serial` decides (`upgrade_available` or `older_than_running_build`), and
+where nothing at all could be proven the rolling channel is placed on the version
+line instead — `latest` is built from main, so it sits at or above every
+published tag and belongs to the line of the newest one. That placement is an
+inference and never overrules a digest or a build serial, which are readings of
+the running image itself; and
 when the target image is not local yet its identity cannot be settled from the
 listing alone, so it is `identity_unknown`. Each release carries its
 `upgrade_state`. Proven non-upgrades (`older_than_running_build`,
 `downgrade_blocked`, `already_current`) are non-selectable with a short reason
-(`latest` excepted, as above). An `identity_unknown` target stays selectable:
+(`latest` excepted, as above). A release whose setup resources could not be
+*verified* stays selectable and says so; only a release whose resources are
+known to be missing drops out. The check is an unauthenticated GitHub call made
+once per eligible tag, so treating its failure as a missing release emptied the
+catalogue down to whatever had already been downloaded. An `identity_unknown` target stays selectable:
 preparation and Guided Upgrade pull the target image and re-inspect its labels,
 then refuse it only if it is genuinely older or still unverifiable — so the guard
 lives in the backend, not only the UI, and a not-yet-local stable target is not
@@ -110,7 +129,8 @@ blocked prematurely.
 Older published images (`v0.6.x`) predate the build-identity labels. When both
 sides lack a `build_serial` but carry comparable supported SemVer tags, the
 SemVer comparison is authoritative on its own: `v0.6.0 -> v0.6.1` is a normal
-upgrade (still `upgrade_available`), `v0.6.1 -> v0.6.0` is `downgrade_blocked`,
+upgrade (still `upgrade_available`), `v0.6.1 -> v0.6.0` is `rollback_available`, `v0.7.0 -> v0.6.1` is
+`downgrade_blocked`,
 and each such upgrade carries an `upgrade_warning` noting the SemVer fallback.
 Only the unprovable case — a running `latest` whose build cannot be ordered
 against an unlabeled stable — stays `identity_unknown` and blocked. Setting

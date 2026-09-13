@@ -164,6 +164,10 @@ UPGRADE_AVAILABLE = "upgrade_available"
 ALREADY_CURRENT = "already_current"
 OLDER_THAN_RUNNING_BUILD = "older_than_running_build"
 DOWNGRADE_BLOCKED = "downgrade_blocked"
+# A lower target that stays inside the running release line: the same
+# major and minor, an earlier patch. Permitted, and deliberately not in
+# BLOCKING_UPGRADE_STATES -- see the note there.
+ROLLBACK_AVAILABLE = "rollback_available"
 IDENTITY_UNKNOWN = "identity_unknown"
 
 # ``basis`` value for an upgrade allowed only by the legacy test override: build
@@ -183,6 +187,14 @@ LEGACY_UNVERIFIED_WARNING = (
 
 # States that Guided Upgrade must refuse: they are either a real downgrade or a
 # comparison it cannot prove is an upgrade.
+#
+# ROLLBACK_AVAILABLE is not among them. Undoing a bad patch is something an
+# operator has to be able to do, and inside one release line the two builds read
+# the same config schema and the same database: the store evolves by
+# CREATE TABLE IF NOT EXISTS and ADD COLUMN, which an older build reads without
+# noticing, and a config written under a schema this build does not know is
+# refused by name in `ems.config` rather than misread. Leaving the line downward
+# stays blocked, because that is where those two statements stop holding.
 BLOCKING_UPGRADE_STATES = frozenset(
     {OLDER_THAN_RUNNING_BUILD, DOWNGRADE_BLOCKED, IDENTITY_UNKNOWN}
 )
@@ -241,7 +253,9 @@ def assess_upgrade(
        must never be blocked as older-than-running or already-current (the same
        image is caught by step 1).
     3. Both sides carry comparable SemVer -> target must be ``>=`` current; a
-       lower target is :data:`DOWNGRADE_BLOCKED` regardless of build serial.
+       lower target inside the same ``major.minor`` line is
+       :data:`ROLLBACK_AVAILABLE` and any other lower target is
+       :data:`DOWNGRADE_BLOCKED`, both regardless of build serial.
        When neither side carries a build serial this is the *legacy* SemVer
        fallback and the upgrade verdict carries :data:`LEGACY_SEMVER_WARNING`.
     4. SemVer is not comparable (a ``latest`` side) but both build serials are
@@ -273,6 +287,8 @@ def assess_upgrade(
             )
         if target_version == current_version:
             return UpgradeAssessment(ALREADY_CURRENT, "semver")
+        if target_version[:2] == current_version[:2]:
+            return UpgradeAssessment(ROLLBACK_AVAILABLE, "semver")
         return UpgradeAssessment(DOWNGRADE_BLOCKED, "semver")
 
     if current.build_serial is not None and target.build_serial is not None:

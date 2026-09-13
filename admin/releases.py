@@ -71,6 +71,10 @@ IDENTITY_UNVERIFIED_REASON = (
     "needed) before making any changes."
 )
 ALREADY_CURRENT_REASON = "Already running this EMS build."
+ROLLBACK_REASON = (
+    "Earlier patch in the release line you are running. Selectable as a "
+    "rollback; it is not an upgrade."
+)
 # What the identity assessment actually weighed. These two are readings of the
 # running image itself; every other basis is a comparison against something that
 # is not necessarily installed.
@@ -231,12 +235,32 @@ def _is_release_candidate(tag, github_prerelease=False):
     return bool(github_prerelease or (parsed and parsed[3][0] == 0))
 
 
+def _release_line(version):
+    """The ``(major, minor)`` a version belongs to."""
+
+    return version[:2] if version else None
+
+
 def _is_backwards(baseline, tag):
     """Whether ``tag`` is a lower version than ``baseline``, where both are known."""
 
     current = _version(baseline)
     selected = _version(tag)
     return bool(current and selected and selected < current)
+
+
+def _blocks_as_downgrade(baseline, tag):
+    """Whether moving from ``baseline`` to ``tag`` leaves its release line.
+
+    Only the patch may go backwards. Inside one line the two builds read the
+    same config schema and the same database, so undoing a bad patch is a move
+    an operator is allowed to make; a minor or major step down is not, and that
+    is where the one-way migrations are.
+    """
+
+    if not _is_backwards(baseline, tag):
+        return False
+    return _release_line(_version(tag)) != _release_line(_version(baseline))
 
 
 def _downgrade_baseline(active, prepared, rolling=None):
@@ -547,6 +571,8 @@ class ReleaseManager:
                 item["reason"] = ALREADY_CURRENT_REASON
             elif running_known and state == IDENTITY_UNKNOWN:
                 item["reason"] = IDENTITY_UNVERIFIED_REASON
+            elif _is_backwards(policy_baseline, tag):
+                item["reason"] = ROLLBACK_REASON
             elif warning:
                 item["reason"] = warning
             elif tag == "latest":
@@ -584,11 +610,18 @@ class ReleaseManager:
         local_item = self._local_release_item()
         if local_item is not None:
             releases.append(local_item)
+        # Selectable and proposed are not the same thing. A rollback has to be
+        # reachable, but the console never suggests one on its own, and it is
+        # the unbounded walk down this list that put an older release in front
+        # of an operator in the first place.
         stable = next(
             (
                 item["tag"]
                 for item in releases
-                if item["stable"] and item["selectable"] and item["channel"] == "stable"
+                if item["stable"]
+                and item["selectable"]
+                and item["channel"] == "stable"
+                and not _is_backwards(policy_baseline, item["tag"])
             ),
             None,
         )
@@ -1629,7 +1662,7 @@ class ReleaseManager:
 
     @staticmethod
     def _is_downgrade(active, selected):
-        return _is_backwards(active, selected)
+        return _blocks_as_downgrade(active, selected)
 
     def _rolling_baseline(self, known_tags=()):
         """Where a running rolling ``latest`` stands, or ``None``.

@@ -13,10 +13,12 @@ import pytest
 from admin.deployment import DockerCli
 from admin.image_identity import (
     ALREADY_CURRENT,
+    BLOCKING_UPGRADE_STATES,
     DOWNGRADE_BLOCKED,
     IDENTITY_UNKNOWN,
     LEGACY_UNVERIFIED,
     OLDER_THAN_RUNNING_BUILD,
+    ROLLBACK_AVAILABLE,
     UPGRADE_AVAILABLE,
     ImageIdentity,
     assess_upgrade,
@@ -393,14 +395,52 @@ def test_assess_override_is_ignored_without_the_flag():
 
 def test_assess_override_never_relaxes_a_semver_downgrade():
     # A SemVer-proven downgrade stays blocked even with the override enabled.
+    # v0.7.0 -> v0.6.1 leaves the release line; the same pair one patch apart is
+    # a rollback and has its own verdict below.
     result = assess_upgrade(
         ImageIdentity(digest="sha256:a"), ImageIdentity(digest="sha256:b"),
-        current_version=_v(0, 6, 1), target_version=_v(0, 6, 0),
+        current_version=_v(0, 7, 0), target_version=_v(0, 6, 1),
         allow_unverified=True,
     )
 
     assert result.state == DOWNGRADE_BLOCKED
     assert result.blocked and result.warning is None
+
+
+def test_assess_allows_a_rollback_inside_the_release_line():
+    """Undoing a bad patch is a move an operator has to be able to make.
+
+    Inside one line the two builds read the same config schema and the same
+    database, so the move is permitted rather than refused -- and it is a
+    verdict of its own, not an upgrade, so nothing downstream can mistake it for
+    one.
+    """
+
+    result = assess_upgrade(
+        ImageIdentity(digest="sha256:a"), ImageIdentity(digest="sha256:b"),
+        current_version=_v(0, 8, 3), target_version=_v(0, 8, 1),
+    )
+
+    assert result.state == ROLLBACK_AVAILABLE
+    assert not result.blocked
+
+
+def test_assess_blocks_a_rollback_that_leaves_the_release_line():
+    """One patch further and it is the same distance; one minor further it is not."""
+
+    result = assess_upgrade(
+        ImageIdentity(digest="sha256:a"), ImageIdentity(digest="sha256:b"),
+        current_version=_v(0, 8, 0), target_version=_v(0, 7, 9),
+    )
+
+    assert result.state == DOWNGRADE_BLOCKED
+    assert result.blocked
+
+
+def test_a_rollback_verdict_is_not_a_blocking_state():
+    """The listing offers what the execution gate accepts, or it is lying."""
+
+    assert ROLLBACK_AVAILABLE not in BLOCKING_UPGRADE_STATES
 
 
 def test_assess_target_latest_is_always_a_forward_channel_move():
