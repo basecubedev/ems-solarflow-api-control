@@ -57,6 +57,32 @@ def tmpfiles_rules():
     return rules
 
 
+# --- agent readiness -------------------------------------------------------
+
+
+def test_the_agent_reports_ready_rather_than_merely_started():
+    """`systemctl restart` has to mean the socket is there.
+
+    The postinst starts this unit and then runs `ems-appliance verify-install`,
+    whose socket check asks once and fails the whole installation when it comes
+    back empty. Under Type=simple systemd reported the unit active as soon as
+    ExecStart was forked, so the check raced the bind and lost often enough to
+    abort a `dpkg` run -- in the install that surfaced this, the very next check
+    in the same output reached the agent through the socket that the previous
+    line said did not exist.
+    """
+
+    assert service(AGENT_UNIT)["Type"] == "notify"
+
+
+def test_the_agent_can_reach_the_notification_socket():
+    """Type=notify is a datagram on an AF_UNIX address, so the sandbox has to
+    admit AF_UNIX -- otherwise the unit never goes ready and every start times
+    out."""
+
+    assert "AF_UNIX" in service(AGENT_UNIT)["RestrictAddressFamilies"].split()
+
+
 # --- agent network sandbox -------------------------------------------------
 
 

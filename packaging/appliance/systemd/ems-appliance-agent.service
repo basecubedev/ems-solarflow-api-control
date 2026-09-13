@@ -6,7 +6,15 @@ After=local-fs.target
 Before=ems-appliance-web.service
 
 [Service]
-Type=simple
+# Not Type=simple: that reports the unit active as soon as ExecStart is forked,
+# which is before the agent has bound its socket. The package's postinst starts
+# this unit and then runs `ems-appliance verify-install`, whose socket check
+# asks once and fails the whole installation when it comes back empty -- an
+# aborted `dpkg` run, seen on a real CI install where the very next check in the
+# same run reached the agent through that socket successfully. Type=notify means
+# `systemctl restart` returns when the agent says READY=1, which it sends after
+# the socket is bound, chmodded and grouped.
+Type=notify
 # The agent is privileged on purpose: it drives Docker, apt, systemd,
 # NetworkManager and authorized_keys. It never accepts a command string and
 # only listens on a local Unix socket.

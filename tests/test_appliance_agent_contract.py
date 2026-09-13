@@ -10,11 +10,19 @@ no second concurrent mutation.
 import json
 import os
 import socket
+import stat
 import threading
 
 import pytest
 
-from appliance.agent import AgentError, AgentHandlers, AgentServer
+from appliance.agent import (
+    SOCKET_MODE,
+    AgentError,
+    AgentHandlers,
+    AgentServer,
+    notify_ready,
+    serve_agent,
+)
 from appliance.agent_client import AgentCallError, AgentClient
 from appliance.protocol import (
     MUTATING_OPERATIONS,
@@ -714,3 +722,89 @@ class _RaisingHandlers:
 
     def dispatch(self, payload, *, actor="", source_ip=""):
         raise self.error
+
+
+# --- readiness -------------------------------------------------------------
+#
+# systemd is told the agent is ready, and the package's postinst believes it:
+# it runs `ems-appliance verify-install` straight after `systemctl restart`,
+# and that check asks once whether the socket exists. Under Type=simple the
+# answer was whatever the race decided, and a lost race aborts a `dpkg` run.
+
+
+def datagram_listener(path):
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    listener.bind(path if isinstance(path, str) else str(path))
+    listener.settimeout(10)
+    return listener
+
+
+def test_the_socket_is_there_when_systemd_is_told_it_is(tmp_path, services, monkeypatch):
+    """The whole fix, asserted from systemd's side of the notification."""
+
+    listener = datagram_listener(tmp_path / "notify.sock")
+    monkeypatch.setenv("NOTIFY_SOCKET", str(tmp_path / "notify.sock"))
+    agent_socket = tmp_path / "agent.sock"
+
+    serving = {}
+    real_serve_forever = AgentServer.serve_forever
+
+    def capture(self, *args, **kwargs):
+        serving["server"] = self
+        return real_serve_forever(self, *args, **kwargs)
+
+    monkeypatch.setattr(AgentServer, "serve_forever", capture)
+    thread = threading.Thread(target=serve_agent, args=(services, agent_socket), daemon=True)
+    thread.start()
+    try:
+        assert listener.recv(64) == b"READY=1"
+        assert agent_socket.exists()
+        assert stat.S_IMODE(agent_socket.stat().st_mode) == SOCKET_MODE
+        # Existing is not the same as listening, and the check that disagreed
+        # with `check_socket` in the failing install was a real connection.
+        caller = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        caller.settimeout(5)
+        try:
+            caller.connect(str(agent_socket))
+        finally:
+            caller.close()
+    finally:
+        listener.close()
+        server = serving.get("server")
+        if server is not None:
+            server.shutdown()
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+
+def test_readiness_reaches_an_abstract_namespace_address(tmp_path, monkeypatch):
+    """systemd uses the abstract namespace, where a leading "@" is a NUL."""
+
+    name = f"\0ems-appliance-ready-{os.getpid()}"
+    listener = datagram_listener(name)
+    monkeypatch.setenv("NOTIFY_SOCKET", "@" + name[1:])
+    try:
+        assert notify_ready() is True
+        assert listener.recv(64) == b"READY=1"
+    finally:
+        listener.close()
+
+
+def test_an_agent_nobody_is_waiting_for_notifies_nobody(monkeypatch):
+    """No NOTIFY_SOCKET is the agent started by hand, not a failure."""
+
+    monkeypatch.delenv("NOTIFY_SOCKET", raising=False)
+    assert notify_ready() is False
+
+
+def test_a_notification_that_cannot_be_delivered_does_not_stop_the_agent(tmp_path, monkeypatch, capsys):
+    """The agent serves either way; the journal gets the reason.
+
+    Losing the notification is not the visible symptom -- systemd waiting for a
+    readiness that never arrives and timing the start out is, and that reads as
+    "the agent failed to start" without saying why.
+    """
+
+    monkeypatch.setenv("NOTIFY_SOCKET", str(tmp_path / "nothing-is-bound-here.sock"))
+    assert notify_ready() is False
+    assert "could not notify systemd of readiness" in capsys.readouterr().err
