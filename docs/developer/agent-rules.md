@@ -396,6 +396,15 @@ Preserve unrelated work. Never use `git reset --hard`, `git clean -fd`, a force
 checkout over user changes, unrelated stash mutation, history rewriting, or a
 push without explicit instruction.
 
+A file that is copied aside so it can be put back — a stylesheet perturbed to
+prove a contract bites, a config swapped to measure a baseline — is copied to a
+name of its own, and the restore is verified. `cp a/styles.css b/styles.css
+backup/` writes both to `backup/styles.css`: the second copy is refused, the
+first is silently the wrong file, and putting it back overwrites a file with its
+neighbour. This has cost work here. Back up to `backup/dashboard.css` and
+`backup/appliance.css`, and confirm the restore with `md5sum -c` rather than by
+reading the command that was meant to do it.
+
 Before commit, run `git diff --check`, `git status --short`, and
 `git diff --stat`, then inspect every changed file. Commits MUST be small,
 logical, in English, and have no Co-Author trailers. Use test-before-fix commits
