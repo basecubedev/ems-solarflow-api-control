@@ -162,36 +162,96 @@ def test_every_model_the_owner_catalogue_names_resolves_to_a_profile():
     )
 
 
-# Property names observed on real hardware: an 800 Pro 2 over the local API,
-# 41 samples across an AC charge cycle (2026-09-13). Names only -- no values, no
-# serial, nothing device-identifying. Extend this list when another model is
-# probed; that is what makes the check grow with the fleet.
+# Every property name a SolarFlow 800 Pro 2 reports from /properties/report,
+# read live on 2026-09-14. Names only -- no values, so nothing here identifies a
+# device or carries a credential (the report does contain a `pass` field).
+#
+# The earlier version of this list held 17 names taken from the AC-charge probe,
+# which had recorded a WATCHED subset rather than the whole report. It therefore
+# claimed to check what the device sends while checking a third of it, and
+# `chargeMaxLimit` -- the one value that decides whether a device charges at all
+# -- was outside it. Extend this when another model is read; that is what makes
+# the check grow with the fleet.
 OBSERVED_ON_HARDWARE = {
+    "BatVolt",
+    "Fanmode",
+    "Fanspeed",
+    "IOTState",
+    "OTAState",
+    "VoltWakeup",
     "acMode",
     "acStatus",
+    "batCalTime",
+    "bindstate",
+    "chargeMaxLimit",
+    "dataReady",
     "dcStatus",
     "electricLevel",
+    "factoryModeState",
     "faultLevel",
     "gridInputPower",
+    "gridOffMode",
+    "gridOffPower",
+    "gridReverse",
+    "gridStandard",
     "gridState",
+    "heatState",
+    "hyperTmp",
     "inputLimit",
+    "inverseMaxPower",
+    "is_error",
+    "lampSwitch",
+    "minSoc",
+    "oldMode",
     "outputHomePower",
     "outputLimit",
     "outputPackPower",
     "packInputPower",
+    "packNum",
     "packState",
+    "pass",
+    "phaseSwitch",
     "pvStatus",
+    "remainOutTime",
+    "reverseState",
+    "rssi",
     "smartMode",
+    "socCompSwitch",
     "socLimit",
+    "socSet",
+    "socStatus",
     "solarInputPower",
+    "solarPower1",
+    "solarPower2",
+    "solarPower3",
+    "solarPower4",
+    "ts",
+    "tsZone",
+    "writeRsp",
 }
 
-# Observed and deliberately not carried into DeviceState, each with the reason.
+# Reported and deliberately not carried into DeviceState, grouped by why.
 DELIBERATELY_UNREAD = {
-    # PV presence is derived from solarInputPower, which is a power rather than
-    # an enum and is already the basis for every PV decision. A second, coarser
-    # signal for the same fact would be a competing authority.
+    # Device-internal thermal management; the EMS reads hyperTmp for display and
+    # commands nothing about cooling.
+    "Fanmode", "Fanspeed", "heatState",
+    # Cloud/lifecycle bookkeeping, none of it a control input.
+    "IOTState", "OTAState", "bindstate", "dataReady", "factoryModeState",
+    "pass", "ts", "tsZone", "writeRsp",
+    # Device features the EMS does not implement. Reading them would imply it
+    # has an opinion about them.
+    "VoltWakeup", "gridOffPower", "gridStandard", "lampSwitch", "oldMode",
+    "phaseSwitch", "reverseState", "socCompSwitch",
+    # PV presence is derived from solarInputPower, a power rather than an enum
+    # and already the basis for every PV decision; a second, coarser signal for
+    # the same fact would be a competing authority.
     "pvStatus",
+    # The device's own output rating. Config carries max_power, which an
+    # operator may deliberately set lower than the hardware allows -- taking the
+    # device's word would override that.
+    "inverseMaxPower",
+    # faultLevel is the graded signal and is read; this is its boolean shadow.
+    "is_error",
 }
 
 
@@ -227,3 +287,68 @@ def test_every_property_real_hardware_reports_is_read_or_explicitly_ignored():
 
     # Guards the guard: a typo in the ignore list must not silently widen it.
     assert DELIBERATELY_UNREAD <= OBSERVED_ON_HARDWARE
+
+
+# Where each AC-charging setting is consumed. A key in the defaults that is in
+# no one's hands is a setting an operator can change with no effect, which is
+# how `charge_ramp_up_w_per_cycle` and `charge_ramp_down_w_per_cycle` shipped in
+# the template while the decision not to build a second ramp stood in the design
+# record. Adding a key means naming its consumer here.
+AC_CHARGE_SETTING_CONSUMERS = {
+    "enabled": "cfg.ac_charge_control_enabled, runtime-toggleable",
+    "charge_start_w": "ChargeDirectionSettings.start_w",
+    "charge_hysteresis_w": "cfg.ac_charge_stop_w -> ChargeDirectionSettings.stop_w",
+    "entry_confirm_cycles": "ChargeDirectionSettings.entry_confirm_cycles",
+    "entry_window_cycles": "ChargeDirectionSettings.entry_window_cycles",
+    "max_charge_entries_per_hour": "ChargeDirectionSettings.max_entries_per_hour",
+    "max_total_charge_power_w": "EMSController.commanded_total_floor_w",
+}
+
+
+def test_every_ac_charge_setting_has_a_consumer():
+    from ems.config import AC_CHARGE_CONTROL_DEFAULTS
+
+    declared = set(AC_CHARGE_CONTROL_DEFAULTS)
+    named = set(AC_CHARGE_SETTING_CONSUMERS)
+
+    assert declared - named == set(), (
+        "these settings are shipped to operators with nobody reading them: "
+        f"{sorted(declared - named)}"
+    )
+    assert named - declared == set(), (
+        f"these consumers name a setting that no longer exists: {sorted(named - declared)}"
+    )
+
+
+def test_the_named_thresholds_actually_reach_the_direction_settings():
+    """Naming a consumer is a claim; this checks the two that carry a number."""
+
+    from ems import config as cfg
+    from ems.controller import EMSController
+
+    class _Runtime:
+        data = {
+            "ac_charge_control": {
+                "enabled": True,
+                "charge_start_w": 321,
+                "charge_hysteresis_w": 21,
+                "entry_confirm_cycles": 4,
+                "entry_window_cycles": 9,
+                "max_charge_entries_per_hour": 7,
+            }
+        }
+
+    previous = cfg.AC_CHARGE_CONTROL_CONFIG
+    cfg.AC_CHARGE_CONTROL_CONFIG = dict(previous, **_Runtime.data["ac_charge_control"])
+    try:
+        controller = EMSController.__new__(EMSController)
+        settings = controller.charge_settings()
+    finally:
+        cfg.AC_CHARGE_CONTROL_CONFIG = previous
+
+    assert settings.start_w == 321
+    # The lower edge is derived, never configured: start minus hysteresis.
+    assert settings.stop_w == 300
+    assert settings.entry_confirm_cycles == 4
+    assert settings.entry_window_cycles == 9
+    assert settings.max_entries_per_hour == 7

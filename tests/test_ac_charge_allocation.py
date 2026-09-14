@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from ems.ac_charge_control import (
+    MIN_DEVICE_CHARGE_W,
     allocate_charge_targets,
     charge_headroom_weight,
     resolve_max_charge_power_w,
@@ -267,3 +268,116 @@ def test_the_mix_models_resolve_under_both_word_orders():
         profile = resolve_hardware_profile(name)
         assert profile is not None, name
         assert profile.canonical_name == expected, name
+
+
+def test_a_share_too_small_to_be_worth_a_direction_change_is_concentrated():
+    """The band's lower edge bounds the total, and the total is then split.
+
+    The design folded `min_charge_power_w` away on the argument that the edge
+    already is the smallest commanded charge. That holds for one device: six
+    devices sharing 105 W take 17 W each, six AC direction changes buying
+    nothing, and a draw that small may not register in gridInputPower at all --
+    which would raise ac_charge_not_delivered about a charge working as well as
+    it ever could.
+    """
+
+    states = [_state(soc=50)] * 6
+    devices = [_device()] * 6
+    capabilities = [_capability()] * 6
+
+    targets = allocate_charge_targets(105, states, devices, capabilities, [True] * 6)
+
+    taking = [value for value in targets if value != 0]
+    assert len(taking) == 2, targets
+    assert all(abs(value) >= MIN_DEVICE_CHARGE_W for value in taking), targets
+    assert sum(targets) == pytest.approx(-105, abs=2)
+
+
+def test_a_nearly_full_device_is_left_out_rather_than_trickled():
+    """1 W of charge is a relay operation that buys a milliwatt-hour."""
+
+    states = [_state(soc=99), _state(soc=50), _state(soc=50)]
+    devices = [_device()] * 3
+
+    targets = allocate_charge_targets(
+        105, states, devices, [_capability()] * 3, [True] * 3
+    )
+
+    assert targets[0] == 0
+    assert all(abs(value) >= MIN_DEVICE_CHARGE_W for value in targets[1:])
+
+
+def test_a_large_charge_still_spreads_across_the_fleet():
+    """The minimum is a floor on a share, never a reason to concentrate."""
+
+    states = [_state(soc=50)] * 6
+    targets = allocate_charge_targets(
+        900, states, [_device()] * 6, [_capability()] * 6, [True] * 6
+    )
+
+    assert all(value < 0 for value in targets), targets
+    assert max(targets) - min(targets) == 0, targets
+    assert sum(targets) == pytest.approx(-900, abs=6)
+
+
+def test_the_last_device_keeps_a_share_below_the_minimum():
+    """Refusing it would leave the surplus unabsorbed while the direction still
+    says charge, which is exactly the windup the floor exists to prevent."""
+
+    states = [_state(soc=50)] * 3
+    targets = allocate_charge_targets(
+        30, states, [_device()] * 3, [_capability()] * 3, [True] * 3
+    )
+
+    taking = [value for value in targets if value != 0]
+    assert len(taking) == 1
+    assert taking[0] == -30
+
+
+def test_a_battery_only_device_needs_no_pv_to_take_part():
+    """The device class the feature exists for: a SolarFlow 2400 AC has no PV.
+
+    Nothing classifies devices as "has PV" or not, and nothing needs to. The
+    PV-first stage keys on *measured* PV, so a device without any contributes a
+    weight of zero and is served by the battery stage instead; the charge weight
+    never looks at PV at all. A `pv_kwp` left at the default on a PV-less device
+    is therefore harmless -- it only ever multiplies a measured PV share, and
+    that share is zero.
+    """
+
+    from ems.target_control import pv_first_weight
+
+    battery_only = _device()
+    battery_only.pv_kwp = 1.0
+
+    # No measured PV: no PV-first share, whatever pv_kwp says.
+    assert pv_first_weight(0, battery_only) == 0
+    assert pv_first_weight(-5, battery_only) == 0
+
+    # The charge side weights room in the battery, not panels.
+    assert charge_headroom_weight(_state(soc=50), battery_only, _capability()) > 0
+
+
+def test_no_pv_right_now_is_not_evidence_of_a_device_without_pv():
+    """Every device reports zero PV at night.
+
+    Deriving "this device has no panels" from an instantaneous zero would
+    reclassify the whole fleet every evening. The reason nothing needs that
+    classification is that both kinds of device are already served correctly by
+    the same rule: no measured PV, no PV-first share.
+    """
+
+    from ems.target_control import pv_first_weight
+
+    with_panels = _device()
+    with_panels.pv_kwp = 4.0
+    with_panels.pv_priority_factor = 1.0
+    without_panels = _device()
+    without_panels.pv_kwp = 1.0
+    without_panels.pv_priority_factor = 1.0
+
+    # At night the two are indistinguishable, and treated identically.
+    assert pv_first_weight(0, with_panels) == pv_first_weight(0, without_panels) == 0
+
+    # In daylight the measured share is what separates them, not a label.
+    assert pv_first_weight(500, with_panels) > pv_first_weight(500, without_panels)
