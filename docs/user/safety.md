@@ -59,6 +59,42 @@ EMS keeps these facts separate and honest:
   Do not conclude "Cloud MQTT control works" from movement toward the target or a
   broker PUBACK alone.
 
+## AC charging draws from the grid
+
+AC charging is off until you switch it on, because it is the one EMS feature
+that can *spend* energy rather than place it. Before enabling it:
+
+- Decide which devices may charge. It is per device (`ac_charge_enabled`), on
+  top of whether the model's AC charge path is established at all.
+- Set `max_charge_power_w` per device and `max_total_charge_power_w` for the
+  installation. Leaving the per-device value at 0 derives it from the device's
+  output limit, which may be more than you want to draw.
+- Start with the default thresholds. Charging begins only after a sustained
+  surplus, and stops the moment the house needs the power back.
+
+You can stop it at any time without restarting the EMS:
+
+```bash
+python3 emsctl.py ac-charge disable            # the whole feature
+python3 emsctl.py device WR1 ac-charge off     # one device
+```
+
+### What happens if the EMS stops while charging
+
+On a clean shutdown the EMS returns every device it put into charge. If the
+process is killed — power loss, `kill -9`, a container removed mid-cycle — it
+writes nothing, and **the device keeps charging until its own maximum SoC stops
+it**. Nothing in the device times the command out.
+
+That is bounded, not unlimited: the charge ends at the device's configured
+maximum SoC. It still costs whatever that energy costs. If the EMS is stopped
+abruptly while charging, check the device and stop it in the Zendure app or with
+`emsctl.py device WR1 ac-mode output` once the EMS is back.
+
+The EMS itself recovers on the next start: a device found charging with a
+healthy battery is taken back into output mode. A device found charging at its
+discharge floor is left alone, because there the firmware is recovering it.
+
 ## During the first live run
 
 - Watch grid power.

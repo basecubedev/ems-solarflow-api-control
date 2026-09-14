@@ -15,15 +15,19 @@ control chain, see [control-flow.md](control-flow.md).
 6. Run state reconciliation when due.
 7. Detect strict night/minSoc idle.
 8. Stabilize total target.
-9. Allocate target across devices.
-10. Apply device ramp and limits.
-11. Apply `min_output_limit` while enabled.
-12. Apply deadband and write gates.
-13. Write `outputLimit` only behind safety gates.
+9. Decide the charge direction.
+10. Allocate target across devices.
+11. Apply device ramp and limits.
+12. Apply `min_output_limit` while enabled (output direction only).
+13. Apply deadband and write gates.
+14. Write the power command only behind safety gates.
 
 ## Stable Fast Output Control
 
-The controller keeps an internal `commanded_total_w`.
+The controller keeps an internal `commanded_total_w`. It is signed: positive is
+power supplied to the house, negative is power drawn from AC into the batteries.
+Its lower bound is zero unless the system is in charge direction, which is what
+keeps the integrator from winding down into a charge nobody decided to take.
 
 It calculates:
 
@@ -187,6 +191,83 @@ weight = battery_kwh * usable_percent / 100
 
 This favors devices with more usable energy while avoiding devices at or below
 their discharge floor.
+
+## AC Charging From Surplus
+
+Off by default (`ac_charge_control.enabled`). When it is on, a device charges
+only if every one of these agrees: the feature, the device's own
+`ac_charge_enabled`, a hardware model whose AC charge path is established,
+current telemetry that allows charging, the device being online and enabled, and
+nobody else owning its AC mode. Any single no is enough.
+
+### Direction
+
+Entry and exit deliberately measure different quantities.
+
+Before charging there is no charge to observe, so the signal is the surplus the
+discharge side could not absorb: the integrator sits at its floor and the
+filtered load is still negative. Entry needs
+`ac_charge_control.entry_confirm_cycles` of the last `entry_window_cycles`
+observations to show that — five of seven by default.
+
+Counting observations rather than averaging them is deliberate. A mean lets
+height substitute for duration: one spike ten times the threshold averages to a
+sustained surplus and would move a relay for something already over. Counting
+within a window rather than in a row is equally deliberate: one brief dip costs
+a single observation instead of discarding the whole confirmation.
+
+Once charging, that surplus has been consumed by the charging itself and the
+meter reads roughly balanced, so the exit reads the desired total instead —
+the commanded charge plus the current load, **before** the ramp limits how far
+it may move this cycle. Reading the ramped value would make an exit that is
+meant to be immediate wait for the ramp.
+
+Exit is immediate and unconditional. It is never gated by a threshold, a
+confirmation counter or the rate limit, because failing closed on the way *back*
+would leave hardware drawing from the grid.
+
+### Why the zero crossing is quiet
+
+Idle and discharge are the same AC mode, so a target crossing zero moves no
+relay. The mode boundary sits at `charge_start_w`, far from zero. A load
+oscillating around zero produces no direction change at all.
+
+The band's lower edge is derived, not configured:
+
+```text
+stop = max(0, charge_start_w - charge_hysteresis_w)
+```
+
+A configuration whose stop threshold sits above its start threshold cannot be
+expressed.
+
+### Switch rate
+
+Hysteresis alone cannot bound the switch rate — a surplus swinging wider than
+the band crosses both edges. What bounds it is the asymmetry (immediate exit,
+deliberate entry) and `max_charge_entries_per_hour`. Reaching that cap is
+logged as a warning rather than silently applied: it means the thresholds do not
+fit the installation.
+
+### Allocation
+
+The charge total is split by absorbable energy — `(max_soc - soc) x battery_kwh`
+— which is the mirror of the discharge side's usable energy above the floor. It
+uses the same weighted allocation primitive, so there is one allocator with two
+weight functions rather than two allocators. Each device is capped by
+`max_charge_power_w`, or by its output limit when that is left at 0.
+
+### Firmware-owned charging
+
+A device the firmware itself put into AC charge is left alone: the EMS neither
+writes its mode nor its charge power. This is recognised from telemetry — the
+mode and the observed status agree, the battery is at its floor, and the EMS did
+not ask for the charge — rather than by reimplementing the firmware's trigger,
+which is a threshold the EMS does not own.
+
+Above the floor, a charge nobody is commanding is a leftover from an EMS that
+stopped mid-charge, or one started from the vendor app, and the normal acMode
+reconcile takes it back.
 
 ## Deadband
 

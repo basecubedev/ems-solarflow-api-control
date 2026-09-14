@@ -276,6 +276,33 @@ Machine-readable root causes always use this shape:
 }
 ```
 
+## AC charging
+
+AC charging from surplus is off until it is switched on, and can be switched off
+again without restarting the EMS.
+
+```bash
+python3 emsctl.py ac-charge status
+python3 emsctl.py ac-charge enable
+python3 emsctl.py ac-charge disable
+
+python3 emsctl.py device WR1 ac-charge on
+python3 emsctl.py device WR1 ac-charge off
+```
+
+`ac-charge disable` stops the whole feature; the per-device switch takes a
+single device out of it and leaves the rest charging. Both write runtime state,
+which the EMS resolves ahead of `config.json`, so neither needs a restart.
+
+Turning it off never leaves a device charging: the direction returns on the next
+cycle, and a clean EMS shutdown returns any device it put into charge. See
+[user/safety.md](user/safety.md) for what happens if the process is killed
+instead.
+
+Charging also requires the device's hardware model to have an established AC
+charge path — a property of the model, not of the installation. A device that
+refuses reports a stable reason rather than failing silently.
+
 ## Config Discovery
 
 By default, `emsctl.py` uses this config lookup order:
