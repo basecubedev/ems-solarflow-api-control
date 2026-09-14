@@ -140,3 +140,47 @@ def test_the_per_device_config_key_reaches_the_device():
 
     signature = inspect.signature(ZendureMqttDeviceClient.__init__)
     assert signature.parameters["ac_charge_enabled"].default is True
+
+
+def test_a_collapsed_charge_band_is_named_at_load():
+    """Entry and exit at the same threshold defeats the anti-flutter design.
+
+    The derivation prevents an *inverted* pair; it cannot prevent a *collapsed*
+    one. Measured on the closed loop against a steady surplus: the shipped band
+    gives one direction change in 200 cycles, a collapsed one gives 24 and pins
+    the hourly cap. Relays move on each, which is the wear the whole asymmetric
+    entry/exit design exists to prevent -- and the owner's founding requirement.
+    """
+
+    from ems.config import normalize_ac_charge_control_config
+
+    def warnings_for(settings):
+        collected = []
+        normalize_ac_charge_control_config(settings, emit_warning=collected.append)
+        return collected
+
+    assert warnings_for({"enabled": True, "charge_start_w": 150, "charge_hysteresis_w": 50}) == []
+    # A wide band is fine: the lower edge simply clamps at zero.
+    assert warnings_for({"enabled": True, "charge_start_w": 150, "charge_hysteresis_w": 400}) == []
+    # Off is off; the thresholds decide nothing.
+    assert warnings_for({"enabled": False, "charge_hysteresis_w": 0}) == []
+
+    assert len(warnings_for({"enabled": True, "charge_start_w": 150, "charge_hysteresis_w": 0})) == 1
+    # The other way to collapse it, which a check that only looks at the
+    # hysteresis misses.
+    assert len(warnings_for({"enabled": True, "charge_start_w": 0})) == 1
+
+
+def test_the_operator_numbers_survive_the_warning():
+    """Warned about, never silently rewritten: clamping a value an operator set
+    would make this a second authority for it."""
+
+    from ems.config import normalize_ac_charge_control_config
+
+    merged = normalize_ac_charge_control_config(
+        {"enabled": True, "charge_start_w": 150, "charge_hysteresis_w": 0},
+        emit_warning=lambda message: None,
+    )
+
+    assert merged["charge_start_w"] == 150
+    assert merged["charge_hysteresis_w"] == 0
