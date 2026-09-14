@@ -91,7 +91,7 @@ def test_hub_uses_scalar_automation_and_rejects_charge(profile):
     assert charge.block_reason == BLOCK_OPERATION_UNSUPPORTED
 
 
-def test_zensdk_supports_discharge_idle_not_charge():
+def test_zensdk_supports_discharge_and_idle():
     ok = resolve_power_write_capability(
         topic_family=FAMILY_LEGACY_JSON,
         hardware_profile="solarflow_800_pro_2",
@@ -100,14 +100,27 @@ def test_zensdk_supports_discharge_idle_not_charge():
     )
     assert ok.supported is True
     assert ok.write_profile == WRITE_PROFILE_ZENSDK_PROPERTIES
-    charge = resolve_power_write_capability(
+
+
+def test_charge_support_is_decided_per_model_not_per_write_profile():
+    """Both models build the identical charge command; only one may send it."""
+
+    measured = resolve_power_write_capability(
         topic_family=FAMILY_LEGACY_JSON,
         hardware_profile="solarflow_800_pro_2",
         operation="charge",
         broker_source=BROKER_SOURCE_ZENDURE_CLOUD_MQTT,
     )
-    assert charge.supported is False
-    assert charge.block_reason == BLOCK_OPERATION_UNSUPPORTED
+    assert measured.supported is True
+
+    unmeasured = resolve_power_write_capability(
+        topic_family=FAMILY_LEGACY_JSON,
+        hardware_profile="solarflow_2400_ac",
+        operation="charge",
+        broker_source=BROKER_SOURCE_ZENDURE_CLOUD_MQTT,
+    )
+    assert unmeasured.supported is False
+    assert unmeasured.block_reason == BLOCK_OPERATION_UNSUPPORTED
 
 
 # --- the telemetry family is context, never a gate ---------------------------
