@@ -6617,16 +6617,25 @@ function featureEnabledPath(section) {
   return null;
 }
 
-function isFeatureEnabled(section) {
+// A feature absent from the values is not off: it is unset, and the catalog
+// default is what the EMS will apply to it. Guided Setup and Maintenance read
+// the same answer here, because reading it twice is how Maintenance came to
+// call a missing ac_charge_control block "Disabled" while the EMS charged.
+function featureEnabledFromValues(section, values) {
   const path = featureEnabledPath(section);
   if (!path) return null;
   const field = (section.fields || []).find((item) => item.path === path);
-  const value = Object.prototype.hasOwnProperty.call(featureValues, path)
-    ? featureValues[path]
-    : field
-    ? field.default
-    : false;
+  const value =
+    values && Object.prototype.hasOwnProperty.call(values, path)
+      ? values[path]
+      : field
+      ? field.default
+      : false;
   return Boolean(value);
+}
+
+function isFeatureEnabled(section) {
+  return featureEnabledFromValues(section, featureValues);
 }
 
 function gridMeterVariants() {
@@ -16656,7 +16665,7 @@ function renderMaintenanceFeatureSection(section) {
   const id = String(section.id || "feature");
   const enabledPath = featureEnabledPath(section);
   const features = mconfigState.draft.features || (mconfigState.draft.features = {});
-  const enabled = enabledPath ? Boolean(features[enabledPath]) : null;
+  const enabled = featureEnabledFromValues(section, features);
   const card = document.createElement("div");
   card.className = "feature-row mconfig-feature";
   card.setAttribute("role", "listitem");
