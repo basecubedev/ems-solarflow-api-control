@@ -95,6 +95,14 @@ sum of per-device targets after allocation, device ramp, enabled/offline gates,
 `controller_target_w` for the internal stabilized controller target and
 `allocated_target_w` for the post-allocation target before final control gates.
 
+**It goes negative while AC charging.** The target is a signed quantity —
+positive is power sent to the house, negative is power drawn in to charge — and
+the same is true of `sensor.ems_solarflow_<device>_target`. An automation
+written before AC charging existed will have assumed the value is never below
+zero; `> 0` and `abs()` are the two places to check. `sensor.ems_solarflow_home`
+is unaffected: a charging device's own draw is subtracted before it is
+published, so it stays the household's consumption.
+
 `sensor.ems_solarflow_home` is a calculated display/runtime value, not the
 smoothed control target. Short-term differences between home load, controller
 target, per-device target, written `outputLimit`, and actual device output are
