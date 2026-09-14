@@ -125,3 +125,26 @@ def test_the_shutdown_release_only_ever_touched_charging_devices():
     source = inspect.getsource(EMSController.release_charging_devices)
     assert 'self.commanded_device_targets.get(dev.name, 0) >= 0' in source
     assert "continue" in source
+
+
+def test_the_kept_across_stop_line_names_what_is_still_drawing():
+    """A line saying "a restart is coming" without saying what is drawing while
+    it does leaves the operator nothing to act on.
+
+    Pinned because the documentation promises the device names, and the first
+    version of the event carried only the signal -- the doc would have been a
+    false claim about the EMS's own output.
+    """
+
+    import inspect
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "ems-solarflow-api-control.py"
+    text = source.read_text(encoding="utf-8")
+    start = text.index('"ac_charge_kept_across_stop"')
+    block = text[start - 600 : start + 400]
+
+    assert "devices=" in block
+    assert "charging_w=" in block
+    # Silent when nothing was charging: the normal stop must not gain a line.
+    assert "if charging:" in block
