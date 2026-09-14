@@ -385,6 +385,15 @@ def build_dashboard_snapshot(
             "commanded_total_w": _rounded(controller.commanded_total_w),
             "filtered_load_w": _rounded(controller.filtered_load_w),
             "night_min_soc_idle": bool(night_min_soc_idle),
+            # A projection of the cycle's charge direction, never operator
+            # state: the regulator's decision is rebuilt every loop and must not
+            # become indistinguishable from something a person chose.
+            "ac_charging": bool(
+                getattr(getattr(controller, "charge_direction", None), "charging", False)
+            ),
+            "ac_charge_entries_last_hour": len(
+                getattr(getattr(controller, "charge_direction", None), "entries", ())
+            ),
         },
         "rules": rule_states,
         "control_explain": _control_explain_payload(controller),

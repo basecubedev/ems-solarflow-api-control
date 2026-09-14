@@ -1410,7 +1410,7 @@ function deviceCardHtml(name, device, previousSocWidths) {
         ${deviceValue("PV", watts(devicePvPower(device)), "solar")}
         ${deviceValue("Output", watts(deviceOutputPower(device)), "inverter")}
         ${deviceValue("Battery", signedWatts(batteryFlow.valueW), batteryFlow.isCharging ? "charge" : "battery")}
-        ${readOnly ? "" : deviceValue("Target", watts(device.target_w), "gauge")}
+        ${readOnly ? "" : deviceCommandValue(device.target_w)}
         ${deviceValue("Limit", watts(device.output_limit_w), "warning")}
       </div>
       ${renderDeviceFirmwareStatus(device)}
@@ -3463,6 +3463,17 @@ function renderFullChargeAssist(device) {
       </div>
     </div>
   `;
+}
+
+function deviceCommandValue(targetW) {
+  // A charging device produces no output, so showing it under "Target" as a
+  // negative number reads as a broken gauge. It gets the battery row's charge
+  // tone instead, which is what it physically is.
+  const number = Number(targetW || 0);
+  if (number < 0) {
+    return deviceValue("Charge", signedWatts(number), "charge");
+  }
+  return deviceValue("Target", watts(number), "gauge");
 }
 
 function deviceValue(label, value, iconName = "rule") {
