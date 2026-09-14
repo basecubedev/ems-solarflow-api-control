@@ -104,10 +104,26 @@ costs nothing like drawing from the grid on one does.
 
 ### What happens if the EMS stops while charging
 
-On a clean shutdown the EMS returns every device it put into charge. If the
-process is killed — power loss, `kill -9`, a container removed mid-cycle — it
-writes nothing, and **the device keeps charging until its own maximum SoC stops
-it**. Nothing in the device times the command out.
+**Stopping the EMS leaves the devices as they are.** That is deliberate: a stop
+you asked for — `docker stop`, `docker compose down`, `systemctl stop`, Ctrl-C —
+is usually a restart, and resetting every device for the length of an update
+would drop the house's cover and throw away a charge that then has to re-confirm
+its entry window. Discharging devices keep their `outputLimit` regardless;
+charging devices now keep theirs too.
+
+A **charging** device therefore keeps drawing while the EMS is away. That is
+bounded — the charge ends at the device's own maximum SoC — but an update that
+never comes back leaves it drawing until then. If a restart does not complete,
+check the device and stop it in the Zendure app or with
+`emsctl.py device WR1 ac-mode output`.
+
+The EMS **does** return a charging device when it stops by itself: `--once`,
+`--max-cycles`, `--duration`, or an unhandled error. Nothing is coming back to
+supervise the charge in those cases.
+
+An unstoppable kill — power loss, `kill -9`, a container removed rather than
+stopped — writes nothing either way. Nothing in the device times the command
+out.
 
 That is bounded, not unlimited: the charge ends at the device's configured
 maximum SoC. It still costs whatever that energy costs. If the EMS is stopped
