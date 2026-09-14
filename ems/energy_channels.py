@@ -67,9 +67,9 @@ ENERGY_CHANNELS = (
     EnergyChannel(
         "pv_yield", "PV Yield", "pv_total_w", POSITIVE, "pv_yield_wh"
     ),
-    # House load is the load at the grid connection point: energy the EMS
-    # charges the battery with from AC is part of it, because the meter cannot
-    # tell the two apart.
+    # House load is what the household draws: the power the fleet charges
+    # from AC is netted out again (``ems.power_direction.derive_house_load_w``),
+    # because the meter alone cannot tell a charging device from an appliance.
     EnergyChannel(
         "home_consumption", "Home", "home_load_w", POSITIVE, "home_consumption_wh"
     ),

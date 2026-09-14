@@ -113,6 +113,43 @@ controller on the same hardware remains unsupported; see
 **A device with no battery never charges**, whatever its configuration says.
 Battery presence is read from telemetry, not from the config.
 
+## Where charging is visible
+
+A charging device reports `output` as 0, so anything that reads the output
+alone shows it as idle. The measured AC input power (`gridInputPower`) is
+carried alongside the output and surfaces in four places:
+
+| Surface | Name |
+|---|---|
+| Dashboard device tile | `ac_charge_w` |
+| Dashboard flow / snapshot total | `inverter_charge_w` |
+| Analytics | the **AC Charge** series and overlay |
+| Home Assistant | `sensor.ems_solarflow_<device>_ac_charge` |
+| InfluxDB | `zendure_device.grid_input` |
+
+This is the measured value, not the commanded charge target. The two differ by
+the device's own ramp, which was measured at 100–170 W/s.
+
+In the aggregated flow diagram a charging fleet draws a **grid → inverter**
+pipe, and the inverter node states `Charging <W>` above its output. Its value
+stays the output it feeds the house, because in a mixed fleet one device can
+export while another charges. What the charger takes off the meter is not drawn
+a second time on the grid → home pipe, so at night — when the whole import is
+the charge — that pipe falls idle rather than showing the same watts twice.
+
+The diagram has no busbar node, so the inward flow is anchored at the grid. When
+the charge is actually covered by a sibling inverter rather than by the grid,
+the grid node still reads the truth (near zero) while the pipe overstates its
+role. Preview it with `serve_dashboard_preview.py --scenario ac-charging`.
+
+Energy statistics count charged energy separately (**AC Charge**, kWh) and
+deliberately attach no monetary value to it.
+
+The household load is corrected for it: the grid meter cannot tell a charging
+device from an appliance, so the charge power is subtracted again before
+`home_load_w` is reported. Without that, a device charging at 800 W would show
+up as 800 W of extra household consumption.
+
 ## Logs
 
 ```text

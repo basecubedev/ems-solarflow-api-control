@@ -41,6 +41,7 @@ from ems.history.schema import (
     query_profile_bucket_names,
 )
 from ems.influx_setup import INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS
+from ems.power_direction import derive_house_load_w
 from ems.logging_utils import log_event
 
 # Shown once when telemetry is being written but the downsampling half of the
@@ -146,6 +147,7 @@ _DEVICE_FIELDS = (
     "solar4",
     "output",
     "output_limit",
+    "grid_input",
     "pack_in",
     "pack_out",
     "soc_limit",
@@ -192,8 +194,9 @@ def build_telemetry_lines(
     output target (``target_output``). Offline devices are recorded with
     ``available=False`` so gaps are explicit. Returns a list of line strings.
 
-    ``house_load`` mirrors the dashboard telemetry semantics:
-    ``max(0, inverter_output_total + grid_power)``.
+    ``house_load`` mirrors the dashboard telemetry semantics and is derived by
+    the shared :func:`ems.power_direction.derive_house_load_w`, so a charging
+    device's own draw is not billed to the household.
     """
     if timestamp_ns is None:
         timestamp_ns = time.time_ns()
@@ -201,6 +204,7 @@ def build_telemetry_lines(
     online_map = online_map or {}
     lines = []
     inverter_total = 0.0
+    charge_total = 0.0
     for device, state in zip(devices, states):
         tags = {"device": device.name, "source": "zendure"}
         online = bool(online_map.get(device.name, True))
@@ -215,13 +219,15 @@ def build_telemetry_lines(
         fields.update(_device_field_values(state))
         if _is_number(fields.get("output")):
             inverter_total += fields["output"]
+        if _is_number(fields.get("grid_input")):
+            charge_total += fields["grid_input"]
         line = build_line_protocol("zendure_device", tags, fields, timestamp_ns)
         if line:
             lines.append(line)
 
     if _is_number(grid_power):
         grid_power = float(grid_power)
-        house_load = max(0.0, inverter_total + grid_power)
+        house_load = derive_house_load_w(inverter_total, grid_power, charge_total)
         line = build_line_protocol(
             "shelly_meter",
             {"source": "shelly"},
