@@ -44,7 +44,7 @@ from ems.mqtt_control.zendure_commands import (
     build_power_command,
     next_power_message_id,
 )
-from ems.mqtt_control.zensdk_operations import (
+from ems.power_command import (
     ZenSdkOperationError,
     build_zensdk_power_operation,
 )
