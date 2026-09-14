@@ -164,9 +164,12 @@ transport write gate. Charging is not gated separately: what prevents it is the
 permission set above, not a second gate. Making the way *back* depend on an
 extra gate would leave hardware drawing from the grid when that gate closed.
 
-On a clean shutdown the EMS returns every device it put into charge. A killed
-process writes nothing and the device charges on until its own maximum SoC stops
-it — bounded, but it still costs. See [user/safety.md](user/safety.md).
+A stop you asked for leaves a running charge alone: an update or a restart is
+meant to preserve the last state, not reset it. The EMS does return a charging
+device when it stops by *itself* — `--once`, `--max-cycles`, `--duration`, an
+unhandled error — because nothing is coming back to supervise it. Either way the
+charge is bounded by the device's own maximum SoC. See
+[user/safety.md](user/safety.md).
 
 **While the regulator charges a device, it owns that device's AC direction.**
 Every cycle each device gets a default claim of `ac_output`, and the state
