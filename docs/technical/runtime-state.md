@@ -43,6 +43,9 @@ Example:
   "winter": {
     "enabled": true
   },
+  "ac_charge_control": {
+    "enabled": false
+  },
   "devices": {
     "WR1": {
       "enabled": true,
@@ -85,6 +88,7 @@ further `outputLimit` writes until PV telemetry becomes positive again.
 | Field | Meaning |
 |---|---|
 | `enabled` | Skip writes for this device when false |
+| `ac_charge_enabled` | Whether this device may be charged from surplus |
 | `max_power` | Runtime per-device power limit |
 | `offgrid_socket_mode` | Operator intent for Zendure offgrid socket mode |
 | `pv_priority_factor` | Runtime PV-first allocation weight override |
