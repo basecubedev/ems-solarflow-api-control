@@ -106,6 +106,9 @@ Modes:
   `diagnosis.json`, `diagnosis.txt`, `control-diagnostics.json`,
   `control-diagnostics.txt`, `control-quality.json`, `control-quality.txt`,
   `redacted-config.json`, `runtime-state.json`, and `bundle-metadata.json`.
+  It collects the control and control-quality sections whether or not you also
+  pass their flags, so the bundle is complete on its own — the point of one is
+  not needing a second round trip.
 
 Control interpretation:
 
@@ -242,6 +245,14 @@ and whose job is unrelated:
 If the aim is "this device may charge from surplus, but never above N watts",
 the one to set is `max_charge_power_w`. `0` there means "ask the device for its
 own ceiling", which is what `chargeMaxLimit` reports — never "no charging".
+
+`diagnose --control` also reports what AC charging is configured to do: whether
+it is enabled (runtime state winning over config, the way the loop resolves it),
+the derived entry/exit band, the installation limit, and which devices are
+permitted to charge. The *current direction* is not there — the regulator never
+writes its decision to runtime state, so the block points at
+`event=ac_charge_direction` instead of leaving a reader to conclude that nothing
+is happening.
 
 Control quality interpretation:
 

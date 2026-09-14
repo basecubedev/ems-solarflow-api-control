@@ -111,6 +111,9 @@ would drop the house's cover and throw away a charge that then has to re-confirm
 its entry window. Discharging devices keep their `outputLimit` regardless;
 charging devices now keep theirs too.
 
+The EMS says so when it happens: `event=ac_charge_kept_across_stop` names the
+signal that stopped it and the device it left charging.
+
 A **charging** device therefore keeps drawing while the EMS is away. That is
 bounded — the charge ends at the device's own maximum SoC — but an update that
 never comes back leaves it drawing until then. If a restart does not complete,
