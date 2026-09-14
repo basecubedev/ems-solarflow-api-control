@@ -517,6 +517,9 @@ def main():
                 )
                 break
     finally:
+        # A charge this EMS commanded must not outlive it: the device would keep
+        # drawing from the grid until its own SoC ceiling stopped it.
+        ems.release_charging_devices()
         # Release the grid-meter client's runtime resources (the MQTT grid meter
         # owns a network loop/connection/thread; HTTP clients own none). Safe and
         # idempotent, and never masks a primary shutdown error.

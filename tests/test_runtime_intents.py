@@ -19,8 +19,23 @@ from ems.runtime_intents import (
 )
 
 
-def telemetry(ac_mode=2, ac_status=1):
-    return SimpleNamespace(ac_mode=ac_mode, ac_status=ac_status)
+def telemetry(ac_mode=2, ac_status=1, soc_limit=2, soc=9, min_soc=15, max_soc=100):
+    """Telemetry for a device at its discharge floor unless told otherwise."""
+
+    return SimpleNamespace(
+        ac_mode=ac_mode,
+        ac_status=ac_status,
+        soc_limit=soc_limit,
+        soc=soc,
+        min_soc=min_soc,
+        max_soc=max_soc,
+    )
+
+
+def healthy(ac_mode=1, ac_status=2):
+    """A charging device whose battery is nowhere near its floor."""
+
+    return telemetry(ac_mode, ac_status, soc_limit=0, soc=60, min_soc=15)
 
 pytestmark = [
     pytest.mark.power_control,
@@ -120,6 +135,30 @@ def test_firmware_charge_claims_the_device_and_commands_nothing():
     assert intent.desired_ac_mode is None
     assert intent.setpoint_w is None
     assert intent.output_control_allowed is False
+
+
+def test_a_charge_the_ems_asked_for_is_not_firmware_owned():
+    """Without this the regulator reads its own charge back as the firmware's.
+
+    The device would be marked uncommandable, drop out of the chargeable set,
+    and the regulator would shut itself down two cycles after starting.
+    """
+
+    assert firmware_charge_intent("WR1", telemetry(1, 2)) is not None
+    assert (
+        firmware_charge_intent("WR1", telemetry(1, 2), ems_commanded_charge=True)
+        is None
+    )
+
+
+def test_a_charge_above_the_floor_is_a_leftover_not_a_firmware_action():
+    """The firmware acts at the floor; anything higher is ours to take back.
+
+    An EMS that died mid-charge, or a charge started from the vendor app, would
+    otherwise be protected forever by a claim meant for emergency recovery.
+    """
+
+    assert firmware_charge_intent("WR1", healthy()) is None
 
 
 def test_a_deliberate_claim_outranks_the_firmware_observation():
