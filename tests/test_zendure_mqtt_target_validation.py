@@ -55,10 +55,10 @@ def _device(hardware_profile, *, max_power=2000, **kwargs):
 # --- Phase 2: operation support before adapter -------------------------------
 
 
-def test_unmeasured_zensdk_negative_target_rejected_without_publish():
+def test_a_zensdk_model_without_a_charge_path_is_rejected_without_publish():
     # The command shape is family-wide; whether a model has an AC charge path is
-    # a per-model fact, and an unmeasured one must not be sent a charge command.
-    dev = _device("solarflow_2400_ac")
+    # a per-model fact, and a model without one must not be sent a charge command.
+    dev = _device("solarflow_800")
     assert dev.write_output_limit(-500) is False
     assert dev._service.published == []
     assert dev.write_health.last_error == "charge_target_unsupported"
@@ -166,8 +166,8 @@ def test_zensdk_never_publishes_negative_output_limit():
     assert properties["acMode"] == 1
 
 
-def test_an_unmeasured_zensdk_model_publishes_nothing_for_a_charge():
-    dev = _device("solarflow_2400_ac")
+def test_a_zensdk_model_without_a_charge_path_publishes_nothing():
+    dev = _device("solarflow_800")
     dev.write_output_limit(-300)
     assert dev._service.published == []
 

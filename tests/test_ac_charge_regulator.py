@@ -107,7 +107,7 @@ def test_charging_never_starts_without_the_per_device_permission():
 
 def test_charging_never_starts_on_a_model_without_a_charge_path():
     harness = Harness(
-        [charging_device(hardware_profile="solarflow_2400_ac")], load=-900
+        [charging_device(hardware_profile="solarflow_800")], load=-900
     )
     harness.run(cycles=20)
 
