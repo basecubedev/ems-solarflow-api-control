@@ -34,9 +34,10 @@ def charging_device(name="WR1", **kwargs):
     return dev
 
 
-def surplus_state(soc=50):
-    # PV is exporting and the battery has room: a genuine surplus situation.
-    return state(soc=soc, solar=900, output=0, soc_limit=0)
+def surplus_state(soc=50, pack_num=2):
+    # PV is exporting and a real battery has room: a genuine surplus situation.
+    # pack_num matters — a device with no pack must never be allocated a charge.
+    return state(soc=soc, solar=900, output=0, soc_limit=0, pack_num=pack_num)
 
 
 class Harness:
@@ -199,7 +200,7 @@ def test_the_regulator_does_not_read_its_own_charge_back_as_the_firmware_s():
     # From here the device reports what it is actually doing.
     charging_telemetry = state(
         soc=50, solar=900, output=0, soc_limit=0, ac_mode=1, ac_status=2,
-        input_limit_w=600,
+        input_limit_w=600, pack_num=2,
     )
     harness.run(cycles=10, states=[charging_telemetry])
 
@@ -257,3 +258,92 @@ def test_shutdown_leaves_a_discharging_device_alone():
     harness.controller.release_charging_devices()
 
     assert len(harness.controller.set_output_limit.call_args_list) == before
+
+
+def test_a_full_battery_does_not_put_the_system_into_charge_direction():
+    """Permission without capacity would wind the integrator down for nothing.
+
+    Entering charge direction opens the negative floor. With no device able to
+    absorb anything, the allocation is empty and the integrator walks down to
+    that floor against a charge that never happens — then has to climb back
+    when the house needs power again.
+    """
+
+    harness = Harness([charging_device()], load=-900)
+    # The helper's ceiling is 100, so a SoC of 100 leaves no headroom.
+    full = state(soc=100, solar=900, output=0, soc_limit=0, pack_num=2)
+    harness.run(cycles=20, states=[full])
+
+    assert harness.controller.charge_direction.charging is False
+    assert harness.controller.commanded_total_w >= 0
+
+
+def test_a_device_without_a_battery_does_not_put_the_system_into_charge_direction():
+    harness = Harness([charging_device()], load=-900)
+    harness.run(cycles=20, states=[surplus_state(pack_num=0)])
+
+    assert harness.controller.charge_direction.charging is False
+    assert all(target >= 0 for target in harness.targets)
+
+
+def test_the_integrator_never_commands_more_charge_than_devices_can_take():
+    """An unreachable setpoint is windup with a delay attached.
+
+    With a total cap well above what the devices accept, the integrator would
+    walk down to that cap while only a fraction actually flows. The meter still
+    reports the unabsorbed surplus, so it stays pinned there — and the exit,
+    which reads commanded plus load, then has to climb the whole gap before it
+    can fire. Measured at a 1200 W cap against a 400 W device, that turned a
+    one-cycle exit into roughly a minute of drawing from the grid.
+    """
+
+    limited = charging_device(max_charge_power_w=400)
+    harness = Harness([limited], load=-1500)
+    harness.run(cycles=20)
+
+    assert harness.controller.charge_direction.charging is True
+    assert harness.controller.commanded_total_w >= -400
+    assert harness.controller.commanded_total_floor_w() == -400
+
+
+def test_the_floor_follows_the_devices_that_can_actually_take_it():
+    two = [charging_device("WR1", max_charge_power_w=300),
+           charging_device("WR2", max_charge_power_w=250)]
+    harness = Harness(two, load=-1500)
+    harness.run(cycles=20, states=[surplus_state(), surplus_state()])
+
+    assert harness.controller.commanded_total_floor_w() == -550
+
+
+def test_a_house_that_needs_power_ends_a_charge_even_with_no_export_capacity():
+    """The no-export hold must never freeze a charge in place.
+
+    The hold exists for the opposite situation: load is positive and nothing can
+    serve it, so the discharge target must not ramp up against reality. It was
+    written before the total could be negative, and it froze that too — at night
+    with no PV a charging device reports no discharge capability, so the hold
+    fired, the integrator stopped seeing the load, and the system charged from
+    the grid while the house drew from it. Indefinitely.
+
+    A charge is the first thing that should give way when the house needs power.
+    """
+
+    harness = Harness([charging_device()], load=-900)
+    surplus = state(soc=50, solar=0, output=0, soc_limit=0, pack_num=2, dc_status=1)
+    harness.run(cycles=10, states=[surplus])
+    assert harness.controller.charge_direction.charging is True
+
+    # Night, no PV, the device is charging and reports no way to discharge.
+    charging_no_export = state(
+        soc=50, solar=0, output=0, soc_limit=0, pack_num=2,
+        dc_status=0, ac_mode=1, ac_status=2, pack_out=600,
+    )
+    before = len(harness.targets)
+    harness.run(cycles=1, load=900, states=[charging_no_export])
+
+    # The direction is out in the same cycle and no device is still told to
+    # charge. The integrator itself walks back under its ramp, which is fine —
+    # what must not happen is the charge continuing.
+    assert harness.controller.charge_direction.charging is False
+    assert harness.controller.commanded_device_targets["WR1"] >= 0
+    assert all(target >= 0 for target in harness.targets[before:])
