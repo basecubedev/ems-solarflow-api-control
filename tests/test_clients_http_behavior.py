@@ -255,6 +255,115 @@ def test_zendure_and_shelly_clients_parse_and_preserve_http_values():
     assert shelly.get_power() == 123.5
 
 
+def _zendure(session, **kwargs):
+    return ZendureClient(
+        "WR1",
+        "192.0.2.10",
+        "SN",
+        session,
+        min_soc=10,
+        max_soc=100,
+        smart_mode=1,
+        grid_off_mode=None,
+        **kwargs,
+    )
+
+
+def _posted(session):
+    return [kwargs["json"] for _verb, _url, kwargs in session.calls if _verb == "post"]
+
+
+def _report(product=None, **properties):
+    payload = {"properties": {"outputLimit": 0, **properties}}
+    if product is not None:
+        payload["product"] = product
+    return ResponseStub(payload=payload)
+
+
+def test_http_discharge_dispatch_stays_the_bare_output_limit_write():
+    """The working discharge path must not change shape.
+
+    The atomic set would also carry smartMode on every five-second cycle, and
+    that is a flash-persistent operating mode. Nothing measured says writing it
+    repeatedly is free, so a non-negative target keeps the single-property write.
+    """
+
+    session = SessionStub()
+    dev = _zendure(session, hardware_profile="solarflow_800_pro_2")
+
+    result = dev.dispatch_output_limit(300)
+
+    assert bool(result) is True
+    assert _posted(session) == [{"sn": "SN", "properties": {"outputLimit": 300}}]
+
+
+def test_http_charge_dispatch_writes_the_measured_atomic_set():
+    session = SessionStub()
+    dev = _zendure(session, hardware_profile="solarflow_800_pro_2")
+
+    result = dev.dispatch_output_limit(-300)
+
+    assert bool(result) is True
+    assert _posted(session) == [
+        {
+            "sn": "SN",
+            "properties": {
+                "smartMode": 1,
+                "acMode": 1,
+                "outputLimit": 0,
+                "inputLimit": 300,
+            },
+        }
+    ]
+
+
+def test_http_charge_is_refused_for_an_unmeasured_model():
+    session = SessionStub()
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+
+    result = dev.dispatch_output_limit(-300)
+
+    assert bool(result) is False
+    assert result.reason == "charge_target_unsupported"
+    assert _posted(session) == []
+
+
+def test_http_charge_is_refused_without_a_resolvable_model():
+    session = SessionStub()
+    dev = _zendure(session)
+
+    result = dev.dispatch_output_limit(-300)
+
+    assert bool(result) is False
+    assert result.reason == "unknown_hardware_profile"
+    assert _posted(session) == []
+
+
+def test_http_model_resolves_from_the_device_own_report():
+    """The local report names the product; no config key is required for it."""
+
+    session = SessionStub(get_response=_report(product="solarFlow800Pro2"))
+    dev = _zendure(session)
+
+    assert dev.dispatch_output_limit(-300).reason == "unknown_hardware_profile"
+    dev.fetch()
+
+    assert bool(dev.dispatch_output_limit(-300)) is True
+
+
+def test_a_pinned_model_outranks_the_reported_product():
+    """Config is a decisive evidence source; the device report corroborates."""
+
+    session = SessionStub(get_response=_report(product="solarFlow800Pro2"))
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.fetch()
+
+    result = dev.dispatch_output_limit(-300)
+
+    assert bool(result) is False
+    assert result.reason == "charge_target_unsupported"
+
+
 def test_zendure_client_defaults_missing_input_limit_to_zero():
     zendure = ZendureClient(
         "WR1",
