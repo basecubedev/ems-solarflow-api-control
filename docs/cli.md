@@ -108,6 +108,9 @@ Modes:
   `redacted-config.json`, `runtime-state.json`, and `bundle-metadata.json`.
   Without `--output` it is written to `data/support/ems-diagnose-<time>.zip`,
   the directory Docker keeps on the host.
+  It collects the control and control-quality sections whether or not you also
+  pass their flags, so the bundle is complete on its own — the point of one is
+  not needing a second round trip.
 
 Control interpretation:
 
@@ -254,6 +257,14 @@ likely cause. A warning rather than an error, because safe mode is a state EMS
 chose: the exit code stays 0, and a Guided Upgrade health check still passes. A
 config.json nested too deeply to check is reported as
 `template_placeholders_unknown`.
+
+`diagnose --control` also reports what AC charging is configured to do: whether
+it is enabled (runtime state winning over config, the way the loop resolves it),
+the derived entry/exit band, the installation limit, and which devices are
+permitted to charge. The *current direction* is not there — the regulator never
+writes its decision to runtime state, so the block points at
+`event=ac_charge_direction` instead of leaving a reader to conclude that nothing
+is happening.
 
 Control quality interpretation:
 

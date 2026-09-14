@@ -208,3 +208,27 @@ def test_the_device_own_status_also_clears_the_silence_count():
     assert count_silent_charge_cycles(
         5, commanded_w=-600, measured_w=0, online=True, charging_status=1
     ) == 6
+
+
+def test_the_home_assistant_target_is_signed_and_the_home_load_is_not():
+    """An existing sensor changes meaning, and someone's automation reads it.
+
+    `sensor.ems_solarflow_target_total` and the per-device target go negative
+    while charging, because the target is one signed quantity. An automation
+    written before the feature existed will have assumed it never drops below
+    zero. `sensor.ems_solarflow_home` must *not* follow: it is the household's
+    consumption, and a charging device's own draw is subtracted before it is
+    published -- otherwise the house appears to consume what the battery takes.
+    """
+
+    from ems.power_direction import derive_house_load_w
+
+    # 900 W leaves one inverter, 800 W is drawn back in, the meter nets to 100.
+    assert derive_house_load_w(900, 100, 800) == 200
+
+    # The signed target is the other half of the contract.
+    from ems.power_direction import operation_for_target
+
+    assert operation_for_target(-1000) == "charge"
+    assert operation_for_target(400) == "discharge"
+    assert operation_for_target(0) == "idle"

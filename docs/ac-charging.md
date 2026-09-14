@@ -157,6 +157,13 @@ or from the dashboard's Control tab in [write mode](dashboard.md#dashboard-write
 — **AC charging** as its own card for the installation, and a per-device toggle
 next to each device's enabled flag.
 
+Both switches live in [runtime-state](technical/runtime-state.md), which the
+EMS seeds from `config.json` when it loads it. The Dashboard therefore shows
+the value the EMS applies, the same value the Admin's feature list shows
+until an operator flips a switch at runtime. The Admin edits `config.json`
+and mirrors the flag into runtime-state on Apply; it never reads the runtime
+switch back into the config.
+
 ## Safety
 
 A power command — charge, idle or discharge — travels on the device's normal
@@ -188,7 +195,7 @@ comparing the target against what the device is doing. A charging device reports
 reference is taken from the measured AC input instead — otherwise "switch this
 device off" would compare 0 against 0, skip the write, and leave the hardware
 charging. Local-API devices are also covered by the startup `acMode` reconcile;
-MQTT control devices are output-only and have no such path.
+MQTT control devices have no state reconciliation and so no such path.
 
 **A charge does not outlive the meter that justifies it.** A grid-meter client
 that cannot reach its hardware returns the last good reading and marks it stale;
@@ -271,6 +278,7 @@ carried alongside the output and surfaces in four places:
 | Dashboard flow / snapshot total | `inverter_charge_w` |
 | Analytics | the **AC Charge** series and overlay |
 | Home Assistant | `sensor.ems_solarflow_<device>_ac_charge` |
+| `emsctl diagnose --control` | the configured band, limit and permitted devices |
 | InfluxDB | `zendure_device.grid_input` |
 
 This is the measured value, not the commanded charge target. The two differ by
@@ -304,6 +312,7 @@ ac_charge_direction
 ac_charge_entry_rate_limited
 ac_charge_not_delivered
 ac_charge_stopped_stale_meter
+ac_charge_kept_across_stop
 ac_charge_released_on_shutdown
 ac_charge_release_failed
 ```
@@ -318,6 +327,12 @@ buries every other event instead of surfacing this one. The usual cause is a
 collapsed band — `charge_hysteresis_w` at 0, or `charge_start_w` at 0 — which
 puts entry and exit at the same threshold; `ac_charge_band_collapsed` names that
 once at startup.
+
+`ac_charge_kept_across_stop` is an `info` and the counterpart of
+`ac_charge_released_on_shutdown`: a stop you asked for leaves a charging device
+as it is, because a restart is coming. It names the signal that ended the run,
+so a device still drawing after `docker compose down` is explained rather than
+surprising. The release event is what you see when the EMS stopped by itself.
 
 `ac_charge_stopped_stale_meter` is a `warning`: the load reading the charge
 rests on stopped being a measurement. It means the grid meter is unreachable,

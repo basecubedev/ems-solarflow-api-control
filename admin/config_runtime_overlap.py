@@ -20,25 +20,36 @@ import re
 
 from dashboard.runtime_write import DEVICE_FIELDS, SECTION_FIELDS, SYSTEM_FIELDS
 from ems import config as cfg
+from ems.config_catalog import device_common_defaults
 
 DEFAULT_RUNTIME_STATE_PATH = "runtime-state.json"
 
-_SYSTEM_DEFAULTS = {
-    "enabled": True,
-    "max_total_power": 800,
-    "loop_interval": 5,
-    "min_output_limit": 35,
-}
+_EMS_DEFAULTS = cfg.default_runtime_config()
+_SYSTEM_DEFAULTS = {key: _EMS_DEFAULTS["system"].get(key) for key in SYSTEM_FIELDS}
 _SECTION_DEFAULTS = {
-    "ha": {"enabled": False, "control_enabled": False},
-    "winter": {"enabled": False},
+    section: {key: _EMS_DEFAULTS.get(section, {}).get(key) for key in fields}
+    for section, fields in SECTION_FIELDS.items()
 }
-_DEVICE_DEFAULTS = {
-    "enabled": True,
-    "max_power": 800,
-    "offgrid_socket_mode": "off",
-    "pv_priority_factor": 1.0,
-}
+_DEVICE_COMMON_DEFAULTS = device_common_defaults()
+
+
+def _device_defaults(config):
+    """What the EMS applies to a whitelisted device key the config omits.
+
+    A device without ``max_power`` gets the installation's
+    ``system.max_device_power``, not a fixed figure.
+    """
+
+    max_device_power = _config_get(config, ["system", "max_device_power"])
+    if max_device_power is None:
+        max_device_power = _EMS_DEFAULTS["system"]["max_device_power"]
+    return {
+        "enabled": True,
+        "max_power": max_device_power,
+        "offgrid_socket_mode": cfg.offgrid_socket_mode_for(None),
+        "pv_priority_factor": _DEVICE_COMMON_DEFAULTS["pv_priority_factor"],
+        "ac_charge_enabled": _DEVICE_COMMON_DEFAULTS["ac_charge_enabled"],
+    }
 
 
 _DEVICE_LEAF_RE = re.compile(r"^devices\[\d+\]\.([A-Za-z0-9_]+)$")
@@ -154,6 +165,7 @@ def compute_overlap_provenance(config, runtime_data):
     runtime_devices = runtime_data.get("devices")
     runtime_devices = runtime_devices if isinstance(runtime_devices, dict) else {}
     devices = {}
+    device_defaults = _device_defaults(config)
     config_devices = config.get("devices") if isinstance(config.get("devices"), list) else []
     for device in config_devices:
         if not isinstance(device, dict):
@@ -166,7 +178,7 @@ def compute_overlap_provenance(config, runtime_data):
         for key, (value_type, _rule) in DEVICE_FIELDS.items():
             entries[key] = _entry(
                 device.get(key), runtime_device, key, value_type,
-                _DEVICE_DEFAULTS.get(key),
+                device_defaults.get(key),
             )
         devices[name] = entries
     if devices:
@@ -212,7 +224,7 @@ def config_effective_value(config, kind, holder, key):
     elif kind == "device" and key in DEVICE_FIELDS:
         device = _config_device(config, holder)
         raw = device.get(key) if isinstance(device, dict) else None
-        default = _DEVICE_DEFAULTS.get(key)
+        default = _device_defaults(config).get(key)
         value_type = DEVICE_FIELDS[key][0]
     else:
         return None

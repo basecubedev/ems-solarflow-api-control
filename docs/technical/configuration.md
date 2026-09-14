@@ -1278,7 +1278,8 @@ safe config and template placeholder safety force every gate off until real
 values are configured.
 
 Both still require the shared precondition (`dry_run=false`,
-`simulation_mode=false`, not replay). Control devices are output-only: they are
+`simulation_mode=false`, not replay). Control devices take the power command
+only — output, and a charge from surplus where the model allows it: they are
 excluded from the read-only telemetry runtime and from every state
 reconciliation writer. Their telemetry is subject to freshness: a stale or
 missing snapshot (broker disconnect / stalled updates) is treated as an

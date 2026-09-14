@@ -18,7 +18,7 @@ state directly. It calls the same EMS tools a shell user would run. See
 
 At least one supported Zendure connection — Local API, Local MQTT, or Zendure
 cloud MQTT — must be available for EMS control (the Local API also does full
-state reconciliation; the MQTT transports are output-only). Do not run Zendure
+state reconciliation; the MQTT transports carry the power command only). Do not run Zendure
 HEMS, Home Assistant automations, MQTT writers, or any other controller in
 parallel if they write Zendure `outputLimit`. EMS assumes exclusive write control
 over `outputLimit` while active. The EMS must not run in parallel with another

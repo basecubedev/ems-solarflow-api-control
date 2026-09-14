@@ -107,3 +107,29 @@ console.log(JSON.stringify({{
     assert out["charging"] == "Charging 600 W"
     assert out["idle"] == ""
     assert out["below_threshold"] == ""
+
+
+def test_every_charge_decision_reason_has_readable_text():
+    """A raw slug in the Control tab is the backend leaking into the UI.
+
+    The frontend maps known reasons to sentences and falls through to the slug
+    otherwise, so a reason the backend emits without a mapping reads as
+    `ac_charge_share_too_small` to an operator.
+    """
+
+    from ems.controller import EMSController
+    import inspect
+    import re
+
+    emitted = set(
+        re.findall(
+            r'decision_reason = "(ac_charge_[a-z_]+)"',
+            inspect.getsource(EMSController.explain_charge_allocation),
+        )
+    )
+    assert emitted, "no charge reasons found; the regex or the source moved"
+
+    source = APP_JS.read_text(encoding="utf-8")
+    mapped = set(re.findall(r"^\s*(ac_charge_[a-z_]+):", source, re.MULTILINE))
+
+    assert emitted <= mapped, sorted(emitted - mapped)

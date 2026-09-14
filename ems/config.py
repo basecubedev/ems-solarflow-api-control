@@ -11,6 +11,7 @@ import stat
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from ems.logging_utils import log_event
 from ems.paths import resolve_config_path, resolve_template_path
 from ems.winter_policies import MAX_RAISE_ABOVE_SOC, configurable_class_defaults
 
