@@ -19,7 +19,8 @@ Every deliberate claim, operator or maintenance, outranks it.
 from dataclasses import dataclass
 from enum import Enum
 
-from ems.power_direction import AC_MODE_INPUT, AC_STATUS_CHARGING
+from ems.config import safe_int
+from ems.power_direction import AC_MODE_INPUT, AC_MODE_OUTPUT, AC_STATUS_CHARGING
 
 PRIORITY_DEFAULT = 0
 PRIORITY_FIRMWARE_OBSERVED = 50
@@ -58,7 +59,7 @@ def ac_output_intent(device_name, reason: str = "ac_output", *, priority=PRIORIT
         device=device_name,
         role=DeviceRuntimeRole.AC_OUTPUT,
         reason=reason,
-        desired_ac_mode=2,
+        desired_ac_mode=AC_MODE_OUTPUT,
         output_control_allowed=True,
         priority=priority,
     )
@@ -71,7 +72,7 @@ def ac_input_intent(
         device=device_name,
         role=DeviceRuntimeRole.AC_INPUT,
         reason=reason,
-        desired_ac_mode=1,
+        desired_ac_mode=AC_MODE_INPUT,
         output_control_allowed=False,
         priority=priority,
         setpoint_w=setpoint_w,
@@ -91,15 +92,6 @@ def runtime_intent_from_role(device_name, role, reason: str | None = None):
     return None
 
 
-def _telemetry_int(value):
-    """Coerce a telemetry field to int; anything unreadable counts as absent."""
-
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def firmware_charge_intent(device_name, state):
     """Claim a device the firmware put into AC charge by itself, or None.
 
@@ -115,10 +107,10 @@ def firmware_charge_intent(device_name, state):
     deliberate claim outranks this one.
     """
 
-    if _telemetry_int(getattr(state, "ac_status", 0)) != AC_STATUS_CHARGING:
+    if safe_int(getattr(state, "ac_status", 0)) != AC_STATUS_CHARGING:
         return None
 
-    if _telemetry_int(getattr(state, "ac_mode", 0)) != AC_MODE_INPUT:
+    if safe_int(getattr(state, "ac_mode", 0)) != AC_MODE_INPUT:
         return None
 
     return DeviceRuntimeIntent(

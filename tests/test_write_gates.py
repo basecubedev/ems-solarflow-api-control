@@ -51,9 +51,10 @@ class DashboardStoreStub:
         self.records.append(snapshot)
 
 
-def device(name):
+def device(name, ac_discharge_enabled=True):
     return SimpleNamespace(
         name=name,
+        ac_discharge_enabled=ac_discharge_enabled,
         ip="127.0.0.1",
         sn=f"{name}-SN",
         session=Mock(),
@@ -185,6 +186,29 @@ class WriteGateTest(unittest.TestCase):
 
         self.assertNotIn("WR1", written_devices)
         self.assertIn("WR2", written_devices)
+
+    def test_a_device_forbidden_to_discharge_receives_no_write(self):
+        """The operator's standing permission is its own axis.
+
+        It is not a claim on the device and does not join the intent priority
+        ladder: a higher-priority claim must never be able to re-enable output
+        on a device the operator forbade.
+        """
+
+        forbidden = device("WR1", ac_discharge_enabled=False)
+        allowed = device("WR2")
+
+        controller = self.run_controller_once(
+            [forbidden, allowed],
+            [state(), state()],
+        )
+
+        written = [
+            write.args[0].name
+            for write in controller.set_output_limit.call_args_list
+        ]
+        self.assertNotIn("WR1", written)
+        self.assertIn("WR2", written)
 
     def test_runtime_disabled_device_receives_no_write(self):
         disabled = device("WR1")
