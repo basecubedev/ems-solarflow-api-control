@@ -1,18 +1,20 @@
 # AC Charging From Surplus
 
-Optional. The EMS charges battery devices from AC when the house exports more
-than it can place, instead of letting that surplus leave.
+The EMS charges battery devices from AC when the house exports more than it can
+place, instead of letting that surplus leave.
 
-It is **off until you switch it on**, because it is the one feature that can
-spend energy rather than place it. Read [user/safety.md](user/safety.md) before
-enabling it.
+**On by default**, for the installation and for every device. What keeps it from
+acting is the surplus itself: it charges only against your own export, and stops
+the moment the house needs the power back. It is still the one feature that can
+spend energy rather than place it — read [user/safety.md](user/safety.md), and
+note that a config upgrade turns it on for an installation that predates it.
 
 ## Configuration
 
 ```json
 {
   "ac_charge_control": {
-    "enabled": false,
+    "enabled": true,
     "charge_start_w": 150,
     "charge_hysteresis_w": 50,
     "entry_confirm_cycles": 5,
@@ -28,7 +30,7 @@ Per device:
 ```json
 {
   "ac_discharge_enabled": true,
-  "ac_charge_enabled": false,
+  "ac_charge_enabled": true,
   "max_charge_power_w": 0
 }
 ```
@@ -41,11 +43,77 @@ Six independent permissions, and any single no is enough:
 
 1. `ac_charge_control.enabled`
 2. the device's own `ac_charge_enabled`
-3. a hardware model whose AC charge path is **established** — see
-   [user/supported-setups.md](user/supported-setups.md)
+3. a hardware model the catalogue records as AC chargeable — see
+   [Which models charge](#which-models-charge)
 4. current telemetry that allows charging
 5. the device being online and enabled
 6. nobody else owning its AC mode
+
+## Which models charge
+
+The permission is decided per model, not per protocol family: every ZenSDK model
+builds the identical charge command, which proves the command is well formed and
+says nothing about whether the hardware has an AC input for battery charging.
+
+| Charges | Model | Catalogue rating | Evidence |
+|---|---|---:|---|
+| yes | SolarFlow 800 Pro 2 | 1000 W | **measured** on real hardware 2026-09-13 |
+| yes | SolarFlow 800 Pro | 1000 W | vendor catalogue |
+| yes | SolarFlow 1600 AC+ | 1600 W | vendor catalogue |
+| yes | SolarFlow 2400 AC | 2400 W | vendor catalogue |
+| yes | SolarFlow 2400 AC+ | 2400 W | vendor catalogue |
+| yes | SolarFlow 3000 Mix AC+ | 3000 W | vendor catalogue |
+| yes | SolarFlow 4000 Mix AC+ | 4000 W | vendor catalogue |
+| yes | Hyper 2000 | 1600 W | vendor catalogue |
+| no | SolarFlow 800, 800 Plus | — | no AC charging of the battery |
+| no | SolarFlow 2400 Pro | — | not an AC charger; not the 2400 AC series |
+| no | AIO 2400 | — | different system architecture |
+| no | Hub 1200, Hub 2000 | — | only via an ACE 1500, which the EMS cannot command |
+| no | ACE 1500, SuperBase | — | telemetry-only: no write path at all |
+
+The catalogue rating is **not** the charge limit. The limit comes from the
+device's own `chargeMaxLimit`, capped by `max_charge_power_w` and the system
+maximum; a device that reports no ceiling charges nothing.
+
+Only the 800 Pro 2 was put on a probe here. The rest are enabled on the strength
+of the vendor catalogue, which is recorded per model as `charge_evidence` and
+surfaced in the `ac_charge_not_delivered` warning below. If a row turns out to
+be wrong, the failure is quiet but not silent: the command is accepted, no
+current flows, and that warning fires.
+
+### Checking a model that is enabled from the catalogue
+
+If your model's evidence is **vendor catalogue** rather than *measured*, nobody
+has yet seen it draw a commanded charge. Four things settle it, and all of them
+are read-only:
+
+1. **Does the EMS ever decide to charge?** `event=ac_charge_direction` with
+   `charging=true` in the log. If it never appears, the installation is not
+   exporting enough for long enough — check `charge_start_w` against your actual
+   surplus before concluding anything about the hardware.
+2. **Does current actually flow?** The device tile's **AC Charge**, or
+   `sensor.ems_solarflow_<device>_ac_charge`. A number above zero while the EMS
+   commands a charge is the proof.
+3. **Does the EMS complain?** `event=ac_charge_not_delivered` is the negative
+   result: the command was accepted and nothing flowed for six cycles. If it
+   fires repeatedly, the catalogue row is wrong for that model — set
+   `ac_charge_enabled` to `false` for the device and please report it.
+4. **What does the device say about itself?**
+
+   ```bash
+   python3 emsctl.py diagnose --hardware --json
+   ```
+
+   Each device carries `reported_properties` with the property **names** it
+   reports (never values) and which of them the EMS does not read. That is the
+   most useful thing to send back from an unfamiliar model: it says whether the
+   device reports `chargeMaxLimit` at all — without it the EMS charges nothing —
+   and it is how fields the EMS was never taught get found.
+
+Note that `max_total_charge_power_w` defaults to **1200 W** for the whole
+installation, which is below what a 2400-class device could draw. That is the
+protective default, not a property of your hardware; raise it only for a circuit
+you know carries it.
 
 ## Behavior
 
@@ -70,12 +138,16 @@ rules and why entry and exit measure different quantities.
 
 ## Runtime control
 
-Both switches take effect without restarting the EMS:
+Both switches take effect without restarting the EMS, from the CLI:
 
 ```bash
 python3 emsctl.py ac-charge disable            # the whole feature
 python3 emsctl.py device WR1 ac-charge off     # one device
 ```
+
+or from the dashboard's Control tab in [write mode](dashboard.md#dashboard-write-mode)
+— **AC charging** as its own card for the installation, and a per-device toggle
+next to each device's enabled flag.
 
 ## Safety
 
@@ -155,6 +227,7 @@ up as 800 W of extra household consumption.
 ```text
 ac_charge_direction
 ac_charge_entry_rate_limited
+ac_charge_not_delivered
 ac_charge_released_on_shutdown
 ac_charge_release_failed
 ```
@@ -162,3 +235,11 @@ ac_charge_release_failed
 `ac_charge_direction` is `info` when the direction changes and `debug`
 otherwise. `ac_charge_entry_rate_limited` is a `warning`: reaching the hourly
 cap means the thresholds do not fit the installation.
+
+`ac_charge_not_delivered` is a `warning` and the one to watch on a model
+enabled from the catalogue rather than from a measurement. It fires once when a
+commanded charge has produced no measured AC input for six consecutive cycles,
+and carries the model and its `charge_evidence`. It **changes nothing** — the
+charge keeps being commanded. If it repeats on your hardware, that model's
+catalogue row is likely wrong; turn `ac_charge_enabled` off for the device and
+please report it.

@@ -176,6 +176,32 @@ def decide_charge_direction(
     )
 
 
+# How many consecutive cycles a commanded charge may produce no measured AC
+# input before it is worth saying so. The hardware probe measured ~4.5 s from
+# command to actual charging, so at the default 5 s loop this is roughly six
+# times the latency it has to beat -- long enough that a device's own ramp, a
+# rounded-down reading or one stale telemetry frame cannot trip it.
+CHARGE_SILENCE_CYCLES = 6
+
+
+def count_silent_charge_cycles(previous_count, *, commanded_w, measured_w, online):
+    """Count cycles where a commanded charge produced no measured AC input.
+
+    A model whose catalogue entry claims an AC charge path it does not have
+    fails quietly: the command is accepted, nothing flows, and the surplus keeps
+    leaving. Nothing here changes a target -- the count exists so that failure
+    is visible rather than silent.
+    """
+
+    if not online:
+        return 0
+    if safe_int(commanded_w, 0) >= 0:
+        return 0
+    if safe_int(measured_w, 0) > 0:
+        return 0
+    return max(0, safe_int(previous_count, 0)) + 1
+
+
 def resolve_max_charge_power_w(device_config, state=None):
     """Highest AC charge power for one device.
 

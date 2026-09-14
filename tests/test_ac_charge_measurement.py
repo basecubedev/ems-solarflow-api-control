@@ -133,3 +133,48 @@ def test_both_history_catalogs_offer_the_same_series():
     assert sorted(SERIES_CATALOG) == sorted(INFLUX_SERIES)
     assert "ac_charge" in SERIES_CATALOG
     assert SERIES_DEVICE_FIELD["ac_charge"] == "ac_charge_w"
+
+
+def test_a_commanded_charge_that_never_flows_is_counted():
+    """Most models are enabled from the catalogue, and a row can be wrong.
+
+    The failure is quiet: the command is accepted, nothing flows, and the
+    surplus keeps leaving. Counting it is what makes it sayable.
+    """
+
+    from ems.ac_charge_control import CHARGE_SILENCE_CYCLES, count_silent_charge_cycles
+
+    count = 0
+    for _ in range(CHARGE_SILENCE_CYCLES):
+        count = count_silent_charge_cycles(
+            count, commanded_w=-600, measured_w=0, online=True
+        )
+    assert count == CHARGE_SILENCE_CYCLES
+
+    # One cycle of real input clears it: the device does charge after all.
+    assert count_silent_charge_cycles(
+        count, commanded_w=-600, measured_w=180, online=True
+    ) == 0
+
+
+def test_the_silent_charge_count_never_fires_on_something_else():
+    from ems.ac_charge_control import count_silent_charge_cycles
+
+    # Discharging, idling, offline, or a device whose ramp has not started yet.
+    assert count_silent_charge_cycles(5, commanded_w=400, measured_w=0, online=True) == 0
+    assert count_silent_charge_cycles(5, commanded_w=0, measured_w=0, online=True) == 0
+    assert count_silent_charge_cycles(5, commanded_w=-600, measured_w=0, online=False) == 0
+    # A single zero reading mid-charge only advances the count, it decides nothing.
+    assert count_silent_charge_cycles(1, commanded_w=-600, measured_w=0, online=True) == 2
+
+
+def test_the_observation_changes_no_target():
+    """It reports; it must never refuse a charge or alter a setpoint."""
+
+    import inspect
+
+    from ems.controller import EMSController
+
+    source = inspect.getsource(EMSController.observe_charge_delivery)
+    for forbidden in ("commanded_device_targets[", "device_charge_limits[", "return False"):
+        assert forbidden not in source, forbidden

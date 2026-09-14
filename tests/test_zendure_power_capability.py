@@ -113,14 +113,14 @@ def test_charge_support_is_decided_per_model_not_per_write_profile():
     )
     assert measured.supported is True
 
-    unmeasured = resolve_power_write_capability(
+    no_charge_path = resolve_power_write_capability(
         topic_family=FAMILY_LEGACY_JSON,
-        hardware_profile="solarflow_2400_ac",
+        hardware_profile="solarflow_800",
         operation="charge",
         broker_source=BROKER_SOURCE_ZENDURE_CLOUD_MQTT,
     )
-    assert unmeasured.supported is False
-    assert unmeasured.block_reason == BLOCK_OPERATION_UNSUPPORTED
+    assert no_charge_path.supported is False
+    assert no_charge_path.block_reason == BLOCK_OPERATION_UNSUPPORTED
 
 
 # --- the telemetry family is context, never a gate ---------------------------

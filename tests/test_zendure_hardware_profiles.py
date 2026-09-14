@@ -121,23 +121,19 @@ def test_zensdk_device_keeps_existing_properties_write_profile():
     assert prof.supports_charge is True
 
 
-def test_unmeasured_zensdk_models_do_not_charge():
-    """A shared command shape is not evidence that a model can charge.
+def test_a_shared_command_shape_does_not_decide_which_models_charge():
+    """Every ZenSDK model builds the identical atomic charge set, so the command
+    contract is family-wide — but whether a given device has an AC charge path
+    at all is a per-model fact, and the catalogue is where it is recorded.
 
-    Every ZenSDK model builds the identical atomic charge set, so the contract
-    is family-wide — but whether a given device actually has an AC charge path
-    is a per-model fact, and the catalogue is where it is recorded.
+    These three share the write profile of models that do charge and still must
+    not be sent a charge command.
     """
 
     for name in (
         "SolarFlow 800",
-        "SolarFlow 800 Pro",
         "SolarFlow 800 Plus",
-        "SolarFlow 1600 AC+",
-        "SolarFlow 2400 AC",
-        "SolarFlow 2400 AC+",
         "SolarFlow 2400 Pro",
-        "SolarFlow 4000 AC+",
     ):
         prof = resolve_hardware_profile(name)
         assert prof is not None, name

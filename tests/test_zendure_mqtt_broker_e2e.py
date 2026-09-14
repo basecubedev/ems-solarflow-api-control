@@ -262,12 +262,12 @@ def test_unknown_profile_is_rejected_and_publishes_nothing():
     assert broker.publish_calls == []
 
 
-def test_negative_target_publishes_nothing_for_an_unmeasured_model_e2e():
-    runtime, network = _build(_config("solarflow_2400_ac"))
+def test_negative_target_publishes_nothing_without_a_charge_path_e2e():
+    runtime, network = _build(_config("solarflow_800"))
     dev = runtime.devices[0]
     broker = network.broker("local_a")
-    # Same write profile and same command shape as the measured model, but its AC
-    # charge path is not established: rejected before anything reaches the wire.
+    # Same write profile and same command shape as models that do charge, but
+    # this one has no AC charge path: rejected before anything reaches the wire.
     assert dev.write_output_limit(-500) is False
     assert broker.publish_calls == []
 
