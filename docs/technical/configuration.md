@@ -560,6 +560,14 @@ The lower edge of the charge band is **derived**, not configured:
 stop = max(0, charge_start_w - charge_hysteresis_w)
 ```
 
+Deriving it this way makes an *inverted* pair impossible; it cannot prevent a
+*collapsed* one. A `charge_hysteresis_w` of 0, or a `charge_start_w` of 0, puts
+entry and exit at the same threshold, and charging then starts and stops
+repeatedly until the hourly entry cap holds it back — measured at 24 direction
+changes in 200 loops against a steady surplus, against one for the shipped band.
+The values are never rewritten, but `ac_charge_band_collapsed` says so once at
+startup.
+
 so a configuration whose stop threshold sits above its start threshold cannot be
 expressed. The confirmation window is likewise never shorter than the count it
 must hold.

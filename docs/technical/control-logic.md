@@ -269,10 +269,34 @@ Above the floor, a charge nobody is commanding is a leftover from an EMS that
 stopped mid-charge, or one started from the vendor app, and the normal acMode
 reconcile takes it back.
 
+### Who owns a device's AC direction
+
+Every cycle each device gets a default claim of `ac_output`, whose desired mode
+is `acMode = 2`, and the state reconciler writes `acMode` whenever telemetry
+disagrees with the winning claim. A device the regulator is charging therefore
+needs a claim of its own, or the reconciler writes `acMode = 2` once per loop
+against the power command writing `acMode = 1`.
+
+A claim whose `desired_ac_mode` is `None` means *the power command owns this
+device's direction*, and the reconciler skips it. Two claims do that:
+
+| Claim | Priority | Raised when |
+|---|---:|---|
+| `regulator_charge_intent` | 100 | the EMS commanded this device a charge last cycle |
+| `firmware_charge_intent` | 50 | the firmware charges an empty pack by itself |
+
+An operator park (150) and maintenance (200) outrank both, so either still takes
+a device away mid-charge.
+
 ## Deadband
 
-The EMS compares the calculated target with the runtime `outputLimit` when
-available. If `outputLimit` is missing or zero, it falls back to current output.
+The EMS compares the calculated target with what the device is currently doing,
+on the same signed axis as the target: the measured AC input (negative) while it
+charges, otherwise the runtime `outputLimit`, falling back to current output
+when that is missing or zero. A charging device reports `outputLimit` 0 and no
+output while drawing hundreds of watts, so a discharge-only reference would read
+it as idle — and "switch this device off" would then compare 0 against 0 and
+skip the write that stops the charge.
 
 Small changes below `deadband` are skipped.
 

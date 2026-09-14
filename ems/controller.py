@@ -27,6 +27,7 @@ from ems.property_writes import write_device_properties
 from ems.models import BATTERY_ABSENT, BATTERY_PRESENT, DeviceCapabilities
 from ems.power_direction import AC_MODE_INPUT, AC_MODE_OUTPUT
 from ems.runtime_intents import (
+    regulator_charge_intent,
     PRIORITY_MAINTENANCE,
     DeviceRuntimeIntent,
     DeviceRuntimeRole,
@@ -128,6 +129,7 @@ class EMSController:
         self.charge_capacity_w = 0
         self.device_charge_limits = {}
         self.silent_charge_cycles = {}
+        self.charge_entry_rate_limited = False
         for device in self.devices:
             set_observer = getattr(device, "set_dispatch_observer", None)
             if callable(set_observer):
@@ -414,6 +416,30 @@ class EMSController:
             allowed and open_gate
             for allowed, open_gate in zip(commandable, gated)
         ]
+
+    def device_active(self, dev):
+        """Is the device reachable and switched on?
+
+        The part of eligibility that has nothing to do with direction. Both
+        directions need it, so it is asked once here rather than spelled out in
+        each — two copies of an eligibility rule is how the two sides drift.
+        """
+
+        return bool(
+            self.device_online.get(dev.name, True)
+            and self.runtime_device_bool(dev.name, "enabled", True)
+        )
+
+    def device_intent_allows_command(self, dev):
+        """Does whoever owns this device's AC mode leave it commandable?
+
+        A property of the cycle rather than of the device: an operator park,
+        maintenance, or a firmware-owned charge takes a device away from the
+        regulator in either direction.
+        """
+
+        intent = self.runtime_intents.get(dev.name)
+        return True if intent is None else intent.output_control_allowed
 
     def active_online_device_indexes(self):
         """Return indexes for devices currently eligible for EMS control."""
@@ -1350,10 +1376,7 @@ class EMSController:
         ):
             return False
 
-        if not self.device_online.get(dev.name, True):
-            return False
-
-        if not self.runtime_device_bool(dev.name, "enabled", True):
+        if not self.device_active(dev):
             return False
 
         if capability is not None and not capability.can_charge:
@@ -1361,8 +1384,7 @@ class EMSController:
 
         # A device the operator parked, maintenance is using or the firmware is
         # charging is not the surplus regulator's to command.
-        intent = self.runtime_intents.get(dev.name)
-        if intent is not None and not intent.output_control_allowed:
+        if not self.device_intent_allows_command(dev):
             return False
 
         if charge_headroom_weight(state, dev, capability) <= 0:
@@ -1402,6 +1424,7 @@ class EMSController:
                 commanded_w=commanded,
                 measured_w=measured,
                 online=self.device_online.get(dev.name, True),
+                charging_status=getattr(state, "ac_status", 0),
             )
             self.silent_charge_cycles[dev.name] = count
 
@@ -1424,7 +1447,11 @@ class EMSController:
 
         A rate-limited entry is a warning rather than a debug line: reaching the
         cap means the thresholds do not fit the installation, and silently
-        refusing would hide that.
+        refusing would hide that. It is said **once per episode**, not once per
+        cycle -- the condition holds for as long as the surplus does, and a
+        misconfigured band produced sixty identical lines in a two-hundred-cycle
+        run, which buries every other event in the log rather than surfacing
+        this one.
         """
 
         fields = {
@@ -1437,8 +1464,14 @@ class EMSController:
         }
 
         if decision.rate_limited:
-            log_event(logging.WARNING, "ac_charge_entry_rate_limited", **fields)
+            if not self.charge_entry_rate_limited:
+                self.charge_entry_rate_limited = True
+                log_event(logging.WARNING, "ac_charge_entry_rate_limited", **fields)
+            else:
+                log_event(logging.DEBUG, "ac_charge_entry_rate_limited", **fields)
             return
+
+        self.charge_entry_rate_limited = False
 
         log_event(
             logging.INFO
@@ -1447,6 +1480,40 @@ class EMSController:
             "ac_charge_direction",
             **fields,
         )
+
+    def grid_meter_reading_is_fresh(self):
+        """Whether the load reading is a measurement rather than a held value.
+
+        A meter client that cannot reach its hardware returns the last good
+        reading and sets ``stale_used``; nothing caps how long it may do that.
+        For the discharge side that is tolerable — the EMS keeps placing energy
+        the operator already owns. Charging *spends*, and a held reading of
+        "still exporting 900 W" is indistinguishable from a real surplus, so the
+        EMS would keep drawing from the grid on a number that may be hours old.
+
+        Tolerated for ``telemetry_max_age_seconds``, the same age the device
+        telemetry is held to. A single missed read must not end a charge: doing
+        that costs a full re-entry window, which is the mistake the drain guard
+        already made once.
+        """
+
+        health = getattr(self.shelly, "health", None)
+        if health is None or not getattr(health, "attempted", False):
+            # No health tracking on this client: the reading is all there is,
+            # and refusing to charge because a transport does not report health
+            # would disable the feature for it entirely.
+            return True
+
+        if not getattr(health, "stale_used", False):
+            return True
+
+        max_age = self.output_control_float(
+            "telemetry_max_age_seconds", 10, minimum=0
+        )
+        age = health.age_seconds()
+        if max_age <= 0 or age is None:
+            return False
+        return age <= max_age
 
     def chargeable_device_flags(self, states, capabilities):
         return [
@@ -1471,11 +1538,7 @@ class EMSController:
         if not getattr(dev, "ac_discharge_enabled", True):
             return False
 
-        intent = self.runtime_intents.get(dev.name)
-        if intent is None:
-            return True
-
-        return intent.output_control_allowed
+        return self.device_intent_allows_command(dev)
 
     def state_reconciliation_supported(self, dev, path):
         """Whether ``dev`` supports state reconciliation; skip explicitly if not.
@@ -3769,17 +3832,23 @@ class EMSController:
             if not state:
                 continue
 
+            # Last cycle's command. A charge this EMS asked for is not the
+            # firmware's and must not be read back as such; it is also the
+            # regulator's claim on the device's AC direction, which is what
+            # keeps the state reconciler from writing acMode back every cycle.
+            ems_commanded_charge = (
+                self.commanded_device_targets.get(dev.name, 0) < 0
+            )
             intent = resolve_device_intent([
                 self.get_device_runtime_intent(dev, state),
                 self.full_charge_assist_intent(dev),
+                regulator_charge_intent(
+                    dev.name, ems_commanded_charge=ems_commanded_charge
+                ),
                 firmware_charge_intent(
                     dev.name,
                     state,
-                    # Last cycle's command: a charge this EMS asked for is not
-                    # the firmware's, and must not be read back as such.
-                    ems_commanded_charge=(
-                        self.commanded_device_targets.get(dev.name, 0) < 0
-                    ),
+                    ems_commanded_charge=ems_commanded_charge,
                 ),
             ])
             self.runtime_intents[dev.name] = intent
@@ -4029,9 +4098,16 @@ class EMSController:
             for index, (dev, allowed) in enumerate(zip(self.devices, chargeable))
         }
         self.charge_capacity_w = sum(self.device_charge_limits.values())
+        meter_fresh = self.grid_meter_reading_is_fresh()
+        if not meter_fresh and self.charge_direction.charging:
+            log_event(
+                logging.WARNING,
+                "ac_charge_stopped_stale_meter",
+                reason="grid_meter_reading_stale",
+            )
         charge_decision = decide_charge_direction(
             self.charge_direction,
-            charging_possible=any(chargeable),
+            charging_possible=any(chargeable) and meter_fresh,
             commanded_total_w=stabilized_total,
             desired_total_w=(
                 self.desired_total_w
@@ -4233,16 +4309,36 @@ class EMSController:
                     min_output_limit
                 )
 
-            deadband_reference = (
-                states[i].output_limit
-                if states[i].output_limit > 0
-                else states[i].output
+            # What the device is doing now, on the same signed axis as the
+            # target. A charging device reports outputLimit 0 and output 0
+            # while drawing hundreds of watts, so a discharge-only reference
+            # reads it as idle -- and an idle target then looks like no change
+            # at all. That is not academic: after a restart the EMS would
+            # decide "this device should be off", compare 0 against 0, skip the
+            # write, and leave the hardware charging from the grid with the EMS
+            # running and content. Local-HTTP devices are saved by the startup
+            # acMode reconcile; MQTT control devices have no such path.
+            charge_reference = cfg.safe_int(
+                getattr(states[i], "grid_input", 0), 0, minimum=0
             )
-            deadband_reference_source = (
-                "output_limit"
-                if states[i].output_limit > 0
-                else "output"
-            )
+            if not charge_reference and cfg.safe_int(
+                getattr(states[i], "ac_mode", 0), 0
+            ) == AC_MODE_INPUT:
+                # Commanded into charge but not yet drawing: the probe measured
+                # ~2 s between the mode taking effect and current flowing.
+                charge_reference = cfg.safe_int(
+                    getattr(states[i], "input_limit_w", 0), 0, minimum=0
+                )
+
+            if charge_reference > 0:
+                deadband_reference = -charge_reference
+                deadband_reference_source = "ac_charge"
+            elif states[i].output_limit > 0:
+                deadband_reference = states[i].output_limit
+                deadband_reference_source = "output_limit"
+            else:
+                deadband_reference = states[i].output
+                deadband_reference_source = "output"
 
             if abs(target - deadband_reference) < cfg.DEADBAND:
                 log_event(
