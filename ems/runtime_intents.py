@@ -25,10 +25,12 @@ from ems.target_control import derive_soc_runtime_state
 
 PRIORITY_DEFAULT = 0
 PRIORITY_FIRMWARE_OBSERVED = 50
+PRIORITY_REGULATOR = 100
 PRIORITY_OPERATOR_PARK = 150
 PRIORITY_MAINTENANCE = 200
 
 FIRMWARE_CHARGE_REASON = "firmware_owned_charge"
+REGULATOR_CHARGE_REASON = "ac_charge_regulator"
 
 
 class DeviceRuntimeRole(str, Enum):
@@ -136,6 +138,52 @@ def firmware_charge_intent(device_name, state, *, ems_commanded_charge=False):
     )
 
 
+def regulator_charge_intent(device_name, *, ems_commanded_charge):
+    """Claim a device the surplus regulator is currently charging, or None.
+
+    This exists to *stop* a write, not to make one. The per-cycle default claim
+    is ``ac_output``, whose desired mode is ``AC_MODE_OUTPUT``, so while the
+    regulator holds a device in ``acMode = 1`` the state reconciler sees a
+    mismatch and writes ``acMode = 2`` — every cycle, against the power command
+    writing ``acMode = 1``. Two writers of one property, a relay commanded back
+    and forth once per loop: exactly the wear the hysteresis exists to prevent,
+    and invisible in any test whose state-reconciliation gate happens to be shut.
+
+    ``desired_ac_mode=None`` is the claim "the power command owns this device's
+    direction", which is what the reconciler already honours for a
+    firmware-owned charge. ``output_control_allowed`` stays **True**: the
+    regulator must keep the right to command the device it is charging, or it
+    reads its own claim back as someone else's and shuts itself down.
+
+    Why not simply point the reconciler at ``AC_MODE_INPUT`` instead, so it
+    keeps enforcing the *right* mode? Because it writes a bare ``{"acMode": n}``,
+    and the hardware probe established that **a direction change needs the
+    atomic set** while a power change within a direction does not. A bare
+    ``acMode: 1`` would put the device into charge mode carrying whatever
+    ``inputLimit`` it still held — 0 after an exit — so it would sit in the
+    charge direction drawing nothing, and ``ac_charge_not_delivered`` would then
+    warn about it. Standing down is not "nobody watches": a device that drifts
+    out of charge mode reports no AC input, the write deadband measures the
+    target against exactly that, and the power command puts it back in the next
+    cycle with a complete command.
+
+    Priority sits above the firmware observation and below an operator park, so
+    parking a device or a maintenance claim still takes it away mid-charge.
+    """
+
+    if not ems_commanded_charge:
+        return None
+
+    return DeviceRuntimeIntent(
+        device=device_name,
+        role=DeviceRuntimeRole.AC_INPUT,
+        reason=REGULATOR_CHARGE_REASON,
+        desired_ac_mode=None,
+        output_control_allowed=True,
+        priority=PRIORITY_REGULATOR,
+    )
+
+
 def resolve_device_intent(candidates):
     """Return the highest-priority candidate, or ``None`` when there is none.
 
@@ -157,6 +205,9 @@ __all__ = [
     "PRIORITY_OPERATOR_PARK",
     "PRIORITY_MAINTENANCE",
     "PRIORITY_FIRMWARE_OBSERVED",
+    "PRIORITY_REGULATOR",
+    "REGULATOR_CHARGE_REASON",
+    "regulator_charge_intent",
     "FIRMWARE_CHARGE_REASON",
     "DeviceRuntimeRole",
     "DeviceRuntimeIntent",

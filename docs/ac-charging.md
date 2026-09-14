@@ -117,6 +117,14 @@ you know carries it.
 
 ## Behavior
 
+A small charge is **concentrated rather than spread**. Devices are weighted by
+the room left in their batteries, so a nearly full one takes a sliver — and a
+sliver still costs a full AC direction change while buying nothing, and may be
+too small to show up in `gridInputPower` at all. Shares below roughly 50 W are
+therefore dropped and re-allocated to devices that can use them, down to a
+single device if need be. Six devices taking 21 W each is six direction changes
+buying nothing; one device taking 126 W is one that works.
+
 Charging starts only after the discharge side has already reached zero and a
 surplus above `charge_start_w` has persisted — `entry_confirm_cycles` of the
 last `entry_window_cycles` observations, five of seven by default.
@@ -160,6 +168,35 @@ On a clean shutdown the EMS returns every device it put into charge. A killed
 process writes nothing and the device charges on until its own maximum SoC stops
 it — bounded, but it still costs. See [user/safety.md](user/safety.md).
 
+**While the regulator charges a device, it owns that device's AC direction.**
+Every cycle each device gets a default claim of `ac_output`, and the state
+reconciler writes `acMode` whenever telemetry disagrees with the claim — so
+without a claim of its own the regulator's `acMode = 1` would be overwritten
+with `acMode = 2` once per loop, against the power command putting it back. The
+regulator therefore claims the device at priority 100 with *no* desired mode,
+meaning "the power command owns this". An operator park (150) or maintenance
+(200) still takes the device away mid-charge, and a device found charging that
+the EMS did not command stays a leftover the reconciler may reclaim.
+
+**A running charge is stopped even when the new target is zero.** The write
+deadband suppresses a command that would change nothing, and it decides that by
+comparing the target against what the device is doing. A charging device reports
+`outputLimit` 0 and `outputHomePower` 0 while drawing hundreds of watts, so the
+reference is taken from the measured AC input instead — otherwise "switch this
+device off" would compare 0 against 0, skip the write, and leave the hardware
+charging. Local-API devices are also covered by the startup `acMode` reconcile;
+MQTT control devices are output-only and have no such path.
+
+**A charge does not outlive the meter that justifies it.** A grid-meter client
+that cannot reach its hardware returns the last good reading and marks it stale;
+nothing caps how long it may do that. For discharging that is tolerable — the
+EMS keeps placing energy you already own. Charging spends, and a held reading of
+"still exporting 900 W" looks exactly like a real surplus, so charging stops
+once the last successful read is older than `telemetry_max_age_seconds`
+(default 10 s, about two loops) and logs `ac_charge_stopped_stale_meter`. A
+single missed read is tolerated on purpose: ending a charge for one dropped
+packet costs a full re-entry window.
+
 ## Known interactions in a mixed fleet
 
 **A device that cannot charge still honours the standby output floor.** While
@@ -184,6 +221,40 @@ controller on the same hardware remains unsupported; see
 
 **A device with no battery never charges**, whatever its configuration says.
 Battery presence is read from telemetry, not from the config.
+
+**A device that stops answering hands its share to the others.** Its capacity
+leaves the total, its target collapses to zero, and the remaining devices take
+up the slack; the direction holds while something can still absorb the surplus.
+The EMS cannot write to it, so it keeps whatever it was last told — the same
+situation as a killed process, except the EMS is running and will command it
+again the moment it answers. See [user/safety.md](user/safety.md).
+
+**The full-charge assist outranks the regulator.** Both want the AC direction of
+the same device, and the claim ladder settles it in one place: the assist (150)
+beats the regulator (100), its claim forbids output control, and the regulator
+stops commanding that device in the same cycle rather than both writing a
+direction at it.
+
+### Known limit: a device that accepts a charge and draws nothing
+
+A model whose catalogue row is wrong still **holds its share of the
+allocation**. Measured on a two-device fleet where only one responds: both are
+commanded 600 W, the EMS assumes 2000 W of capacity, 600 W is absorbed, and the
+rest of the surplus keeps leaving. The working device does not take up the
+slack.
+
+`ac_charge_not_delivered` names the device, so this is diagnosable rather than
+silent — but until you act on it the fleet charges at part of its capacity. Turn
+`ac_charge_enabled` off for that device and please report it, so the catalogue
+row can be corrected.
+
+It is not dropped from the allocation automatically on purpose. Doing that needs
+a signal that a device is not charging, and both available witnesses can be
+absent on a model nobody has measured: `gridInputPower` may not be reported, and
+`acStatus` is not in every MQTT snapshot. Excluding a device on a missing field
+would stop a charge that works. The first measurement on an unproven model is
+what decides this, which is why `diagnose --hardware` reports the property names
+a device actually sends.
 
 ## Where charging is visible
 
@@ -225,9 +296,11 @@ up as 800 W of extra household consumption.
 ## Logs
 
 ```text
+ac_charge_band_collapsed
 ac_charge_direction
 ac_charge_entry_rate_limited
 ac_charge_not_delivered
+ac_charge_stopped_stale_meter
 ac_charge_released_on_shutdown
 ac_charge_release_failed
 ```
@@ -235,6 +308,17 @@ ac_charge_release_failed
 `ac_charge_direction` is `info` when the direction changes and `debug`
 otherwise. `ac_charge_entry_rate_limited` is a `warning`: reaching the hourly
 cap means the thresholds do not fit the installation.
+
+`ac_charge_entry_rate_limited` is said **once per episode**, not once per
+cycle: the condition holds as long as the surplus does, and one line per loop
+buries every other event instead of surfacing this one. The usual cause is a
+collapsed band — `charge_hysteresis_w` at 0, or `charge_start_w` at 0 — which
+puts entry and exit at the same threshold; `ac_charge_band_collapsed` names that
+once at startup.
+
+`ac_charge_stopped_stale_meter` is a `warning`: the load reading the charge
+rests on stopped being a measurement. It means the grid meter is unreachable,
+not that anything about the charging is wrong.
 
 `ac_charge_not_delivered` is a `warning` and the one to watch on a model
 enabled from the catalogue rather than from a measurement. It fires once when a

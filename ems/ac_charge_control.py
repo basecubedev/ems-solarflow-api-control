@@ -39,6 +39,7 @@ far.
 from dataclasses import dataclass, replace
 
 from ems.config import safe_int
+from ems.power_direction import AC_STATUS_CHARGING
 from ems.target_control import get_device_battery_kwh, weighted_limited_allocation
 
 # Why a direction decision came out the way it did. Stable, machine-readable.
@@ -184,13 +185,21 @@ def decide_charge_direction(
 CHARGE_SILENCE_CYCLES = 6
 
 
-def count_silent_charge_cycles(previous_count, *, commanded_w, measured_w, online):
-    """Count cycles where a commanded charge produced no measured AC input.
+def count_silent_charge_cycles(
+    previous_count, *, commanded_w, measured_w, online, charging_status=0
+):
+    """Count cycles where a commanded charge shows no sign of happening.
 
     A model whose catalogue entry claims an AC charge path it does not have
     fails quietly: the command is accepted, nothing flows, and the surplus keeps
     leaving. Nothing here changes a target -- the count exists so that failure
     is visible rather than silent.
+
+    Two witnesses, and either one clears the count. ``gridInputPower`` is the
+    measurement; ``acStatus`` is what the device says it is doing, and the probe
+    established that status rather than the written mode is what proves a
+    direction was taken. A device reporting one but not the other is charging,
+    so demanding both would warn about a charge that works.
     """
 
     if not online:
@@ -198,6 +207,8 @@ def count_silent_charge_cycles(previous_count, *, commanded_w, measured_w, onlin
     if safe_int(commanded_w, 0) >= 0:
         return 0
     if safe_int(measured_w, 0) > 0:
+        return 0
+    if safe_int(charging_status, 0) == AC_STATUS_CHARGING:
         return 0
     return max(0, safe_int(previous_count, 0)) + 1
 
@@ -274,6 +285,22 @@ def charge_headroom_weight(state, device_config, capability):
     return max(0, get_device_battery_kwh(device_config) * headroom_percent / 100)
 
 
+# The smallest share worth putting a device into charge mode for. Below this a
+# charge buys nothing and costs something: the device changes AC direction for a
+# trickle, and a draw this small may not register in ``gridInputPower`` at all,
+# which is both the confirmation metric and what ``ac_charge_not_delivered``
+# watches — so a share below it can raise a warning about a charge that is
+# working as well as it ever could.
+#
+# The design folded ``min_charge_power_w`` away on the argument that the band's
+# lower edge already *is* the smallest commanded charge. That holds for one
+# device and breaks for a fleet: the edge bounds the total, and the total is
+# then split. A judgement rather than a measurement — nobody has measured the
+# smallest charge an inverter reports — so it is one number in one place, ready
+# to be replaced by a measured one.
+MIN_DEVICE_CHARGE_W = 50
+
+
 def allocate_charge_targets(
     total_charge_w, states, device_configs, capabilities, chargeable
 ):
@@ -282,6 +309,11 @@ def allocate_charge_targets(
     Returns negative watts per device — the controller's sign convention — and
     reuses the same weighted allocation primitive the discharge side uses, so
     there is one allocator with two weight functions rather than two allocators.
+
+    A small total is **concentrated** rather than spread: shares below
+    ``MIN_DEVICE_CHARGE_W`` are dropped and re-allocated to devices that can use
+    them, down to a single device if need be. Six devices taking 21 W each is six
+    direction changes buying nothing; one device taking 126 W is one that works.
     """
 
     weights = []
@@ -296,7 +328,26 @@ def allocate_charge_targets(
         weights.append(charge_headroom_weight(state, device_config, capability))
         limits.append(resolve_max_charge_power_w(device_config, state))
 
-    allocation = weighted_limited_allocation(max(0, total_charge_w), weights, limits)
+    total = max(0, total_charge_w)
+    allocation = weighted_limited_allocation(total, weights, limits)
+
+    # Drop the smallest unusable share and let the primitive redistribute, until
+    # every remaining share is worth taking or only one device is left. Keeping
+    # the last one even when it is under the minimum is deliberate: refusing it
+    # would leave the surplus unabsorbed while the direction still says charge,
+    # which is the windup the floor exists to prevent.
+    while sum(1 for value in allocation if value > 0) > 1:
+        under = [
+            index
+            for index, value in enumerate(allocation)
+            if 0 < value < MIN_DEVICE_CHARGE_W
+        ]
+        if not under:
+            break
+        smallest = min(under, key=lambda index: allocation[index])
+        weights[smallest] = 0
+        allocation = weighted_limited_allocation(total, weights, limits)
+
     return [-int(round(value)) for value in allocation]
 
 
@@ -311,6 +362,7 @@ __all__ = [
     "ChargeDirectionState",
     "ChargeDirectionDecision",
     "decide_charge_direction",
+    "MIN_DEVICE_CHARGE_W",
     "resolve_max_charge_power_w",
     "charge_headroom_weight",
     "allocate_charge_targets",
