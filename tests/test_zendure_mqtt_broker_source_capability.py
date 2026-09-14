@@ -50,6 +50,10 @@ pytestmark = [
 ]
 
 ZENSDK_MODEL = "solarflow_800_pro_2"
+# Same write profile, same command shape — but its AC charge path has not been
+# measured, so it is the model to reach for when a test needs an operation the
+# catalogue refuses.
+ZENSDK_MODEL_WITHOUT_CHARGE = "solarflow_2400_ac"
 LEGACY_MODEL = "hyper_2000"
 PRODUCT_KEY = "73bkTV"
 ROUTE_DEVICE_ID = "ABCD1234567890"
@@ -272,7 +276,7 @@ def test_power_write_capability_matrix(
 def test_unsupported_operation_still_reported_on_a_verified_source():
     cap = resolve_power_write_capability(
         topic_family=FAMILY_ZENSDK_HA_SCALAR,
-        hardware_profile=ZENSDK_MODEL,
+        hardware_profile=ZENSDK_MODEL_WITHOUT_CHARGE,
         broker_source=BROKER_SOURCE_ZENDURE_CLOUD_MQTT,
         operation="charge",
     )

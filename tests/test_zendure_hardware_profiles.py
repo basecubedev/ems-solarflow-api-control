@@ -117,6 +117,32 @@ def test_zensdk_device_keeps_existing_properties_write_profile():
     assert prof.canonical_name == "solarflow_800_pro_2"
     assert prof.power_write_profile == WRITE_PROFILE_ZENSDK_PROPERTIES
     assert prof.writable is True
+    # The only model whose AC charge path has been measured (2026-09-13).
+    assert prof.supports_charge is True
+
+
+def test_unmeasured_zensdk_models_do_not_charge():
+    """A shared command shape is not evidence that a model can charge.
+
+    Every ZenSDK model builds the identical atomic charge set, so the contract
+    is family-wide — but whether a given device actually has an AC charge path
+    is a per-model fact, and the catalogue is where it is recorded.
+    """
+
+    for name in (
+        "SolarFlow 800",
+        "SolarFlow 800 Pro",
+        "SolarFlow 800 Plus",
+        "SolarFlow 1600 AC+",
+        "SolarFlow 2400 AC",
+        "SolarFlow 2400 AC+",
+        "SolarFlow 2400 Pro",
+        "SolarFlow 4000 AC+",
+    ):
+        prof = resolve_hardware_profile(name)
+        assert prof is not None, name
+        assert prof.supports_charge is False, name
+        assert "charge" not in prof.supported_operations, name
 
 
 def test_zensdk_brand_model_resolves_without_explicit_alias():
@@ -126,6 +152,33 @@ def test_zensdk_brand_model_resolves_without_explicit_alias():
     assert prof is not None
     assert prof.canonical_name == "solarflow_2400_ac"
     assert prof.power_write_profile == WRITE_PROFILE_ZENSDK_PROPERTIES
+
+
+def test_plus_variants_are_distinct_from_their_base_model():
+    """``+`` is part of the model name, not punctuation to be discarded.
+
+    Normalization stripped it, so "SolarFlow 2400 AC+" collapsed onto the same
+    key as "SolarFlow 2400 AC" and the first-declared alias won. The AC+ profile
+    was unreachable by any human spelling. 1600 AC+ and 4000 AC+ only resolved
+    because no base model existed to collide with.
+    """
+
+    for spelling in ("SolarFlow 2400 AC+", "SolarFlow2400AC+", "solarFlow2400AC+"):
+        prof = resolve_hardware_profile(spelling)
+        assert prof is not None, spelling
+        assert prof.canonical_name == "solarflow_2400_ac_plus", spelling
+
+    base = resolve_hardware_profile("SolarFlow 2400 AC")
+    assert base is not None
+    assert base.canonical_name == "solarflow_2400_ac"
+
+    for spelling, expected in (
+        ("SolarFlow 1600 AC+", "solarflow_1600_ac_plus"),
+        ("SolarFlow 4000 AC+", "solarflow_4000_ac_plus"),
+    ):
+        prof = resolve_hardware_profile(spelling)
+        assert prof is not None, spelling
+        assert prof.canonical_name == expected, spelling
 
 
 # --- deferred / conditional / unknown hardware ------------------------------
