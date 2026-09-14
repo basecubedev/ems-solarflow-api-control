@@ -21,6 +21,7 @@ from ems.runtime_intents import (
     DeviceRuntimeRole,
     ac_input_intent,
     ac_output_intent,
+    firmware_charge_intent,
     resolve_device_intent,
     runtime_intent_from_role,
 )
@@ -3466,6 +3467,7 @@ class EMSController:
             intent = resolve_device_intent([
                 self.get_device_runtime_intent(dev, state),
                 self.full_charge_assist_intent(dev),
+                firmware_charge_intent(dev.name, state),
             ])
             self.runtime_intents[dev.name] = intent
             ac_mode_write_ok = self.reconcile_ac_mode_intent(dev, state, intent)
