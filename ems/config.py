@@ -102,7 +102,12 @@ AC_CHARGE_CONTROL_DEFAULTS = {
     "enabled": False,
     "charge_start_w": 150,
     "charge_hysteresis_w": 50,
-    "entry_confirm_cycles": 3,
+    # k of the last n observations, not k in a row and not a mean: each sample
+    # is judged against the threshold on its own, so a single deep spike can
+    # never stand in for a sustained surplus, while one brief dip no longer
+    # discards the evidence gathered so far.
+    "entry_confirm_cycles": 5,
+    "entry_window_cycles": 7,
     "max_charge_entries_per_hour": 12,
     "max_total_charge_power_w": 1200,
     "charge_ramp_up_w_per_cycle": 400,
@@ -2936,8 +2941,11 @@ def ac_charge_control_enabled(runtime_state=None):
     without a restart; config is the fallback.
     """
 
-    if runtime_state:
-        section = runtime_state.data.get("ac_charge_control", {})
+    # Read defensively: this runs every control cycle against whatever runtime
+    # state the controller was handed, which may be absent or a partial object.
+    data = getattr(runtime_state, "data", None)
+    if isinstance(data, dict):
+        section = data.get("ac_charge_control")
         if isinstance(section, dict) and "enabled" in section:
             return safe_bool(section.get("enabled"), False)
 

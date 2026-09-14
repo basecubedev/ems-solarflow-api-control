@@ -365,7 +365,7 @@ def test_emsctl_completion_bash_contains_commands_and_configured_device(tmp_path
     result = run_emsctl(tmp_path, "completion", "bash")
 
     assert result.returncode == 0, result.stderr
-    assert "status system device ha ha-control winter dashboard influx stack diagnose backup config interactive menu examples completion help" in result.stdout
+    assert "status system device ha ha-control winter ac-charge dashboard influx stack diagnose backup config interactive menu examples completion help" in result.stdout
     assert "set-password change-password disable-auth auth-status" in result.stdout
     assert "off eco standard" in result.stdout
     assert "output input" in result.stdout
@@ -377,7 +377,7 @@ def test_emsctl_completion_zsh_contains_commands_and_configured_device(tmp_path)
     result = run_emsctl(tmp_path, "completion", "zsh")
 
     assert result.returncode == 0, result.stderr
-    assert "commands=(status system device ha ha-control winter dashboard influx stack diagnose backup config interactive menu examples completion help)" in result.stdout
+    assert "commands=(status system device ha ha-control winter ac-charge dashboard influx stack diagnose backup config interactive menu examples completion help)" in result.stdout
     assert "dashboard_actions=(set-password change-password disable-auth auth-status)" in result.stdout
     assert "offgrid_modes=(off eco standard)" in result.stdout
     assert "ac_modes=(output input)" in result.stdout
@@ -1913,3 +1913,53 @@ def test_config_upgrade_preserves_config_permissions(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+
+
+def test_ac_charge_can_be_switched_off_at_runtime(tmp_path):
+    """Stopping the EMS drawing from the grid must not need a restart."""
+
+    assert run_emsctl(tmp_path, "status").returncode == 0
+
+    assert run_emsctl(tmp_path, "ac-charge", "enable").returncode == 0
+    assert runtime_state(tmp_path)["ac_charge_control"]["enabled"] is True
+
+    assert run_emsctl(tmp_path, "ac-charge", "disable").returncode == 0
+    assert runtime_state(tmp_path)["ac_charge_control"]["enabled"] is False
+
+    status = run_emsctl(tmp_path, "ac-charge", "status")
+    assert status.returncode == 0
+    assert "ac_charge_control" in status.stdout
+
+
+def test_a_single_device_can_be_taken_out_of_charging(tmp_path):
+    assert run_emsctl(tmp_path, "status").returncode == 0
+
+    assert run_emsctl(tmp_path, "device", "WR1", "ac-charge", "on").returncode == 0
+    assert runtime_state(tmp_path)["devices"]["WR1"]["ac_charge_enabled"] is True
+
+    assert run_emsctl(tmp_path, "device", "WR1", "ac-charge", "off").returncode == 0
+    assert runtime_state(tmp_path)["devices"]["WR1"]["ac_charge_enabled"] is False
+
+
+def test_an_invalid_ac_charge_value_changes_nothing(tmp_path):
+    assert run_emsctl(tmp_path, "status").returncode == 0
+    before = (tmp_path / "runtime-state.json").read_text()
+
+    result = run_emsctl(tmp_path, "device", "WR1", "ac-charge", "maybe")
+
+    assert result.returncode != 0
+    assert "'on' or 'off'" in result.stderr + result.stdout
+    assert (tmp_path / "runtime-state.json").read_text() == before
+
+
+def test_the_runtime_toggles_are_the_ones_admin_mirrors(tmp_path):
+    """One whitelist, not two: Admin derives its mirror set from this one.
+
+    A key writable here but absent from the mirror would let an Admin apply be a
+    silent no-op against a runtime value that keeps winning.
+    """
+
+    from admin.config_runtime_overlap import DEVICE_FIELDS, SECTION_FIELDS
+
+    assert "ac_charge_enabled" in DEVICE_FIELDS
+    assert "enabled" in SECTION_FIELDS["ac_charge_control"]
