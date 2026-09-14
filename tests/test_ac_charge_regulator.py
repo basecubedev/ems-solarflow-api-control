@@ -906,3 +906,162 @@ def test_the_per_device_runtime_switch_stops_a_charge_in_one_cycle():
     assert harness.controller.charge_direction.charging is False
     assert item.ac_mode == 2
     assert item.grid_input == 0
+
+
+def test_an_mqtt_control_device_charges_through_the_same_loop():
+    """A whole transport that had no loop-level coverage.
+
+    Everything else here builds a local-HTTP device. The MQTT control client is
+    a different class with a different constructor, no `resolved_hardware_profile`
+    (it carries a pinned one instead) and no state reconciliation -- and that
+    last difference already hid one defect, the charge that was not stopped
+    after a restart. So the path is walked once end to end.
+
+    It also happens to be the test user's configuration: a 2400 AC on MQTT,
+    whose own ceiling is 2400 W and which the installation limit holds to 1200.
+    """
+
+    from ems.mqtt_control.zendure_profiles import WRITE_PROFILE_ZENSDK_PROPERTIES
+    from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
+
+    class ServiceStub:
+        def publish(self, *args, **kwargs):
+            return True
+
+        def snapshot(self, *args, **kwargs):
+            return None
+
+    dev = ZendureMqttDeviceClient(
+        name="WR1",
+        service=ServiceStub(),
+        device_id="ABC123",
+        topic_family="zensdk_ha_scalar",
+        source="zendure_cloud_mqtt",
+        hardware_profile="solarflow_2400_ac",
+        power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
+        ac_charge_enabled=True,
+        max_charge_power_w=0,
+        max_power=800,
+        battery_kwh=2.0,
+        min_soc=15,
+        max_soc=100,
+        smart_mode=1,
+    )
+    assert dev.supports_state_reconciliation is False
+    assert not hasattr(dev, "resolved_hardware_profile")
+
+    item = surplus_state()
+    item.ac_mode = 2
+    item.ac_status = 1
+    item.output_limit = 0
+    item.input_limit_w = 0
+    item.grid_input = 0
+    item.charge_max_limit_w = 2400
+
+    harness = Harness([dev], load=-900)
+    harness.controller.set_output_limit = FollowingHardware(item)
+    harness.run(cycles=20, states=[item])
+
+    assert harness.controller.charge_direction.charging is True
+    # The pinned profile is what resolves the model, and it charges.
+    assert harness.controller.device_model_supports_charge(dev) is True
+    # Its own ceiling is read from telemetry, then held to the installation limit.
+    assert harness.controller.device_charge_limits["WR1"] == 2400
+    assert harness.controller.commanded_device_targets["WR1"] == -1200
+    assert item.ac_mode == 1
+
+
+def test_the_regulator_state_stays_bounded_over_a_long_run():
+    """Nothing here may grow with uptime.
+
+    The entry window, the hourly entry list and the per-device maps are the only
+    state the regulator keeps between cycles, and a surplus that comes and goes
+    exercises all three. Four thousand cycles is about five and a half hours at
+    the shipped loop interval.
+    """
+
+    class OscillatingMeter:
+        def __init__(self):
+            self.cycle = 0
+            self.charge = 0
+
+        def get_power(self):
+            self.cycle += 1
+            surplus = -400 if (self.cycle // 40) % 2 == 0 else 500
+            return surplus + self.charge
+
+    item = surplus_state()
+    item.ac_mode = 2
+    item.ac_status = 1
+    item.output_limit = 0
+    item.input_limit_w = 0
+    item.grid_input = 0
+
+    harness = Harness([charging_device()], load=0)
+    meter = OscillatingMeter()
+    harness.controller.shelly = meter
+    hardware = FollowingHardware(item)
+
+    def respond(dev, value):
+        meter.charge = -int(value) if int(value) < 0 else 0
+        hardware(dev, value)
+
+    harness.controller.set_output_limit = respond
+    harness.run(cycles=4000, states=[item])
+
+    direction = harness.controller.charge_direction
+    assert len(direction.entry_window) <= 7
+    assert len(direction.entries) <= 12
+    assert len(harness.controller.silent_charge_cycles) == 1
+    assert len(harness.controller.commanded_device_targets) == 1
+    assert len(harness.controller.device_charge_limits) == 1
+
+
+def test_the_control_view_explains_a_charge_as_a_charge():
+    """"Why is this device at -1000 W?" was answered with "pv_first_allocation".
+
+    The explanation is built by the discharge allocator, which runs first and
+    against a requested total of zero while charging. Its numbers are replaced
+    downstream; its reasons were not, so the Control tab named the strategy that
+    did not decide it, for a direction it does not describe.
+    """
+
+    items = [surplus_state(), surplus_state()]
+    for item in items:
+        item.ac_mode = 2
+        item.ac_status = 1
+        item.output_limit = 0
+        item.input_limit_w = 0
+        item.grid_input = 0
+
+    charging = charging_device("CHARGES")
+    refused = charging_device("REFUSED")
+    refused.ac_charge_enabled = False
+
+    harness = Harness([charging, refused], load=-900)
+    harness.run(cycles=20, states=items)
+
+    assert harness.controller.charge_direction.charging is True
+    explanation = harness.controller.last_control_explanation.to_dict()
+
+    assert explanation["mode"] == "ac_charge"
+    devices = explanation["devices"]
+    assert devices["CHARGES"]["effective_target_w"] < 0
+    assert devices["CHARGES"]["decision_reason"] == "ac_charge_allocation"
+    # A device that may not charge says so, rather than inheriting a discharge
+    # reason for a target of zero.
+    assert devices["REFUSED"]["decision_reason"] == "ac_charge_not_permitted"
+
+
+def test_explaining_a_charge_changes_no_target():
+    """It only retells the decision. A wording pass that moved a watt would be
+    a second place deciding what the devices do."""
+
+    import inspect
+
+    from ems.controller import EMSController
+
+    source = inspect.getsource(EMSController.explain_charge_allocation)
+    for forbidden in ("targets[", "commanded_device_targets", "device_charge_limits"):
+        assert f"{forbidden} =" not in source, forbidden
+    assert "return" in source
