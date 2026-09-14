@@ -886,7 +886,7 @@ class WriteGateTest(unittest.TestCase):
             controller.reconcile_runtime_ac_charge_power(
                 controlled,
                 state(ac_mode=1, input_limit_w=200),
-                ac_input_intent("WR1", "test_charge")
+                controller.get_device_runtime_intent(controlled, state(ac_mode=1))
             )
 
         controlled.session.post.assert_not_called()
@@ -969,7 +969,7 @@ class WriteGateTest(unittest.TestCase):
             controller.reconcile_runtime_ac_charge_power(
                 controlled,
                 state(ac_mode=1, input_limit_w=0),
-                ac_input_intent("WR1", "test_charge")
+                controller.get_device_runtime_intent(controlled, state(ac_mode=1))
             )
 
         controlled.session.post.assert_not_called()
@@ -1003,7 +1003,7 @@ class WriteGateTest(unittest.TestCase):
             controller.reconcile_runtime_ac_charge_power(
                 controlled,
                 state(ac_mode=1, input_limit_w=0),
-                ac_input_intent("WR1", "test_charge")
+                controller.get_device_runtime_intent(controlled, state(ac_mode=1))
             )
 
         controlled.session.post.assert_not_called()

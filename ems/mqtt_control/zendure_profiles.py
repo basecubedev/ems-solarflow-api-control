@@ -15,6 +15,13 @@ every other device — unknown, deferred (ACE 1500), or conditionally excluded
 import re
 from dataclasses import dataclass
 
+from ems.power_direction import (
+    OPERATION_CHARGE,
+    OPERATION_DISCHARGE,
+    OPERATION_IDLE,
+    operation_for_target,
+)
+
 # Verified write-protocol families. ``telemetry_only`` is intentionally NOT an
 # implemented write profile: a device that resolves to it can never publish.
 WRITE_PROFILE_ZENSDK_PROPERTIES = "zensdk_properties_write"
@@ -30,10 +37,9 @@ IMPLEMENTED_WRITE_PROFILES = frozenset(
     }
 )
 
-# Neutral per-device operations. Sign of the controller's target selects one.
-OPERATION_DISCHARGE = "discharge"
-OPERATION_IDLE = "idle"
-OPERATION_CHARGE = "charge"
+# The neutral per-device operations and the sign mapping live in
+# ``ems.power_direction``; they are re-exported here so the transport modules
+# that grew up around this registry keep their import site.
 
 # Validation maturity of a profile, surfaced to operators (never a write gate).
 VALIDATION_EXISTING_SUPPORT = "existing_support"
@@ -600,21 +606,6 @@ def hardware_profile_selector_options() -> list[dict]:
             }
         )
     return options
-
-
-def operation_for_target(target_w: int) -> str:
-    """Map a signed controller target to a neutral operation.
-
-    ``> 0`` discharge / AC output, ``== 0`` idle / stop, ``< 0`` AC charging.
-    The EMS sign convention stays internal; the write adapter converts a charge
-    operation to a positive charging watt value.
-    """
-
-    if target_w > 0:
-        return OPERATION_DISCHARGE
-    if target_w < 0:
-        return OPERATION_CHARGE
-    return OPERATION_IDLE
 
 
 __all__ = [
