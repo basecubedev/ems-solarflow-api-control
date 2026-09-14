@@ -119,7 +119,11 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        supports_charge=False,
+        # Measured on real hardware 2026-09-13: the atomic charge set drew the
+        # commanded power. Every other ZenSDK model stays False until the same
+        # measurement is made on it — a shared command shape proves the command
+        # is well formed, not that a model has an AC charge path.
+        supports_charge=True,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),

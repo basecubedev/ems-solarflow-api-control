@@ -69,7 +69,9 @@ def test_setup_and_maintenance_catalogs_export_registry_models(tmp_path):
         "label": "SolarFlow 800 Pro 2",
         "generation": "solarflow_zensdk",
         "control_supported": True,
-        "supported_operations": ["discharge", "idle"],
+        # Charge appears because this model's AC charge path was measured;
+        # every other ZenSDK model still exports discharge/idle only.
+        "supported_operations": ["discharge", "idle", "charge"],
         "power_write_profile": "zensdk_properties_write",
         "validation_maturity": "existing_support",
     }.items() <= exact.items()
