@@ -38,6 +38,7 @@ far.
 
 from dataclasses import dataclass, replace
 
+from ems.config import safe_int
 from ems.target_control import get_device_battery_kwh, weighted_limited_allocation
 
 # Why a direction decision came out the way it did. Stable, machine-readable.
@@ -127,7 +128,11 @@ def decide_charge_direction(
         )
 
     if previous.charging:
-        if desired_total_w > -settings.stop_w:
+        # Inclusive on purpose: a desired total sitting exactly on the band's
+        # lower edge means the charge has wound down to the stop threshold, and
+        # a strict comparison would keep it going one more cycle. Boundaries are
+        # where an "immediate" exit quietly stops being immediate.
+        if desired_total_w >= -settings.stop_w:
             return ChargeDirectionDecision(
                 charging=False,
                 state=ChargeDirectionState(False, (), entries),
@@ -171,12 +176,23 @@ def decide_charge_direction(
     )
 
 
-def resolve_max_charge_power_w(device_config, hardware_profile=None):
+def resolve_max_charge_power_w(device_config, state=None):
     """Highest AC charge power for one device.
 
     Precedence is the contract, not the values: an explicit setting always wins,
-    so adding a model catalogue later can never override an installation where
-    somebody set the number by hand. The catalogue slots in as the middle tier.
+    and below it the device's own reported ceiling decides.
+
+    It deliberately does **not** fall back to the output limit. Feeding out and
+    drawing in are different paths with different ratings — a SolarFlow 800 Pro 2
+    reports an 800 W output limit and a 1000 W charge ceiling — and the reason
+    the two are not interchangeable is physical: an inverter's output adds to the
+    house current on a circuit whose breaker sits upstream of the injection
+    point, while a charge is drawn through that breaker and protected by it.
+
+    A device that reports no ceiling charges nothing. Every model that can charge
+    reports one, so an absent value means the device is not understood, and
+    guessing a charge current for hardware nobody has identified is not a guess
+    worth making. Setting ``max_charge_power_w`` explicitly unblocks it.
     """
 
     explicit = getattr(device_config, "max_charge_power_w", 0) or 0
@@ -184,17 +200,17 @@ def resolve_max_charge_power_w(device_config, hardware_profile=None):
         explicit = int(explicit)
     except (TypeError, ValueError):
         explicit = 0
+
+    reported = 0
+    if state is not None:
+        reported = safe_int(getattr(state, "charge_max_limit_w", 0), 0, minimum=0)
+
     if explicit > 0:
-        return explicit
+        # The operator may go below the device's ceiling freely; above it the
+        # device decides, because it is the one that has to accept the command.
+        return min(explicit, reported) if reported > 0 else explicit
 
-    # Tier two — a per-model limit from the hardware catalogue — does not exist
-    # yet; hardware_profile is accepted so adding it stays a one-line change.
-
-    fallback = getattr(device_config, "max_power", 0) or 0
-    try:
-        return max(0, int(fallback))
-    except (TypeError, ValueError):
-        return 0
+    return reported
 
 
 def charge_headroom_weight(state, device_config, capability):
@@ -202,10 +218,24 @@ def charge_headroom_weight(state, device_config, capability):
 
     ``usable_battery_weight`` weights a discharge by the energy above the floor;
     a charge is weighted by the energy still missing below the ceiling. Same
-    shape, opposite end.
+    shape, opposite end — but not the same safety, which is why the guards here
+    are explicit rather than inherited from the arithmetic.
+
+    A device with no battery reads as "below the floor" on the discharge side
+    and is skipped by accident. The same arithmetic here reads as "completely
+    empty" and would hand it the whole charge, so battery presence is taken from
+    telemetry the way the full-charge assist takes it.
+
+    Whether a pack is being drained by something outside the EMS is a separate
+    question — a permission, not a quantity — and it is answered by the caller,
+    which knows whether this EMS is already charging the device. Answering it
+    here ended a running charge on a single noisy sample.
     """
 
     if capability and not capability.can_charge:
+        return 0
+
+    if safe_int(getattr(state, "pack_num", 0), 0, minimum=0) <= 0:
         return 0
 
     if state.max_soc <= 0:
@@ -238,7 +268,7 @@ def allocate_charge_targets(
             limits.append(0)
             continue
         weights.append(charge_headroom_weight(state, device_config, capability))
-        limits.append(resolve_max_charge_power_w(device_config))
+        limits.append(resolve_max_charge_power_w(device_config, state))
 
     allocation = weighted_limited_allocation(max(0, total_charge_w), weights, limits)
     return [-int(round(value)) for value in allocation]
