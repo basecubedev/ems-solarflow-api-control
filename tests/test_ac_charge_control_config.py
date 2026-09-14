@@ -2,9 +2,12 @@
 """Config surface for AC charging from surplus.
 
 The feature lets the EMS draw from the grid, so its default state and the shape
-of its thresholds are safety properties, not preferences: off unless switched
-on, off in simulation, and a charge band whose edges cannot be inverted.
+of its thresholds are safety properties, not preferences: on for an ordinary
+install but never in simulation, and a charge band whose edges cannot be
+inverted.
 """
+
+import logging
 
 import pytest
 
@@ -169,6 +172,27 @@ def test_a_collapsed_charge_band_is_named_at_load():
     # The other way to collapse it, which a check that only looks at the
     # hysteresis misses.
     assert len(warnings_for({"enabled": True, "charge_start_w": 0})) == 1
+
+
+def test_the_default_warning_path_reaches_the_log(caplog):
+    """The warning has two paths, and only the one the tests supply was run.
+
+    Every case above passes ``emit_warning``, so the default -- the path a real
+    config load takes -- was never executed. It called ``log_event`` without
+    importing it, so an operator who collapsed the band met a ``NameError``
+    where the warning about relay wear belonged. CI's static check found that;
+    no test did, because no test ever ran the branch.
+    """
+
+    from ems.config import normalize_ac_charge_control_config
+
+    with caplog.at_level(logging.WARNING):
+        merged = normalize_ac_charge_control_config(
+            {"enabled": True, "charge_start_w": 150, "charge_hysteresis_w": 0}
+        )
+
+    assert merged["charge_start_w"] == 150
+    assert "ac_charge_band_collapsed" in caplog.text
 
 
 def test_the_operator_numbers_survive_the_warning():
