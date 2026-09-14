@@ -409,7 +409,7 @@ is invented without verified evidence. Machine-readable errors:
 A resolved ZenSDK profile never publishes a bare `outputLimit`: a device sitting
 in an inactive mode (`smartMode=0` / `acMode=1`) ignores a lone setpoint, and
 sending the mode fields separately would race it. Every ZenSDK power command is
-the **atomic** source-backed property set (`ems/mqtt_control/zensdk_operations.py`,
+the **atomic** source-backed property set (`ems/power_command.py`,
 mirroring the reference implementation):
 
 ```json
