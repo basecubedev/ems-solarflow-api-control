@@ -106,6 +106,12 @@ What the two charts do with a zoom is the difference between them:
 The Energy tab shows historical inverter output totals and savings estimates
 from the local SQLite aggregates.
 
+Where a period contains AC-charged energy, the card carries an extra **AC
+Charge** figure in kWh. It has no monetary value attached on purpose: the
+savings figure prices avoided import, and energy put into a battery has avoided
+nothing yet — the discharge that does is already counted. Installations that
+never AC-charge never see the row.
+
 ![Energy statistics demo screenshot](assets/preview-energy.jpg)
 
 ## Diagnose View
@@ -207,6 +213,7 @@ running EMS loop required:
 ```bash
 python3 scripts/serve_dashboard_preview.py
 python3 scripts/serve_dashboard_preview.py --scenario firmware-status
+python3 scripts/serve_dashboard_preview.py --scenario ac-charging
 python3 scripts/serve_dashboard_preview.py --scenario write-mode
 ```
 
@@ -214,9 +221,10 @@ It serves the real dashboard assets on `http://127.0.0.1:8767`. Open the landing
 page at `http://127.0.0.1:8767/preview` for links to every view, or go straight to
 a view (`/preview/aggregated`, `/preview/devices`, `/preview/control`,
 `/preview/energy`, `/preview/diagnose`, `/preview/logs`,
-`/preview/maintenance`). Scenarios cover a healthy system, mixed firmware-status
-values (including unknown values), an offline device, and read-only/write-mode
-authentication states. See
+`/preview/maintenance`). Scenarios cover a healthy system, a fleet where one
+device AC-charges the surplus of another (`ac-charging`, the only state that
+draws the grid → inverter pipe), mixed firmware-status values (including unknown
+values), an offline device, and read-only/write-mode authentication states. See
 [developer.md](developer/developer.md#local-dashboard-preview) for details.
 
 ## Configuration
@@ -315,7 +323,17 @@ mode is unavailable.
 Authenticated writes require the dashboard session cookie and a per-session
 CSRF token. The backend validates every writable field with explicit allowlists.
 Power limits are checked against the configured EMS and device limits, not only
-generic type ranges.
+generic type ranges. The routes follow the same allowlist, so a section is
+reachable exactly when it is writable — there is no second list to keep in sync.
+
+What the Control tab can change: EMS enabled / max total power / min output
+limit / loop interval; per device its enabled flag, **AC charging**, max power,
+PV priority and offgrid socket mode; Winter mode; **AC charging** for the whole
+installation; and Home Assistant publishing and helper control.
+
+Both AC-charging switches take effect on the next control cycle. Turning either
+one off stops a running charge in the same cycle, without a restart — stopping a
+device that is drawing from the grid is the one action that must never wait.
 
 ## Security Hardening
 
@@ -544,17 +562,20 @@ the visible series and KPI cards (no extra chart pages):
 
 - **Overview** / **Devices** — PV, Inverter Output, Battery Power; KPIs PV,
   Output, Charge, Discharge, Current SoC, Runtime Role.
-- **Grid** — Grid Power and Home Load; KPIs Grid Import, Grid Export, Home, SoC.
+- **Grid** — Grid Power, Home Load and AC Charge; KPIs Grid Import, Grid
+  Export, Home, AC Charge, SoC.
 - **Battery** — Battery Power; KPIs Charge, Discharge, SoC, Runtime Role.
-- **PV** — PV Input; KPIs PV, PV Peak, Output, SoC.
+- **PV** — PV Input and Inverter Output; KPIs PV, PV Peak, Output, SoC.
 
 Energy KPIs are integrated from the selected period; Current SoC and Runtime
-Role come from the live snapshot.
+Role come from the live snapshot. A KPI's series is always part of its tab's
+fetched set — a KPI reading a series the tab does not request would render a
+permanent `--`, which reads like a measurement rather than a wiring mistake.
 
 Overlay toggles add optional series on top of the active tab without changing
 it: **SoC** (drawn on a secondary right-hand percentage axis), **EMS Target**,
-and **Grid Power**. Every overlay is data-backed (no overlay is empty by
-design). Overlays render as dashed lines and the crosshair/live legend reports
+**Grid Power** and **AC Charge**. Every overlay is data-backed (no overlay is
+empty by design). Overlays render as dashed lines and the crosshair/live legend reports
 every visible series at the cursor. A custom date range (from/to pickers +
 Apply) replaces the period selector when set.
 
@@ -566,8 +587,14 @@ schema/provider and the frontend):
   `shelly_meter.grid_power`.
 - **Home Load** (`home`) — calculated household load (the Shelly / grid meter
   does not measure household load directly; it is derived from inverter output
-  and grid power), `max(0, inverter_output_total + grid_power)`. Stored as
-  `shelly_meter.house_load`.
+  and grid power), `max(0, inverter_output_total - ac_charge_total +
+  grid_power)`. The meter cannot tell a charging device from an appliance, so
+  its draw is subtracted again or the household is billed for it. Stored as
+  `shelly_meter.house_load`; derived once in `ems.power_direction`.
+- **AC Charge** (`ac_charge`) — measured AC input power summed over the devices
+  (`gridInputPower`), positive while charging and 0 otherwise. It is the
+  measured value, not the commanded charge target. Source:
+  `zendure_device.grid_input`.
 - **EMS Target** (`target`) — the EMS effective output target actually used by
   the controller after limits and safety logic (`effective_target_total_w`).
   Source: `ems_runtime.target_output`.

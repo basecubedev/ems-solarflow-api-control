@@ -16,6 +16,7 @@ from ems.ac_charge_control import (
     charge_headroom_weight,
     resolve_max_charge_power_w,
 )
+from ems.clients import parse_device
 from ems.models import DeviceCapabilities
 
 pytestmark = [
@@ -159,3 +160,24 @@ def test_a_device_that_reports_no_ceiling_charges_nothing():
 
     assert resolve_max_charge_power_w(_device(max_power=800), None) == 0
     assert resolve_max_charge_power_w(_device(max_power="?"), _state(soc=50, charge_max_limit_w="?")) == 0
+
+
+def test_the_surplus_export_setting_is_read_but_decides_nothing_yet():
+    """gridReverse is carried so the state is visible, not acted on.
+
+    A device with surplus export enabled and a full battery stops curtailing:
+    its PV leaves whatever the EMS allocates, which makes it a source rather
+    than an actuator. The EMS does not model that role yet, so the value is
+    reported rather than quietly changing an allocation. The day it does change
+    one, this test fails and the change is deliberate.
+    """
+
+    telemetry = {"electricLevel": 50, "socSet": 1000, "packNum": 2, "chargeMaxLimit": 1000}
+    on = parse_device({"properties": dict(telemetry, gridReverse=1)})
+    off = parse_device({"properties": dict(telemetry, gridReverse=2)})
+
+    assert (on.grid_reverse, off.grid_reverse) == (1, 2)
+    assert charge_headroom_weight(on, _device(), _capability()) == charge_headroom_weight(
+        off, _device(), _capability()
+    )
+    assert resolve_max_charge_power_w(_device(), on) == resolve_max_charge_power_w(_device(), off)

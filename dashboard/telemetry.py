@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from dataclasses import asdict, is_dataclass
 
 from ems.models import parse_pack_count
+from ems.power_direction import derive_house_load_w
 from ems.state_store import describe_full_charge_assist_status
 
 
@@ -86,6 +87,10 @@ def _state_telemetry_fields(state):
             for field in ("solar1", "solar2", "solar3", "solar4")
         ],
         "output_w": _rounded(getattr(state, "output", 0)),
+        # Measured, not commanded: the mirror of output_w for the charge
+        # direction. A charging device reports output_w == 0, so without this
+        # field the tile shows a device doing nothing.
+        "ac_charge_w": _rounded(getattr(state, "grid_input", 0)),
         # End-user EMS convention: positive means charging, negative means
         # discharging. Zendure/controller field names use the opposite view,
         # so the API publishes pack_out - pack_in exactly once here.
@@ -233,6 +238,7 @@ def build_dashboard_snapshot(
     devices = {}
     pv_total_w = 0
     inverter_total_w = 0
+    inverter_charge_total_w = 0
     battery_total_w = 0
     soc_values = []
     offline_devices = []
@@ -249,6 +255,7 @@ def build_dashboard_snapshot(
 
         pv_total_w += fields["pv_input_w"]
         inverter_total_w += fields["output_w"]
+        inverter_charge_total_w += fields["ac_charge_w"]
         battery_total_w += fields["battery_power_w"]
         soc_values.append(fields["soc"])
 
@@ -291,6 +298,7 @@ def build_dashboard_snapshot(
 
         pv_total_w += fields["pv_input_w"]
         inverter_total_w += fields["output_w"]
+        inverter_charge_total_w += fields["ac_charge_w"]
         battery_total_w += fields["battery_power_w"]
         soc_values.append(fields["soc"])
 
@@ -308,7 +316,9 @@ def build_dashboard_snapshot(
         }
 
     grid_power_w = _rounded(load_w)
-    home_load_w = _rounded(max(0, inverter_total_w + grid_power_w))
+    home_load_w = _rounded(
+        derive_house_load_w(inverter_total_w, grid_power_w, inverter_charge_total_w)
+    )
     average_soc = _rounded(sum(soc_values) / len(soc_values)) if soc_values else 0
 
     winter_active = False
@@ -380,6 +390,7 @@ def build_dashboard_snapshot(
         "home_load_w": home_load_w,
         "pv_total_w": _rounded(pv_total_w),
         "inverter_output_w": _rounded(inverter_total_w),
+        "inverter_charge_w": _rounded(inverter_charge_total_w),
         "battery_power_w": _rounded(battery_total_w),
         "average_soc": average_soc,
         "controller": {

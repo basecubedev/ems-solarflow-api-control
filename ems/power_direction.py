@@ -35,6 +35,23 @@ def operation_for_target(target_w: int) -> str:
     return OPERATION_IDLE
 
 
+def derive_house_load_w(inverter_output_w, grid_power_w, inverter_charge_w=0):
+    """Net both directions against the meter to get what the house draws.
+
+    The meter reads one exchange power for everything behind it, so a charging
+    device is indistinguishable from an appliance unless its draw is subtracted
+    again. It reports ``output == 0`` while charging, which is why summing the
+    outputs alone attributes the whole charge power to the household.
+    """
+
+    return max(
+        0.0,
+        float(inverter_output_w or 0)
+        - float(inverter_charge_w or 0)
+        + float(grid_power_w or 0),
+    )
+
+
 __all__ = [
     "AC_MODE_INPUT",
     "AC_MODE_OUTPUT",
@@ -42,5 +59,6 @@ __all__ = [
     "OPERATION_DISCHARGE",
     "OPERATION_IDLE",
     "OPERATION_CHARGE",
+    "derive_house_load_w",
     "operation_for_target",
 ]

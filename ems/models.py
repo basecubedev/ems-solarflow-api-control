@@ -70,6 +70,13 @@ class DeviceState:
     # The device's own AC charge ceiling. It is not the output limit: drawing in
     # and feeding out are different paths with different ratings.
     charge_max_limit_w: int = 0
+    # Measured AC input power, the mirror of `output`. `input_limit_w` is what
+    # was asked for; this is what flows.
+    grid_input: int = 0
+    # Whether the device exports surplus on its own rather than curtailing at
+    # max SoC. Read only: it changes what the device does when no EMS is
+    # watching, so it is reported, never set.
+    grid_reverse: int = 0
     # None when the device never reported the field; 0 is an observed "no pack".
     pack_num: int | None = None
     soc_status: int = 0

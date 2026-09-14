@@ -111,6 +111,7 @@ sensor.ems_solarflow_wr1_min_soc
 sensor.ems_solarflow_wr1_max_soc
 sensor.ems_solarflow_wr1_solar
 sensor.ems_solarflow_wr1_output
+sensor.ems_solarflow_wr1_ac_charge
 sensor.ems_solarflow_wr1_target
 sensor.ems_solarflow_wr1_output_limit
 sensor.ems_solarflow_wr1_soc_limit
@@ -128,6 +129,10 @@ binary_sensor.wr1_dc_active
 binary_sensor.wr1_grid_online
 binary_sensor.wr1_available
 ```
+
+`sensor.ems_solarflow_wr1_ac_charge` is the *measured* AC input power
+(`gridInputPower`), the mirror of `_output` for the charging direction. A
+charging device reports `_output` as 0, so the two are never both non-zero.
 
 `sensor.ems_solarflow_wr1_target` follows the same effective command semantics
 as the global target. Its `allocated_target_w` attribute contains the

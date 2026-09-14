@@ -21,6 +21,7 @@ from dashboard.auth import (
     verify_password_file,
 )
 from dashboard.runtime_write import (
+    SECTION_FIELDS,
     RuntimeWriteError,
     apply_device_update,
     apply_section_update,
@@ -1606,17 +1607,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     payload,
                     self.server.runtime_validation,
                 )
-            elif path == "/api/runtime/ha":
+            elif path[len("/api/runtime/"):] in SECTION_FIELDS:
+                # Routed from the write whitelist rather than from a literal per
+                # section: a section added to the whitelist without a route here
+                # accepts nothing, which is how ac_charge_control shipped
+                # unreachable.
                 result = apply_section_update(
                     self.server.runtime_state,
-                    "ha",
-                    payload,
-                    self.server.runtime_validation,
-                )
-            elif path == "/api/runtime/winter":
-                result = apply_section_update(
-                    self.server.runtime_state,
-                    "winter",
+                    path[len("/api/runtime/"):],
                     payload,
                     self.server.runtime_validation,
                 )
