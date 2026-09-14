@@ -7,6 +7,13 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from ems import config as cfg
+from ems.ac_charge_control import (
+    ChargeDirectionSettings,
+    ChargeDirectionState,
+    allocate_charge_targets,
+    decide_charge_direction,
+    resolve_max_charge_power_w,
+)
 from ems.clients import (
     fetch_all_devices,
     zero_device_state,
@@ -89,6 +96,9 @@ class EMSController:
         self.last_ha_written = {}
         self.commanded_total_w = None
         self.filtered_load_w = None
+        # The total before the ramp limits it. The charge direction's exit reads
+        # this, so a sudden house load does not wait for the ramp.
+        self.desired_total_w = None
         self.load_history = deque(
             maxlen=cfg.safe_int(
                 cfg.OUTPUT_CONTROL_CONFIG.get("median_window", 3),
@@ -107,6 +117,7 @@ class EMSController:
         self._last_influx_publish = 0
         self.last_control_explanation = None
         self.runtime_intents = {}
+        self.charge_direction = ChargeDirectionState()
         for device in self.devices:
             set_observer = getattr(device, "set_dispatch_observer", None)
             if callable(set_observer):
@@ -525,7 +536,8 @@ class EMSController:
         else:
             desired = self.commanded_total_w + filtered_load
 
-        desired = max(0, min(max_power, desired))
+        floor = self.commanded_total_floor_w()
+        desired = max(floor, min(max_power, desired))
 
         target_deadband = self.output_control_float(
             "target_deadband_w",
@@ -609,7 +621,7 @@ class EMSController:
                     ramp_limit_w=round(ramp_limit, 1)
                 )
 
-        ramped = max(0, min(max_power, ramped))
+        ramped = max(floor, min(max_power, ramped))
 
         log_event(
             logging.DEBUG,
@@ -622,6 +634,7 @@ class EMSController:
             ramped_total_w=round(ramped, 1)
         )
 
+        self.desired_total_w = desired
         self.commanded_total_w = ramped
         return ramped
 
@@ -692,7 +705,9 @@ class EMSController:
                     ramp_limit_w=round(limit)
                 )
 
-            ramped = max(0, min(dev.max_power, ramped))
+            ramped = max(
+                self.device_charge_floor_w(dev), min(dev.max_power, ramped)
+            )
             self.commanded_device_targets[dev.name] = ramped
             ramped_targets.append(ramped)
 
@@ -756,6 +771,9 @@ class EMSController:
 
         self.commanded_total_w = None
         self.filtered_load_w = None
+        # The total before the ramp limits it. The charge direction's exit reads
+        # this, so a sudden house load does not wait for the ramp.
+        self.desired_total_w = None
         self.load_history.clear()
         self.commanded_device_targets = {}
 
@@ -1051,6 +1069,13 @@ class EMSController:
                 effective_targets.append(0)
                 continue
 
+            charge_floor = self.device_charge_floor_w(dev)
+            if target < 0 and charge_floor < 0:
+                # A charging device is not producing output, so the standby
+                # output floor has nothing to say about it.
+                effective_targets.append(max(charge_floor, target))
+                continue
+
             if min_output_limit > 0:
                 target = max(target, min_output_limit)
 
@@ -1177,6 +1202,171 @@ class EMSController:
             reason="unknown_runtime_role"
         )
         return ac_output_intent(dev.name, "invalid_runtime_role_fallback")
+
+    def charge_settings(self):
+        return ChargeDirectionSettings(
+            start_w=cfg.ac_charge_control_int("charge_start_w", 150, minimum=0),
+            stop_w=cfg.ac_charge_stop_w(),
+            entry_confirm_cycles=cfg.ac_charge_control_int(
+                "entry_confirm_cycles", 5, minimum=1
+            ),
+            entry_window_cycles=cfg.ac_charge_control_int(
+                "entry_window_cycles", 7, minimum=1
+            ),
+            max_entries_per_hour=cfg.ac_charge_control_int(
+                "max_charge_entries_per_hour", 12, minimum=1
+            ),
+        )
+
+    def commanded_total_floor_w(self):
+        """Lower bound of the signed total.
+
+        Zero unless the system is in charge direction, which is what keeps the
+        integrator from winding down into a charge nobody decided to take.
+        """
+
+        if not self.charge_direction.charging:
+            return 0
+
+        return -cfg.ac_charge_control_int(
+            "max_total_charge_power_w", 1200, minimum=0
+        )
+
+    def release_charging_devices(self):
+        """Return every device this EMS put into charge, before shutting down.
+
+        A charge outlives the process that started it: nothing in the device
+        stops drawing from the grid until its own SoC ceiling does. This covers
+        the clean exit only — a killed process writes nothing, and that window
+        is documented rather than papered over.
+        """
+
+        for dev in self.devices:
+            if self.commanded_device_targets.get(dev.name, 0) >= 0:
+                continue
+
+            log_event(
+                logging.INFO,
+                "ac_charge_released_on_shutdown",
+                device=dev.name,
+                previous_target_w=self.commanded_device_targets.get(dev.name),
+            )
+            try:
+                self.set_output_limit(dev, 0)
+            except Exception as exc:
+                log_event(
+                    logging.WARNING,
+                    "ac_charge_release_failed",
+                    device=dev.name,
+                    error=exc,
+                )
+            self.commanded_device_targets[dev.name] = 0
+
+        self.charge_direction = ChargeDirectionState()
+
+    def device_charge_floor_w(self, dev):
+        """How far negative one device's target may go right now.
+
+        Zero unless the system is in charge direction. Without this the ramps
+        would keep a device in charge for several cycles after the direction
+        said stop: a per-device ramp of 400 W walking back from -900 W takes
+        three loops, and every one of them draws from the grid.
+        """
+
+        if not self.charge_direction.charging:
+            return 0
+
+        return -resolve_max_charge_power_w(dev)
+
+    def device_model_supports_charge(self, dev):
+        """Whether the device's resolved model declares an AC charge path.
+
+        Transport-neutral: the HTTP client resolves its model from config and
+        its own report, an MQTT control device carries a pinned one, and both
+        answer through the same registry.
+        """
+
+        from ems.mqtt_control.zendure_profiles import (
+            OPERATION_CHARGE,
+            hardware_profile_by_name,
+        )
+
+        resolve = getattr(dev, "resolved_hardware_profile", None)
+        profile_id = (
+            resolve() if callable(resolve) else getattr(dev, "hardware_profile", None)
+        )
+        profile = hardware_profile_by_name(profile_id) if profile_id else None
+        return bool(profile and profile.supports_operation(OPERATION_CHARGE))
+
+    def device_charge_allowed(self, dev, capability):
+        """Every permission axis for one device, intersected.
+
+        Feature, operator, model, runtime capability, device activation and
+        whoever owns the AC mode. Any one of them saying no is enough, and the
+        model axis is last because it is the one an operator cannot override.
+        """
+
+        if not cfg.ac_charge_control_enabled(self.runtime_state):
+            return False
+
+        if not self.runtime_device_bool(
+            dev.name, "ac_charge_enabled", getattr(dev, "ac_charge_enabled", False)
+        ):
+            return False
+
+        if not self.device_online.get(dev.name, True):
+            return False
+
+        if not self.runtime_device_bool(dev.name, "enabled", True):
+            return False
+
+        if capability is not None and not capability.can_charge:
+            return False
+
+        # A device the operator parked, maintenance is using or the firmware is
+        # charging is not the surplus regulator's to command.
+        intent = self.runtime_intents.get(dev.name)
+        if intent is not None and not intent.output_control_allowed:
+            return False
+
+        return self.device_model_supports_charge(dev)
+
+    def log_charge_direction(self, decision, stabilized_total, chargeable):
+        """Log the direction decision, loudly only when it matters.
+
+        A rate-limited entry is a warning rather than a debug line: reaching the
+        cap means the thresholds do not fit the installation, and silently
+        refusing would hide that.
+        """
+
+        fields = {
+            "charging": decision.charging,
+            "reason": decision.reason,
+            "commanded_total_w": round(stabilized_total, 1),
+            "filtered_load_w": round(self.filtered_load_w or 0, 1),
+            "chargeable_devices": sum(1 for flag in chargeable if flag),
+            "entries_last_hour": len(decision.state.entries),
+        }
+
+        if decision.rate_limited:
+            log_event(logging.WARNING, "ac_charge_entry_rate_limited", **fields)
+            return
+
+        log_event(
+            logging.INFO
+            if decision.charging != self.charge_direction.charging
+            else logging.DEBUG,
+            "ac_charge_direction",
+            **fields,
+        )
+
+    def chargeable_device_flags(self, capabilities):
+        return [
+            self.device_charge_allowed(
+                dev, capabilities[index] if index < len(capabilities) else None
+            )
+            for index, dev in enumerate(self.devices)
+        ]
 
     def device_output_control_allowed(self, dev):
         """Whether the EMS may command output on ``dev`` this cycle.
@@ -3484,7 +3674,15 @@ class EMSController:
             intent = resolve_device_intent([
                 self.get_device_runtime_intent(dev, state),
                 self.full_charge_assist_intent(dev),
-                firmware_charge_intent(dev.name, state),
+                firmware_charge_intent(
+                    dev.name,
+                    state,
+                    # Last cycle's command: a charge this EMS asked for is not
+                    # the firmware's, and must not be read back as such.
+                    ems_commanded_charge=(
+                        self.commanded_device_targets.get(dev.name, 0) < 0
+                    ),
+                ),
             ])
             self.runtime_intents[dev.name] = intent
             ac_mode_write_ok = self.reconcile_ac_mode_intent(dev, state, intent)
@@ -3724,19 +3922,48 @@ class EMSController:
             active_device_count=len(active_indexes)
         )
 
+        chargeable = self.chargeable_device_flags(capabilities)
+        charge_decision = decide_charge_direction(
+            self.charge_direction,
+            charging_possible=any(chargeable),
+            commanded_total_w=stabilized_total,
+            desired_total_w=(
+                self.desired_total_w
+                if self.desired_total_w is not None
+                else stabilized_total
+            ),
+            filtered_load_w=self.filtered_load_w or 0,
+            now=time.monotonic(),
+            settings=self.charge_settings(),
+        )
+        self.log_charge_direction(charge_decision, stabilized_total, chargeable)
+        self.charge_direction = charge_decision.state
+
+        # The discharge allocator never sees a negative request: charging is a
+        # different weighting of the same allocation primitive, not a sign the
+        # PV-first split knows how to read.
         targets, current, new, control_explanation = calculate_targets(
             load,
             states,
             max_power,
             device_configs=self.devices,
             capabilities=capabilities,
-            requested_total=stabilized_total,
+            requested_total=max(0, stabilized_total),
             explain=True,
             online_devices=self.device_online,
             commandable=self.claim_eligible_devices()
         )
 
         self.log_pv_priority_change(control_explanation)
+
+        if charge_decision.charging and stabilized_total < 0:
+            targets = allocate_charge_targets(
+                -stabilized_total,
+                states,
+                self.devices,
+                capabilities,
+                chargeable,
+            )
 
         targets = self.apply_device_ramp(
             targets,

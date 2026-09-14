@@ -51,6 +51,7 @@ TOP_LEVEL_COMMANDS = (
     "ha",
     "ha-control",
     "winter",
+    "ac-charge",
     "dashboard",
     "influx",
     "stack",
@@ -83,6 +84,7 @@ DEVICE_ACTIONS = (
     "offgrid",
     "pv-priority-factor",
     "ac-mode",
+    "ac-charge",
     "ac-charge-power",
 )
 DEVICE_AC_MODE_VALUES = ("output", "input")
@@ -421,6 +423,28 @@ Examples:
     )
     ha_control.add_argument("action", choices=["enable", "disable"], help="One of: enable, disable.")
     ha_control.add_argument("value", nargs="?", help=argparse.SUPPRESS)
+
+    ac_charge = subparsers.add_parser(
+        "ac-charge",
+        help="Edit AC charging runtime state.",
+        description=(
+            "Enable, disable, or inspect AC charging from surplus. Disabling it "
+            "stops the EMS drawing from the grid without a restart."
+        ),
+        epilog="""\
+Examples:
+  python3 emsctl.py ac-charge status
+  python3 emsctl.py ac-charge disable
+  python3 emsctl.py device WR1 ac-charge off
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    ac_charge.add_argument(
+        "action",
+        choices=["enable", "disable", "status"],
+        help="One of: enable, disable, status.",
+    )
+    ac_charge.add_argument("value", nargs="?", help=argparse.SUPPRESS)
 
     winter = subparsers.add_parser(
         "winter",
@@ -1497,6 +1521,9 @@ def runtime_defaults(config, existing=None):
         "winter": {
             "enabled": config.get("winter", {}).get("enabled", False)
         },
+        "ac_charge_control": {
+            "enabled": config.get("ac_charge_control", {}).get("enabled", False)
+        },
         "devices": devices
     }
 
@@ -1515,7 +1542,7 @@ def merge_defaults(data, defaults):
         **system
     }
 
-    for section_name in ("ha", "winter"):
+    for section_name in ("ha", "winter", "ac_charge_control"):
         section = merged.get(section_name)
         if not isinstance(section, dict):
             section = {}
@@ -1694,6 +1721,11 @@ def update_device(args, state):
                 raise ValueError("device ac-mode value must be 'output' or 'input'")
             device["runtime_role"] = DEVICE_AC_MODE_RUNTIME_ROLES[value]
             device["runtime_role_reason"] = "emsctl"
+        case "ac-charge":
+            value = str(args.value or "").strip().lower()
+            if value not in ("on", "off"):
+                raise ValueError("device ac-charge value must be 'on' or 'off'")
+            device["ac_charge_enabled"] = value == "on"
         case "ac-charge-power":
             device["ac_charge_power_w"] = strict_int_value(
                 args.value,
@@ -4271,6 +4303,15 @@ def main(argv=None):
             })
             return 0
 
+        if args.command == "ac-charge" and args.action == "status":
+            ensure_no_value(args)
+            if created:
+                save_atomic(runtime_path, state)
+            print_status(runtime_path, {
+                "ac_charge_control": state.get("ac_charge_control", {})
+            })
+            return 0
+
         if args.command == "system":
             update_system(args, state)
         elif args.command == "device":
@@ -4296,6 +4337,8 @@ def main(argv=None):
             set_bool_section(args, state, "ha", "control_enabled")
         elif args.command == "winter":
             set_bool_section(args, state, "winter", "enabled")
+        elif args.command == "ac-charge":
+            set_bool_section(args, state, "ac_charge_control", "enabled")
         else:
             raise ValueError(f"unknown command {args.command}")
 

@@ -698,7 +698,14 @@ class WriteGateTest(unittest.TestCase):
         controller.set_output_limit.assert_not_called()
         self.assertFalse(controller.night_min_soc_idle_active)
 
-    def test_safety_blocker_prevents_returning_to_output_mode(self):
+    def test_a_battery_at_its_floor_keeps_the_charge_it_was_given(self):
+        """At the floor the firmware owns the device; the reason says so.
+
+        It used to report ``ac_charge_active`` at every charge level, which hid
+        whether an empty battery was being recovered or an EMS that died
+        mid-charge had simply left the device that way.
+        """
+
         controlled = device("WR1")
         controller = EMSController(
             devices=[controlled],
@@ -710,7 +717,7 @@ class WriteGateTest(unittest.TestCase):
         with patch("ems.controller.log_event") as log_event:
             controller.reconcile_ac_mode_intent(
                 controlled,
-                state(ac_mode=1, ac_status=2, solar=0, output=0),
+                state(ac_mode=1, ac_status=2, solar=0, output=0, soc_limit=2),
                 ac_output_intent("WR1", "startup_ac_mode_reconcile")
             )
 
@@ -718,10 +725,38 @@ class WriteGateTest(unittest.TestCase):
         self.assertTrue(
             any(
                 call.args[1] == "ac_mode_intent_skip"
-                and call.kwargs["reason"] == "ac_charge_active"
+                and call.kwargs["reason"] == "discharge_cutoff"
                 for call in log_event.call_args_list
             )
         )
+
+    def test_a_leftover_charge_on_a_healthy_battery_is_taken_back(self):
+        """Above the floor a charge nobody commands is the reconcile's to undo."""
+
+        controlled = device("WR1")
+        controlled.session.post.return_value = SimpleNamespace(status_code=200)
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub()
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=1, ac_status=2, solar=0, output=0, soc=60),
+                ac_output_intent("WR1", "startup_ac_mode_reconcile")
+            )
+
+        written = [
+            call.kwargs["json"]["properties"]
+            for call in controlled.session.post.call_args_list
+        ]
+        self.assertIn({"acMode": 2}, written)
 
     def test_explicit_ac_output_runtime_intent_bypasses_startup_blocker(self):
         controlled = device("WR1")
