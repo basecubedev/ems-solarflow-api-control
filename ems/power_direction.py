@@ -11,6 +11,14 @@ OPERATION_DISCHARGE = "discharge"
 OPERATION_IDLE = "idle"
 OPERATION_CHARGE = "charge"
 
+# Where the neutral vocabulary meets the device. ``acMode`` is the value that was
+# *written*; ``acStatus`` is what the device is *doing*, and a hardware probe on
+# an 800 Pro 2 measured them ~2 s apart across a direction change. Only the
+# status proves a direction was actually taken.
+AC_MODE_INPUT = 1
+AC_MODE_OUTPUT = 2
+AC_STATUS_CHARGING = 2
+
 
 def operation_for_target(target_w: int) -> str:
     """Map a signed controller target to a neutral operation.
@@ -28,6 +36,9 @@ def operation_for_target(target_w: int) -> str:
 
 
 __all__ = [
+    "AC_MODE_INPUT",
+    "AC_MODE_OUTPUT",
+    "AC_STATUS_CHARGING",
     "OPERATION_DISCHARGE",
     "OPERATION_IDLE",
     "OPERATION_CHARGE",

@@ -119,7 +119,11 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        supports_charge=False,
+        # Measured on real hardware 2026-09-13: the atomic charge set drew the
+        # commanded power. Every other ZenSDK model stays False until the same
+        # measurement is made on it — a shared command shape proves the command
+        # is well formed, not that a model has an AC charge path.
+        supports_charge=True,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -311,12 +315,17 @@ def _normalize(value) -> str:
     (``solarFlow800Pro``). Splitting camelCase and letter/digit boundaries before
     collapsing punctuation lets a glued string match the same alias as its
     spaced form, without dropping the numeric model identifier.
+
+    ``+`` survives as the word "plus" because it distinguishes a model rather
+    than decorating one: collapsing it made "SolarFlow 2400 AC+" indistinguish-
+    able from "SolarFlow 2400 AC", and the first-declared alias won.
     """
 
     text = str(value or "")
     text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text)  # camelCase boundary
     text = re.sub(r"(?<=[A-Za-z])(?=[0-9])", " ", text)  # letter -> digit
     text = re.sub(r"(?<=[0-9])(?=[A-Za-z])", " ", text)  # digit -> letter
+    text = re.sub(r"\+", " plus ", text)  # "+" names a variant, it is not punctuation
     text = re.sub(r"[^A-Za-z0-9]+", " ", text.lower())
     return text.strip()
 

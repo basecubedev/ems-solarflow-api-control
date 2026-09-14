@@ -832,6 +832,44 @@ class WriteGateTest(unittest.TestCase):
             )
         )
 
+    def test_firmware_owned_ac_charge_is_not_interrupted(self):
+        """A charge the firmware started itself must survive the next loop.
+
+        acMode reconciliation consulted the emergency blocker only on the
+        startup path, so in normal operation the default ac_output intent wrote
+        acMode=2 straight over a running firmware charge.
+        """
+
+        charging = device("WR1")
+        charging.session.post.return_value = SimpleNamespace(status_code=200)
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            self.run_controller_once(
+                [charging],
+                [state(
+                    ac_mode=1,
+                    ac_status=2,
+                    soc=9,
+                    soc_limit=2,
+                    solar=0,
+                    pack_out=300,
+                    input_limit_w=300,
+                )]
+            )
+
+        mode_writes = [
+            call.kwargs["json"]["properties"]
+            for call in charging.session.post.call_args_list
+            if "acMode" in call.kwargs.get("json", {}).get("properties", {})
+        ]
+
+        self.assertEqual(
+            mode_writes, [], "EMS overwrote a firmware-owned AC charge"
+        )
+
     def test_ac_input_runtime_charge_power_writes_input_limit_on_next_loop(self):
         controlled = device("WR1")
         controlled.session.post.return_value = SimpleNamespace(status_code=200)

@@ -25,11 +25,11 @@ Operation contracts:
     stops commanding entirely).
 
 ``charge`` (target < 0)
-    NOT built here. The ZenSDK AC-charge shape
-    (``smartMode 1 / acMode 1 / inputLimit <w>``) is known from the reference
-    implementation but no ZenSDK profile enables charge until it is validated
-    on hardware, so this builder fails closed rather than emitting an
-    unverified charge command.
+    ``{"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": |target|}``.
+    Measured on a SolarFlow 800 Pro 2 on 2026-09-13: the device drew the
+    commanded power within 4.5 s. Whether a given *model* has an AC charge path
+    is a separate question, answered by its catalogue entry — this builder only
+    owns the shape.
 
 ``expected_properties`` names the telemetry values that prove the command was
 applied — confirmation must verify the fields that make the command effective,
@@ -39,8 +39,9 @@ not merely that some output sample changed.
 from dataclasses import dataclass
 
 from ems.power_direction import (
-    OPERATION_DISCHARGE,
-    OPERATION_IDLE,
+    AC_MODE_INPUT,
+    AC_MODE_OUTPUT,
+    OPERATION_CHARGE,
     operation_for_target,
 )
 
@@ -61,24 +62,27 @@ class ZenSdkPowerOperation:
 def build_zensdk_power_operation(target_w) -> ZenSdkPowerOperation:
     """Build the atomic ZenSDK property set for a signed power target.
 
-    Raises :class:`ZenSdkOperationError` for any operation without a verified
-    contract (currently: charge). Callers gate operations through the model
-    capability first; this raise is fail-closed defense in depth.
+    The shape only. Whether a model may be sent this operation at all is the
+    catalogue's decision, enforced before the command is built.
     """
 
     if isinstance(target_w, bool) or not isinstance(target_w, int):
         raise ZenSdkOperationError("target_w must be an integer")
     operation = operation_for_target(target_w)
-    if operation not in (OPERATION_DISCHARGE, OPERATION_IDLE):
-        raise ZenSdkOperationError(
-            f"zensdk operation {operation} has no verified command contract"
-        )
-    properties = {
-        "smartMode": 1,
-        "acMode": 2,
-        "outputLimit": target_w,
-        "inputLimit": 0,
-    }
+    if operation == OPERATION_CHARGE:
+        properties = {
+            "smartMode": 1,
+            "acMode": AC_MODE_INPUT,
+            "outputLimit": 0,
+            "inputLimit": abs(target_w),
+        }
+    else:
+        properties = {
+            "smartMode": 1,
+            "acMode": AC_MODE_OUTPUT,
+            "outputLimit": target_w,
+            "inputLimit": 0,
+        }
     return ZenSdkPowerOperation(
         operation=operation,
         properties=properties,

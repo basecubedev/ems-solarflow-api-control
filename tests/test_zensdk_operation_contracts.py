@@ -42,9 +42,26 @@ def test_idle_contract_stays_in_smart_output_regulation():
     }
 
 
-def test_charge_has_no_verified_contract_and_fails_closed():
-    with pytest.raises(ZenSdkOperationError):
-        build_zensdk_power_operation(-300)
+def test_charge_contract_is_the_measured_atomic_set():
+    """The charge shape, as observed on a SolarFlow 800 Pro 2 on 2026-09-13.
+
+    Writing this set produced gridInputPower 150 and outputPackPower 210 within
+    4.5 s; acMode echoed at ~2.4 s and acStatus reached 2 at ~4.5 s. The negative
+    EMS target becomes a positive charging watt value, which is the sign
+    convention the write adapter owns.
+    """
+
+    op = build_zensdk_power_operation(-150)
+
+    assert op.operation == "charge"
+    assert op.properties == {
+        "smartMode": 1,
+        "acMode": 1,
+        "outputLimit": 0,
+        "inputLimit": 150,
+    }
+    assert op.expected_properties == op.properties
+    assert op.expected_properties is not op.properties
 
 
 @pytest.mark.parametrize("bad", [True, 300.0, "300", None])
