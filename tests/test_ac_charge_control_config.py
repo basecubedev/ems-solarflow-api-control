@@ -28,24 +28,38 @@ class RuntimeStateStub:
         self.data = data
 
 
-def test_the_feature_is_off_everywhere_by_default():
-    assert AC_CHARGE_CONTROL_DEFAULTS["enabled"] is False
-    assert build_default_template()["ac_charge_control"]["enabled"] is False
-    assert default_safe_config()["ac_charge_control"]["enabled"] is False
-    assert cfg.ac_charge_control_enabled() is False
+def test_the_feature_is_on_everywhere_by_default():
+    """On by default like winter mode and full-charge assist.
+
+    Four places carry this default and they must agree, or an installation
+    behaves differently depending on whether its config.json spells the key out.
+    """
+
+    assert AC_CHARGE_CONTROL_DEFAULTS["enabled"] is True
+    assert build_default_template()["ac_charge_control"]["enabled"] is True
+    assert default_safe_config()["ac_charge_control"]["enabled"] is True
+    assert cfg.ac_charge_control_enabled() is True
 
 
-def test_devices_keep_discharging_and_do_not_start_charging_by_default():
+def test_devices_may_charge_and_discharge_by_default():
     device = build_default_template()["devices"][0]
 
-    # Today's behaviour made explicit; nothing changes for an existing install.
     assert device["ac_discharge_enabled"] is True
-    assert device["ac_charge_enabled"] is False
-    # 0 means "derive from the device output limit", not "no charging".
+    assert device["ac_charge_enabled"] is True
+    # 0 means "ask the device for its own ceiling", not "no charging".
     assert device["max_charge_power_w"] == 0
 
 
-def test_an_existing_config_gains_the_defaults_without_changing_behaviour():
+def test_an_existing_config_gains_charging_on_upgrade():
+    """This one does change behaviour, and the name says so.
+
+    A config.json written before the feature existed has neither key. The
+    upgrade fills both in as enabled, so after it the installation charges from
+    surplus without a further step. That is the owner's decision; it is pinned
+    here because it is exactly the kind of default that must never move by
+    accident.
+    """
+
     old = {
         "config_schema_version": 3,
         "system": {"enabled": True},
@@ -54,10 +68,10 @@ def test_an_existing_config_gains_the_defaults_without_changing_behaviour():
 
     upgraded = build_config_upgrade_plan(old)["upgraded_config"]
 
-    assert upgraded["ac_charge_control"]["enabled"] is False
+    assert upgraded["ac_charge_control"]["enabled"] is True
     device = upgraded["devices"][0]
     assert device["ac_discharge_enabled"] is True
-    assert device["ac_charge_enabled"] is False
+    assert device["ac_charge_enabled"] is True
     # The operator's own values survive untouched.
     assert device["max_power"] == 800
 
@@ -99,3 +113,30 @@ def test_runtime_state_can_switch_the_feature_off_without_a_restart(monkeypatch)
 
     # An absent runtime section leaves config in charge.
     assert cfg.ac_charge_control_enabled(RuntimeStateStub({})) is True
+
+
+def test_the_per_device_config_key_reaches_the_device():
+    """It did not, and the key looked live the whole time.
+
+    `devices[].ac_charge_enabled` is documented, schema-validated and editable in
+    the Admin console, but nothing passed it to the device object, so the
+    controller's fallback decided and the config value was inert. Both transports
+    carry it now, the same way they already carried `ac_discharge_enabled`.
+    """
+
+    from ems.clients import ZendureClient
+    from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
+
+    http_off = ZendureClient(
+        "WR1", "192.0.2.10", "SN", None, 0, 0, 1, None, ac_charge_enabled=False
+    )
+    http_default = ZendureClient("WR2", "192.0.2.11", "SN", None, 0, 0, 1, None)
+
+    assert http_off.ac_charge_enabled is False
+    assert http_default.ac_charge_enabled is True
+    assert http_default.ac_discharge_enabled is True
+
+    import inspect
+
+    signature = inspect.signature(ZendureMqttDeviceClient.__init__)
+    assert signature.parameters["ac_charge_enabled"].default is True

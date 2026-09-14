@@ -317,9 +317,9 @@ def test_http_charge_dispatch_writes_the_measured_atomic_set():
     ]
 
 
-def test_http_charge_is_refused_for_an_unmeasured_model():
+def test_http_charge_is_refused_for_a_model_without_a_charge_path():
     session = SessionStub()
-    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev = _zendure(session, hardware_profile="solarflow_800")
 
     result = dev.dispatch_output_limit(-300)
 
@@ -355,7 +355,7 @@ def test_a_pinned_model_outranks_the_reported_product():
     """Config is a decisive evidence source; the device report corroborates."""
 
     session = SessionStub(get_response=_report(product="solarFlow800Pro2"))
-    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev = _zendure(session, hardware_profile="solarflow_800")
     dev.fetch()
 
     result = dev.dispatch_output_limit(-300)
