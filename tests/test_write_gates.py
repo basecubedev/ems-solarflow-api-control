@@ -82,7 +82,9 @@ def state(
     ac_status=1,
     pack_state=2,
     ac_mode=2,
-    input_limit_w=0
+    input_limit_w=0,
+    pack_num=0,
+    charge_max_limit_w=1000
 ):
     return DeviceState(
         soc=soc,
@@ -111,6 +113,8 @@ def state(
         dc_status=dc_status,
         grid_state=1,
         input_limit_w=input_limit_w,
+        charge_max_limit_w=charge_max_limit_w,
+        pack_num=pack_num,
     )
 
 

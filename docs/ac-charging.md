@@ -88,6 +88,31 @@ On a clean shutdown the EMS returns every device it put into charge. A killed
 process writes nothing and the device charges on until its own maximum SoC stops
 it — bounded, but it still costs. See [user/safety.md](user/safety.md).
 
+## Known interactions in a mixed fleet
+
+**A device that cannot charge still honours the standby output floor.** While
+one device charges, another that may not will be written `min_output_limit`
+(35 W by default) rather than zero, because that floor exists so a device is not
+told to stop. It reads as a contradiction during a charge and costs a small,
+continuous round trip. It is the floor's normal behaviour whenever the EMS wants
+zero from a device, not something charging introduced; set `min_output_limit` to
+0 if your hardware tolerates a true stop.
+
+**A device that drops off the network mid-charge keeps charging.** The EMS
+cannot write to a device it cannot reach, so the last commanded charge stands
+until the device returns — at which point the EMS commands it back. The total
+target adapts immediately: the unreachable device leaves the charge capacity and
+the remaining devices take over what they can.
+
+**A pack being drained is not charged.** If something outside the EMS draws from
+a battery — a third-party inverter on the same pack — that device is skipped for
+charging rather than charged through it. Running an EMS alongside another
+controller on the same hardware remains unsupported; see
+[user/safety.md](user/safety.md).
+
+**A device with no battery never charges**, whatever its configuration says.
+Battery presence is read from telemetry, not from the config.
+
 ## Logs
 
 ```text

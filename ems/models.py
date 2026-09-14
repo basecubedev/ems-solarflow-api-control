@@ -39,6 +39,9 @@ class DeviceState:
     dc_status: int
     grid_state: int
     input_limit_w: int = 0
+    # The device's own AC charge ceiling. It is not the output limit: drawing in
+    # and feeding out are different paths with different ratings.
+    charge_max_limit_w: int = 0
     pack_num: int = 0
     soc_status: int = 0
     battery_calibration_time: int | None = None
