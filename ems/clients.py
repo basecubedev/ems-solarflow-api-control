@@ -351,7 +351,9 @@ class ZendureClient:
         pv_priority_factor=1.0,
         *,
         hardware_profile=None,
-        ac_discharge_enabled=True
+        ac_discharge_enabled=True,
+        ac_charge_enabled=True,
+        max_charge_power_w=0
     ):
         self.name = name
         self.ip = ip
@@ -367,6 +369,8 @@ class ZendureClient:
         self.pv_priority_factor = pv_priority_factor or 1.0
         self.hardware_profile = hardware_profile or None
         self.ac_discharge_enabled = bool(ac_discharge_enabled)
+        self.ac_charge_enabled = bool(ac_charge_enabled)
+        self.max_charge_power_w = max_charge_power_w or 0
         self.observed_product = None
         self.read_health = CommHealth(name, kind="read")
         self.write_health = CommHealth(name, kind="write")

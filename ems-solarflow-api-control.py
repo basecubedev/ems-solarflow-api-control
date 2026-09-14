@@ -204,6 +204,8 @@ def main():
             d.get("pv_priority_factor", 1.0),
             hardware_profile=d.get("hardware_profile"),
             ac_discharge_enabled=d.get("ac_discharge_enabled", True),
+            ac_charge_enabled=d.get("ac_charge_enabled", True),
+            max_charge_power_w=d.get("max_charge_power_w", 0),
         )
         for d in cfg.http_control_device_configs()
     ]

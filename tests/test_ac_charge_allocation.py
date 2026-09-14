@@ -181,3 +181,89 @@ def test_the_surplus_export_setting_is_read_but_decides_nothing_yet():
         off, _device(), _capability()
     )
     assert resolve_max_charge_power_w(_device(), on) == resolve_max_charge_power_w(_device(), off)
+
+
+def test_the_charge_catalogue_matches_the_owner_device_list():
+    """The registry is the owner's AC-charging catalogue, one row per model.
+
+    Pinned as data rather than prose: a model silently flipping here changes
+    whether the EMS will ever push power into it.
+    """
+
+    from ems.mqtt_control.zendure_profiles import _HARDWARE_PROFILES
+
+    charging = {p.display_label for p in _HARDWARE_PROFILES if p.supports_charge}
+
+    assert charging == {
+        "SolarFlow 800 Pro",
+        "SolarFlow 800 Pro 2",
+        "SolarFlow 1600 AC+",
+        "SolarFlow 2400 AC",
+        "SolarFlow 2400 AC+",
+        "SolarFlow 3000 Mix AC+",
+        "SolarFlow 4000 Mix AC+",
+        "Hyper 2000",
+    }
+
+
+def test_every_charging_model_names_what_the_permission_rests_on():
+    """A catalogue claim must never be indistinguishable from an observation."""
+
+    from ems.mqtt_control.zendure_profiles import (
+        CHARGE_EVIDENCE_MEASURED,
+        CHARGE_EVIDENCE_NONE,
+        CHARGE_EVIDENCE_VENDOR_CATALOGUE,
+        _HARDWARE_PROFILES,
+    )
+
+    for profile in _HARDWARE_PROFILES:
+        expected = {CHARGE_EVIDENCE_MEASURED, CHARGE_EVIDENCE_VENDOR_CATALOGUE}
+        if profile.supports_charge:
+            assert profile.charge_evidence in expected, profile.display_label
+        else:
+            assert profile.charge_evidence == CHARGE_EVIDENCE_NONE, profile.display_label
+
+    measured = {
+        p.display_label
+        for p in _HARDWARE_PROFILES
+        if p.charge_evidence == CHARGE_EVIDENCE_MEASURED
+    }
+    # Only the maintainer's own hardware was put on a probe.
+    assert measured == {"SolarFlow 800 Pro 2"}
+
+
+def test_a_model_the_ems_cannot_command_is_never_given_a_charge_permission():
+    """The ACE 1500 does AC charge, and the EMS has no way to tell it to.
+
+    A capability without an actuator is not a permission; the flag gates a
+    command, so it follows the write path and not the datasheet.
+    """
+
+    from ems.mqtt_control.zendure_profiles import _HARDWARE_PROFILES
+
+    for profile in _HARDWARE_PROFILES:
+        if not profile.writable:
+            assert not profile.supports_charge, profile.display_label
+
+
+def test_the_mix_models_resolve_under_both_word_orders():
+    """The product is written "4000 Mix AC+" and "Mix 4000 AC+" in the wild.
+
+    A name that does not resolve leaves the device telemetry-only, so it is
+    never controlled at all -- charge flag or no charge flag.
+    """
+
+    from ems.mqtt_control.zendure_profiles import resolve_hardware_profile
+
+    for name, expected in (
+        ("SolarFlow 4000 Mix AC+", "solarflow_4000_ac_plus"),
+        ("SolarFlow Mix 4000 AC+", "solarflow_4000_ac_plus"),
+        # The name this profile was created under, kept so existing configs
+        # still resolve even though only the Mix variant exists.
+        ("SolarFlow 4000 AC+", "solarflow_4000_ac_plus"),
+        ("SolarFlow 3000 Mix AC+", "solarflow_3000_ac_plus"),
+        ("SolarFlow Mix 3000 AC+", "solarflow_3000_ac_plus"),
+    ):
+        profile = resolve_hardware_profile(name)
+        assert profile is not None, name
+        assert profile.canonical_name == expected, name

@@ -47,6 +47,15 @@ VALIDATION_COMMUNITY_REQUIRED = "community_hardware_validation_required"
 VALIDATION_DEFERRED = "deferred"
 VALIDATION_TELEMETRY_ONLY = "telemetry_only"
 
+# What a model's AC charge permission rests on. ``supports_charge`` says whether
+# the EMS will ever command a charge; this says why, so a catalogue claim is
+# never mistaken for an observation. The owner's device catalogue notes that an
+# AC connector does not by itself mean the battery can be charged from AC, which
+# is exactly the distinction this keeps.
+CHARGE_EVIDENCE_MEASURED = "measured"
+CHARGE_EVIDENCE_VENDOR_CATALOGUE = "vendor_catalogue"
+CHARGE_EVIDENCE_NONE = "none"
+
 
 @dataclass(frozen=True)
 class ZendureHardwareProfile:
@@ -59,6 +68,7 @@ class ZendureHardwareProfile:
     supports_idle: bool
     supports_charge: bool
     validation_status: str
+    charge_evidence: str = CHARGE_EVIDENCE_NONE
     # Source-backed MQTT-writable properties; empty = no verified contract.
     state_property_writes: tuple[str, ...] = ()
 
@@ -95,7 +105,9 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
+        # Catalogue: no direct AC charging of the battery.
         supports_charge=False,
+        charge_evidence=CHARGE_EVIDENCE_NONE,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -107,7 +119,9 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        supports_charge=False,
+        # Catalogue: AC grid charging integrated, up to 1000 W.
+        supports_charge=True,
+        charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -120,11 +134,10 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_discharge=True,
         supports_idle=True,
         # Measured on real hardware 2026-09-13: the atomic charge set drew the
-        # commanded power. Every other ZenSDK model stays False until the same
-        # measurement is made on it — a shared command shape proves the command
-        # is well formed, not that a model has an AC charge path.
+        # commanded power at acStatus 2.
         supports_charge=True,
         validation_status=VALIDATION_EXISTING_SUPPORT,
+        charge_evidence=CHARGE_EVIDENCE_MEASURED,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
     ZendureHardwareProfile(
@@ -135,7 +148,9 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
+        # Catalogue: no integrated AC charging.
         supports_charge=False,
+        charge_evidence=CHARGE_EVIDENCE_NONE,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -147,7 +162,9 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        supports_charge=False,
+        # Catalogue: AC-coupled storage system, up to 1600 W.
+        supports_charge=True,
+        charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -159,7 +176,9 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        supports_charge=False,
+        # Catalogue: AC-coupled storage system, up to 2400 W.
+        supports_charge=True,
+        charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -171,7 +190,9 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        supports_charge=False,
+        # Catalogue: AC-coupled storage system, up to 2400 W.
+        supports_charge=True,
+        charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -183,19 +204,55 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
+        # Catalogue: not intended as an AC charger; not the 2400 AC series.
         supports_charge=False,
+        charge_evidence=CHARGE_EVIDENCE_NONE,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
     ZendureHardwareProfile(
+        # Only the Mix variant of the 4000 exists; the plain "SolarFlow 4000 AC+"
+        # this profile was created under was a documentation error. The canonical
+        # name is kept so configs already carrying it keep resolving, and both
+        # word orders are accepted because the product is written either way.
         canonical_name="solarflow_4000_ac_plus",
-        display_label="SolarFlow 4000 AC+",
+        display_label="SolarFlow 4000 Mix AC+",
         hardware_generation="solarflow_zensdk",
-        aliases=("SolarFlow 4000 AC+", "SolarFlow4000AC+"),
+        aliases=(
+            "SolarFlow 4000 Mix AC+",
+            "SolarFlow Mix 4000 AC+",
+            "SolarFlow 4000 AC+",
+            "SolarFlow4000MixAC+",
+            "SolarFlowMix4000AC+",
+            "SolarFlow4000AC+",
+        ),
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        supports_charge=False,
+        # Catalogue: AC-coupled storage system, up to 4000 W.
+        supports_charge=True,
+        charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
+        validation_status=VALIDATION_EXISTING_SUPPORT,
+        state_property_writes=_ZENSDK_STATE_PROPERTIES,
+    ),
+    ZendureHardwareProfile(
+        # No profile existed for this model at all, so it resolved to unknown and
+        # stayed telemetry-only whatever the charge flag said.
+        canonical_name="solarflow_3000_ac_plus",
+        display_label="SolarFlow 3000 Mix AC+",
+        hardware_generation="solarflow_zensdk",
+        aliases=(
+            "SolarFlow 3000 Mix AC+",
+            "SolarFlow Mix 3000 AC+",
+            "SolarFlow3000MixAC+",
+            "SolarFlowMix3000AC+",
+        ),
+        power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
+        supports_discharge=True,
+        supports_idle=True,
+        # Catalogue: AC-coupled storage system, up to 3000 W.
+        supports_charge=True,
+        charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -207,7 +264,9 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_LEGACY_OBJECT,
         supports_discharge=True,
         supports_idle=True,
+        # Catalogue: bidirectional AC, up to 1600 W depending on pack count.
         supports_charge=True,
+        charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
         validation_status=VALIDATION_COMMUNITY_REQUIRED,
     ),
     ZendureHardwareProfile(
@@ -219,18 +278,22 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_discharge=True,
         supports_idle=True,
         # AIO 2400 must reject negative (charge) targets.
+        # Catalogue: different system architecture.
         supports_charge=False,
+        charge_evidence=CHARGE_EVIDENCE_NONE,
         validation_status=VALIDATION_COMMUNITY_REQUIRED,
     ),
     ZendureHardwareProfile(
         canonical_name="hub_1200",
         display_label="Hub 1200",
         hardware_generation="hub_hyper_legacy",
-        aliases=("Hub 1200", "SolarFlow 2.0", "Hub1200"),
+        aliases=("Hub 1200", "SolarFlow Hub 1200", "SolarFlow 2.0", "Hub1200"),
         power_write_profile=WRITE_PROFILE_LEGACY_HUB,
         supports_discharge=True,
         supports_idle=True,
+        # Catalogue: not directly; AC charging needs an ACE 1500.
         supports_charge=False,
+        charge_evidence=CHARGE_EVIDENCE_NONE,
         validation_status=VALIDATION_COMMUNITY_REQUIRED,
     ),
     ZendureHardwareProfile(
@@ -241,7 +304,9 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_LEGACY_HUB,
         supports_discharge=True,
         supports_idle=True,
+        # Catalogue: not directly; AC charging needs an ACE 1500.
         supports_charge=False,
+        charge_evidence=CHARGE_EVIDENCE_NONE,
         validation_status=VALIDATION_COMMUNITY_REQUIRED,
     ),
     ZendureHardwareProfile(
@@ -253,6 +318,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_discharge=False,
         supports_idle=False,
         supports_charge=False,
+        charge_evidence=CHARGE_EVIDENCE_NONE,
         # Paired and standalone modes need different semantics + flash-write
         # protection; deferred to a later release.
         validation_status=VALIDATION_DEFERRED,

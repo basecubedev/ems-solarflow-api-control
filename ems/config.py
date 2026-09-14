@@ -95,11 +95,13 @@ BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
 }
 
 AC_CHARGE_CONTROL_DEFAULTS = {
-    # Off by default: turning this on lets the EMS draw from the grid. Entry is
-    # deliberate and exit is immediate, so the two thresholds are never equal —
-    # the lower edge is derived from the hysteresis rather than configured, which
-    # makes an inverted pair impossible to express.
-    "enabled": False,
+    # On by default like the other features. What keeps it from acting is the
+    # surplus itself: entry needs a sustained export, so an installation that
+    # never exports never charges. Entry is deliberate and exit is immediate, so
+    # the two thresholds are never equal — the lower edge is derived from the
+    # hysteresis rather than configured, which makes an inverted pair impossible
+    # to express.
+    "enabled": True,
     "charge_start_w": 150,
     "charge_hysteresis_w": 50,
     # k of the last n observations, not k in a row and not a mean: each sample
