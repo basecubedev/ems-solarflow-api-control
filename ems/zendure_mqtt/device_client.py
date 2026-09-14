@@ -163,6 +163,8 @@ class ZendureMqttDeviceClient:
         min_soc=0,
         max_soc=0,
         ac_discharge_enabled=True,
+        ac_charge_enabled=True,
+        max_charge_power_w=0,
         smart_mode=1,
         grid_off_mode=None,
         max_power=None,
@@ -273,6 +275,8 @@ class ZendureMqttDeviceClient:
         self.min_soc = min_soc
         self.max_soc = max_soc
         self.ac_discharge_enabled = bool(ac_discharge_enabled)
+        self.ac_charge_enabled = bool(ac_charge_enabled)
+        self.max_charge_power_w = max_charge_power_w or 0
         self.smart_mode = smart_mode
         self.grid_off_mode = grid_off_mode
         self.max_power = max_power or cfg.MAX_DEVICE_POWER

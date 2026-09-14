@@ -527,12 +527,14 @@ still reacting to an earlier command.
 
 ## AC Charging
 
-Off by default. Enabling it lets the EMS draw from the grid, so it is the one
-feature whose default state is a safety property rather than a preference.
+On by default, like the other features. It draws from the grid only against
+your own export, so an installation that never exports never charges — but a
+config upgrade does enable it for an installation that predates the feature, and
+`docs/user/safety.md` says what to set beforehand if that is not wanted.
 
 ```json
 "ac_charge_control": {
-  "enabled": false,
+  "enabled": true,
   "charge_start_w": 150,
   "charge_hysteresis_w": 50,
   "entry_confirm_cycles": 5,
@@ -576,7 +578,7 @@ See [control-logic.md](control-logic.md) for the direction rules and
 | Key | Default | Meaning |
 |---|---|---|
 | `ac_discharge_enabled` | `true` | Whether the EMS may command this device to supply the house. Today's behaviour, written down. |
-| `ac_charge_enabled` | `false` | Whether this device may be charged from surplus. Also runtime-toggleable. |
+| `ac_charge_enabled` | `true` | Whether this device may be charged from surplus. Whether the *model* can is decided separately by the hardware catalogue. Also runtime-toggleable. |
 | `max_charge_power_w` | `0` | Highest charging power for this device. `0` uses the ceiling the device reports for itself. |
 
 ### Why the charge limit is not the output limit
@@ -602,9 +604,12 @@ So the EMS never borrows one as the other. A SolarFlow 800 Pro 2 reports an
 the **installation's** limit — your circuit and your fuse — not the devices'.
 Nothing in the EMS can measure that, so it stays a number you set.
 
-Charging additionally requires the device's resolved hardware model to have an
-established AC charge path. That is a property of the model, not of the
-installation — see [../user/supported-setups.md](../user/supported-setups.md).
+Charging additionally requires the device's resolved hardware model to carry an
+AC charge path in the hardware catalogue. That is a property of the model, not
+of the installation — see
+[../user/supported-setups.md](../user/supported-setups.md). Each model records
+what its permission rests on (`charge_evidence`): `measured` for the one model
+put on a probe here, `vendor_catalogue` for the rest.
 
 ## Winter Settings
 
@@ -647,7 +652,7 @@ Each Zendure device entry defines static installation data:
   "pv_priority_factor": 1.0,
   "battery_kwh": 1.0,
   "ac_discharge_enabled": true,
-  "ac_charge_enabled": false,
+  "ac_charge_enabled": true,
   "max_charge_power_w": 0,
   "min_soc": 15,
   "max_soc": 100
@@ -1212,7 +1217,7 @@ before it can publish. The pinned `hardware_profile` selects it
 
 | Hardware profile | Write method | Notes |
 | --- | --- | --- |
-| SolarFlow 800 / 800 Plus / 800 Pro / 800 Pro 2 / 1600 AC+ / 2400 AC / 2400 AC+ / 2400 Pro / 4000 AC+ | `zensdk_properties_write` | Publishes `{deviceId, messageId, timestamp, properties:{outputLimit}}` to `iot/<productKey>/<deviceId>/properties/write`. Needs `mqtt.product_key`. |
+| SolarFlow 800 / 800 Plus / 800 Pro / 800 Pro 2 / 1600 AC+ / 2400 AC / 2400 AC+ / 2400 Pro / 3000 Mix AC+ / 4000 Mix AC+ | `zensdk_properties_write` | Publishes `{deviceId, messageId, timestamp, properties:{outputLimit}}` to `iot/<productKey>/<deviceId>/properties/write`. Needs `mqtt.product_key`. |
 | Hyper 2000 / AIO 2400 | `legacy_object_device_automation` | Publishes a `deviceAutomation` `function/invoke` command to `iot/<productKey>/<deviceId>/function/invoke`; acknowledged on `function/invoke/reply`. Needs `mqtt.product_key`. |
 | Hub 1200 / Hub 2000 | `legacy_hub_device_automation` | Same `function/invoke` topic with a scalar watt value; acknowledged on `function/invoke/reply`. Needs `mqtt.product_key`. |
 | ACE 1500 / SuperBase V4600 / SuperBase V6400 | `telemetry_only` — **read-only** | Never publishes. |

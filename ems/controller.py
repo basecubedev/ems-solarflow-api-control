@@ -8,10 +8,12 @@ from datetime import datetime, timedelta
 
 from ems import config as cfg
 from ems.ac_charge_control import (
+    CHARGE_SILENCE_CYCLES,
     ChargeDirectionSettings,
     ChargeDirectionState,
     allocate_charge_targets,
     charge_headroom_weight,
+    count_silent_charge_cycles,
     decide_charge_direction,
     resolve_max_charge_power_w,
 )
@@ -125,6 +127,7 @@ class EMSController:
         # instead of re-deriving it from telemetry they do not carry.
         self.charge_capacity_w = 0
         self.device_charge_limits = {}
+        self.silent_charge_cycles = {}
         for device in self.devices:
             set_observer = getattr(device, "set_dispatch_observer", None)
             if callable(set_observer):
@@ -1302,24 +1305,28 @@ class EMSController:
 
         return -max(0, self.device_charge_limits.get(dev.name, 0))
 
-    def device_model_supports_charge(self, dev):
-        """Whether the device's resolved model declares an AC charge path.
+    def device_charge_profile(self, dev):
+        """Resolve the device's hardware profile, or None.
 
         Transport-neutral: the HTTP client resolves its model from config and
         its own report, an MQTT control device carries a pinned one, and both
         answer through the same registry.
         """
 
-        from ems.mqtt_control.zendure_profiles import (
-            OPERATION_CHARGE,
-            hardware_profile_by_name,
-        )
+        from ems.mqtt_control.zendure_profiles import hardware_profile_by_name
 
         resolve = getattr(dev, "resolved_hardware_profile", None)
         profile_id = (
             resolve() if callable(resolve) else getattr(dev, "hardware_profile", None)
         )
-        profile = hardware_profile_by_name(profile_id) if profile_id else None
+        return hardware_profile_by_name(profile_id) if profile_id else None
+
+    def device_model_supports_charge(self, dev):
+        """Whether the device's resolved model declares an AC charge path."""
+
+        from ems.mqtt_control.zendure_profiles import OPERATION_CHARGE
+
+        profile = self.device_charge_profile(dev)
         return bool(profile and profile.supports_operation(OPERATION_CHARGE))
 
     def device_charge_allowed(self, dev, state, capability):
@@ -1339,7 +1346,7 @@ class EMSController:
             return False
 
         if not self.runtime_device_bool(
-            dev.name, "ac_charge_enabled", getattr(dev, "ac_charge_enabled", False)
+            dev.name, "ac_charge_enabled", getattr(dev, "ac_charge_enabled", True)
         ):
             return False
 
@@ -1372,6 +1379,45 @@ class EMSController:
             return False
 
         return self.device_model_supports_charge(dev)
+
+    def observe_charge_delivery(self, states):
+        """Report a commanded charge that never produced any AC input.
+
+        Most models are allowed to charge on the strength of the vendor
+        catalogue rather than a measurement here, and a catalogue row can be
+        wrong. The failure is quiet by nature: the command is accepted, nothing
+        flows, and the surplus keeps leaving. This only observes -- it changes
+        no target and refuses nothing, because the safe response to an uncertain
+        row is to say so, not to override the operator's configuration.
+
+        The telemetry just read reflects the previous cycle's command, which is
+        why this runs before the new targets are calculated.
+        """
+
+        for dev, state in zip(self.devices, states):
+            commanded = self.commanded_device_targets.get(dev.name, 0)
+            measured = getattr(state, "grid_input", 0)
+            count = count_silent_charge_cycles(
+                self.silent_charge_cycles.get(dev.name, 0),
+                commanded_w=commanded,
+                measured_w=measured,
+                online=self.device_online.get(dev.name, True),
+            )
+            self.silent_charge_cycles[dev.name] = count
+
+            if count != CHARGE_SILENCE_CYCLES:
+                continue
+
+            profile = self.device_charge_profile(dev)
+            log_event(
+                logging.WARNING,
+                "ac_charge_not_delivered",
+                device=dev.name,
+                commanded_w=round(commanded, 1),
+                cycles=count,
+                model=getattr(profile, "canonical_name", None),
+                charge_evidence=getattr(profile, "charge_evidence", None),
+            )
 
     def log_charge_direction(self, decision, stabilized_total, chargeable):
         """Log the direction decision, loudly only when it matters.
@@ -3782,6 +3828,8 @@ class EMSController:
                 can_ac_charge=cap.can_ac_charge,
                 reason=cap.reason
             )
+
+        self.observe_charge_delivery(states)
 
         #
         # Reconcile SOC limits
