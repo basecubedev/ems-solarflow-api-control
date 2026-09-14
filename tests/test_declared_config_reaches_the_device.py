@@ -352,3 +352,111 @@ def test_the_named_thresholds_actually_reach_the_direction_settings():
     assert settings.entry_confirm_cycles == 4
     assert settings.entry_window_cycles == 9
     assert settings.max_entries_per_hour == 7
+
+
+def declared_section_fields(prefix):
+    """Every ``<prefix>.*`` key the Admin config catalogue offers."""
+
+    found = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            path = node.get("path")
+            if isinstance(path, str) and path.startswith(f"{prefix}."):
+                found.add(path.split(".", 1)[1])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, (list, tuple)):
+            for value in node:
+                walk(value)
+
+    walk(_SECTIONS)
+    return found
+
+
+def test_the_admin_editor_offers_exactly_the_settings_that_exist():
+    """A third list, and it had already drifted.
+
+    Removing `charge_ramp_up_w_per_cycle` and `charge_ramp_down_w_per_cycle`
+    from the defaults and both templates left them standing in the Admin field
+    catalogue -- so the console went on offering two settings that changed
+    nothing, which is the exact defect their removal was meant to end. Three
+    places describing one set of settings need the pairing walked, not trusted.
+    """
+
+    from ems.config import AC_CHARGE_CONTROL_DEFAULTS
+
+    offered = declared_section_fields("ac_charge_control")
+    real = set(AC_CHARGE_CONTROL_DEFAULTS)
+
+    assert offered - real == set(), (
+        "Admin offers settings that no longer exist: " f"{sorted(offered - real)}"
+    )
+    assert real - offered == set(), (
+        "settings an operator cannot reach in Admin: " f"{sorted(real - offered)}"
+    )
+
+
+# Where AC-charging events are raised, and where an operator is told they exist.
+EVENT_SOURCES = (
+    "ems/controller.py",
+    "ems/ac_charge_control.py",
+    "ems/config.py",
+    "ems/simulation.py",
+    "ems-solarflow-api-control.py",
+)
+EVENT_DOCS = ("docs/ac-charging.md", "docs/user/safety.md", "docs/cli.md")
+
+
+def test_every_ac_charge_event_is_documented():
+    """An event nobody is told about is a message into an empty room.
+
+    `ac_charge_kept_across_stop` shipped undocumented -- the one line that says
+    a device is still drawing from the grid after the operator stopped the EMS.
+    The log names in the docs are what an operator greps for; a name the code
+    raises and the docs omit cannot be looked up, and a name the docs promise
+    and the code never raises sends someone hunting for a line that will never
+    appear.
+    """
+
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+
+    code = "".join((root / name).read_text(encoding="utf-8") for name in EVENT_SOURCES)
+    # The log level is an expression in places, so match the event name only.
+    raised = set(re.findall(r'log_event\(\s*[^,]+,\s*\n?\s*"(ac_charge[a-z_]*)"', code))
+    raised |= set(
+        re.findall(r'log_event\(\s*logging\.\w+,\s*"(ac_charge[a-z_]*)"', code)
+    )
+    assert raised, "no events found; the regex or the sources moved"
+
+    documentation = "".join(
+        (root / name).read_text(encoding="utf-8") for name in EVENT_DOCS
+    )
+    mentioned = set(re.findall(r"\b(ac_charge_[a-z_]+)\b", documentation))
+
+    from ems.config import AC_CHARGE_CONTROL_DEFAULTS
+
+    # Config keys and telemetry fields share the prefix and are not events.
+    not_events = set(AC_CHARGE_CONTROL_DEFAULTS) | {
+        "ac_charge_control",
+        "ac_charge_enabled",
+        "ac_charge_power_w",
+        "ac_charge_regulator",
+        "ac_charge_w",
+        "ac_charge_kwh",
+        "ac_charge_wh",
+        "ac_charge_allocation",
+        "ac_charge_share_too_small",
+        "ac_charge_not_permitted",
+    }
+    mentioned -= not_events
+
+    assert raised - mentioned == set(), (
+        f"raised but nowhere documented: {sorted(raised - mentioned)}"
+    )
+    assert mentioned - raised == set(), (
+        f"documented but never raised: {sorted(mentioned - raised)}"
+    )

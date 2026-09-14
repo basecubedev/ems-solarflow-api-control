@@ -9,6 +9,7 @@ from ems.clients import fetch_all_devices, zero_device_state
 from ems.controller import EMSController
 from ems.logging_utils import log_event
 from ems.models import parse_pack_count
+from ems.power_direction import AC_MODE_OUTPUT
 from ems.runtime_state import RuntimeState, build_runtime_defaults
 from ems.target_control import detect_capabilities
 
@@ -37,7 +38,14 @@ class SimulatedZendureClient:
         max_power=None,
         pv_kwp=1.0,
         battery_kwh=1.0,
-        pv_priority_factor=1.0
+        pv_priority_factor=1.0,
+        # A simulated device that cannot charge makes every offline check blind
+        # to the charge direction: without a resolvable model the regulator
+        # refuses it, so --simulate and --self-test both ran green over a
+        # feature they never reached. The measured model is the honest default.
+        hardware_profile="solarflow_800_pro_2",
+        ac_charge_enabled=True,
+        max_charge_power_w=0
     ):
         self.name = name
         self.ip = "simulation"
@@ -55,6 +63,10 @@ class SimulatedZendureClient:
         self.pv_kwp = pv_kwp
         self.battery_kwh = battery_kwh
         self.pv_priority_factor = pv_priority_factor
+        self.hardware_profile = hardware_profile
+        self.ac_charge_enabled = ac_charge_enabled
+        self.max_charge_power_w = max_charge_power_w
+        self.observed_product = None
         self.state = zero_device_state()
         self.last_output_limit = None
 
@@ -447,6 +459,124 @@ def run_live_preflight(devices, shelly, ha=None):
     return ok
 
 
+def self_test_ac_charge_direction(ok):
+    """Drive a surplus until the regulator charges, then take it away.
+
+    The offline checks this file provides are what a developer runs after
+    touching the control loop, and neither reached AC charging: the built-in
+    frames are all house *demand*, and a simulated device carried no model at
+    all, so the regulator refused it. Both stayed green over a feature they
+    never entered.
+
+    Entry needs a sustained surplus by design, so this runs the confirmation
+    window rather than a single frame, and then checks the way back -- an exit
+    that quietly stopped being immediate is the failure that costs money.
+    """
+
+    settings = {**cfg.AC_CHARGE_CONTROL_DEFAULTS, "enabled": True}
+    previous = cfg.AC_CHARGE_CONTROL_CONFIG
+    cfg.AC_CHARGE_CONTROL_CONFIG = settings
+
+    try:
+        device = SimulatedZendureClient("WR1", max_power=800, battery_kwh=2.0)
+        # A second device the operator has not permitted. It shares the surplus
+        # and the model, so the only thing keeping it out is the permission --
+        # which is what makes it worth having here: a check that only asserts
+        # "a surplus charges" passes just as happily when every guard is gone.
+        refused = SimulatedZendureClient(
+            "WR2", max_power=800, battery_kwh=2.0, ac_charge_enabled=False
+        )
+        surplus_state = zero_device_state()
+        surplus_state.soc = 50
+        surplus_state.min_soc = 15
+        surplus_state.max_soc = 100
+        surplus_state.pack_num = 2
+        surplus_state.solar = 900
+        surplus_state.charge_max_limit_w = 1000
+        surplus_state.ac_mode = AC_MODE_OUTPUT
+        device.set_state(surplus_state)
+
+        meter = SimulatedShellyClient()
+        meter.set_power(-900)
+        refused.set_state(surplus_state)
+        ems = EMSController(
+            [device, refused],
+            meter,
+            ha=None,
+            sleep_enabled=False,
+            runtime_state=None
+        )
+        # The full-charge assist claims a device it considers due, at
+        # maintenance priority, which correctly takes it away from the surplus
+        # regulator -- an interaction with its own test. Its claim comes from a
+        # record in the state database on disk rather than from the feature
+        # flag, so leaving the store attached would make this check depend on
+        # what an earlier run left behind (rule 7).
+        ems.battery_full_charge_store = None
+
+        for _ in range(12):
+            ems.run_once()
+
+        if not ems.charge_direction.charging:
+            log_event(
+                logging.ERROR,
+                "self_test_failed",
+                test="ac_charge_direction_entry",
+                reason="sustained_surplus_did_not_enter_charging",
+                commanded_total_w=round(ems.commanded_total_w or 0, 1),
+                filtered_load_w=round(ems.filtered_load_w or 0, 1),
+                charge_capacity_w=ems.charge_capacity_w,
+                direction_reason=ems.charge_direction.entry_window,
+                chargeable=ems.chargeable_device_flags(
+                    [device.state, refused.state],
+                    [
+                        detect_capabilities(device.state),
+                        detect_capabilities(refused.state),
+                    ],
+                ),
+            )
+            return False
+
+        refused_target = ems.commanded_device_targets.get("WR2", 0)
+        if refused_target < 0:
+            log_event(
+                logging.ERROR,
+                "self_test_failed",
+                test="ac_charge_device_permission",
+                reason="a_device_without_permission_was_charged",
+                target_w=refused_target
+            )
+            return False
+
+        target = ems.commanded_device_targets.get("WR1", 0)
+        if target >= 0:
+            log_event(
+                logging.ERROR,
+                "self_test_failed",
+                test="ac_charge_direction_entry",
+                reason="charging_without_a_negative_device_target",
+                target_w=target
+            )
+            return False
+
+        # The house wants the power back. Leaving must not wait for a ramp.
+        meter.set_power(1200)
+        ems.run_once()
+
+        if ems.charge_direction.charging:
+            log_event(
+                logging.ERROR,
+                "self_test_failed",
+                test="ac_charge_direction_exit",
+                reason="charging_held_while_the_house_drew_power"
+            )
+            return False
+
+        return ok
+    finally:
+        cfg.AC_CHARGE_CONTROL_CONFIG = previous
+
+
 def run_self_tests():
     """Run local helper checks without hardware or HA access."""
 
@@ -535,6 +665,8 @@ def run_self_tests():
             test="winter_ac_charge_limit_payload",
             payload=json.dumps(payload, sort_keys=True)
         )
+
+    ok = self_test_ac_charge_direction(ok)
 
     sim_devices = [
         SimulatedZendureClient("WR1"),

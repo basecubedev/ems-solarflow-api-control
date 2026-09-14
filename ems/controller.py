@@ -1442,6 +1442,36 @@ class EMSController:
                 charge_evidence=getattr(profile, "charge_evidence", None),
             )
 
+    def explain_charge_allocation(self, explanation, targets, chargeable):
+        """Retell the decision as a charge, now that the targets are one.
+
+        The explanation is built by the discharge allocator, which runs first
+        and against a requested total of ``max(0, stabilized_total)`` -- zero
+        while charging. Its *numbers* are replaced downstream, but its reasons
+        are not, so the Control view answered "why is this device at -1000 W?"
+        with "pv_first_allocation": the strategy that did not decide it, for a
+        direction it does not describe.
+
+        Only the wording is touched. Nothing here changes a target.
+        """
+
+        if explanation is None:
+            return
+
+        explanation.mode = "ac_charge"
+        for index, dev in enumerate(self.devices):
+            device_explanation = explanation.devices.get(dev.name)
+            if device_explanation is None or index >= len(targets):
+                continue
+            if targets[index] < 0:
+                device_explanation.decision_reason = "ac_charge_allocation"
+            elif index < len(chargeable) and chargeable[index]:
+                # Permitted, but its share was below what a direction change is
+                # worth, so the charge was concentrated on the others.
+                device_explanation.decision_reason = "ac_charge_share_too_small"
+            else:
+                device_explanation.decision_reason = "ac_charge_not_permitted"
+
     def log_charge_direction(self, decision, stabilized_total, chargeable):
         """Log the direction decision, loudly only when it matters.
 
@@ -4145,6 +4175,9 @@ class EMSController:
                 self.devices,
                 capabilities,
                 chargeable,
+            )
+            self.explain_charge_allocation(
+                control_explanation, targets, chargeable
             )
 
         targets = self.apply_device_ramp(
