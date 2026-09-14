@@ -95,6 +95,13 @@ Either switch stops a running charge in the same cycle. Stopping a device that
 is drawing from the grid is the one action that must never wait for a threshold,
 a counter or a restart.
 
+So does losing the grid meter. A meter client that cannot reach its hardware
+keeps returning its last reading, and "still exporting" is indistinguishable
+from a real surplus — so charging stops when that reading is older than
+`telemetry_max_age_seconds` and says so with `ac_charge_stopped_stale_meter`.
+Discharging continues, because placing energy you already own on a stale reading
+costs nothing like drawing from the grid on one does.
+
 ### What happens if the EMS stops while charging
 
 On a clean shutdown the EMS returns every device it put into charge. If the

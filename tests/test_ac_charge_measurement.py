@@ -178,3 +178,33 @@ def test_the_observation_changes_no_target():
     source = inspect.getsource(EMSController.observe_charge_delivery)
     for forbidden in ("commanded_device_targets[", "device_charge_limits[", "return False"):
         assert forbidden not in source, forbidden
+
+
+def test_the_device_own_status_also_clears_the_silence_count():
+    """Two witnesses, either one enough.
+
+    `gridInputPower` is the measurement and `acStatus` is what the device says
+    it is doing -- the probe established that status, not the written mode, is
+    what proves a direction was taken. Demanding both would warn about a charge
+    that works on a model reporting only one of them, and the not-delivered
+    warning is the signal an operator is asked to act on.
+    """
+
+    from ems.ac_charge_control import count_silent_charge_cycles
+    from ems.power_direction import AC_STATUS_CHARGING
+
+    # Nothing measured, but the device says it is charging.
+    assert count_silent_charge_cycles(
+        5, commanded_w=-600, measured_w=0, online=True,
+        charging_status=AC_STATUS_CHARGING,
+    ) == 0
+
+    # Measured, but the status field is missing entirely.
+    assert count_silent_charge_cycles(
+        5, commanded_w=-600, measured_w=180, online=True, charging_status=0
+    ) == 0
+
+    # Neither witness: this is the case worth warning about.
+    assert count_silent_charge_cycles(
+        5, commanded_w=-600, measured_w=0, online=True, charging_status=1
+    ) == 6

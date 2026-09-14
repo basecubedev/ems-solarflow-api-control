@@ -111,9 +111,12 @@ AC_CHARGE_CONTROL_DEFAULTS = {
     "entry_confirm_cycles": 5,
     "entry_window_cycles": 7,
     "max_charge_entries_per_hour": 12,
-    "max_total_charge_power_w": 1200,
-    "charge_ramp_up_w_per_cycle": 400,
-    "charge_ramp_down_w_per_cycle": 600
+    # No charge-specific ramp: the existing output-control ramp already acts on
+    # the signed total, and a second one would be a second mechanism deciding
+    # the same thing. Keys for it were drafted and deliberately not built, so
+    # they are not shipped either -- a setting that changes nothing is worse
+    # than an absent one.
+    "max_total_charge_power_w": 1200
 }
 
 CONFIG_UPGRADE_DEFAULTS = {
@@ -1867,10 +1870,9 @@ def initialize(args, base_dir):
     BATTERY_FULL_CHARGE_ASSIST_CONFIG = normalize_battery_full_charge_assist_config(
         CONFIG.get("battery_full_charge_assist", {})
     )
-    AC_CHARGE_CONTROL_CONFIG = {
-        **AC_CHARGE_CONTROL_DEFAULTS,
-        **(CONFIG.get("ac_charge_control") or {})
-    }
+    AC_CHARGE_CONTROL_CONFIG = normalize_ac_charge_control_config(
+        CONFIG.get("ac_charge_control")
+    )
     ZENDURE_CONFIG = CONFIG["devices"]
     zendure_mqtt_config = CONFIG.get("zendure_mqtt", {})
     ZENDURE_MQTT_CONFIG = zendure_mqtt_config if isinstance(zendure_mqtt_config, dict) else {}
@@ -2705,6 +2707,53 @@ def sanitize_bucket_prefix(value, default="ems"):
 
 
 INFLUXDB_MODES = ("bundled", "external")
+
+
+def normalize_ac_charge_control_config(config, *, emit_warning=None):
+    """Merge the AC charging settings and say so when the band has collapsed.
+
+    ``charge_start_w`` and ``charge_hysteresis_w`` describe two edges, and the
+    lower one is derived so it can never sit *above* the upper one. It can still
+    be made to sit *on* it: a hysteresis of zero, or a start of zero, puts entry
+    and exit at the same threshold.
+
+    That is not a harmless setting. Measured on the closed loop against a steady
+    200 W surplus: the shipped band produces one direction change in 200 cycles,
+    a collapsed one produces 24 and pins the hourly entry cap. Relays move on
+    every one of them, which is the wear the whole asymmetric entry/exit design
+    exists to prevent.
+
+    The operator's numbers are kept — clamping them silently would be a second
+    authority for a value they set — but the warning is emitted once here at load
+    rather than every cycle from the control loop.
+    """
+
+    if not isinstance(config, dict):
+        config = {}
+
+    merged = {**AC_CHARGE_CONTROL_DEFAULTS, **config}
+    warn = emit_warning or (
+        lambda message: log_event(logging.WARNING, "ac_charge_band_collapsed", message=message)
+    )
+
+    start = safe_int(merged.get("charge_start_w"), AC_CHARGE_CONTROL_DEFAULTS["charge_start_w"], minimum=0)
+    hysteresis = safe_int(merged.get("charge_hysteresis_w"), AC_CHARGE_CONTROL_DEFAULTS["charge_hysteresis_w"], minimum=0)
+
+    # The same derivation ac_charge_stop_w uses. Rebuilding it slightly
+    # differently here is how this check first missed charge_start_w = 0.
+    stop = max(0, start - hysteresis)
+
+    if safe_bool(merged.get("enabled"), False) and stop >= start:
+        warn(
+            "ac_charge_control: charge_start_w "
+            f"{start} and charge_hysteresis_w {hysteresis} derive a stop "
+            f"threshold of {stop}, so entry and exit sit at the same point and "
+            "charging will start and stop repeatedly until the hourly entry cap "
+            "holds it back. Set charge_start_w above zero and charge_hysteresis_w "
+            "below it."
+        )
+
+    return merged
 
 
 def normalize_influxdb_mode(value):
