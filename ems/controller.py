@@ -3146,6 +3146,14 @@ class EMSController:
             )
 
             self.publish_sensor(
+                base + "ac_charge",
+                d.grid_input,
+                "W",
+                "power",
+                extra=device_extra()
+            )
+
+            self.publish_sensor(
                 base + "target",
                 effective_targets[i],
                 "W",
@@ -3638,6 +3646,7 @@ class EMSController:
                 output_limit_w=state.output_limit,
                 pack_input_w=state.pack_in,
                 soc_runtime_state=derive_soc_runtime_state(state),
+                grid_reverse=state.grid_reverse,
                 can_charge=cap.can_charge,
                 can_discharge=cap.can_discharge,
                 can_export=cap.can_export,

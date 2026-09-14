@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
+import re
 import shutil
 import subprocess
 from html.parser import HTMLParser
@@ -239,7 +240,13 @@ console.log(JSON.stringify({{
     out = run_node(script)
     for overlay in out["overlays"]:
         assert overlay in out["meta"], f"overlay {overlay} has no series metadata"
-    assert set(out["overlays"]) == {"soc", "target", "grid"}
+    assert set(out["overlays"]) == {"soc", "target", "grid", "ac_charge"}
+
+    # Frontend metadata and the backend catalog are two lists of the same
+    # series. A name that exists in one only serves an empty chart.
+    from ems.history.provider import SERIES_CATALOG
+
+    assert set(out["meta"]) == set(SERIES_CATALOG)
 
 
 def test_analytics_overlays_extend_active_series_and_custom_range():
@@ -613,3 +620,42 @@ console.log(JSON.stringify({{
     assert out["peak"] == 2500
     assert out["power"] == "2.50 kW"
     assert out["energy"] == "1.5 kWh"
+
+
+def test_every_integrating_kpi_has_its_series_in_the_tab_that_shows_it():
+    """A KPI integrates the fetched series, and a tab fetches only its own.
+
+    A KPI whose series is not in its tab's list reads an empty array and renders
+    a permanent zero, which looks like a measurement rather than a wiring
+    mistake. Overlays do not count: they are off by default.
+    """
+
+    out = run_node(
+        f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify({{
+  tabs: app.ANALYTICS_TABS.map((t) => ({{id: t.id, series: t.series, kpis: t.kpis}})),
+  live: Object.entries(app.ANALYTICS_KPIS)
+    .filter(([, kpi]) => kpi.live)
+    .map(([id]) => id),
+}}));
+"""
+    )
+
+    source = APP_JS.read_text(encoding="utf-8")
+    live = set(out["live"])
+    missing = []
+    for tab in out["tabs"]:
+        for kpi in tab["kpis"]:
+            if kpi in live:
+                continue
+            match = re.search(
+                rf'^\s*{re.escape(kpi)}:.*?(?:integrateSeries|seriesPeak)\(d, "([a-z_]+)"',
+                source,
+                re.MULTILINE,
+            )
+            assert match, f"KPI {kpi} neither live nor reading a series"
+            if match.group(1) not in tab["series"]:
+                missing.append(f"{tab['id']}/{kpi} needs series {match.group(1)}")
+
+    assert missing == []

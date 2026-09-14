@@ -14,6 +14,7 @@ import time
 
 SCENARIOS = (
     "normal",
+    "ac-charging",
     "firmware-status",
     "offline-device",
     "auth-readonly",
@@ -84,6 +85,7 @@ def _device(name, **over):
         "soc_status": 0,
         "pack_num": 1,
         "input_limit_w": 0,
+        "ac_charge_w": 0,
     }
     base.update(over)
     base["name"] = name
@@ -212,6 +214,7 @@ def _rules(devices):
 def _snapshot(devices, *, grid_power_w=0, max_total_power_w=800):
     pv = sum(_num(d.get("pv_input_w")) for d in devices.values())
     out = sum(_num(d.get("output_w")) for d in devices.values())
+    charge = sum(_num(d.get("ac_charge_w")) for d in devices.values())
     batt = sum(_num(d.get("battery_power_w")) for d in devices.values())
     socs = [
         _num(d.get("soc"))
@@ -219,11 +222,12 @@ def _snapshot(devices, *, grid_power_w=0, max_total_power_w=800):
         if isinstance(d.get("soc"), (int, float))
     ]
     average_soc = round(sum(socs) / len(socs), 1) if socs else 0
-    home_load = max(0.0, out + grid_power_w)
+    home_load = max(0.0, out - charge + grid_power_w)
     return {
         "timestamp": _timestamp(),
         "pv_total_w": round(pv, 1),
         "inverter_output_w": round(out, 1),
+        "inverter_charge_w": round(charge, 1),
         "home_load_w": round(home_load, 1),
         "grid_power_w": grid_power_w,
         "battery_power_w": round(batt, 1),
@@ -249,6 +253,26 @@ def _snapshot(devices, *, grid_power_w=0, max_total_power_w=800):
 
 
 def _devices_for(scenario):
+    if scenario == "ac-charging":
+        # The feature's own picture: one device exports PV surplus, a second,
+        # battery-only AC device absorbs it, and the meter lands on zero. This
+        # is the only state in which the grid -> inverter pipe is drawn.
+        return {
+            "WR1": _device(
+                "WR1", soc=82, pv_input_w=1400, output_w=800, battery_power_w=560,
+                pack_output_w=580, pack_input_w=20, target_w=800,
+                allocated_target_w=800, output_limit_w=800, pack_num=2,
+            ),
+            "WR2": _device(
+                "WR2", soc=34, pv_input_w=0, pv_inputs_w=[0, 0, 0, 0],
+                output_w=0, ac_charge_w=600, battery_power_w=600,
+                pack_output_w=600, pack_input_w=0, target_w=-600,
+                allocated_target_w=-600, output_limit_w=0, input_limit_w=600,
+                ac_mode=1, ac_status=2, dc_status=0, pack_num=2,
+                remain_minutes=None,
+            ),
+        }
+
     if scenario == "firmware-status":
         # Mixed firmware values across devices so every readable label plus the
         # unknown-value fallback can be checked at a glance.
@@ -322,6 +346,7 @@ def _runtime(devices):
             "max_power": 800,
             "offgrid_socket_mode": "off",
             "pv_priority_factor": 1.0,
+            "ac_charge_enabled": False,
         }
     return {
         "system": {
@@ -332,6 +357,7 @@ def _runtime(devices):
         },
         "ha": {"enabled": False, "control_enabled": False},
         "winter": {"enabled": False},
+        "ac_charge_control": {"enabled": False},
         "devices": runtime_devices,
         "_limits": {
             "system": {"max_total_power": 5000, "min_output_limit": 5000},
@@ -586,6 +612,9 @@ def build_scenario(scenario=DEFAULT_SCENARIO, device_count=None, freeze_timestam
     # Grid is held very close to zero (-5 W) to show the EMS regulating tightly
     # against the house load; an offline device breaks that balance.
     grid_power_w = 120 if scenario == "offline-device" else -5
+    # 800 W out, 600 W charged, 200 W house: the meter reads zero.
+    if scenario == "ac-charging":
+        grid_power_w = 0
     snapshot = _snapshot(devices, grid_power_w=grid_power_w)
     # An unchanging timestamp is the A/B partner for the de-duplication work:
     # the server keeps sending, and a correct client stops re-rendering.
