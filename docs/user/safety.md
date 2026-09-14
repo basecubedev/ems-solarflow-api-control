@@ -61,23 +61,39 @@ EMS keeps these facts separate and honest:
 
 ## AC charging draws from the grid
 
-AC charging is off until you switch it on, because it is the one EMS feature
-that can *spend* energy rather than place it. Before enabling it:
+**AC charging is on by default**, for the installation and for every device,
+like the other EMS features. It is still the one feature that can *spend* energy
+rather than place it, so know what that means before you run it:
 
-- Decide which devices may charge. It is per device (`ac_charge_enabled`), on
-  top of whether the model's AC charge path is established at all.
-- Set `max_charge_power_w` per device and `max_total_charge_power_w` for the
-  installation. Leaving the per-device value at 0 derives it from the device's
-  output limit, which may be more than you want to draw.
-- Start with the default thresholds. Charging begins only after a sustained
-  surplus, and stops the moment the house needs the power back.
+- **It acts only against your own surplus.** Entry needs a sustained export
+  above `charge_start_w`; an installation that never exports never charges. It
+  stops the moment the house needs the power back.
+- **A config upgrade turns it on.** A `config.json` written before the feature
+  existed has neither key, and the upgrade fills both in as enabled. If you do
+  not want that, set `ac_charge_control.enabled` to `false`, or
+  `ac_charge_enabled` to `false` on the devices you want to keep out of it,
+  before the upgrade runs.
+- **Which devices can charge is decided by the model**, not by the switch — see
+  [supported-setups.md](supported-setups.md#supported-zendure-devices-local-api--zensdk).
+  Only the 800 Pro 2 was measured here; the other models are enabled on the
+  device catalogue's word, and the EMS logs `ac_charge_not_delivered` if a
+  commanded charge never draws any current.
+- **Check `max_total_charge_power_w`** for your installation — your circuit and
+  your fuse, which nothing in the EMS can measure. The default is 1200 W.
+  `max_charge_power_w` per device at 0 means "ask the device for its own
+  ceiling".
 
-You can stop it at any time without restarting the EMS:
+You can stop it at any time without restarting the EMS, from the dashboard's
+Control tab in write mode or from the CLI:
 
 ```bash
 python3 emsctl.py ac-charge disable            # the whole feature
 python3 emsctl.py device WR1 ac-charge off     # one device
 ```
+
+Either switch stops a running charge in the same cycle. Stopping a device that
+is drawing from the grid is the one action that must never wait for a threshold,
+a counter or a restart.
 
 ### What happens if the EMS stops while charging
 

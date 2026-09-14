@@ -220,6 +220,8 @@ def build_zendure_mqtt_control_runtime(
                 min_soc=item.get("min_soc", 0),
                 max_soc=item.get("max_soc", 0),
                 ac_discharge_enabled=item.get("ac_discharge_enabled", True),
+                ac_charge_enabled=item.get("ac_charge_enabled", True),
+                max_charge_power_w=item.get("max_charge_power_w", 0),
                 smart_mode=item.get("smart_mode", 1),
                 grid_off_mode=item.get("grid_off_mode"),
                 max_power=item.get("max_power"),

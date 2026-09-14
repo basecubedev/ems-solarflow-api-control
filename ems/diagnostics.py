@@ -1894,18 +1894,51 @@ def diagnose_hardware(checks, config_data):
         diagnose_add(checks, "hardware", "ok", "zendure_device_config_complete", f"Zendure device {name} has required read config", device=name, serial_configured=True)
         url = f"http://{device['ip']}/properties/report"
         start = time.monotonic()
+        reported = None
         try:
             status, payload = diagnose_http_json(url)
             from ems.clients import parse_device
             parse_device(payload)
+            reported = diagnose_reported_property_names(payload)
             _diagnose_record_probe(read_tracker, start)
             diagnose_add(checks, "hardware", "ok", "zendure_read_ok", f"Zendure device {name} read-only report endpoint returned parseable payload", device=name, status_code=status)
+            if reported["unmapped"]:
+                diagnose_add(checks, "hardware", "info", "zendure_unmapped_properties", f"Zendure device {name} reports {len(reported['unmapped'])} propert{'y' if len(reported['unmapped']) == 1 else 'ies'} the EMS does not read", device=name, unmapped=reported["unmapped"])
         except Exception as exc:
             _diagnose_record_probe(read_tracker, start, exc)
             diagnose_add(checks, "hardware", "warning", "zendure_read_failed", f"Zendure device {name} read-only probe failed: {exc.__class__.__name__}", device=name)
-        health["devices"].append({"name": name, "read": read_tracker.snapshot(), "write": None})
+        health["devices"].append({"name": name, "read": read_tracker.snapshot(), "write": None, "reported_properties": reported})
 
     return health
+
+
+def diagnose_reported_property_names(payload):
+    """Which property names a device reports, and which of them nothing reads.
+
+    Names only -- never values, so this carries no serial, token or reading and
+    stays safe in a support bundle. It exists because the EMS cannot notice a
+    field it was never taught: ``gridInputPower`` sat in a hardware capture for a
+    day while four surfaces showed a charging device as idle. An inventory from
+    an unfamiliar model is the cheapest way to find the next one, and it is what
+    ``tests/test_declared_config_reaches_the_device.py`` grows from.
+    """
+
+    properties = payload.get("properties") if isinstance(payload, dict) else None
+    if not isinstance(properties, dict):
+        return {"reported": [], "unmapped": []}
+
+    from ems.clients import parse_device
+
+    names = sorted(str(key) for key in properties)
+    # A name is "read" when removing it changes what parse_device produces.
+    baseline = parse_device(payload)
+    unmapped = []
+    for name in names:
+        reduced = dict(properties)
+        reduced.pop(name, None)
+        if parse_device({"properties": reduced}) == baseline:
+            unmapped.append(name)
+    return {"reported": names, "unmapped": unmapped}
 
 
 def diagnose_redact_key(key):
