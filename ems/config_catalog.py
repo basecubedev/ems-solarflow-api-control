@@ -1344,7 +1344,7 @@ _SECTIONS = [
         "ac_charge_control",
         "AC charging",
         "Charges batteries from AC when the house exports surplus.",
-        "When the house exports more than the start threshold, EMS charges the devices that allow it instead of letting the surplus leave. Off by default, because enabling it lets EMS draw from the grid.",
+        "When the house exports more than the start threshold, EMS charges the devices that allow it instead of letting the surplus leave. On by default; it acts only while the installation exports surplus.",
         8,
         [
             _field(
