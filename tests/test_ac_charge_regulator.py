@@ -871,3 +871,38 @@ def test_the_full_charge_assist_takes_a_device_away_mid_charge():
     assert harness.controller.runtime_intents["WR1"].reason == "full_charge_assist"
     assert harness.controller.commanded_device_targets["WR1"] == 0
     assert harness.controller.charge_direction.charging is False
+
+
+def test_the_per_device_runtime_switch_stops_a_charge_in_one_cycle():
+    """The switch the Control tab writes, end to end.
+
+    Turning a device out of charging is the one action that must never wait for
+    a threshold, a counter or a restart, and it is now reachable from a browser
+    -- so the path from runtime-state to a device back in output mode is worth
+    holding still. The feature-level switch already had a test; the per-device
+    one did not, and it is the one an operator reaches for when a single device
+    misbehaves.
+    """
+
+    item = surplus_state()
+    item.ac_mode = 2
+    item.ac_status = 1
+    item.output_limit = 0
+    item.input_limit_w = 0
+    item.grid_input = 0
+
+    runtime = RuntimeStateStub(devices={})
+    harness = Harness([charging_device()], load=-900, runtime_state=runtime)
+    harness.controller.set_output_limit = FollowingHardware(item)
+    harness.run(cycles=20, states=[item])
+
+    assert harness.controller.charge_direction.charging is True
+    assert item.ac_mode == 1
+
+    runtime.devices["WR1"] = {"ac_charge_enabled": False}
+    harness.run(cycles=1, states=[item])
+
+    assert harness.controller.commanded_device_targets["WR1"] == 0
+    assert harness.controller.charge_direction.charging is False
+    assert item.ac_mode == 2
+    assert item.grid_input == 0

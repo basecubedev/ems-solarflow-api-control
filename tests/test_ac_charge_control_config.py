@@ -184,3 +184,93 @@ def test_the_operator_numbers_survive_the_warning():
 
     assert merged["charge_start_w"] == 150
     assert merged["charge_hysteresis_w"] == 0
+
+
+def test_a_runtime_charge_power_alone_never_starts_a_charge():
+    """`ac_charge_power_w` and `max_charge_power_w` are one word apart and
+    unrelated, so the dangerous reading of the near-miss is worth pinning.
+
+    Setting the runtime charge power is meant to *prepare* a value for a device
+    that is later switched into AC input mode. If it were enough on its own, an
+    operator reaching for what they thought was a surplus-charging cap would
+    have put the device on the grid instead.
+    """
+
+    from ems.controller import EMSController
+    from tests.test_write_gates import RuntimeStateStub, device, state
+
+    dev = device("WR1")
+    item = state(soc=50, solar=0, output=0, soc_limit=0, pack_num=2)
+
+    controller = EMSController.__new__(EMSController)
+    controller.runtime_state = RuntimeStateStub(
+        devices={"WR1": {"ac_charge_power_w": 600}}
+    )
+    intent = controller.get_device_runtime_intent(dev, item)
+
+    assert intent.role.value == "ac_output"
+    assert intent.desired_ac_mode == 2
+    # No setpoint means the reconciler writes no inputLimit at all.
+    assert intent.setpoint_w is None
+
+    # It takes effect only once the role says the device is an AC input.
+    controller.runtime_state = RuntimeStateStub(
+        devices={"WR1": {"runtime_role": "ac_input", "ac_charge_power_w": 600}}
+    )
+    prepared = controller.get_device_runtime_intent(dev, item)
+
+    assert prepared.role.value == "ac_input"
+    assert prepared.setpoint_w == 600
+
+
+@pytest.mark.parametrize(
+    "label,override,expected",
+    [
+        # Negative thresholds clamp to zero, which the band check then names.
+        ("negative start", {"charge_start_w": -500}, {"start_w": 0}),
+        # Junk falls back rather than propagating into the control loop.
+        ("text threshold", {"charge_start_w": "viel"}, {"start_w": 150}),
+        ("null everywhere", {"charge_start_w": None, "entry_confirm_cycles": None}, {"start_w": 150, "entry_confirm_cycles": 5}),
+        # A rate cap of zero would refuse every entry forever; one is the floor.
+        ("zero rate cap", {"max_charge_entries_per_hour": 0}, {"max_entries_per_hour": 1}),
+    ],
+)
+def test_hostile_settings_fall_back_instead_of_reaching_the_loop(label, override, expected):
+    from ems.controller import EMSController
+
+    merged = {**AC_CHARGE_CONTROL_DEFAULTS, **override, "enabled": True}
+    previous = cfg.AC_CHARGE_CONTROL_CONFIG
+    cfg.AC_CHARGE_CONTROL_CONFIG = merged
+    try:
+        controller = EMSController.__new__(EMSController)
+        controller.runtime_state = None
+        settings = controller.charge_settings()
+    finally:
+        cfg.AC_CHARGE_CONTROL_CONFIG = previous
+
+    for field, value in expected.items():
+        assert getattr(settings, field) == value, (label, field)
+
+
+def test_a_negative_system_maximum_charges_nothing():
+    """Fail-closed: a nonsense ceiling must not become an unbounded one."""
+
+    from ems.ac_charge_control import ChargeDirectionState
+    from ems.controller import EMSController
+
+    merged = {
+        **AC_CHARGE_CONTROL_DEFAULTS,
+        "enabled": True,
+        "max_total_charge_power_w": -1200,
+    }
+    previous = cfg.AC_CHARGE_CONTROL_CONFIG
+    cfg.AC_CHARGE_CONTROL_CONFIG = merged
+    try:
+        controller = EMSController.__new__(EMSController)
+        controller.runtime_state = None
+        controller.charge_direction = ChargeDirectionState(charging=True)
+        controller.charge_capacity_w = 2000
+        controller.device_charge_limits = {"WR1": 1000}
+        assert controller.commanded_total_floor_w() == 0
+    finally:
+        cfg.AC_CHARGE_CONTROL_CONFIG = previous

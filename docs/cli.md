@@ -225,7 +225,23 @@ the current runtime role. The controller applies it as Zendure `inputLimit` on
 the next EMS loop only while the device role is `ac_input`, and only when
 telemetry reports a different current `inputLimit`. While the role is
 `ac_output`, the stored charge power is ignored for hardware writes so it can
-be prepared before switching to input mode.
+be prepared before switching to input mode. Setting it never starts a charge on
+its own.
+
+**Not to be confused with `max_charge_power_w`**, whose name is one word away
+and whose job is unrelated:
+
+| | `ac_charge_power_w` | `max_charge_power_w` |
+|---|---|---|
+| Where | runtime-state, per device | `config.json`, per device |
+| Set with | `emsctl device WR1 ac-charge-power N` | the config file or Admin |
+| What it is | the exact `inputLimit` to hold | an upper bound on surplus charging |
+| Who reads it | the runtime AC-mode reconciler, while the role is `ac_input` | the surplus charge regulator |
+| Effect of setting it | none until the role is `ac_input` | caps the share this device may take |
+
+If the aim is "this device may charge from surplus, but never above N watts",
+the one to set is `max_charge_power_w`. `0` there means "ask the device for its
+own ceiling", which is what `chargeMaxLimit` reports — never "no charging".
 
 Control quality interpretation:
 
