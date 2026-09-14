@@ -529,6 +529,87 @@ window is integrated, so a single failed read leaves no hole (see
 
 `stale_telemetry_ramp_factor` reduces ramp speed when telemetry is stale.
 
+## AC Charging
+
+Off by default. Enabling it lets the EMS draw from the grid, so it is the one
+feature whose default state is a safety property rather than a preference.
+
+```json
+"ac_charge_control": {
+  "enabled": false,
+  "charge_start_w": 150,
+  "charge_hysteresis_w": 50,
+  "entry_confirm_cycles": 5,
+  "entry_window_cycles": 7,
+  "max_charge_entries_per_hour": 12,
+  "max_total_charge_power_w": 1200
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `enabled` | Whether the EMS may charge from surplus at all. Also runtime-toggleable. |
+| `charge_start_w` | Surplus needed before charging starts |
+| `charge_hysteresis_w` | How far below the start threshold charging continues |
+| `entry_confirm_cycles` | Observations that must show surplus before charging starts |
+| `entry_window_cycles` | How many recent loops those observations are counted within |
+| `max_charge_entries_per_hour` | Safety limit on how often a device may enter charging |
+| `max_total_charge_power_w` | Highest combined charging power across all devices |
+
+The lower edge of the charge band is **derived**, not configured:
+
+```text
+stop = max(0, charge_start_w - charge_hysteresis_w)
+```
+
+so a configuration whose stop threshold sits above its start threshold cannot be
+expressed. The confirmation window is likewise never shorter than the count it
+must hold.
+
+Entry counts five of the last seven observations by default, rather than five in
+a row or an average. Each observation is judged against the threshold on its
+own, so a single deep spike cannot stand in for a sustained surplus; counting
+within a window means one brief dip does not discard the confirmation. Leaving
+charge is always immediate and is never gated by any of these values.
+
+See [control-logic.md](control-logic.md) for the direction rules and
+[../user/safety.md](../user/safety.md) before enabling it.
+
+### Per-device keys
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ac_discharge_enabled` | `true` | Whether the EMS may command this device to supply the house. Today's behaviour, written down. |
+| `ac_charge_enabled` | `false` | Whether this device may be charged from surplus. Also runtime-toggleable. |
+| `max_charge_power_w` | `0` | Highest charging power for this device. `0` uses the ceiling the device reports for itself. |
+
+### Why the charge limit is not the output limit
+
+The two describe different paths with different ratings, and the difference is
+physical, not bookkeeping.
+
+Feeding out, an inverter's current **adds** to the house current on a circuit
+whose breaker sits upstream of the injection point — the breaker never sees the
+inverter's contribution, which is why a balcony plant is limited at the source.
+Charging, the current is drawn through that breaker and protected by it.
+
+So the EMS never borrows one as the other. A SolarFlow 800 Pro 2 reports an
+800 W output limit and a 1000 W charge ceiling, and both numbers are correct.
+
+| Precedence | Source |
+|---|---|
+| 1 | `devices[].max_charge_power_w`, when set — capped by the device's ceiling, because the device has to accept the command |
+| 2 | The ceiling the device reports (`chargeMaxLimit`) |
+| — | A device that reports no ceiling charges nothing, and setting the key explicitly unblocks it |
+
+`ac_charge_control.max_total_charge_power_w` is a different question again: it is
+the **installation's** limit — your circuit and your fuse — not the devices'.
+Nothing in the EMS can measure that, so it stays a number you set.
+
+Charging additionally requires the device's resolved hardware model to have an
+established AC charge path. That is a property of the model, not of the
+installation — see [../user/supported-setups.md](../user/supported-setups.md).
+
 ## Winter Settings
 
 Winter mode is optional but enabled by default for new configs; set
@@ -577,6 +658,9 @@ Each Zendure device entry defines static installation data:
   "pv_kwp": 1.0,
   "pv_priority_factor": 1.0,
   "battery_kwh": 1.0,
+  "ac_discharge_enabled": true,
+  "ac_charge_enabled": false,
+  "max_charge_power_w": 0,
   "min_soc": 15,
   "max_soc": 100
 }

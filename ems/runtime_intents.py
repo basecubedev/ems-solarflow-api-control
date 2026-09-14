@@ -21,6 +21,7 @@ from enum import Enum
 
 from ems.config import safe_int
 from ems.power_direction import AC_MODE_INPUT, AC_MODE_OUTPUT, AC_STATUS_CHARGING
+from ems.target_control import derive_soc_runtime_state
 
 PRIORITY_DEFAULT = 0
 PRIORITY_FIRMWARE_OBSERVED = 50
@@ -92,25 +93,37 @@ def runtime_intent_from_role(device_name, role, reason: str | None = None):
     return None
 
 
-def firmware_charge_intent(device_name, state):
+def firmware_charge_intent(device_name, state, *, ems_commanded_charge=False):
     """Claim a device the firmware put into AC charge by itself, or None.
 
-    Observed, never predicted. The firmware decides when to recover an empty
-    battery from AC; reimplementing that trigger here would be a second
+    Three observations, no prediction. The firmware decides when to recover an
+    empty battery from AC; reimplementing that trigger here would be a second
     authority for someone else's threshold and would drift the first time a
-    firmware or a model moves it. The device's own status is read instead.
+    firmware or a model moves it.
 
-    Both the written mode and the observed status must agree, which keeps the
-    ~2 s settling window after an EMS command from being mistaken for the
-    firmware acting on its own. Whether the EMS meant to put the device there is
-    not this producer's question: the priority ladder answers it, because every
-    deliberate claim outranks this one.
+    The written mode and the observed status must agree, which keeps the ~2 s
+    settling window after a command from being mistaken for the firmware acting
+    on its own. The battery must be at its floor, which is where the firmware
+    acts and an EMS surplus charge does not. And the EMS must not have asked for
+    this charge itself — without that, the regulator's own charge would be read
+    back as firmware-owned, the device would be marked uncommandable, and the
+    regulator would shut itself down two cycles after starting.
+
+    Above the floor and uncommanded, a charging device is a leftover — an EMS
+    that died mid-charge, or an app-initiated one — and the normal acMode
+    reconcile is allowed to take it back.
     """
+
+    if ems_commanded_charge:
+        return None
 
     if safe_int(getattr(state, "ac_status", 0)) != AC_STATUS_CHARGING:
         return None
 
     if safe_int(getattr(state, "ac_mode", 0)) != AC_MODE_INPUT:
+        return None
+
+    if derive_soc_runtime_state(state) != "soc_empty":
         return None
 
     return DeviceRuntimeIntent(

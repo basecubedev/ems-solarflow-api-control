@@ -62,17 +62,30 @@ are not listed until a physical report confirms them.
 EMS controls Zendure SolarFlow devices through the local Zendure API /
 ZenSDK-compatible HTTP API. Known ZenSDK-compatible models:
 
-| Model | Status | Notes |
-|---|---|---|
-| SolarFlow 800 Pro 2 | Validated | Maintainer hardware; ZenSDK local HTTP control **and** Zendure cloud MQTT control confirmed. |
-| SolarFlow 800 | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 800 Plus | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 800 Pro | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 1600 AC+ | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 2400 AC | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 2400 AC+ | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 2400 Pro | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 4000 AC+ | Family-supported | Same ZenSDK family; not individually confirmed. |
+| Model | Status | AC charging | Notes |
+|---|---|---|---|
+| SolarFlow 800 Pro 2 | Validated | **Measured** | Maintainer hardware; ZenSDK local HTTP control **and** Zendure cloud MQTT control confirmed. |
+| SolarFlow 800 | Family-supported | Not established | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
+| SolarFlow 800 Plus | Family-supported | Not established | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
+| SolarFlow 800 Pro | Family-supported | Not established | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
+| SolarFlow 1600 AC+ | Family-supported | Not established | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
+| SolarFlow 2400 AC | Family-supported | Not established | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
+| SolarFlow 2400 AC+ | Family-supported | Not established | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
+| SolarFlow 2400 Pro | Family-supported | Not established | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
+| SolarFlow 4000 AC+ | Family-supported | Not established | Same ZenSDK family; not individually confirmed. |
+
+### Why AC charging is tracked per model
+
+Every ZenSDK model builds the identical charge command through the identical
+code path. That proves the command is well formed — it does not prove a given
+model has an AC charge path at all, and a wrong assumption there would have the
+EMS ask unknown hardware to draw from the grid.
+
+"Measured" means the command was written to that model and the device drew the
+commanded power. Anything else refuses to charge, and says so with a stable
+reason rather than failing silently. Unlocking a model is one line in the
+hardware catalogue plus the measurement that justifies it; if you have one of
+these devices and can run the test, an issue with the trace is welcome.
 
 Each Zendure device configured over the **Local API** needs a local IP address,
 serial number, max power, battery size, PV size / priority metadata, and min/max

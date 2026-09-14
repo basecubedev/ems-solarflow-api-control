@@ -84,12 +84,26 @@ socSet=1000 / configured socSet restore during battery full-charge assist
 acMode/inputLimit during battery full-charge assist only through runtime intent
 ```
 
-Runtime output writes and persistent state reconciliation writes are separate
-write paths. Output-limit writes require the device's transport gate to be
-enabled; state reconciliation writes additionally require
-`allow_state_reconciliation_writes=true`. State reconciliation is API-only:
-Zendure MQTT control devices are output-only and are skipped by every state
-reconciliation writer.
+Runtime power writes and persistent state reconciliation writes are separate
+write paths. A power write — discharge, idle or charge — requires the device's
+transport gate to be enabled; state reconciliation writes additionally require
+`allow_state_reconciliation_writes=true`.
+
+State reconciliation is API-only: Zendure MQTT control devices carry
+`supports_state_reconciliation=False` and are skipped by every state
+reconciliation writer. That flag means "no separate reconciliation path", not
+"cannot set a mode": a ZenSDK power command is one atomic property write
+carrying `smartMode`, `acMode`, `outputLimit` and `inputLimit` together, because
+a bare setpoint is ignored by a device sitting in an inactive mode. The mode
+therefore travels with the power command, on the transport's own gate, in both
+directions.
+
+A charge is not gated separately from a discharge. What decides whether a
+charge may happen at all is the permission set — the feature switch, the
+device's own opt-in, the model's established charge path and current telemetry —
+not a second write gate. Making the way *back* depend on an extra gate was
+considered and rejected: failing closed on the return path would leave hardware
+drawing from the grid.
 
 ## Zendure outputLimit
 
