@@ -194,7 +194,7 @@ their discharge floor.
 
 ## AC Charging From Surplus
 
-Off by default (`ac_charge_control.enabled`). When it is on, a device charges
+On by default (`ac_charge_control.enabled`). A device charges
 only if every one of these agrees: the feature, the device's own
 `ac_charge_enabled`, a hardware model whose AC charge path is established,
 current telemetry that allows charging, the device being online and enabled, and
