@@ -18,7 +18,9 @@ pytestmark = [
 ]
 
 
-def snapshot(timestamp, pv=100, output=80, target=90, grid=12, battery=-20):
+def snapshot(
+    timestamp, pv=100, output=80, target=90, grid=12, battery=-20, charge=0
+):
     return {
         "timestamp": timestamp,
         "devices": {
@@ -26,6 +28,7 @@ def snapshot(timestamp, pv=100, output=80, target=90, grid=12, battery=-20):
                 "soc": 61,
                 "pv_input_w": pv,
                 "output_w": output,
+                "ac_charge_w": charge,
                 "battery_power_w": battery,
                 "target_w": target,
                 "output_limit_w": 100,
@@ -35,6 +38,7 @@ def snapshot(timestamp, pv=100, output=80, target=90, grid=12, battery=-20):
         "home_load_w": max(0, output + grid),
         "pv_total_w": pv,
         "inverter_output_w": output,
+        "inverter_charge_w": charge,
         "battery_power_w": battery,
         "average_soc": 61,
         "controller": {
@@ -709,6 +713,8 @@ def test_energy_disabled_summary_includes_zero_yesterday(tmp_path):
     assert summary["yesterday"]["inverter_output_kwh"] == 0.0
     assert summary["yesterday"]["savings_value"] == 0.0
     assert summary["yesterday"]["peak_output_w"] == 0.0
+    assert summary["yesterday"]["ac_charge_wh"] == 0.0
+    assert summary["yesterday"]["ac_charge_kwh"] == 0.0
 
 
 def test_energy_lifetime_since_date_is_null_without_daily_stats(tmp_path):
@@ -1351,3 +1357,114 @@ def test_an_unmeasured_interval_over_midnight_marks_both_days(tmp_path):
 
     dates = {date_key for _, date_key in channel_gaps(path)}
     assert dates == {"2026-06-01", "2026-06-02"}
+
+
+def test_charged_energy_is_counted_separately_and_carries_no_savings(tmp_path):
+    """Charging is energy in, not energy delivered.
+
+    The savings figure prices avoided import. Energy put into a battery has
+    avoided nothing yet; the discharge that does is already counted, so pricing
+    both would book the same kilowatt-hour twice.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(
+        path,
+        energy_savings={"enabled": True, "price_per_kwh": 0.35},
+    )
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    store.record(snapshot(first.isoformat(), output=0, charge=600))
+    store.record(
+        snapshot((first + timedelta(seconds=5)).isoformat(), output=0, charge=600)
+    )
+
+    with sqlite3.connect(path) as con:
+        row = con.execute(
+            """
+            SELECT inverter_output_wh, ac_charge_wh, savings_value
+            FROM daily_energy_stats WHERE date = '2026-06-01'
+            """
+        ).fetchone()
+
+    assert row[0] == 0
+    assert row[1] == pytest.approx(600 * 5 / 3600)
+    assert row[2] == 0
+
+    summary = store.energy_summary(now=first.isoformat())
+    assert summary["today"]["ac_charge_wh"] == pytest.approx(600 * 5 / 3600)
+    assert summary["today"]["ac_charge_kwh"] == pytest.approx(600 * 5 / 3600 / 1000)
+    assert summary["today"]["savings_value"] == 0
+
+
+def test_charge_and_output_are_integrated_on_the_same_clock(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(
+        path,
+        energy_savings={"enabled": True, "max_sample_delta_seconds": 60},
+    )
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    store.record(snapshot(first.isoformat(), output=200, charge=400))
+    store.record(
+        snapshot((first + timedelta(seconds=10)).isoformat(), output=200, charge=400)
+    )
+    # A gap beyond the guard advances the baseline without counting either side.
+    store.record(
+        snapshot((first + timedelta(hours=2)).isoformat(), output=200, charge=400)
+    )
+
+    with sqlite3.connect(path) as con:
+        row = con.execute(
+            """
+            SELECT inverter_output_wh, ac_charge_wh
+            FROM daily_energy_stats WHERE date = '2026-06-01'
+            """
+        ).fetchone()
+
+    assert row[0] == pytest.approx(200 * 10 / 3600)
+    assert row[1] == pytest.approx(400 * 10 / 3600)
+
+
+def test_charge_column_is_added_to_an_existing_dashboard_database(tmp_path):
+    """Databases created before the counter existed must keep working."""
+
+    path = tmp_path / "dashboard.sqlite"
+    with sqlite3.connect(path) as con:
+        con.execute(
+            """
+            CREATE TABLE daily_energy_stats (
+                date TEXT PRIMARY KEY,
+                inverter_output_wh REAL NOT NULL DEFAULT 0,
+                savings_value REAL NOT NULL DEFAULT 0,
+                price_per_kwh REAL NOT NULL DEFAULT 0,
+                currency TEXT NOT NULL DEFAULT 'EUR',
+                peak_output_w REAL NOT NULL DEFAULT 0,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO daily_energy_stats(date, inverter_output_wh, updated_at)
+            VALUES('2026-05-31', 1234.0, '2026-05-31T12:00:00+00:00')
+            """
+        )
+
+    store = DashboardStore(path, energy_savings={"enabled": True})
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    store.record(snapshot(first.isoformat(), output=0, charge=600))
+    store.record(
+        snapshot((first + timedelta(seconds=5)).isoformat(), output=0, charge=600)
+    )
+
+    with sqlite3.connect(path) as con:
+        rows = dict(
+            con.execute(
+                "SELECT date, ac_charge_wh FROM daily_energy_stats"
+            ).fetchall()
+        )
+
+    assert rows["2026-05-31"] == 0
+    assert rows["2026-06-01"] == pytest.approx(600 * 5 / 3600)

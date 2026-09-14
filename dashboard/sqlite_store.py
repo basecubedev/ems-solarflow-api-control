@@ -165,6 +165,7 @@ class DashboardStore:
                 CREATE TABLE IF NOT EXISTS daily_energy_stats (
                     date TEXT PRIMARY KEY,
                     inverter_output_wh REAL NOT NULL DEFAULT 0,
+                    ac_charge_wh REAL NOT NULL DEFAULT 0,
                     savings_value REAL NOT NULL DEFAULT 0,
                     price_per_kwh REAL NOT NULL DEFAULT 0,
                     currency TEXT NOT NULL DEFAULT 'EUR',
@@ -173,6 +174,17 @@ class DashboardStore:
                     updated_at TEXT NOT NULL
                 )
             """)
+            existing = {
+                row[1]
+                for row in con.execute(
+                    "PRAGMA table_info(daily_energy_stats)"
+                ).fetchall()
+            }
+            if "ac_charge_wh" not in existing:
+                con.execute(
+                    "ALTER TABLE daily_energy_stats "
+                    "ADD COLUMN ac_charge_wh REAL NOT NULL DEFAULT 0"
+                )
             con.execute("""
                 CREATE TABLE IF NOT EXISTS energy_integration_state (
                     key TEXT PRIMARY KEY,
@@ -434,6 +446,10 @@ class DashboardStore:
             0.0,
             _as_float(snapshot.get("inverter_output_w"), 0.0),
         )
+        inverter_charge_w = max(
+            0.0,
+            _as_float(snapshot.get("inverter_charge_w"), 0.0),
+        )
         elapsed_hours = 0.0
         last_sample_time = None
 
@@ -464,6 +480,7 @@ class DashboardStore:
         # It used to keep integrating through an outage, which put a figure
         # built on frozen telemetry next to channels reading "not measured".
         delta_wh = inverter_output_w * elapsed_hours if measured else 0.0
+        charge_delta_wh = inverter_charge_w * elapsed_hours if measured else 0.0
         channel_wh = _energy_channels_module().channel_sample_wh(
             snapshot,
             elapsed_hours,
@@ -479,6 +496,7 @@ class DashboardStore:
                 delta_wh,
                 channel_wh,
                 updated_at,
+                charge_delta_wh,
             )
             self._record_channel_coverage(con, date_key, updated_at, measured)
         elif elapsed_hours > 0:
@@ -605,6 +623,7 @@ class DashboardStore:
         delta_wh,
         channel_wh,
         updated_at,
+        charge_delta_wh=0.0,
     ):
         row = con.execute(
             """
@@ -622,6 +641,10 @@ class DashboardStore:
             price_per_kwh = self.energy_price_per_kwh
             currency = self.energy_currency
 
+        # Charged energy carries no monetary value here. The savings figure
+        # prices avoided import; energy put into a battery has not avoided
+        # anything yet, and the discharge that does is already counted. Pricing
+        # both would book the same kilowatt-hour twice.
         savings_value = (delta_wh / 1000.0) * price_per_kwh
         # The channel columns come from the frozen registry, never from input.
         channel_columns = "".join(
@@ -638,6 +661,7 @@ class DashboardStore:
             INSERT INTO daily_energy_stats(
                 date,
                 inverter_output_wh,
+                ac_charge_wh,
                 savings_value,
                 price_per_kwh,
                 currency,
@@ -645,10 +669,12 @@ class DashboardStore:
                 sample_count,
                 updated_at{channel_columns}
             )
-            VALUES(?, ?, ?, ?, ?, ?, 1, ?{channel_placeholders})
+            VALUES(?, ?, ?, ?, ?, ?, ?, 1, ?{channel_placeholders})
             ON CONFLICT(date) DO UPDATE SET
                 inverter_output_wh = daily_energy_stats.inverter_output_wh
                     + excluded.inverter_output_wh,
+                ac_charge_wh = daily_energy_stats.ac_charge_wh
+                    + excluded.ac_charge_wh,
                 savings_value = daily_energy_stats.savings_value
                     + excluded.savings_value,
                 peak_output_w = MAX(
@@ -661,6 +687,7 @@ class DashboardStore:
             (
                 date_key,
                 float(delta_wh),
+                float(charge_delta_wh),
                 float(savings_value),
                 float(price_per_kwh),
                 currency,
@@ -797,6 +824,7 @@ class DashboardStore:
                 COALESCE(SUM(savings_value), 0),
                 COALESCE(MAX(peak_output_w), 0),
                 COALESCE(SUM(CASE WHEN sample_count > 0 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(ac_charge_wh), 0),
                 {_channel_sums_sql()}
             FROM daily_energy_stats
             WHERE date BETWEEN ? AND ?
@@ -808,11 +836,12 @@ class DashboardStore:
             row[0],
             row[1],
             peak_output_w=row[2] if include_peak else None,
-            channel_wh=_channel_totals(row[4:]),
+            channel_wh=_channel_totals(row[5:]),
             coverage=coverage,
             start_date=start_date,
             end_date=end_date,
             measured_days=row[3],
+            charge_wh=row[4],
         )
 
     def _best_day(self, con, coverage):
@@ -823,6 +852,7 @@ class DashboardStore:
                 inverter_output_wh,
                 savings_value,
                 peak_output_w,
+                ac_charge_wh,
                 {_channel_columns_sql()}
             FROM daily_energy_stats
             ORDER BY inverter_output_wh DESC, date ASC
@@ -838,11 +868,12 @@ class DashboardStore:
             row[2],
             date=row[0],
             peak_output_w=row[3],
-            channel_wh=_channel_totals(row[4:]),
+            channel_wh=_channel_totals(row[5:]),
             coverage=coverage,
             start_date=row[0],
             end_date=row[0],
             measured_days=1,
+            charge_wh=row[4],
         )
 
     def _monthly_summary(self, con, coverage, year, today=None):
@@ -853,6 +884,7 @@ class DashboardStore:
                 COALESCE(SUM(inverter_output_wh), 0),
                 COALESCE(SUM(savings_value), 0),
                 COALESCE(SUM(CASE WHEN sample_count > 0 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(ac_charge_wh), 0),
                 {_channel_sums_sql()}
             FROM daily_energy_stats
             WHERE substr(date, 1, 4) = ?
@@ -876,11 +908,12 @@ class DashboardStore:
                 **_energy_payload(
                     row[1] if row else 0,
                     row[2] if row else 0,
-                    channel_wh=_channel_totals(row[4:]) if row else None,
+                    channel_wh=_channel_totals(row[5:]) if row else None,
                     coverage=coverage,
                     start_date=f"{year:04d}-{month:02d}-01",
                     end_date=end_date,
                     measured_days=row[3] if row else 0,
+                    charge_wh=row[4] if row else 0,
                 ),
             })
 
@@ -894,6 +927,7 @@ class DashboardStore:
                 COALESCE(SUM(inverter_output_wh), 0),
                 COALESCE(SUM(savings_value), 0),
                 COALESCE(SUM(CASE WHEN sample_count > 0 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(ac_charge_wh), 0),
                 {_channel_sums_sql()}
             FROM daily_energy_stats
             GROUP BY year
@@ -907,11 +941,12 @@ class DashboardStore:
                 **_energy_payload(
                     row[1],
                     row[2],
-                    channel_wh=_channel_totals(row[4:]),
+                    channel_wh=_channel_totals(row[5:]),
                     coverage=coverage,
                     start_date=f"{int(row[0]):04d}-01-01",
                     end_date=_elapsed_end(f"{int(row[0]):04d}-12-31", today),
                     measured_days=row[3],
+                    charge_wh=row[4],
                 ),
             }
             for row in rows
@@ -926,6 +961,7 @@ class DashboardStore:
                 MIN(date),
                 MAX(date),
                 COUNT(*),
+                COALESCE(SUM(ac_charge_wh), 0),
                 {_channel_sums_sql()}
             FROM daily_energy_stats
             WHERE sample_count > 0
@@ -935,11 +971,12 @@ class DashboardStore:
         payload = _energy_payload(
             row[0],
             row[1],
-            channel_wh=_channel_totals(row[5:]),
+            channel_wh=_channel_totals(row[6:]),
             coverage=coverage,
             start_date=row[2],
             end_date=row[3],
             measured_days=row[4],
+            charge_wh=row[5],
         )
         payload["since_date"] = row[2]
         return payload
@@ -961,6 +998,7 @@ def empty_snapshot():
         "home_load_w": 0,
         "pv_total_w": 0,
         "inverter_output_w": 0,
+        "inverter_charge_w": 0,
         "battery_power_w": 0,
         "average_soc": 0,
         "controller": {
@@ -1187,10 +1225,13 @@ def _energy_payload(
     start_date=None,
     end_date=None,
     measured_days=None,
+    charge_wh=0,
 ):
     payload = {
         "inverter_output_wh": round(float(wh or 0), 9),
         "inverter_output_kwh": round(float(wh or 0) / 1000.0, 9),
+        "ac_charge_wh": round(float(charge_wh or 0), 9),
+        "ac_charge_kwh": round(float(charge_wh or 0) / 1000.0, 9),
         "savings_value": round(float(savings or 0), 9),
     }
 

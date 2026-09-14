@@ -34,6 +34,7 @@ NUMERIC_FIELDS = [
     "solar4",
     "output",
     "output_limit",
+    "grid_input",
     "pack_in",
     "pack_out",
     "voltage",
