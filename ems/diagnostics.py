@@ -1930,13 +1930,24 @@ def diagnose_reported_property_names(payload):
     from ems.clients import parse_device
 
     names = sorted(str(key) for key in properties)
-    # A name is "read" when removing it changes what parse_device produces.
+    # A name is "read" when *changing* it changes what parse_device produces.
+    #
+    # Removing it instead looks equivalent and is not: every reader here is
+    # written ``props.get(name) or 0``, so dropping a field that currently reads
+    # zero produces the identical state and the field looks unread. On a device
+    # sitting idle that is most of them -- a real report listed gridInputPower,
+    # acStatus and solarInputPower as unread purely because they were zero,
+    # which is precisely the advice this is meant to give an operator.
     baseline = parse_device(payload)
     unmapped = []
     for name in names:
-        reduced = dict(properties)
-        reduced.pop(name, None)
-        if parse_device({"properties": reduced}) == baseline:
+        current = properties[name]
+        probe = 987654 if isinstance(current, (int, float)) and not isinstance(current, bool) else "?"
+        if probe == current:
+            probe = 123456
+        perturbed = dict(properties)
+        perturbed[name] = probe
+        if parse_device({"properties": perturbed}) == baseline:
             unmapped.append(name)
     return {"reported": names, "unmapped": unmapped}
 

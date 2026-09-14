@@ -7,6 +7,8 @@ the hardware as a negative target, that the way back is never blocked, and that
 the regulator leaves no trace in operator state.
 """
 
+import logging
+import time
 from unittest.mock import Mock, patch
 
 import pytest
@@ -14,6 +16,9 @@ import pytest
 from ems import config as cfg
 from ems.config import AC_CHARGE_CONTROL_DEFAULTS
 from ems.controller import EMSController
+from ems.health import CommHealth
+from ems.runtime_intents import REGULATOR_CHARGE_REASON
+from ems.target_control import detect_capabilities
 from tests.test_write_gates import RuntimeStateStub, ShellyStub, device, state
 
 pytestmark = [
@@ -347,3 +352,522 @@ def test_a_house_that_needs_power_ends_a_charge_even_with_no_export_capacity():
     assert harness.controller.charge_direction.charging is False
     assert harness.controller.commanded_device_targets["WR1"] >= 0
     assert all(target >= 0 for target in harness.targets[before:])
+
+
+def test_the_shipped_standby_floor_does_not_block_entry():
+    """Entry needs `commanded_total_w <= 0`, and the floor is not on the total.
+
+    The harness patches `min_output_limit` to 0, so nothing else here would
+    notice if the shipped default of 35 W held the total above zero and made
+    entry unreachable on every real installation. It does not: the floor applies
+    per device at the output stage, and the total still reaches zero.
+    """
+
+    harness = Harness([charging_device("WR1"), charging_device("WR2")], load=-900)
+    with patch("ems.controller.cfg.MIN_OUTPUT_LIMIT", 35):
+        harness.run(cycles=20)
+
+    assert harness.controller.charge_direction.charging is True
+    assert all(target < 0 for target in harness.targets[-2:])
+
+
+def test_a_commanded_charge_reaches_the_transport_as_a_charge_operation():
+    """End to end across the seam the other tests mock away.
+
+    Everything above stops at `set_output_limit`; the write-path tests start
+    after it. This runs the real loop with that seam intact and asserts what the
+    transport was actually asked to do -- so a surplus really does become an AC
+    charge command and not just a negative number in a dict.
+    """
+
+    from ems.power_command import build_zensdk_power_operation
+    from ems.power_direction import AC_MODE_INPUT, OPERATION_CHARGE
+
+    harness = Harness([charging_device("WR1")], load=-900)
+    dispatched = []
+    harness.controller.set_output_limit = lambda dev, value: dispatched.append(
+        (dev.name, int(value))
+    )
+    harness.run(cycles=20)
+
+    assert harness.controller.charge_direction.charging is True
+    assert dispatched, "the loop never wrote anything"
+
+    name, value = dispatched[-1]
+    assert name == "WR1"
+    assert value < 0, dispatched[-3:]
+
+    operation = build_zensdk_power_operation(value)
+    assert operation.operation == OPERATION_CHARGE
+    assert operation.properties["acMode"] == AC_MODE_INPUT
+    assert operation.properties["inputLimit"] == abs(value)
+    assert operation.properties["outputLimit"] == 0
+
+
+class DyingMeter:
+    """A meter that starts failing and then holds its last reading forever.
+
+    That is the real client's behaviour: on a read error it returns
+    ``last_value`` and marks the health ``stale_used``, with nothing capping how
+    long it may keep doing so.
+    """
+
+    def __init__(self, power):
+        self.power = power
+        self.health = CommHealth("stub", kind="read")
+        self.health.record_success(latency_ms=1.0)
+        self.failing = False
+
+    def get_power(self):
+        if self.failing:
+            self.health.record_failure(error=OSError("unreachable"), stale_used=True)
+        else:
+            self.health.record_success(latency_ms=1.0)
+        return self.power
+
+
+def test_a_charge_does_not_outlive_the_meter_that_justifies_it():
+    """A held reading of "still exporting" is indistinguishable from a surplus.
+
+    Discharging on a stale meter places energy the operator already owns;
+    charging *spends*, so it is the direction that has to fail closed. Without
+    this the EMS keeps drawing from the grid on a number that may be hours old.
+    """
+
+    harness = Harness([charging_device()], load=-900)
+    meter = DyingMeter(-900)
+    harness.controller.shelly = meter
+    harness.run(cycles=20)
+    assert harness.controller.charge_direction.charging is True
+
+    # The meter starts failing. The held reading is stale but still young, which
+    # a transient miss looks like, and a charge must survive that: ending it
+    # costs a full re-entry window.
+    meter.failing = True
+    harness.run(cycles=2)
+    assert harness.controller.charge_direction.charging is True, (
+        "a single missed read must not end a charge -- re-entry costs a full window"
+    )
+
+    # Now let the last good reading age past the tolerance. Moving the clock
+    # backwards on the health record rather than sleeping keeps this
+    # deterministic (rule 7).
+    meter.health.last_success_monotonic = time.monotonic() - 3600
+    harness.run(cycles=1)
+    assert harness.controller.charge_direction.charging is False
+
+
+def test_a_meter_without_health_tracking_still_charges():
+    """Refusing to charge because a transport reports no health would disable
+    the feature for it entirely, which is not what fail-closed means here."""
+
+    harness = Harness([charging_device()], load=-900)
+    assert not hasattr(harness.controller.shelly, "health")
+
+    harness.run(cycles=20)
+
+    assert harness.controller.charge_direction.charging is True
+
+
+def charging_hardware_state(soc=60):
+    """A device already drawing from the grid, as found after a restart."""
+
+    item = state(soc=soc, solar=0, output=0, soc_limit=0, pack_num=2)
+    item.ac_mode = 1
+    item.ac_status = 2
+    item.output_limit = 0
+    item.input_limit_w = 600
+    item.grid_input = 600
+    return item
+
+
+def test_a_running_charge_is_stopped_even_when_the_target_is_zero():
+    """The write deadband must see a charging device as negative, not as idle.
+
+    A charging device reports outputLimit 0 and output 0 while drawing 600 W. A
+    discharge-only reference reads that as idle, so an idle target looks like no
+    change and the write is skipped -- leaving the hardware charging from the
+    grid with the EMS running and content. Local-HTTP devices are rescued by the
+    startup acMode reconcile; MQTT control devices have no such path, which is
+    how this would have reached hardware.
+    """
+
+    device_config = charging_device()
+    device_config.supports_state_reconciliation = False
+    harness = Harness([device_config], load=0)
+    harness.controller.run_startup_ac_mode_reconcile_once = Mock()
+    writes = []
+    harness.controller.set_output_limit = lambda dev, value: writes.append(int(value))
+
+    harness.run(cycles=3, states=[charging_hardware_state()])
+
+    assert harness.controller.charge_direction.charging is False
+    assert writes, "the EMS left the device charging without writing anything"
+    assert writes[0] == 0
+
+    from ems.power_command import build_zensdk_power_operation
+    from ems.power_direction import AC_MODE_OUTPUT, OPERATION_IDLE
+
+    operation = build_zensdk_power_operation(writes[0])
+    assert operation.operation == OPERATION_IDLE
+    assert operation.properties["acMode"] == AC_MODE_OUTPUT
+    assert operation.properties["inputLimit"] == 0
+
+
+def test_a_charge_the_ems_itself_commanded_is_not_rewritten_every_cycle():
+    """The same reference must still suppress a no-op, or every cycle writes."""
+
+    device_config = charging_device()
+    harness = Harness([device_config], load=-900)
+    writes = []
+    harness.controller.set_output_limit = lambda dev, value: writes.append(int(value))
+    harness.run(cycles=20)
+    assert harness.controller.charge_direction.charging is True
+
+    # Telemetry now agrees with what was commanded: nothing left to say.
+    settled = charging_hardware_state()
+    settled.grid_input = abs(harness.controller.commanded_device_targets["WR1"])
+    settled.input_limit_w = settled.grid_input
+    before = len(writes)
+    harness.run(cycles=3, states=[settled], load=0)
+
+    assert len(writes) == before, writes[before:]
+
+
+class FollowingHardware:
+    """Telemetry that follows the command, the way a device does.
+
+    Every other test here holds the state fixed, which hides anything that only
+    goes wrong once the device actually reports what it was told.
+    """
+
+    def __init__(self, item):
+        self.state = item
+
+    def __call__(self, dev, value):
+        target = int(value)
+        if target < 0:
+            self.state.ac_mode = 1
+            self.state.ac_status = 2
+            self.state.input_limit_w = -target
+            self.state.grid_input = -target
+            self.state.output_limit = 0
+        else:
+            self.state.ac_mode = 2
+            self.state.ac_status = 1
+            self.state.input_limit_w = 0
+            self.state.grid_input = 0
+            self.state.output_limit = target
+
+
+def test_the_state_reconciler_does_not_fight_the_regulator_over_ac_mode():
+    """Two writers of acMode, once per loop, on the maintainer's own hardware.
+
+    The per-cycle default claim is `ac_output`, whose desired mode is
+    AC_MODE_OUTPUT. While the regulator holds a device in acMode 1 the
+    reconciler sees a mismatch and writes acMode 2 -- against the power command
+    writing acMode 1 -- so the relay is commanded back and forth every cycle.
+    Local-API installations have state reconciliation on by default, so this was
+    live; it stayed invisible because the tests' state-reconciliation gate is
+    shut and their telemetry never follows the command.
+    """
+
+    item = surplus_state()
+    item.ac_mode = 2
+    item.ac_status = 1
+    item.output_limit = 0
+    item.input_limit_w = 0
+    item.grid_input = 0
+
+    harness = Harness([charging_device()], load=-900)
+    harness.controller.device_state_writes_allowed = lambda dev: True
+    harness.controller.set_output_limit = FollowingHardware(item)
+
+    written = []
+    with patch(
+        "ems.controller.write_device_properties",
+        side_effect=lambda dev, properties, **kw: written.append(properties) or True,
+    ):
+        harness.run(cycles=25, states=[item])
+
+    assert harness.controller.charge_direction.charging is True
+    assert item.ac_mode == 1, "the device never reached charge mode"
+    assert [p for p in written if "acMode" in p] == []
+
+    intent = harness.controller.runtime_intents["WR1"]
+    assert intent.reason == REGULATOR_CHARGE_REASON
+    # None means "the power command owns this direction", not "output".
+    assert intent.desired_ac_mode is None
+    # True, or the regulator reads its own claim back as someone else's and
+    # refuses to keep charging the device it is charging.
+    assert intent.output_control_allowed is True
+
+
+def test_an_operator_park_still_takes_a_device_away_mid_charge():
+    """The regulator's claim must lose to a park, or the park does nothing."""
+
+    from ems.runtime_intents import (
+        PRIORITY_OPERATOR_PARK,
+        PRIORITY_REGULATOR,
+        ac_input_intent,
+        regulator_charge_intent,
+        resolve_device_intent,
+    )
+
+    assert PRIORITY_REGULATOR < PRIORITY_OPERATOR_PARK
+
+    winner = resolve_device_intent([
+        regulator_charge_intent("WR1", ems_commanded_charge=True),
+        ac_input_intent("WR1", "operator_park"),
+    ])
+
+    assert winner.reason == "operator_park"
+    assert winner.output_control_allowed is False
+
+
+def test_both_directions_ask_the_same_question_about_eligibility():
+    """Online, switched on, and not claimed by someone else are one rule.
+
+    They were written out twice, once per direction, and two copies of an
+    eligibility rule is how the two sides drift apart. They already had: the
+    discharge flag is read from the device config only, while the charge flag
+    reads runtime-state first -- nobody decided that, it is an artefact of two
+    code paths.
+    """
+
+    from ems.runtime_intents import ac_input_intent
+
+    harness = Harness([charging_device()], load=-900)
+    controller = harness.controller
+    dev = controller.devices[0]
+    item = surplus_state()
+    capability = detect_capabilities(item)
+
+    controller.runtime_intents = {}
+    assert controller.device_active(dev) is True
+    assert controller.device_intent_allows_command(dev) is True
+
+    # Offline takes the device away from both directions.
+    controller.device_online[dev.name] = False
+    assert controller.device_active(dev) is False
+    assert controller.device_charge_allowed(dev, item, capability) is False
+    controller.device_online[dev.name] = True
+
+    # So does a claim by someone else, and through the same predicate.
+    controller.runtime_intents = {dev.name: ac_input_intent(dev.name, "operator_park")}
+    assert controller.device_intent_allows_command(dev) is False
+    assert controller.device_charge_allowed(dev, item, capability) is False
+    assert controller.device_output_control_allowed(dev) is False
+
+
+def test_a_device_that_drifts_out_of_charge_mode_is_put_back():
+    """Standing the reconciler down is not "nobody watches".
+
+    The reconciler writes a bare acMode, and a direction change needs the atomic
+    set -- a bare `acMode: 1` would leave inputLimit at whatever it held, so the
+    device would sit in the charge direction drawing nothing. The power command
+    is the one that can write a complete direction change, and it notices the
+    drift because the write deadband measures the target against the *measured*
+    AC input rather than against an output the device does not produce.
+    """
+
+    item = surplus_state()
+    item.ac_mode = 2
+    item.ac_status = 1
+    item.output_limit = 0
+    item.input_limit_w = 0
+    item.grid_input = 0
+
+    harness = Harness([charging_device()], load=-900)
+    harness.controller.device_state_writes_allowed = lambda dev: True
+    hardware = FollowingHardware(item)
+    written = []
+
+    def record(dev, value):
+        written.append(int(value))
+        hardware(dev, value)
+
+    harness.controller.set_output_limit = record
+    with patch("ems.controller.write_device_properties", return_value=True):
+        harness.run(cycles=20, states=[item])
+        assert harness.controller.charge_direction.charging is True
+        assert item.ac_mode == 1
+
+        # The device falls out of charge mode on its own: a vendor-app touch, a
+        # reset, a firmware decision. Nothing the EMS did.
+        item.ac_mode = 2
+        item.ac_status = 1
+        item.input_limit_w = 0
+        item.grid_input = 0
+        item.output_limit = 0
+        before = len(written)
+        harness.run(cycles=1, states=[item])
+
+    assert written[before:], "the drift went uncorrected"
+    assert written[-1] < 0
+    assert item.ac_mode == 1, "the device was not put back into charge mode"
+    assert item.input_limit_w == abs(written[-1]), "put back without a charge power"
+
+
+def collapsed_band_harness(hysteresis):
+    """A closed loop whose meter responds to the charge, as a real one does."""
+
+    class RespondingMeter:
+        def __init__(self, surplus):
+            self.surplus = surplus
+            self.charge = 0
+
+        def get_power(self):
+            return self.surplus + self.charge
+
+    item = surplus_state()
+    item.ac_mode = 2
+    item.ac_status = 1
+    item.output_limit = 0
+    item.input_limit_w = 0
+    item.grid_input = 0
+
+    harness = Harness([charging_device()], load=-200)
+    meter = RespondingMeter(-200)
+    harness.controller.shelly = meter
+    hardware = FollowingHardware(item)
+
+    def respond(dev, value):
+        meter.charge = -int(value) if int(value) < 0 else 0
+        hardware(dev, value)
+
+    harness.controller.set_output_limit = respond
+    harness.feature = {
+        **AC_CHARGE_CONTROL_DEFAULTS,
+        "enabled": True,
+        "charge_start_w": 150,
+        "charge_hysteresis_w": hysteresis,
+    }
+    return harness, item
+
+
+def count_direction_changes(harness, item, cycles):
+    changes = 0
+    previous = harness.controller.charge_direction.charging
+    for _ in range(cycles):
+        harness.run(cycles=1, states=[item])
+        now = harness.controller.charge_direction.charging
+        if now != previous:
+            changes += 1
+        previous = now
+    return changes
+
+
+def test_the_shipped_band_does_not_flutter_against_a_steady_surplus():
+    harness, item = collapsed_band_harness(50)
+
+    assert count_direction_changes(harness, item, 200) <= 2
+
+
+def test_a_collapsed_band_flutters_and_the_rate_cap_is_what_bounds_it():
+    """Entry and exit at the same threshold defeats the asymmetry entirely.
+
+    Kept as a test rather than only as a config warning: it records what the
+    hourly cap is actually for, and that it holds.
+    """
+
+    harness, item = collapsed_band_harness(0)
+
+    changes = count_direction_changes(harness, item, 200)
+
+    assert changes > 10, changes
+    assert len(harness.controller.charge_direction.entries) <= 12
+
+
+def test_the_rate_limit_is_said_once_per_episode_not_once_per_cycle():
+    """Sixty identical lines bury every other event instead of surfacing this one."""
+
+    harness, item = collapsed_band_harness(0)
+
+    with patch("ems.controller.log_event") as log:
+        for _ in range(200):
+            harness.run(cycles=1, states=[item])
+
+    warnings = [
+        call
+        for call in log.call_args_list
+        if call.args[1:2] == ("ac_charge_entry_rate_limited",)
+        and call.args[0] == logging.WARNING
+    ]
+
+    assert 0 < len(warnings) <= 3, len(warnings)
+
+
+def test_a_device_that_stops_answering_hands_its_share_to_the_others():
+    """Offline is a signal the allocator acts on, unlike "draws nothing".
+
+    Its capacity leaves the total, its target collapses to zero, the remaining
+    device takes up the slack, and the write it can no longer receive is skipped
+    rather than attempted. The direction itself holds -- the surplus is still
+    there and something can still absorb it.
+    """
+
+    items = [surplus_state(), surplus_state()]
+    for item in items:
+        item.ac_mode = 2
+        item.ac_status = 1
+        item.output_limit = 0
+        item.input_limit_w = 0
+        item.grid_input = 0
+
+    harness = Harness(
+        [charging_device("A"), charging_device("B")], load=-1200
+    )
+    hardware = [FollowingHardware(items[0]), FollowingHardware(items[1])]
+    harness.controller.set_output_limit = lambda dev, value: hardware[
+        0 if dev.name == "A" else 1
+    ](dev, value)
+
+    harness.run(cycles=20, states=items)
+    assert harness.controller.charge_direction.charging is True
+    assert harness.controller.commanded_device_targets["B"] < 0
+    shared_capacity = harness.controller.charge_capacity_w
+
+    # B stops answering: no telemetry at all, which is how the real fetch
+    # reports an unreachable device.
+    harness.run(cycles=4, states=[items[0], None])
+
+    assert harness.controller.device_online["B"] is False
+    assert harness.controller.charge_capacity_w < shared_capacity
+    assert harness.controller.commanded_device_targets["B"] == 0
+    assert harness.controller.commanded_device_targets["A"] < 0
+    assert harness.controller.charge_direction.charging is True
+
+
+def test_the_full_charge_assist_takes_a_device_away_mid_charge():
+    """Two features want the same AC direction; the ladder decides, once.
+
+    The assist outranks the regulator, and its claim forbids output control, so
+    the regulator stops commanding the device in the same cycle rather than both
+    writing a direction at it.
+    """
+
+    from ems.runtime_intents import ac_input_intent
+
+    item = surplus_state()
+    item.ac_mode = 2
+    item.ac_status = 1
+    item.output_limit = 0
+    item.input_limit_w = 0
+    item.grid_input = 0
+
+    harness = Harness([charging_device()], load=-900)
+    harness.controller.set_output_limit = FollowingHardware(item)
+    harness.run(cycles=20, states=[item])
+
+    assert harness.controller.charge_direction.charging is True
+    assert harness.controller.runtime_intents["WR1"].reason == REGULATOR_CHARGE_REASON
+
+    harness.controller.full_charge_assist_intent = lambda dev: ac_input_intent(
+        dev.name, "full_charge_assist", setpoint_w=600
+    )
+    harness.run(cycles=3, states=[item])
+
+    assert harness.controller.runtime_intents["WR1"].reason == "full_charge_assist"
+    assert harness.controller.commanded_device_targets["WR1"] == 0
+    assert harness.controller.charge_direction.charging is False
