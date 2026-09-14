@@ -2,6 +2,7 @@
 import argparse
 import logging
 import os
+import signal
 import sys
 import time
 
@@ -92,6 +93,49 @@ def parse_args():
     )
 
     return parser.parse_args()
+
+
+def install_stop_signal_handlers():
+    """Let a stop signal unwind the loop instead of killing the process.
+
+    Python's default SIGTERM action terminates immediately: no exception is
+    raised, so ``finally`` never runs. That is how every Docker-first
+    installation is stopped -- ``docker stop``, ``docker compose down``,
+    ``systemctl stop`` all send SIGTERM -- and the loop's ``finally`` is what
+    returns a device the EMS put into AC charge, closes the grid-meter client,
+    and stops the InfluxDB writer and the MQTT runtimes. Without a handler the
+    documented "clean shutdown" only ever happened on Ctrl-C, which raises
+    KeyboardInterrupt and does unwind.
+
+    Raising SystemExit from the handler makes a stop signal behave the way Ctrl-C
+    already did. It is a BaseException, so an ``except Exception`` around the
+    loop cannot swallow it.
+
+    Returns a record of which signal stopped the loop, because the two kinds of
+    stop want different things from a running AC charge -- see the ``finally``
+    in :func:`main`.
+    """
+
+    stopped_by = {"signal": None}
+
+    def _stop(signum, _frame):
+        name = getattr(signal.Signals(signum), "name", signum)
+        stopped_by["signal"] = name
+        log_event(logging.INFO, "ems_stop_signal", signal=name)
+        raise SystemExit(0)
+
+    for name in ("SIGTERM", "SIGHUP"):
+        handled = getattr(signal, name, None)
+        if handled is None:
+            continue
+        try:
+            signal.signal(handled, _stop)
+        except (OSError, ValueError):
+            # Not the main thread, or the platform has no such signal. The loop
+            # still exits on its own conditions; only the unwind is lost.
+            log_event(logging.DEBUG, "ems_stop_signal_unavailable", signal=name)
+
+    return stopped_by
 
 
 def main():
@@ -468,6 +512,8 @@ def main():
         zendure_mqtt_runtime=zendure_mqtt_runtime
     )
 
+    stopped_by = install_stop_signal_handlers()
+
     log_event(logging.INFO, "ems_started")
 
     start_time = time.time()
@@ -519,9 +565,30 @@ def main():
                 )
                 break
     finally:
-        # A charge this EMS commanded must not outlive it: the device would keep
-        # drawing from the grid until its own SoC ceiling stopped it.
-        ems.release_charging_devices()
+        # Who ended the run decides what happens to a running AC charge.
+        #
+        # A stop someone asked for is usually a restart -- an update, a config
+        # change, a host reboot -- and the operator's instruction is that the
+        # last state survives it. Discharging devices already do: nothing resets
+        # their outputLimit, here or anywhere. Charging is the only state this
+        # block ever touched, so honouring that means leaving it alone.
+        #
+        # A stop the EMS reached by itself is different: --once, --max-cycles,
+        # --duration, or an unhandled error. Nothing is coming back to supervise
+        # the charge, so the device is returned.
+        #
+        # The window is bounded either way -- the charge ends at the device's
+        # own SoC ceiling -- but an update that never completes leaves it
+        # drawing until then. See docs/user/safety.md.
+        if stopped_by["signal"]:
+            log_event(
+                logging.INFO,
+                "ac_charge_kept_across_stop",
+                signal=stopped_by["signal"],
+                reason="operator_stop_preserves_device_state",
+            )
+        else:
+            ems.release_charging_devices()
         # Release the grid-meter client's runtime resources (the MQTT grid meter
         # owns a network loop/connection/thread; HTTP clients own none). Safe and
         # idempotent, and never masks a primary shutdown error.
