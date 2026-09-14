@@ -2,6 +2,7 @@
 import logging
 import time
 from collections import deque
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from ems import config as cfg
@@ -14,10 +15,12 @@ from ems.mqtt_control.dispatch import WriteDispatchStatus, dispatch_device_write
 from ems.property_writes import write_device_properties
 from ems.models import DeviceCapabilities
 from ems.runtime_intents import (
+    PRIORITY_MAINTENANCE,
     DeviceRuntimeIntent,
     DeviceRuntimeRole,
     ac_input_intent,
     ac_output_intent,
+    resolve_device_intent,
     runtime_intent_from_role,
 )
 from ems.state_store import BatteryFullChargeStateStore
@@ -1058,6 +1061,11 @@ class EMSController:
         intent = runtime_intent_from_role(dev.name, role, reason)
 
         if intent:
+            if intent.role is DeviceRuntimeRole.AC_INPUT:
+                return replace(
+                    intent,
+                    setpoint_w=self.runtime_ac_charge_setpoint(dev.name)
+                )
             return intent
 
         log_event(
@@ -1224,27 +1232,18 @@ class EMSController:
             )
             return False
 
-    def desired_runtime_input_limit(self, dev, intent):
-        """Return desired runtime AC charge inputLimit, or None."""
+    def runtime_ac_charge_setpoint(self, device_name):
+        """Return the operator's runtime AC charge power, or None.
 
-        if intent.role is not DeviceRuntimeRole.AC_INPUT:
-            return None
-
-        if intent.reason == FULL_CHARGE_ASSIST_REASON:
-            return cfg.safe_int(
-                cfg.BATTERY_FULL_CHARGE_ASSIST_CONFIG.get(
-                    "ac_charge_power",
-                    200
-                ),
-                200,
-                minimum=0
-            )
+        None means no value is commanded: an unset, empty or invalid entry
+        leaves the existing inputLimit alone rather than guessing one.
+        """
 
         if not self.runtime_state:
             return None
 
         raw_value = self.runtime_state.get_device(
-            dev.name,
+            device_name,
             "ac_charge_power_w",
             None
         )
@@ -1256,7 +1255,7 @@ class EMSController:
             log_event(
                 logging.WARNING,
                 "runtime_ac_charge_power_invalid",
-                device=dev.name,
+                device=device_name,
                 value=raw_value,
                 reason="not_integer"
             )
@@ -1268,7 +1267,7 @@ class EMSController:
             log_event(
                 logging.WARNING,
                 "runtime_ac_charge_power_invalid",
-                device=dev.name,
+                device=device_name,
                 value=raw_value,
                 reason="not_integer"
             )
@@ -1278,7 +1277,7 @@ class EMSController:
             log_event(
                 logging.WARNING,
                 "runtime_ac_charge_power_invalid",
-                device=dev.name,
+                device=device_name,
                 value=raw_value,
                 reason="negative"
             )
@@ -1292,7 +1291,7 @@ class EMSController:
         if not self.state_reconciliation_supported(dev, "runtime_ac_charge_power"):
             return True
 
-        desired_input_limit = self.desired_runtime_input_limit(dev, intent)
+        desired_input_limit = intent.setpoint_w
         if desired_input_limit is None:
             return True
 
@@ -1711,18 +1710,32 @@ class EMSController:
             state=state
         )
 
-    def full_charge_assist_intent(self, dev, base_intent):
+    def full_charge_assist_ac_charge_power(self):
+        return cfg.safe_int(
+            self.full_charge_assist_config().get("ac_charge_power", 200),
+            200,
+            minimum=0
+        )
+
+    def full_charge_assist_intent(self, dev):
+        """Return the assist's claim on ``dev``, or None when it has none."""
+
         store = self.battery_full_charge_store
         if not store:
-            return base_intent
+            return None
 
         record = store.get_device_state(dev.name)
         if not record or not record.get("has_battery"):
-            return base_intent
+            return None
 
         if record.get("full_charge_assist_active"):
             if self.full_charge_assist_config().get("enable_ac_charge_mode", True):
-                return ac_input_intent(dev.name, FULL_CHARGE_ASSIST_REASON)
+                return ac_input_intent(
+                    dev.name,
+                    FULL_CHARGE_ASSIST_REASON,
+                    setpoint_w=self.full_charge_assist_ac_charge_power(),
+                    priority=PRIORITY_MAINTENANCE
+                )
 
             return DeviceRuntimeIntent(
                 device=dev.name,
@@ -1730,7 +1743,7 @@ class EMSController:
                 reason=FULL_CHARGE_ASSIST_REASON,
                 desired_ac_mode=None,
                 output_control_allowed=False,
-                priority=100
+                priority=PRIORITY_MAINTENANCE
             )
 
         if (
@@ -1745,10 +1758,10 @@ class EMSController:
                     2 if record.get("ac_mode_restore_pending") else None
                 ),
                 output_control_allowed=False,
-                priority=100
+                priority=PRIORITY_MAINTENANCE
             )
 
-        return base_intent
+        return None
 
     def update_full_charge_assist_ac_pending(self, dev, intent, write_ok, now):
         if not write_ok or not self.battery_full_charge_store:
@@ -3321,10 +3334,10 @@ class EMSController:
             if not state:
                 continue
 
-            intent = self.full_charge_assist_intent(
-                dev,
-                self.get_device_runtime_intent(dev, state)
-            )
+            intent = resolve_device_intent([
+                self.get_device_runtime_intent(dev, state),
+                self.full_charge_assist_intent(dev),
+            ])
             self.runtime_intents[dev.name] = intent
             ac_mode_write_ok = self.reconcile_ac_mode_intent(dev, state, intent)
             self.update_full_charge_assist_ac_pending(
