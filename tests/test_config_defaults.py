@@ -590,6 +590,11 @@ def test_config_upgrade_render_uses_device_template_layout():
     ) in text
     assert (
         '      "battery_kwh": 1.92,\n\n'
+        '      "_comment_ac_directions": [\n'
+        '        "Which AC directions EMS may command on this device.",'
+    ) in text
+    assert (
+        '      "max_charge_power_w": 0,\n\n'
         '      "_comment_soc": [\n'
         '        "Battery SOC limits in percent.",'
     ) in text

@@ -94,6 +94,21 @@ BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
     "state_database_path": "data/ems_state.sqlite"
 }
 
+AC_CHARGE_CONTROL_DEFAULTS = {
+    # Off by default: turning this on lets the EMS draw from the grid. Entry is
+    # deliberate and exit is immediate, so the two thresholds are never equal —
+    # the lower edge is derived from the hysteresis rather than configured, which
+    # makes an inverted pair impossible to express.
+    "enabled": False,
+    "charge_start_w": 150,
+    "charge_hysteresis_w": 50,
+    "entry_confirm_cycles": 3,
+    "max_charge_entries_per_hour": 12,
+    "max_total_charge_power_w": 1200,
+    "charge_ramp_up_w_per_cycle": 400,
+    "charge_ramp_down_w_per_cycle": 600
+}
+
 CONFIG_UPGRADE_DEFAULTS = {
     "on_startup": "check",
     "backup_before_apply": True,
@@ -623,6 +638,7 @@ def default_safe_config():
         "battery_full_charge_assist": copy.deepcopy(
             BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
         ),
+        "ac_charge_control": copy.deepcopy(AC_CHARGE_CONTROL_DEFAULTS),
         "config_upgrade": copy.deepcopy(CONFIG_UPGRADE_DEFAULTS),
         "influxdb": copy.deepcopy(INFLUXDB_DEFAULTS),
         "devices": [],
@@ -1670,6 +1686,7 @@ DASHBOARD_CONFIG = DASHBOARD_DEFAULTS.copy()
 INFLUXDB_CONFIG = None
 ENERGY_SAVINGS_CONFIG = ENERGY_SAVINGS_DEFAULTS.copy()
 BATTERY_FULL_CHARGE_ASSIST_CONFIG = BATTERY_FULL_CHARGE_ASSIST_DEFAULTS.copy()
+AC_CHARGE_CONTROL_CONFIG = AC_CHARGE_CONTROL_DEFAULTS.copy()
 OFFGRID_SOCKET_MODES = {
     "standard": 0,
     "eco": 1,
@@ -1722,6 +1739,7 @@ def initialize(args, base_dir):
     global SOC_RECONCILE_INTERVAL, WINTER_CONFIG, DASHBOARD_CONFIG
     global INFLUXDB_CONFIG
     global ENERGY_SAVINGS_CONFIG, BATTERY_FULL_CHARGE_ASSIST_CONFIG
+    global AC_CHARGE_CONTROL_CONFIG
     global ZENDURE_CONFIG, ZENDURE_MQTT_CONFIG, SHELLY_IP, GRID_METER_CONFIG
 
     ARGS = args
@@ -1842,6 +1860,10 @@ def initialize(args, base_dir):
     BATTERY_FULL_CHARGE_ASSIST_CONFIG = normalize_battery_full_charge_assist_config(
         CONFIG.get("battery_full_charge_assist", {})
     )
+    AC_CHARGE_CONTROL_CONFIG = {
+        **AC_CHARGE_CONTROL_DEFAULTS,
+        **(CONFIG.get("ac_charge_control") or {})
+    }
     ZENDURE_CONFIG = CONFIG["devices"]
     zendure_mqtt_config = CONFIG.get("zendure_mqtt", {})
     ZENDURE_MQTT_CONFIG = zendure_mqtt_config if isinstance(zendure_mqtt_config, dict) else {}
@@ -2899,6 +2921,39 @@ def resolve_influx_token(influxdb_config, environ=None):
         return str(environ.get(env_name, "")).strip()
 
     return ""
+
+
+def ac_charge_control_int(key, default=0, minimum=None):
+    return safe_int(
+        AC_CHARGE_CONTROL_CONFIG.get(key, default), default, minimum=minimum
+    )
+
+
+def ac_charge_control_enabled(runtime_state=None):
+    """Whether AC charging from surplus is switched on.
+
+    Runtime state wins so an operator can stop the EMS drawing from the grid
+    without a restart; config is the fallback.
+    """
+
+    if runtime_state:
+        section = runtime_state.data.get("ac_charge_control", {})
+        if isinstance(section, dict) and "enabled" in section:
+            return safe_bool(section.get("enabled"), False)
+
+    return safe_bool(AC_CHARGE_CONTROL_CONFIG.get("enabled", False), False)
+
+
+def ac_charge_stop_w():
+    """Lower edge of the charge band, derived so it can never sit above the start.
+
+    Configuring both edges would allow an inverted pair; configuring the start
+    and the hysteresis cannot.
+    """
+
+    start = ac_charge_control_int("charge_start_w", 150, minimum=0)
+    hysteresis = ac_charge_control_int("charge_hysteresis_w", 50, minimum=0)
+    return max(0, start - hysteresis)
 
 
 def winter_config_bool(key, default=False):

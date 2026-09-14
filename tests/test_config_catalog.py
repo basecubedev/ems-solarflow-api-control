@@ -190,6 +190,7 @@ def test_default_template_order_and_legacy_ha_defaults():
         "zendure_mqtt",
         "winter",
         "battery_full_charge_assist",
+        "ac_charge_control",
         "energy_savings",
         "dashboard",
         "influxdb",

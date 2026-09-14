@@ -15,6 +15,7 @@ from ems.logging_utils import log_event
 from ems.mqtt_control.dispatch import WriteDispatchStatus, dispatch_device_write
 from ems.property_writes import write_device_properties
 from ems.models import BATTERY_ABSENT, BATTERY_PRESENT, DeviceCapabilities
+from ems.power_direction import AC_MODE_INPUT, AC_MODE_OUTPUT
 from ems.runtime_intents import (
     PRIORITY_MAINTENANCE,
     DeviceRuntimeIntent,
@@ -416,7 +417,7 @@ class EMSController:
         if not self.runtime_device_bool(dev.name, "enabled", True):
             return "device_disabled"
 
-        if not self.device_output_control_allowed_by_intent(dev.name):
+        if not self.device_output_control_allowed(dev):
             return self.runtime_role_block_reason(dev.name)
 
         return None
@@ -517,7 +518,7 @@ class EMSController:
         filtered = []
 
         for dev, capability in zip(self.devices, capabilities):
-            if self.device_output_control_allowed_by_intent(dev.name):
+            if self.device_output_control_allowed(dev):
                 filtered.append(capability)
                 continue
 
@@ -694,7 +695,7 @@ class EMSController:
         if not self.output_control_bool("device_ramp_enabled", True):
             adjusted_targets = []
             for dev, target in zip(self.devices, targets):
-                if not self.device_output_control_allowed_by_intent(dev.name):
+                if not self.device_output_control_allowed(dev):
                     target = 0
                 self.commanded_device_targets[dev.name] = target
                 adjusted_targets.append(target)
@@ -729,7 +730,7 @@ class EMSController:
         ramped_targets = []
 
         for dev, target in zip(self.devices, targets):
-            if not self.device_output_control_allowed_by_intent(dev.name):
+            if not self.device_output_control_allowed(dev):
                 self.commanded_device_targets[dev.name] = 0
                 ramped_targets.append(0)
                 continue
@@ -1243,8 +1244,20 @@ class EMSController:
         )
         return ac_output_intent(dev.name, "invalid_runtime_role_fallback")
 
-    def device_output_control_allowed_by_intent(self, dev_name):
-        intent = self.runtime_intents.get(dev_name)
+    def device_output_control_allowed(self, dev):
+        """Whether the EMS may command output on ``dev`` this cycle.
+
+        Two independent noes, deliberately not one. The operator's standing
+        permission is a property of the device; whoever owns its AC mode right
+        now is a property of the cycle. Folding the permission into the intent
+        ladder would let a higher-priority claim re-enable output on a device
+        the operator forbade.
+        """
+
+        if not getattr(dev, "ac_discharge_enabled", True):
+            return False
+
+        intent = self.runtime_intents.get(dev.name)
         if intent is None:
             return True
 
@@ -1331,8 +1344,8 @@ class EMSController:
             return True
 
         if (
-            desired_ac_mode == 2
-            and current_ac_mode not in (1, 2)
+            desired_ac_mode == AC_MODE_OUTPUT
+            and current_ac_mode not in (AC_MODE_INPUT, AC_MODE_OUTPUT)
             and (current_ac_mode != 0 or startup_reconcile)
         ):
             log_event(
@@ -1342,7 +1355,11 @@ class EMSController:
             )
             return False
 
-        if current_ac_mode == 1 and desired_ac_mode == 2 and startup_reconcile:
+        if (
+            current_ac_mode == AC_MODE_INPUT
+            and desired_ac_mode == AC_MODE_OUTPUT
+            and startup_reconcile
+        ):
             skip_reason = startup_ac_mode_initialization_blocker(state)
             if skip_reason:
                 log_event(
@@ -2570,7 +2587,7 @@ class EMSController:
             fields["grid_off_mode"] = dev.grid_off_mode
 
         if (
-            int(state.ac_mode) != 2
+            int(state.ac_mode) != AC_MODE_OUTPUT
             or firmware_recovery_or_ac_charge_active(state)
         ):
             log_event(
@@ -3826,7 +3843,7 @@ class EMSController:
                 elif block_reason:
                     device_explanation.write_decision = "blocked"
                     device_explanation.write_reason = block_reason
-                    if not self.device_output_control_allowed_by_intent(dev.name):
+                    if not self.device_output_control_allowed(dev):
                         device_explanation.limiting_reason = (
                             self.runtime_role_block_reason(dev.name)
                         )
@@ -3921,7 +3938,7 @@ class EMSController:
                 )
                 continue
 
-            if not self.device_output_control_allowed_by_intent(dev.name):
+            if not self.device_output_control_allowed(dev):
                 intent = self.runtime_intents.get(dev.name)
                 log_event(
                     logging.INFO,

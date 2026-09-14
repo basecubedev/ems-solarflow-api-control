@@ -201,7 +201,9 @@ def main():
             d.get("max_power", cfg.MAX_DEVICE_POWER),
             d.get("pv_kwp", 1.0),
             d.get("battery_kwh", 1.0),
-            d.get("pv_priority_factor", 1.0)
+            d.get("pv_priority_factor", 1.0),
+            hardware_profile=d.get("hardware_profile"),
+            ac_discharge_enabled=d.get("ac_discharge_enabled", True),
         )
         for d in cfg.http_control_device_configs()
     ]

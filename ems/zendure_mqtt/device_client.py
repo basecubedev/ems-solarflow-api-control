@@ -162,6 +162,7 @@ class ZendureMqttDeviceClient:
         serial_number=None,
         min_soc=0,
         max_soc=0,
+        ac_discharge_enabled=True,
         smart_mode=1,
         grid_off_mode=None,
         max_power=None,
@@ -271,6 +272,7 @@ class ZendureMqttDeviceClient:
         self.control_gate = control_gate_for_broker_source(source)
         self.min_soc = min_soc
         self.max_soc = max_soc
+        self.ac_discharge_enabled = bool(ac_discharge_enabled)
         self.smart_mode = smart_mode
         self.grid_off_mode = grid_off_mode
         self.max_power = max_power or cfg.MAX_DEVICE_POWER
