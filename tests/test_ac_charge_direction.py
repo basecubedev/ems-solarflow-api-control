@@ -299,3 +299,30 @@ def test_charging_does_not_exit_on_its_own_balanced_meter():
         )
         assert decision.charging is True, index
         state = decision.state
+
+
+def test_the_stop_threshold_is_inclusive():
+    """Exactly on the edge is already below it.
+
+    A device reporting a 1000 W charge ceiling against a 900 W house load lands
+    the desired total on precisely minus the stop threshold. A strict comparison
+    kept charging for one more cycle, which is where an exit documented as
+    immediate quietly stops being immediate.
+    """
+
+    charging = ChargeDirectionState(charging=True, entries=(0.0,))
+
+    on_the_edge = decide_charge_direction(
+        charging, charging_possible=True, commanded_total_w=-1000,
+        desired_total_w=-SETTINGS.stop_w, filtered_load_w=900, now=10.0,
+        settings=SETTINGS,
+    )
+    assert on_the_edge.charging is False
+    assert on_the_edge.reason == REASON_LEFT_BELOW_STOP
+
+    just_inside = decide_charge_direction(
+        charging, charging_possible=True, commanded_total_w=-1000,
+        desired_total_w=-SETTINGS.stop_w - 1, filtered_load_w=899, now=10.0,
+        settings=SETTINGS,
+    )
+    assert just_inside.charging is True

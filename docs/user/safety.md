@@ -91,6 +91,10 @@ maximum SoC. It still costs whatever that energy costs. If the EMS is stopped
 abruptly while charging, check the device and stop it in the Zendure app or with
 `emsctl.py device WR1 ac-mode output` once the EMS is back.
 
+The same applies to a device that drops off the network mid-charge: the EMS
+cannot write to a device it cannot reach, so that one keeps charging until it is
+reachable again. The remaining devices adapt in the same cycle.
+
 The EMS itself recovers on the next start: a device found charging with a
 healthy battery is taken back into output mode. A device found charging at its
 discharge floor is left alone, because there the firmware is recovering it.

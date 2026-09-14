@@ -118,7 +118,8 @@
       "_comment_ac_directions": [
         "Which AC directions EMS may command on this device.",
         "Discharge is on by default.",
-        "Charging also needs a model with an established AC charge path."
+        "Charging also needs a model with an established AC charge path.",
+        "max_charge_power_w 0 uses the limit the device reports for itself."
       ],
       "ac_discharge_enabled": true,
       "ac_charge_enabled": false,
@@ -149,7 +150,8 @@
       "_comment_ac_directions": [
         "Which AC directions EMS may command on this device.",
         "Discharge is on by default.",
-        "Charging also needs a model with an established AC charge path."
+        "Charging also needs a model with an established AC charge path.",
+        "max_charge_power_w 0 uses the limit the device reports for itself."
       ],
       "ac_discharge_enabled": true,
       "ac_charge_enabled": false,

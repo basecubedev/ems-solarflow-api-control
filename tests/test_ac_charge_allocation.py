@@ -25,8 +25,14 @@ pytestmark = [
 ]
 
 
-def _state(soc, max_soc=100):
-    return SimpleNamespace(soc=soc, max_soc=max_soc)
+def _state(soc, max_soc=100, pack_num=2, pack_in=0, charge_max_limit_w=1000):
+    return SimpleNamespace(
+        soc=soc,
+        max_soc=max_soc,
+        pack_num=pack_num,
+        pack_in=pack_in,
+        charge_max_limit_w=charge_max_limit_w,
+    )
 
 
 def _device(max_power=800, max_charge_power_w=0, battery_kwh=2.0):
@@ -56,6 +62,24 @@ def test_weight_is_the_mirror_of_the_discharge_weight():
     assert charge_headroom_weight(_state(20), _device(), _capability(False)) == 0
     # An unknown ceiling is not an invitation to guess one.
     assert charge_headroom_weight(_state(20, max_soc=0), _device(), _capability()) == 0
+
+
+def test_a_device_without_a_battery_is_never_allocated_a_charge():
+    """The mirrored formula is not mirrored in its safety.
+
+    On the discharge side a device with no pack reads as "below the floor" and
+    is skipped by accident. On the charge side the same arithmetic reads as
+    "completely empty" and would hand it the whole charge — telling hardware
+    with nowhere to put the energy to draw from the grid. Battery presence is
+    taken from telemetry, the same way the full-charge assist takes it.
+    """
+
+    no_pack = _state(soc=0, pack_num=0)
+
+    assert charge_headroom_weight(no_pack, _device(), _capability()) == 0
+    assert allocate_charge_targets(
+        600, [no_pack], [_device()], [_capability()], [True]
+    ) == [0]
 
 
 def test_the_emptier_battery_takes_the_larger_share():
@@ -100,12 +124,38 @@ def test_nothing_is_allocated_when_no_device_can_take_it():
     assert targets == [0]
 
 
-def test_an_explicit_limit_always_outranks_the_derived_one():
-    """The precedence is the contract a later model catalogue must not break."""
+def test_the_charge_limit_comes_from_the_device_not_from_its_output_rating():
+    """Feeding out and drawing in are different paths with different ratings.
 
-    assert resolve_max_charge_power_w(_device(max_power=800)) == 800
-    assert resolve_max_charge_power_w(_device(max_power=800, max_charge_power_w=300)) == 300
-    # Zero means "derive", not "no charging".
-    assert resolve_max_charge_power_w(_device(max_power=800, max_charge_power_w=0)) == 800
-    # Unreadable values never invent a limit.
-    assert resolve_max_charge_power_w(_device(max_power="?", max_charge_power_w="?")) == 0
+    A SolarFlow 800 Pro 2 reports an 800 W output limit and a 1000 W charge
+    ceiling, and the reason they are not interchangeable is physical: an
+    inverter's output adds to the house current on a circuit whose breaker sits
+    upstream of the injection point, while a charge is drawn through that
+    breaker and protected by it.
+    """
+
+    device = _device(max_power=800)
+    reports_1000 = _state(soc=50, charge_max_limit_w=1000)
+
+    assert resolve_max_charge_power_w(device, reports_1000) == 1000
+    # The output rating is never borrowed as a charge rating.
+    assert resolve_max_charge_power_w(device, _state(soc=50, charge_max_limit_w=0)) == 0
+
+
+def test_an_operator_may_go_below_the_device_ceiling_but_not_above_it():
+    reports_1000 = _state(soc=50, charge_max_limit_w=1000)
+
+    assert resolve_max_charge_power_w(_device(max_charge_power_w=400), reports_1000) == 400
+    # Above the ceiling the device decides: it is the one that has to accept it.
+    assert resolve_max_charge_power_w(_device(max_charge_power_w=3000), reports_1000) == 1000
+    # Without a reported ceiling an explicit setting still stands on its own.
+    assert resolve_max_charge_power_w(
+        _device(max_charge_power_w=600), _state(soc=50, charge_max_limit_w=0)
+    ) == 600
+
+
+def test_a_device_that_reports_no_ceiling_charges_nothing():
+    """Every model that can charge reports one, so an absent value is a stranger."""
+
+    assert resolve_max_charge_power_w(_device(max_power=800), None) == 0
+    assert resolve_max_charge_power_w(_device(max_power="?"), _state(soc=50, charge_max_limit_w="?")) == 0
