@@ -577,10 +577,30 @@ See [control-logic.md](control-logic.md) for the direction rules and
 |---|---|---|
 | `ac_discharge_enabled` | `true` | Whether the EMS may command this device to supply the house. Today's behaviour, written down. |
 | `ac_charge_enabled` | `false` | Whether this device may be charged from surplus. Also runtime-toggleable. |
-| `max_charge_power_w` | `0` | Highest charging power for this device. `0` derives it from `max_power`. |
+| `max_charge_power_w` | `0` | Highest charging power for this device. `0` uses the ceiling the device reports for itself. |
 
-An explicit `max_charge_power_w` always outranks a derived one, so a per-model
-limit added later cannot override a value somebody set by hand.
+### Why the charge limit is not the output limit
+
+The two describe different paths with different ratings, and the difference is
+physical, not bookkeeping.
+
+Feeding out, an inverter's current **adds** to the house current on a circuit
+whose breaker sits upstream of the injection point — the breaker never sees the
+inverter's contribution, which is why a balcony plant is limited at the source.
+Charging, the current is drawn through that breaker and protected by it.
+
+So the EMS never borrows one as the other. A SolarFlow 800 Pro 2 reports an
+800 W output limit and a 1000 W charge ceiling, and both numbers are correct.
+
+| Precedence | Source |
+|---|---|
+| 1 | `devices[].max_charge_power_w`, when set — capped by the device's ceiling, because the device has to accept the command |
+| 2 | The ceiling the device reports (`chargeMaxLimit`) |
+| — | A device that reports no ceiling charges nothing, and setting the key explicitly unblocks it |
+
+`ac_charge_control.max_total_charge_power_w` is a different question again: it is
+the **installation's** limit — your circuit and your fuse — not the devices'.
+Nothing in the EMS can measure that, so it stays a number you set.
 
 Charging additionally requires the device's resolved hardware model to have an
 established AC charge path. That is a property of the model, not of the

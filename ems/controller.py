@@ -11,6 +11,7 @@ from ems.ac_charge_control import (
     ChargeDirectionSettings,
     ChargeDirectionState,
     allocate_charge_targets,
+    charge_headroom_weight,
     decide_charge_direction,
     resolve_max_charge_power_w,
 )
@@ -118,6 +119,12 @@ class EMSController:
         self.last_control_explanation = None
         self.runtime_intents = {}
         self.charge_direction = ChargeDirectionState()
+        # What the devices that may charge could actually take, from the cycle
+        # that last decided the direction, and each device's resolved ceiling.
+        # Resolved once per cycle so the ramp and the clamp read one answer
+        # instead of re-deriving it from telemetry they do not carry.
+        self.charge_capacity_w = 0
+        self.device_charge_limits = {}
         for device in self.devices:
             set_observer = getattr(device, "set_dispatch_observer", None)
             if callable(set_observer):
@@ -504,6 +511,13 @@ class EMSController:
         if (
             raw_load > 0
             and not has_export_capacity
+            # Never freeze a charge in place. The hold exists so a positive load
+            # cannot ramp the discharge target up against devices that have
+            # nothing to give; a charge is the opposite situation, and it is the
+            # first thing that should give way when the house needs power. A
+            # charging device also reports no discharge capability at night,
+            # which is exactly when this would have bitten.
+            and self.commanded_total_w >= 0
         ):
             clamped = min(self.commanded_total_w, standby_total_w)
 
@@ -1223,14 +1237,22 @@ class EMSController:
 
         Zero unless the system is in charge direction, which is what keeps the
         integrator from winding down into a charge nobody decided to take.
+
+        While charging it is the smaller of the configured cap and what the
+        chargeable devices can actually accept. Commanding more than that is
+        windup with a delay attached: only the deliverable part flows, the meter
+        keeps reporting the unabsorbed surplus so the integrator stays pinned at
+        the cap, and the exit — which reads commanded plus load — then has to
+        climb the whole gap before it can fire.
         """
 
         if not self.charge_direction.charging:
             return 0
 
-        return -cfg.ac_charge_control_int(
+        configured = cfg.ac_charge_control_int(
             "max_total_charge_power_w", 1200, minimum=0
         )
+        return -min(configured, max(0, self.charge_capacity_w))
 
     def release_charging_devices(self):
         """Return every device this EMS put into charge, before shutting down.
@@ -1263,6 +1285,8 @@ class EMSController:
             self.commanded_device_targets[dev.name] = 0
 
         self.charge_direction = ChargeDirectionState()
+        self.charge_capacity_w = 0
+        self.device_charge_limits = {}
 
     def device_charge_floor_w(self, dev):
         """How far negative one device's target may go right now.
@@ -1276,7 +1300,7 @@ class EMSController:
         if not self.charge_direction.charging:
             return 0
 
-        return -resolve_max_charge_power_w(dev)
+        return -max(0, self.device_charge_limits.get(dev.name, 0))
 
     def device_model_supports_charge(self, dev):
         """Whether the device's resolved model declares an AC charge path.
@@ -1298,12 +1322,17 @@ class EMSController:
         profile = hardware_profile_by_name(profile_id) if profile_id else None
         return bool(profile and profile.supports_operation(OPERATION_CHARGE))
 
-    def device_charge_allowed(self, dev, capability):
+    def device_charge_allowed(self, dev, state, capability):
         """Every permission axis for one device, intersected.
 
-        Feature, operator, model, runtime capability, device activation and
-        whoever owns the AC mode. Any one of them saying no is enough, and the
-        model axis is last because it is the one an operator cannot override.
+        Feature, operator, model, runtime capability, device activation, whoever
+        owns the AC mode — and whether the device can absorb anything at all.
+        Any one of them saying no is enough.
+
+        Capacity belongs here and not only in the allocator: without it the
+        system would enter charge direction with nothing to allocate to, and the
+        integrator would wind down to its floor against a charge that never
+        happens.
         """
 
         if not cfg.ac_charge_control_enabled(self.runtime_state):
@@ -1327,6 +1356,19 @@ class EMSController:
         # charging is not the surplus regulator's to command.
         intent = self.runtime_intents.get(dev.name)
         if intent is not None and not intent.output_control_allowed:
+            return False
+
+        if charge_headroom_weight(state, dev, capability) <= 0:
+            return False
+
+        # Something outside the EMS is taking energy out of this pack. Only a
+        # charge we are not already running is refused for it: applying this to
+        # a running charge ended it on a single noisy sample, and re-entry then
+        # costs a full confirmation window.
+        already_charging = self.commanded_device_targets.get(dev.name, 0) < 0
+        if not already_charging and cfg.safe_int(
+            getattr(state, "pack_in", 0), 0, minimum=0
+        ) > 0:
             return False
 
         return self.device_model_supports_charge(dev)
@@ -1360,10 +1402,12 @@ class EMSController:
             **fields,
         )
 
-    def chargeable_device_flags(self, capabilities):
+    def chargeable_device_flags(self, states, capabilities):
         return [
             self.device_charge_allowed(
-                dev, capabilities[index] if index < len(capabilities) else None
+                dev,
+                states[index],
+                capabilities[index] if index < len(capabilities) else None,
             )
             for index, dev in enumerate(self.devices)
         ]
@@ -3922,7 +3966,12 @@ class EMSController:
             active_device_count=len(active_indexes)
         )
 
-        chargeable = self.chargeable_device_flags(capabilities)
+        chargeable = self.chargeable_device_flags(states, capabilities)
+        self.device_charge_limits = {
+            dev.name: resolve_max_charge_power_w(dev, states[index]) if allowed else 0
+            for index, (dev, allowed) in enumerate(zip(self.devices, chargeable))
+        }
+        self.charge_capacity_w = sum(self.device_charge_limits.values())
         charge_decision = decide_charge_direction(
             self.charge_direction,
             charging_possible=any(chargeable),

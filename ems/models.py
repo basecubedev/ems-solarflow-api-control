@@ -67,6 +67,9 @@ class DeviceState:
     dc_status: int
     grid_state: int
     input_limit_w: int = 0
+    # The device's own AC charge ceiling. It is not the output limit: drawing in
+    # and feeding out are different paths with different ratings.
+    charge_max_limit_w: int = 0
     # None when the device never reported the field; 0 is an observed "no pack".
     pack_num: int | None = None
     soc_status: int = 0
