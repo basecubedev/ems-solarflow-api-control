@@ -136,7 +136,6 @@ def test_the_kept_across_stop_line_names_what_is_still_drawing():
     false claim about the EMS's own output.
     """
 
-    import inspect
     from pathlib import Path
 
     source = Path(__file__).resolve().parents[1] / "ems-solarflow-api-control.py"
