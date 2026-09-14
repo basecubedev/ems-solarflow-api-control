@@ -40,6 +40,12 @@ INFLUX_SERIES = {
         "device_scoped": True,
         "collapse": "sum",
     },
+    "ac_charge": {
+        "measurement": "zendure_device",
+        "field": "grid_input",
+        "device_scoped": True,
+        "collapse": "sum",
+    },
     "soc": {
         "measurement": "zendure_device",
         "field": "soc",

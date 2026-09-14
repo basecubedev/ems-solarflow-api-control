@@ -23,7 +23,7 @@ const state = {
     chart: null,
     available: null,
     deviceOptions: [],
-    overlays: { soc: false, target: false, grid: false },
+    overlays: { soc: false, target: false, grid: false, ac_charge: false },
     custom: { active: false, start: null, end: null },
     // Zoom viewport (epoch seconds) when the user has zoomed into the chart;
     // null means live mode. applyingScale guards programmatic scale changes so
@@ -102,6 +102,7 @@ const ANALYTICS_SERIES_META = {
   soc: { label: "SoC", colorVar: "--accent", unit: "%", scaleId: "pct" },
   home: { label: "Home Load", colorVar: "--accent2", unit: "W" },
   grid: { label: "Grid Power", colorVar: "--grid", unit: "W" },
+  ac_charge: { label: "AC Charge", colorVar: "--grid", unit: "W" },
   target: { label: "EMS Target", colorVar: "--accent2", unit: "W" },
 };
 
@@ -113,6 +114,7 @@ const ANALYTICS_OVERLAYS = [
   { id: "soc", label: "SoC" },
   { id: "target", label: "EMS Target" },
   { id: "grid", label: "Grid Power" },
+  { id: "ac_charge", label: "AC Charge" },
 ];
 
 // Analytics sub-tabs. Each tab reuses the same chart + API; only the visible
@@ -120,9 +122,9 @@ const ANALYTICS_OVERLAYS = [
 const ANALYTICS_TABS = [
   { id: "overview", label: "Overview", series: ["pv", "output", "battery"], kpis: ["pv", "output", "charge", "discharge", "soc", "role"] },
   { id: "devices", label: "Devices", series: ["pv", "output", "battery"], kpis: ["pv", "output", "charge", "discharge", "soc", "role"] },
-  { id: "grid", label: "Grid", series: ["grid", "home"], kpis: ["gridImport", "gridExport", "home", "soc"] },
+  { id: "grid", label: "Grid", series: ["grid", "home", "ac_charge"], kpis: ["gridImport", "gridExport", "home", "acCharge", "soc"] },
   { id: "battery", label: "Battery", series: ["battery"], kpis: ["charge", "discharge", "soc", "role"] },
-  { id: "pv", label: "PV", series: ["pv"], kpis: ["pv", "pvPeak", "output", "soc"] },
+  { id: "pv", label: "PV", series: ["pv", "output"], kpis: ["pv", "pvPeak", "output", "soc"] },
 ];
 
 const _kpiPos = (value) => Math.max(0, value);
@@ -138,6 +140,7 @@ const ANALYTICS_KPIS = {
   gridImport: { label: (r) => `Grid Import · ${r}`, tone: "grid", compute: (d) => energyLabel(integrateSeries(d, "grid", _kpiPos)) },
   gridExport: { label: (r) => `Grid Export · ${r}`, tone: "grid", compute: (d) => energyLabel(integrateSeries(d, "grid", _kpiNeg)) },
   home: { label: (r) => `Home · ${r}`, tone: "output", compute: (d) => energyLabel(integrateSeries(d, "home", _kpiPos)) },
+  acCharge: { label: (r) => `AC Charge · ${r}`, tone: "grid", compute: (d) => energyLabel(integrateSeries(d, "ac_charge", _kpiPos)) },
   pvPeak: { label: () => "PV Peak", tone: "pv", compute: (d) => powerLabel(seriesPeak(d, "pv")) },
   // ``live`` KPIs read the cheap live snapshot (not the integrated series), so
   // they can be refreshed on every SSE/poll update without re-integrating.
@@ -416,12 +419,14 @@ function renderAggregatedSnapshot(snapshot) {
   const gridPower = Number(snapshot.grid_power_w || 0);
   const pvPower = Number(snapshot.pv_total_w || 0);
   const inverterPower = Number(snapshot.inverter_output_w || 0);
+  const chargePower = Math.abs(Number(snapshot.inverter_charge_w || 0));
   const homeLoad = Number(snapshot.home_load_w || 0);
   const soc = clamp(Number(snapshot.average_soc || 0), 0, 100);
 
   setText("flowPv", watts(snapshot.pv_total_w));
   setText("flowBattery", signedWatts(batteryFlow.valueW));
   setText("flowInverter", watts(snapshot.inverter_output_w));
+  setText("flowInverterState", inverterChargeLabel(chargePower));
   setText("flowHome", watts(snapshot.home_load_w));
   setText("flowGrid", watts(snapshot.grid_power_w));
   setText("flowBatterySoc", pct(soc));
@@ -435,7 +440,11 @@ function renderAggregatedSnapshot(snapshot) {
     flowActive("aggregate:visualBattery", batteryFlow.absW),
     batteryFlow.state
   );
-  setVisualState("visualInverter", flowActive("aggregate:visualInverter", inverterPower), "active");
+  setVisualState(
+    "visualInverter",
+    flowActive("aggregate:visualInverter", Math.max(inverterPower, chargePower)),
+    "active",
+  );
   setVisualState("visualHome", flowActive("aggregate:visualHome", homeLoad), "active");
   setVisualState(
     "visualGrid",
@@ -446,7 +455,8 @@ function renderAggregatedSnapshot(snapshot) {
   // The scale comes from the whole picture, not from one pipe, so that two
   // ribbons in the same view are comparable with each other.
   flowScaleReference(Math.max(
-    Math.abs(pvPower), batteryFlow.absW, Math.abs(inverterPower), Math.abs(gridPower)
+    Math.abs(pvPower), batteryFlow.absW, Math.abs(inverterPower),
+    Math.abs(gridPower), chargePower
   ));
 
   setPipe("pipePvInverter", pvPower, "forward");
@@ -454,7 +464,32 @@ function renderAggregatedSnapshot(snapshot) {
   // animation, reverse visibly flows inverter -> battery for charging.
   setPipe("pipeBatteryInverter", batteryFlow.absW, batteryPipeDirection(batteryFlow));
   setPipe("pipeInverterHome", inverterPower, "forward");
-  setPipe("pipeGridHome", Math.abs(gridPower), gridPower < -FLOW_THRESHOLD_W ? "reverse" : "forward");
+  setPipe(
+    "pipeGridHome",
+    gridHomePipeWatts(gridPower, chargePower),
+    gridPower < -FLOW_THRESHOLD_W ? "reverse" : "forward",
+  );
+  // Drawn grid -> inverter, so charging needs no reverse: the power really does
+  // travel that way. It is the one flow the diagram could not express, because
+  // a charging device reports no output at all.
+  setPipe("pipeGridInverter", chargePower, "forward");
+}
+
+// In a mixed fleet both directions run at once: one device exports while
+// another charges. The node value therefore stays the output it feeds the house
+// and the inward flow gets its own line, rather than one number standing for
+// two opposite things.
+function inverterChargeLabel(chargePower) {
+  return chargePower > FLOW_THRESHOLD_W ? `Charging ${watts(chargePower)}` : "";
+}
+
+// What the charger takes off the meter is already drawn on the grid -> inverter
+// pipe, so it is not drawn a second time on the way to the house. At night,
+// when the whole import is the charge, this pipe falls idle instead of showing
+// the same watts twice. Export is untouched: nothing is charging then.
+function gridHomePipeWatts(gridPowerW, chargePowerW) {
+  if (gridPowerW <= 0) return Math.abs(gridPowerW);
+  return Math.max(0, gridPowerW - Math.abs(chargePowerW || 0));
 }
 
 function renderDevicesSnapshot(snapshot) {
@@ -1574,6 +1609,7 @@ function energyPeriodStage(label, values, currency, options = {}) {
       <div class="energy-stage-values">
         ${energyFact("Energy", formatEnergyKwh(values), "inverter", "output")}
         ${energyFact("Savings", formatSavings(values, currency), "charge", "savings")}
+        ${acChargeFact(values)}
         ${detail}
       </div>
     </article>
@@ -1637,6 +1673,7 @@ function energySummaryCard({ title, subtitle, values, currency, className = "", 
       <div class="energy-summary-values">
         ${energyFact("Energy", formatEnergyKwh(values), "inverter", "output")}
         ${energyFact("Savings", formatSavings(values, currency), "charge", "savings")}
+        ${acChargeFact(values)}
         ${detailFacts}
       </div>
     </article>
@@ -1722,6 +1759,21 @@ function monthName(month) {
   return labels[Number(month) - 1] || "--";
 }
 
+// Charged energy is only shown where it exists: an installation that never AC
+// charges would otherwise carry a permanent "0.00 kWh" row on every card.
+function acChargeKwh(values) {
+  const kwh = Number(values?.ac_charge_kwh);
+  if (Number.isFinite(kwh)) return kwh;
+  const wh = Number(values?.ac_charge_wh);
+  if (Number.isFinite(wh)) return wh / 1000;
+  return 0;
+}
+
+function acChargeFact(values) {
+  if (acChargeKwh(values) <= 0) return "";
+  return energyFact("AC Charge", formatKwh(acChargeKwh(values)), "grid", "grid");
+}
+
 function energyKwh(values) {
   const kwh = Number(values?.inverter_output_kwh);
   if (Number.isFinite(kwh)) return kwh;
@@ -1730,13 +1782,16 @@ function energyKwh(values) {
   return 0;
 }
 
-function formatEnergyKwh(values) {
-  const value = energyKwh(values);
+function formatKwh(value) {
   const digits = Math.abs(value) >= 1000 ? 0 : 1;
   return `${value.toLocaleString("en-US", {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   })} kWh`;
+}
+
+function formatEnergyKwh(values) {
+  return formatKwh(energyKwh(values));
 }
 
 function formatSavings(values, currency) {
@@ -4601,6 +4656,7 @@ function runtimeControlPanel() {
   const system = runtime.system || {};
   const ha = runtime.ha || {};
   const winter = runtime.winter || {};
+  const acCharge = runtime.ac_charge_control || {};
   const devices = Object.entries(runtime.devices || {});
   const limits = runtime._limits || {};
   const systemLimits = limits.system || {};
@@ -4613,7 +4669,8 @@ function runtimeControlPanel() {
     index + 2
   )).join("");
   const winterStep = devices.length + 2;
-  const haStep = devices.length + 3;
+  const acChargeStep = devices.length + 3;
+  const haStep = devices.length + 4;
 
   return `
     <section class="runtime-editor-panel control-stage-row" aria-label="Runtime write controls">
@@ -4647,6 +4704,17 @@ function runtimeControlPanel() {
           submitLabel: "Save winter mode",
           fields: `
           ${runtimeToggle("enabled", "Winter mode", winter.enabled)}
+        `})}
+        ${runtimeStageCard({
+          endpoint: "/api/runtime/ac_charge_control",
+          title: "AC Charging",
+          subtitle: "Charge the batteries from grid surplus",
+          step: acChargeStep,
+          kind: "gates",
+          iconName: "grid",
+          submitLabel: "Save AC charging",
+          fields: `
+          ${runtimeToggle("enabled", "AC charging", acCharge.enabled)}
         `})}
         ${runtimeStageCard({
           endpoint: "/api/runtime/ha",
@@ -4696,6 +4764,7 @@ function runtimeDeviceForm(name, device, maxPower = 5000, step = 1) {
     submitLabel: `Save ${name} settings`,
     fields: `
       ${runtimeToggle("enabled", "Device enabled", device.enabled)}
+      ${runtimeToggle("ac_charge_enabled", "AC charging", device.ac_charge_enabled)}
       ${runtimeNumber("max_power", "Max power", device.max_power, 0, maxPower, "W", "50")}
       ${runtimeNumber("pv_priority_factor", "PV priority", device.pv_priority_factor, 0.01, 100, "x", "0.01")}
       ${runtimeSelect("offgrid_socket_mode", "Offgrid socket", device.offgrid_socket_mode, [
@@ -5337,6 +5406,7 @@ function demoAnalyticsData() {
   const home = [];
   const soc = [];
   const target = [];
+  const acCharge = [];
   const now = Math.floor(Date.now() / 1000);
   for (let index = 0; index < 48; index += 1) {
     time.push(now - (47 - index) * 1800);
@@ -5347,10 +5417,11 @@ function demoAnalyticsData() {
     home.push(Math.round(500 + Math.cos(index / 7) * 160));
     soc.push(Math.min(100, 40 + index));
     target.push(Math.min(800, 440 + index * 12));
+    acCharge.push(index > 8 && index < 20 ? Math.round(300 + Math.sin(index / 3) * 120) : 0);
   }
   return {
     time,
-    series: { pv, output, battery, grid, home, soc, target },
+    series: { pv, output, battery, grid, home, soc, target, ac_charge: acCharge },
     devices: [],
     source: "demo",
   };
@@ -6727,6 +6798,8 @@ if (typeof module !== "undefined") {
     renderGlobalSnapshotMetrics,
     renderAggregatedSnapshot,
     flowActive,
+    inverterChargeLabel,
+    gridHomePipeWatts,
     flowSpeedBucket,
     flowRibbonWidth,
     flowScaleReference,

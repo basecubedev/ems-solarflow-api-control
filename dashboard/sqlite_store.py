@@ -122,6 +122,7 @@ class DashboardStore:
                 CREATE TABLE IF NOT EXISTS daily_energy_stats (
                     date TEXT PRIMARY KEY,
                     inverter_output_wh REAL NOT NULL DEFAULT 0,
+                    ac_charge_wh REAL NOT NULL DEFAULT 0,
                     savings_value REAL NOT NULL DEFAULT 0,
                     price_per_kwh REAL NOT NULL DEFAULT 0,
                     currency TEXT NOT NULL DEFAULT 'EUR',
@@ -130,6 +131,17 @@ class DashboardStore:
                     updated_at TEXT NOT NULL
                 )
             """)
+            existing = {
+                row[1]
+                for row in con.execute(
+                    "PRAGMA table_info(daily_energy_stats)"
+                ).fetchall()
+            }
+            if "ac_charge_wh" not in existing:
+                con.execute(
+                    "ALTER TABLE daily_energy_stats "
+                    "ADD COLUMN ac_charge_wh REAL NOT NULL DEFAULT 0"
+                )
             con.execute("""
                 CREATE TABLE IF NOT EXISTS energy_integration_state (
                     key TEXT PRIMARY KEY,
@@ -270,7 +282,12 @@ class DashboardStore:
             0.0,
             _as_float(snapshot.get("inverter_output_w"), 0.0),
         )
+        inverter_charge_w = max(
+            0.0,
+            _as_float(snapshot.get("inverter_charge_w"), 0.0),
+        )
         delta_wh = 0.0
+        charge_delta_wh = 0.0
 
         row = con.execute(
             """
@@ -285,6 +302,7 @@ class DashboardStore:
                 delta_seconds = (sample_time - last_sample_time).total_seconds()
                 if 0 < delta_seconds <= self.max_energy_sample_delta_seconds:
                     delta_wh = inverter_output_w * delta_seconds / 3600.0
+                    charge_delta_wh = inverter_charge_w * delta_seconds / 3600.0
                 # Larger, zero, or negative intervals are skipped and the
                 # baseline timestamp is advanced to avoid restart/downtime jumps.
 
@@ -296,6 +314,7 @@ class DashboardStore:
             inverter_output_w,
             delta_wh,
             updated_at,
+            charge_delta_wh,
         )
         con.execute(
             """
@@ -308,7 +327,9 @@ class DashboardStore:
             (sample_time.astimezone(timezone.utc).isoformat(), updated_at),
         )
 
-    def _upsert_daily_energy(self, con, date_key, output_w, delta_wh, updated_at):
+    def _upsert_daily_energy(
+        self, con, date_key, output_w, delta_wh, updated_at, charge_delta_wh=0.0
+    ):
         row = con.execute(
             """
             SELECT price_per_kwh, currency
@@ -325,12 +346,17 @@ class DashboardStore:
             price_per_kwh = self.energy_price_per_kwh
             currency = self.energy_currency
 
+        # Charged energy carries no monetary value here. The savings figure
+        # prices avoided import; energy put into a battery has not avoided
+        # anything yet, and the discharge that does is already counted. Pricing
+        # both would book the same kilowatt-hour twice.
         savings_value = (delta_wh / 1000.0) * price_per_kwh
         con.execute(
             """
             INSERT INTO daily_energy_stats(
                 date,
                 inverter_output_wh,
+                ac_charge_wh,
                 savings_value,
                 price_per_kwh,
                 currency,
@@ -338,10 +364,12 @@ class DashboardStore:
                 sample_count,
                 updated_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, 1, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, 1, ?)
             ON CONFLICT(date) DO UPDATE SET
                 inverter_output_wh = daily_energy_stats.inverter_output_wh
                     + excluded.inverter_output_wh,
+                ac_charge_wh = daily_energy_stats.ac_charge_wh
+                    + excluded.ac_charge_wh,
                 savings_value = daily_energy_stats.savings_value
                     + excluded.savings_value,
                 peak_output_w = MAX(
@@ -354,6 +382,7 @@ class DashboardStore:
             (
                 date_key,
                 float(delta_wh),
+                float(charge_delta_wh),
                 float(savings_value),
                 float(price_per_kwh),
                 currency,
@@ -434,7 +463,8 @@ class DashboardStore:
             SELECT
                 COALESCE(SUM(inverter_output_wh), 0),
                 COALESCE(SUM(savings_value), 0),
-                COALESCE(MAX(peak_output_w), 0)
+                COALESCE(MAX(peak_output_w), 0),
+                COALESCE(SUM(ac_charge_wh), 0)
             FROM daily_energy_stats
             WHERE date BETWEEN ? AND ?
             """,
@@ -445,12 +475,14 @@ class DashboardStore:
             row[0],
             row[1],
             peak_output_w=row[2] if include_peak else None,
+            charge_wh=row[3],
         )
 
     def _best_day(self, con):
         row = con.execute(
             """
-            SELECT date, inverter_output_wh, savings_value, peak_output_w
+            SELECT date, inverter_output_wh, savings_value, peak_output_w,
+                   ac_charge_wh
             FROM daily_energy_stats
             ORDER BY inverter_output_wh DESC, date ASC
             LIMIT 1
@@ -460,7 +492,9 @@ class DashboardStore:
         if not row:
             return _energy_payload(0, 0, date=None)
 
-        return _energy_payload(row[1], row[2], date=row[0], peak_output_w=row[3])
+        return _energy_payload(
+            row[1], row[2], date=row[0], peak_output_w=row[3], charge_wh=row[4]
+        )
 
     def _monthly_summary(self, con, year):
         rows = con.execute(
@@ -468,23 +502,25 @@ class DashboardStore:
             SELECT
                 CAST(substr(date, 6, 2) AS INTEGER) AS month,
                 COALESCE(SUM(inverter_output_wh), 0),
-                COALESCE(SUM(savings_value), 0)
+                COALESCE(SUM(savings_value), 0),
+                COALESCE(SUM(ac_charge_wh), 0)
             FROM daily_energy_stats
             WHERE substr(date, 1, 4) = ?
             GROUP BY month
             """,
             (f"{year:04d}",),
         ).fetchall()
-        values = {int(row[0]): (row[1], row[2]) for row in rows}
+        values = {int(row[0]): (row[1], row[2], row[3]) for row in rows}
 
-        return [
-            {
+        months = []
+        for month in range(1, 13):
+            output_wh, savings, charge_wh = values.get(month, (0, 0, 0))
+            months.append({
                 "month": month,
                 "label": MONTH_LABELS[month - 1],
-                **_energy_payload(*values.get(month, (0, 0))),
-            }
-            for month in range(1, 13)
-        ]
+                **_energy_payload(output_wh, savings, charge_wh=charge_wh),
+            })
+        return months
 
     def _yearly_summary(self, con):
         rows = con.execute(
@@ -492,7 +528,8 @@ class DashboardStore:
             SELECT
                 CAST(substr(date, 1, 4) AS INTEGER) AS year,
                 COALESCE(SUM(inverter_output_wh), 0),
-                COALESCE(SUM(savings_value), 0)
+                COALESCE(SUM(savings_value), 0),
+                COALESCE(SUM(ac_charge_wh), 0)
             FROM daily_energy_stats
             GROUP BY year
             ORDER BY year ASC
@@ -502,7 +539,7 @@ class DashboardStore:
         return [
             {
                 "year": int(row[0]),
-                **_energy_payload(row[1], row[2]),
+                **_energy_payload(row[1], row[2], charge_wh=row[3]),
             }
             for row in rows
         ]
@@ -513,13 +550,14 @@ class DashboardStore:
             SELECT
                 COALESCE(SUM(inverter_output_wh), 0),
                 COALESCE(SUM(savings_value), 0),
-                MIN(date)
+                MIN(date),
+                COALESCE(SUM(ac_charge_wh), 0)
             FROM daily_energy_stats
             WHERE sample_count > 0
             """
         ).fetchone()
 
-        payload = _energy_payload(row[0], row[1])
+        payload = _energy_payload(row[0], row[1], charge_wh=row[3])
         payload["since_date"] = row[2]
         return payload
 
@@ -540,6 +578,7 @@ def empty_snapshot():
         "home_load_w": 0,
         "pv_total_w": 0,
         "inverter_output_w": 0,
+        "inverter_charge_w": 0,
         "battery_power_w": 0,
         "average_soc": 0,
         "controller": {
@@ -599,10 +638,12 @@ def _as_float(value, default=0.0, minimum=None):
     return parsed
 
 
-def _energy_payload(wh, savings, date=None, peak_output_w=None):
+def _energy_payload(wh, savings, date=None, peak_output_w=None, charge_wh=0):
     payload = {
         "inverter_output_wh": round(float(wh or 0), 9),
         "inverter_output_kwh": round(float(wh or 0) / 1000.0, 9),
+        "ac_charge_wh": round(float(charge_wh or 0), 9),
+        "ac_charge_kwh": round(float(charge_wh or 0) / 1000.0, 9),
         "savings_value": round(float(savings or 0), 9),
     }
 

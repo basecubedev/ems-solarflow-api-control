@@ -138,6 +138,11 @@
                 <path class="pipe-glow" d="M530 166 H616 V86 H704"></path>
                 <path class="pipe-energy" d="M530 166 H616 V86 H704"></path>
               </g>
+              <g id="pipeGridInverter" class="energy-pipe grid idle">
+                <path class="pipe-base" d="M760 236 H640 V194 H530"></path>
+                <path class="pipe-glow" d="M760 236 H640 V194 H530"></path>
+                <path class="pipe-energy" d="M760 236 H640 V194 H530"></path>
+              </g>
               <g id="pipeGridHome" class="energy-pipe grid idle">
                 <path class="pipe-base" d="M778 218 H818 V106 H778"></path>
                 <path class="pipe-glow" d="M778 218 H818 V106 H778"></path>
@@ -176,8 +181,9 @@
               <rect class="inverter-body" x="34" y="28" width="38" height="40" rx="10"></rect>
               <path class="inverter-wave" d="M41 49c5-12 10 12 15 0s10 12 15 0"></path>
               <circle class="inverter-led" cx="65" cy="37" r="3"></circle>
-              <text class="visual-label" x="174" y="43" text-anchor="end">Inverter</text>
-              <text id="flowInverter" class="visual-value" x="174" y="68" text-anchor="end">0 W</text>
+              <text id="flowInverterState" class="visual-state" x="174" y="26" text-anchor="end"></text>
+              <text class="visual-label" x="174" y="46" text-anchor="end">Inverter</text>
+              <text id="flowInverter" class="visual-value" x="174" y="70" text-anchor="end">0 W</text>
             </g>
 
             <g id="visualHome" class="device-visual home-visual" transform="translate(690 42)">
@@ -323,6 +329,7 @@
                   <button type="button" data-analytics-overlay="soc" aria-pressed="false">SoC</button>
                   <button type="button" data-analytics-overlay="target" aria-pressed="false">EMS Target</button>
                   <button type="button" data-analytics-overlay="grid" aria-pressed="false">Grid Power</button>
+                  <button type="button" data-analytics-overlay="ac_charge" aria-pressed="false">AC Charge</button>
                 </div>
                 <div class="analytics-tabs" role="tablist" aria-label="Analytics view">
                   <button type="button" data-analytics-tab="overview" class="active" role="tab" aria-selected="true">Overview</button>
