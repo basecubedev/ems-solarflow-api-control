@@ -55,8 +55,10 @@ def _device(hardware_profile, *, max_power=2000, **kwargs):
 # --- Phase 2: operation support before adapter -------------------------------
 
 
-def test_zensdk_negative_target_rejected_without_publish():
-    dev = _device("solarflow_800_pro_2")
+def test_unmeasured_zensdk_negative_target_rejected_without_publish():
+    # The command shape is family-wide; whether a model has an AC charge path is
+    # a per-model fact, and an unmeasured one must not be sent a charge command.
+    dev = _device("solarflow_2400_ac")
     assert dev.write_output_limit(-500) is False
     assert dev._service.published == []
     assert dev.write_health.last_error == "charge_target_unsupported"
@@ -150,13 +152,24 @@ def test_zensdk_never_publishes_negative_output_limit():
     import json
 
     dev = _device("solarflow_800_pro_2")
-    # Any accepted ZenSDK write is a non-negative properties/write outputLimit.
     dev.write_output_limit(300)
     _topic, payload = dev._service.published[-1]
     assert json.loads(payload)["properties"]["outputLimit"] == 300
-    # A negative target never reaches the properties/write path.
+
+    # A charge is expressed as a positive inputLimit with outputLimit parked at
+    # zero. The wire never carries a negative outputLimit in either direction.
     dev.write_output_limit(-300)
-    assert len(dev._service.published) == 1
+    _topic, payload = dev._service.published[-1]
+    properties = json.loads(payload)["properties"]
+    assert properties["outputLimit"] == 0
+    assert properties["inputLimit"] == 300
+    assert properties["acMode"] == 1
+
+
+def test_an_unmeasured_zensdk_model_publishes_nothing_for_a_charge():
+    dev = _device("solarflow_2400_ac")
+    dev.write_output_limit(-300)
+    assert dev._service.published == []
 
 
 def test_nan_is_not_finite_guard():
