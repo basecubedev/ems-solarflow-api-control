@@ -91,7 +91,7 @@ standard `config/config.json` layout; the third is a whole system.
 | Home Assistant | [home-assistant.md](home-assistant.md) | Optional HA publishing, helpers and sensors. |
 | Winter mode | [winter-mode.md](winter-mode.md) | Optional winter minSoc ramp and reconciliation. |
 | Battery full-charge assist | [battery-full-charge-assist.md](battery-full-charge-assist.md) | Optional EMS-managed full-charge assist. |
-| AC charging | [ac-charging.md](ac-charging.md) | Optional charging from grid surplus. Off by default. |
+| AC charging | [ac-charging.md](ac-charging.md) | Charging from grid surplus. On by default. |
 | Quality and maintenance | [quality-and-maintenance.md](quality-and-maintenance.md) | How the project is tested, packaged and maintained. |
 
 ## Raspberry Pi Appliance Manager
