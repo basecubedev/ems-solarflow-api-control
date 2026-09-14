@@ -38,7 +38,7 @@ not merely that some output sample changed.
 
 from dataclasses import dataclass
 
-from ems.mqtt_control.zendure_profiles import (
+from ems.power_direction import (
     OPERATION_DISCHARGE,
     OPERATION_IDLE,
     operation_for_target,

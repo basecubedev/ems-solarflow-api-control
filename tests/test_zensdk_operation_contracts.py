@@ -3,7 +3,7 @@
 
 import pytest
 
-from ems.mqtt_control.zensdk_operations import (
+from ems.power_command import (
     ZenSdkOperationError,
     build_zensdk_power_operation,
 )

@@ -107,6 +107,9 @@ COPY ems/zendure_mqtt/service.py ./ems/zendure_mqtt/service.py
 COPY ems/zendure_mqtt/runtime.py ./ems/zendure_mqtt/runtime.py
 # Model-aware power-control registry + capability authority. Admin's config
 # mapping/validation resolves hardware profiles and write capability from here.
+# The registry reads the transport-neutral power direction vocabulary, so that
+# leaf module travels with it.
+COPY ems/power_direction.py ./ems/power_direction.py
 COPY ems/mqtt_control/__init__.py ./ems/mqtt_control/__init__.py
 COPY ems/mqtt_control/topic_families.py ./ems/mqtt_control/topic_families.py
 COPY ems/mqtt_control/zendure_profiles.py ./ems/mqtt_control/zendure_profiles.py
