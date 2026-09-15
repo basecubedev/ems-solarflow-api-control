@@ -12170,7 +12170,16 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
 // a caller can reliably await full completion. ``pinnedTag`` forces the selector
 // to the resumed transition tag.
 function loadUpgradePlanning(pinnedTag, { preserveVerification = false } = {}) {
-  if (upgradeState.loadingPromise) return upgradeState.loadingPromise;
+  if (upgradeState.loadingPromise) {
+    if (!pinnedTag) return upgradeState.loadingPromise;
+    // A pinned load is a resume. The run already in flight may carry no pin --
+    // the hash route starts one -- and sharing it would hand the resume the
+    // server default instead of the transition tag; the resume then fails
+    // closed in silence. Wait it out, then load once more with the pin applied.
+    return upgradeState.loadingPromise
+      .catch(() => undefined)
+      .then(() => loadUpgradePlanning(pinnedTag, { preserveVerification }));
+  }
   upgradeState.loading = true;
   upgradeState.loadingPromise = (async () => {
     try {
@@ -12561,8 +12570,21 @@ async function waitForAdminReconnect(
   if (adminReconnectInFlight) return await adminReconnectInFlight;
   adminReconnectInFlight = (async () => {
     showReconnectOverlay();
-    const deadline = Date.now() + 120000;
+    // Two minutes is a laptop's replacement. A Raspberry Pi pulls and recreates
+    // the Admin in longer than that, and a page that stops polling before the
+    // replacement answers strands the operator on a spinner with nothing
+    // wrong underneath. Offer the manual reload after two minutes and keep
+    // polling for fifteen, well inside the hour the transition stays resumable.
+    const ADMIN_RECONNECT_HINT_MS = 120000;
+    const ADMIN_RECONNECT_DEADLINE_MS = 15 * 60 * 1000;
+    const hintAt = Date.now() + ADMIN_RECONNECT_HINT_MS;
+    const deadline = Date.now() + ADMIN_RECONNECT_DEADLINE_MS;
+    let hinted = false;
     while (Date.now() < deadline) {
+      if (!hinted && Date.now() >= hintAt) {
+        showManualReloadHint();
+        hinted = true;
+      }
       try {
         const res = await rawFetch("/api/admin/auth/status", { cache: "no-store" });
         const status = res.ok ? await res.json().catch(() => ({})) : {};
@@ -12596,7 +12618,7 @@ async function waitForAdminReconnect(
       }
       await sleep(1500);
     }
-    showManualReloadHint();
+    if (!hinted) showManualReloadHint();
   })();
   try {
     return await adminReconnectInFlight;
@@ -12677,9 +12699,9 @@ async function resumeGuidedUpgradeFromTransition(alignment) {
   window.location.hash = "maintenance-upgrade";
   setAdminView("maintenance");
   // Open the panel and load the catalogue to completion with the transition tag
-  // PINNED, so a server default/prepared release can never overwrite it. The
-  // load is awaited (shared in-flight promise dedupes any concurrent hash-route
-  // load), then the exact transition tag is confirmed before resuming.
+  // PINNED, so a server default/prepared release can never overwrite it. A
+  // hash-route load already in flight is waited out rather than shared -- it
+  // carries no pin -- and the exact transition tag is confirmed before resuming.
   await setMaintenancePath("upgrade", transitionTag);
   if (!transitionTag || upgradeState.selected !== transitionTag) {
     // Fail closed: never resume against a build we could not deterministically

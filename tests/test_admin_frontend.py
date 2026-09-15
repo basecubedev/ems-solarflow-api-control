@@ -4059,9 +4059,12 @@ def test_upgrade_planning_dedupes_concurrent_loads():
         "\nfunction onUpgradeReleaseChange", 1
     )[0]
     # A single shared in-flight promise prevents a second parallel planning run
-    # and lets callers await full completion.
+    # and lets callers await full completion. A pinned load (a resume) is the
+    # one exception: it waits the run out and loads again with its pin, because
+    # sharing an unpinned run would hand the resume the server default.
     assert "upgradeState.loadingPromise" in fn
-    assert "if (upgradeState.loadingPromise) return upgradeState.loadingPromise;" in fn
+    assert "if (!pinnedTag) return upgradeState.loadingPromise;" in fn
+    assert ".then(() => loadUpgradePlanning(pinnedTag, { preserveVerification }))" in fn
 
 
 def test_guided_upgrade_execute_button_not_gated_on_admin_status():
@@ -8722,28 +8725,35 @@ def test_reconnect_timeout_keeps_overlay_and_shows_manual_reload_hint(tmp_path):
         "async function waitForAdminReconnect" +
         _async_fn_body(js, "async function waitForAdminReconnect")
     )
+    # The clock advances one minute per poll and the old Admin keeps answering,
+    # so only the deadline ends the wait. The manual reload is offered once,
+    # after two minutes; polling carries on past it for the full fifteen (a
+    # Raspberry Pi replaces the Admin in longer than two), and the overlay
+    # never hides on its own.
     script = f"""
 let adminReconnectInFlight = null;
 let pendingAuthenticatedWorkflowResume = false;
 let manual = 0;
+let callsAtHint = null;
 let hidden = 0;
 let calls = 0;
+let now = 0;
 const authState = {{authenticated: true, adminInstanceId: "old"}};
 const upgradeState = {{running: true}};
-const Date = {{now: (() => {{ let value = 0; return () => (value += 60000); }})()}};
+const Date = {{now: () => now}};
 async function rawFetch() {{
   calls += 1;
   return {{ok: true, json: async () => ({{admin_instance_id: "old"}})}};
 }}
 function showReconnectOverlay() {{}}
 function hideReconnectOverlay() {{ hidden += 1; }}
-function showManualReloadHint() {{ manual += 1; }}
-function sleep() {{ return Promise.resolve(); }}
+function showManualReloadHint() {{ manual += 1; callsAtHint = calls; }}
+function sleep() {{ now += 60000; return Promise.resolve(); }}
 async function applyAuthStatus() {{ throw new Error("stale Admin was accepted"); }}
 {reconnect}
 (async () => {{
   await waitForAdminReconnect("old");
-  console.log(JSON.stringify({{calls, manual, hidden,
+  console.log(JSON.stringify({{calls, manual, callsAtHint, hidden,
     pendingAuthenticatedWorkflowResume}}));
 }})();
 """
@@ -8752,8 +8762,9 @@ async function applyAuthStatus() {{ throw new Error("stale Admin was accepted");
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {
-        "calls": 1,
+        "calls": 15,
         "manual": 1,
+        "callsAtHint": 2,
         "hidden": 0,
         "pendingAuthenticatedWorkflowResume": False,
     }
