@@ -372,7 +372,7 @@ ZENDURE_MQTT_GENERATIONS = {
         "label": "New SolarFlow / ZenSDK generation",
         "description": (
             "For SolarFlow 800, 800 Pro, 800 Pro 2, 800 Plus, SolarFlow 1600 AC+, "
-            "SolarFlow 2400 AC / AC+ / Pro and SolarFlow 4000 AC+."
+            "SolarFlow 2400 AC / AC+ / Pro and SolarFlow 3000 / 4000 Mix AC+."
         ),
         "topic_family": FAMILY_ZENSDK_HA_SCALAR,
         "base_topic": "Zendure",
@@ -498,6 +498,7 @@ RUNTIME_DEVICE_FIELDS = {
     "devices[].enabled": {"type": "boolean"},
     "devices[].offgrid_socket_mode": {"type": "integer"},
     "devices[].ac_charge_power_w": {"type": "integer", "unit": "W"},
+    "devices[].ac_charge_enabled": {"type": "boolean"},
     "devices[].grid_off_mode": {"type": "integer"},
 }
 
@@ -1135,6 +1136,32 @@ _SECTIONS = [
                 risk="control_stability",
             ),
             _field(
+                "devices[].ac_discharge_enabled",
+                "AC discharge",
+                "Lets EMS command this device to supply the house. Turn it off to keep a device charged and idle.",
+                "boolean",
+                level="advanced",
+                risk="control_stability",
+            ),
+            _field(
+                "devices[].ac_charge_enabled",
+                "AC charging",
+                "Lets EMS charge this device from surplus. Needs the AC charging feature on, and a model the hardware catalogue lists as AC chargeable.",
+                "boolean",
+                level="advanced",
+                risk="control_stability",
+            ),
+            _field(
+                "devices[].max_charge_power_w",
+                "AC charge limit",
+                "Highest AC charging power for this device. Leave at 0 to use the limit the device reports for itself; a value above that is capped by the device.",
+                "number",
+                level="advanced",
+                unit="W",
+                minimum=0,
+                risk="control_stability",
+            ),
+            _field(
                 "devices[].min_soc",
                 "Minimum SoC",
                 "Lowest battery level EMS should normally allow for this device.",
@@ -1311,6 +1338,78 @@ _SECTIONS = [
             ),
         ],
         enabled_path="battery_full_charge_assist.enabled",
+    ),
+    _section(
+        "ac_charge_control",
+        "ac_charge_control",
+        "AC charging",
+        "Charges batteries from AC when the house exports surplus.",
+        "When the house exports more than the start threshold, EMS charges the devices that allow it instead of letting the surplus leave. On by default; it acts only while the installation exports surplus.",
+        8,
+        [
+            _field(
+                "ac_charge_control.enabled",
+                "AC charging",
+                "Charges battery devices from AC when the house exports surplus power.",
+                "boolean",
+                risk="control_stability",
+            ),
+            _field(
+                "ac_charge_control.charge_start_w",
+                "Start above",
+                "Surplus needed before charging starts.",
+                "number",
+                unit="W",
+                minimum=0,
+                risk="control_stability",
+            ),
+            _field(
+                "ac_charge_control.charge_hysteresis_w",
+                "Hysteresis",
+                "How far below the start threshold charging continues. Charging stops at start minus this value, so the two never sit on the same point.",
+                "number",
+                unit="W",
+                minimum=0,
+                risk="control_stability",
+            ),
+            _field(
+                "ac_charge_control.entry_confirm_cycles",
+                "Confirmation cycles",
+                "Control loops that must show surplus before charging starts, counted within the confirmation window. Leaving charge is always immediate.",
+                "number",
+                level="advanced",
+                minimum=1,
+                risk="control_stability",
+            ),
+            _field(
+                "ac_charge_control.entry_window_cycles",
+                "Confirmation window",
+                "How many recent control loops the confirmation counts within. A wider window tolerates brief dips in the surplus without restarting the count.",
+                "number",
+                level="advanced",
+                minimum=1,
+                risk="control_stability",
+            ),
+            _field(
+                "ac_charge_control.max_charge_entries_per_hour",
+                "Switches per hour",
+                "Safety limit on how often a device may enter charging. Reaching it means the thresholds do not fit the installation.",
+                "number",
+                level="advanced",
+                minimum=1,
+                risk="control_stability",
+            ),
+            _field(
+                "ac_charge_control.max_total_charge_power_w",
+                "Total charge limit",
+                "Highest combined AC charging power across all devices. This is the installation's limit, not the devices': a charge is drawn through the house fuse that protects it, unlike feed-in.",
+                "number",
+                unit="W",
+                minimum=0,
+                risk="control_stability",
+            ),
+        ],
+        enabled_path="ac_charge_control.enabled",
     ),
     _section(
         "energy_savings",
@@ -1920,7 +2019,7 @@ _SECTIONS = [
     ),
 ]
 
-_DEFAULT_TEMPLATE = {'_comment': 'Copy this file to config.json and adjust your local setup.', '_comment_docs': ['Detailed setup guide: docs/configuration.md.', 'Example profiles: docs/configuration-examples.md.'], 'config_schema_version': 3, 'config_upgrade': {'_comment': ['Optional config.json maintenance on startup.', "'check' reports missing template keys without writing.", "'apply' backs up the file and adds missing keys before EMS starts."], 'on_startup': 'check', 'backup_before_apply': True, 'backup_failure_policy': 'continue_without_upgrade'}, 'system': {'_comment': ['Standalone live-control defaults.', 'Set dry_run=true when validating a setup without hardware writes.', 'Review power and SOC limits before the first live run.'], 'enabled': True, 'dry_run': False, 'simulation_mode': False, 'allow_hardware_writes': True, 'allow_mqtt_local_control_writes': True, 'allow_mqtt_zendure_control_writes': True, 'allow_state_reconciliation_writes': True, 'reconcile_ac_mode_on_start': True, 'reconcile_smart_mode': True, 'log_level': 'info', 'max_total_power': 800, 'max_device_power': 800, 'deadband': 2, 'runtime_state_path': 'data/runtime-state.json', 'min_output_limit': 35, 'loop_interval': 5, 'output_control': {'_comment_output_control': ['Advanced output smoothing and ramp tuning.', 'Most installations should keep these defaults.'], 'load_deadband_w': 5, 'target_deadband_w': 5, 'filter_enabled': True, 'filter_method': 'median_ema', 'median_window': 2, 'ema_alpha': 0.85, 'sign_change_fast_response_enabled': True, 'sign_change_threshold_w': 50, 'sign_change_filter_reset_factor': 1.0, 'ramp_enabled': True, 'ramp_up_w_per_cycle': 500, 'ramp_down_w_per_cycle': 300, 'device_ramp_enabled': True, 'device_ramp_up_w_per_cycle': 400, 'device_ramp_down_w_per_cycle': 200, 'large_import_bypass_w': 600, 'large_export_bypass_w': 600, 'bypass_ramp_multiplier': 1.5, 'telemetry_max_age_seconds': 10, 'stale_telemetry_ramp_factor': 0.5}, 'redistribute_clamped_power': True, 'pv_kwp_weighting': True, 'pv_charge_balance_enabled': True, 'pv_charge_balance_deadband_percent': 1, 'pv_charge_balance_full_bias_percent': 15, 'pv_charge_balance_strength': 0.7, 'battery_kwh_weighting': True, 'soc_reconcile_interval': 10}, 'grid_meter': {'_comment': ['Household or grid power meter used as the EMS load signal.', 'Supported types: shelly, shelly_3em_gen1, ecotracker, tasmota_http,', 'zendure_grid_meter_http, zendure_smartmeter_d0, mqtt.', 'Shelly reads total power by default.', 'Use channels like [c] or [a,c] for selected clamps or phases.', 'Tasmota needs url or ip plus power_path.', 'Zendure grid meter via local HTTP reads total_power from', '/properties/report and needs only grid_meter.ip (recommended; covers', 'both D0 and Smart Meter 3CT). zendure_smartmeter_3ct_http is a', 'backward-compatible alias.', 'Zendure SmartMeter D0 and MQTT use grid_meter.mqtt with topic and', 'either mqtt.broker_ref or host/port; payload_format and max_age_seconds.'], 'type': 'shelly', 'ip': '192.168.1.50'}, '_comment_devices': ['One entry per Zendure device.', 'Replace IP and SN with values from your local installation.', 'Use one real device first, then add more devices after validation.'], 'devices': [{'name': 'WR1', 'ip': '192.168.1.100', 'sn': 'YOUR_SN', '_comment_smart_mode': ['Use smart_mode=1 for runtime/RAM mode.', 'This is the normal setting for live EMS control.'], 'smart_mode': 1, 'max_power': 800, 'pv_kwp': 1.0, 'pv_priority_factor': 1.0, 'battery_kwh': 1.0, '_comment_soc': ['Battery SOC limits in percent.', 'Use 0 to leave a value unmanaged.'], 'min_soc': 15, 'max_soc': 100}, {'name': 'WR2', 'ip': '192.168.1.101', 'sn': 'YOUR_SN', '_comment_smart_mode': ['Use smart_mode=1 for runtime/RAM mode.', 'This is the normal setting for live EMS control.'], 'smart_mode': 1, 'max_power': 800, 'pv_kwp': 1.0, 'pv_priority_factor': 1.0, 'battery_kwh': 1.0, '_comment_soc': ['Battery SOC limits in percent.', 'Use 0 to leave a value unmanaged.'], 'min_soc': 15, 'max_soc': 100}], 'zendure_mqtt': {'_comment': ['MQTT telemetry is always on: set host to subscribe to Zendure telemetry', 'from a local or cloud MQTT broker.', 'Supported inverters can be controlled over MQTT using the same EMS', 'control loop as the local API, when the topic family has a verified', 'write method. A control device sets capabilities.write_output_limit=true', 'and publishes only behind its write gate (allow_mqtt_local_control_writes', '/ allow_mqtt_zendure_control_writes).', 'Devices whose topic family has no verified write method stay telemetry-only.', "Zendure MQTT devices live in 'devices' with type 'zendure_mqtt'.", 'Leave host empty if no broker is available; EMS still starts normally.'], 'host': '', 'port': 1883, 'tls': False, 'tls_insecure': False, 'username': '', 'password': '', 'app_key': '', 'connect_timeout_seconds': 10.0, 'keepalive_seconds': 30}, 'winter': {'_comment': ['Optional seasonal minimum-SOC strategy.', 'Enable it when batteries need a higher winter reserve.', 'See docs/configuration-examples.md before changing advanced values.'], 'enabled': True, 'months': [10, 11, 12, 1, 2, 3], 'summer_min_soc': 15, 'winter_min_soc': 40, 'ramp_step_percent': 5, 'adjust_hour': 12, 'ac_charge_power': 200}, 'battery_full_charge_assist': {'_comment': ['Optional full-charge assist for battery-backed devices.', 'Temporarily raises device Max-SoC to 100%.', 'Use it when devices should reach firmware Max-SoC periodically.'], 'enabled': True, 'interval_days': 28, 'assist_window_days': 7, 'assist_start_soc': 80, 'force_time': '14:00', 'ac_charge_power': 600, 'enable_ac_charge_mode': True, 'state_database_path': 'data/ems_state.sqlite'}, 'energy_savings': {'_comment': ['Lightweight daily energy statistics stored in SQLite.', 'Values are based on measured inverter AC output.', 'Set price_per_kwh to estimate savings.'], 'enabled': True, 'price_per_kwh': 0.0, 'currency': 'EUR', 'max_sample_delta_seconds': 20, 'timezone': 'Europe/Berlin'}, 'dashboard': {'_comment': ['Optional live dashboard.', 'Runtime write controls need a local admin password.', 'Create it with: python3 emsctl.py dashboard set-password.'], 'enabled': True, 'host': '0.0.0.0', 'port': 8080, 'database_path': 'data/ems_dashboard.sqlite', 'history_hours': 48, 'write_interval_seconds': 5, 'auth_file': 'config/dashboard-auth.json', 'ssl_enabled': False, 'ssl_cert_file': 'config/dashboard.crt', 'ssl_key_file': 'config/dashboard.key', 'ssl_auto_generate': True, 'session_idle_timeout_seconds': 1800, 'session_absolute_max_seconds': 43200, 'log_buffer_lines': 5000, 'log_redaction': False, '_comment_animation_mode': ['Visual animation cost for the dashboard.', "'normal' keeps the full animated energy-flow view.", "'reduced' trims glows and slows pipe motion.", "'off' disables continuous pipe animations and glow filters.", 'This does not affect control behavior or authentication.'], 'animation_mode': 'normal'}, 'influxdb': {'_comment': ['Optional InfluxDB 2.x backend for long-term analytics.', 'When disabled, the dashboard still uses local SQLite history.', 'Bundled mode is the supported zero-config Docker setup.', "Run 'python3 emsctl.py influx sync' after changing schema settings."], 'enabled': True, '_comment_mode': ["'bundled' uses the docker-compose InfluxDB managed by this project.", "Run 'python3 emsctl.py influx init' for the complete setup.", "Use 'python3 emsctl.py stack up' to start InfluxDB and EMS together.", "'external' points at an InfluxDB instance you manage yourself."], 'mode': 'bundled', '_comment_auto': ['auto_init lets setup commands create bundled InfluxDB secrets.', 'It can also start the bundled container during setup.', 'The EMS control loop never starts Docker by itself.', 'auto_sync applies bucket, retention, and task schema during setup.', 'Set both values false when managing InfluxDB fully by hand.'], 'auto_init': True, 'auto_sync': True, '_comment_secret_file': ['Local gitignored env file for generated bundled secrets.', 'Path is relative to the project root.', 'Never commit this file or place secrets directly in config.json.'], 'secret_file': 'deploy/docker/influxdb.env', '_comment_url': ["'url' is used by EMS when it runs inside Docker.", "In bundled mode, host-side commands use 'host_url' instead.", "A native EMS process also uses 'host_url' in bundled mode.", "External mode always uses 'url'."], 'url': 'http://influxdb:8086', 'host_url': 'http://127.0.0.1:8086', 'org': 'ems', '_comment_token': ['Leave token empty to read it from token_env.', 'This avoids committing secrets.', 'Bundled mode fills token_env from secret_file automatically.'], 'token': '', 'token_env': 'INFLUXDB_TOKEN', 'bucket_prefix': 'ems', '_comment_raw_write_interval': ['Raw telemetry write cadence for InfluxDB.', 'Use 0 or null to write one raw sample per EMS control loop.', 'Use a positive number to throttle writes to every N seconds.', 'This is separate from dashboard.write_interval_seconds.'], 'raw_write_interval_seconds': 0, '_comment_retention': ['How long InfluxDB keeps each resolution bucket.', 'Increase values only when storage capacity is planned.'], 'retention': {'raw_days': 14, 'one_minute_days': 90, 'five_minute_days': 365, 'one_hour_days': 1825}, '_comment_downsampling': ['Rules for creating lower-resolution history buckets.', 'Keep aligned with retention and query profiles.'], 'downsampling': [{'source': 'raw', 'target': '1m', 'window': '1m'}, {'source': '1m', 'target': '5m', 'window': '5m'}, {'source': '5m', 'target': '1h', 'window': '1h'}], '_comment_query_profiles': ['Dashboard analytics query resolution by selected time range.', 'Short ranges use detailed data; long ranges use downsampled buckets.'], 'query_profiles': [{'max_range': '1h', 'bucket': 'raw', 'window': '1s'}, {'max_range': '6h', 'bucket': 'raw', 'window': '10s'}, {'max_range': '24h', 'bucket': '1m', 'window': '1m'}, {'max_range': '30d', 'bucket': '5m', 'window': '5m'}, {'max_range': '365d', 'bucket': '1h', 'window': '1h'}]}, 'ha': {'_comment': ['Legacy Home Assistant integration.', 'Disabled by default; not recommended for new Admin-guided setups.', 'Future Admin flows should prefer telemetry publishing instead of HA-based control.'], 'enabled': False, 'control_enabled': False, 'url': 'http://homeassistant.local:8123', 'token': 'YOUR_TOKEN_HERE'}}  # noqa: E501
+_DEFAULT_TEMPLATE = {'_comment': 'Copy this file to config.json and adjust your local setup.', '_comment_docs': ['Detailed setup guide: docs/configuration.md.', 'Example profiles: docs/configuration-examples.md.'], 'config_schema_version': 3, 'config_upgrade': {'_comment': ['Optional config.json maintenance on startup.', "'check' reports missing template keys without writing.", "'apply' backs up the file and adds missing keys before EMS starts."], 'on_startup': 'check', 'backup_before_apply': True, 'backup_failure_policy': 'continue_without_upgrade'}, 'system': {'_comment': ['Standalone live-control defaults.', 'Set dry_run=true when validating a setup without hardware writes.', 'Review power and SOC limits before the first live run.'], 'enabled': True, 'dry_run': False, 'simulation_mode': False, 'allow_hardware_writes': True, 'allow_mqtt_local_control_writes': True, 'allow_mqtt_zendure_control_writes': True, 'allow_state_reconciliation_writes': True, 'reconcile_ac_mode_on_start': True, 'reconcile_smart_mode': True, 'log_level': 'info', 'max_total_power': 800, 'max_device_power': 800, 'deadband': 2, 'runtime_state_path': 'data/runtime-state.json', 'min_output_limit': 35, 'loop_interval': 5, 'output_control': {'_comment_output_control': ['Advanced output smoothing and ramp tuning.', 'Most installations should keep these defaults.'], 'load_deadband_w': 5, 'target_deadband_w': 5, 'filter_enabled': True, 'filter_method': 'median_ema', 'median_window': 2, 'ema_alpha': 0.85, 'sign_change_fast_response_enabled': True, 'sign_change_threshold_w': 50, 'sign_change_filter_reset_factor': 1.0, 'ramp_enabled': True, 'ramp_up_w_per_cycle': 500, 'ramp_down_w_per_cycle': 300, 'device_ramp_enabled': True, 'device_ramp_up_w_per_cycle': 400, 'device_ramp_down_w_per_cycle': 200, 'large_import_bypass_w': 600, 'large_export_bypass_w': 600, 'bypass_ramp_multiplier': 1.5, 'telemetry_max_age_seconds': 10, 'stale_telemetry_ramp_factor': 0.5}, 'redistribute_clamped_power': True, 'pv_kwp_weighting': True, 'pv_charge_balance_enabled': True, 'pv_charge_balance_deadband_percent': 1, 'pv_charge_balance_full_bias_percent': 15, 'pv_charge_balance_strength': 0.7, 'battery_kwh_weighting': True, 'soc_reconcile_interval': 10}, 'grid_meter': {'_comment': ['Household or grid power meter used as the EMS load signal.', 'Supported types: shelly, shelly_3em_gen1, ecotracker, tasmota_http,', 'zendure_grid_meter_http, zendure_smartmeter_d0, mqtt.', 'Shelly reads total power by default.', 'Use channels like [c] or [a,c] for selected clamps or phases.', 'Tasmota needs url or ip plus power_path.', 'Zendure grid meter via local HTTP reads total_power from', '/properties/report and needs only grid_meter.ip (recommended; covers', 'both D0 and Smart Meter 3CT). zendure_smartmeter_3ct_http is a', 'backward-compatible alias.', 'Zendure SmartMeter D0 and MQTT use grid_meter.mqtt with topic and', 'either mqtt.broker_ref or host/port; payload_format and max_age_seconds.'], 'type': 'shelly', 'ip': '192.168.1.50'}, '_comment_devices': ['One entry per Zendure device.', 'Replace IP and SN with values from your local installation.', 'Use one real device first, then add more devices after validation.'], 'devices': [{'name': 'WR1', 'ip': '192.168.1.100', 'sn': 'YOUR_SN', '_comment_smart_mode': ['Use smart_mode=1 for runtime/RAM mode.', 'This is the normal setting for live EMS control.'], 'smart_mode': 1, 'max_power': 800, 'pv_kwp': 1.0, 'pv_priority_factor': 1.0, 'battery_kwh': 1.0, '_comment_ac_directions': ['Which AC directions EMS may command on this device.', 'Both directions are on by default.', 'Charging also needs a model the hardware catalogue lists as AC chargeable.', 'max_charge_power_w 0 uses the limit the device reports for itself.'], 'ac_discharge_enabled': True, 'ac_charge_enabled': True, 'max_charge_power_w': 0, '_comment_soc': ['Battery SOC limits in percent.', 'Use 0 to leave a value unmanaged.'], 'min_soc': 15, 'max_soc': 100}, {'name': 'WR2', 'ip': '192.168.1.101', 'sn': 'YOUR_SN', '_comment_smart_mode': ['Use smart_mode=1 for runtime/RAM mode.', 'This is the normal setting for live EMS control.'], 'smart_mode': 1, 'max_power': 800, 'pv_kwp': 1.0, 'pv_priority_factor': 1.0, 'battery_kwh': 1.0, '_comment_ac_directions': ['Which AC directions EMS may command on this device.', 'Both directions are on by default.', 'Charging also needs a model the hardware catalogue lists as AC chargeable.', 'max_charge_power_w 0 uses the limit the device reports for itself.'], 'ac_discharge_enabled': True, 'ac_charge_enabled': True, 'max_charge_power_w': 0, '_comment_soc': ['Battery SOC limits in percent.', 'Use 0 to leave a value unmanaged.'], 'min_soc': 15, 'max_soc': 100}], 'zendure_mqtt': {'_comment': ['MQTT telemetry is always on: set host to subscribe to Zendure telemetry', 'from a local or cloud MQTT broker.', 'Supported inverters can be controlled over MQTT using the same EMS', 'control loop as the local API, when the topic family has a verified', 'write method. A control device sets capabilities.write_output_limit=true', 'and publishes only behind its write gate (allow_mqtt_local_control_writes', '/ allow_mqtt_zendure_control_writes).', 'Devices whose topic family has no verified write method stay telemetry-only.', "Zendure MQTT devices live in 'devices' with type 'zendure_mqtt'.", 'Leave host empty if no broker is available; EMS still starts normally.'], 'host': '', 'port': 1883, 'tls': False, 'tls_insecure': False, 'username': '', 'password': '', 'app_key': '', 'connect_timeout_seconds': 10.0, 'keepalive_seconds': 30}, 'winter': {'_comment': ['Optional seasonal minimum-SOC strategy.', 'Enable it when batteries need a higher winter reserve.', 'See docs/configuration-examples.md before changing advanced values.'], 'enabled': True, 'months': [10, 11, 12, 1, 2, 3], 'summer_min_soc': 15, 'winter_min_soc': 40, 'ramp_step_percent': 5, 'adjust_hour': 12, 'ac_charge_power': 200}, 'battery_full_charge_assist': {'_comment': ['Optional full-charge assist for battery-backed devices.', 'Temporarily raises device Max-SoC to 100%.', 'Use it when devices should reach firmware Max-SoC periodically.'], 'enabled': True, 'interval_days': 28, 'assist_window_days': 7, 'assist_start_soc': 80, 'force_time': '14:00', 'ac_charge_power': 600, 'enable_ac_charge_mode': True, 'state_database_path': 'data/ems_state.sqlite'}, 'ac_charge_control': {'_comment': ['Optional AC charging from grid surplus.', 'A device charges only when its model and its device entry both allow it.', 'On by default; it only acts while the installation is exporting surplus.'], 'enabled': True, 'charge_start_w': 150, 'charge_hysteresis_w': 50, 'entry_confirm_cycles': 5, 'entry_window_cycles': 7, 'max_charge_entries_per_hour': 12, 'max_total_charge_power_w': 1200}, 'energy_savings': {'_comment': ['Lightweight daily energy statistics stored in SQLite.', 'Values are based on measured inverter AC output.', 'Set price_per_kwh to estimate savings.'], 'enabled': True, 'price_per_kwh': 0.0, 'currency': 'EUR', 'max_sample_delta_seconds': 20, 'timezone': 'Europe/Berlin'}, 'dashboard': {'_comment': ['Optional live dashboard.', 'Runtime write controls need a local admin password.', 'Create it with: python3 emsctl.py dashboard set-password.'], 'enabled': True, 'host': '0.0.0.0', 'port': 8080, 'database_path': 'data/ems_dashboard.sqlite', 'history_hours': 48, 'write_interval_seconds': 5, 'auth_file': 'config/dashboard-auth.json', 'ssl_enabled': False, 'ssl_cert_file': 'config/dashboard.crt', 'ssl_key_file': 'config/dashboard.key', 'ssl_auto_generate': True, 'session_idle_timeout_seconds': 1800, 'session_absolute_max_seconds': 43200, 'log_buffer_lines': 5000, 'log_redaction': False, '_comment_animation_mode': ['Visual animation cost for the dashboard.', "'normal' keeps the full animated energy-flow view.", "'reduced' trims glows and slows pipe motion.", "'off' disables continuous pipe animations and glow filters.", 'This does not affect control behavior or authentication.'], 'animation_mode': 'normal'}, 'influxdb': {'_comment': ['Optional InfluxDB 2.x backend for long-term analytics.', 'When disabled, the dashboard still uses local SQLite history.', 'Bundled mode is the supported zero-config Docker setup.', "Run 'python3 emsctl.py influx sync' after changing schema settings."], 'enabled': True, '_comment_mode': ["'bundled' uses the docker-compose InfluxDB managed by this project.", "Run 'python3 emsctl.py influx init' for the complete setup.", "Use 'python3 emsctl.py stack up' to start InfluxDB and EMS together.", "'external' points at an InfluxDB instance you manage yourself."], 'mode': 'bundled', '_comment_auto': ['auto_init lets setup commands create bundled InfluxDB secrets.', 'It can also start the bundled container during setup.', 'The EMS control loop never starts Docker by itself.', 'auto_sync applies bucket, retention, and task schema during setup.', 'Set both values false when managing InfluxDB fully by hand.'], 'auto_init': True, 'auto_sync': True, '_comment_secret_file': ['Local gitignored env file for generated bundled secrets.', 'Path is relative to the project root.', 'Never commit this file or place secrets directly in config.json.'], 'secret_file': 'deploy/docker/influxdb.env', '_comment_url': ["'url' is used by EMS when it runs inside Docker.", "In bundled mode, host-side commands use 'host_url' instead.", "A native EMS process also uses 'host_url' in bundled mode.", "External mode always uses 'url'."], 'url': 'http://influxdb:8086', 'host_url': 'http://127.0.0.1:8086', 'org': 'ems', '_comment_token': ['Leave token empty to read it from token_env.', 'This avoids committing secrets.', 'Bundled mode fills token_env from secret_file automatically.'], 'token': '', 'token_env': 'INFLUXDB_TOKEN', 'bucket_prefix': 'ems', '_comment_raw_write_interval': ['Raw telemetry write cadence for InfluxDB.', 'Use 0 or null to write one raw sample per EMS control loop.', 'Use a positive number to throttle writes to every N seconds.', 'This is separate from dashboard.write_interval_seconds.'], 'raw_write_interval_seconds': 0, '_comment_retention': ['How long InfluxDB keeps each resolution bucket.', 'Increase values only when storage capacity is planned.'], 'retention': {'raw_days': 14, 'one_minute_days': 90, 'five_minute_days': 365, 'one_hour_days': 1825}, '_comment_downsampling': ['Rules for creating lower-resolution history buckets.', 'Keep aligned with retention and query profiles.'], 'downsampling': [{'source': 'raw', 'target': '1m', 'window': '1m'}, {'source': '1m', 'target': '5m', 'window': '5m'}, {'source': '5m', 'target': '1h', 'window': '1h'}], '_comment_query_profiles': ['Dashboard analytics query resolution by selected time range.', 'Short ranges use detailed data; long ranges use downsampled buckets.'], 'query_profiles': [{'max_range': '1h', 'bucket': 'raw', 'window': '1s'}, {'max_range': '6h', 'bucket': 'raw', 'window': '10s'}, {'max_range': '24h', 'bucket': '1m', 'window': '1m'}, {'max_range': '30d', 'bucket': '5m', 'window': '5m'}, {'max_range': '365d', 'bucket': '1h', 'window': '1h'}]}, 'ha': {'_comment': ['Legacy Home Assistant integration.', 'Disabled by default; not recommended for new Admin-guided setups.', 'Future Admin flows should prefer telemetry publishing instead of HA-based control.'], 'enabled': False, 'control_enabled': False, 'url': 'http://homeassistant.local:8123', 'token': 'YOUR_TOKEN_HERE'}}  # noqa: E501
 
 _ROOT_FIELDS = [
     _field(
@@ -2032,10 +2131,11 @@ _template_section_order = {
     "zendure_mqtt": 5,
     "winter": 6,
     "battery_full_charge_assist": 7,
-    "energy_savings": 8,
-    "dashboard": 9,
-    "influxdb": 10,
-    "ha": 11,
+    "ac_charge_control": 8,
+    "energy_savings": 9,
+    "dashboard": 10,
+    "influxdb": 11,
+    "ha": 12,
 }
 for _section_item in _SECTIONS:
     _section_item["order"] = _template_section_order[_section_item["id"]]
@@ -2247,6 +2347,7 @@ def render_default_template(device_count=2):
         ("zendure_mqtt",),
         ("winter",),
         ("battery_full_charge_assist",),
+        ("ac_charge_control",),
         ("energy_savings",),
         ("dashboard",),
         ("influxdb",),
@@ -2265,8 +2366,12 @@ def render_default_template(device_count=2):
         '      "sn": "YOUR_SN",\n\n      "_comment_smart_mode":',
     )
     rendered = rendered.replace(
-        '      "battery_kwh": 1.0,\n      "_comment_soc":',
-        '      "battery_kwh": 1.0,\n\n      "_comment_soc":',
+        '      "battery_kwh": 1.0,\n      "_comment_ac_directions":',
+        '      "battery_kwh": 1.0,\n\n      "_comment_ac_directions":',
+    )
+    rendered = rendered.replace(
+        '      "max_charge_power_w": 0,\n      "_comment_soc":',
+        '      "max_charge_power_w": 0,\n\n      "_comment_soc":',
     )
     rendered = rendered.replace(
         '    "months": [\n      10,\n      11,\n      12,\n      1,\n      2,\n'

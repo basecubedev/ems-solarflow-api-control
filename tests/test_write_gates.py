@@ -51,9 +51,10 @@ class DashboardStoreStub:
         self.records.append(snapshot)
 
 
-def device(name):
+def device(name, ac_discharge_enabled=True):
     return SimpleNamespace(
         name=name,
+        ac_discharge_enabled=ac_discharge_enabled,
         ip="127.0.0.1",
         sn=f"{name}-SN",
         session=Mock(),
@@ -81,7 +82,9 @@ def state(
     ac_status=1,
     pack_state=2,
     ac_mode=2,
-    input_limit_w=0
+    input_limit_w=0,
+    pack_num=0,
+    charge_max_limit_w=1000
 ):
     return DeviceState(
         soc=soc,
@@ -110,6 +113,8 @@ def state(
         dc_status=dc_status,
         grid_state=1,
         input_limit_w=input_limit_w,
+        charge_max_limit_w=charge_max_limit_w,
+        pack_num=pack_num,
     )
 
 
@@ -185,6 +190,29 @@ class WriteGateTest(unittest.TestCase):
 
         self.assertNotIn("WR1", written_devices)
         self.assertIn("WR2", written_devices)
+
+    def test_a_device_forbidden_to_discharge_receives_no_write(self):
+        """The operator's standing permission is its own axis.
+
+        It is not a claim on the device and does not join the intent priority
+        ladder: a higher-priority claim must never be able to re-enable output
+        on a device the operator forbade.
+        """
+
+        forbidden = device("WR1", ac_discharge_enabled=False)
+        allowed = device("WR2")
+
+        controller = self.run_controller_once(
+            [forbidden, allowed],
+            [state(), state()],
+        )
+
+        written = [
+            write.args[0].name
+            for write in controller.set_output_limit.call_args_list
+        ]
+        self.assertNotIn("WR1", written)
+        self.assertIn("WR2", written)
 
     def test_runtime_disabled_device_receives_no_write(self):
         disabled = device("WR1")
@@ -674,7 +702,14 @@ class WriteGateTest(unittest.TestCase):
         controller.set_output_limit.assert_not_called()
         self.assertFalse(controller.night_min_soc_idle_active)
 
-    def test_safety_blocker_prevents_returning_to_output_mode(self):
+    def test_a_battery_at_its_floor_keeps_the_charge_it_was_given(self):
+        """At the floor the firmware owns the device; the reason says so.
+
+        It used to report ``ac_charge_active`` at every charge level, which hid
+        whether an empty battery was being recovered or an EMS that died
+        mid-charge had simply left the device that way.
+        """
+
         controlled = device("WR1")
         controller = EMSController(
             devices=[controlled],
@@ -686,7 +721,7 @@ class WriteGateTest(unittest.TestCase):
         with patch("ems.controller.log_event") as log_event:
             controller.reconcile_ac_mode_intent(
                 controlled,
-                state(ac_mode=1, ac_status=2, solar=0, output=0),
+                state(ac_mode=1, ac_status=2, solar=0, output=0, soc_limit=2),
                 ac_output_intent("WR1", "startup_ac_mode_reconcile")
             )
 
@@ -694,10 +729,38 @@ class WriteGateTest(unittest.TestCase):
         self.assertTrue(
             any(
                 call.args[1] == "ac_mode_intent_skip"
-                and call.kwargs["reason"] == "ac_charge_active"
+                and call.kwargs["reason"] == "discharge_cutoff"
                 for call in log_event.call_args_list
             )
         )
+
+    def test_a_leftover_charge_on_a_healthy_battery_is_taken_back(self):
+        """Above the floor a charge nobody commands is the reconcile's to undo."""
+
+        controlled = device("WR1")
+        controlled.session.post.return_value = SimpleNamespace(status_code=200)
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub()
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=1, ac_status=2, solar=0, output=0, soc=60),
+                ac_output_intent("WR1", "startup_ac_mode_reconcile")
+            )
+
+        written = [
+            call.kwargs["json"]["properties"]
+            for call in controlled.session.post.call_args_list
+        ]
+        self.assertIn({"acMode": 2}, written)
 
     def test_explicit_ac_output_runtime_intent_bypasses_startup_blocker(self):
         controlled = device("WR1")
@@ -832,6 +895,44 @@ class WriteGateTest(unittest.TestCase):
             )
         )
 
+    def test_firmware_owned_ac_charge_is_not_interrupted(self):
+        """A charge the firmware started itself must survive the next loop.
+
+        acMode reconciliation consulted the emergency blocker only on the
+        startup path, so in normal operation the default ac_output intent wrote
+        acMode=2 straight over a running firmware charge.
+        """
+
+        charging = device("WR1")
+        charging.session.post.return_value = SimpleNamespace(status_code=200)
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            self.run_controller_once(
+                [charging],
+                [state(
+                    ac_mode=1,
+                    ac_status=2,
+                    soc=9,
+                    soc_limit=2,
+                    solar=0,
+                    pack_out=300,
+                    input_limit_w=300,
+                )]
+            )
+
+        mode_writes = [
+            call.kwargs["json"]["properties"]
+            for call in charging.session.post.call_args_list
+            if "acMode" in call.kwargs.get("json", {}).get("properties", {})
+        ]
+
+        self.assertEqual(
+            mode_writes, [], "EMS overwrote a firmware-owned AC charge"
+        )
+
     def test_ac_input_runtime_charge_power_writes_input_limit_on_next_loop(self):
         controlled = device("WR1")
         controlled.session.post.return_value = SimpleNamespace(status_code=200)
@@ -886,7 +987,7 @@ class WriteGateTest(unittest.TestCase):
             controller.reconcile_runtime_ac_charge_power(
                 controlled,
                 state(ac_mode=1, input_limit_w=200),
-                ac_input_intent("WR1", "test_charge")
+                controller.get_device_runtime_intent(controlled, state(ac_mode=1))
             )
 
         controlled.session.post.assert_not_called()
@@ -969,7 +1070,7 @@ class WriteGateTest(unittest.TestCase):
             controller.reconcile_runtime_ac_charge_power(
                 controlled,
                 state(ac_mode=1, input_limit_w=0),
-                ac_input_intent("WR1", "test_charge")
+                controller.get_device_runtime_intent(controlled, state(ac_mode=1))
             )
 
         controlled.session.post.assert_not_called()
@@ -1003,7 +1104,7 @@ class WriteGateTest(unittest.TestCase):
             controller.reconcile_runtime_ac_charge_power(
                 controlled,
                 state(ac_mode=1, input_limit_w=0),
-                ac_input_intent("WR1", "test_charge")
+                controller.get_device_runtime_intent(controlled, state(ac_mode=1))
             )
 
         controlled.session.post.assert_not_called()

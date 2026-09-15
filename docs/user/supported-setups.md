@@ -62,17 +62,40 @@ are not listed until a physical report confirms them.
 EMS controls Zendure SolarFlow devices through the local Zendure API /
 ZenSDK-compatible HTTP API. Known ZenSDK-compatible models:
 
-| Model | Status | Notes |
-|---|---|---|
-| SolarFlow 800 Pro 2 | Validated | Maintainer hardware; ZenSDK local HTTP control **and** Zendure cloud MQTT control confirmed. |
-| SolarFlow 800 | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 800 Plus | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 800 Pro | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 1600 AC+ | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 2400 AC | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 2400 AC+ | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 2400 Pro | Family-supported | Same ZenSDK local HTTP protocol as the 800 Pro 2. |
-| SolarFlow 4000 AC+ | Family-supported | Same ZenSDK family; not individually confirmed. |
+| Model | Status | AC charging | Notes |
+|---|---|---|---|
+| SolarFlow 800 Pro 2 | Validated | **Measured** | Maintainer hardware; ZenSDK local HTTP control **and** Zendure cloud MQTT control confirmed. |
+| SolarFlow 800 | Family-supported | No AC charge path | Catalogue: no direct AC charging of the battery. |
+| SolarFlow 800 Plus | Family-supported | No AC charge path | Catalogue: no integrated AC charging. |
+| SolarFlow 800 Pro | Family-supported | Catalogue (1000 W) | Not measured here. |
+| SolarFlow 1600 AC+ | Family-supported | Catalogue (1600 W) | Not measured here. |
+| SolarFlow 2400 AC | Family-supported | Catalogue (2400 W) | Not measured here. |
+| SolarFlow 2400 AC+ | Family-supported | Catalogue (2400 W) | Not measured here. |
+| SolarFlow 2400 Pro | Family-supported | No AC charge path | Catalogue: not an AC charger; not the 2400 AC series. |
+| SolarFlow 3000 Mix AC+ | Family-supported | Catalogue (3000 W) | Not measured here. |
+| SolarFlow 4000 Mix AC+ | Family-supported | Catalogue (4000 W) | Only the Mix variant of the 4000 exists; the plain "4000 AC+" name is still accepted. |
+
+### Why AC charging is tracked per model
+
+Every ZenSDK model builds the identical charge command through the identical
+code path. That proves the command is well formed — it does not prove a given
+model has an AC charge path at all, and a wrong assumption there would have the
+EMS ask unknown hardware to draw from the grid. So the permission is a per-model
+fact, and each row says what it rests on:
+
+- **Measured** — the command was written to that model and the device drew the
+  commanded power. Only the maintainer's 800 Pro 2.
+- **Catalogue (N W)** — the vendor/device catalogue records an AC input for
+  battery charging. Enabled, not confirmed here. The wattage is the catalogue
+  rating and is **not** used as a limit: the limit comes from the device's own
+  `chargeMaxLimit`.
+- **No AC charge path** — the catalogue says the model cannot charge from AC.
+  The EMS refuses with a stable reason rather than failing silently.
+
+A model enabled from the catalogue that turns out not to charge fails quietly:
+the command is accepted and no current flows. The EMS watches for exactly that
+and logs `ac_charge_not_delivered` — if you see it, please open a report with the
+trace so the row can be corrected.
 
 Each Zendure device configured over the **Local API** needs a local IP address,
 serial number, max power, battery size, PV size / priority metadata, and min/max

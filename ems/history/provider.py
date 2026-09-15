@@ -29,6 +29,11 @@ SERIES_CATALOG = {
         "color_var": "--output",
         "sqlite_field": "inverter_output_w",
     },
+    "ac_charge": {
+        "label": "AC Charge",
+        "color_var": "--grid",
+        "sqlite_field": "inverter_charge_w",
+    },
     "battery": {
         "label": "Battery Power",
         "color_var": "--battery",
@@ -52,6 +57,7 @@ DEFAULT_SERIES = ["pv", "output", "battery"]
 SERIES_DEVICE_FIELD = {
     "pv": "pv_input_w",
     "output": "output_w",
+    "ac_charge": "ac_charge_w",
     "battery": "battery_power_w",
     "soc": "soc",
 }

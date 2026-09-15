@@ -93,12 +93,16 @@ class RuntimeStateStub:
             "winter": {
                 "enabled": False,
             },
+            "ac_charge_control": {
+                "enabled": False,
+            },
             "devices": {
                 "WR1": {
                     "enabled": True,
                     "max_power": 800,
                     "offgrid_socket_mode": "off",
                     "pv_priority_factor": 1.0,
+                    "ac_charge_enabled": False,
                 }
             },
         }
@@ -1595,3 +1599,72 @@ def test_auth_refresh_when_auth_not_configured_is_forbidden(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_every_whitelisted_runtime_section_is_reachable(tmp_path):
+    """The write whitelist and the routes are one list, not two.
+
+    ac_charge_control shipped on the whitelist with no route behind it, so the
+    feature could not be switched on from the dashboard at all. Routing is now
+    derived from the whitelist; this walks every section so the two cannot drift
+    apart again.
+    """
+
+    from dashboard.runtime_write import SECTION_FIELDS
+
+    auth_file = tmp_path / "auth.json"
+    write_password_file(auth_file, "secret-password")
+    runtime_state = RuntimeStateStub()
+    server, base_url = with_server(
+        StoreStub(),
+        runtime_state=runtime_state,
+        auth_file=str(auth_file),
+    )
+
+    try:
+        _, login_headers, login = json_response(
+            f"{base_url}/api/auth/login",
+            method="POST",
+            payload={"password": "secret-password"},
+        )
+        headers = {
+            "Cookie": login_headers["Set-Cookie"],
+            "X-CSRF-Token": login["csrf_token"],
+        }
+
+        for section, fields in SECTION_FIELDS.items():
+            field = next(
+                name for name, (kind, _) in fields.items() if kind == "bool"
+            )
+            status, _, payload = json_response(
+                f"{base_url}/api/runtime/{section}",
+                method="PATCH",
+                payload={field: True},
+                headers=headers,
+            )
+            assert status == 200, (section, payload)
+            assert runtime_state.data[section][field] is True
+
+        # A per-device charge permission is writable too: stopping a device
+        # drawing from the grid must not need a restart.
+        status, _, payload = json_response(
+            f"{base_url}/api/runtime/device/WR1",
+            method="PATCH",
+            payload={"ac_charge_enabled": True},
+            headers=headers,
+        )
+        assert status == 200, payload
+        assert runtime_state.data["devices"]["WR1"]["ac_charge_enabled"] is True
+
+        # The whitelist decides, so a section that is not on it stays a 404
+        # rather than becoming writable by naming it in the URL.
+        status, _, _ = json_response(
+            f"{base_url}/api/runtime/system_limits",
+            method="PATCH",
+            payload={"enabled": True},
+            headers=headers,
+        )
+        assert status == 404
+        assert "system_limits" not in runtime_state.data
+    finally:
+        server.shutdown()
