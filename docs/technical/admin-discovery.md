@@ -69,6 +69,14 @@ example, and `deploy/docker` resources fetched from GitHub. Older releases remai
 visible but disabled. Unstable builds (release candidates) newer than the support
 floor stay selectable in the **Unstable** group with a not-stable warning.
 
+The release list itself, and whether each release's setup resources are
+present, come from the CI-published release catalogue
+(`release-catalogue.json` on the `development-build-catalogue` branch, read over
+the content CDN on every listing; a copy from the last day stands in only when
+the CDN cannot be reached) -- see `docs/developer/ci-release.md`. The GitHub API
+is asked only when that catalogue cannot be read, and a catalogue that cannot be
+trusted counts as unreadable rather than as empty.
+
 The synthetic `latest` option maps the rolling Docker channel to setup resources
 from the repository's `main` branch. It is selectable when those resources can be
 verified, but it is never treated as stable and never replaces the newest

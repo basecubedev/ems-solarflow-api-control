@@ -173,6 +173,7 @@ from admin.zendure_mqtt_migration_review import (
 from admin.zendure_mqtt_runtime_status import build_runtime_status_view
 from admin.networks import detect_network_suggestions
 from admin.development_catalogue import development_catalogue_source
+from admin.release_catalogue import release_catalogue_source
 from admin.device_identity import IdentityTokenKeyStore
 from admin.releases import ReleaseError, ReleaseManager, default_admin_data_dir
 from admin.known_good import KnownGoodStore
@@ -851,7 +852,9 @@ def create_admin_runtime(
     # (the CI-published, read-only JSON index) so installable development builds
     # appear in Setup without any test injection; a missing catalogue is empty.
     release_manager = release_manager or ReleaseManager(
-        docker=docker, development_source=development_catalogue_source()
+        docker=docker,
+        development_source=development_catalogue_source(),
+        release_source=release_catalogue_source(),
     )
     config_preview = ConfigPreviewGenerator(release_manager)
     admin_data_dir = getattr(release_manager, "data_dir", default_admin_data_dir())

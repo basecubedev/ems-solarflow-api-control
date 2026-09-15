@@ -224,6 +224,24 @@ def _development_tag_revision(tag):
     return match.group(1) if match else ""
 
 
+def resources_present(paths) -> bool:
+    """Whether a release tree carries every setup resource the Admin installs.
+
+    One rule for two readers: the Admin's own per-tag check against the GitHub
+    tree, and the CI script that records the answer in the release catalogue so
+    that installations no longer have to ask.
+    """
+
+    paths = {str(path) for path in paths}
+    resource_files = REQUIRED_FILES - {CONFIG_TEMPLATE_NAME}
+    has_template = any(path in paths for path in ARCHIVE_TEMPLATE_PATHS)
+    return (
+        resource_files.issubset(paths)
+        and has_template
+        and any(path.startswith("deploy/docker/") for path in paths)
+    )
+
+
 def _is_admin_version(tag):
     return tag == "latest" or bool(
         _version(tag) and _version(tag) >= MIN_ADMIN_VERSION
@@ -352,6 +370,7 @@ class ReleaseManager:
         docker=None,
         development_source=None,
         known_good=None,
+        release_source=None,
     ):
         explicit_data_dir = data_dir is not None
         self.data_dir = Path(data_dir) if explicit_data_dir else default_admin_data_dir()
@@ -374,6 +393,7 @@ class ReleaseManager:
         # Optional callable that returns candidate development-build descriptors
         # (from a registry/CI index). ``None`` keeps the catalogue release-only.
         self._development_source = development_source
+        self._release_source = release_source
         # Read-only Docker inspector (``inspect_container``/``inspect_image``) used
         # to read build identity. ``None`` disables identity checks entirely, so
         # release selection falls back to SemVer/tag reasoning only.
@@ -414,13 +434,17 @@ class ReleaseManager:
         warnings = []
         remote = []
         remote_available = True
-        try:
-            remote = self._fetch_release_metadata()
-        except (OSError, ValueError, urllib.error.URLError) as exc:
-            remote_available = False
-            warnings.append(f"GitHub releases are unavailable: {exc}")
+        catalogued = self._catalogued_releases()
+        if catalogued is not None:
+            remote = catalogued
         else:
-            warnings.extend(getattr(self, "_release_page_warnings", []))
+            try:
+                remote = self._fetch_release_metadata()
+            except (OSError, ValueError, urllib.error.URLError) as exc:
+                remote_available = False
+                warnings.append(f"GitHub releases are unavailable: {exc}")
+            else:
+                warnings.extend(getattr(self, "_release_page_warnings", []))
 
         by_tag = {item["tag"]: item for item in remote}
         self._newest_seen_tags.update(
@@ -717,6 +741,8 @@ class ReleaseManager:
             self._write_selected(tag)
             return self._ready_payload(tag, manifest, reused=True)
 
+        if tag not in self._known_downloads:
+            self._catalogued_releases()
         if tag not in self._known_downloads:
             try:
                 self._fetch_release_metadata()
@@ -1112,6 +1138,48 @@ class ReleaseManager:
             raise ValueError("GitHub returned an invalid release list")
         return payload
 
+    def _catalogued_releases(self):
+        """The release list from the CI-published catalogue, or ``None``.
+
+        The catalogue answers both questions the upgrade page used to put to
+        the GitHub API on every visit -- which releases exist, and whether each
+        one's setup resources are present -- from one file read over the content
+        CDN, which is not rate limited. ``None`` means the catalogue could not be
+        used and the API path decides as before; a failing source never breaks
+        the listing.
+        """
+
+        source = self._release_source
+        if source is None:
+            return None
+        try:
+            catalogue = source()
+        except Exception:
+            return None
+        if catalogue is None:
+            return None
+        self._resource_checks["main"] = bool(catalogue["main_resources_present"])
+        releases = []
+        for entry in catalogue["releases"]:
+            tag = entry["tag"]
+            self._known_downloads[tag] = (
+                f"https://codeload.github.com/{REPO}/zip/refs/tags/{tag}"
+            )
+            self._resource_checks[tag] = bool(entry["resources_present"])
+            releases.append(
+                {
+                    "tag": tag,
+                    "name": entry["name"],
+                    "published_at": entry.get("published_at"),
+                    "github_prerelease": bool(entry["prerelease"]),
+                    "kind": "release",
+                }
+            )
+        self._known_downloads["latest"] = (
+            f"https://codeload.github.com/{REPO}/zip/refs/heads/main"
+        )
+        return releases
+
     def _fetch_release_metadata(self):
         payload = []
         self._release_page_warnings = []
@@ -1200,17 +1268,10 @@ class ReleaseManager:
         payload = json.loads(raw.decode("utf-8"))
         if not isinstance(payload, dict) or not isinstance(payload.get("tree"), list):
             raise ValueError("GitHub returned an invalid resource tree")
-        paths = {
+        return resources_present(
             item.get("path")
             for item in payload["tree"]
             if isinstance(item, dict) and item.get("type") == "blob"
-        }
-        resource_files = REQUIRED_FILES - {CONFIG_TEMPLATE_NAME}
-        has_template = any(path in paths for path in ARCHIVE_TEMPLATE_PATHS)
-        return (
-            resource_files.issubset(paths)
-            and has_template
-            and any(str(path).startswith("deploy/docker/") for path in paths)
         )
 
     def _resolve_remote_revision(self, ref):

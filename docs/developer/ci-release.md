@@ -204,6 +204,31 @@ from this build identity. The Admin Console image is published as
 For stable installations, pin a release tag in `docker-compose.yml` rather than
 `latest`.
 
+## Release catalogue
+
+Job `publish-release-catalogue` in `docker-publish.yml`, after the images are
+pushed. It runs `scripts/release_catalogue.py build`, which asks the GitHub API
+once -- authenticated, in CI -- for the release list and, per release, whether
+the setup resources are present in its tree, and writes the answer as
+`release-catalogue.json` to the `development-build-catalogue` branch. The
+Admin reads that one file over `raw.githubusercontent.com`, which is a content
+CDN and not counted against the API limit.
+
+This replaces what every installation used to do on every visit to
+Maintenance -> Upgrade: the release list plus one `git/trees` read of roughly
+half a megabyte per eligible tag, a dozen unauthenticated calls against a limit
+of sixty an hour per address. A few visits after an upgrade emptied that
+budget, and an empty budget emptied the list down to whatever was cached.
+
+The catalogue is rebuilt in full on every run, so it needs no seed and a single
+stale entry cannot survive. The resource rule is `admin.releases.resources_present`,
+imported by the script, so the Admin's own check and the catalogue can never
+disagree about what "present" means. The job is reported as done only once
+`scripts/release_catalogue.py verify` reads the newest release back through
+the Admin's own loader from the public URL. An Admin that cannot read the
+catalogue falls back to the API path unchanged; a catalogue it cannot trust is
+treated as unreadable, never as empty.
+
 ## Development build publishing (testing only)
 
 Workflow: `.github/workflows/docker-feature-publish.yml` ("EMS development
