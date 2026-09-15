@@ -663,3 +663,20 @@ def test_feature_pair_verification_checks_complete_runtime_and_bundle_identity()
         "ems_image",
     ):
         assert verification.count(f"['{field}']") >= 2, field
+
+
+def test_the_build_declares_the_release_it_descends_from():
+    """The Admin orders a development build by this label, so it must be set.
+
+    Restricted to the ``v*`` namespace on purpose: this repository also carries
+    appliance image and Manager tags, and an unrestricted ``git describe`` can
+    name one of those as the release a build contains.
+    """
+
+    text = _text()
+
+    assert "git describe --tags --abbrev=0 --match 'v*'" in text
+    assert text.count(
+        "de.basecubedev.ems.contains_release="
+        "${{ steps.build_identity.outputs.contains_release }}"
+    ) == 2

@@ -202,3 +202,23 @@ def test_release_pair_verification_checks_complete_oci_and_bundle_identity():
         "ems_image",
     ):
         assert verification.count(f"['{field}']") >= 2, field
+
+
+def test_every_published_image_declares_the_release_it_contains():
+    """The Admin orders a development build against this label on both sides.
+
+    A `latest` image has no version of its own, so without it a rolling
+    installation cannot say what it is running and cannot be compared to
+    anything that is not numbered by this same workflow.
+    """
+
+    text = _text()
+
+    assert "git describe --tags --abbrev=0 --match 'v*'" in text
+    assert text.count(
+        "de.basecubedev.ems.contains_release="
+        "${{ steps.build_identity.outputs.contains_release }}"
+    ) == text.count(
+        "de.basecubedev.ems.release_tag="
+        "${{ steps.build_identity.outputs.release_tag }}"
+    )

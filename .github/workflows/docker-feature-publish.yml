@@ -380,6 +380,12 @@ jobs:
           fi
           git_commit_short="${git_commit::7}"
           git_describe="$(git describe --tags --always --dirty 2>/dev/null || true)"
+          # The newest release tag this build descends from. Restricted to the
+          # v* namespace on purpose: the appliance cuts image and Manager tags
+          # of their own, and an unrestricted describe would name one of those
+          # as the release this build contains. Empty when no release is an
+          # ancestor, which the Admin reads as "cannot tell" rather than "old".
+          contains_release="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
           # The canonical install target identifies one exact workflow attempt.
           # The floating dev-<branch> alias stays published for convenience but is
           # not a canonical install target (SystemBuildResolver rejects it).
@@ -396,6 +402,7 @@ jobs:
             echo "git_commit=${git_commit}"
             echo "git_commit_short=${git_commit_short}"
             echo "git_describe=${git_describe}"
+            echo "contains_release=${contains_release}"
             echo "build_serial=${GITHUB_RUN_NUMBER}"
             echo "build_id=${immutable_tag}"
           } >> "${GITHUB_OUTPUT}"
@@ -430,6 +437,7 @@ jobs:
             de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.immutable_tag }}
             de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
             de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
+            de.basecubedev.ems.contains_release=${{ steps.build_identity.outputs.contains_release }}
 
       # Imports the feature cache but never exports; the pushed build is the
       # authoritative exporter.
@@ -501,6 +509,7 @@ jobs:
             de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.immutable_tag }}
             de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
             de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
+            de.basecubedev.ems.contains_release=${{ steps.build_identity.outputs.contains_release }}
 
       - name: Build local Admin image for startup validation
         uses: docker/build-push-action@v7

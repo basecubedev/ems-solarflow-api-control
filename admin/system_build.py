@@ -28,7 +28,11 @@ from enum import Enum
 from time import monotonic
 
 from admin.admin_update import ADMIN_IMAGE_REPO, EMS_IMAGE_REPO
-from admin.image_identity import ImageIdentity, identify_image
+from admin.image_identity import (
+    CHANNEL_DEVELOPMENT,
+    ImageIdentity,
+    identify_image,
+)
 from admin.releases import TAG_PATTERN
 from admin.system_build_id import parse_system_build_id, validate_system_build_id
 
@@ -36,7 +40,7 @@ from admin.system_build_id import parse_system_build_id, validate_system_build_i
 CHANNEL_STABLE = "stable"
 CHANNEL_RC = "rc"
 CHANNEL_LATEST = "latest"
-CHANNEL_DEV = "development"
+CHANNEL_DEV = CHANNEL_DEVELOPMENT
 CHANNEL_UNKNOWN = "unknown"
 
 # Channels whose ``release_tag`` label must equal the requested tag.
@@ -178,6 +182,7 @@ class SystemBuild:
     ems_digest: str
     release_tag: str | None = None
     build_serial: int | None = None
+    contains_release: str | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -191,6 +196,7 @@ class SystemBuild:
             "ems_image": self.ems_image,
             "ems_digest": self.ems_digest,
             "release_tag": self.release_tag,
+            "contains_release": self.contains_release,
         }
 
 
@@ -404,6 +410,7 @@ class SystemBuildResolver:
             ems_digest=ems_identity.digest,
             release_tag=admin_identity.release_tag,
             build_serial=admin_identity.build_serial,
+            contains_release=admin_identity.contains_release,
         )
 
     def _development_descriptor(self, tag, channel, admin_ref, ems_ref):
@@ -796,6 +803,7 @@ def decide_upgrade_direction(running_ems, target: SystemBuild) -> UpgradeDirecti
             revision=running_ems.get("revision"),
             channel=running_ems.get("channel"),
             build_serial=running_ems.get("build_serial"),
+            contains_release=running_ems.get("contains_release"),
             build_id=running_ems.get("build_id"),
             release_tag=running_ems.get("release_tag"),
         )
@@ -807,6 +815,7 @@ def decide_upgrade_direction(running_ems, target: SystemBuild) -> UpgradeDirecti
         revision=target.revision,
         channel=target.channel,
         build_serial=target.build_serial,
+        contains_release=target.contains_release,
         build_id=target.build_id,
         release_tag=target.release_tag or target.canonical_tag,
     )
@@ -816,8 +825,13 @@ def decide_upgrade_direction(running_ems, target: SystemBuild) -> UpgradeDirecti
         target_identity,
         current_version=_version(running_tag) if running_tag else None,
         target_version=_version(target.canonical_tag),
-        allow_unverified=(target.channel == CHANNEL_DEV),
         target_rolling=(target.channel == CHANNEL_LATEST),
+        target_contains_version=_version(target.contains_release)
+        if target.contains_release
+        else None,
+        current_contains_version=_version(running.contains_release)
+        if running.contains_release
+        else None,
     )
     return UpgradeDirection(
         allowed=not assessment.blocked,
