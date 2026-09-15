@@ -157,6 +157,13 @@ or from the dashboard's Control tab in [write mode](dashboard.md#dashboard-write
 — **AC charging** as its own card for the installation, and a per-device toggle
 next to each device's enabled flag.
 
+Both switches live in [runtime-state](technical/runtime-state.md), which the
+EMS seeds from `config.json` when it loads it. The Dashboard therefore shows
+the value the EMS applies, the same value the Admin's feature list shows
+until an operator flips a switch at runtime. The Admin edits `config.json`
+and mirrors the flag into runtime-state on Apply; it never reads the runtime
+switch back into the config.
+
 ## Safety
 
 A power command — charge, idle or discharge — travels on the device's normal

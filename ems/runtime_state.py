@@ -132,7 +132,7 @@ def merge_runtime_defaults(data, defaults):
         **system
     }
 
-    for section_name in ("ha", "winter"):
+    for section_name in ("ha", "winter", "ac_charge_control"):
         section = merged.get(section_name)
         if not isinstance(section, dict):
             section = {}
@@ -438,7 +438,8 @@ def build_runtime_defaults(devices):
                 getattr(dev, "pv_priority_factor", 1.0),
                 1.0,
                 minimum=0.01
-            )
+            ),
+            "ac_charge_enabled": bool(getattr(dev, "ac_charge_enabled", True)),
         }
         identity = _clean_identity(str(getattr(dev, "sn", "") or ""))
         if identity is not None:
@@ -458,6 +459,9 @@ def build_runtime_defaults(devices):
         },
         "winter": {
             "enabled": cfg.winter_config_bool("enabled", False)
+        },
+        "ac_charge_control": {
+            "enabled": cfg.ac_charge_control_enabled()
         },
         "devices": device_defaults
     }
