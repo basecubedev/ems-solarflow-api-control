@@ -127,6 +127,12 @@ jobs:
             exit 1
           fi
           git_describe="$(git describe --tags --always --dirty 2>/dev/null || true)"
+          # The newest release tag this build descends from. A tagged release
+          # names itself; a `latest` build names the release it is built past,
+          # which is the only version a rolling image can state. Restricted to
+          # the v* namespace: this repository also tags appliance images and
+          # Manager releases, and an unrestricted describe would name one.
+          contains_release="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
           git_commit_short="${git_commit::12}"
           if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
             git_dirty="true"
@@ -138,6 +144,7 @@ jobs:
             echo "release_tag=${release_tag}"
             echo "ems_release_tag=${ems_release_tag}"
             echo "git_describe=${git_describe}"
+            echo "contains_release=${contains_release}"
             echo "git_commit=${git_commit}"
             echo "git_commit_short=${git_commit_short}"
             echo "git_dirty=${git_dirty}"
@@ -166,6 +173,7 @@ jobs:
             de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
             de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
             de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.release_tag }}
+            de.basecubedev.ems.contains_release=${{ steps.build_identity.outputs.contains_release }}
 
       # Imports the release cache but never exports (the pushed build is the
       # authoritative exporter). Explicit labels override the Dockerfile's
@@ -195,6 +203,7 @@ jobs:
             de.basecubedev.ems.channel=${{ steps.build_identity.outputs.channel }}
             de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
             de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.release_tag }}
+            de.basecubedev.ems.contains_release=${{ steps.build_identity.outputs.contains_release }}
           cache-from: type=gha,scope=${{ env.EMS_RELEASE_CACHE_SCOPE }}
 
       - name: Validate Docker image runtime content
@@ -266,6 +275,7 @@ jobs:
             de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
             de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
             de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.release_tag }}
+            de.basecubedev.ems.contains_release=${{ steps.build_identity.outputs.contains_release }}
 
       # Imports the Admin release cache but never exports; the Dockerfile derives
       # the identity labels from these build args.
