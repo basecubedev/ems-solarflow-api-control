@@ -105,7 +105,10 @@ The live stage tracker highlights the current step, gently pulses it, and labels
 it *Working…*, so a long step (for example while the target image downloads, or
 during the health check) stays visibly active rather than looking frozen. If the
 Admin Console itself is replaced, a full-screen reconnect spinner takes over and
-the page reconnects on its own.
+the page reconnects on its own. On a slow host (a Raspberry Pi pulling the new
+image) that can take several minutes: after two the spinner offers a manual
+reload, and it keeps waiting either way — nothing is wrong underneath, the
+transition is stored and resumes as soon as the new Admin answers.
 
 The current-state preflight and the verified backup always run **under the
 Admin that is currently running**, before any Admin alignment. The target Admin
