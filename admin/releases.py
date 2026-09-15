@@ -1029,6 +1029,12 @@ class ReleaseManager:
             target_version=target_version,
             allow_unverified=allow_unverified,
             target_rolling=tag == "latest",
+            target_contains_version=(
+                _version(target.contains_release) if target.contains_release else None
+            ),
+            current_contains_version=(
+                _version(running.contains_release) if running.contains_release else None
+            ),
         )
 
     def verify_upgrade_target(self, tag, *, pull=None):

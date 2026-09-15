@@ -48,6 +48,56 @@ stable, RC, `latest`, development and local builds. Digests are **not** required
 to be equal — Admin and EMS are separate images. `build_serial` (a GitHub run
 number) is **not** used as pair identity or as a global version order.
 
+### Ordering a development build
+
+A development tag carries no version, so there is nothing for SemVer to compare
+and a run number is not a substitute: development builds are numbered by
+`docker-feature-publish.yml` and releases by `docker-publish.yml`, two counters
+that never meet. A development image therefore declares the newest `v*` tag it
+descends from:
+
+```text
+de.basecubedev.ems.contains_release   (newest v* release this build contains)
+```
+
+Every published image carries it, releases included: a tagged release names
+itself, and a `latest` build names the release it was built past — the only
+version a rolling image can state. That matters on the running side too, because
+an installation that has followed `latest` for months could otherwise say
+nothing but "latest" and a commit hash.
+
+`assess_upgrade` uses it only where a build serial cannot help: when exactly
+one side is a development build, the two serials count runs of different
+workflows. Only then. Two development builds, or `latest` against a release,
+are ordered by their serials, which do come from one counter — inside a counter
+the declared release is the same on both sides and separates nothing, so where
+a serial is missing there the direction is simply unknown.
+
+Across that boundary each side states the version it can, its own SemVer or the
+release it declares, and those are read with one policy — the same the release
+channels already use. A lower target inside the running `major.minor` is a
+rollback: selectable, and named as one rather than offered as an upgrade.
+Anything lower across a minor or major boundary is blocked. Equality is the one
+place the two kinds of target differ: a development build declaring the running
+release sits on top of it, so moving there is an upgrade, while moving to the
+release itself drops those commits and is a rollback — which is why a
+development build is never a one-way door. A running image that has a SemVer of
+its own keeps it; the label only answers for a side that has no version to
+give.
+
+The label is restricted to the `v*` namespace because this repository also tags
+appliance images and Manager releases, and an unrestricted `git describe` would
+name one of those. A tag from outside that namespace parses as no version at
+all, so it decides nothing rather than deciding wrongly.
+
+An image built before the label existed does not carry it. Nothing then proves
+the direction, and a run number must not stand in for one, so the move is
+refused as `identity_unknown` — in the listing and in Guided Upgrade alike.
+`decide_upgrade_direction` used to ask for an unverified pass on every
+development target, which existed only because such a target could not be
+judged at all. It can be now, and a move nothing can prove is refused rather
+than carried through on a warning.
+
 Resolution and validation live in [`admin/system_build.py`](../../admin/system_build.py)
 (`SystemBuild`, `SystemBuildResolver`, `decide_alignment`). A pair that fails
 validation raises `system_build_mismatch`; the resolver never downloads or

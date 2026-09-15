@@ -21,6 +21,12 @@ from dataclasses import dataclass, field
 LABEL_VERSION = "org.opencontainers.image.version"
 LABEL_REVISION = "org.opencontainers.image.revision"
 LABEL_CHANNEL = "de.basecubedev.ems.channel"
+LABEL_CONTAINS_RELEASE = "de.basecubedev.ems.contains_release"
+
+# The one channel whose images are numbered by a different workflow, so a build
+# serial only orders builds that agree on this. ``admin.system_build`` imports
+# it from here rather than keeping a second spelling.
+CHANNEL_DEVELOPMENT = "development"
 LABEL_BUILD_SERIAL = "de.basecubedev.ems.build_serial"
 LABEL_BUILD_ID = "de.basecubedev.ems.build_id"
 LABEL_RELEASE_TAG = "de.basecubedev.ems.release_tag"
@@ -44,6 +50,7 @@ class ImageIdentity:
     build_serial: int | None = None
     build_id: str | None = None
     release_tag: str | None = None
+    contains_release: str | None = None
     labels: dict = field(default_factory=dict)
 
     def as_dict(self):
@@ -58,6 +65,7 @@ class ImageIdentity:
             "build_serial": self.build_serial,
             "build_id": self.build_id,
             "release_tag": self.release_tag,
+            "contains_release": self.contains_release,
             "labels": dict(self.labels),
         }
 
@@ -113,6 +121,7 @@ def parse_labels(labels, image_ref=None, digest=None):
         build_serial=_parse_build_serial(safe_labels.get(LABEL_BUILD_SERIAL)),
         build_id=_clean(safe_labels.get(LABEL_BUILD_ID)),
         release_tag=_clean(safe_labels.get(LABEL_RELEASE_TAG)),
+        contains_release=_clean(safe_labels.get(LABEL_CONTAINS_RELEASE)),
         labels=safe_labels,
     )
 
@@ -236,6 +245,8 @@ def assess_upgrade(
     target_version=None,
     allow_unverified=False,
     target_rolling=False,
+    target_contains_version=None,
+    current_contains_version=None,
 ):
     """Classify a move from ``current`` to ``target`` build identity.
 
@@ -258,10 +269,23 @@ def assess_upgrade(
        :data:`DOWNGRADE_BLOCKED`, both regardless of build serial.
        When neither side carries a build serial this is the *legacy* SemVer
        fallback and the upgrade verdict carries :data:`LEGACY_SEMVER_WARNING`.
-    4. SemVer is not comparable (a ``latest`` side) but both build serials are
-       known -> a higher target serial is an upgrade, otherwise
-       :data:`OLDER_THAN_RUNNING_BUILD`.
-    5. Nothing can prove an upgrade -> :data:`IDENTITY_UNKNOWN`, unless
+    4. Exactly one side is a development build, so the two build serials count
+       runs of *different* workflows and are not an ordering. Only then, because
+       within one counter the declared release is the same for both sides and
+       distinguishes nothing. Each side then
+       states the version it can -- its own SemVer, or the release it declares
+       having been built on top of -- and those are read with the policy step 3
+       uses: a lower target inside the running ``major.minor`` is
+       :data:`ROLLBACK_AVAILABLE`, and anything lower across that boundary is
+       :data:`DOWNGRADE_BLOCKED`. Equality is the one place the two kinds of
+       target differ. A development build declaring the running release sits on
+       top of it, so moving there is an upgrade; moving to the release itself
+       drops those commits and is a rollback.
+    5. Both serials are known and count runs of the same workflow -> a higher
+       target serial is an upgrade, otherwise
+       :data:`OLDER_THAN_RUNNING_BUILD`. This is what orders two development
+       builds against each other, and ``latest`` against a release.
+    6. Nothing can prove an upgrade -> :data:`IDENTITY_UNKNOWN`, unless
        ``allow_unverified`` is set (the ``ADMIN_ALLOW_LEGACY_UNVERIFIED_UPGRADES``
        test override), in which case the move is allowed as
        :data:`LEGACY_UNVERIFIED` with :data:`LEGACY_UNVERIFIED_WARNING`. The
@@ -291,7 +315,40 @@ def assess_upgrade(
             return UpgradeAssessment(ROLLBACK_AVAILABLE, "semver")
         return UpgradeAssessment(DOWNGRADE_BLOCKED, "semver")
 
-    if current.build_serial is not None and target.build_serial is not None:
+    crosses_build_counters = (
+        current.channel is not None
+        and target.channel is not None
+        and (current.channel == CHANNEL_DEVELOPMENT)
+        != (target.channel == CHANNEL_DEVELOPMENT)
+    )
+    serials_order_these_two = (
+        current.build_serial is not None
+        and target.build_serial is not None
+        and not crosses_build_counters
+    )
+
+    running_states = (
+        current_version if current_version is not None else current_contains_version
+    )
+    target_states = (
+        target_version if target_version is not None else target_contains_version
+    )
+    if (
+        crosses_build_counters
+        and running_states is not None
+        and target_states is not None
+    ):
+        if target_states > running_states:
+            return UpgradeAssessment(UPGRADE_AVAILABLE, "contains_release")
+        if target_states == running_states:
+            if target.channel == CHANNEL_DEVELOPMENT:
+                return UpgradeAssessment(UPGRADE_AVAILABLE, "contains_release")
+            return UpgradeAssessment(ROLLBACK_AVAILABLE, "contains_release")
+        if target_states[:2] == running_states[:2]:
+            return UpgradeAssessment(ROLLBACK_AVAILABLE, "contains_release")
+        return UpgradeAssessment(DOWNGRADE_BLOCKED, "contains_release")
+
+    if serials_order_these_two:
         if target.build_serial > current.build_serial:
             return UpgradeAssessment(UPGRADE_AVAILABLE, "build_serial")
         if target.build_serial == current.build_serial:
