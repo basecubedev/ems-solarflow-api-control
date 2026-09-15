@@ -85,6 +85,14 @@ development build is never a one-way door. A running image that has a SemVer of
 its own keeps it; the label only answers for a side that has no version to
 give.
 
+The same label places a *running* image that has no version of its own. A
+rolling `latest` or a development build installed by Guided Upgrade is pinned by
+digest, so its compose file carries no `:latest` tag to read the channel from;
+the Admin reads the channel and the declared release off the running image
+instead, and the compose tag is only the answer for an image whose labels cannot
+be read. Without that, such an install had no baseline on the version line at
+all, and every older release passed the downgrade guard.
+
 The label is restricted to the `v*` namespace because this repository also tags
 appliance images and Manager releases, and an unrestricted `git describe` would
 name one of those. A tag from outside that namespace parses as no version at

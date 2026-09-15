@@ -224,6 +224,24 @@ def _development_tag_revision(tag):
     return match.group(1) if match else ""
 
 
+def resources_present(paths) -> bool:
+    """Whether a release tree carries every setup resource the Admin installs.
+
+    One rule for two readers: the Admin's own per-tag check against the GitHub
+    tree, and the CI script that records the answer in the release catalogue so
+    that installations no longer have to ask.
+    """
+
+    paths = {str(path) for path in paths}
+    resource_files = REQUIRED_FILES - {CONFIG_TEMPLATE_NAME}
+    has_template = any(path in paths for path in ARCHIVE_TEMPLATE_PATHS)
+    return (
+        resource_files.issubset(paths)
+        and has_template
+        and any(path.startswith("deploy/docker/") for path in paths)
+    )
+
+
 def _is_admin_version(tag):
     return tag == "latest" or bool(
         _version(tag) and _version(tag) >= MIN_ADMIN_VERSION
@@ -352,6 +370,7 @@ class ReleaseManager:
         docker=None,
         development_source=None,
         known_good=None,
+        release_source=None,
     ):
         explicit_data_dir = data_dir is not None
         self.data_dir = Path(data_dir) if explicit_data_dir else default_admin_data_dir()
@@ -374,6 +393,7 @@ class ReleaseManager:
         # Optional callable that returns candidate development-build descriptors
         # (from a registry/CI index). ``None`` keeps the catalogue release-only.
         self._development_source = development_source
+        self._release_source = release_source
         # Read-only Docker inspector (``inspect_container``/``inspect_image``) used
         # to read build identity. ``None`` disables identity checks entirely, so
         # release selection falls back to SemVer/tag reasoning only.
@@ -384,6 +404,7 @@ class ReleaseManager:
         # to the state directory's store.
         self._known_good = known_good
         self._identity_cache = {}
+        self._running_identity_memo = None
         self._known_downloads = {}
         self._resource_checks = {}
         self._prepare_lock = threading.Lock()
@@ -402,17 +423,28 @@ class ReleaseManager:
         every supported release with available Docker resources stays selectable.
         """
 
+        self._forget_running_identity()
+        try:
+            return self._list_releases(for_upgrade=for_upgrade)
+        finally:
+            self._forget_running_identity()
+
+    def _list_releases(self, *, for_upgrade):
         cached = self._cached_manifests()
         warnings = []
         remote = []
         remote_available = True
-        try:
-            remote = self._fetch_release_metadata()
-        except (OSError, ValueError, urllib.error.URLError) as exc:
-            remote_available = False
-            warnings.append(f"GitHub releases are unavailable: {exc}")
+        catalogued = self._catalogued_releases()
+        if catalogued is not None:
+            remote = catalogued
         else:
-            warnings.extend(getattr(self, "_release_page_warnings", []))
+            try:
+                remote = self._fetch_release_metadata()
+            except (OSError, ValueError, urllib.error.URLError) as exc:
+                remote_available = False
+                warnings.append(f"GitHub releases are unavailable: {exc}")
+            else:
+                warnings.extend(getattr(self, "_release_page_warnings", []))
 
         by_tag = {item["tag"]: item for item in remote}
         self._newest_seen_tags.update(
@@ -589,7 +621,15 @@ class ReleaseManager:
             else:
                 item["reason"] = None
 
-        if baseline and not _version(baseline) and baseline != "latest":
+        # A running build without a version of its own is still placed on the
+        # line by the release it declares; the warning is for the case where
+        # nothing could place it and therefore no downgrade claim was made.
+        if (
+            baseline
+            and not _version(baseline)
+            and baseline != "latest"
+            and not _version(policy_baseline)
+        ):
             warnings.append(
                 "The current release cannot be compared safely; no downgrade claim "
                 "was made."
@@ -651,6 +691,13 @@ class ReleaseManager:
             raise self._data_directory_error() from exc
 
     def _prepare_locked(self, tag, *, revision=None):
+        self._forget_running_identity()
+        try:
+            return self._prepare_with_running_identity(tag, revision=revision)
+        finally:
+            self._forget_running_identity()
+
+    def _prepare_with_running_identity(self, tag, *, revision=None):
         cached = self._cached_manifests()
         active = self.detect_active_release()
         prepared = self._selected_release(cached)
@@ -694,6 +741,8 @@ class ReleaseManager:
             self._write_selected(tag)
             return self._ready_payload(tag, manifest, reused=True)
 
+        if tag not in self._known_downloads:
+            self._catalogued_releases()
         if tag not in self._known_downloads:
             try:
                 self._fetch_release_metadata()
@@ -950,14 +999,29 @@ class ReleaseManager:
 
         if self._docker is None:
             return ImageIdentity()
+        if self._running_identity_memo is not None:
+            return self._running_identity_memo
         from admin.installed_release import running_image_ref
 
         ref = running_image_ref(self._docker, self._ems_container_name())
         if not ref:
             ref = self._compose_image_ref()
-        if ref:
-            return self._identify(ref)
-        return ImageIdentity()
+        identity = self._identify(ref) if ref else ImageIdentity()
+        self._running_identity_memo = identity
+        return identity
+
+    def _forget_running_identity(self):
+        """Read the running container afresh on the next question about it.
+
+        Placing the running build asks for its identity several times per
+        listing; one ``docker ps`` per listing is the cost, not one per
+        question. The memo is dropped at both ends of a listing or a prepare,
+        because the container may be replaced between two requests -- an
+        executed upgrade followed by a verify is exactly that -- and nothing
+        read for one request may answer the next.
+        """
+
+        self._running_identity_memo = None
 
     def _identify(self, image_ref):
         ref = str(image_ref or "").strip()
@@ -1048,10 +1112,14 @@ class ReleaseManager:
         """
 
         tag = _safe_tag(tag)
-        running = self._running_identity()
-        running_known = _has_build_identity(running)
-        active = self.detect_active_release()
-        return self._assess_upgrade(tag, running, running_known, active, pull=pull)
+        self._forget_running_identity()
+        try:
+            running = self._running_identity()
+            running_known = _has_build_identity(running)
+            active = self.detect_active_release()
+            return self._assess_upgrade(tag, running, running_known, active, pull=pull)
+        finally:
+            self._forget_running_identity()
 
     def _fetch_release_page(self, url):
         request = urllib.request.Request(
@@ -1069,6 +1137,48 @@ class ReleaseManager:
         if not isinstance(payload, list):
             raise ValueError("GitHub returned an invalid release list")
         return payload
+
+    def _catalogued_releases(self):
+        """The release list from the CI-published catalogue, or ``None``.
+
+        The catalogue answers both questions the upgrade page used to put to
+        the GitHub API on every visit -- which releases exist, and whether each
+        one's setup resources are present -- from one file read over the content
+        CDN, which is not rate limited. ``None`` means the catalogue could not be
+        used and the API path decides as before; a failing source never breaks
+        the listing.
+        """
+
+        source = self._release_source
+        if source is None:
+            return None
+        try:
+            catalogue = source()
+        except Exception:
+            return None
+        if catalogue is None:
+            return None
+        self._resource_checks["main"] = bool(catalogue["main_resources_present"])
+        releases = []
+        for entry in catalogue["releases"]:
+            tag = entry["tag"]
+            self._known_downloads[tag] = (
+                f"https://codeload.github.com/{REPO}/zip/refs/tags/{tag}"
+            )
+            self._resource_checks[tag] = bool(entry["resources_present"])
+            releases.append(
+                {
+                    "tag": tag,
+                    "name": entry["name"],
+                    "published_at": entry.get("published_at"),
+                    "github_prerelease": bool(entry["prerelease"]),
+                    "kind": "release",
+                }
+            )
+        self._known_downloads["latest"] = (
+            f"https://codeload.github.com/{REPO}/zip/refs/heads/main"
+        )
+        return releases
 
     def _fetch_release_metadata(self):
         payload = []
@@ -1158,17 +1268,10 @@ class ReleaseManager:
         payload = json.loads(raw.decode("utf-8"))
         if not isinstance(payload, dict) or not isinstance(payload.get("tree"), list):
             raise ValueError("GitHub returned an invalid resource tree")
-        paths = {
+        return resources_present(
             item.get("path")
             for item in payload["tree"]
             if isinstance(item, dict) and item.get("type") == "blob"
-        }
-        resource_files = REQUIRED_FILES - {CONFIG_TEMPLATE_NAME}
-        has_template = any(path in paths for path in ARCHIVE_TEMPLATE_PATHS)
-        return (
-            resource_files.issubset(paths)
-            and has_template
-            and any(str(path).startswith("deploy/docker/") for path in paths)
         )
 
     def _resolve_remote_revision(self, ref):
@@ -1671,28 +1774,54 @@ class ReleaseManager:
         return _blocks_as_downgrade(active, selected)
 
     def _rolling_baseline(self, known_tags=()):
-        """Where a running rolling ``latest`` stands, or ``None``.
+        """Where a running build without a version of its own stands, or ``None``.
 
-        Only the newest release this manager has actually seen is used, never a
-        guess: with no catalogue and nothing cached there is nothing to compare
-        against, and the listing says so by keeping ``latest`` as its default
-        rather than proposing a version it cannot place.
+        The running image says so itself when it can: every published image
+        declares the newest release it descends from, and that is where a
+        rolling ``latest`` or a development build sits on the version line.
+        Otherwise the newest release this manager has actually seen is used --
+        never a guess: with no catalogue and nothing cached there is nothing to
+        compare against, and the listing says so by keeping ``latest`` as its
+        default rather than proposing a version it cannot place.
         """
 
-        if not self._running_is_rolling():
+        if not self._running_has_no_version():
             return None
         candidates = [
             tag
             for tag in (*known_tags, *self._newest_seen_tags)
             if _version(tag) and _is_admin_version(tag)
         ]
+        declared = self._running_identity().contains_release
+        if declared and _version(declared):
+            candidates.append(declared)
         return max(candidates, key=_version) if candidates else None
 
     def _running_is_rolling(self):
-        """True when the installed EMS image is the rolling ``latest`` tag."""
+        """True when the installed EMS image is the rolling ``latest`` channel.
 
+        Read off the running image's channel label first. A Guided Upgrade pins
+        the compose image by digest, so the compose file of a rolling install
+        does not end in ``:latest`` -- and reading only the compose tag left such
+        an install with no baseline at all, which let every older release pass
+        the downgrade guard and put v0.7.0 in front of an operator running a
+        v0.8 build. The compose tag remains the answer for an image whose labels
+        cannot be read.
+        """
+
+        channel = self._running_identity().channel
+        if channel:
+            return channel == "latest"
         ref = self._compose_image_ref() or ""
         return ref.rsplit(":", 1)[-1] == "latest" if ":" in ref else False
+
+    def _running_has_no_version(self):
+        """True for a running image with no SemVer of its own to compare by."""
+
+        channel = self._running_identity().channel
+        if channel:
+            return channel in ("latest", "development")
+        return self._running_is_rolling()
 
     def _ready_payload(self, tag, manifest, reused):
         root = self.releases_dir / tag

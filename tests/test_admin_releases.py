@@ -2164,3 +2164,179 @@ def test_the_paging_stops_at_the_end_rather_than_asking_forever(tmp_path):
     ReleaseManager(data_dir=tmp_path, urlopen=counting).list_releases()
 
     assert len(asked) == 1, asked
+
+
+# --- a digest-pinned install still knows where it stands -------------------
+#
+# Reported from a live console running `latest` installed by Guided Upgrade:
+# every v0.8.x was correctly refused as older than the running build, and
+# Maintenance -> Upgrade then proposed v0.7.0. Guided Upgrade pins the compose
+# image by digest, so the compose file did not end in `:latest`, the manager
+# did not consider the install rolling, placed no baseline on the version line,
+# and every older release passed the downgrade guard as merely "unverified".
+
+
+def _pinned_payload():
+    return [
+        {
+            "tag_name": tag,
+            "name": tag,
+            "published_at": published,
+            "prerelease": False,
+            "draft": False,
+            "zipball_url": f"https://example.test/{tag}.zip",
+        }
+        for tag, published in (
+            ("v0.8.4", "2026-09-13T00:00:00Z"),
+            ("v0.7.0", "2026-07-07T00:00:00Z"),
+            ("v0.6.1", "2026-06-01T00:00:00Z"),
+        )
+    ]
+
+
+def _labelled(channel, serial, release_tag, contains="v0.8.4"):
+    return {
+        "de.basecubedev.ems.channel": channel,
+        "de.basecubedev.ems.build_serial": str(serial),
+        "de.basecubedev.ems.release_tag": release_tag,
+        "org.opencontainers.image.version": release_tag,
+        "org.opencontainers.image.revision": "d" * 40,
+        "de.basecubedev.ems.build_id": f"{release_tag}-x",
+        "de.basecubedev.ems.contains_release": contains,
+    }
+
+
+def _pinned_install(tmp_path, labels, *, readable=True, cached="latest"):
+    """A console whose compose image is ``repository@sha256:...``."""
+
+    digest = "sha256:" + "f" * 64
+    ref = f"{DOCKER_IMAGE}@{digest}"
+    data = tmp_path / "data"
+    _write_cached(data, cached)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "docker-compose.yml").write_text(
+        f"services:\n  ems:\n    image: {ref}\n"
+        "    container_name: ems-solarflow-api-control\n",
+        encoding="utf-8",
+    )
+    container = {
+        "container_name": "ems-solarflow-api-control",
+        "image": ref,
+        "status": "running",
+    }
+    images = {ref: {"digest": digest, "labels": labels}} if readable else {}
+    return ReleaseManager(
+        data_dir=data,
+        project_dir=project,
+        urlopen=_opener(payload=_pinned_payload()),
+        docker=_FakeDocker(container=container, images=images),
+    )
+
+
+def test_a_pinned_rolling_install_refuses_the_older_line(tmp_path):
+    manager = _pinned_install(tmp_path, _labelled("latest", 169, "latest"))
+    result = manager.list_releases()
+    by_tag = {item["tag"]: item for item in result["releases"]}
+
+    assert manager._running_is_rolling() is True
+    assert by_tag["v0.7.0"]["upgrade_state"] == "downgrade_blocked"
+    assert by_tag["v0.7.0"]["selectable"] is False
+    assert by_tag["v0.6.1"]["selectable"] is False
+    assert result["default_release"] != "v0.7.0"
+
+
+def test_a_pinned_development_install_refuses_the_older_line(tmp_path):
+    """A development build has no version of its own either, and declares one."""
+
+    manager = _pinned_install(
+        tmp_path, _labelled("development", 45, "dev-feat-x-aaaaaaaaaa-1234567-99-1")
+    )
+    by_tag = {item["tag"]: item for item in manager.list_releases()["releases"]}
+
+    assert by_tag["v0.7.0"]["upgrade_state"] == "downgrade_blocked"
+    assert by_tag["v0.7.0"]["selectable"] is False
+
+
+def test_the_compose_tag_still_answers_when_the_image_cannot_be_read(tmp_path):
+    """Labels first, compose tag second -- never neither."""
+
+    pinned = _pinned_install(tmp_path, {}, readable=False)
+    assert pinned._running_is_rolling() is False
+
+    tagged = _rolling_install(tmp_path / "tagged", payload=_pinned_payload())
+    assert tagged._running_is_rolling() is True
+
+
+def test_the_running_identity_is_read_afresh_for_every_request(tmp_path):
+    """One `docker ps` per request, and none of it survives the request.
+
+    Placing the running build reads its identity several times per listing, so
+    the read is memoised for the request -- and dropped at both ends of it,
+    because an executed upgrade followed by a verify replaces the container in
+    between, and nothing read for one request may answer the next.
+    """
+
+    class _ReplaceableDocker(_FakeDocker):
+        def __init__(self, container, images):
+            super().__init__(container=container, images=images)
+            self.image_id = "sha256:" + "a" * 64
+
+        def inspect_container_image_id(self, _name):
+            return self.image_id
+
+    docker = _ReplaceableDocker(
+        _running_container("latest"),
+        {
+            "sha256:" + "a" * 64: _image(digest="sha256:" + "a" * 64, build_serial=169, channel="latest"),
+            "sha256:" + "b" * 64: _image(digest="sha256:" + "b" * 64, build_serial=175, channel="latest"),
+        },
+    )
+    manager = ReleaseManager(
+        data_dir=tmp_path / "data",
+        project_dir=_project_compose(tmp_path, "latest"),
+        urlopen=_opener(payload=_two_line_payload()),
+        docker=docker,
+    )
+    compared = []
+    original = manager._assess_upgrade
+
+    def recording(tag, running, *args, **kwargs):
+        compared.append(running.build_serial)
+        return original(tag, running, *args, **kwargs)
+
+    manager._assess_upgrade = recording
+
+    manager.list_releases()
+    manager.verify_upgrade_target("v0.8.3")
+    docker.image_id = "sha256:" + "b" * 64
+    manager.verify_upgrade_target("v0.8.3")
+
+    assert compared[-2:] == [169, 175]
+
+
+def test_a_placed_development_install_is_not_called_uncomparable(tmp_path):
+    """The warning is for a build nothing could place. A development build
+    declaring its release is placed -- v0.7.0 is refused in the same listing --
+    so saying no downgrade claim was made would contradict the list."""
+
+    dev_tag = "dev-feat-x-aaaaaaaaaa-1234567-99-1"
+    manager = _pinned_install(
+        tmp_path, _labelled("development", 45, dev_tag), cached=dev_tag
+    )
+    result = manager.list_releases()
+    by_tag = {item["tag"]: item for item in result["releases"]}
+
+    assert by_tag["v0.7.0"]["upgrade_state"] == "downgrade_blocked"
+    assert not any("cannot be compared" in warning for warning in result["warnings"])
+
+
+def test_a_build_nothing_can_place_still_says_so(tmp_path):
+    """No labels to place it by and no version in the cache: the old warning."""
+
+    manager = _pinned_install(
+        tmp_path, {}, readable=False, cached="dev-feat-x-aaaaaaaaaa-1234567-99-1"
+    )
+    result = manager.list_releases()
+
+    assert any("cannot be compared" in warning for warning in result["warnings"])
