@@ -1,3 +1,20 @@
 {
-  "builds": []
+  "builds": [
+    {
+      "admin_digest": "sha256:e1ae643887e4fc469f189e79906f53f6d5e08c4ec476014350867509b69c9d03",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-ac-charge-control-e8bce2d1c7-f187cbd-35005388105-1",
+      "admin_test_contract": 1,
+      "build_id": "dev-feat-ac-charge-control-e8bce2d1c7-f187cbd-35005388105-1",
+      "channel": "development",
+      "created_at": "2026-09-15T18:14:44Z",
+      "display_name": "Feature feat-ac-charge-control",
+      "ems_digest": "sha256:d4df4e9d3a0cd4851f6600344bcfc41c00132fc4a4504d1ff9229b6a927c42bb",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-ac-charge-control-e8bce2d1c7-f187cbd-35005388105-1",
+      "installable": true,
+      "revision": "f187cbd02108f1eb7adc26bd8cb01b57a40df205",
+      "run_attempt": 1,
+      "run_id": "35005388105",
+      "tag": "dev-feat-ac-charge-control-e8bce2d1c7-f187cbd-35005388105-1"
+    }
+  ]
 }
