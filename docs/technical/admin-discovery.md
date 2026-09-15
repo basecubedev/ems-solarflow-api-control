@@ -113,8 +113,11 @@ blocked as older-than-running or already-current, so the list never dead-ends wh
 the running build is the newest stable; two comparable SemVer tags require the
 target to be `>=` current, or a lower patch in the same `major.minor`
 (`rollback_available`); any other lower target is `downgrade_blocked`, even if
-its build serial is higher; when a running `latest` makes SemVer incomparable the monotonic
-`build_serial` decides (`upgrade_available` or `older_than_running_build`), and
+its build serial is higher; when a running `latest` makes SemVer incomparable, the release it declares
+places it on the version line and the same rollback policy applies -- a release
+inside that line is `rollback_available`, selectable and never proposed; only a
+running build that declares nothing falls back to the monotonic `build_serial`
+(`upgrade_available` or `older_than_running_build`), and
 where nothing at all could be proven the rolling channel is placed on the version
 line instead. The running image places itself when it can: every published image
 declares the newest release it descends from (`de.basecubedev.ems.contains_release`),
