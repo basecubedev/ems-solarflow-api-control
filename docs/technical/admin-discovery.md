@@ -108,10 +108,17 @@ target to be `>=` current, or a lower patch in the same `major.minor`
 its build serial is higher; when a running `latest` makes SemVer incomparable the monotonic
 `build_serial` decides (`upgrade_available` or `older_than_running_build`), and
 where nothing at all could be proven the rolling channel is placed on the version
-line instead — `latest` is built from main, so it sits at or above every
-published tag and belongs to the line of the newest one. That placement is an
-inference and never overrules a digest or a build serial, which are readings of
-the running image itself; and
+line instead. The running image places itself when it can: every published image
+declares the newest release it descends from (`de.basecubedev.ems.contains_release`),
+and that label is where a `latest` or a development build stands. Only without it
+does the inference apply — `latest` is built from main, so it sits at or above
+every published tag and belongs to the line of the newest one. Whether the
+running build *is* rolling is read off its channel label, not the compose tag: a
+Guided Upgrade pins the compose image by digest, so a rolling install's compose
+file does not end in `:latest`, and reading only that tag once left such an
+install with no baseline and v0.7.0 proposed to an operator running a v0.8 build.
+That placement is an inference and never overrules a digest or a build serial,
+which are readings of the running image itself; and
 when the target image is not local yet its identity cannot be settled from the
 listing alone, so it is `identity_unknown`. Each release carries its
 `upgrade_state`. Proven non-upgrades (`older_than_running_build`,
