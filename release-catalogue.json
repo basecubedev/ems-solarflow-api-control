@@ -1,0 +1,327 @@
+{
+  "generated_at": "2026-09-15T15:53:50Z",
+  "main_resources_present": true,
+  "releases": [
+    {
+      "channel": "stable",
+      "name": "v0.8.4",
+      "prerelease": false,
+      "published_at": "2026-09-13T15:47:17Z",
+      "resources_present": true,
+      "tag": "v0.8.4"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.8.3",
+      "prerelease": false,
+      "published_at": "2026-09-12T21:12:19Z",
+      "resources_present": true,
+      "tag": "v0.8.3"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.8.2",
+      "prerelease": false,
+      "published_at": "2026-09-11T19:16:14Z",
+      "resources_present": true,
+      "tag": "v0.8.2"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.8.1",
+      "prerelease": false,
+      "published_at": "2026-09-05T22:59:46Z",
+      "resources_present": true,
+      "tag": "v0.8.1"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.8.0",
+      "prerelease": false,
+      "published_at": "2026-09-03T19:22:58Z",
+      "resources_present": true,
+      "tag": "v0.8.0"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.8.0-RC2",
+      "prerelease": false,
+      "published_at": "2026-08-04T18:17:44Z",
+      "resources_present": true,
+      "tag": "v0.8.0-RC2"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.8.0-RC1",
+      "prerelease": false,
+      "published_at": "2026-08-04T16:39:30Z",
+      "resources_present": true,
+      "tag": "v0.8.0-RC1"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.7.0",
+      "prerelease": false,
+      "published_at": "2026-07-07T15:18:00Z",
+      "resources_present": true,
+      "tag": "v0.7.0"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.7.0-RC",
+      "prerelease": false,
+      "published_at": "2026-07-06T23:19:34Z",
+      "resources_present": true,
+      "tag": "v0.7.0-RC"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.6.1",
+      "prerelease": false,
+      "published_at": "2026-07-01T20:31:08Z",
+      "resources_present": true,
+      "tag": "v0.6.1"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.6.0",
+      "prerelease": false,
+      "published_at": "2026-06-29T17:58:24Z",
+      "resources_present": true,
+      "tag": "v0.6.0"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.6.0-rc6",
+      "prerelease": false,
+      "published_at": "2026-06-25T00:01:50Z",
+      "resources_present": true,
+      "tag": "v0.6.0-rc6"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.6.0-rc5",
+      "prerelease": false,
+      "published_at": "2026-06-23T18:04:51Z",
+      "resources_present": false,
+      "tag": "v0.6.0-rc5"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.6.0-rc4",
+      "prerelease": false,
+      "published_at": "2026-06-22T18:54:25Z",
+      "resources_present": false,
+      "tag": "v0.6.0-rc4"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.6.0-rc3",
+      "prerelease": false,
+      "published_at": "2026-06-21T00:57:25Z",
+      "resources_present": false,
+      "tag": "v0.6.0-rc3"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.6.0-rc2",
+      "prerelease": false,
+      "published_at": "2026-06-20T12:36:33Z",
+      "resources_present": false,
+      "tag": "v0.6.0-rc2"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.6.0-rc1",
+      "prerelease": false,
+      "published_at": "2026-06-18T15:19:57Z",
+      "resources_present": false,
+      "tag": "v0.6.0-rc1"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.6.0-rc",
+      "prerelease": false,
+      "published_at": "2026-06-17T22:38:37Z",
+      "resources_present": false,
+      "tag": "v0.6.0-rc"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.14",
+      "prerelease": false,
+      "published_at": "2026-06-16T16:39:40Z",
+      "resources_present": false,
+      "tag": "v0.5.14"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.13",
+      "prerelease": false,
+      "published_at": "2026-06-15T21:25:40Z",
+      "resources_present": false,
+      "tag": "v0.5.13"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.12",
+      "prerelease": false,
+      "published_at": "2026-06-15T20:15:05Z",
+      "resources_present": false,
+      "tag": "v0.5.12"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.11",
+      "prerelease": false,
+      "published_at": "2026-06-15T17:10:30Z",
+      "resources_present": false,
+      "tag": "v0.5.11"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.10",
+      "prerelease": false,
+      "published_at": "2026-06-14T13:59:26Z",
+      "resources_present": false,
+      "tag": "v0.5.10"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.9",
+      "prerelease": false,
+      "published_at": "2026-06-10T21:07:36Z",
+      "resources_present": false,
+      "tag": "v0.5.9"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.8",
+      "prerelease": false,
+      "published_at": "2026-06-07T17:16:06Z",
+      "resources_present": false,
+      "tag": "v0.5.8"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.7",
+      "prerelease": false,
+      "published_at": "2026-06-07T15:25:54Z",
+      "resources_present": false,
+      "tag": "v0.5.7"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.6",
+      "prerelease": false,
+      "published_at": "2026-06-07T10:09:59Z",
+      "resources_present": false,
+      "tag": "v0.5.6"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.5 \u2014 Energy Dashboard",
+      "prerelease": false,
+      "published_at": "2026-06-05T11:14:08Z",
+      "resources_present": false,
+      "tag": "v0.5.5"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.4",
+      "prerelease": false,
+      "published_at": "2026-06-03T12:49:14Z",
+      "resources_present": false,
+      "tag": "v0.5.4"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.3 \u2014 Container Image ems-solarflow-api-control",
+      "prerelease": false,
+      "published_at": "2026-05-31T21:14:26Z",
+      "resources_present": false,
+      "tag": "v0.5.3"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.2 \u2014 Energy Dashboard",
+      "prerelease": false,
+      "published_at": "2026-05-31T20:48:28Z",
+      "resources_present": false,
+      "tag": "v0.5.2"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.1 \u2014 Dashboard feature pack",
+      "prerelease": false,
+      "published_at": "2026-05-30T12:52:27Z",
+      "resources_present": false,
+      "tag": "v0.5.1"
+    },
+    {
+      "channel": "stable",
+      "name": "v0.5.0 \u2014 First Stable Release",
+      "prerelease": false,
+      "published_at": "2026-05-25T16:31:59Z",
+      "resources_present": false,
+      "tag": "v0.5.0"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.4.1 \u2013 EMS Hardening & Influx Development",
+      "prerelease": true,
+      "published_at": "2026-05-13T22:14:49Z",
+      "resources_present": false,
+      "tag": "v0.4.1"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.4.0 \u2013 EMS Runtime Control Feature Bundle",
+      "prerelease": true,
+      "published_at": "2026-05-11T18:40:35Z",
+      "resources_present": false,
+      "tag": "v0.4.0"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.3.1 \u2013 capability-detection-export",
+      "prerelease": true,
+      "published_at": "2026-05-10T16:48:12Z",
+      "resources_present": false,
+      "tag": "v0.3.1"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.3.0 \u2013 Refactoring Release",
+      "prerelease": true,
+      "published_at": "2026-05-10T15:28:14Z",
+      "resources_present": false,
+      "tag": "v0.3.0"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.2.1 \u2013 Runtime Failsafe Stage 1",
+      "prerelease": true,
+      "published_at": "2026-05-08T13:03:18Z",
+      "resources_present": false,
+      "tag": "v0.2.1"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.2.0 - Improved Runtime Control & Battery Balancing",
+      "prerelease": true,
+      "published_at": "2026-05-08T11:34:50Z",
+      "resources_present": false,
+      "tag": "v0.2.0"
+    },
+    {
+      "channel": "rc",
+      "name": "v0.1.0 - Initial EMS release",
+      "prerelease": true,
+      "published_at": "2026-05-07T16:04:53Z",
+      "resources_present": false,
+      "tag": "v0.1.0"
+    }
+  ],
+  "schema": 1
+}
