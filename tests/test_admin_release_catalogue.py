@@ -395,3 +395,22 @@ def test_the_builder_records_an_unknown_ref_as_absent_and_aborts_on_anything_els
     assert builder.tree_has_resources("v0.0.1", "token", opener=not_found) is False
     with pytest.raises(urllib.error.HTTPError):
         builder.tree_has_resources("v0.8.4", "token", opener=rate_limited)
+
+
+def test_a_rolling_install_can_select_the_release_it_was_built_past(tmp_path):
+    """Seen on a live console: on `latest` (serial 170, built from v0.8.4),
+    v0.8.4 was "older than the running EMS build" and not selectable. It is a
+    rollback inside the 0.8 line: selectable, named as one, never the proposal.
+    """
+
+    manager = _manager(tmp_path, lambda: _catalogue(_entry("v0.8.4"), _entry("v0.8.3"), _entry("v0.7.0", published="2026-07-07T00:00:00Z")))
+    result = manager.list_releases()
+    by_tag = {item["tag"]: item for item in result["releases"]}
+
+    assert by_tag["v0.8.4"]["upgrade_state"] == "rollback_available"
+    assert by_tag["v0.8.4"]["selectable"] is True
+    assert "rollback" in by_tag["v0.8.4"]["reason"]
+    assert by_tag["v0.8.3"]["selectable"] is True
+    assert by_tag["v0.7.0"]["upgrade_state"] == "downgrade_blocked"
+    assert result["default_release"] == "latest"
+    assert result["latest_stable"] is None

@@ -289,13 +289,33 @@ def test_two_development_builds_are_still_ordered_by_their_run_numbers():
     assert forward.basis == "build_serial"
 
 
-def test_a_rolling_install_is_still_ordered_against_a_release_by_run_number():
-    """`latest` and a release are numbered by the same workflow."""
+def test_a_rolling_install_rolls_back_inside_the_line_it_declares():
+    """The owner's policy, applied where a serial could only say "older".
 
-    running = _rolling("v0.8.4", serial=168)
-    older_release = _release("v0.8.2", 158)
+    A `latest` built from v0.8.4 plus a handful of commits was refusing v0.8.4
+    itself, because 170 > 167. Once the running image declares the release it
+    was built past, a release inside that line is a rollback -- selectable, and
+    never proposed -- exactly as it is for a tagged release.
+    """
 
-    assessment = _move(running, older_release)
+    running = _rolling("v0.8.4", serial=170)
+
+    assert _move(running, _release("v0.8.4", 167)).state == ROLLBACK_AVAILABLE
+    assert _move(running, _release("v0.8.3", 160)).state == ROLLBACK_AVAILABLE
+    assert _move(running, _release("v0.9.0", 200)).state == UPGRADE_AVAILABLE
+    blocked = _move(running, _release("v0.7.0", 120))
+    assert blocked.state == DOWNGRADE_BLOCKED and blocked.blocked
+
+
+def test_a_rolling_install_without_the_label_is_still_ordered_by_run_number():
+    """Nothing declared, nothing to place by: the serial decides as before."""
+
+    running = ImageIdentity(
+        digest="sha256:rolling", version_label="latest", release_tag="latest",
+        channel="latest", build_serial=168,
+    )
+
+    assessment = _move(running, _release("v0.8.2", 158))
 
     assert assessment.state == OLDER_THAN_RUNNING_BUILD
     assert assessment.basis == "build_serial"

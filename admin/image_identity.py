@@ -281,10 +281,18 @@ def assess_upgrade(
        target differ. A development build declaring the running release sits on
        top of it, so moving there is an upgrade; moving to the release itself
        drops those commits and is a rollback.
+       The same policy reads a move from a rolling ``latest`` (or any running
+       build without a version of its own) to a release, once the running
+       image declares the release it was built past: a release inside that
+       line is a rollback and stays selectable, one above it is an upgrade, and
+       one in an older line is blocked. A build serial cannot say which line a
+       target is in, only that it is older -- and "older" was refusing v0.8.4
+       to a ``latest`` built from v0.8.4 plus a handful of commits.
     5. Both serials are known and count runs of the same workflow -> a higher
        target serial is an upgrade, otherwise
        :data:`OLDER_THAN_RUNNING_BUILD`. This is what orders two development
-       builds against each other, and ``latest`` against a release.
+       builds against each other, two rolling builds, and a running build that
+       declares no release against anything.
     6. Nothing can prove an upgrade -> :data:`IDENTITY_UNKNOWN`, unless
        ``allow_unverified`` is set (the ``ADMIN_ALLOW_LEGACY_UNVERIFIED_UPGRADES``
        test override), in which case the move is allowed as
@@ -333,8 +341,13 @@ def assess_upgrade(
     target_states = (
         target_version if target_version is not None else target_contains_version
     )
+    rolling_to_release = (
+        current_version is None
+        and current_contains_version is not None
+        and target_version is not None
+    )
     if (
-        crosses_build_counters
+        (crosses_build_counters or rolling_to_release)
         and running_states is not None
         and target_states is not None
     ):

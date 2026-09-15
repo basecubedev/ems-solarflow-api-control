@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 from admin.container_names import resolve_ems_container_name
 from admin.image_identity import (
+    ROLLBACK_AVAILABLE,
     ALREADY_CURRENT,
     DOWNGRADE_BLOCKED,
     IDENTITY_UNKNOWN,
@@ -603,7 +604,7 @@ class ReleaseManager:
                 item["reason"] = ALREADY_CURRENT_REASON
             elif running_known and state == IDENTITY_UNKNOWN:
                 item["reason"] = IDENTITY_UNVERIFIED_REASON
-            elif _is_backwards(policy_baseline, tag):
+            elif state == ROLLBACK_AVAILABLE or _is_backwards(policy_baseline, tag):
                 item["reason"] = ROLLBACK_REASON
             elif warning:
                 item["reason"] = warning
@@ -661,6 +662,7 @@ class ReleaseManager:
                 if item["stable"]
                 and item["selectable"]
                 and item["channel"] == "stable"
+                and item["upgrade_state"] != ROLLBACK_AVAILABLE
                 and not _is_backwards(policy_baseline, item["tag"])
             ),
             None,

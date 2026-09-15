@@ -73,8 +73,9 @@ are ordered by their serials, which do come from one counter — inside a counte
 the declared release is the same on both sides and separates nothing, so where
 a serial is missing there the direction is simply unknown.
 
-Across that boundary each side states the version it can, its own SemVer or the
-release it declares, and those are read with one policy — the same the release
+Across that boundary -- and for a rolling `latest` moving to a release, which a
+serial could only call "older" -- each side states the version it can, its own
+SemVer or the release it declares, and those are read with one policy — the same the release
 channels already use. A lower target inside the running `major.minor` is a
 rollback: selectable, and named as one rather than offered as an upgrade.
 Anything lower across a minor or major boundary is blocked. Equality is the one
