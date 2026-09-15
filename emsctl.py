@@ -1268,7 +1268,8 @@ def config_device_defaults(config):
                 item.get("pv_priority_factor", 1.0),
                 f"devices.{name}.pv_priority_factor",
                 minimum=0.01
-            )
+            ),
+            "ac_charge_enabled": bool(item.get("ac_charge_enabled", True)),
         }
         identity = _config_device_identity(item)
         if identity:
@@ -1489,7 +1490,8 @@ def runtime_defaults(config, existing=None):
                     "enabled": True,
                     "max_power": 800,
                     "offgrid_socket_mode": "off",
-                    "pv_priority_factor": 1.0
+                    "pv_priority_factor": 1.0,
+                    "ac_charge_enabled": True,
                 }
 
     return {
@@ -1522,7 +1524,9 @@ def runtime_defaults(config, existing=None):
             "enabled": config.get("winter", {}).get("enabled", False)
         },
         "ac_charge_control": {
-            "enabled": config.get("ac_charge_control", {}).get("enabled", False)
+            "enabled": config_mod.normalize_ac_charge_control_config(
+                config.get("ac_charge_control", {})
+            )["enabled"]
         },
         "devices": devices
     }
