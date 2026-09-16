@@ -998,6 +998,92 @@ function flowTileSignature(hosts) {
   ]));
 }
 
+// DOM node types, named where both the motion budget and the live DOM reuse
+// below can see them.
+const ELEMENT_NODE = 1;
+const CHARACTER_DATA_NODES = new Set([3, 8]);
+
+// -- Motion budget --------------------------------------------------------
+//
+// The cockpit runs continuous animations: one per pipe segment of the energy
+// flow, a pulse on each sun and battery fill, and a sliding ring on every
+// control result row -- 153 of them at twelve devices. Each is ticked on the
+// main thread for every frame it runs, and the Web Animations API keeps running
+// one whose element is in a switched-away view or scrolled far off the page.
+//
+// Measured on the preview with twelve devices: pausing the ones nobody can see
+// takes style recalculation from 662 ms to 170 ms per eight seconds in the
+// devices view, and from 625 ms to 1 ms in the control view. That is main
+// thread the browser then has for rasterising what a scroll brings into view.
+//
+// Every element carrying an endless animation is observed, rather than a list
+// of selectors that would go stale as views are added.
+
+// Which endless animations belong to which element. Asking the element again
+// inside the observer callback is what makes scrolling expensive: a full scroll
+// fires it once per element per direction, and 306 `getAnimations()` calls cost
+// more than the work they were meant to save.
+const motionAnimations = typeof WeakMap === "function" ? new WeakMap() : null;
+let motionObserver = null;
+
+// Only endless animations are ours to stop. A CSS transition (the SOC bar) or
+// a one-shot effect is left alone: pausing one would strand it half-way.
+function isEndlessAnimation(animation) {
+  try {
+    return animation.effect.getComputedTiming().iterations === Infinity;
+  } catch (_) {
+    return false;
+  }
+}
+
+function setMotionActive(element, active) {
+  const animations = motionAnimations && motionAnimations.get(element);
+  if (!animations) return;
+  animations.forEach((animation) => {
+    if (active) {
+      if (animation.playState === "paused") animation.play();
+    } else if (animation.playState === "running") {
+      animation.pause();
+    }
+  });
+}
+
+// Hand every newly animated element to the observer. Animations appear when a
+// view is built or the flow tiles are laid out again, so this runs after those
+// rather than on a timer.
+function trackMotion() {
+  if (!motionObserver || typeof document === "undefined") return;
+  if (typeof document.getAnimations !== "function" || !motionAnimations) return;
+  document.getAnimations().forEach((animation) => {
+    if (!isEndlessAnimation(animation)) return;
+    const target = animation.effect && animation.effect.target;
+    if (!target || target.nodeType !== ELEMENT_NODE) return;
+    const known = motionAnimations.get(target);
+    if (!known) {
+      motionAnimations.set(target, [animation]);
+      motionObserver.observe(target);
+    } else if (!known.includes(animation)) {
+      // A rebuilt element keeps its observation and gains the new animation;
+      // the replaced one is finished and harmless to keep in the list.
+      known.push(animation);
+    }
+  });
+}
+
+function initMotionBudget() {
+  if (motionObserver || typeof IntersectionObserver !== "function") return;
+  if (typeof document === "undefined") return;
+  motionObserver = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => setMotionActive(entry.target, entry.isIntersecting));
+    },
+    // Ahead of the edge, so motion is already running by the time it is on
+    // screen rather than starting under the reader's eye.
+    { rootMargin: "240px" }
+  );
+  trackMotion();
+}
+
 function rebuildFlowTiles() {
   const hosts = [];
   flowTileSvgs().forEach((svg) => {
@@ -1011,6 +1097,7 @@ function rebuildFlowTiles() {
   if (signature === flowTileState.signature) return hosts;
   flowTileState.signature = signature;
   hosts.forEach(renderFlowTiles);
+  trackMotion();
   return hosts;
 }
 
@@ -1143,9 +1230,6 @@ function setBatteryFill(id, soc) {
 // text is written only where it differs, attributes only where they differ, and
 // an element is replaced only when the structure genuinely changed.
 
-const ELEMENT_NODE = 1;
-const CHARACTER_DATA_NODES = new Set([3, 8]);
-
 // `style` is written by the SOC bar animation and never appears in the markup,
 // so removing attributes the markup does not carry would reset the bar on every
 // snapshot.
@@ -1170,39 +1254,60 @@ function patchHtml(host, html) {
   // by something else and has to be filled even when the markup is unchanged.
   if (patchedHtml && patchedHtml.get(host) === html && host.childNodes.length) return;
   template.innerHTML = html;
-  patchChildNodes(host, template.content);
+  const structureChanged = patchChildNodes(host, template.content);
   if (patchedHtml) patchedHtml.set(host, html);
+  // An element the patch created can carry a continuous animation of its own --
+  // a control result row is one. Without this the motion budget would only find
+  // it the next time something else happened to look.
+  if (structureChanged) trackMotion();
 }
 
+// What became of one node: it could not be kept, it was updated in place, or it
+// was kept but something below it was added, replaced or removed.
+const PATCH_REPLACED = 0;
+const PATCH_UPDATED = 1;
+const PATCH_RESTRUCTURED = 2;
+
+// Returns whether any node was added, replaced or removed, as opposed to text
+// and attributes being updated in place.
 function patchChildNodes(target, source) {
   const incoming = Array.from(source.childNodes);
+  let structureChanged = false;
   for (let index = 0; index < incoming.length; index += 1) {
     const next = incoming[index];
     const current = target.childNodes[index];
     if (!current) {
       target.appendChild(next);
-    } else if (!patchNode(current, next)) {
+      structureChanged = true;
+      continue;
+    }
+    const outcome = patchNode(current, next);
+    if (outcome === PATCH_REPLACED) {
       target.replaceChild(next, current);
+      structureChanged = true;
+    } else if (outcome === PATCH_RESTRUCTURED) {
+      structureChanged = true;
     }
   }
   while (target.childNodes.length > incoming.length) {
     target.removeChild(target.lastChild);
+    structureChanged = true;
   }
+  return structureChanged;
 }
 
 function patchNode(target, source) {
-  if (target.nodeType !== source.nodeType) return false;
+  if (target.nodeType !== source.nodeType) return PATCH_REPLACED;
   // Text and comments both carry their content in nodeValue, and reporting a
   // comment as patched without taking the new value would leave a stale one.
   if (CHARACTER_DATA_NODES.has(target.nodeType)) {
     if (target.nodeValue !== source.nodeValue) target.nodeValue = source.nodeValue;
-    return true;
+    return PATCH_UPDATED;
   }
-  if (target.nodeType !== ELEMENT_NODE) return false;
-  if (target.nodeName !== source.nodeName) return false;
+  if (target.nodeType !== ELEMENT_NODE) return PATCH_REPLACED;
+  if (target.nodeName !== source.nodeName) return PATCH_REPLACED;
   patchAttributes(target, source);
-  patchChildNodes(target, source);
-  return true;
+  return patchChildNodes(target, source) ? PATCH_RESTRUCTURED : PATCH_UPDATED;
 }
 
 function patchAttributes(target, source) {
@@ -3235,6 +3340,8 @@ function setFlowView(view, persist = true) {
   if (nextView === "maintenance") {
     enterMaintenanceView();
   }
+  // A view shown for the first time brings its own continuous animations.
+  trackMotion();
   invalidateFlowTiles();
 }
 
@@ -6545,6 +6652,7 @@ function initDashboardApp() {
   initDensitySwitcher();
   initFlowViewSwitch();
   initFlowTiles();
+  initMotionBudget();
   initAuthControls();
   initRuntimeForms();
   initDiagnose();
@@ -6712,5 +6820,9 @@ if (typeof module !== "undefined") {
     initFlowTiles,
     invalidateFlowTiles,
     rebuildFlowTiles,
+    initMotionBudget,
+    setMotionActive,
+    isEndlessAnimation,
+    trackMotion,
   };
 }

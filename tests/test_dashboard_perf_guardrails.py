@@ -859,3 +859,32 @@ def test_the_dom_patch_keeps_script_written_attributes():
     assert 'const SCRIPT_OWNED_ATTRIBUTES = new Set(["style"]);' in source
     patch = source.split("function patchAttributes(target, source) {", 1)[1].split("\nfunction ", 1)[0]
     assert "SCRIPT_OWNED_ATTRIBUTES.has(attribute.name)" in patch
+
+
+def test_motion_is_bound_to_visibility():
+    # Continuous animations are ticked on the main thread for every frame they
+    # run, and the Web Animations API keeps running one whose element is in a
+    # switched-away view. The browser-level proof is
+    # tests/e2e-dashboard/motion-follows-visibility.spec.ts.
+    source = APP_JS.read_text(encoding="utf-8")
+    assert "function initMotionBudget()" in source
+    assert "new IntersectionObserver(" in source
+    assert "initMotionBudget();" in source
+
+    track = source.split("function trackMotion() {", 1)[1].split("\nfunction ", 1)[0]
+    assert "isEndlessAnimation(animation)" in track
+
+    # The observer callback must not ask the DOM anything: a full scroll fires
+    # it once per element per direction, and the calls cost more than the work
+    # they save.
+    active = source.split("function setMotionActive(element, active) {", 1)[1].split("\nfunction ", 1)[0]
+    assert "getAnimations()" not in active
+    assert "motionAnimations" in active
+
+
+def test_only_endless_animations_are_paused():
+    # A CSS transition (the SOC bar) or a one-shot effect must be left alone:
+    # pausing one would strand it half-way.
+    source = APP_JS.read_text(encoding="utf-8")
+    endless = source.split("function isEndlessAnimation(animation) {", 1)[1].split("\nfunction ", 1)[0]
+    assert "getComputedTiming().iterations === Infinity" in endless
