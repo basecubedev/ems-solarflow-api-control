@@ -94,12 +94,13 @@ def test_sections_have_stable_required_metadata():
         "zendure_mqtt",
         "winter",
         "battery_full_charge_assist",
+        "ac_charge_control",
         "energy_savings",
         "dashboard",
         "influxdb",
         "ha",
     ]
-    assert [section["order"] for section in sections] == list(range(1, 12))
+    assert [section["order"] for section in sections] == list(range(1, 13))
     for section in sections:
         assert SECTION_KEYS <= section.keys()
         assert section["level"] in LEVELS
@@ -240,3 +241,41 @@ def test_invalid_mode_is_rejected():
 
 def test_metadata_uses_canonical_template_not_legacy_root_path():
     assert TEMPLATE_PATH.parts[-2:] == ("config", "config.template.json")
+
+
+def test_a_section_never_claims_a_default_its_field_contradicts():
+    """A feature's prose and its toggle default are two statements of one fact.
+
+    Nothing derives one from the other, so they rot apart silently: the AC
+    charging section told operators it was off by default for as long as the
+    catalogue served ``default: True``, and the Admin toggle rendered checked
+    right beside that sentence.
+    """
+    off_claims = ("off by default", "disabled by default", "default is off")
+    on_claims = ("on by default", "enabled by default", "default is on")
+
+    for section in get_config_feature_sections():
+        enabled_path = section.get("enabled_path")
+        if not enabled_path:
+            continue
+        field = next(
+            (item for item in section["fields"] if item["path"] == enabled_path),
+            None,
+        )
+        if field is None or "default" not in field:
+            continue
+        default = bool(field["default"])
+        text = " ".join(
+            str(section.get(key, "")) for key in ("summary", "description")
+        ).lower()
+
+        for claim in off_claims:
+            assert not (claim in text and default), (
+                f"{section['id']} says {claim!r} while {enabled_path} "
+                f"defaults to {field['default']!r}"
+            )
+        for claim in on_claims:
+            assert not (claim in text and not default), (
+                f"{section['id']} says {claim!r} while {enabled_path} "
+                f"defaults to {field['default']!r}"
+            )

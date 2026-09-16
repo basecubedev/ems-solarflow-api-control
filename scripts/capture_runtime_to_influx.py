@@ -11,9 +11,10 @@ Schema parity with the native writer:
 - ``zendure_device`` device telemetry fields match the native writer (plus a few
   derived booleans).
 - ``shelly_meter`` carries ``grid_power`` (meter exchange power, positive import
-  / negative export) and the derived ``house_load`` (``max(0, inverter_total +
-  grid_power)``) with identical semantics, so the Analytics grid/home series are
-  the same regardless of which writer produced the data.
+  / negative export) and the derived ``house_load``
+  (``max(0, inverter_total - charge_total + grid_power)``) with identical
+  semantics, so the Analytics grid/home series are the same regardless of which
+  writer produced the data.
 
 Limitation: the collector is read-only and never instantiates the controller, so
 it cannot know the EMS effective output target. It does **not** write
@@ -36,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ems import config as ems_config
 from ems.clients import ShellyClient, ZendureClient, create_session, fetch_all_devices
 from ems.logging_utils import log_event, setup_logging
+from ems.power_direction import derive_house_load_w
 from scripts.influx_utils import (
     InfluxHTTPClient,
     build_line_protocol,
@@ -292,6 +294,7 @@ def main():
         lines = []
         states = fetch_all_devices(devices)
         inverter_total = 0.0
+        charge_total = 0.0
 
         for device, state in zip(devices, states):
             if state is None:
@@ -316,6 +319,7 @@ def main():
 
             if isinstance(state.output, (int, float)):
                 inverter_total += float(state.output)
+                charge_total += float(getattr(state, "grid_input", 0) or 0)
 
             line = build_line_protocol(
                 "zendure_device",
@@ -341,7 +345,9 @@ def main():
             if isinstance(grid_power, (int, float)):
                 grid_power = float(grid_power)
                 fields["grid_power"] = grid_power
-                fields["house_load"] = max(0.0, inverter_total + grid_power)
+                fields["house_load"] = derive_house_load_w(
+                    inverter_total, grid_power, charge_total
+                )
             line = build_line_protocol(
                 "shelly_meter",
                 {"source": "shelly", "run_id": args.run_id},

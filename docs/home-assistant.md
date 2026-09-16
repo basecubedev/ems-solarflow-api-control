@@ -95,6 +95,14 @@ sum of per-device targets after allocation, device ramp, enabled/offline gates,
 `controller_target_w` for the internal stabilized controller target and
 `allocated_target_w` for the post-allocation target before final control gates.
 
+**It goes negative while AC charging.** The target is a signed quantity —
+positive is power sent to the house, negative is power drawn in to charge — and
+the same is true of `sensor.ems_solarflow_<device>_target`. An automation
+written before AC charging existed will have assumed the value is never below
+zero; `> 0` and `abs()` are the two places to check. `sensor.ems_solarflow_home`
+is unaffected: a charging device's own draw is subtracted before it is
+published, so it stays the household's consumption.
+
 `sensor.ems_solarflow_home` is a calculated display/runtime value, not the
 smoothed control target. Short-term differences between home load, controller
 target, per-device target, written `outputLimit`, and actual device output are
@@ -111,6 +119,7 @@ sensor.ems_solarflow_wr1_min_soc
 sensor.ems_solarflow_wr1_max_soc
 sensor.ems_solarflow_wr1_solar
 sensor.ems_solarflow_wr1_output
+sensor.ems_solarflow_wr1_ac_charge
 sensor.ems_solarflow_wr1_target
 sensor.ems_solarflow_wr1_output_limit
 sensor.ems_solarflow_wr1_soc_limit
@@ -128,6 +137,10 @@ binary_sensor.wr1_dc_active
 binary_sensor.wr1_grid_online
 binary_sensor.wr1_available
 ```
+
+`sensor.ems_solarflow_wr1_ac_charge` is the *measured* AC input power
+(`gridInputPower`), the mirror of `_output` for the charging direction. A
+charging device reports `_output` as 0, so the two are never both non-zero.
 
 `sensor.ems_solarflow_wr1_target` follows the same effective command semantics
 as the global target. Its `allocated_target_w` attribute contains the

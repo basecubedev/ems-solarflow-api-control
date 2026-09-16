@@ -43,18 +43,23 @@ Example:
   "winter": {
     "enabled": true
   },
+  "ac_charge_control": {
+    "enabled": true
+  },
   "devices": {
     "WR1": {
       "enabled": true,
       "max_power": 800,
       "offgrid_socket_mode": "off",
-      "pv_priority_factor": 1.0
+      "pv_priority_factor": 1.0,
+      "ac_charge_enabled": true
     },
     "WR2": {
       "enabled": true,
       "max_power": 800,
       "offgrid_socket_mode": "off",
-      "pv_priority_factor": 1.0
+      "pv_priority_factor": 1.0,
+      "ac_charge_enabled": true
     }
   }
 }
@@ -85,6 +90,7 @@ further `outputLimit` writes until PV telemetry becomes positive again.
 | Field | Meaning |
 |---|---|
 | `enabled` | Skip writes for this device when false |
+| `ac_charge_enabled` | Whether this device may be charged from surplus |
 | `max_power` | Runtime per-device power limit |
 | `offgrid_socket_mode` | Operator intent for Zendure offgrid socket mode |
 | `pv_priority_factor` | Runtime PV-first allocation weight override |
@@ -159,9 +165,17 @@ Dashboard runtime-write whitelist:
 
 - `system.enabled`, `system.max_total_power`, `system.loop_interval`,
   `system.min_output_limit`
-- `winter.enabled` (and `ha.enabled` / `ha.control_enabled`)
+- `winter.enabled`, `ac_charge_control.enabled` (and `ha.enabled` /
+  `ha.control_enabled`)
 - per device: `enabled`, `max_power`, `pv_priority_factor`,
-  `offgrid_socket_mode`
+  `offgrid_socket_mode`, `ac_charge_enabled`
+
+Every key on this list is seeded from `config.json` by the EMS when it loads
+runtime-state, so the Dashboard's runtime controls always show the value the
+EMS applies. A key the Dashboard could write but the EMS did not seed would
+read as *off* in the Dashboard while the EMS applied the config default; that
+is how `ac_charge_control.enabled` shipped, and a contract test now walks the
+whitelist against the seeded defaults.
 
 The mirror reuses the same validated whitelist writers the Dashboard uses (so the
 safety property — only whitelisted keys ever reach runtime-state — is preserved)
@@ -196,6 +210,16 @@ The template default is standalone operation, so both HA runtime fields start as
 
 Winter months, SOC limits, ramp step, adjustment hour, and AC charge power stay
 static in `config.json`.
+
+## AC Charging Fields
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Switches AC charging from grid surplus on or off at runtime |
+
+Seeded from `ac_charge_control.enabled` (on by default). The thresholds stay
+static in `config.json`; per device, `ac_charge_enabled` in the device entry
+stops one device drawing from the grid without a restart.
 
 ## Home Assistant Sync
 

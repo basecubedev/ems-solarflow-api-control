@@ -523,3 +523,74 @@ def test_explicitly_observed_snapshot_metric_may_use_snapshot_time():
         )
         is True
     )
+
+
+def _charge_record(watts=300):
+    from ems.mqtt_control.command_state import CommandRecord
+
+    rec = CommandRecord(
+        message_id=7,
+        device_id="DEVICE_ID",
+        operation="charge",
+        target_w=-watts,
+        created_monotonic=100.0,
+    )
+    rec.expected_properties = {
+        "smartMode": 1,
+        "acMode": 1,
+        "outputLimit": 0,
+        "inputLimit": watts,
+    }
+    mark_published(rec, now_monotonic=100.0)
+    return rec
+
+
+def _confirm(rec, metrics, times=None):
+    from ems.mqtt_control.command_state import confirm_from_expected_properties
+
+    times = times or {key: 101.0 for key in metrics}
+    return confirm_from_expected_properties(
+        rec,
+        metrics,
+        now_monotonic=101.0,
+        telemetry_monotonic=101.0,
+        metric_monotonic=times,
+        allow_from_published=True,
+    )
+
+
+def test_a_charge_is_not_confirmed_by_an_output_limit_of_zero():
+    """Zero output is what an idle device reports, so it proves nothing here.
+
+    Under the discharge split inputLimit was optional, which let a charge
+    confirm from acMode plus an outputLimit that would read zero either way —
+    telemetry that never saw a single watt flow.
+    """
+
+    rec = _charge_record()
+
+    assert _confirm(rec, {"smartMode": 1, "acMode": 1, "outputLimit": 0}) is False
+
+
+def test_a_charge_confirms_on_the_input_limit_that_carries_it():
+    rec = _charge_record()
+
+    assert _confirm(
+        rec, {"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 300}
+    ) is True
+
+
+def test_a_charge_with_the_wrong_input_limit_does_not_confirm():
+    rec = _charge_record(watts=300)
+
+    assert _confirm(
+        rec, {"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 0}
+    ) is False
+
+
+def test_a_discharge_still_confirms_without_an_input_limit():
+    """The discharge split is unchanged: outputLimit carries the proof there."""
+
+    rec = _expected_record(target_w=300)
+
+    assert _confirm(rec, {"smartMode": 1, "acMode": 2, "outputLimit": 300}) is True

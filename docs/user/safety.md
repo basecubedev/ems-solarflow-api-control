@@ -59,6 +59,88 @@ EMS keeps these facts separate and honest:
   Do not conclude "Cloud MQTT control works" from movement toward the target or a
   broker PUBACK alone.
 
+## AC charging draws from the grid
+
+**AC charging is on by default**, for the installation and for every device,
+like the other EMS features. It is still the one feature that can *spend* energy
+rather than place it, so know what that means before you run it:
+
+- **It acts only against your own surplus.** Entry needs a sustained export
+  above `charge_start_w`; an installation that never exports never charges. It
+  stops the moment the house needs the power back.
+- **A config upgrade turns it on.** A `config.json` written before the feature
+  existed has neither key, and the upgrade fills both in as enabled. If you do
+  not want that, set `ac_charge_control.enabled` to `false`, or
+  `ac_charge_enabled` to `false` on the devices you want to keep out of it,
+  before the upgrade runs.
+- **Which devices can charge is decided by the model**, not by the switch — see
+  [supported-setups.md](supported-setups.md#supported-zendure-devices-local-api--zensdk).
+  Only the 800 Pro 2 was measured here; the other models are enabled on the
+  device catalogue's word, and the EMS logs `ac_charge_not_delivered` if a
+  commanded charge never draws any current.
+- **Check `max_total_charge_power_w`** for your installation — your circuit and
+  your fuse, which nothing in the EMS can measure. The default is 1200 W.
+  `max_charge_power_w` per device at 0 means "ask the device for its own
+  ceiling".
+
+You can stop it at any time without restarting the EMS, from the dashboard's
+Control tab in write mode or from the CLI:
+
+```bash
+python3 emsctl.py ac-charge disable            # the whole feature
+python3 emsctl.py device WR1 ac-charge off     # one device
+```
+
+Either switch stops a running charge in the same cycle. Stopping a device that
+is drawing from the grid is the one action that must never wait for a threshold,
+a counter or a restart.
+
+So does losing the grid meter. A meter client that cannot reach its hardware
+keeps returning its last reading, and "still exporting" is indistinguishable
+from a real surplus — so charging stops when that reading is older than
+`telemetry_max_age_seconds` and says so with `ac_charge_stopped_stale_meter`.
+Discharging continues, because placing energy you already own on a stale reading
+costs nothing like drawing from the grid on one does.
+
+### What happens if the EMS stops while charging
+
+**Stopping the EMS leaves the devices as they are.** That is deliberate: a stop
+you asked for — `docker stop`, `docker compose down`, `systemctl stop`, Ctrl-C —
+is usually a restart, and resetting every device for the length of an update
+would drop the house's cover and throw away a charge that then has to re-confirm
+its entry window. Discharging devices keep their `outputLimit` regardless;
+charging devices now keep theirs too.
+
+The EMS says so when it happens: `event=ac_charge_kept_across_stop` names the
+signal that stopped it and the device it left charging.
+
+A **charging** device therefore keeps drawing while the EMS is away. That is
+bounded — the charge ends at the device's own maximum SoC — but an update that
+never comes back leaves it drawing until then. If a restart does not complete,
+check the device and stop it in the Zendure app or with
+`emsctl.py device WR1 ac-mode output`.
+
+The EMS **does** return a charging device when it stops by itself: `--once`,
+`--max-cycles`, `--duration`, or an unhandled error. Nothing is coming back to
+supervise the charge in those cases.
+
+An unstoppable kill — power loss, `kill -9`, a container removed rather than
+stopped — writes nothing either way. Nothing in the device times the command
+out.
+
+That is bounded, not unlimited: the charge ends at the device's configured
+maximum SoC. It still costs whatever that energy costs. If the EMS is stopped
+abruptly while charging, check the device and stop it in the Zendure app or with
+`emsctl.py device WR1 ac-mode output` once the EMS is back.
+
+The same applies to a device that drops off the network mid-charge: the EMS
+cannot write to a device it cannot reach, so that one keeps charging until it is
+reachable again. The remaining devices adapt in the same cycle.
+
+The EMS itself recovers on the next start: a device found charging with a
+healthy battery is taken back into output mode. A device found charging at its
+discharge floor is left alone, because there the firmware is recovering it.
+
 ## During the first live run
 
 - Watch grid power.

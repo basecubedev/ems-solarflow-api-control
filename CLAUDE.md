@@ -228,11 +228,22 @@ import `emsctl` (so the dashboard can import it directly).
 
 Each device gets a runtime AC role: `ac_output` (`acMode=2`, normal output
 regulation) or `ac_input` (`acMode=1`, excluded from output regulation, may
-carry `ac_charge_power_w` reconciled as `inputLimit`). `acMode`/`inputLimit`
-writes for this are owned exclusively by the runtime intent reconciler in
-`runtime_intents.py` — don't add a second writer. Legacy role names
-(`normal_output`, `ac_input_charge`, `reserved`) are accepted defensively and
-mapped to `ac_output`/`ac_input`.
+carry `ac_charge_power_w` reconciled as `inputLimit`). *State reconciliation*
+writes of `acMode`/`inputLimit` are owned exclusively by the runtime intent
+reconciler in `runtime_intents.py` — don't add a second writer. Legacy role
+names (`normal_output`, `ac_input_charge`, `reserved`) are accepted defensively
+and mapped to `ac_output`/`ac_input`.
+
+The AC-charging power command is the one other path that sets `acMode`, and it
+does so atomically together with `outputLimit`/`inputLimit` (a direction change
+is one write, see `ems/power_command.py`). The two never both write: a claim
+whose `desired_ac_mode` is `None` means "the power command owns this device's
+direction", and the reconciler skips it. `regulator_charge_intent` (priority
+100) raises that claim while the regulator charges a device, and
+`firmware_charge_intent` (50) does the same for a charge the firmware started.
+Without such a claim the per-cycle default `ac_output` claim makes the
+reconciler write `acMode=2` against the power command's `acMode=1`, once per
+loop.
 
 ### Battery full-charge assist
 
