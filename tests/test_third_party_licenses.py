@@ -229,17 +229,24 @@ def test_an_undocumented_vendored_asset_is_rejected(repo_copy):
 
 
 def test_an_undocumented_optional_platform_package_is_rejected(repo_copy):
+    """Anchored on the packages map itself, not on a real optional package:
+    the lockfile marks none at present, and the last one left with a
+    Playwright bump -- an anchor on it would have matched nothing and the
+    test would have passed a lockfile it never changed."""
+
     lock = repo_copy / "package-lock.json"
+    text = lock.read_text(encoding="utf-8")
+    assert text.count('"packages": {') == 1
     lock.write_text(
-        lock.read_text(encoding="utf-8").replace(
-            '"node_modules/fsevents": {',
-            '"node_modules/other-watcher": {\n'
+        text.replace(
+            '"packages": {',
+            '"packages": {\n'
+            '    "node_modules/other-watcher": {\n'
             '      "version": "1.0.0",\n'
             '      "dev": true,\n'
             '      "optional": true,\n'
             '      "os": ["darwin"]\n'
-            "    },\n"
-            '    "node_modules/fsevents": {',
+            "    },",
         ),
         encoding="utf-8",
     )
