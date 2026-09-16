@@ -11,7 +11,7 @@ carries that product as its first word. Three prefixes, and the set is closed:
 | Prefix | Ships | Workflows |
 |---|---|---|
 | `Appliance ` | the Raspberry Pi product — Manager `.deb`, OS image, fleet index | `appliance-image.yml`, `appliance-manager-release.yml` |
-| `EMS ` | the paired EMS controller and Admin console | `docker-publish.yml`, `docker-feature-publish.yml`, `docker-feature-cleanup.yml`, `admin-replacement-canary.yml`, `generated-config-template.yml` |
+| `EMS ` | the paired EMS controller and Admin console | `docker-publish.yml`, `release-catalogue.yml`, `docker-feature-publish.yml`, `docker-feature-cleanup.yml`, `admin-replacement-canary.yml`, `generated-config-template.yml` |
 | `Repo ` | ships nothing, gates both | `simulated-regression-tests.yml`, `playwright-e2e.yml` |
 
 There is deliberately no `Admin ` prefix: the two container images ship as one
@@ -206,13 +206,24 @@ For stable installations, pin a release tag in `docker-compose.yml` rather than
 
 ## Release catalogue
 
-Job `publish-release-catalogue` in `docker-publish.yml`, after the images are
-pushed. It runs `scripts/release_catalogue.py build`, which asks the GitHub API
-once -- authenticated, in CI -- for the release list and, per release, whether
-the setup resources are present in its tree, and writes the answer as
+Workflow `release-catalogue.yml`, jobs `publish-release-catalogue` and
+`verify-release-catalogue`. The first runs
+`scripts/release_catalogue.py build`, which asks the GitHub API once --
+authenticated, in CI -- for the release list and, per release, whether the
+setup resources are present in its tree, and writes the answer as
 `release-catalogue.json` to the `development-build-catalogue` branch. The
 Admin reads that one file over `raw.githubusercontent.com`, which is a content
 CDN and not counted against the API limit.
+
+The list is the repository's GitHub Releases, not its tags: a tag carries no
+channel and no notes, the Release object does. So the file has to follow the
+Release object, and it is rebuilt from two directions. `docker-publish.yml`
+calls the workflow after the images of a tag are pushed, and the workflow runs
+on its own whenever a Release is published, edited or deleted -- whichever
+happens last leaves the file correct, so it no longer matters whether the tag
+or its Release comes first. Before the release trigger existed, v0.8.6 was
+tagged, its images were published and the catalogue was rebuilt twenty minutes
+before its Release was created, and nothing rebuilt it afterwards.
 
 This replaces what every installation used to do on every visit to
 Maintenance -> Upgrade: the release list plus one `git/trees` read of roughly
@@ -221,11 +232,26 @@ of sixty an hour per address. A few visits after an upgrade emptied that
 budget, and an empty budget emptied the list down to whatever was cached.
 
 The catalogue is rebuilt in full on every run, so it needs no seed and a single
-stale entry cannot survive. The resource rule is `admin.releases.resources_present`,
-imported by the script, so the Admin's own check and the catalogue can never
-disagree about what "present" means. The job is reported as done only once
-`scripts/release_catalogue.py verify` reads the newest release back through
-the Admin's own loader from the public URL. An Admin that cannot read the
+stale entry cannot survive. It is always written from the default branch,
+whatever ref started the run, so a Release edited on an old tag never checks
+out a tree without the script. The build-and-publish job holds one concurrency
+group, in which the newest queued rebuild is the one that runs last; the
+verification is a job of its own outside that group, because it may wait
+minutes -- for the CDN, or for a Release that is not there yet -- and inside
+the group it would hold back the very rebuild that Release triggers. The
+resource rule is `admin.releases.resources_present`, imported by the script,
+so the Admin's own check and the catalogue can never disagree about what
+"present" means.
+
+The run is reported as done only once `scripts/release_catalogue.py verify`
+reads the release it was started for back through the Admin's own loader from
+the public URL: the tag of a tag run, the Release of a release event, and
+otherwise -- on a branch run, for a deleted Release, or for a draft, which the
+catalogue leaves out on purpose -- the newest entry the run wrote. A tag run
+whose Release does not exist yet waits up to ten minutes for it -- publishing
+the Release inside that window rebuilds the file through the release trigger
+and the tag run turns green -- and after that it is red with a hint, instead of
+green with a file that does not list the release. An Admin that cannot read the
 catalogue falls back to the API path unchanged; a catalogue it cannot trust is
 treated as unreadable, never as empty.
 

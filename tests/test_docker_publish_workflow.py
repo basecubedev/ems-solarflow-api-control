@@ -227,9 +227,10 @@ def test_every_published_image_declares_the_release_it_contains():
 def test_the_release_catalogue_is_published_after_the_images_and_verified():
     """One authenticated pass in CI stands in for a dozen calls per install.
 
-    The catalogue is rebuilt in full, written to the same branch the
-    development catalogue lives on, and reported as published only once the
-    file installations will read lists the newest release.
+    The catalogue job itself lives in ``release-catalogue.yml`` and is pinned
+    by ``tests/test_release_catalogue_workflow.py``; what this workflow owes it
+    is the order -- after the images -- and the tag the run published, so the
+    job is reported done only once the file installations read lists it.
     """
 
     workflow = yaml.safe_load(PUBLISH_WORKFLOW.read_text(encoding="utf-8"))
@@ -237,10 +238,8 @@ def test_the_release_catalogue_is_published_after_the_images_and_verified():
 
     assert job["needs"] == ["publish-ghcr"]
     assert job["permissions"] == {"contents": "write"}
-    steps = " ".join(str(step.get("run", "")) for step in job["steps"])
-    assert "scripts/release_catalogue.py build --output release-catalogue.json" in steps
-    assert "scripts/release_catalogue.py verify" in steps
-    assert "development-build-catalogue/release-catalogue.json" in steps
-    envs = [step.get("env", {}) for step in job["steps"]]
-    assert any(env.get("GITHUB_TOKEN") == "${{ secrets.GITHUB_TOKEN }}" for env in envs)
-    assert any(env.get("CATALOGUE_BRANCH") == "development-build-catalogue" for env in envs)
+    assert job["uses"] == "./.github/workflows/release-catalogue.yml"
+    expect_tag = job["with"]["expect_tag"]
+    assert "github.ref_type == 'tag'" in expect_tag
+    assert "github.ref_name" in expect_tag
+    assert "steps" not in job

@@ -428,54 +428,12 @@ jobs:
   publish-release-catalogue:
     name: EMS release catalogue publish
     needs: [publish-ghcr]
-    runs-on: ubuntu-latest
     permissions:
       contents: write
-    steps:
-      - uses: actions/checkout@v7
-      # One authenticated pass here replaces a dozen unauthenticated API calls
-      # on every installation's visit to the upgrade page. The catalogue is
-      # rebuilt in full each time, so it needs no seed and cannot go stale in
-      # a way a single entry could.
-      - name: Build release catalogue
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 scripts/release_catalogue.py build --output release-catalogue.json
-      - name: Publish release catalogue
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CATALOGUE_BRANCH: development-build-catalogue
-          CATALOGUE_FILE: release-catalogue.json
-        run: |
-          set -euo pipefail
-          api="repos/${GITHUB_REPOSITORY}/contents/${CATALOGUE_FILE}"
-          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${CATALOGUE_BRANCH}" >/dev/null 2>&1; then
-            base_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${{ github.event.repository.default_branch }}" --jq .object.sha)"
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f ref="refs/heads/${CATALOGUE_BRANCH}" -f sha="$base_sha" >/dev/null \
-              || gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${CATALOGUE_BRANCH}" >/dev/null
-          fi
-          content="$(base64 -w0 "$CATALOGUE_FILE")"
-          for retry in 1 2 3 4 5; do
-            if metadata="$(gh api "${api}?ref=${CATALOGUE_BRANCH}" 2>/dev/null)"; then
-              sha="$(jq -r .sha <<< "$metadata")"
-            else
-              sha=""
-            fi
-            args=(--method PUT "$api" -f "message=ci: release catalogue ${GITHUB_SHA::7}" \
-              -f "content=${content}" -f "branch=${CATALOGUE_BRANCH}")
-            [[ -z "$sha" ]] || args+=(-f "sha=${sha}")
-            if gh api "${args[@]}" >/dev/null; then
-              exit 0
-            fi
-            sleep "$retry"
-          done
-          echo "could not publish the release catalogue" >&2
-          exit 1
-      # Reported as done only once the file the installations read says so.
-      - name: Verify published release catalogue
-        run: |
-          expect="$(python3 -c 'import json; d=json.load(open("release-catalogue.json")); print(d["releases"][0]["tag"])')"
-          python3 scripts/release_catalogue.py verify \
-            --source "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/development-build-catalogue/release-catalogue.json" \
-            --expect-tag "$expect"
+    # Done only once the catalogue lists the tag this run published. That takes
+    # the tag's GitHub Release, which is made by hand: the verify waits ten
+    # minutes for it, and release-catalogue.yml rebuilds the file on its own
+    # the moment the Release is published, however late that is.
+    uses: ./.github/workflows/release-catalogue.yml
+    with:
+      expect_tag: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
