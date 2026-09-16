@@ -59,7 +59,7 @@ from ems.zendure_mqtt.config_entries import (
     find_zendure_mqtt_broker_profile_issues,
     has_runtime_control_device,
     is_control_zendure_mqtt_device_config,
-    is_zendure_mqtt_device_config,
+    is_mqtt_telemetry_device_config,
     zendure_config_device_identity,
     zendure_mqtt_broker_ref,
 )
@@ -148,7 +148,9 @@ def _prune_unreferenced_new_brokers(preview, preexisting_refs):
         return
     referenced = set()
     for device in preview.get("devices", []):
-        if is_zendure_mqtt_device_config(device):
+        # Every entry read over MQTT holds its broker, including one this page
+        # cannot edit: dropping the profile would strand the device.
+        if is_mqtt_telemetry_device_config(device):
             referenced.add(zendure_mqtt_broker_ref(device))
     grid = preview.get("grid_meter")
     if isinstance(grid, dict):
