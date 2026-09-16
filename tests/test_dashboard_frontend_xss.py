@@ -907,15 +907,15 @@ console.log(JSON.stringify({{
 def test_device_cards_render_soc_fill_start_and_target_values():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});
-const cards = [];
+const renders = [];
 const grid = {{
-  innerHTML: "",
+  _html: "",
+  get innerHTML() {{ return this._html; }},
+  set innerHTML(value) {{ this._html = value; renders.push(value); }},
   querySelectorAll() {{
     return [];
   }},
-  appendChild(card) {{
-    cards.push(card);
-  }}
+  appendChild() {{}}
 }};
 global.document = {{
   getElementById(id) {{
@@ -938,7 +938,7 @@ app.renderDevices({{
     mode: "solar"
   }}
 }});
-const firstHtml = cards[0].innerHTML;
+const firstHtml = renders[0];
 
 app.renderDevices({{
   "WR<&1": {{
@@ -952,7 +952,7 @@ app.renderDevices({{
     mode: "solar"
   }}
 }});
-const unchangedFirstHtml = cards[1].innerHTML;
+const unchangedFirstHtml = renders[1];
 
 app.renderDevices({{
   "WR<&1": {{
@@ -966,7 +966,7 @@ app.renderDevices({{
     mode: "solar"
   }}
 }});
-const changedHtml = cards[2].innerHTML;
+const changedHtml = renders[2];
 
 app.renderDevices({{
   "WR<&1": {{
@@ -980,7 +980,7 @@ app.renderDevices({{
     mode: "solar"
   }}
 }});
-const unchangedAfterChangeHtml = cards[3].innerHTML;
+const unchangedAfterChangeHtml = renders[3];
 
 console.log(JSON.stringify({{
   firstHtml,

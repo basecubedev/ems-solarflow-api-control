@@ -78,8 +78,9 @@ class FakeElement {
   querySelectorAll() { return []; }
 }
 
-// Counts rendered rule rows. renderRules runs for every view on every render,
-// so its append count is a faithful proxy for "a full render happened".
+// Counts writes to the rule list. renderRules runs for every view on every
+// render and writes it once, so that count is a faithful proxy for "a full
+// render happened".
 function makeCountingDoc(extra = {}) {
   const nodes = new Map();
   const listeners = new Map();
@@ -90,10 +91,10 @@ function makeCountingDoc(extra = {}) {
       if (!nodes.has(id)) {
         const node = new FakeElement(id);
         if (id === "rulesList") {
-          node.appendChild = function (child) {
-            doc.renderCount += 1;
-            this.children.push(child);
-          };
+          Object.defineProperty(node, "innerHTML", {
+            get() { return node._html || ""; },
+            set(value) { node._html = value; doc.renderCount += 1; },
+          });
         }
         nodes.set(id, node);
       }
@@ -116,8 +117,8 @@ function makeCountingDoc(extra = {}) {
   return doc;
 }
 
-// renderRules appends nine rows per render.
-const ROWS_PER_RENDER = 9;
+// renderRules writes the list once per render.
+const ROWS_PER_RENDER = 1;
 
 function snapshot(timestamp, over = {}) {
   return Object.assign({

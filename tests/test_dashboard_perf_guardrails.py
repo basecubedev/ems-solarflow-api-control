@@ -829,3 +829,62 @@ def test_setflowview_history_guard_uses_local_boolean_not_function():
     source = APP_JS.read_text(encoding="utf-8")
     assert "if (isHistoryPanelVisible && previousView !== nextView)" in source
     assert "if (historyVisible && previousView" not in source
+
+
+def test_live_renderers_patch_their_host_instead_of_rebuilding_it():
+    # Static guard for the live render path. A snapshot arrives every few
+    # seconds; writing it with `innerHTML` throws away the nodes it renders
+    # into, and with them the layout and the rasterised tiles of that area,
+    # which is what a person scrolling sees being drawn again. The browser-level
+    # proof is tests/e2e-dashboard/live-dom-reuse.spec.ts; this one keeps the
+    # two renderers from quietly going back.
+    source = APP_JS.read_text(encoding="utf-8")
+
+    devices = source.split("function renderDevices(devices) {", 1)[1].split("\nfunction ", 1)[0]
+    assert "patchHtml(" in devices
+    assert 'grid.innerHTML = ""' not in devices
+    assert "grid.appendChild(" not in devices
+
+    rules = source.split("function renderRules(rules) {", 1)[1].split("\nfunction ", 1)[0]
+    assert "patchHtml(" in rules
+    assert 'list.innerHTML = ""' not in rules
+    assert "list.appendChild(" not in rules
+
+
+def test_the_dom_patch_keeps_script_written_attributes():
+    # The SOC bar's width is written by animateDeviceSocFills, never by the
+    # markup. An attribute sweep that removed what the markup does not carry
+    # would reset the bar to zero on every snapshot.
+    source = APP_JS.read_text(encoding="utf-8")
+    assert 'const SCRIPT_OWNED_ATTRIBUTES = new Set(["style"]);' in source
+    patch = source.split("function patchAttributes(target, source) {", 1)[1].split("\nfunction ", 1)[0]
+    assert "SCRIPT_OWNED_ATTRIBUTES.has(attribute.name)" in patch
+
+
+def test_motion_is_bound_to_visibility():
+    # Continuous animations are ticked on the main thread for every frame they
+    # run, and the Web Animations API keeps running one whose element is in a
+    # switched-away view. The browser-level proof is
+    # tests/e2e-dashboard/motion-follows-visibility.spec.ts.
+    source = APP_JS.read_text(encoding="utf-8")
+    assert "function initMotionBudget()" in source
+    assert "new IntersectionObserver(" in source
+    assert "initMotionBudget();" in source
+
+    track = source.split("function trackMotion() {", 1)[1].split("\nfunction ", 1)[0]
+    assert "isEndlessAnimation(animation)" in track
+
+    # The observer callback must not ask the DOM anything: a full scroll fires
+    # it once per element per direction, and the calls cost more than the work
+    # they save.
+    active = source.split("function setMotionActive(element, active) {", 1)[1].split("\nfunction ", 1)[0]
+    assert "getAnimations()" not in active
+    assert "motionAnimations" in active
+
+
+def test_only_endless_animations_are_paused():
+    # A CSS transition (the SOC bar) or a one-shot effect must be left alone:
+    # pausing one would strand it half-way.
+    source = APP_JS.read_text(encoding="utf-8")
+    endless = source.split("function isEndlessAnimation(animation) {", 1)[1].split("\nfunction ", 1)[0]
+    assert "getComputedTiming().iterations === Infinity" in endless
