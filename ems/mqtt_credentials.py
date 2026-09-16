@@ -270,7 +270,7 @@ def _referenced_broker_refs(config):
 
     from ems.zendure_mqtt.config_entries import (
         config_entry_enabled,
-        is_zendure_mqtt_device_config,
+        is_mqtt_telemetry_device_config,
         zendure_mqtt_broker_ref,
     )
 
@@ -278,7 +278,10 @@ def _referenced_broker_refs(config):
     devices = config.get("devices")
     if isinstance(devices, list):
         for device in devices:
-            if is_zendure_mqtt_device_config(device) and config_entry_enabled(device):
+            # Every entry read over MQTT, whether Zendure hardware or an
+            # external inverter: a device this misses is a stored credential
+            # that looks unused and could be dropped out from under it.
+            if is_mqtt_telemetry_device_config(device) and config_entry_enabled(device):
                 refs.add(zendure_mqtt_broker_ref(device))
     grid = config.get("grid_meter")
     if _mqtt_grid_meter_type(grid) and config_entry_enabled(grid):

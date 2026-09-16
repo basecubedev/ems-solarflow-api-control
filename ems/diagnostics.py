@@ -1125,6 +1125,21 @@ def diagnose_config_plausibility(checks, args, config_data):
                 checks, index, item, broker_sources=broker_sources
             )
             continue
+        if zendure_mqtt_entries.is_external_mqtt_device_config(item):
+            # Read over MQTT and never commanded: it has no ip/sn to report on,
+            # and its own validator owns what can be wrong with it.
+            for issue in zendure_mqtt_entries.validate_external_mqtt_device_config(
+                item, broker_sources=broker_sources
+            ):
+                diagnose_add(
+                    checks,
+                    "config",
+                    issue.get("severity", "error"),
+                    issue.get("code", "external_mqtt_invalid"),
+                    issue.get("message", ""),
+                    index=index,
+                )
+            continue
         name = item.get("name")
         path = f"devices.{index}"
         if not isinstance(name, str) or not name.strip():
@@ -1328,6 +1343,7 @@ def diagnose_zendure_mqtt_runtime(checks, config_data):
         config_data.get("devices"),
         known_broker_refs=known_refs,
         brokers_defined=brokers_defined,
+        broker_sources={ref: broker.source for ref, broker in brokers.items()},
     )
     runtime_config, config_error = load_zendure_mqtt_runtime_config(raw)
 
@@ -2193,7 +2209,7 @@ def diagnose_hardware(checks, config_data):
     for index, device in enumerate(config_data.get("devices", [])):
         if not isinstance(device, dict):
             continue
-        if zendure_mqtt_entries.is_zendure_mqtt_device_config(device):
+        if zendure_mqtt_entries.is_mqtt_telemetry_device_config(device):
             continue
         name = str(device.get("name") or f"device-{index}")
         read_tracker = CommHealth(name, kind="read")
@@ -2684,7 +2700,7 @@ def diagnose_ac_charge_model_refusal(item):
         hardware_profile_by_name,
     )
 
-    mqtt = zendure_mqtt_entries.is_zendure_mqtt_device_config(item)
+    mqtt = zendure_mqtt_entries.is_mqtt_telemetry_device_config(item)
     if mqtt and not zendure_mqtt_entries.is_control_zendure_mqtt_device_config(item):
         return "telemetry_only"
     pinned = (

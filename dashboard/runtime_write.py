@@ -106,7 +106,7 @@ def validate_device_values(device_name, payload, validation_context=None):
         if refused:
             raise RuntimeWriteError(
                 f"{refused[0]} is not available for {device_name}: it is "
-                "controlled over MQTT, where the EMS cannot switch the AC mode"
+                "connected over MQTT, where the EMS cannot switch the AC mode"
             )
     fields = {**_device_fields(device_name, validation_context), **DEVICE_AC_FIELDS}
     return _validate_payload(payload, fields)
@@ -118,7 +118,7 @@ def ac_role_supported(device_name, validation_context=None):
 
 
 def build_validation_context(config=None, runtime_state=None):
-    from ems.zendure_mqtt.config_entries import is_zendure_mqtt_device_config
+    from ems.zendure_mqtt.config_entries import is_mqtt_telemetry_device_config
 
     config = config if isinstance(config, dict) else {}
     system = config.get("system", {}) if isinstance(config.get("system"), dict) else {}
@@ -177,7 +177,7 @@ def build_validation_context(config=None, runtime_state=None):
             for device in devices
             if isinstance(device, dict)
             and device.get("name")
-            and is_zendure_mqtt_device_config(device)
+            and is_mqtt_telemetry_device_config(device)
         ),
     }
 

@@ -21,6 +21,8 @@ from ems.mqtt_control.topic_families import (
     SCALAR_FAMILIES,
 )
 
+from ems.zendure_mqtt.external_catalog import match_external_topic
+
 # Neutral schema names for the two JSON-report layouts. A topic family names
 # the observed topic/payload format only — new ZenSDK devices publish the
 # leading-slash JSON report via the cloud broker too, so the "legacy_" prefix
@@ -45,10 +47,11 @@ class TopicMatch:
 
 
 def classify_topic(topic):
-    """Classify an MQTT topic into a Zendure telemetry family.
+    """Classify an MQTT topic into a known telemetry family.
 
-    Only telemetry-carrying topics are recognized. ``properties/write`` and any
-    other control shape is deliberately left as ``FAMILY_UNKNOWN`` so it is never
+    Only telemetry-carrying topics are recognized: the Zendure families and the
+    shapes the external-device catalog lists. ``properties/write`` and any other
+    control shape is deliberately left as ``FAMILY_UNKNOWN`` so it is never
     consumed as telemetry.
     """
 
@@ -100,6 +103,12 @@ def classify_topic(topic):
             device_id=segments[2],
             serial_number=segments[2],
             metric="/".join(segments[3:]),
+        )
+    external = match_external_topic(segments)
+    if external is not None:
+        entry, device, metric = external
+        return TopicMatch(
+            entry.family, device_id=device, serial_number=device, metric=metric
         )
     return TopicMatch(FAMILY_UNKNOWN)
 

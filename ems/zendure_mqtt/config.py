@@ -41,13 +41,17 @@ class ZendureMqttClientConfig:
     subscriptions: tuple[str, ...] | None = None
     connect_timeout_seconds: float = 10.0
     keepalive_seconds: int = 30
+    # One filter per configured catalog device; no Zendure family filter
+    # reaches its topics.
+    external_subscriptions: tuple[str, ...] = ()
 
     def resolved_subscriptions(self) -> tuple[str, ...]:
         """Topic filters to subscribe to, de-duplicated and order-stable.
 
         Uses ``subscriptions`` when given, else the known local families. When an
         ``app_key`` is configured the cloud-prefixed scalar tree ``<app_key>/#``
-        is added — never a global ``#``.
+        is added — never a global ``#``. Every configured catalog device adds
+        the filter for its own topics.
         """
 
         if self.subscriptions is not None:
@@ -62,6 +66,9 @@ class ZendureMqttClientConfig:
             cloud = f"{self.app_key}/#"
             if cloud not in topics:
                 topics.append(cloud)
+        for topic in self.external_subscriptions:
+            if topic not in topics:
+                topics.append(topic)
         return tuple(topics)
 
     def redacted(self) -> "ZendureMqttClientConfig":
