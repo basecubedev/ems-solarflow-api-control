@@ -14,8 +14,17 @@ python3 scripts/dashboard_bench.py --matrix baseline --browser firefox
 
 ## Start here
 
+[live-render-and-motion-study.md](live-render-and-motion-study.md) is the
+current document. It answers a reported symptom -- sections of the cockpit
+being drawn again while scrolling, and again on the way back up -- and finds
+two causes, neither of them lazy loading: every snapshot rebuilt the nodes it
+rendered into, and 153 endless animations kept running in views nobody was
+looking at. It also records the two measurement traps that cost a run each: a
+window the compositor considers hidden is throttled to 1 Hz, and an
+IntersectionObserver callback that reads from the DOM costs more than it saves.
+
 [final-dashboard-performance-audit.md](final-dashboard-performance-audit.md) is
-the current document. It is the last Linux-side pass over the whole frontend:
+the document before it. It is the last Linux-side pass over the whole frontend:
 how it scales to twelve devices, what it rebuilds, what it retains, what it does
 while nobody is looking at it. Three defects found and fixed, each with a
 before/after taken from a worktree at the pre-change commit; the largest is that
