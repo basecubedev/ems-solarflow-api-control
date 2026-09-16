@@ -16,6 +16,12 @@
 # before it is handed over. An archive that does not round-trip is deleted
 # rather than delivered.
 #
+# The bundle also carries the history: a clean clone under .git -- every tag,
+# HEAD detached at the archived revision, no remotes, hooks, reflogs or
+# worktree links -- so the extracted tree is a checkout whose git describe and
+# git log answer. That clone is verified too: same revision, same tags,
+# complete objects, and nothing in it that would run code where it lands.
+#
 # Alongside the bundle it writes a source authority: the bundle's digest, the
 # full project revision and the canonical tree hash the build authority uses.
 # Production finalization compares the two, because a build from one commit and
@@ -34,7 +40,7 @@ OUTPUT=""
 KEEP=no
 
 usage() {
-    sed -n '3,22p' "$0"
+    sed -n '3,28p' "$0"
 }
 
 not_run() {
@@ -78,9 +84,30 @@ mkdir -p "$(dirname "$OUTPUT")" || fail "cannot create $(dirname "$OUTPUT")" out
 # git archive reads the object tree, so it emits modes and symlinks as git
 # recorded them. It never follows a link and never picks up an untracked file,
 # which is the whole reason the bundle is not built from the working directory.
-git -C "$ROOT" archive --format=tar --prefix="$PREFIX/" "$REVISION" \
-    | gzip -n > "$OUTPUT" \
-    || fail "the archive could not be written" archive_failed
+# The history goes in beside it from a fresh clone, reduced to the tags and
+# the commits behind them; a shallow repository has neither to give and is
+# refused before anything is written.
+set +e
+PYTHONPATH="$ROOT" python3 - "$OUTPUT" "$ROOT" "$REVISION" "$PREFIX" <<'PY'
+import sys
+
+from appliance import source_bundle
+
+archive, root, revision, prefix = sys.argv[1:5]
+try:
+    made = source_bundle.create(archive, root=root, ref=revision, prefix=prefix)
+except source_bundle.SourceBundleError as exc:
+    print(f"appliance-create-source-bundle: {exc.message}", file=sys.stderr)
+    sys.exit(3 if exc.code == "repository_shallow" else 1)
+print(f"history:  {made.commits} commit(s), {len(made.tags)} tag(s) carried under .git")
+PY
+written=$?
+set -e
+case "$written" in
+    0) ;;
+    3) not_run "the repository is a shallow clone; clone it with its history first" repository_shallow ;;
+    *) fail "the archive could not be written" archive_failed ;;
+esac
 
 MANIFEST="${OUTPUT%.tar.gz}"
 MANIFEST="${MANIFEST%.tar}.manifest.json"
@@ -118,9 +145,13 @@ for path, reason in report.unsafe:
     print(f"UNSAFE     {path}: {reason}", file=sys.stderr)
 for path in report.duplicate:
     print(f"DUPLICATE  {path}", file=sys.stderr)
+for problem in report.repository:
+    print(f"HISTORY    {problem}", file=sys.stderr)
 
 print(f"compared: {report.compared} tracked object(s)")
 print(f"symlinks: {report.symlinks} preserved")
+if report.carried:
+    print(f"history:  HEAD {report.head[:12]}, {len(report.tags)} tag(s) verified under .git")
 sys.exit(0 if report.ok else 1)
 PY
 verified=$?

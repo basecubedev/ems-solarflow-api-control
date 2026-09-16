@@ -426,6 +426,15 @@ flattened into regular files, which produces a tree that still builds, generates
 six mount units, activates none of them, and loses every write to the shared
 paths at the next boot.
 
+The bundle also carries the history under `.git`: a clean clone with every
+tag, HEAD detached at the archived revision, and no remotes, branches, hooks,
+reflogs or worktree links, so the extracted tree is a checkout whose
+`git describe` and `git log` answer. The verification holds that clone to the
+same standard as the tree — the bundled revision, the repository's tags,
+complete objects, and nothing that would run code where it is extracted. A
+shallow repository is refused rather than bundled, because its tags and history
+are not all there to carry.
+
 ## 18. Validation and release claims
 
 Validation MUST match the changed risk. Use the applicable baseline:

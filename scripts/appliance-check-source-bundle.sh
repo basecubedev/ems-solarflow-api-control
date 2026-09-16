@@ -7,7 +7,9 @@
 #
 # A delivery path that flattens a symlink into a regular file produces a tree
 # that still builds and never activates its persistence mounts. So every tracked
-# object is compared: content, file mode, symlink mode and symlink target.
+# object is compared: content, file mode, symlink mode and symlink target. A
+# history carried under .git is held to the same standard: the bundled
+# revision, the repository's tags, complete objects, nothing that runs code.
 #
 # Paths a bundle deliberately omits must be named with --exclude. A silent
 # omission and a dropped file are indistinguishable from the far end.
@@ -24,7 +26,7 @@ FORMAT=text
 EXCLUDES=""
 
 usage() {
-    sed -n '3,16p' "$0"
+    sed -n '3,19p' "$0"
 }
 
 not_run() {
@@ -92,10 +94,14 @@ else:
         print(f"UNSAFE     {path}: {reason}")
     for path in report.duplicate:
         print(f"DUPLICATE  {path}")
+    for problem in report.repository:
+        print(f"HISTORY    {problem}")
     if report.excluded:
         print(f"excluded: {len(report.excluded)} declared path(s)")
     print(f"compared: {report.compared} tracked object(s)")
     print(f"symlinks: {report.symlinks} preserved")
+    if report.carried:
+        print(f"history:  HEAD {report.head[:12]}, {len(report.tags)} tag(s) verified under .git")
     if report.ok:
         print(f"RESULT: PASS ({ref})")
     else:
@@ -104,7 +110,8 @@ else:
             f"{len(report.mismatched)} changed, "
             f"{len(report.unexpected)} undeclared, "
             f"{len(report.unsafe)} unsafe, "
-            f"{len(report.duplicate)} duplicate)"
+            f"{len(report.duplicate)} duplicate, "
+            f"{len(report.repository)} history)"
         )
 
 sys.exit(0 if report.ok else 1)
