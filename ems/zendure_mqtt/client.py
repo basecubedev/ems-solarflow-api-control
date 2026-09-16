@@ -45,7 +45,11 @@ class ZendureMqttReadClient:
         client_factory=None,
     ):
         self._config = config
-        self._aggregator = aggregator if aggregator is not None else ZendureMqttAggregator()
+        self._aggregator = (
+            aggregator
+            if aggregator is not None
+            else ZendureMqttAggregator(external_topics=dict(config.external_topics))
+        )
         self._client_factory = client_factory or _default_client_factory
         self._client = None
         self._lock = threading.Lock()
