@@ -114,13 +114,13 @@ def _state_telemetry_fields(state):
 
 
 def _telemetry_only_tiles(controller):
-    """Read-only tiles for Zendure MQTT telemetry-only devices, if any.
+    """Read-only tiles for every device that streams telemetry but takes no orders.
 
-    These devices stream telemetry but are excluded from the control loop
-    (``capabilities.write_output_limit`` is not set). They are not part of
-    ``controller.devices``; their live state comes from the telemetry runtime's
-    snapshot cache. Returns an empty list when no telemetry runtime is wired
-    (older deployments, test doubles) so the dashboard stays stable.
+    Zendure MQTT devices with no write method and external inverters with no
+    command path at all arrive the same way: they are not part of
+    ``controller.devices``, and their live state comes from the telemetry
+    runtime's snapshot cache. Returns an empty list when no telemetry runtime is
+    wired (older deployments, test doubles) so the dashboard stays stable.
     """
 
     runtime = getattr(controller, "zendure_mqtt_runtime", None)

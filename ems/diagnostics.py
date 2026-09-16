@@ -833,6 +833,19 @@ def diagnose_config_plausibility(checks, args, config_data):
                 checks, index, item, broker_sources=broker_sources
             )
             continue
+        if zendure_mqtt_entries.is_external_mqtt_device_config(item):
+            # Read over MQTT and never commanded: it has no ip/sn to report on,
+            # and its own validator owns what can be wrong with it.
+            for issue in zendure_mqtt_entries.validate_external_mqtt_device_config(item):
+                diagnose_add(
+                    checks,
+                    "config",
+                    issue.get("severity", "error"),
+                    issue.get("code", "external_mqtt_invalid"),
+                    issue.get("message", ""),
+                    index=index,
+                )
+            continue
         name = item.get("name")
         path = f"devices.{index}"
         if not isinstance(name, str) or not name.strip():
@@ -852,6 +865,14 @@ def diagnose_config_plausibility(checks, args, config_data):
 
     # Name uniqueness spans every transport (API and MQTT entries alike); the
     # shared helper keeps diagnose in parity with the startup guard.
+    for issue in zendure_mqtt_entries.find_duplicate_external_topics(devices):
+        diagnose_add(
+            checks,
+            "config",
+            issue.get("severity", "error"),
+            issue.get("code", "external_mqtt_topic_duplicate"),
+            issue.get("message", ""),
+        )
     for issue in zendure_mqtt_entries.find_duplicate_device_names(devices):
         diagnose_add(checks, "config", "error", issue["code"], issue["message"])
 
@@ -1878,7 +1899,7 @@ def diagnose_hardware(checks, config_data):
     for index, device in enumerate(config_data.get("devices", [])):
         if not isinstance(device, dict):
             continue
-        if zendure_mqtt_entries.is_zendure_mqtt_device_config(device):
+        if zendure_mqtt_entries.is_mqtt_telemetry_device_config(device):
             continue
         name = str(device.get("name") or f"device-{index}")
         read_tracker = CommHealth(name, kind="read")

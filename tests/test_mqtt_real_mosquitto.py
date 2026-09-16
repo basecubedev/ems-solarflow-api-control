@@ -200,3 +200,59 @@ def test_credentials_ref_wrong_secret_never_reads_and_hides_password(tmp_path):
             assert "the-wrong-password" not in repr(getattr(client, "_connect_error", ""))
         finally:
             client.close()
+
+
+# --- Mosquitto 06: an inverter the EMS only reads ---------------------------
+def test_external_mqtt_device_reads_a_republished_web_interface_value(tmp_path):
+    """The reported case, end to end over a real broker.
+
+    An inverter whose only interface is a web page, scraped by a
+    home-automation system that republishes the reading as a whole number of
+    watts. It is a devices[] entry on a normal broker profile, it reaches the
+    same telemetry runtime every Zendure MQTT device uses, and nothing is ever
+    published back.
+    """
+
+    require_real_broker_environment()
+    from ems.zendure_mqtt.runtime import build_zendure_mqtt_runtime
+
+    topic = "KostlPico/EXAMPLE0000001/solarPower"
+    with mosquitto_broker(tmp_path) as (host, port):
+        config = {
+            "zendure_mqtt": {
+                "brokers": {
+                    "house": {
+                        "enabled": True,
+                        "source": "local_mqtt",
+                        "host": host,
+                        "port": port,
+                    }
+                }
+            },
+            "devices": [
+                {
+                    "name": "Kostal Piko",
+                    "type": "external_mqtt",
+                    "mqtt": {
+                        "broker_ref": "house",
+                        "device_id": "EXAMPLE0000001",
+                        "topics": {"outputHomePower": topic},
+                    },
+                }
+            ],
+        }
+        runtime = build_zendure_mqtt_runtime(config)
+        runtime.start()
+        try:
+            publish_until(
+                lambda: publish_once(host, port, topic, "1234"),
+                lambda: any(
+                    snap.metrics.get("outputHomePower") == 1234
+                    for snap in runtime.snapshots().values()
+                ),
+                message="external inverter never received 1234 W",
+            )
+            names = {item["name"]: item["status"] for item in runtime.device_summaries()}
+            assert names["Kostal Piko"] == "online"
+        finally:
+            runtime.stop()

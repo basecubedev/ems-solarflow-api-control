@@ -29,6 +29,26 @@ from ems.device_identity import (
 
 ZENDURE_MQTT_TYPE = "zendure_mqtt"
 
+# An inverter this project does not control, read over the same MQTT telemetry
+# path. It behaves exactly like a Zendure MQTT device with no write method --
+# read, shown, counted, never commanded -- and differs in one way only: its
+# topics follow nobody's convention, so each one is named in the entry.
+EXTERNAL_MQTT_TYPE = "external_mqtt"
+
+# The metric names an external entry may map a topic to. Deliberately the
+# vocabulary the rest of the project already speaks, so a reading needs no
+# translation anywhere downstream; a name outside this set is a typo that would
+# otherwise become a metric nobody reads.
+EXTERNAL_MQTT_METRICS = frozenset(
+    {
+        "outputHomePower",
+        "solarInputPower",
+        "packInputPower",
+        "outputPackPower",
+        "electricLevel",
+    }
+)
+
 # Stable identity of the implicit broker used by old single-broker configs. A
 # device without an explicit ``mqtt.broker_ref`` maps to it.
 DEFAULT_BROKER_REF = "default"
@@ -73,6 +93,223 @@ def is_zendure_mqtt_device_config(item: Any) -> bool:
     """True if ``item`` is a ``devices[]`` entry of type ``zendure_mqtt``."""
 
     return isinstance(item, Mapping) and _entry_type(item) == ZENDURE_MQTT_TYPE
+
+
+def is_external_mqtt_device_config(item: Any) -> bool:
+    """True if ``item`` is a ``devices[]`` entry of type ``external_mqtt``."""
+
+    return isinstance(item, Mapping) and _entry_type(item) == EXTERNAL_MQTT_TYPE
+
+
+def is_mqtt_telemetry_device_config(item: Any) -> bool:
+    """True for any entry read over MQTT and never given a control path here.
+
+    Both kinds reach the telemetry runtime and neither is ever handed an HTTP
+    client, so the question "is this an MQTT entry" has one answer.
+    """
+
+    return is_zendure_mqtt_device_config(item) or is_external_mqtt_device_config(item)
+
+
+def external_mqtt_topic_map(devices: Any) -> dict[str, tuple[str, str]]:
+    """Map every configured external topic to ``(device_id, metric)``.
+
+    This is what lets one aggregator read topics that follow no convention: the
+    entry says which topic carries which metric, and nothing has to be guessed
+    from the topic's shape. A malformed or disabled entry contributes nothing.
+    """
+
+    mapping: dict[str, tuple[str, str]] = {}
+    if not isinstance(devices, list):
+        return mapping
+    for item in devices:
+        if not is_external_mqtt_device_config(item) or not config_entry_enabled(item):
+            continue
+        if validate_external_mqtt_device_config(item):
+            continue
+        device_id = zendure_mqtt_device_identifier(item)
+        if not device_id:
+            continue
+        for metric, topic in item["mqtt"].get("topics", {}).items():
+            mapping[str(topic).strip()] = (device_id, str(metric))
+    return mapping
+
+
+def validate_mqtt_telemetry_device_config(
+    item: Any,
+    *,
+    known_broker_refs: Any = None,
+    brokers_defined: bool = False,
+    broker_sources: Any = None,
+) -> list[dict[str, Any]]:
+    """Validate any telemetry entry, Zendure or external, through one door.
+
+    Callers that hold a mixed ``devices[]`` list should not have to ask which
+    kind an entry is before they can check it.
+    """
+
+    validator = (
+        validate_external_mqtt_device_config
+        if is_external_mqtt_device_config(item)
+        else validate_zendure_mqtt_device_config
+    )
+    return validator(
+        item,
+        known_broker_refs=known_broker_refs,
+        brokers_defined=brokers_defined,
+        broker_sources=broker_sources,
+    )
+
+
+def validate_external_mqtt_device_config(
+    item: Any,
+    *,
+    known_broker_refs: Any = None,
+    brokers_defined: bool = False,
+    broker_sources: Any = None,
+) -> list[dict[str, Any]]:
+    """Validate an external MQTT entry; an empty list means valid.
+
+    The name, the identifier and the broker reference are checked by the same
+    shared code every MQTT entry goes through, so an external device cannot
+    drift into being validated more loosely than its neighbours. Only the two
+    questions unique to this type are asked here: which topics carry which
+    metric, and the refusal of any write capability.
+    """
+
+    if not isinstance(item, Mapping):
+        return [_issue("error", "device_not_object", "device entry must be an object")]
+    if _entry_type(item) != EXTERNAL_MQTT_TYPE:
+        return [
+            _issue(
+                "error",
+                "not_external_mqtt",
+                f"device type must be '{EXTERNAL_MQTT_TYPE}'",
+            )
+        ]
+
+    issues = _structural_issues(
+        item,
+        known_broker_refs=known_broker_refs,
+        brokers_defined=brokers_defined,
+        broker_sources=broker_sources,
+        require_topic_family=False,
+    )
+
+    if _write_output_limit_requested(item):
+        # Not "not implemented yet": there is no command path to this hardware,
+        # so an entry asking for one is refused rather than partially honoured.
+        issues.append(
+            _issue(
+                "error",
+                "write_output_limit_unsupported",
+                "an external MQTT device cannot be written to; "
+                "remove capabilities.write_output_limit",
+            )
+        )
+
+    settings = item.get("mqtt")
+    if not isinstance(settings, Mapping):
+        return issues
+
+    topics = settings.get("topics")
+    if not isinstance(topics, Mapping) or not topics:
+        issues.append(
+            _issue(
+                "error",
+                "external_mqtt_topics_missing",
+                "mqtt.topics must name at least one metric and its topic",
+            )
+        )
+        return issues
+
+    for metric, topic in topics.items():
+        if metric not in EXTERNAL_MQTT_METRICS:
+            issues.append(
+                _issue(
+                    "error",
+                    "external_mqtt_metric_unknown",
+                    f"mqtt.topics names an unknown metric {metric}; "
+                    f"use one of {', '.join(sorted(EXTERNAL_MQTT_METRICS))}",
+                )
+            )
+        value = str(topic or "").strip()
+        if not value:
+            issues.append(
+                _issue(
+                    "error",
+                    "external_mqtt_topic_empty",
+                    f"mqtt.topics.{metric} has no topic",
+                )
+            )
+            continue
+        if "#" in value or "+" in value:
+            # A filter would subscribe, but readings are attributed by exact
+            # topic, so the entry would record nothing and say nothing.
+            issues.append(
+                _issue(
+                    "error",
+                    "external_mqtt_topic_wildcard",
+                    f"mqtt.topics.{metric} must be one exact topic, not a filter",
+                )
+            )
+        elif _recognised_topic_family(value):
+            # A mistyped entry would otherwise take a Zendure device's readings
+            # and leave it dark with nothing said.
+            issues.append(
+                _issue(
+                    "error",
+                    "external_mqtt_topic_recognised",
+                    f"mqtt.topics.{metric} is a topic this project already "
+                    "recognises; configure that device by its own type",
+                )
+            )
+    return issues
+
+
+def _recognised_topic_family(topic: str) -> bool:
+    from ems.mqtt_control.topic_families import FAMILY_UNKNOWN
+    from ems.zendure_mqtt.topics import classify_topic
+
+    return classify_topic(topic).family != FAMILY_UNKNOWN
+
+
+def find_duplicate_external_topics(devices: Any) -> list[dict[str, Any]]:
+    """Report one topic claimed by two active external entries.
+
+    A plain mapping keeps the last claim, so the other device would sit there
+    receiving nothing for no visible reason.
+    """
+
+    if not isinstance(devices, list):
+        return []
+
+    seen: dict[str, int] = {}
+    issues: list[dict[str, Any]] = []
+    for index, item in enumerate(devices):
+        if not is_external_mqtt_device_config(item) or not config_entry_enabled(item):
+            continue
+        settings = item.get("mqtt")
+        topics = settings.get("topics") if isinstance(settings, Mapping) else None
+        if not isinstance(topics, Mapping):
+            continue
+        for topic in topics.values():
+            key = str(topic or "").strip()
+            if not key:
+                continue
+            first = seen.get(key)
+            if first is None:
+                seen[key] = index
+                continue
+            issues.append(
+                _issue(
+                    "error",
+                    "external_mqtt_topic_duplicate",
+                    f"devices.{first} and devices.{index} both read {key}; "
+                    "one topic belongs to one device",
+                )
+            )
+    return issues
 
 
 def _write_output_limit_requested(item: Mapping[str, Any]) -> bool:
@@ -152,7 +389,7 @@ def has_runtime_control_device(config: Any) -> bool:
         isinstance(item, Mapping)
         and config_entry_enabled(item)
         and (
-            not is_zendure_mqtt_device_config(item)
+            not is_mqtt_telemetry_device_config(item)
             or is_control_zendure_mqtt_device_config(item)
         )
         for item in devices
@@ -684,8 +921,16 @@ def _structural_issues(
     known_broker_refs: Any,
     brokers_defined: bool,
     broker_sources: Any = None,
+    require_topic_family: bool = True,
 ) -> list[dict[str, Any]]:
-    """Shape checks shared by the telemetry and control validators."""
+    """Shape checks shared by every MQTT device validator.
+
+    ``require_topic_family`` is false for an external entry: a topic family
+    names a *recognised* topic shape, and an external device's topics are named
+    outright because they follow no shape worth recognising. Everything else --
+    the name, the identifier, the broker reference -- is the same question for
+    every entry and is answered here once.
+    """
 
     issues: list[dict[str, Any]] = []
 
@@ -698,7 +943,7 @@ def _structural_issues(
     mqtt = item.get("mqtt")
     if not isinstance(mqtt, Mapping):
         issues.append(_issue("error", "mqtt_missing", "mqtt must be an object"))
-    else:
+    elif require_topic_family:
         topic_family = mqtt.get("topic_family")
         if not isinstance(topic_family, str) or not topic_family.strip():
             issues.append(
