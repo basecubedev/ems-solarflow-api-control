@@ -247,16 +247,12 @@ under Vendored Components above.
 
 Packages that `package-lock.json` marks optional and platform-specific. They are
 never installed on the Linux developer and CI machines this project targets.
+None at present: `fsevents`, the macOS-only file watcher, was the last one and
+left with `@playwright/test` 1.63.0. The table stays so the checker keeps
+comparing this section with the lockfile.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
-| `fsevents` | 2.3.2 | MIT | macOS-only native file-watching for the Node toolchain (`"os": ["darwin"]`, `"optional": true`) | ❌ | ❌ | https://github.com/fsevents/fsevents |
-
-```text
-Optional platform dependency
-macOS only
-Not installed on Linux
-```
 
 At the Python level, `typing-extensions` is the equivalent case: a conditional
 `cryptography` dependency for `python_full_version < 3.11`, never installed on
