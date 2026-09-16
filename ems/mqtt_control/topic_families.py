@@ -17,6 +17,11 @@ FAMILY_ZENSDK_HA_SCALAR = "zensdk_ha_scalar"
 FAMILY_LEGACY_JSON = "legacy_zendure_json"
 FAMILY_LEGACY_JSON_ALT = "legacy_zendure_json_alt"
 FAMILY_ZENDURE_CLOUD_SCALAR = "zendure_cloud_scalar"
+# A topic named in the configuration rather than recognised by its shape, for an
+# inverter this project reads and never commands. It is deliberately absent from
+# SCALAR_FAMILIES: those are the families a write capability may be derived
+# from, and this one never carries one.
+FAMILY_EXTERNAL_SCALAR = "external_scalar"
 FAMILY_UNKNOWN = "unknown"
 
 SCALAR_FAMILIES = frozenset({FAMILY_ZENSDK_HA_SCALAR, FAMILY_ZENDURE_CLOUD_SCALAR})
@@ -27,6 +32,7 @@ __all__ = [
     "FAMILY_LEGACY_JSON",
     "FAMILY_LEGACY_JSON_ALT",
     "FAMILY_ZENDURE_CLOUD_SCALAR",
+    "FAMILY_EXTERNAL_SCALAR",
     "FAMILY_UNKNOWN",
     "SCALAR_FAMILIES",
     "JSON_FAMILIES",

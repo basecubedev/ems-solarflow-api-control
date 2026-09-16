@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ems.zendure_mqtt.payloads import coerce_scalar, parse_report_payload
+from ems.mqtt_control.topic_families import FAMILY_EXTERNAL_SCALAR
 from ems.zendure_mqtt.topics import (
     FAMILY_UNKNOWN,
     JSON_FAMILIES,
@@ -119,12 +120,26 @@ class ZendureMqttAggregator:
     and read back merged snapshots. Grouping key is the device id from the topic.
     """
 
-    def __init__(self, *, monotonic=time.monotonic, wall_clock=time.time):
+    def __init__(
+        self,
+        *,
+        monotonic=time.monotonic,
+        wall_clock=time.time,
+        external_topics=None,
+    ):
         self._devices = {}
         self._monotonic = monotonic
         self._wall_clock = wall_clock
+        # ``{topic: (device_id, metric)}`` for inverters whose topics follow no
+        # convention. Consulted before classification, because their shape
+        # carries no information to classify by.
+        self._external_topics = dict(external_topics or {})
 
     def observe(self, topic, payload=None):
+        external = self._external_topics.get(topic)
+        if external is not None:
+            self._observe_external(topic, payload, *external)
+            return
         match = classify_topic(topic)
         if match.family == FAMILY_UNKNOWN:
             return
@@ -151,6 +166,31 @@ class ZendureMqttAggregator:
             snap.observed_metrics.add(match.metric)
         elif match.family in JSON_FAMILIES:
             self._merge_report(snap, payload)
+
+    def _observe_external(self, topic, payload, device_id, metric):
+        """Record one named reading from a topic that was configured, not parsed.
+
+        A payload that is not a number leaves the previous reading in place: a
+        stale number is honest, a zero would look like a real measurement.
+        """
+
+        if not device_id or not metric:
+            return
+        value = coerce_scalar(payload)
+        snap = self._devices.get(device_id)
+        if snap is None:
+            snap = ZendureMqttSnapshot(device_id=device_id, serial_number=device_id)
+            self._devices[device_id] = snap
+        snap.last_seen_epoch = self._wall_clock()
+        snap.last_seen_monotonic = self._monotonic()
+        snap.topic_families.add(FAMILY_EXTERNAL_SCALAR)
+        snap.seen_topics.add(topic)
+        snap.observed_metrics = set()
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return
+        snap.metrics[metric] = value
+        snap.metric_monotonic[metric] = snap.last_seen_monotonic
+        snap.observed_metrics.add(metric)
 
     def _merge_report(self, snap, payload):
         report = parse_report_payload(payload)
