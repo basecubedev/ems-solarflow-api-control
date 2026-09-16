@@ -1,0 +1,128 @@
+name: EMS release catalogue
+
+# The file every installation reads for its release list (docs/developer/
+# ci-release.md, "Release catalogue"). It is built from the GitHub Releases,
+# not from the tags, so it has to follow the Release object: once after the
+# images of a tag are published (docker-publish.yml calls this workflow), and
+# again whenever a Release is published, edited or deleted. Whichever of the
+# two happens last is the one that leaves the file correct.
+on:
+  release:
+    types: [published, edited, deleted, prereleased, released, unpublished]
+  workflow_call:
+    inputs:
+      expect_tag:
+        description: "The tag the published catalogue must list before the job is reported done; empty means the newest entry it wrote"
+        required: false
+        default: ""
+        type: string
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release-catalogue:
+    name: EMS release catalogue publish
+    runs-on: ubuntu-latest
+    # Two rebuilds at once would race on the catalogue branch. Each rebuild is
+    # complete and the newest queued one runs last, so nothing is lost when a
+    # pending one is cancelled in its favour. Only the seconds of building and
+    # publishing hold the group: the verification is a job of its own outside
+    # it, so a rebuild triggered by a Release is never held back by a run that
+    # is still waiting for that very Release.
+    concurrency: release-catalogue
+    outputs:
+      newest_tag: ${{ steps.build.outputs.newest_tag }}
+    steps:
+      # The default branch, whatever ref started the run: a Release edited on
+      # an old tag would otherwise check out a tree without the script, and
+      # the catalogue is defined by the Admin that reads it, not by the tag
+      # it describes.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      # One authenticated pass here replaces a dozen unauthenticated API calls
+      # on every installation's visit to the upgrade page. The catalogue is
+      # rebuilt in full each time, so it needs no seed and cannot go stale in
+      # a way a single entry could.
+      - name: Build release catalogue
+        id: build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/release_catalogue.py build --output release-catalogue.json
+          newest="$(python3 -c 'import json; d=json.load(open("release-catalogue.json")); print(d["releases"][0]["tag"])')"
+          echo "newest_tag=${newest}" >> "$GITHUB_OUTPUT"
+      - name: Publish release catalogue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CATALOGUE_BRANCH: development-build-catalogue
+          CATALOGUE_FILE: release-catalogue.json
+        run: |
+          set -euo pipefail
+          api="repos/${GITHUB_REPOSITORY}/contents/${CATALOGUE_FILE}"
+          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${CATALOGUE_BRANCH}" >/dev/null 2>&1; then
+            base_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${{ github.event.repository.default_branch }}" --jq .object.sha)"
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/heads/${CATALOGUE_BRANCH}" -f sha="$base_sha" >/dev/null \
+              || gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${CATALOGUE_BRANCH}" >/dev/null
+          fi
+          content="$(base64 -w0 "$CATALOGUE_FILE")"
+          for retry in 1 2 3 4 5; do
+            if metadata="$(gh api "${api}?ref=${CATALOGUE_BRANCH}" 2>/dev/null)"; then
+              sha="$(jq -r .sha <<< "$metadata")"
+            else
+              sha=""
+            fi
+            args=(--method PUT "$api" -f "message=ci: release catalogue ${GITHUB_SHA::7}" \
+              -f "content=${content}" -f "branch=${CATALOGUE_BRANCH}")
+            [[ -z "$sha" ]] || args+=(-f "sha=${sha}")
+            if gh api "${args[@]}" >/dev/null; then
+              exit 0
+            fi
+            sleep "$retry"
+          done
+          echo "could not publish the release catalogue" >&2
+          exit 1
+
+  # Reported as done only once the file the installations read lists the
+  # release this run was started for: the tag of a tag run, the Release of a
+  # release event, and otherwise the newest entry the run wrote -- also for a
+  # deleted Release, and for a draft, which the catalogue leaves out on
+  # purpose. A tag run whose Release does not exist yet waits for it and is
+  # then red with a hint, not green with a file that does not list it.
+  verify-release-catalogue:
+    name: EMS release catalogue verify
+    needs: [publish-release-catalogue]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Verify published release catalogue
+        env:
+          EXPECT_TAG: ${{ inputs.expect_tag }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_DRAFT: ${{ github.event.release.draft }}
+          NEWEST_TAG: ${{ needs.publish-release-catalogue.outputs.newest_tag }}
+        run: |
+          set -euo pipefail
+          expect="$EXPECT_TAG"
+          if [[ "$EVENT_NAME" == "release" && "$EVENT_ACTION" != "deleted" && "$EVENT_ACTION" != "unpublished" && "$RELEASE_DRAFT" != "true" ]]; then
+            expect="$RELEASE_TAG"
+          fi
+          if [[ -n "$expect" ]]; then
+            hint="A tag reaches installations only through its GitHub Release: publish the release for ${expect}, and this workflow rebuilds the catalogue on its own."
+          else
+            expect="$NEWEST_TAG"
+            hint="The catalogue read back from its branch does not list the newest entry that was just published."
+          fi
+          if ! python3 scripts/release_catalogue.py verify \
+              --source "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/development-build-catalogue/release-catalogue.json" \
+              --expect-tag "$expect"; then
+            echo "::error::${hint}"
+            exit 1
+          fi
