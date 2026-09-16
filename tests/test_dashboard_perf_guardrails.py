@@ -829,3 +829,33 @@ def test_setflowview_history_guard_uses_local_boolean_not_function():
     source = APP_JS.read_text(encoding="utf-8")
     assert "if (isHistoryPanelVisible && previousView !== nextView)" in source
     assert "if (historyVisible && previousView" not in source
+
+
+def test_live_renderers_patch_their_host_instead_of_rebuilding_it():
+    # Static guard for the live render path. A snapshot arrives every few
+    # seconds; writing it with `innerHTML` throws away the nodes it renders
+    # into, and with them the layout and the rasterised tiles of that area,
+    # which is what a person scrolling sees being drawn again. The browser-level
+    # proof is tests/e2e-dashboard/live-dom-reuse.spec.ts; this one keeps the
+    # two renderers from quietly going back.
+    source = APP_JS.read_text(encoding="utf-8")
+
+    devices = source.split("function renderDevices(devices) {", 1)[1].split("\nfunction ", 1)[0]
+    assert "patchHtml(" in devices
+    assert 'grid.innerHTML = ""' not in devices
+    assert "grid.appendChild(" not in devices
+
+    rules = source.split("function renderRules(rules) {", 1)[1].split("\nfunction ", 1)[0]
+    assert "patchHtml(" in rules
+    assert 'list.innerHTML = ""' not in rules
+    assert "list.appendChild(" not in rules
+
+
+def test_the_dom_patch_keeps_script_written_attributes():
+    # The SOC bar's width is written by animateDeviceSocFills, never by the
+    # markup. An attribute sweep that removed what the markup does not carry
+    # would reset the bar to zero on every snapshot.
+    source = APP_JS.read_text(encoding="utf-8")
+    assert 'const SCRIPT_OWNED_ATTRIBUTES = new Set(["style"]);' in source
+    patch = source.split("function patchAttributes(target, source) {", 1)[1].split("\nfunction ", 1)[0]
+    assert "SCRIPT_OWNED_ATTRIBUTES.has(attribute.name)" in patch

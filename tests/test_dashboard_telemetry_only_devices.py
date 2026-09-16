@@ -291,7 +291,7 @@ def test_frontend_renders_read_only_tile_without_target_and_with_badge():
           },
         });
 
-        const cards = element("deviceGrid").children.map((card) => card.innerHTML);
+        const cards = element("deviceGrid").innerHTML.split("<article").map((part) => "<article" + part);
         const wr1 = cards.find((html) => html.includes("WR1"));
         const inv = cards.find((html) => html.includes("INV_2"));
         assert(wr1, "WR1 card rendered");

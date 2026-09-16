@@ -706,21 +706,12 @@ def test_frontend_renders_full_charge_assist_rule_row_via_app_js():
           constructor(id = "") {
             this.id = id;
             this.textContent = "";
-            this._innerHTML = "";
+            this.innerHTML = "";
             this.className = "";
-            this.children = [];
             this.attrs = {};
             this.classList = new FakeClassList();
           }
-          // Mirror real DOM: assigning innerHTML = "" clears child nodes, which
-          // renderRules() relies on to rebuild the list on each call.
-          get innerHTML() { return this._innerHTML; }
-          set innerHTML(value) {
-            this._innerHTML = value;
-            if (value === "") this.children = [];
-          }
           setAttribute(key, value) { this.attrs[key] = value; }
-          appendChild(child) { this.children.push(child); }
           querySelectorAll() { return []; }
         }
 
@@ -748,13 +739,19 @@ def test_frontend_renders_full_charge_assist_rule_row_via_app_js():
           if (!condition) throw new Error(message);
         }
 
+        // The rules panel is one patched markup string; the harness has no
+        // parser, so a row is the slice from its opening tag to its end.
         function rowsHtml() {
-          return element("rulesList").children.map((c) => c.innerHTML).join("\\n");
+          return element("rulesList").innerHTML;
         }
         function assistRow() {
-          return element("rulesList").children.find(
-            (c) => c.innerHTML.includes("Full-charge assist")
-          );
+          const html = rowsHtml();
+          const title = html.indexOf("Full-charge assist");
+          if (title === -1) return null;
+          const start = html.lastIndexOf('<div class="rule-row', title);
+          const end = html.indexOf("</div>", title);
+          const markup = html.slice(start, end);
+          return { markup, className: markup.slice(0, markup.indexOf(">")) };
         }
 
         // Active assist marks the dedicated rule row active and lists devices.
