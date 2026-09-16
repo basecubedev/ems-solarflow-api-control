@@ -114,6 +114,8 @@ from ems.zendure_mqtt.config_entries import (
     find_zendure_mqtt_broker_profile_issues,
     has_runtime_control_device,
     is_control_zendure_mqtt_device_config,
+    EXTERNAL_MQTT_TYPE,
+    is_external_mqtt_device_config,
     is_zendure_mqtt_device_config,
     normalized_broker_identity,
     validate_zendure_mqtt_control_device_config,
@@ -537,6 +539,19 @@ def _config_devices(config):
 
 
 def _device_draft(device, broker_sources=None):
+    if is_external_mqtt_device_config(device):
+        # This page has no editor for an external inverter, so it offers none:
+        # the entry travels through the draft as itself and is written back
+        # untouched. Classifying it as the nearest editable kind would replace
+        # its topics with an empty ip and a set of control defaults invented for
+        # hardware that has none.
+        return {
+            "kind": EXTERNAL_MQTT_TYPE,
+            "original_name": str(device.get("name") or "").strip(),
+            "name": str(device.get("name") or "").strip(),
+            "editable": False,
+            "entry": copy.deepcopy(device),
+        }
     if is_zendure_mqtt_device_config(device):
         return zendure_mqtt_device_draft(device, broker_sources=broker_sources)
     name = str(device.get("name") or "").strip()
@@ -1444,6 +1459,13 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
     result = []
     for item in devices:
         if not isinstance(item, dict) or item.get("removed") is True:
+            continue
+        if item.get("kind") == EXTERNAL_MQTT_TYPE:
+            # Carried through as it arrived. Nothing on this page produced it,
+            # so nothing on this page may rewrite it.
+            entry = item.get("entry")
+            if isinstance(entry, dict):
+                result.append(copy.deepcopy(entry))
             continue
         original = _resolve_original_device(
             item,
