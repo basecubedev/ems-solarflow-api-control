@@ -1,6 +1,22 @@
 {
   "builds": [
     {
+      "admin_digest": "sha256:e27edf1f4813efdec9ded0e818b4f496ef68da5732170cc834c77c9599da0e18",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-ac-charge-control-e8bce2d1c7-e00238d-35120974890-1",
+      "admin_test_contract": 1,
+      "build_id": "dev-feat-ac-charge-control-e8bce2d1c7-e00238d-35120974890-1",
+      "channel": "development",
+      "created_at": "2026-09-16T16:26:45Z",
+      "display_name": "Feature feat-ac-charge-control",
+      "ems_digest": "sha256:ace8d91a5bcee09d9bab4366869c7c5f580d16e1ad37eefa2dc4042c1bf05153",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-ac-charge-control-e8bce2d1c7-e00238d-35120974890-1",
+      "installable": true,
+      "revision": "e00238df6b22961f79fb3c2e8c559b8ff3da835b",
+      "run_attempt": 1,
+      "run_id": "35120974890",
+      "tag": "dev-feat-ac-charge-control-e8bce2d1c7-e00238d-35120974890-1"
+    },
+    {
       "admin_digest": "sha256:67cca8c9b78ed48ce7423fd0bf37aee432f0a889b65f420718445c27ef7bc58a",
       "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-ac-charge-control-e8bce2d1c7-d5c524b-35032591198-1",
       "admin_test_contract": 1,
@@ -15,22 +31,6 @@
       "run_attempt": 1,
       "run_id": "35032591198",
       "tag": "dev-feat-ac-charge-control-e8bce2d1c7-d5c524b-35032591198-1"
-    },
-    {
-      "admin_digest": "sha256:e1ae643887e4fc469f189e79906f53f6d5e08c4ec476014350867509b69c9d03",
-      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-ac-charge-control-e8bce2d1c7-f187cbd-35005388105-1",
-      "admin_test_contract": 1,
-      "build_id": "dev-feat-ac-charge-control-e8bce2d1c7-f187cbd-35005388105-1",
-      "channel": "development",
-      "created_at": "2026-09-15T18:14:44Z",
-      "display_name": "Feature feat-ac-charge-control",
-      "ems_digest": "sha256:d4df4e9d3a0cd4851f6600344bcfc41c00132fc4a4504d1ff9229b6a927c42bb",
-      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-ac-charge-control-e8bce2d1c7-f187cbd-35005388105-1",
-      "installable": true,
-      "revision": "f187cbd02108f1eb7adc26bd8cb01b57a40df205",
-      "run_attempt": 1,
-      "run_id": "35005388105",
-      "tag": "dev-feat-ac-charge-control-e8bce2d1c7-f187cbd-35005388105-1"
     }
   ]
 }
