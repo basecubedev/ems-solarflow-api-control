@@ -537,6 +537,14 @@ class SystemBuildResolver:
             _mismatch("admin and ems image channels differ")
         if admin.version_label != ems.version_label:
             _mismatch("admin and ems image version labels differ")
+        # The resolved build reports one of each and takes both from the Admin
+        # image, while the move is judged against the running EMS build and it
+        # is the EMS image that gets deployed. One image may answer for the
+        # other only where they are known to say the same thing.
+        if admin.contains_release != ems.contains_release:
+            _mismatch("admin and ems image declared releases differ")
+        if admin.build_serial != ems.build_serial:
+            _mismatch("admin and ems image build serials differ")
         if admin.version_label != tag:
             _mismatch("image version label does not match the requested build tag")
         if channel != CHANNEL_UNKNOWN and admin.channel != channel:

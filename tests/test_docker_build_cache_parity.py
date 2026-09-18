@@ -69,6 +69,34 @@ def _kv_block(with_block: dict, key: str) -> dict:
     return values
 
 
+_STEP_OUTPUT_LABELS = re.compile(
+    r"^\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.labels\s*\}\}$"
+)
+
+
+def _with_id(workflow: Path, job: str, step_id: str) -> dict:
+    for step in _load(workflow)["jobs"][job]["steps"]:
+        if step.get("id") == step_id:
+            return step
+    raise AssertionError(f"{workflow.name}:{job} has no step with id {step_id!r}")
+
+
+def _labels(workflow: Path, job: str, step_name: str) -> dict:
+    """The labels a step applies, through the metadata step when it names one.
+
+    A build step either carries the label block itself or hands over the one
+    metadata-action produced. Read literally the second form is no labels at
+    all, and a guard comparing two empty sets agrees with everything.
+    """
+
+    with_block = _named(workflow, job, step_name).get("with") or {}
+    named_step = _STEP_OUTPUT_LABELS.match(str(with_block.get("labels", "")).strip())
+    if named_step is None:
+        return _kv_block(with_block, "labels")
+    produced = _with_id(workflow, job, named_step.group(1)).get("with") or {}
+    return _kv_block(produced, "labels")
+
+
 @pytest.mark.parametrize(("workflow", "job", "local_name", "pushed_name"), PAIRS, ids=PAIR_IDS)
 def test_local_validation_and_pushed_build_share_identity(workflow, job, local_name, pushed_name):
     local = _named(workflow, job, local_name)
@@ -97,14 +125,24 @@ def test_cache_settings_are_not_part_of_image_identity(workflow, job, local_name
     assert "cache-to" in pushed_with
 
 
-def test_release_ems_local_labels_match_published_identity():
-    # The EMS local build overrides the Dockerfile's empty-on-latest version
-    # label; those identity labels must equal what metadata-action publishes.
-    local_labels = _kv_block(_named(RELEASE, "publish-ghcr", "Build local Docker image for content validation").get("with") or {}, "labels")
-    meta_labels = _kv_block(_named(RELEASE, "publish-ghcr", "Generate Docker metadata").get("with") or {}, "labels")
+@pytest.mark.parametrize(("workflow", "job", "local_name", "pushed_name"), PAIRS, ids=PAIR_IDS)
+def test_local_labels_match_the_published_identity(workflow, job, local_name, pushed_name):
+    """The image that gets validated must carry the identity that gets pushed.
+
+    The local build overrides the Dockerfile's empty-on-latest version label,
+    so the two sides state their labels rather than inherit them, and a
+    validation image labelled differently validates a different image. Each
+    side may write the block or name the metadata step that produced it; what
+    matters is the labels that reach the image.
+    """
+
+    local_labels = _labels(workflow, job, local_name)
+    pushed_labels = _labels(workflow, job, pushed_name)
     for label in IDENTITY_LABELS:
-        assert local_labels.get(label) == meta_labels.get(label), (
-            f"{label}: local={local_labels.get(label)!r} published={meta_labels.get(label)!r}"
+        # Stated on the pushed side, or the comparison below proves nothing.
+        assert pushed_labels.get(label), f"{label} is not published at all"
+        assert local_labels.get(label) == pushed_labels.get(label), (
+            f"{label}: local={local_labels.get(label)!r} published={pushed_labels.get(label)!r}"
         )
 
 
