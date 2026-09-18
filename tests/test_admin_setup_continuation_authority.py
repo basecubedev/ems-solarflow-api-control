@@ -972,8 +972,11 @@ class _PausingCancelStore(PendingTransitionStore):
         self.arm_thread = thread_name
         self.release.clear()
 
-    def cancel(self, *, operation_id=None, now=None):
-        record = super().cancel(operation_id=operation_id, now=now)
+    def cancel(self, **kwargs):
+        # Parks a call; it has no opinion about the store's arguments, so it
+        # forwards whatever it was given rather than restating the signature.
+        record = super().cancel(**kwargs)
+        operation_id = kwargs.get("operation_id")
         if (
             self.arm_for is not None
             and operation_id == self.arm_for

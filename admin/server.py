@@ -237,6 +237,7 @@ from admin.workflow_lifecycle import (
     SWITCH_TARGETS,
     TARGET_GUIDED_SETUP,
     WORKFLOW_SWITCH_REQUIRED,
+    ReplacementActivity,
     admin_replacement_activity,
     worker_aware_alignment_status,
 )
@@ -781,6 +782,20 @@ def _build_system_alignment(
 
     state_dir = Path(admin_data_dir) / "state"
     transition_store = transition_store or PendingTransitionStore(state_dir)
+    launcher = SystemTransitionLauncher(
+        store=transition_store,
+        docker=docker,
+        release_manager=release_manager,
+    )
+
+    def replacement_activity(operation_id):
+        # The replacement runs in its own container, so the in-process
+        # coordinator cannot see it; the container probe is the only thing
+        # that can. Run as a thread here instead, it is nobody's to prove.
+        if launcher.in_process:
+            return ReplacementActivity.UNKNOWN
+        return admin_replacement_activity(docker, operation_id)
+
     return SystemAlignmentService(
         # One verified resolution is reused across validate → Continue / Update
         # Admin Server / re-render, so the explicit verification pulls each image
@@ -800,12 +815,9 @@ def _build_system_alignment(
         current_identity=lambda: _running_admin_identity(docker),
         current_ems_identity=lambda: _running_ems_identity(docker),
         persistent_ref=admin_image_ref_from_env,
-        launcher=SystemTransitionLauncher(
-            store=transition_store,
-            docker=docker,
-            release_manager=release_manager,
-        ),
+        launcher=launcher,
         operation_coordinator=operation_coordinator,
+        replacement_activity=replacement_activity,
     )
 
 

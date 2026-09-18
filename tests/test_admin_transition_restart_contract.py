@@ -104,17 +104,21 @@ def _service(
     running_ems,
     embedded=None,
     now=None,
+    replacement_activity=None,
+    current_identity=None,
 ):
     return SystemAlignmentService(
         resolver=_Resolver(build),
         transition_store=PendingTransitionStore(state_dir),
         embedded_resources=embedded or _EmbeddedResources(),
         known_good_store=KnownGoodStore(state_dir),
-        current_identity=lambda: _identity_for(build, role="admin"),
+        current_identity=current_identity
+        or (lambda: _identity_for(build, role="admin")),
         current_ems_identity=lambda: running_ems["identity"],
         persistent_ref=lambda: build.admin_image,
         launcher=lambda _record: pytest.fail("aligned Admin must not launch updater"),
         now=now or (lambda: NOW),
+        replacement_activity=replacement_activity,
     )
 
 
@@ -466,6 +470,180 @@ def test_a_forced_expiry_is_not_undone_by_the_next_step(tmp_path):
     assert store.read().is_expired(NOW) is True
 
 
+# --- a replacement that is gone is not a replacement that is running -------
+#
+# admin_reconnect_pending is the one stage the Admin cannot leave by itself:
+# the sidecar pulls, rewrites compose and recreates the container, and only the
+# replacement Admin can report back. A sidecar killed outright -- power cut,
+# OOM, a reboot mid-pull -- writes no failure, so the record stayed at that
+# stage, fresh, with cancel refused as "mutation in progress", resume not
+# offered and the advanced recovery refusing too. The console was unusable for
+# every further build operation until the deadline ran out.
+
+
+def _reconnect_pending(state_dir, *, build, ttl_seconds=3600):
+    return PendingTransitionStore(state_dir).begin(
+        make_transition_record(
+            mode="guided_upgrade",
+            system_tag=build.canonical_tag,
+            build_id=build.build_id,
+            revision=build.revision,
+            admin_image=build.admin_image,
+            admin_digest=build.admin_digest,
+            ems_image=build.ems_image,
+            ems_digest=build.ems_digest,
+            stage=STAGE_ADMIN_RECONNECT_PENDING,
+            ttl_seconds=ttl_seconds,
+            now=NOW,
+        ),
+        now=NOW,
+    )
+
+
+def _stranger_admin(build):
+    """A running Admin that is not the build the transition was to install."""
+
+    return ImageIdentity(
+        image_ref=build.admin_image,
+        digest="sha256:" + "9" * 64,
+        revision="a" * 40,
+        channel=build.channel,
+        build_id="v0.0.1-aaaaaaa",
+        release_tag="v0.0.1",
+    )
+
+
+def test_a_dead_replacement_makes_the_reconnect_stage_escapable(tmp_path):
+    """Gone, and the Admin it should have installed is not the one running.
+
+    Both halves are the proof. The sidecar exits after a *successful* swap too,
+    so its absence alone says nothing about whether the replacement happened.
+    """
+
+    state_dir = tmp_path / "state"
+    build = _build()
+    record = _reconnect_pending(state_dir, build=build)
+    service = _service(
+        state_dir,
+        build=build,
+        running_ems={"identity": _identity_for(build, role="ems")},
+        current_identity=lambda: _stranger_admin(build),
+        replacement_activity=lambda _operation_id: "inactive",
+    )
+
+    transition = service.status(operation_active=lambda _op: False)["transition"]
+    assert transition["expired"] is False
+    assert transition["replacement_active"] is False
+    assert transition["cancel_available"] is True
+
+    cancelled = service.cancel(operation_id=record.operation_id)
+    assert cancelled["stage"] == "cancelled"
+
+
+def test_a_succeeded_replacement_is_not_offered_as_an_abandon(tmp_path):
+    """The sidecar is gone because it finished; the target Admin is answering.
+
+    That operation is not stranded, it is waiting to be continued, and offering
+    to abandon it invites discarding an upgrade one step from done.
+    """
+
+    state_dir = tmp_path / "state"
+    build = _build()
+    _reconnect_pending(state_dir, build=build)
+    service = _service(
+        state_dir,
+        build=build,
+        running_ems={"identity": _identity_for(build, role="ems")},
+        replacement_activity=lambda _operation_id: "inactive",
+    )
+
+    transition = service.status(operation_active=lambda _op: False)["transition"]
+    assert transition["replacement_active"] is None
+    assert transition["cancel_available"] is False
+
+
+def test_an_unreadable_running_admin_is_not_proof_the_replacement_is_gone(tmp_path):
+    """Half the proof is missing, which is not the same as false.
+
+    The running-Admin identity degrades to an all-``None`` identity when Docker
+    will not answer, and the identity check reports that as unverifiable rather
+    than as a mismatch. Only a verified different build proves the swap did not
+    happen; reading "could not read it" as that proof offers to abandon an
+    upgrade that may already have landed. The deadline stays the escape.
+    """
+
+    state_dir = tmp_path / "state"
+    build = _build()
+
+    def _docker_will_not_answer():
+        raise RuntimeError("docker is not answering")
+
+    for current_identity in (ImageIdentity, _docker_will_not_answer):
+        record = _reconnect_pending(state_dir, build=build)
+        service = _service(
+            state_dir,
+            build=build,
+            running_ems={"identity": _identity_for(build, role="ems")},
+            current_identity=current_identity,
+            replacement_activity=lambda _operation_id: "inactive",
+        )
+
+        transition = service.status(operation_active=lambda _op: False)["transition"]
+        assert transition["expired"] is False
+        assert transition["replacement_active"] is None
+        assert transition["cancel_available"] is False
+
+        with pytest.raises(SystemAlignmentError):
+            service.cancel(operation_id=record.operation_id)
+        PendingTransitionStore(state_dir).clear()
+
+
+def test_a_running_replacement_keeps_the_reconnect_stage_closed(tmp_path):
+    """The sidecar is mid-pull; cancelling would leave compose half-rewritten."""
+
+    state_dir = tmp_path / "state"
+    build = _build()
+    record = _reconnect_pending(state_dir, build=build)
+    service = _service(
+        state_dir,
+        build=build,
+        running_ems={"identity": _identity_for(build, role="ems")},
+        replacement_activity=lambda _operation_id: "active",
+    )
+
+    transition = service.status(operation_active=lambda _op: False)["transition"]
+    assert transition["replacement_active"] is True
+    assert transition["cancel_available"] is False
+
+    with pytest.raises(SystemAlignmentError) as exc_info:
+        service.cancel(operation_id=record.operation_id)
+    assert exc_info.value.code == "mutation_in_progress"
+
+
+def test_an_unprovable_replacement_keeps_the_reconnect_stage_closed(tmp_path):
+    """A daemon that cannot answer is not an answer; no probe at all is none either."""
+
+    state_dir = tmp_path / "state"
+    build = _build()
+    running_ems = {"identity": _identity_for(build, role="ems")}
+    for probe in (lambda _operation_id: "unknown", None):
+        record = _reconnect_pending(state_dir, build=build)
+        service = _service(
+            state_dir,
+            build=build,
+            running_ems=running_ems,
+            replacement_activity=probe,
+        )
+
+        transition = service.status(operation_active=lambda _op: False)["transition"]
+        assert transition["replacement_active"] is None
+        assert transition["cancel_available"] is False
+
+        with pytest.raises(SystemAlignmentError):
+            service.cancel(operation_id=record.operation_id)
+        PendingTransitionStore(state_dir).clear()
+
+
 def test_every_step_buys_the_same_window(tmp_path):
     """A step renews the window the record started with, never a longer one.
 
@@ -524,6 +702,76 @@ def test_every_step_buys_the_same_window(tmp_path):
         assert renewed.is_expired(now + timedelta(seconds=3600)), (
             f"step {index} bought more than the window it started with"
         )
+
+
+def test_a_step_that_lands_after_the_deadline_does_not_reopen_the_window(tmp_path):
+    """Expiry is a one-way door, and a late step must not pull it shut again.
+
+    The deadline bounds inaction, so progress renews it -- but once it has
+    passed, the record is the operator's to abandon and the console has already
+    offered that. A worker whose step finally lands must not take the offer
+    back: an EMS operation that outran its window would otherwise re-arm a full
+    window on entering healthcheck_pending, a stage that refuses cancellation
+    on its own, and the way out would close for another hour.
+    """
+
+    state_dir = tmp_path / "state"
+    record = _transition_at(
+        state_dir, STAGE_EMS_OPERATION_RUNNING, ttl_seconds=3600
+    )
+    store = PendingTransitionStore(state_dir)
+    late = NOW + timedelta(minutes=90)
+    assert store.read().is_expired(late)
+
+    advanced = store.advance(
+        record.operation_id,
+        expected_stage=STAGE_EMS_OPERATION_RUNNING,
+        new_stage=STAGE_HEALTHCHECK_PENDING,
+        now=late,
+    )
+
+    assert advanced.stage == STAGE_HEALTHCHECK_PENDING
+    assert advanced.is_expired(late), "the late step moved a deadline that had passed"
+    cancelled = store.cancel(operation_id=record.operation_id, now=late)
+    assert cancelled.stage == "cancelled"
+
+
+def test_a_proof_of_absence_names_the_claim_it_was_read_against(tmp_path):
+    """A sidecar that claims after the probe is the mutation the stage refuses.
+
+    The proof that the replacement is gone is read outside the store's lock. A
+    sidecar that starts, claims the transition and begins its Compose rewrite
+    in between is exactly what ``admin_reconnect_pending`` exists to protect,
+    so the proof carries the claim it was read against and the store refuses
+    one whose claim has moved.
+    """
+
+    state_dir = tmp_path / "state"
+    record = _transition_at(
+        state_dir, STAGE_ADMIN_RECONNECT_PENDING, ttl_seconds=3600
+    )
+    store = PendingTransitionStore(state_dir)
+    observed = store.read().admin_update_claimed_at
+    assert observed is None
+    assert store.claim_admin_update(record.operation_id, now=NOW) is True
+
+    with pytest.raises(TransitionStateError) as excinfo:
+        store.cancel(
+            operation_id=record.operation_id,
+            now=NOW,
+            replacement_inactive=True,
+            replacement_claimed_at=observed,
+        )
+    assert excinfo.value.reason == "mutation_in_progress"
+    assert store.read().stage == STAGE_ADMIN_RECONNECT_PENDING
+
+    cancelled = store.cancel(
+        operation_id=record.operation_id,
+        now=NOW,
+        replacement_inactive=True,
+        replacement_claimed_at=store.read().admin_update_claimed_at,
+    )
+    assert cancelled.stage == "cancelled"
 
 
 def test_a_repeated_step_does_not_renew_the_window(tmp_path):
@@ -597,35 +845,3 @@ def test_a_repeated_step_does_not_renew_the_window(tmp_path):
     )
     assert ems.read().expires_at == deadline
     assert ems.read().is_expired(past_the_window) is True
-def test_a_step_that_lands_after_the_deadline_does_not_reopen_the_window(tmp_path):
-    """Expiry is a one-way door, and a late step must not pull it shut again.
-
-    The deadline bounds inaction, so progress renews it -- but once it has
-    passed, the record is the operator's to abandon and the console has already
-    offered that. A worker whose step finally lands must not take the offer
-    back: an EMS operation that outran its window would otherwise re-arm a full
-    window on entering healthcheck_pending, a stage that refuses cancellation
-    on its own, and the way out would close for another hour.
-    """
-
-    state_dir = tmp_path / "state"
-    record = _transition_at(
-        state_dir, STAGE_EMS_OPERATION_RUNNING, ttl_seconds=3600
-    )
-    store = PendingTransitionStore(state_dir)
-    late = NOW + timedelta(minutes=90)
-    assert store.read().is_expired(late)
-
-    advanced = store.advance(
-        record.operation_id,
-        expected_stage=STAGE_EMS_OPERATION_RUNNING,
-        new_stage=STAGE_HEALTHCHECK_PENDING,
-        now=late,
-    )
-
-    assert advanced.stage == STAGE_HEALTHCHECK_PENDING
-    assert advanced.is_expired(late), "the late step moved a deadline that had passed"
-    cancelled = store.cancel(operation_id=record.operation_id, now=late)
-    assert cancelled.stage == "cancelled"
-
-

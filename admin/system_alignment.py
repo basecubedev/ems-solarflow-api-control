@@ -2,9 +2,11 @@
 """Align paired System Builds and own their durable transition lifecycle."""
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 from admin.admin_update import (
     CANCELLABLE_TRANSITION_STAGES,
+    EXTERNALLY_OWNED_TRANSITION_STAGES,
     SETUP_TRANSITION_MODES,
     TERMINAL_TRANSITION_STAGES,
     TRANSITION_MODE_ALIGN_EXISTING,
@@ -20,8 +22,10 @@ from admin.admin_update import (
     TRANSITION_STAGE_FAILED_RECOVERABLE,
     TRANSITION_STAGE_HEALTHCHECK_PENDING,
     TRANSITION_STAGE_RESOURCES_VERIFIED,
+    ReplacementActivity,
     TransitionStateError,
     make_transition_record,
+    running_admin_matches,
     transition_identity,
     transition_resource_verification_active,
 )
@@ -74,6 +78,11 @@ COMMIT_UNPROVABLE = "unprovable"
 
 _STRATEGY_EMBEDDED = BuildResourceStrategy.EMBEDDED.value
 _STRATEGY_RELEASE_ARCHIVE = BuildResourceStrategy.RELEASE_ARCHIVE.value
+
+# How long a replacement probe's answer stands in for the next one. Every
+# poll of the reconnect stage would otherwise shell out to Docker for the
+# sidecar and again for the Admin identity; a cancel never reads the cache.
+REPLACEMENT_PROBE_CACHE_SECONDS = 10
 
 _RESUMABLE_TRANSITION_STAGES = frozenset(
     {
@@ -206,7 +215,7 @@ class SystemAlignmentService:
     def __init__(self, *, resolver, transition_store, embedded_resources,
                  known_good_store, current_identity, persistent_ref, launcher,
                  current_ems_identity=None, release_archive_resources=None,
-                 operation_coordinator=None, now=None):
+                 operation_coordinator=None, replacement_activity=None, now=None):
         self._resolver = resolver
         self._transitions = transition_store
         self._embedded = embedded_resources
@@ -219,6 +228,11 @@ class SystemAlignmentService:
         # Bound once, so every path into the resource importer registers its
         # worker rather than each caller having to remember to.
         self._coordinator = operation_coordinator
+        # The only observer of the out-of-process Admin replacement. The
+        # coordinator cannot see it — it runs in its own container — so without
+        # this the stage it owns has no liveness answer at all.
+        self._replacement_activity = replacement_activity
+        self._replacement_cache = {}
         # Transient launcher-dispatch ownership, distinct from the durable stage
         # ownership B1 holds and from the sidecar's own claim_admin_update().
         self._dispatch = ReplacementDispatchCoordinator()
@@ -513,6 +527,82 @@ class SystemAlignmentService:
         except Exception:
             return None, False
 
+    def _replacement_state(self, record, *, fresh=False):
+        """Whether the out-of-process Admin replacement is still running.
+
+        ``True``/``False`` only where it is proven, and only for the stage a
+        replacement owns — elsewhere the question has no subject and an answer
+        would prove nothing. A missing, raising or undecided probe is ``None``:
+        unknown, which authorizes nothing.
+
+        An absent sidecar is half the answer. It exits after a *successful*
+        swap too, and that operation is not stranded but waiting to be
+        continued — offering to abandon it invites discarding an upgrade one
+        step from done. So ``False`` also requires that the Admin the
+        replacement was to install is not the one answering.
+
+        The probe shells out to Docker, and every poll of the stage asked it;
+        the answer is kept for :data:`REPLACEMENT_PROBE_CACHE_SECONDS` against
+        the exact record it was read for, so a durable change reads it again.
+        A caller about to act on it passes ``fresh``.
+        """
+
+        if getattr(record, "stage", None) not in EXTERNALLY_OWNED_TRANSITION_STAGES:
+            return None
+        # The stage is durable before the sidecar exists: while this process
+        # is still starting it, an absent container proves nothing.
+        if self._dispatch.in_flight(record.operation_id):
+            return None
+        probe = self._replacement_activity
+        if not callable(probe):
+            return None
+        key = (record.operation_id, record.updated_at, record.admin_update_claimed_at)
+        now = self._now_value() or datetime.now(timezone.utc)
+        if not fresh:
+            cached = self._replacement_cache.get(key)
+            if cached is not None and self._is_recent(cached[0], now):
+                return cached[1]
+        value = self._probe_replacement(probe, record)
+        self._replacement_cache = {key: (now, value)}
+        return value
+
+    @staticmethod
+    def _is_recent(read_at, now) -> bool:
+        try:
+            return (now - read_at).total_seconds() < REPLACEMENT_PROBE_CACHE_SECONDS
+        except TypeError:
+            return False
+
+    def _probe_replacement(self, probe, record):
+        try:
+            answer = probe(record.operation_id)
+        except Exception:
+            return None
+        if answer == ReplacementActivity.ACTIVE:
+            return True
+        if answer != ReplacementActivity.INACTIVE:
+            return None
+        return False if self._running_admin_is_target(record) is False else None
+
+    def _running_admin_is_target(self, record):
+        """Whether the Admin answering now is the one the transition installs.
+
+        Reuses the transition store's own identity check rather than comparing
+        digests again here. Only a verified mismatch is ``False``: a running
+        Admin that could not be read is unverifiable rather than a different
+        build, and the running identity degrades to an unreadable one whenever
+        Docker declines to answer. Reading that as the second half of the proof
+        offers to abandon a swap that may have succeeded.
+        """
+
+        try:
+            running_admin_matches(record, self._identity_dict(self._current_identity()))
+        except TransitionStateError as exc:
+            return False if exc.reason == "admin_identity_mismatch" else None
+        except Exception:
+            return None
+        return True
+
     def status(self, *, operation_active=None) -> dict:
         """Return a side-effect-free transition/known-good snapshot for polling.
 
@@ -544,9 +634,11 @@ class SystemAlignmentService:
             worker_active, worker_status_available = self._evaluate_worker(
                 record, operation_active
             )
+            replacement_active = self._replacement_state(record)
             transition["expired"] = expired
             transition["worker_active"] = worker_active
             transition["worker_status_available"] = worker_status_available
+            transition["replacement_active"] = replacement_active
             transition["resume_available"] = (
                 record.stage in _RESUMABLE_TRANSITION_STAGES and not expired
             )
@@ -568,9 +660,15 @@ class SystemAlignmentService:
             # and never while a claimed resource import may still write the
             # shared cache under a stage that still reads ``admin_aligned``.
             base_cancellable = (
-                record.stage in CANCELLABLE_TRANSITION_STAGES
-                and not transition_resource_verification_active(record)
-            ) or (expired and record.stage not in TERMINAL_TRANSITION_STAGES)
+                (
+                    record.stage in CANCELLABLE_TRANSITION_STAGES
+                    and not transition_resource_verification_active(record)
+                )
+                or (expired and record.stage not in TERMINAL_TRANSITION_STAGES)
+                # A replacement proven gone removes the only reason its stage
+                # refuses, without waiting out the deadline.
+                or replacement_active is False
+            )
             transition["cancel_available"] = bool(
                 base_cancellable
                 and worker_status_available
@@ -2013,12 +2111,29 @@ class SystemAlignmentService:
         cancel runs directly.
         """
 
-        self._current_record(operation_id)
+        record = self._current_record(operation_id)
+        # Read the external replacement before the coordinator lock is taken:
+        # the probe talks to Docker, and nothing under that lock may wait on a
+        # daemon. The answer may be stale by the time the durable cancel runs,
+        # and that is harmless: it can only stop being the reason the stage
+        # refuses, because the replacement reporting back moves the stage to one
+        # that is cancellable anyway, and no second sidecar is launched from
+        # here. The store re-reads the stage under its own lock regardless.
+        replacement_inactive = self._replacement_state(record, fresh=True) is False
+        # The proof names the sidecar claim it was read against; a sidecar that
+        # claims in between is the mutation this stage exists to protect, and
+        # the store refuses a proof whose claim has moved.
+        replacement_claimed_at = record.admin_update_claimed_at
         if coordinator is None:
-            return self._commit_cancel(operation_id)
+            return self._commit_cancel(
+                operation_id, replacement_inactive, replacement_claimed_at
+            )
         try:
             return coordinator.abandon(
-                operation_id, lambda: self._commit_cancel(operation_id)
+                operation_id,
+                lambda: self._commit_cancel(
+                    operation_id, replacement_inactive, replacement_claimed_at
+                ),
             )
         except OperationWorkerActive as exc:
             raise SystemAlignmentError(
@@ -2033,13 +2148,19 @@ class SystemAlignmentService:
                 "blocked until the operation status is available.",
             ) from exc
 
-    def _commit_cancel(self, operation_id) -> dict:
+    def _commit_cancel(
+        self, operation_id, replacement_inactive=False, replacement_claimed_at=None
+    ) -> dict:
         """Durably cancel while the coordinator lock is held: nothing here may
-        call back into the coordinator or build worker-aware status."""
+        call back into the coordinator, probe Docker, or build worker-aware
+        status. ``replacement_inactive`` was therefore read by the caller."""
 
         try:
             record = self._transitions.cancel(
-                operation_id=operation_id, now=self._now_value()
+                operation_id=operation_id,
+                now=self._now_value(),
+                replacement_inactive=replacement_inactive,
+                replacement_claimed_at=replacement_claimed_at,
             )
         except TransitionStateError as exc:
             self._raise_store(exc)

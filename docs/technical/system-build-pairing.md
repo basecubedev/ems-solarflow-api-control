@@ -293,9 +293,13 @@ release it — together with the running Admin's identity, because the sidecar
 exits after a successful swap as well and its absence alone would offer to
 abandon an upgrade that is one step from done. A sidecar proven gone whose
 Admin is *not* the one it was to install opens the stage immediately; an active,
-unprovable or unobservable replacement keeps it shut. Without that, a sidecar
-killed outright, by a power cut, an OOM kill or a reboot mid-pull, wrote no
-failure and left every further build operation blocked until the deadline.
+unprovable or unobservable replacement keeps it shut. Both halves are proofs:
+the identity read degrades to an unreadable identity whenever Docker declines
+to answer, and an Admin that could not be read is unverifiable rather than a
+different build, so only a verified mismatch opens the stage and everything
+else waits for the deadline. Without that, a sidecar killed outright, by a
+power cut, an OOM kill or a reboot mid-pull, wrote no failure and left every
+further build operation blocked until the deadline.
 `status()` reports the verdict as `replacement_active` (`true`, `false`, or
 `null` for unprovable) next to `worker_active`, and the console drops the
 reconnect wait and offers the abandon only on `false`.

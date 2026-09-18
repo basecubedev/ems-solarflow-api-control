@@ -11,7 +11,7 @@ after Admin + EMS are verified and health checks pass.
 import dataclasses
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -30,6 +30,7 @@ from admin.operation_coordinator import (
 from admin.image_identity import ImageIdentity
 from admin.known_good import KnownGoodStore
 from admin.system_alignment import (
+    REPLACEMENT_PROBE_CACHE_SECONDS,
     SystemAlignmentError,
     SystemAlignmentService,
     terminal_system_build_action_state,
@@ -133,7 +134,8 @@ class FakeReleaseArchive:
 
 def _service(tmp_path, *, build=None, resolver_error=None, running=None,
              persistent_ref=None, embedded=None, launched=None, known_good=None,
-             running_ems=None, release_archive=None):
+             running_ems=None, release_archive=None, launcher=None,
+             replacement_activity=None, now=None):
     running = running or ImageIdentity(
         image_ref=f"{ADMIN_IMAGE_REPO}:latest", digest="sha256:latest", revision="old",
         build_id="v0.7.0-old",
@@ -160,8 +162,9 @@ def _service(tmp_path, *, build=None, resolver_error=None, running=None,
             current_identity=lambda: running,
             current_ems_identity=lambda: running_ems,
             persistent_ref=lambda: persistent_ref or f"{ADMIN_IMAGE_REPO}:latest",
-            launcher=lambda record: launched.append(record),
-            now=lambda: T0,
+            launcher=launcher or (lambda record: launched.append(record)),
+            replacement_activity=replacement_activity,
+            now=now or (lambda: T0),
         ),
         transitions,
         known_good,
@@ -605,6 +608,133 @@ def test_development_manual_retry_requires_fresh_acknowledgement(tmp_path):
         development_risk_acknowledged=True,
     )
     assert retried["stage"] == STAGE_ADMIN_RECONNECT_PENDING
+
+
+# --- the replacement probe is read once per window of polls ----------------
+
+
+def test_the_replacement_probe_is_read_once_per_window_of_polls(tmp_path):
+    """Every poll of the reconnect stage shelled out to Docker for the probe
+    and again for the Admin identity, one to four processes every 1.8 s on a
+    board with none to spare. The answer is allowed to be a few seconds
+    stale; a cancel is not, so it reads fresh."""
+
+    clock = {"now": T0}
+    probes = []
+
+    def probe(_operation_id):
+        probes.append(clock["now"])
+        return "active"
+
+    service, transitions, *_ = _service(
+        tmp_path,
+        build=_build(),
+        replacement_activity=probe,
+        now=lambda: clock["now"],
+    )
+    started = service.start(requested_tag="v0.8.0", mode="guided_upgrade")
+    assert transitions.read().stage == STAGE_ADMIN_RECONNECT_PENDING
+
+    for _ in range(3):
+        transition = service.status(operation_active=lambda _op: False)["transition"]
+        assert transition["replacement_active"] is True
+    assert len(probes) == 1
+
+    clock["now"] = T0 + timedelta(seconds=REPLACEMENT_PROBE_CACHE_SECONDS + 1)
+    service.status(operation_active=lambda _op: False)
+    assert len(probes) == 2
+
+    with pytest.raises(SystemAlignmentError):
+        service.cancel(operation_id=started["operation_id"])
+    assert len(probes) == 3, "a cancel must read the replacement fresh"
+
+
+def test_a_durable_change_to_the_record_reads_the_probe_again(tmp_path):
+    """A cached verdict belongs to the record it was read against; the sidecar
+    claiming the transition is a change worth a fresh look."""
+
+    probes = []
+    service, transitions, *_ = _service(
+        tmp_path,
+        build=_build(),
+        replacement_activity=lambda _op: probes.append(1) or "inactive",
+    )
+    started = service.start(requested_tag="v0.8.0", mode="guided_upgrade")
+    service.status(operation_active=lambda _op: False)
+    assert len(probes) == 1
+
+    assert transitions.claim_admin_update(started["operation_id"], now=T0) is True
+    service.status(operation_active=lambda _op: False)
+    assert len(probes) == 2
+
+
+# --- a replacement being launched is not a replacement that is gone --------
+#
+# admin_reconnect_pending is written durably first and the sidecar is started
+# after, so for the length of that launch the container probe finds nothing and
+# the running Admin is not the target -- which reads exactly like a replacement
+# proven gone. It is not: this process is the one starting it, and it knows.
+
+
+def test_a_replacement_being_launched_is_not_one_that_is_gone(tmp_path):
+    """Interleaving pinned: status and cancel while the launcher is held inside
+    the dispatch, with a probe that answers "inactive" throughout."""
+
+    launching = threading.Event()
+    release = threading.Event()
+
+    def launcher(record):
+        launching.set()
+        assert release.wait(10), "the launch was never released"
+
+    service, transitions, *_ = _service(
+        tmp_path,
+        build=_build(),
+        launcher=launcher,
+        replacement_activity=lambda _op: "inactive",
+    )
+    worker = threading.Thread(
+        target=lambda: service.start(requested_tag="v0.8.0", mode="guided_upgrade")
+    )
+    worker.start()
+    try:
+        assert launching.wait(5), "the dispatch never reached the launcher"
+        transition = service.status(operation_active=lambda _op: False)["transition"]
+        assert transition["stage"] == STAGE_ADMIN_RECONNECT_PENDING
+        assert transition["replacement_active"] is None
+        assert transition["cancel_available"] is False
+        with pytest.raises(SystemAlignmentError) as excinfo:
+            service.cancel(operation_id=transition["operation_id"])
+        assert excinfo.value.code == "mutation_in_progress"
+    finally:
+        release.set()
+        worker.join(10)
+    assert transitions.read().stage == STAGE_ADMIN_RECONNECT_PENDING
+
+
+def test_a_replacement_that_claims_after_the_probe_is_not_cancelled_under(tmp_path):
+    """The proof is read before the store's lock, and the sidecar may land in
+    between. Interleaving pinned: the sidecar claims the transition after the
+    probe saw no container and before the durable cancel commits."""
+
+    service, transitions, *_ = _service(
+        tmp_path, build=_build(), replacement_activity=lambda _op: "inactive"
+    )
+    started = service.start(requested_tag="v0.8.0", mode="guided_upgrade")
+    operation_id = started["operation_id"]
+    assert transitions.read().stage == STAGE_ADMIN_RECONNECT_PENDING
+    original_commit = service._commit_cancel
+
+    def claim_then_commit(*args, **kwargs):
+        assert transitions.claim_admin_update(operation_id, now=T0) is True
+        return original_commit(*args, **kwargs)
+
+    service._commit_cancel = claim_then_commit
+
+    with pytest.raises(SystemAlignmentError) as excinfo:
+        service.cancel(operation_id=operation_id)
+    assert excinfo.value.code == "mutation_in_progress"
+    assert transitions.read().stage == STAGE_ADMIN_RECONNECT_PENDING
 
 
 @pytest.mark.parametrize("tag,channel", [("v0.8.0", "stable"), ("v0.9.0-rc.1", "rc")])
@@ -2996,10 +3126,10 @@ def test_abandon_and_worker_claim_never_both_win_through_the_service(tmp_path):
     original_commit = service._commit_cancel
     outcome = {}
 
-    def slow_commit(op):
+    def slow_commit(*args, **kwargs):
         entered.set()
         assert finish.wait(2)
-        return original_commit(op)
+        return original_commit(*args, **kwargs)
 
     service._commit_cancel = slow_commit
 

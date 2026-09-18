@@ -12201,3 +12201,102 @@ def test_recheck_cleanup_uses_the_owning_workflow_abandon_route():
     assert "system-alignment-recheck-cleanup" in js
     handler = js.split("systemAlignmentEls.recheckCleanup.addEventListener", 1)[1]
     assert handler.startswith('("click", retrySetupCleanup)')
+
+
+def test_a_replacement_proven_gone_offers_the_escape_instead_of_waiting():
+    """The reconnect note is a promise that something is still coming.
+
+    When the Admin replacement is proven to be no longer running and never
+    reported back, that promise is false: the panel must stop waiting and offer
+    the abandon the backend now allows, without the operator having to sit out
+    the transition's deadline.
+    """
+
+    js = _read("admin.js")
+    reals = "\n".join(
+        [
+            _extract_fn(js, "upgradeAlignmentState"),
+            _extract_fn(js, "upgradeAdminVerificationCurrent"),
+            _extract_fn(js, "upgradeTargetPrepared"),
+            _extract_fn(js, "upgradeTargetVerified"),
+            _extract_fn(js, "upgradeCanPlan"),
+            _extract_fn(js, "upgradeAlignmentRequiresRecovery"),
+            _extract_fn(js, "updateExecuteButton"),
+            _extract_fn(js, "updateUpgradeActionButtons"),
+            _extract_fn(js, "renderUpgradeAdminAlignment"),
+            _extract_fn(js, "applyUpgradeAlignmentTransition"),
+            _extract_fn(js, "renderSystemAlignmentStatus"),
+            _extract_decl(js, "function recoveryActionFor"),
+        ]
+    )
+    header = (
+        _cleanup_recovery_decls(js)
+        + """
+const SETUP_TRANSITION_MODES = new Set(["fresh_install", "automated_setup"]);
+const DISCARD_SETUP_CONFIRM = "";
+const CANCEL_UPGRADE_CONFIRM = "";
+let systemAlignmentState = null;
+const SYSTEM_ALIGNMENT_STAGE_ORDER = [];
+const UPGRADE_ALIGNMENT_STATUS_TEXT = {};
+function systemAlignmentStageStates(data) {
+  const t = (data && data.transition) || {};
+  return { stage: t.stage || (data && data.status) || null, states: [] };
+}
+function applySystemBuildPresentation() {}
+function upgradeDevAckSatisfied() { return true; }
+const document = { querySelectorAll: () => [] };
+const upgradeAdminEls = { current: {}, target: {}, status: {} };
+const upgradeEls = {
+  executeBtn: { disabled: false, textContent: "" },
+  planBtn: { disabled: false, textContent: "", setAttribute() {}, removeAttribute() {} },
+  options: [],
+};
+const systemAlignmentEls = {
+  tag: {}, buildId: {}, revision: {}, adminImage: {}, emsImage: {}, message: {},
+  warning: {}, reconnect: {}, partial: {}, partialMessage: {}, resume: {},
+  returnToRunning: {}, abandon: {},
+};
+let authState = { adminInstanceId: "admin-A" };
+let upgradeState = {
+  selected: "v9.9.10", prepared: true, preparedTag: "v9.9.10",
+  preparedFingerprint: "fp:A", planned: true, plannedFingerprint: "fp:A",
+  preparedAdminInstanceId: "admin-A", status: "ready", loading: false,
+  planning: false, running: false, completed: false, alignmentTransition: null,
+  validation: null, releases: [],
+};
+"""
+    )
+    driver = """
+function render(replacementActive) {
+  renderSystemAlignmentStatus({
+    active: true,
+    status: "admin_reconnect_pending",
+    transition: {
+      mode: "guided_upgrade", stage: "admin_reconnect_pending",
+      operation_id: "upgrade-op", system_tag: "v9.9.10", expired: false,
+      resume_available: false, return_available: false,
+      cancel_available: replacementActive === false,
+      worker_active: false, worker_status_available: true,
+      replacement_active: replacementActive,
+    },
+  });
+  return {
+    reconnectShown: systemAlignmentEls.reconnect.hidden === false,
+    recoveryPanelShown: systemAlignmentEls.partial.hidden === false,
+    abandonAvailable: systemAlignmentEls.abandon.disabled === false,
+    message: systemAlignmentEls.partialMessage.textContent || "",
+  };
+}
+console.log(JSON.stringify({ running: render(true), gone: render(false) }));
+"""
+    out = _run_node(header + reals + driver)
+
+    # Still pulling: the reconnect note stands and nothing may be abandoned.
+    assert out["running"]["reconnectShown"] is True
+    assert out["running"]["recoveryPanelShown"] is False
+    assert out["running"]["abandonAvailable"] is False
+    # Proven gone: stop waiting, offer the escape, and say why.
+    assert out["gone"]["reconnectShown"] is False
+    assert out["gone"]["recoveryPanelShown"] is True
+    assert out["gone"]["abandonAvailable"] is True
+    assert "no longer running" in out["gone"]["message"]

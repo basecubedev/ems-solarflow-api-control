@@ -20121,9 +20121,14 @@ function renderSystemAlignmentStatus(data) {
 
   const failed = stage === "failed_recoverable";
   const expired = transition.expired === true;
-  const recoveryAvailable = failed || expired;
+  // The replacement runs in its own container and reports back by becoming the
+  // Admin. Proven gone without that, it is not a reconnect that is still
+  // coming, and waiting on it is a promise the console cannot keep.
+  const replacementGone = transition.replacement_active === false;
+  const recoveryAvailable = failed || expired || replacementGone;
   const reconnecting =
     !expired &&
+    !replacementGone &&
     (stage === "admin_update_pending" ||
       stage === "admin_reconnect_pending" ||
       stage === "admin_alignment_started");
@@ -20154,6 +20159,9 @@ function renderSystemAlignmentStatus(data) {
         : errorMessage ||
           (expired
             ? "The System Build transition has expired. Abandon it to start a new one."
+            : replacementGone
+            ? "The Admin replacement is no longer running and did not report " +
+              "back. Abandon it to start a new one."
             : setupOwned
               ? "Admin is aligned, but EMS has not completed the matching build " +
                 "transition. Retry it, or discard this setup to remove its " +
