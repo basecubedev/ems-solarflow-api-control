@@ -1028,6 +1028,32 @@ def parse_transition_record(data) -> TransitionRecord:
     )
 
 
+def _renewed_expiry(record: TransitionRecord, now) -> str:
+    """The record's deadline moved one whole window past ``now``.
+
+    The window is the record's own — from its last write to its deadline — so
+    a transition started with a shorter TTL keeps it. Reading it from the last
+    write rather than from ``created_at`` is what keeps it constant: a deadline
+    that was already moved once would otherwise be read as a longer window on
+    every further step. A window that is not positive is left exactly as it
+    is: a deadline forced into the past stays there.
+
+    A deadline that has already passed is left alone as well. Expiry is what
+    opens the operator's abandon on a stage that refuses it, and a step landing
+    afterwards must not take that back: renewal bounds inaction while the
+    record is still live, it does not revive one.
+    """
+
+    written = _parse_iso(record.updated_at)
+    expires = _parse_iso(record.expires_at)
+    if written is None or expires is None or expires <= written:
+        return record.expires_at
+    current = now.astimezone(timezone.utc)
+    if current >= expires:
+        return record.expires_at
+    return (current + (expires - written)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _transition_is_expired(record: TransitionRecord, now) -> bool:
     expires = _parse_iso(record.expires_at)
     if expires is None:
@@ -1249,6 +1275,25 @@ class PendingTransitionStore:
             )
         return record
 
+    @classmethod
+    def _progressed(cls, record, now, **changes):
+        """One forward write: the change, its timestamp, and a renewed window.
+
+        Every durable step is evidence that the operation is alive, so it moves
+        the deadline on. Cancellation does not — it ends the record.
+
+        One clock reading stamps the whole write, so the timestamp and the
+        deadline cannot land on either side of a second boundary.
+        """
+
+        current = now or _now_utc()
+        return replace(
+            record,
+            updated_at=cls._updated_at(current),
+            expires_at=_renewed_expiry(record, current),
+            **changes,
+        )
+
     def _write_record_locked(self, record) -> TransitionRecord:
         validated = parse_transition_record(record.as_dict())
         self._write_raw(validated.as_dict())
@@ -1314,11 +1359,7 @@ class PendingTransitionStore:
                     "invalid_transition",
                     f"transition cannot advance from {record.stage} to {new_stage}",
                 )
-            advanced = replace(
-                record,
-                stage=new_stage,
-                updated_at=self._updated_at(now),
-            )
+            advanced = self._progressed(record, now, stage=new_stage)
             return self._write_record_locked(advanced)
 
     def claim(self, operation_id, *, expected_stage, new_stage, now=None) -> bool:
@@ -1340,11 +1381,7 @@ class PendingTransitionStore:
                     "invalid_transition",
                     f"transition cannot be claimed from {record.stage}",
                 )
-            claimed = replace(
-                record,
-                stage=new_stage,
-                updated_at=self._updated_at(now),
-            )
+            claimed = self._progressed(record, now, stage=new_stage)
             self._write_record_locked(claimed)
             return True
 
@@ -1367,10 +1404,9 @@ class PendingTransitionStore:
                 )
             if record.admin_update_claimed_at:
                 return False
-            claimed = replace(
-                record,
-                admin_update_claimed_at=self._updated_at(now),
-                updated_at=self._updated_at(now),
+            current = now or _now_utc()
+            claimed = self._progressed(
+                record, current, admin_update_claimed_at=self._updated_at(current)
             )
             self._write_record_locked(claimed)
             return True
@@ -1391,10 +1427,9 @@ class PendingTransitionStore:
                 )
             if record.resources_claimed_at:
                 return False
-            claimed = replace(
-                record,
-                resources_claimed_at=self._updated_at(now),
-                updated_at=self._updated_at(now),
+            current = now or _now_utc()
+            claimed = self._progressed(
+                record, current, resources_claimed_at=self._updated_at(current)
             )
             self._write_record_locked(claimed)
             return True
@@ -1422,10 +1457,8 @@ class PendingTransitionStore:
                     "invalid_transition",
                     f"Admin reconnect cannot resume transition at {record.stage}",
                 )
-            aligned = replace(
-                record,
-                stage=TRANSITION_STAGE_ADMIN_ALIGNED,
-                updated_at=self._updated_at(current_time),
+            aligned = self._progressed(
+                record, current_time, stage=TRANSITION_STAGE_ADMIN_ALIGNED
             )
             return self._write_record_locked(aligned)
 
@@ -1465,10 +1498,10 @@ class PendingTransitionStore:
                     "invalid_transition",
                     f"{record.stage} cannot recover from {resume_stage}",
                 )
-            failed = replace(
+            failed = self._progressed(
                 record,
+                now,
                 stage=TRANSITION_STAGE_FAILED_RECOVERABLE,
-                updated_at=self._updated_at(now),
                 failed_stage=record.stage,
                 resume_stage=resume_stage,
                 error_code=code,
@@ -1487,10 +1520,10 @@ class PendingTransitionStore:
                 raise TransitionStateError(
                     "invalid_transition", "only a recoverable failure can be retried"
                 )
-            retried = replace(
+            retried = self._progressed(
                 record,
+                now,
                 stage=record.resume_stage,
-                updated_at=self._updated_at(now),
                 failed_stage=None,
                 resume_stage=None,
                 error_code=None,

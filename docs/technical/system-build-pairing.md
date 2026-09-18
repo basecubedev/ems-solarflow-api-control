@@ -249,7 +249,10 @@ The record:
   the one the record was created with and stays that size on every renewal —
   it is read from the record's last write to its deadline, never from its
   creation, so a deadline that was moved once is not read as a longer window
-  by the next step. An expired
+  by the next step. Renewal stops at the deadline: once it has passed, a step
+  that finally lands writes its stage and leaves the deadline where it is,
+  because expiry is what opens the abandon on a stage that refuses one and a
+  late step must not close it again. An expired
   record refuses every forward path (resume, claim, restart). TTL expiry does
   not prove the operation's mutating worker stopped, so the abandon escape is
   gated on live worker state, not the clock:
