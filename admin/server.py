@@ -3974,11 +3974,6 @@ class AdminHandler(BaseHTTPRequestHandler):
             status=409,
         )
 
-    def _advance_guided_upgrade_reconnect(self, operation_id, transition):
-        """Advance a reconnected Admin to ``resources_verified`` when possible."""
-
-        return _advance_guided_upgrade_reconnect(self.server, operation_id, transition)
-
     @staticmethod
     def _guided_backup_status(pre_alignment):
         """Return ``(completed, archive_reference, verified)`` for the backup step.
@@ -4051,13 +4046,6 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
         except Exception as exc:
             raise GuidedUpgradeContextPersistenceError(str(exc)) from exc
-
-    def _run_guided_upgrade_alignment(
-        self, executor, run_context, pre_alignment, progress, operation_id
-    ):
-        return _run_guided_upgrade(
-            self.server, executor, run_context, pre_alignment, progress, operation_id
-        )
 
     def _send_upgrade_job(self, job_id):
         job = self.server.upgrade_jobs.get(job_id.strip("/"))
