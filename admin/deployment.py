@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import ssl
 import subprocess
 import threading
@@ -165,16 +166,105 @@ def _container_rows(stdout):
     return rows
 
 
+# How long a streaming docker command may say nothing before it is treated as
+# gone. Docker reports progress continuously while it works, so silence is the
+# only signal available for "this is not coming back" -- and duration is not:
+# a large image on a slow line is legitimately slow and never quiet.
+STREAM_STALL_TIMEOUT_SECONDS = 600
+
+
+def _kill_stalled(process):
+    """SIGKILL the process together with everything it started.
+
+    The stalled command is rarely the direct child: ``sh script`` runs docker
+    as a child and ``docker compose`` runs its plugin as one, and each inherits
+    the pipe. A kill that reaches only the parent leaves the read blocked on
+    them. The wrappers start every command in its own session, so its process
+    group is its own; a process that is not a group leader, or one that has
+    no pid at all, gets the plain kill.
+    """
+
+    pid = getattr(process, "pid", None)
+    if isinstance(pid, int) and pid > 0:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+            return
+        except OSError:
+            pass
+    try:
+        process.kill()
+    except Exception:
+        # Already gone, or a process object that cannot be killed: the read
+        # either returns on its own or was never blocked.
+        pass
+
+
+def _stream_until_done(process, *, on_line, tail_lines, stall_timeout, monotonic):
+    """Read ``process`` output to its end, killing it if it falls silent.
+
+    Returns ``(exit_code, tail, stalled)``. The caller decides what a stall
+    means for its own command; this only guarantees that the read returns.
+    """
+
+    tail = []
+    last_spoke = [monotonic()]
+    finished = threading.Event()
+    # Orders the two verdicts against each other: the read completing and the
+    # watchdog giving up are the same decision seen from two threads.
+    verdict = threading.Lock()
+    stalled = []
+
+    def watch():
+        while True:
+            remaining = last_spoke[0] + stall_timeout - monotonic()
+            if remaining > 0:
+                if finished.wait(remaining):
+                    return
+                continue
+            # A command that finished in the same moment the watchdog gave up
+            # on it did finish. Its exit code cannot say which happened: the
+            # process the kill reaches is rarely the one holding the pipe, and
+            # a shell that already exited 0 reports success for a read that
+            # only the kill ended.
+            with verdict:
+                if finished.is_set():
+                    return
+                stalled.append(True)
+            _kill_stalled(process)
+            return
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    try:
+        stdout = process.stdout
+        if stdout is not None:
+            for line in stdout:
+                last_spoke[0] = monotonic()
+                line = line.rstrip("\n")
+                tail.append(line)
+                del tail[:-tail_lines]
+                if on_line is not None:
+                    on_line(line)
+        code = process.wait()
+    finally:
+        with verdict:
+            finished.set()
+    return code, tail, bool(stalled)
+
+
 class DockerCli:
     """Thin ``docker`` CLI wrapper: availability check and image pull.
 
     Kept injectable so unit tests can drive preparation without a real daemon.
     """
 
-    def __init__(self, run=None, popen=None, socket_path=DOCKER_SOCKET_PATH):
+    def __init__(self, run=None, popen=None, socket_path=DOCKER_SOCKET_PATH,
+                 stall_timeout=STREAM_STALL_TIMEOUT_SECONDS, monotonic=None):
         self._run = run or subprocess.run
         self._popen = popen or subprocess.Popen
         self._socket_path = socket_path
+        self._stall_timeout = stall_timeout
+        self._monotonic = monotonic or time.monotonic
 
     def probe(self):
         """Return the structured host-Docker access state without raising.
@@ -217,23 +307,34 @@ class DockerCli:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                # Its own session, so a stall can be killed as a process group.
+                start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise DockerError(
                 "docker_cli_missing", _DOCKER_MESSAGES["client_missing"]
             ) from exc
         state = {}
-        tail = []
-        stdout = process.stdout
-        if stdout is not None:
-            for line in stdout:
-                line = line.rstrip("\n")
-                tail.append(line)
-                del tail[:-40]
-                percent = parse_pull_progress(state, line)
-                if on_progress is not None:
-                    on_progress(percent, line)
-        if process.wait() != 0:
+
+        def report(line):
+            percent = parse_pull_progress(state, line)
+            if on_progress is not None:
+                on_progress(percent, line)
+
+        code, tail, stalled = _stream_until_done(
+            process,
+            on_line=report,
+            tail_lines=40,
+            stall_timeout=self._stall_timeout,
+            monotonic=self._monotonic,
+        )
+        if stalled:
+            raise DockerError(
+                "image_pull_stalled",
+                "The image download stopped making progress and was cancelled. "
+                "Check the internet connection and try again.",
+            )
+        if code != 0:
             raise _docker_pull_error("\n".join(tail))
 
     def inspect_container(self, container_name):
@@ -566,8 +667,11 @@ class BootstrapInstaller:
     scaffold (and, with ``--analytics``, generates bundled InfluxDB secrets).
     """
 
-    def __init__(self, popen=None):
+    def __init__(self, popen=None, stall_timeout=STREAM_STALL_TIMEOUT_SECONDS,
+                 monotonic=None):
         self._popen = popen or subprocess.Popen
+        self._stall_timeout = stall_timeout
+        self._monotonic = monotonic or time.monotonic
 
     def prepare(self, workspace, script_path, analytics=False, tag=None, on_line=None):
         command = ["sh", str(script_path), "--no-start"]
@@ -583,22 +687,28 @@ class BootstrapInstaller:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                # Its own session, so a stall can be killed as a process group.
+                start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise DockerError(
                 "bootstrap_unavailable",
                 "The bootstrap installer could not be run.",
             ) from exc
-        tail = []
-        stdout = process.stdout
-        if stdout is not None:
-            for line in stdout:
-                line = line.rstrip("\n")
-                tail.append(line)
-                del tail[:-60]
-                if on_line is not None:
-                    on_line(line)
-        if process.wait() != 0:
+        code, tail, stalled = _stream_until_done(
+            process,
+            on_line=on_line,
+            tail_lines=60,
+            stall_timeout=self._stall_timeout,
+            monotonic=self._monotonic,
+        )
+        if stalled:
+            raise DockerError(
+                "bootstrap_stalled",
+                "The installer stopped reporting progress and was cancelled. "
+                "Check the host and run the installation again.",
+            )
+        if code != 0:
             raise _bootstrap_error("\n".join(tail))
 
 
@@ -609,9 +719,12 @@ class DockerCompose:
     the already-prepared workspace; it never chooses images or compose paths.
     """
 
-    def __init__(self, run=None, popen=None):
+    def __init__(self, run=None, popen=None,
+                 stall_timeout=STREAM_STALL_TIMEOUT_SECONDS, monotonic=None):
         self._run = run or subprocess.run
         self._popen = popen or subprocess.Popen
+        self._stall_timeout = stall_timeout
+        self._monotonic = monotonic or time.monotonic
 
     def up(self, workspace, profiles=(), services=(), force_recreate=False, on_line=None):
         command = ["docker", "compose"]
@@ -629,21 +742,27 @@ class DockerCompose:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                # Its own session, so a stall can be killed as a process group.
+                start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise DockerError(
                 "docker_cli_missing", _DOCKER_MESSAGES["client_missing"]
             ) from exc
-        tail = []
-        stdout = process.stdout
-        if stdout is not None:
-            for line in stdout:
-                line = line.rstrip("\n")
-                tail.append(line)
-                del tail[:-60]
-                if on_line is not None:
-                    on_line(line)
-        if process.wait() != 0:
+        code, tail, stalled = _stream_until_done(
+            process,
+            on_line=on_line,
+            tail_lines=60,
+            stall_timeout=self._stall_timeout,
+            monotonic=self._monotonic,
+        )
+        if stalled:
+            raise DockerError(
+                "compose_up_stalled",
+                "Starting the containers stopped making progress and was "
+                "cancelled. Check the Docker daemon and try again.",
+            )
+        if code != 0:
             raise _compose_start_error("\n".join(tail))
 
     def stop(self, workspace, services, profiles=(), on_line=None):
@@ -662,21 +781,27 @@ class DockerCompose:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                # Its own session, so a stall can be killed as a process group.
+                start_new_session=True,
             )
         except FileNotFoundError as exc:
             raise DockerError(
                 "docker_cli_missing", _DOCKER_MESSAGES["client_missing"]
             ) from exc
-        tail = []
-        stdout = process.stdout
-        if stdout is not None:
-            for line in stdout:
-                line = line.rstrip("\n")
-                tail.append(line)
-                del tail[:-60]
-                if on_line is not None:
-                    on_line(line)
-        if process.wait() != 0:
+        code, tail, stalled = _stream_until_done(
+            process,
+            on_line=on_line,
+            tail_lines=60,
+            stall_timeout=self._stall_timeout,
+            monotonic=self._monotonic,
+        )
+        if stalled:
+            raise DockerError(
+                "compose_stop_stalled",
+                "Stopping the containers stopped making progress and was "
+                "cancelled. Check the Docker daemon and try again.",
+            )
+        if code != 0:
             raise DockerError(
                 "docker_compose_stop_failed",
                 "Could not stop the optional feature container.",

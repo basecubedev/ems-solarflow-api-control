@@ -1242,6 +1242,11 @@ stable error code:
 - `target_digest_mismatch` — the pulled content digest did not equal the verified
   digest (a moved or re-pushed image).
 
+A recreate that stops reporting progress for ten minutes is cancelled the
+same way and keeps `compose_up_stalled` through the job and the transition
+record; Compose was already rewritten at that point, so the step list says
+so and the retry recreates from the pinned reference.
+
 In every case **no Compose change is written and the EMS container is not
 recreated**. Any backup or config steps that already ran before the pull are
 reported honestly in the step list. The verified target stays selected and you

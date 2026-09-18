@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Deployment preparation service tests (no real Docker daemon)."""
 
+import itertools
 import json
+import os
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1735,3 +1738,251 @@ def test_inspect_container_still_reads_a_well_formed_row():
 
     assert container["container_name"] == "ems-admin-updater-op-1"
     assert container["status"] == "running"
+
+
+# --- a docker call that goes silent is not a docker call that is working ---
+#
+# A pull or a recreate holds the thread that started it, and in the Admin that
+# thread owns the operation claim the abandon escape is gated on. Neither had
+# any bound at all: a stalled daemon kept the pipe open, the claim was never
+# released, and the console told the operator to wait for an operation that was
+# never going to finish -- the one wedge that outlasts even the deadline.
+
+
+class _SilentProcess:
+    """Says one thing, then nothing, until something kills it."""
+
+    def __init__(self, returncode=-9):
+        self.killed = threading.Event()
+        self._returncode = returncode
+        self._spoke = False
+
+    @property
+    def stdout(self):
+        return self
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if not self._spoke:
+            self._spoke = True
+            return "abc123: Pulling fs layer\n"
+        # Bounded only so a broken watchdog fails the test instead of hanging it.
+        assert self.killed.wait(10), "the stalled process was never killed"
+        raise StopIteration
+
+    def kill(self):
+        self.killed.set()
+
+    def wait(self):
+        return self._returncode
+
+
+def _every_reading_is_a_stall():
+    """A clock on which any two readings lie further apart than any timeout.
+
+    The watchdog decides on this clock, never on wall time; the timeout the
+    wrappers are given below only paces how often the watchdog looks.
+    """
+
+    ticks = itertools.count(0, 100)
+    return lambda: next(ticks)
+
+
+def _stalls_once_spoken(lines):
+    """A clock that stands still until ``lines`` holds the first line.
+
+    The reader stamps its last-spoke time before it hands the line on, so the
+    first stall reading can only come after that line was captured: the kill
+    is ordered after the child has said who it is.
+    """
+
+    ticks = itertools.count(100, 100)
+    return lambda: next(ticks) if lines else 0.0
+
+
+def _process_state(pid):
+    """The kernel's one-letter state for ``pid``, or ``None`` once it is gone.
+
+    A task reaped between the open and the read answers ESRCH rather than
+    vanishing from the filesystem, and both mean gone.
+    """
+
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
+            return handle.read().rsplit(")", 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+
+
+def test_a_reaped_child_reads_as_gone_rather_than_raising(monkeypatch):
+    """``/proc/<pid>/stat`` can be opened and then refuse to be read.
+
+    A task reaped between the open and the read answers ESRCH, which is a
+    ProcessLookupError and not the FileNotFoundError a missing directory
+    raises. Both mean the child is gone, which is the only thing the caller
+    asks; letting one of them out turns a successful kill into a test failure,
+    and that is how the full suite reported one while the child was dead.
+    """
+
+    def _reaped(*_args, **_kwargs):
+        raise ProcessLookupError(3, "No such process")
+
+    monkeypatch.setattr("builtins.open", _reaped)
+    assert _process_state(4242) is None
+
+
+class _TalkingProcess:
+    """Slow, but never silent: every line resets the watchdog."""
+
+    def __init__(self, lines):
+        self.killed = threading.Event()
+        self.stdout = iter(lines)
+
+    def kill(self):
+        self.killed.set()
+
+    def wait(self):
+        return 0
+
+
+def test_a_stall_whose_process_exited_zero_is_still_a_stall():
+    """The exit code left behind by the kill is not the verdict.
+
+    The stalled command is rarely the direct child, and the direct child can be
+    a shell that already exited 0 while the child holding the pipe kept the read
+    blocked. Its 0 says the shell ended well, not that the work finished: the
+    read ended because the watchdog killed the group. Reading the code as the
+    verdict reports a command that was killed mid-run as a completed one.
+    """
+
+    process = _SilentProcess(returncode=0)
+    docker = DockerCli(
+        popen=lambda *_a, **_k: process,
+        stall_timeout=0.05,
+        monotonic=_every_reading_is_a_stall(),
+    )
+
+    with pytest.raises(DockerError) as exc:
+        docker.pull("ems:latest")
+
+    assert exc.value.code == "image_pull_stalled"
+    assert process.killed.is_set()
+
+
+def test_a_pull_that_goes_silent_is_killed_rather_than_waited_on():
+    process = _SilentProcess()
+    docker = DockerCli(
+        popen=lambda *_a, **_k: process,
+        stall_timeout=0.05,
+        monotonic=_every_reading_is_a_stall(),
+    )
+
+    with pytest.raises(DockerError) as exc:
+        docker.pull("ems:latest")
+
+    assert exc.value.code == "image_pull_stalled"
+    assert process.killed.is_set()
+
+
+def test_a_slow_pull_that_keeps_talking_is_never_killed():
+    lines = [
+        "abc123: Pulling fs layer\n",
+        "abc123: Download complete\n",
+        "Status: Downloaded newer image for ems:latest\n",
+    ]
+    process = _TalkingProcess(lines)
+    ticks = iter([step * 1.0 for step in range(100)])
+    docker = DockerCli(
+        popen=lambda *_a, **_k: process,
+        stall_timeout=10,
+        monotonic=lambda: next(ticks),
+    )
+    seen = []
+
+    docker.pull("ems:latest", on_progress=lambda percent, _line: seen.append(percent))
+
+    assert not process.killed.is_set()
+    assert seen[-1] == 100
+
+
+def test_a_compose_recreate_that_goes_silent_is_killed_too(tmp_path):
+    process = _SilentProcess()
+    compose = DockerCompose(
+        popen=lambda *_a, **_k: process,
+        stall_timeout=0.05,
+        monotonic=_every_reading_is_a_stall(),
+    )
+
+    with pytest.raises(DockerError) as exc:
+        compose.up(tmp_path, services=("ems",), force_recreate=True)
+
+    assert exc.value.code == "compose_up_stalled"
+    assert process.killed.is_set()
+
+
+def test_a_compose_stop_that_goes_silent_is_killed_too(tmp_path):
+    """Same wrapper, same pipe, same thread holding the same claim."""
+
+    process = _SilentProcess()
+    compose = DockerCompose(
+        popen=lambda *_a, **_k: process,
+        stall_timeout=0.05,
+        monotonic=_every_reading_is_a_stall(),
+    )
+
+    with pytest.raises(DockerError) as exc:
+        compose.stop(tmp_path, services=("influxdb",))
+
+    assert exc.value.code == "compose_stop_stalled"
+    assert process.killed.is_set()
+
+
+def test_a_bootstrap_installer_that_goes_silent_is_killed_too(tmp_path):
+    """A half-run installer is recoverable by running it again; a wedge is not."""
+
+    process = _SilentProcess()
+    installer = BootstrapInstaller(
+        popen=lambda *_a, **_k: process,
+        stall_timeout=0.05,
+        monotonic=_every_reading_is_a_stall(),
+    )
+
+    with pytest.raises(DockerError) as exc:
+        installer.prepare(tmp_path, tmp_path / "install-docker.sh")
+
+    assert exc.value.code == "bootstrap_stalled"
+    assert process.killed.is_set()
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc"), reason="reads process state from /proc")
+def test_a_stalled_installer_is_killed_with_the_children_holding_its_pipe(tmp_path):
+    """The stalled command is rarely the direct child.
+
+    ``sh script`` runs docker as a child and ``docker compose`` runs its plugin
+    as one; both inherit the pipe. A kill that reaches only the parent leaves
+    the read blocked on them exactly as before, and the thread holding the
+    operation claim with it. The child here outlives its shell on purpose and,
+    if it survives the kill, says so through the pipe it kept.
+    """
+
+    script = tmp_path / "install-docker.sh"
+    script.write_text("(sleep 8; echo survived) &\necho $!\nwait\n", encoding="utf-8")
+    lines = []
+    installer = BootstrapInstaller(
+        stall_timeout=0.05, monotonic=_stalls_once_spoken(lines)
+    )
+
+    with pytest.raises(DockerError) as exc:
+        installer.prepare(tmp_path, script, on_line=lambda line: lines.append(line.strip()))
+
+    assert exc.value.code == "bootstrap_stalled"
+    assert "survived" not in lines, "the child kept the pipe and outlived the kill"
+    child = int(lines[0])
+    # The signal is delivered at once; the state change is the kernel's to
+    # schedule. Bounded only so a child that was never signalled fails here.
+    deadline = time.monotonic() + 5.0
+    while _process_state(child) not in (None, "Z", "X") and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert _process_state(child) in (None, "Z", "X"), "the child was never killed"

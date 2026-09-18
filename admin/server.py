@@ -495,8 +495,10 @@ _TRUSTED_UPGRADE_FAILURE_CODES = frozenset(
         "system_build_registry_rate_limited",
         "image_pull_rate_limited",
         "image_pull_network_error",
+        "image_pull_stalled",
         "image_pull_failed",
         "target_digest_mismatch",
+        "compose_up_stalled",
     }
 )
 

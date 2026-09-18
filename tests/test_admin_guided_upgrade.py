@@ -2383,6 +2383,47 @@ class RaisingPullDocker(FakeDockerCli):
         raise self._error
 
 
+class StallingCompose(FakeCompose):
+    """A recreate whose daemon fell silent and was cancelled by the watchdog."""
+
+    def up(self, workspace, services=(), force_recreate=False, **kwargs):
+        super().up(workspace, services=services, force_recreate=force_recreate, **kwargs)
+        raise DockerError(
+            "compose_up_stalled",
+            "Starting the containers stopped making progress and was cancelled.",
+        )
+
+
+def test_a_stalled_recreate_keeps_its_code_through_the_job(tmp_path):
+    """The pull kept its typed failure through the job; the recreate dropped
+    it to a generic one, and the transition record then said an upgrade had
+    failed without the one word -- stalled -- that names the next check."""
+
+    install = _install(tmp_path)
+    releases = _prepared_release(tmp_path)
+    compose = StallingCompose()
+    executor = GuidedUpgradeExecutor(
+        release_manager=FakeReleaseManager(releases),
+        compose=compose,
+        docker_cli=FakeDockerCli(local_digests={_resolved_build()["ems_digest"]}),
+        ems_cli=FakeEmsCli("ok"),
+        install_context_provider=lambda: detect_install_context(base_dir=str(install)),
+    )
+
+    result = executor.execute(
+        TAG, ALL_OPTIONS, confirm=True, system_build=_resolved_build()
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "compose_up_stalled"
+    recreate = next(s for s in result["steps"] if s["id"] == "recreate_ems")
+    assert recreate["status"] == "error"
+    assert recreate["code"] == "compose_up_stalled"
+    from admin.server import _TRUSTED_UPGRADE_FAILURE_CODES
+
+    assert "compose_up_stalled" in _TRUSTED_UPGRADE_FAILURE_CODES
+
+
 @pytest.mark.parametrize(
     "code, message",
     [
