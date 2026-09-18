@@ -719,6 +719,12 @@ class AdminRuntime:
     # like the lifecycle coordinator above: a lost entry makes Preview refuse
     # and the browser re-plan, which is the safe direction.
     device_plans: DevicePlanRegistry = field(default_factory=DevicePlanRegistry)
+    # One driver continues a Guided Upgrade at a time. It belongs to the runtime
+    # because the callers do not share an AdminServer: startup continues from
+    # the runtime itself and each listener is a server of its own.
+    guided_upgrade_continuation_lock: threading.Lock = field(
+        default_factory=threading.Lock
+    )
     # Whether the process started an optional HTTPS listener at all (global; the
     # per-request transport is reported separately via AdminServer.https_active).
     https_configured: bool = False
@@ -1036,6 +1042,268 @@ def create_admin_runtime(
     )
 
 
+def _upgrade_alignment_status(runtime):
+    """The worker-aware transition status, read without a request in hand."""
+
+    coordinator = getattr(runtime, "operation_coordinator", None)
+    return worker_aware_alignment_status(
+        runtime.system_alignment, getattr(coordinator, "is_active", None)
+    )
+
+
+def _forget_upgrade_context(runtime, operation_id):
+    """Operation-bound context cleanup on a terminal upgrade lifecycle event."""
+
+    store = getattr(runtime, "guided_upgrade_context", None)
+    if store is None:
+        return
+    try:
+        store.clear_for_operation(operation_id)
+    except OSError:
+        # Cleanup must never fail the lifecycle event that triggered it; a
+        # leftover context is refused by its fail-closed loader anyway.
+        pass
+
+
+def _run_guided_upgrade(
+    runtime, executor, run_context, pre_alignment, progress, operation_id
+):
+    if not runtime.system_alignment.claim_ems_operation(operation_id=operation_id):
+        return {
+            "ok": False,
+            "status": "rejected",
+            "reason": "ems_operation_already_claimed",
+            "message": "This EMS operation is already running.",
+            "steps": [],
+            "warnings": [],
+        }
+    try:
+        result = executor.run(
+            run_context,
+            pre_alignment=pre_alignment,
+            progress=progress,
+        )
+        if not isinstance(result, dict):
+            raise TypeError("Guided Upgrade returned no result")
+    except Exception:
+        runtime.system_alignment.finish_ems_operation(
+            operation_id=operation_id,
+            succeeded=False,
+            error_code="ems_upgrade_unexpected_failure",
+            error_message="Guided EMS upgrade failed unexpectedly.",
+        )
+        raise
+    if not result.get("ok"):
+        reason = result.get("reason")
+        error_code = (
+            reason if reason in _TRUSTED_UPGRADE_FAILURE_CODES else "ems_upgrade_failed"
+        )
+        runtime.system_alignment.finish_ems_operation(
+            operation_id=operation_id,
+            succeeded=False,
+            error_code=error_code,
+            error_message=result.get("message") or "Guided EMS upgrade failed.",
+        )
+        return result
+    runtime.system_alignment.finish_ems_operation(
+        operation_id=operation_id, succeeded=True
+    )
+    diagnostics = result.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        try:
+            diagnostics = runtime.ems_cli.run()
+        except Exception:
+            diagnostics = None
+    # Fail closed: an empty, unknown or malformed diagnosis must never mark
+    # the build known-good. This is the same validator the resume path uses.
+    health = validate_system_health_result(diagnostics)
+    healthy = health.success
+    completion = runtime.system_alignment.finish_healthcheck(
+        operation_id=operation_id,
+        passed=healthy,
+        error_code=None if healthy else (health.error_code or "healthcheck_failed"),
+        error_message=(
+            None if healthy else (health.message or "EMS health checks did not pass.")
+        ),
+    )
+    completion_stage = completion.get("stage") or completion.get("status")
+    if not healthy or completion_stage != "completed":
+        transition = _upgrade_alignment_status(runtime).get("transition") or {}
+        result = {
+            **result,
+            "ok": False,
+            "status": "failed",
+            "reason": transition.get("error_code") or "healthcheck_failed",
+            "message": transition.get("error_message")
+            or "EMS health checks did not pass.",
+        }
+    elif completion_stage == "completed":
+        # The durable success (known-good + completed stage) is committed;
+        # the execution context is no longer a pending upgrade.
+        _forget_upgrade_context(runtime, operation_id)
+    return result
+
+
+def _submit_guided_upgrade_job(
+    runtime, operation_id, executor, run_context, pre_alignment
+):
+    """Submit (or re-attach to) the single EMS upgrade job for this operation.
+
+    Keyed by ``operation_id`` so several execute/resume requests can never
+    start a second job: a repeat returns the existing job's live snapshot.
+    ``None`` means abandonment won the claim race.
+    """
+
+    job = UpgradeJob(uuid.uuid4().hex, plan_upgrade_steps(run_context.options))
+    job, _created = runtime.upgrade_jobs.get_or_submit(
+        operation_id,
+        job,
+        lambda handle: handle.finish(
+            _run_guided_upgrade(
+                runtime, executor, run_context, pre_alignment, handle, operation_id
+            )
+        ),
+        coordinator=runtime.operation_coordinator,
+    )
+    return job
+
+
+def _advance_guided_upgrade_reconnect(runtime, operation_id, transition):
+    """Advance a reconnected Admin to ``resources_verified`` when possible."""
+
+    stage = transition.get("stage")
+    if stage == "admin_reconnect_pending":
+        result = runtime.system_alignment.resume(operation_id=operation_id)
+        stage = result.get("stage")
+    if stage == "admin_aligned":
+        result = runtime.system_alignment.verify_resources(operation_id=operation_id)
+        stage = result.get("stage")
+    return stage
+
+
+# Only for a test double that carries no runtime lock; process-wide, so it is
+# never weaker than the shared one it stands in for.
+_CONTINUATION_FALLBACK_LOCK = threading.Lock()
+
+
+def _continuation_lock(runtime):
+    return getattr(runtime, "guided_upgrade_continuation_lock", None) or (
+        _CONTINUATION_FALLBACK_LOCK
+    )
+
+
+def continue_guided_upgrade(runtime, operation_id):
+    """Carry one Guided Upgrade operation as far forward as it can go.
+
+    The single continuation: the browser's resume request and the replaced
+    Admin's own startup both arrive here, so neither can drift from the other.
+    They also arrive in the same moment, and the durable steps before the job
+    -- reconnect, resource import, the EMS-operation edge -- refuse a caller
+    that finds another in the middle of them. One driver at a time: a second
+    caller waits for the first and then re-attaches to the job it started.
+    Callers format the outcome; alignment and build errors propagate.
+    """
+
+    with _continuation_lock(runtime):
+        return _continue_guided_upgrade_locked(runtime, operation_id)
+
+
+def _continue_guided_upgrade_locked(runtime, operation_id):
+    existing = runtime.upgrade_jobs.for_operation(operation_id)
+    if existing is not None:
+        # A duplicate continuation re-attaches to the single existing job --
+        # even after completion, when the durable context has been cleared.
+        return {"outcome": "reattached", "job": existing, "stage": None}
+    transition = _upgrade_alignment_status(runtime).get("transition") or {}
+    target_release = transition.get("system_tag")
+    stage = _advance_guided_upgrade_reconnect(runtime, operation_id, transition)
+    if stage in {"admin_update_pending", "admin_reconnect_pending"}:
+        return {"outcome": "waiting", "job": None, "stage": stage}
+    if stage == "failed_recoverable":
+        return {"outcome": "failed_recoverable", "job": None, "stage": stage}
+    context = None
+    store = getattr(runtime, "guided_upgrade_context", None)
+    if store is not None:
+        context = store.load(
+            operation_id=operation_id, target_system_tag=target_release
+        )
+    if context is None:
+        return {"outcome": "context_unavailable", "job": None, "stage": stage}
+    executor = runtime.guided_upgrade
+    # Reconstruct the verified pair from the durable transition, never a
+    # fresh resolve: the replacement Admin's resolver cache is empty, so
+    # re-resolving the tag could pick up a moved digest. The transition
+    # pins the exact pair verified before the Admin was replaced.
+    system_build = runtime.system_alignment.transition_build(
+        operation_id=operation_id
+    )
+    rejection, run_context = executor.preflight(
+        target_release, context.options, confirm=True, system_build=system_build
+    )
+    if rejection is not None:
+        return {"outcome": "rejected", "job": None, "stage": stage, "rejection": rejection}
+    # Replay the completed pre-alignment work (verify/preflight/backup) without
+    # repeating it, consuming the durable backup state (exact verified
+    # archive) rather than re-asserting it from the enabled option.
+    pre_alignment = executor.resume_alignment(
+        run_context,
+        backup={
+            "completed": context.backup_completed,
+            "verified": context.backup_verified,
+            "reference": context.backup_reference,
+        },
+        migration={
+            "required": context.mqtt_migration_required,
+            "completed": context.mqtt_migration_completed,
+            "revision": context.mqtt_migration_revision,
+        },
+    )
+    if stage == "resources_verified":
+        runtime.system_alignment.begin_ems_operation(operation_id=operation_id)
+    job = _submit_guided_upgrade_job(
+        runtime, operation_id, executor, run_context, pre_alignment
+    )
+    if job is None:
+        return {"outcome": "abandoned", "job": None, "stage": stage}
+    return {"outcome": "started", "job": job, "stage": stage}
+
+
+def resume_pending_guided_upgrade(runtime):
+    """Continue a Guided Upgrade this Admin was installed by, or return ``None``.
+
+    An Admin that has just replaced another one is the only party that can
+    prove the replacement worked, and the durable transition already carries
+    the operator's confirmation. Waiting for a browser to say so again is what
+    left a completed Admin swap sitting until its deadline. Only a Guided
+    Upgrade is continued: a Setup-owned transition has its own lifecycle, and
+    anything unreadable or already terminal is left exactly as it is.
+    """
+
+    try:
+        status = _upgrade_alignment_status(runtime)
+    except Exception:
+        return None
+    if status.get("ok") is False or not status.get("active"):
+        return None
+    transition = status.get("transition") or {}
+    if transition.get("mode") != TRANSITION_MODE_GUIDED_UPGRADE:
+        return None
+    operation_id = transition.get("operation_id")
+    if not operation_id:
+        return None
+    if transition.get("expired") is True:
+        # Every forward path refuses an expired record; the only thing left
+        # is the operator's abandon, and no Docker call is needed to know it.
+        return f"Guided Upgrade {operation_id}: expired, left for the operator"
+    try:
+        result = continue_guided_upgrade(runtime, operation_id)
+    except Exception as exc:
+        # The operator's escape routes are all still open; never take the
+        # Admin down over a continuation that could not start.
+        return f"Guided Upgrade {operation_id} could not be continued: {exc}"
+    return f"Guided Upgrade {operation_id}: {result['outcome']}"
+
+
 class AdminServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -1067,6 +1335,7 @@ class AdminServer(ThreadingHTTPServer):
         self.guided_upgrade_context = runtime.guided_upgrade_context
         self.system_alignment = runtime.system_alignment
         self.operation_coordinator = runtime.operation_coordinator
+        self.guided_upgrade_continuation_lock = runtime.guided_upgrade_continuation_lock
         self.setup_lifecycle = runtime.setup_lifecycle
         self.device_plans = runtime.device_plans
         self.admin_update = runtime.admin_update
@@ -2689,15 +2958,7 @@ class AdminHandler(BaseHTTPRequestHandler):
     def _clear_guided_upgrade_context(self, operation_id):
         """Operation-bound context cleanup on a terminal upgrade lifecycle event."""
 
-        store = getattr(self.server, "guided_upgrade_context", None)
-        if store is None:
-            return
-        try:
-            store.clear_for_operation(operation_id)
-        except OSError:
-            # Cleanup must never fail the lifecycle event that triggered it; a
-            # leftover context is refused by its fail-closed loader anyway.
-            pass
+        _forget_upgrade_context(self.server, operation_id)
 
     def _handle_maintenance_diagnostics(self):
         # User-triggered read-only EMS checks. The body carries no command input;
@@ -3562,22 +3823,10 @@ class AdminHandler(BaseHTTPRequestHandler):
     def _start_guided_upgrade_job(
         self, operation_id, executor, run_context, pre_alignment
     ):
-        """Submit (or re-attach to) the single EMS upgrade job for this operation.
+        """Answer with this operation's single EMS upgrade job, or its refusal."""
 
-        Keyed by ``operation_id`` so several execute/resume requests can never
-        start a second job: a repeat returns the existing job's live snapshot.
-        """
-
-        job = UpgradeJob(uuid.uuid4().hex, plan_upgrade_steps(run_context.options))
-        job, _created = self.server.upgrade_jobs.get_or_submit(
-            operation_id,
-            job,
-            lambda handle: handle.finish(
-                self._run_guided_upgrade_alignment(
-                    executor, run_context, pre_alignment, handle, operation_id
-                )
-            ),
-            coordinator=self.server.operation_coordinator,
+        job = _submit_guided_upgrade_job(
+            self.server, operation_id, executor, run_context, pre_alignment
         )
         if job is None:
             # Abandonment won the claim race: never start a worker for a
@@ -3596,7 +3845,6 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
             return
         snapshot = job.snapshot()
-        transition = self._alignment_status().get("transition")
         self._send_json(
             {
                 "ok": True,
@@ -3605,7 +3853,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "steps": snapshot["steps"],
                 # Keep System Build progress tied to the persisted transition;
                 # the generic job status is not a workflow stage.
-                "transition": transition,
+                "transition": self._alignment_status().get("transition"),
             },
             status=202,
         )
@@ -3646,15 +3894,24 @@ class AdminHandler(BaseHTTPRequestHandler):
                 )
             )
             return
-        # A duplicate resume re-attaches to the single existing job — even
-        # after completion, when the durable context has already been cleared.
-        existing = self.server.upgrade_jobs.for_operation(operation_id)
-        if existing is not None:
-            snapshot = existing.snapshot()
+        try:
+            result = continue_guided_upgrade(self.server, operation_id)
+        except (SystemBuildError, SystemAlignmentError) as exc:
+            self._send_alignment_error(exc)
+            return
+        except Exception:  # never leak a traceback to the UI
+            self._send_json(
+                {"ok": False, "status": "error", "message": "Upgrade failed unexpectedly."},
+                status=500,
+            )
+            return
+        outcome = result["outcome"]
+        if outcome in {"reattached", "started"}:
+            snapshot = result["job"].snapshot()
             self._send_json(
                 {
                     "ok": True,
-                    "job_id": existing.job_id,
+                    "job_id": result["job"].job_id,
                     "status": snapshot["status"],
                     "steps": snapshot["steps"],
                     "transition": self._alignment_status().get("transition"),
@@ -3662,26 +3919,21 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=202,
             )
             return
-        target_release = transition.get("system_tag")
-        try:
-            stage = self._advance_guided_upgrade_reconnect(operation_id, transition)
-        except (SystemBuildError, SystemAlignmentError) as exc:
-            self._send_alignment_error(exc)
-            return
-        # Still waiting for the replacement Admin: report and let the poller wait.
-        if stage in {"admin_update_pending", "admin_reconnect_pending"}:
+        if outcome == "waiting":
+            # Still waiting for the replacement Admin: report and let the
+            # poller wait.
             self._send_json(
                 {
                     "ok": True,
-                    "status": stage,
-                    "stage": stage,
+                    "status": result["stage"],
+                    "stage": result["stage"],
                     "operation_id": operation_id,
                     "reconnect": True,
                 },
                 status=202,
             )
             return
-        if stage == "failed_recoverable":
+        if outcome == "failed_recoverable":
             self._send_json(
                 {
                     "ok": False,
@@ -3692,13 +3944,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=409,
             )
             return
-        context = None
-        store = getattr(self.server, "guided_upgrade_context", None)
-        if store is not None:
-            context = store.load(
-                operation_id=operation_id, target_system_tag=target_release
-            )
-        if context is None:
+        if outcome == "context_unavailable":
             self._send_json(
                 {
                     "ok": False,
@@ -3708,74 +3954,30 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=409,
             )
             return
-        executor = self.server.guided_upgrade
-        try:
-            # Reconstruct the verified pair from the durable transition, never a
-            # fresh resolve: the replacement Admin's resolver cache is empty, so
-            # re-resolving the tag could pick up a moved digest. The transition
-            # pins the exact pair verified before the Admin was replaced.
-            system_build = self.server.system_alignment.transition_build(
-                operation_id=operation_id
-            )
-            rejection, run_context = executor.preflight(
-                target_release, context.options, confirm=True, system_build=system_build
-            )
-        except (SystemBuildError, SystemAlignmentError) as exc:
-            self._send_alignment_error(exc)
-            return
-        except Exception:
-            self._send_json(
-                {"ok": False, "status": "error", "message": "Upgrade failed unexpectedly."},
-                status=500,
-            )
-            return
-        if rejection is not None:
+        if outcome == "rejected":
+            rejection = result["rejection"]
             self._send_json(
                 self._sanitize_external_mqtt_payload(rejection),
                 status=_UPGRADE_STATUS_CODES.get(rejection.get("reason"), 409),
             )
             return
-        # Replay the completed pre-alignment work (verify/preflight/backup) without
-        # repeating it, consuming the durable backup state (exact verified
-        # archive) rather than re-asserting it from the enabled option.
-        pre_alignment = executor.resume_alignment(
-            run_context,
-            backup={
-                "completed": context.backup_completed,
-                "verified": context.backup_verified,
-                "reference": context.backup_reference,
+        self._send_json(
+            {
+                "ok": False,
+                "error": "system_transition_in_progress",
+                "message": (
+                    "The System Build transition was abandoned before the "
+                    "upgrade could start."
+                ),
+                "transition": self._alignment_status().get("transition"),
             },
-            migration={
-                "required": context.mqtt_migration_required,
-                "completed": context.mqtt_migration_completed,
-                "revision": context.mqtt_migration_revision,
-            },
-        )
-        try:
-            if stage == "resources_verified":
-                self.server.system_alignment.begin_ems_operation(
-                    operation_id=operation_id
-                )
-        except SystemAlignmentError as exc:
-            self._send_alignment_error(exc)
-            return
-        self._start_guided_upgrade_job(
-            operation_id, executor, run_context, pre_alignment
+            status=409,
         )
 
     def _advance_guided_upgrade_reconnect(self, operation_id, transition):
         """Advance a reconnected Admin to ``resources_verified`` when possible."""
 
-        stage = transition.get("stage")
-        if stage == "admin_reconnect_pending":
-            result = self.server.system_alignment.resume(operation_id=operation_id)
-            stage = result.get("stage")
-        if stage == "admin_aligned":
-            result = self.server.system_alignment.verify_resources(
-                operation_id=operation_id
-            )
-            stage = result.get("stage")
-        return stage
+        return _advance_guided_upgrade_reconnect(self.server, operation_id, transition)
 
     @staticmethod
     def _guided_backup_status(pre_alignment):
@@ -3853,82 +4055,9 @@ class AdminHandler(BaseHTTPRequestHandler):
     def _run_guided_upgrade_alignment(
         self, executor, run_context, pre_alignment, progress, operation_id
     ):
-        if not self.server.system_alignment.claim_ems_operation(
-            operation_id=operation_id
-        ):
-            return {
-                "ok": False,
-                "status": "rejected",
-                "reason": "ems_operation_already_claimed",
-                "message": "This EMS operation is already running.",
-                "steps": [],
-                "warnings": [],
-            }
-        try:
-            result = executor.run(
-                run_context,
-                pre_alignment=pre_alignment,
-                progress=progress,
-            )
-            if not isinstance(result, dict):
-                raise TypeError("Guided Upgrade returned no result")
-        except Exception:
-            self.server.system_alignment.finish_ems_operation(
-                operation_id=operation_id,
-                succeeded=False,
-                error_code="ems_upgrade_unexpected_failure",
-                error_message="Guided EMS upgrade failed unexpectedly.",
-            )
-            raise
-        if not result.get("ok"):
-            reason = result.get("reason")
-            error_code = (
-                reason if reason in _TRUSTED_UPGRADE_FAILURE_CODES else "ems_upgrade_failed"
-            )
-            self.server.system_alignment.finish_ems_operation(
-                operation_id=operation_id,
-                succeeded=False,
-                error_code=error_code,
-                error_message=result.get("message") or "Guided EMS upgrade failed.",
-            )
-            return result
-        self.server.system_alignment.finish_ems_operation(
-            operation_id=operation_id, succeeded=True
+        return _run_guided_upgrade(
+            self.server, executor, run_context, pre_alignment, progress, operation_id
         )
-        diagnostics = result.get("diagnostics")
-        if not isinstance(diagnostics, dict):
-            try:
-                diagnostics = self.server.ems_cli.run()
-            except Exception:
-                diagnostics = None
-        # Fail closed: an empty, unknown or malformed diagnosis must never mark
-        # the build known-good. This is the same validator the resume path uses.
-        health = validate_system_health_result(diagnostics)
-        healthy = health.success
-        completion = self.server.system_alignment.finish_healthcheck(
-            operation_id=operation_id,
-            passed=healthy,
-            error_code=None if healthy else (health.error_code or "healthcheck_failed"),
-            error_message=(
-                None if healthy else (health.message or "EMS health checks did not pass.")
-            ),
-        )
-        completion_stage = completion.get("stage") or completion.get("status")
-        if not healthy or completion_stage != "completed":
-            transition = (self._alignment_status().get("transition") or {})
-            result = {
-                **result,
-                "ok": False,
-                "status": "failed",
-                "reason": transition.get("error_code") or "healthcheck_failed",
-                "message": transition.get("error_message")
-                or "EMS health checks did not pass.",
-            }
-        elif completion_stage == "completed":
-            # The durable success (known-good + completed stage) is committed;
-            # the execution context is no longer a pending upgrade.
-            self._clear_guided_upgrade_context(operation_id)
-        return result
 
     def _send_upgrade_job(self, job_id):
         job = self.server.upgrade_jobs.get(job_id.strip("/"))
