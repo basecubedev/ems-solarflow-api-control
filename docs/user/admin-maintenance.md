@@ -110,6 +110,21 @@ image) that can take several minutes: after two the spinner offers a manual
 reload, and it keeps waiting either way — nothing is wrong underneath, the
 transition is stored and resumes as soon as the new Admin answers.
 
+You do not have to keep the page open. The replaced Admin picks the upgrade up
+itself when it starts, so closing the console, losing the network or putting the
+laptop to sleep during the replacement no longer leaves the upgrade waiting; when
+you come back, it has either finished or is on a step you can see.
+
+The other side of that: **closing the console does not stop an upgrade.** The
+confirmation you gave is what the system acts on, and it outlives the browser
+by design. To stop one, use **Abandon** in the System Build panel while it is
+offered — the console says when it is, and refuses while a step is mid-flight
+rather than leaving something half applied.
+
+If the replacement never arrives — the container was killed by a power cut or an
+out-of-memory kill mid-download — the console says so instead of waiting, and
+offers to abandon the upgrade so you can start it again.
+
 The current-state preflight and the verified backup always run **under the
 Admin that is currently running**, before any Admin alignment. The target Admin
 is never assumed before the backup and preflight are complete.
@@ -537,8 +552,9 @@ Maintenance is conservative by default:
 
 - **Backup before risky changes.** Config apply, guided upgrade, and restore all
   back up what they replace before writing.
-- **No silent downgrade.** Guided upgrade only moves forward; restore never
-  installs an older EMS image.
+- **No silent downgrade.** Guided upgrade moves forward, or back inside the
+  release line you are running, and never proposes going back by itself;
+  restore never installs an older EMS image.
 - **Preview before restore.** A restore always starts with a preview and is only
   applied after you confirm it.
 - **Confirmation before writes.** The Admin Console asks before it changes

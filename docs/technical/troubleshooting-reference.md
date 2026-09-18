@@ -1183,6 +1183,16 @@ Build** again to re-resolve and re-verify the current pair, then re-plan and
 retry. This check is deliberate: it guarantees the executed System Build is
 exactly the one you verified.
 
+Two more HTTP 409 refusals happen at the same point, before any preflight: the
+confirmed upgrade re-checks the direction of the move itself.
+`upgrade_direction_blocked` means the verified build may not replace the
+running EMS build (the body carries the verdict's `reason` and
+`upgrade_state`, the same the verification step shows), and
+`upgrade_direction_unavailable` means the running EMS identity could not be
+read — typically Docker did not answer — so whether the build is a forward
+move is unproven. Nothing ran in either case; verify again once Docker
+answers.
+
 For Docker Bootstrap or advanced shell use, the equivalent manual recreate is:
 
 ```bash
@@ -1221,6 +1231,9 @@ stable error code:
   throttle (see the rate-limit section below);
 - `image_pull_network_error` — a network problem reaching the registry;
 - `image_pull_failed` — a generic pull failure (tag/repository/registry);
+- `image_pull_stalled` — the download stopped reporting progress for ten
+  minutes and was cancelled; a slow line that keeps reporting is never
+  cancelled, only silence is;
 - `target_digest_mismatch` — the pulled content digest did not equal the verified
   digest (a moved or re-pushed image).
 

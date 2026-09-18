@@ -73,6 +73,18 @@ are ordered by their serials, which do come from one counter — inside a counte
 the declared release is the same on both sides and separates nothing, so where
 a serial is missing there the direction is simply unknown.
 
+The serial says which of two builds is older; it does not say whether they
+share a release line, and it may not decide the move on its own. Where both
+sides declare the same `major.minor`, a lower serial is a rollback rather than
+a refusal — going back to yesterday's experimental build of the same branch is
+the same move as undoing a patch. For development builds the line is the
+branch as well: two branches built past the same release declare the same
+`major.minor` and are numbered by the same counter, and only the branch in the
+immutable `dev-<branch>-…` tag tells them apart, so a lower serial is a
+rollback inside one branch and a refusal across two. Where the declarations
+differ by line, either side declares nothing, or a development build cannot
+name its branch, a lower serial stays blocked.
+
 Across that boundary -- and for a rolling `latest` moving to a release, which a
 serial could only call "older" -- each side states the version it can, its own
 SemVer or the release it declares, and those are read with one policy — the same the release
@@ -93,6 +105,14 @@ the Admin reads the channel and the declared release off the running image
 instead, and the compose tag is only the answer for an image whose labels cannot
 be read. Without that, such an install had no baseline on the version line at
 all, and every older release passed the downgrade guard.
+
+That declaration decides the placement alone. Ranking it against the catalogue
+instead — taking the newest tag either could name — moved an installation into
+a line it is not in as soon as a release above it was cut: an installation
+running `latest` built past v0.8.4 then had the whole 0.8 line refused as a
+downgrade, v0.8.4 itself included, and so was a v0.8.7 published afterwards
+that is newer than the running build by every other measure. Only an image that
+declares nothing falls back to the newest release the console has seen.
 
 The label is restricted to the `v*` namespace because this repository also tags
 appliance images and Manager releases, and an unrestricted `git describe` would
@@ -223,9 +243,16 @@ cancelled
 
 The record:
 
-- has a bounded TTL; an expired record refuses every forward path (resume,
-  claim, restart). TTL expiry does not prove the operation's mutating worker
-  stopped, so the abandon escape is gated on live worker state, not the clock:
+- has a bounded TTL that every durable step renews, so it bounds inaction
+  rather than duration: an operation that keeps taking steps stays alive, while
+  one that stops is escapable within a window of its last step. The window is
+  the one the record was created with and stays that size on every renewal —
+  it is read from the record's last write to its deadline, never from its
+  creation, so a deadline that was moved once is not read as a longer window
+  by the next step. An expired
+  record refuses every forward path (resume, claim, restart). TTL expiry does
+  not prove the operation's mutating worker stopped, so the abandon escape is
+  gated on live worker state, not the clock:
   a single `OperationCoordinator` owns worker ownership and abandonment
   atomically — Guided Upgrade and deployment workers claim it before mutating
   and release it when they stop, and an abandon proves no matching worker is
@@ -252,6 +279,41 @@ The record:
 - cannot be silently overwritten while an active transition is in progress;
   the operator-visible cancel is the only action that frees the store for a
   new operation.
+
+Two mutations own a stage and both have to be proven gone before that stage may
+be abandoned, because neither is visible to the same observer.
+`OperationCoordinator` answers for workers in this process. The Admin
+replacement is not one of them — it runs in its own container — so
+`admin_reconnect_pending` refuses cancellation on its own, and
+`admin_replacement_activity` (the sidecar container's state) is what can still
+release it — together with the running Admin's identity, because the sidecar
+exits after a successful swap as well and its absence alone would offer to
+abandon an upgrade that is one step from done. A sidecar proven gone whose
+Admin is *not* the one it was to install opens the stage immediately; an active,
+unprovable or unobservable replacement keeps it shut. Without that, a sidecar
+killed outright, by a power cut, an OOM kill or a reboot mid-pull, wrote no
+failure and left every further build operation blocked until the deadline.
+`status()` reports the verdict as `replacement_active` (`true`, `false`, or
+`null` for unprovable) next to `worker_active`, and the console drops the
+reconnect wait and offers the abandon only on `false`.
+
+Two things keep that proof honest. The stage is durable before the sidecar
+exists, so while this process is still starting one — the dispatch coordinator
+holds the attempt — an absent container proves nothing and the verdict stays
+`null`. And the proof is read before the store's lock, so it names the sidecar
+claim (`admin_update_claimed_at`) it was read against; a sidecar that claims
+in between is the mutation the stage protects, and the store refuses a proof
+whose claim has moved with `mutation_in_progress`. A replacement that runs as
+a thread in this process (`EMS_ADMIN_UPDATE_LOCAL_WORKER`, development only)
+has no container to find and is reported as unprovable.
+
+A replaced Admin continues the Guided Upgrade that installed it. The durable
+transition already carries the operator's confirmation, and the replacement
+Admin is the only party that can prove its own identity matches the target, so
+the entry point runs the same continuation the browser's resume calls — off the
+serving threads, and only for a Guided Upgrade. Waiting for a page load instead
+left a completed Admin swap sitting at `admin_reconnect_pending` until its
+deadline whenever the console had been closed.
 
 Admin reconnect only advances to `admin_aligned`; resource verification,
 EMS execution and health checks remain pending. The operation becomes
@@ -385,7 +447,14 @@ recomputes the fingerprint through the shared
 `SystemAlignmentService.selection_fingerprint` helper, and rejects a missing
 (`system_build_verification_required`) or changed
 (`system_build_verification_stale`) fingerprint with HTTP 409 **before** any
-preflight, backup, migration, Compose write, deployment, or transition. Because
+preflight, backup, migration, Compose write, deployment, or transition. It then
+asks `SystemAlignmentService.upgrade_direction` — the one verdict validation
+also reports — and refuses a move that is not allowed with
+`upgrade_direction_blocked` (the verdict's `reason` and `upgrade_state` in the
+body), or one that cannot be decided because the running EMS identity could
+not be read with `upgrade_direction_unavailable`; both are HTTP 409, both
+happen before the preflight, and validation answers the undecidable case with
+the same code rather than reporting the build as older. Because
 the resolver can re-resolve a mutable tag to a different digest between Verify and
 Upgrade, this is what guarantees the executed pair is exactly the one the operator
 verified: if a re-resolve occurs and the identity (digests, revision, build id, or
