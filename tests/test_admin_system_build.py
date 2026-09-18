@@ -45,6 +45,7 @@ def _labels(
     release_tag=None,
     version="v0.8.0",
     build_serial=None,
+    contains_release=None,
 ):
     labels = {
         "org.opencontainers.image.version": version,
@@ -56,6 +57,8 @@ def _labels(
         labels["de.basecubedev.ems.release_tag"] = release_tag
     if build_serial is not None:
         labels["de.basecubedev.ems.build_serial"] = str(build_serial)
+    if contains_release is not None:
+        labels["de.basecubedev.ems.contains_release"] = contains_release
     return labels
 
 
@@ -809,3 +812,52 @@ def test_digest_pinned_ref_requires_expected_repository():
 def test_digest_pinned_ref_rejects_empty_reference():
     with pytest.raises(DigestReferenceError):
         digest_pinned_ref("", "sha256:" + "a" * 64)
+
+
+# --- the pair must agree on what decides the move --------------------------
+#
+# A resolved System Build carries one contains_release and one build_serial,
+# and both are read off the *Admin* image. What the move is judged against is
+# the running *EMS* build's own label, and what actually gets deployed is the
+# EMS image. Reading one image's claim about the other is only sound while the
+# two are known to agree, and nothing said so: the pair check walked revision,
+# build id, channel and version label and stopped there.
+
+
+def test_rejects_contains_release_mismatch():
+    """The label the whole upgrade/rollback policy reads must agree on both."""
+
+    admin_labels = _labels(release_tag="v0.8.0", contains_release="v0.8.0")
+    ems_labels = _labels(release_tag="v0.8.0", contains_release="v0.7.0")
+    docker = FakeDocker(
+        _pair("v0.8.0", admin_labels=admin_labels, ems_labels=ems_labels)
+    )
+    with pytest.raises(SystemBuildError) as exc:
+        SystemBuildResolver(docker=docker).resolve("v0.8.0")
+    assert exc.value.code == "system_build_mismatch"
+
+
+def test_rejects_build_serial_mismatch():
+    """The serial orders builds; one image may not answer for the other."""
+
+    admin_labels = _labels(release_tag="v0.8.0", build_serial=170)
+    ems_labels = _labels(release_tag="v0.8.0", build_serial=169)
+    docker = FakeDocker(
+        _pair("v0.8.0", admin_labels=admin_labels, ems_labels=ems_labels)
+    )
+    with pytest.raises(SystemBuildError) as exc:
+        SystemBuildResolver(docker=docker).resolve("v0.8.0")
+    assert exc.value.code == "system_build_mismatch"
+
+
+def test_a_pair_that_declares_nothing_still_resolves():
+    """Images from before the label existed carry None on both sides."""
+
+    admin_labels = _labels(release_tag="v0.8.0")
+    ems_labels = _labels(release_tag="v0.8.0")
+    docker = FakeDocker(
+        _pair("v0.8.0", admin_labels=admin_labels, ems_labels=ems_labels)
+    )
+    build = SystemBuildResolver(docker=docker).resolve("v0.8.0")
+    assert build.contains_release is None
+    assert build.build_serial is None

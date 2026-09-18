@@ -197,13 +197,9 @@ jobs:
             EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
             EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}
             EMS_CHANNEL=${{ steps.build_identity.outputs.channel }}
-          labels: |
-            org.opencontainers.image.version=${{ steps.build_identity.outputs.release_tag }}
-            org.opencontainers.image.revision=${{ steps.build_identity.outputs.git_commit }}
-            de.basecubedev.ems.channel=${{ steps.build_identity.outputs.channel }}
-            de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
-            de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.release_tag }}
-            de.basecubedev.ems.contains_release=${{ steps.build_identity.outputs.contains_release }}
+          # The labels the pushed image gets, so the pair check below reads the
+          # stamping that ships rather than a copy of it.
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ env.EMS_RELEASE_CACHE_SCOPE }}
 
       - name: Validate Docker image runtime content
@@ -294,6 +290,9 @@ jobs:
             EMS_CHANNEL=${{ steps.build_identity.outputs.channel }}
             EMS_RELEASE_TAG=${{ steps.build_identity.outputs.release_tag }}
             EMS_SYSTEM_TAG=${{ steps.build_identity.outputs.release_tag }}
+          # The Dockerfile stamps neither of the two labels the upgrade policy
+          # reads; the metadata step does, and the pushed image gets the same.
+          labels: ${{ steps.meta_admin.outputs.labels }}
           cache-from: type=gha,scope=${{ env.ADMIN_RELEASE_CACHE_SCOPE }}
 
       - name: Validate Admin image runtime content
@@ -325,11 +324,15 @@ jobs:
           admin_channel="$(label de.basecubedev.ems.channel ems-solarflow-admin:ci)"
           admin_build_id="$(label de.basecubedev.ems.build_id ems-solarflow-admin:ci)"
           admin_release_tag="$(label de.basecubedev.ems.release_tag ems-solarflow-admin:ci)"
+          admin_contains="$(label de.basecubedev.ems.contains_release ems-solarflow-admin:ci)"
+          admin_serial="$(label de.basecubedev.ems.build_serial ems-solarflow-admin:ci)"
           ems_version="$(label org.opencontainers.image.version ems-solarflow-api-control:ci)"
           ems_oci_rev="$(label org.opencontainers.image.revision ems-solarflow-api-control:ci)"
           ems_oci_channel="$(label de.basecubedev.ems.channel ems-solarflow-api-control:ci)"
           ems_oci_build_id="$(label de.basecubedev.ems.build_id ems-solarflow-api-control:ci)"
           ems_oci_release_tag="$(label de.basecubedev.ems.release_tag ems-solarflow-api-control:ci)"
+          ems_contains="$(label de.basecubedev.ems.contains_release ems-solarflow-api-control:ci)"
+          ems_serial="$(label de.basecubedev.ems.build_serial ems-solarflow-api-control:ci)"
 
           sb="$(docker run --rm ems-solarflow-admin:ci cat /app/release-resources/system-build.json)"
           rm="$(docker run --rm ems-solarflow-admin:ci cat /app/release-resources/resource-manifest.json)"
@@ -379,6 +382,13 @@ jobs:
             expect "${!name}" "$expected_ems_image" "$name"
           done
           expect "$ems_release_tag" "$expected_runtime_release_tag" "EMS runtime release_tag"
+          # The two labels every upgrade and rollback verdict is read from. The
+          # resolver refuses a pair that disagrees about them at install time;
+          # this is where a stamping mistake is supposed to be caught instead.
+          expect "$admin_contains" "$ems_contains" "pair contains_release"
+          expect "$admin_serial" "$ems_serial" "pair build_serial"
+          expect "$admin_contains" "${{ steps.build_identity.outputs.contains_release }}" "contains_release"
+          expect "$admin_serial" "${{ steps.build_identity.outputs.build_serial }}" "build_serial"
           expect "$sb_format_version" "1" "system-build format_version"
           expect "$rm_format_version" "1" "resource-manifest format_version"
 

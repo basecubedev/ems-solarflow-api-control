@@ -19,6 +19,7 @@ See ``docs/technical/admin-workflow-state.md``.
 
 import json
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -414,6 +415,105 @@ def test_replacement_activity_reports_three_distinct_states():
         admin_replacement_activity(unreachable, "op-1") is ReplacementActivity.UNKNOWN
     )
     assert admin_replacement_activity(None, "op-1") is ReplacementActivity.UNKNOWN
+
+
+def test_an_in_process_replacement_is_not_provable_by_the_container_probe(
+    tmp_path, monkeypatch
+):
+    """With ``EMS_ADMIN_UPDATE_LOCAL_WORKER`` the replacement is a thread here.
+
+    There is no container for the probe to find, so for the whole replacement
+    it would answer "inactive" and the console would offer to abandon a
+    replacement that is running. Unprovable is the honest answer: it keeps
+    the stage shut, as it was before the probe existed.
+    """
+
+    from admin.admin_update import PendingTransitionStore, make_transition_record
+    from admin.server import _build_system_alignment
+
+    monkeypatch.setenv("EMS_ADMIN_UPDATE_LOCAL_WORKER", "1")
+    state_dir = tmp_path / "state"
+    record = PendingTransitionStore(state_dir).begin(
+        make_transition_record(
+            mode="guided_upgrade",
+            system_tag="v0.8.6",
+            build_id="v0.8.6-fffffff",
+            revision="f" * 40,
+            admin_image="ghcr.io/basecubedev/ems-solarflow-admin:v0.8.6",
+            admin_digest="sha256:" + "a" * 64,
+            ems_image="ghcr.io/basecubedev/ems-solarflow-api-control:v0.8.6",
+            ems_digest="sha256:" + "b" * 64,
+            stage="admin_reconnect_pending",
+        )
+    )
+    service = _build_system_alignment(
+        release_manager=SimpleNamespace(development_build=lambda tag: None),
+        admin_data_dir=tmp_path,
+        docker=_Docker(container=None),
+    )
+
+    transition = service.status(operation_active=lambda _op: False)["transition"]
+
+    assert transition["operation_id"] == record.operation_id
+    assert transition["replacement_active"] is None
+    assert transition["cancel_available"] is False
+
+
+class _StoppedEmsDocker(_Docker):
+    """Docker with a stopped, fully labelled EMS container and no sidecar."""
+
+    def inspect_container(self, container_name):
+        if container_name == "ems-solarflow-api-control":
+            return {"status": "exited", "image": "ghcr.io/basecubedev/ems-solarflow-api-control:v0.8.4"}
+        return super().inspect_container(container_name)
+
+    def inspect_container_image_id(self, container_name):
+        return "sha256:" + "4" * 64
+
+    def inspect_image(self, image_ref):
+        if not image_ref:
+            return None
+        return {
+            "image_ref": image_ref,
+            "digest": "sha256:" + "4" * 64,
+            "labels": {
+                "org.opencontainers.image.version": "v0.8.4",
+                "de.basecubedev.ems.channel": "stable",
+                "de.basecubedev.ems.release_tag": "v0.8.4",
+                "de.basecubedev.ems.build_serial": "100",
+                "de.basecubedev.ems.contains_release": "v0.8.4",
+            },
+        }
+
+
+def test_the_production_service_judges_a_stopped_ems_by_its_installed_build(tmp_path):
+    from admin.server import _build_system_alignment
+    from admin.system_build import SystemBuild
+
+    service = _build_system_alignment(
+        release_manager=SimpleNamespace(development_build=lambda tag: None),
+        admin_data_dir=tmp_path,
+        docker=_StoppedEmsDocker(container=None),
+    )
+    target = SystemBuild(
+        requested_tag="v0.8.6",
+        canonical_tag="v0.8.6",
+        channel="stable",
+        revision="f" * 40,
+        build_id="v0.8.6-fffffff",
+        admin_image="ghcr.io/basecubedev/ems-solarflow-admin:v0.8.6",
+        admin_digest="sha256:" + "a" * 64,
+        ems_image="ghcr.io/basecubedev/ems-solarflow-api-control:v0.8.6",
+        ems_digest="sha256:" + "b" * 64,
+        release_tag="v0.8.6",
+        build_serial=120,
+        contains_release="v0.8.6",
+    )
+
+    direction = service.upgrade_direction(target)
+
+    assert direction["allowed"] is True, direction
+    assert direction["state"] == "upgrade_available"
 
 
 def test_replacement_activity_without_an_operation_scans_the_updater_prefix():

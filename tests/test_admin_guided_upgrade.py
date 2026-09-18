@@ -28,6 +28,7 @@ from admin.image_identity import (
 from admin.install_context import detect_install_context
 from admin.system_build import digest_pinned_ref
 from admin.server import ScanRegistry, create_server
+from admin.system_alignment import SystemAlignmentError
 from tests.admin_auth_helpers import auth_headers, authenticate
 
 pytestmark = [
@@ -1057,6 +1058,9 @@ class _AlignedSystemBuild:
     def resolve(self, requested_tag):
         self.resolve_calls.append(requested_tag)
         return self._build(requested_tag)
+
+    def upgrade_direction(self, build):
+        return {"allowed": True, "state": "upgrade_available", "reason": ""}
 
     def transition_build(self, *, operation_id):
         # Reconstruct from the durable transition's bound pair, not a fresh
@@ -2379,6 +2383,47 @@ class RaisingPullDocker(FakeDockerCli):
         raise self._error
 
 
+class StallingCompose(FakeCompose):
+    """A recreate whose daemon fell silent and was cancelled by the watchdog."""
+
+    def up(self, workspace, services=(), force_recreate=False, **kwargs):
+        super().up(workspace, services=services, force_recreate=force_recreate, **kwargs)
+        raise DockerError(
+            "compose_up_stalled",
+            "Starting the containers stopped making progress and was cancelled.",
+        )
+
+
+def test_a_stalled_recreate_keeps_its_code_through_the_job(tmp_path):
+    """The pull kept its typed failure through the job; the recreate dropped
+    it to a generic one, and the transition record then said an upgrade had
+    failed without the one word -- stalled -- that names the next check."""
+
+    install = _install(tmp_path)
+    releases = _prepared_release(tmp_path)
+    compose = StallingCompose()
+    executor = GuidedUpgradeExecutor(
+        release_manager=FakeReleaseManager(releases),
+        compose=compose,
+        docker_cli=FakeDockerCli(local_digests={_resolved_build()["ems_digest"]}),
+        ems_cli=FakeEmsCli("ok"),
+        install_context_provider=lambda: detect_install_context(base_dir=str(install)),
+    )
+
+    result = executor.execute(
+        TAG, ALL_OPTIONS, confirm=True, system_build=_resolved_build()
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "compose_up_stalled"
+    recreate = next(s for s in result["steps"] if s["id"] == "recreate_ems")
+    assert recreate["status"] == "error"
+    assert recreate["code"] == "compose_up_stalled"
+    from admin.server import _TRUSTED_UPGRADE_FAILURE_CODES
+
+    assert "compose_up_stalled" in _TRUSTED_UPGRADE_FAILURE_CODES
+
+
 @pytest.mark.parametrize(
     "code, message",
     [
@@ -2420,3 +2465,185 @@ def test_pull_failure_preserves_typed_docker_error(tmp_path, code, message):
     assert not (install / "docker-compose.yml.bak").exists()
     assert compose.calls == []
     assert (install / "config" / "config.json").read_text(encoding="utf-8") == original_config
+
+
+# --- the upgrade direction is enforced where it mutates --------------------
+#
+# decide_upgrade_direction was computed only by the read-only validation route,
+# and the browser was the only thing that acted on the verdict. The confirmed
+# execute re-resolved the pair and re-checked its fingerprint, but never asked
+# again whether the move was allowed -- so the downgrade guard, which exists
+# because leaving a release line downwards crosses one-way migrations, lived in
+# a place that cannot be an authority.
+
+
+class _DirectionAwareAlignment(_AlignedSystemBuild):
+    """An alignment service whose direction verdict a test controls."""
+
+    def __init__(self, *, allowed=True, state="upgrade_available", raises=False):
+        super().__init__()
+        self.direction_allowed = allowed
+        self.direction_state = state
+        self.direction_raises = raises
+        self.direction_calls = []
+
+    def upgrade_direction(self, build):
+        self.direction_calls.append(build)
+        if self.direction_raises:
+            raise RuntimeError("the running EMS identity could not be read")
+        return {
+            "allowed": self.direction_allowed,
+            "state": self.direction_state,
+            "reason": "" if self.direction_allowed else "Target is older.",
+        }
+
+
+def test_execute_refuses_a_blocked_upgrade_direction_before_any_work():
+    alignment = _DirectionAwareAlignment(
+        allowed=False, state="downgrade_blocked"
+    )
+    executor = _RejectingPreflightExecutor()
+    srv, base = _server(executor, system_alignment=alignment)
+    try:
+        status, body = _post(
+            base + "/api/admin/maintenance/upgrade/execute", _execute_body()
+        )
+    finally:
+        srv.shutdown()
+
+    assert status == 409
+    assert body["reason"] == "upgrade_direction_blocked"
+    assert body["upgrade_state"] == "downgrade_blocked"
+    # Refused before the preflight runs and before any transition is opened.
+    assert executor.preflight_calls == []
+    assert alignment.start_calls == []
+
+
+def test_execute_fails_closed_when_the_direction_cannot_be_decided():
+    alignment = _DirectionAwareAlignment(raises=True)
+    executor = _RejectingPreflightExecutor()
+    srv, base = _server(executor, system_alignment=alignment)
+    try:
+        status, body = _post(
+            base + "/api/admin/maintenance/upgrade/execute", _execute_body()
+        )
+    finally:
+        srv.shutdown()
+
+    assert status == 409
+    assert body["reason"] == "upgrade_direction_unavailable"
+    assert executor.preflight_calls == []
+    assert alignment.start_calls == []
+
+
+def test_an_unreachable_daemon_is_not_an_absent_ems_container():
+    """A daemon that cannot answer proves nothing about what is running.
+
+    The reader treated every failure to ask as "no container", and an empty
+    identity then read as identity_unknown: a Docker hiccup at the moment
+    of the click refused the move as one that cannot be proven newer, with
+    a version reason, although validation a second earlier had allowed it.
+    """
+
+    from admin.server import _running_ems_identity
+
+    class _Unreachable:
+        def inspect_container(self, container_name):
+            raise DockerError("docker_unavailable", "the Docker daemon is unreachable")
+
+    with pytest.raises(DockerError):
+        _running_ems_identity(_Unreachable())
+
+
+class _StoppedEmsDocker:
+    """An EMS container that exists and is stopped, its image fully labelled."""
+
+    def __init__(self, status="exited"):
+        self.status = status
+
+    def inspect_container(self, container_name):
+        return {
+            "name": container_name,
+            "status": self.status,
+            "image": "ghcr.io/basecubedev/ems-solarflow-api-control:v0.8.4",
+        }
+
+    def inspect_container_image_id(self, container_name):
+        return "sha256:" + "4" * 64
+
+    def inspect_image(self, image_ref):
+        if not image_ref:
+            return None
+        return {
+            "image_ref": image_ref,
+            "digest": "sha256:" + "4" * 64,
+            "labels": {
+                "org.opencontainers.image.version": "v0.8.4",
+                "de.basecubedev.ems.channel": "stable",
+                "de.basecubedev.ems.release_tag": "v0.8.4",
+                "de.basecubedev.ems.build_serial": "100",
+                "de.basecubedev.ems.contains_release": "v0.8.4",
+            },
+        }
+
+
+def test_a_stopped_ems_container_still_says_which_build_is_installed():
+    """A crashed or stopped EMS is exactly the one an operator wants to
+    reinstall or upgrade. The container still names the image it was created
+    from, and that is the installed build; only what is *running* is empty."""
+
+    from admin.server import _installed_ems_identity, _running_ems_identity
+
+    installed = _installed_ems_identity(_StoppedEmsDocker())
+    assert installed.release_tag == "v0.8.4"
+    assert installed.build_serial == 100
+    assert installed.digest == "sha256:" + "4" * 64
+
+    live = _running_ems_identity(_StoppedEmsDocker())
+    assert live.release_tag is None and live.digest is None
+
+    running = _installed_ems_identity(_StoppedEmsDocker(status="running"))
+    assert running.release_tag == "v0.8.4"
+
+
+class _UndecidableAlignment(_AlignedSystemBuild):
+    """Validation whose direction cannot be obtained at all."""
+
+    def validate_upgrade_target(self, *, requested_tag):
+        self.validate_calls.append(requested_tag)
+        raise SystemAlignmentError(
+            "upgrade_direction_unavailable",
+            "the running EMS identity could not be read",
+        )
+
+
+def test_validate_reports_an_undecidable_direction_as_a_conflict(tmp_path):
+    executor, _install_dir, _compose, _docker = _make_executor(tmp_path)
+    alignment = _UndecidableAlignment()
+    srv, base = _server(executor, system_alignment=alignment)
+    try:
+        status, body = _post(
+            base + "/api/admin/maintenance/upgrade/validate", {"tag": TAG}
+        )
+    finally:
+        srv.shutdown()
+
+    assert status == 409
+    assert body["error"] == "upgrade_direction_unavailable"
+    assert alignment.start_calls == []
+
+
+def test_execute_continues_when_the_direction_is_allowed():
+    alignment = _DirectionAwareAlignment(allowed=True)
+    executor = _RejectingPreflightExecutor()
+    srv, base = _server(executor, system_alignment=alignment)
+    try:
+        _status, body = _post(
+            base + "/api/admin/maintenance/upgrade/execute", _execute_body()
+        )
+    finally:
+        srv.shutdown()
+
+    assert len(alignment.direction_calls) == 1
+    # The executor's own current-state rejection is what stops this run.
+    assert body["reason"] == "config_missing"

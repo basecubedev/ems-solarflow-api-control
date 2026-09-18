@@ -24,6 +24,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, fields, replace
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 
 from admin.image_identity import ImageIdentity, identify_image
@@ -501,6 +502,22 @@ CANCELLABLE_TRANSITION_STAGES = frozenset(
         TRANSITION_STAGE_FAILED_RECOVERABLE,
     }
 )
+# The stage whose mutation runs outside this process: the replacement sidecar
+# pulls, rewrites Compose and recreates the Admin, and only the replacement
+# Admin reports back. Nothing in here can observe it, which is why the stage
+# refuses cancellation on its own — and why a caller that *can* prove the
+# sidecar is gone may cancel it after all.
+EXTERNALLY_OWNED_TRANSITION_STAGES = frozenset(
+    {TRANSITION_STAGE_ADMIN_RECONNECT_PENDING}
+)
+
+
+class ReplacementActivity(str, Enum):
+    """Whether an Admin replacement sidecar is running, gone, or unprovable."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    UNKNOWN = "unknown"
 
 
 def transition_resource_verification_active(record) -> bool:
@@ -1028,6 +1045,32 @@ def parse_transition_record(data) -> TransitionRecord:
     )
 
 
+def _renewed_expiry(record: TransitionRecord, now) -> str:
+    """The record's deadline moved one whole window past ``now``.
+
+    The window is the record's own — from its last write to its deadline — so
+    a transition started with a shorter TTL keeps it. Reading it from the last
+    write rather than from ``created_at`` is what keeps it constant: a deadline
+    that was already moved once would otherwise be read as a longer window on
+    every further step. A window that is not positive is left exactly as it
+    is: a deadline forced into the past stays there.
+
+    A deadline that has already passed is left alone as well. Expiry is what
+    opens the operator's abandon on a stage that refuses it, and a step landing
+    afterwards must not take that back: renewal bounds inaction while the
+    record is still live, it does not revive one.
+    """
+
+    written = _parse_iso(record.updated_at)
+    expires = _parse_iso(record.expires_at)
+    if written is None or expires is None or expires <= written:
+        return record.expires_at
+    current = now.astimezone(timezone.utc)
+    if current >= expires:
+        return record.expires_at
+    return (current + (expires - written)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _transition_is_expired(record: TransitionRecord, now) -> bool:
     expires = _parse_iso(record.expires_at)
     if expires is None:
@@ -1035,7 +1078,7 @@ def _transition_is_expired(record: TransitionRecord, now) -> bool:
     return now >= expires
 
 
-def _running_admin_matches(record: TransitionRecord, running_admin) -> None:
+def running_admin_matches(record: TransitionRecord, running_admin) -> None:
     """Raise unless the running Admin identity matches the record's target.
 
     Catches a tampered ``admin_digest``/``build_id``/``revision`` and a wrong
@@ -1078,7 +1121,7 @@ def validate_transition_for_resume(record: TransitionRecord, *, now, running_adm
         )
     if _transition_is_expired(record, now):
         raise TransitionStateError("expired", "the pending transition has expired")
-    _running_admin_matches(record, running_admin)
+    running_admin_matches(record, running_admin)
     return record
 
 
@@ -1249,6 +1292,25 @@ class PendingTransitionStore:
             )
         return record
 
+    @classmethod
+    def _progressed(cls, record, now, **changes):
+        """One forward write: the change, its timestamp, and a renewed window.
+
+        Every durable step is evidence that the operation is alive, so it moves
+        the deadline on. Cancellation does not — it ends the record.
+
+        One clock reading stamps the whole write, so the timestamp and the
+        deadline cannot land on either side of a second boundary.
+        """
+
+        current = now or _now_utc()
+        return replace(
+            record,
+            updated_at=cls._updated_at(current),
+            expires_at=_renewed_expiry(record, current),
+            **changes,
+        )
+
     def _write_record_locked(self, record) -> TransitionRecord:
         validated = parse_transition_record(record.as_dict())
         self._write_raw(validated.as_dict())
@@ -1314,11 +1376,7 @@ class PendingTransitionStore:
                     "invalid_transition",
                     f"transition cannot advance from {record.stage} to {new_stage}",
                 )
-            advanced = replace(
-                record,
-                stage=new_stage,
-                updated_at=self._updated_at(now),
-            )
+            advanced = self._progressed(record, now, stage=new_stage)
             return self._write_record_locked(advanced)
 
     def claim(self, operation_id, *, expected_stage, new_stage, now=None) -> bool:
@@ -1340,11 +1398,7 @@ class PendingTransitionStore:
                     "invalid_transition",
                     f"transition cannot be claimed from {record.stage}",
                 )
-            claimed = replace(
-                record,
-                stage=new_stage,
-                updated_at=self._updated_at(now),
-            )
+            claimed = self._progressed(record, now, stage=new_stage)
             self._write_record_locked(claimed)
             return True
 
@@ -1367,10 +1421,9 @@ class PendingTransitionStore:
                 )
             if record.admin_update_claimed_at:
                 return False
-            claimed = replace(
-                record,
-                admin_update_claimed_at=self._updated_at(now),
-                updated_at=self._updated_at(now),
+            current = now or _now_utc()
+            claimed = self._progressed(
+                record, current, admin_update_claimed_at=self._updated_at(current)
             )
             self._write_record_locked(claimed)
             return True
@@ -1391,10 +1444,9 @@ class PendingTransitionStore:
                 )
             if record.resources_claimed_at:
                 return False
-            claimed = replace(
-                record,
-                resources_claimed_at=self._updated_at(now),
-                updated_at=self._updated_at(now),
+            current = now or _now_utc()
+            claimed = self._progressed(
+                record, current, resources_claimed_at=self._updated_at(current)
             )
             self._write_record_locked(claimed)
             return True
@@ -1414,7 +1466,7 @@ class PendingTransitionStore:
             self._require_mutable(record)
             if _transition_is_expired(record, current_time):
                 raise TransitionStateError("expired", "the pending transition has expired")
-            _running_admin_matches(record, running_admin)
+            running_admin_matches(record, running_admin)
             if record.stage == TRANSITION_STAGE_ADMIN_ALIGNED:
                 return record
             if record.stage != TRANSITION_STAGE_ADMIN_RECONNECT_PENDING:
@@ -1422,10 +1474,8 @@ class PendingTransitionStore:
                     "invalid_transition",
                     f"Admin reconnect cannot resume transition at {record.stage}",
                 )
-            aligned = replace(
-                record,
-                stage=TRANSITION_STAGE_ADMIN_ALIGNED,
-                updated_at=self._updated_at(current_time),
+            aligned = self._progressed(
+                record, current_time, stage=TRANSITION_STAGE_ADMIN_ALIGNED
             )
             return self._write_record_locked(aligned)
 
@@ -1465,10 +1515,10 @@ class PendingTransitionStore:
                     "invalid_transition",
                     f"{record.stage} cannot recover from {resume_stage}",
                 )
-            failed = replace(
+            failed = self._progressed(
                 record,
+                now,
                 stage=TRANSITION_STAGE_FAILED_RECOVERABLE,
-                updated_at=self._updated_at(now),
                 failed_stage=record.stage,
                 resume_stage=resume_stage,
                 error_code=code,
@@ -1487,10 +1537,10 @@ class PendingTransitionStore:
                 raise TransitionStateError(
                     "invalid_transition", "only a recoverable failure can be retried"
                 )
-            retried = replace(
+            retried = self._progressed(
                 record,
+                now,
                 stage=record.resume_stage,
-                updated_at=self._updated_at(now),
                 failed_stage=None,
                 resume_stage=None,
                 error_code=None,
@@ -1524,7 +1574,14 @@ class PendingTransitionStore:
             operation_id, running_admin=running_admin, now=now
         )
 
-    def cancel(self, *, operation_id=None, now=None) -> TransitionRecord | None:
+    def cancel(
+        self,
+        *,
+        operation_id=None,
+        now=None,
+        replacement_inactive=False,
+        replacement_claimed_at=None,
+    ) -> TransitionRecord | None:
         """Mark the current transition cancelled (terminal, not resumable).
 
         A fresh transition may only be cancelled outside externally-mutating
@@ -1533,6 +1590,19 @@ class PendingTransitionStore:
         cancelled from any non-terminal stage: expiry already refuses every
         forward path, so without cancel the record would wedge the store
         permanently (``begin`` never replaces a non-terminal record).
+
+        ``replacement_inactive`` is the caller's proof that the out-of-process
+        Admin replacement is gone, which is the only reason
+        ``admin_reconnect_pending`` refuses. It must be a proof and never a
+        default: a sidecar killed before it could record a failure would
+        otherwise hold the store until the deadline, and a sidecar still
+        working must never have its Compose rewrite cancelled underneath it.
+
+        The proof is read outside this lock, so it names the sidecar claim it
+        was read against: ``replacement_claimed_at`` is the record's
+        ``admin_update_claimed_at`` at that moment. A sidecar that claimed in
+        between is exactly the mutation the stage protects, and a proof whose
+        claim has moved is refused.
         """
 
         with self._locked():
@@ -1548,7 +1618,21 @@ class PendingTransitionStore:
                 return record
             self._require_mutable(record)
             if not _transition_is_expired(record, now or _now_utc()):
-                if record.stage not in CANCELLABLE_TRANSITION_STAGES:
+                if (
+                    replacement_inactive
+                    and record.stage in EXTERNALLY_OWNED_TRANSITION_STAGES
+                    and record.admin_update_claimed_at != replacement_claimed_at
+                ):
+                    raise TransitionStateError(
+                        "mutation_in_progress",
+                        "the Admin replacement claimed the transition after it "
+                        "was observed absent",
+                    )
+                cancellable = record.stage in CANCELLABLE_TRANSITION_STAGES or (
+                    replacement_inactive
+                    and record.stage in EXTERNALLY_OWNED_TRANSITION_STAGES
+                )
+                if not cancellable:
                     raise TransitionStateError(
                         "mutation_in_progress",
                         f"transition cannot be cancelled while {record.stage} is running",
@@ -2093,8 +2177,18 @@ class AdminUpdateLauncher:
     def _env(self):
         return os.environ if self._environ is None else self._environ
 
+    @property
+    def in_process(self) -> bool:
+        """Whether the replacement runs as a thread here rather than a sidecar.
+
+        A container probe has nothing to find then, and would read the whole
+        replacement as gone.
+        """
+
+        return _flag(self._env().get("EMS_ADMIN_UPDATE_LOCAL_WORKER"))
+
     def launch(self, plan_id):
-        if _flag(self._env().get("EMS_ADMIN_UPDATE_LOCAL_WORKER")):
+        if self.in_process:
             self._launch_local(plan_id)
             return
         self._launch_sidecar(plan_id)
@@ -2253,7 +2347,7 @@ class SystemTransitionLauncher(AdminUpdateLauncher):
 
     def launch(self, record):
         self._matching_transition(record)
-        if _flag(self._env().get("EMS_ADMIN_UPDATE_LOCAL_WORKER")):
+        if self.in_process:
             self._launch_transition_local(record)
             return
         self._launch_transition_sidecar(record)

@@ -764,8 +764,11 @@ class GuidedUpgradeExecutor:
                     str(context.install_root), services=(EMS_SERVICE,), force_recreate=True
                 )
             except DockerError as exc:
-                steps.append(_step("recreate_ems", "error", "Recreate EMS", detail=exc.message))
-                return failed()
+                steps.append(
+                    _step("recreate_ems", "error", "Recreate EMS",
+                          detail=exc.message, code=exc.code)
+                )
+                return failed(reason=exc.code, message=exc.message)
             steps.append(_step("recreate_ems", "ok", "Recreate EMS"))
 
         # 08 diagnostics

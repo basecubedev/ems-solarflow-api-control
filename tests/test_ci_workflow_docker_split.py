@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "simulated-regression-tests.yml"
 PLAYWRIGHT_WORKFLOW = ROOT / ".github" / "workflows" / "playwright-e2e.yml"
 PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "docker-publish.yml"
+FEATURE_WORKFLOW = ROOT / ".github" / "workflows" / "docker-feature-publish.yml"
 CANARY_WORKFLOW = ROOT / ".github" / "workflows" / "admin-replacement-canary.yml"
 
 # Mirrors scripts/test-pr.sh; ownership is exclusive, see
@@ -158,3 +159,109 @@ def test_every_pytest_job_reports_its_selection():
             assert any(_reports_selection(step) for step in steps), (
                 f"{workflow.name}:{name} runs pytest without reporting its selection"
             )
+
+
+# --- the pair check must see what the upgrade policy reads -----------------
+#
+# `de.basecubedev.ems.contains_release` and `.build_serial` decide every
+# upgrade and rollback verdict, and SystemBuildResolver refuses a pair whose
+# two images disagree about them. The publish workflow builds a local pair
+# precisely to catch a stamping mistake before anything is pushed -- but the
+# two validation images were not given those labels, so the one guard that
+# could catch it at build time was blind to exactly them, and a mistake would
+# surface on an operator's machine as system_build_mismatch instead.
+
+POLICY_LABELS = (
+    "de.basecubedev.ems.contains_release",
+    "de.basecubedev.ems.build_serial",
+)
+
+# Every workflow that builds a local pair to validate before it pushes, and the
+# step in it that compares the two images.
+PAIR_CHECKS = [
+    (PUBLISH_WORKFLOW, "Verify Admin/EMS system-build pair metadata"),
+    (FEATURE_WORKFLOW, "Verify Admin/EMS feature-build pair metadata"),
+]
+
+
+def _workflow_steps(path):
+    workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+    for job in workflow["jobs"].values():
+        yield from job.get("steps", [])
+
+
+def _metadata_labels(path):
+    """Every ``docker/metadata-action`` step's label block, by step id."""
+
+    return {
+        step["id"]: step.get("with", {}).get("labels", "")
+        for step in _workflow_steps(path)
+        if "docker/metadata-action" in str(step.get("uses", "")) and step.get("id")
+    }
+
+
+def _image_builds(path):
+    """Every image that ships or stands in for one that ships.
+
+    ``(step name, pushed, raw labels, the labels it stamps)`` for each pushed
+    build and for each local ``:ci`` build the pair check inspects. Other
+    local builds are fixtures with an identity of their own -- the packaged
+    browser gate -- and belong to no pair.
+    """
+
+    metadata = _metadata_labels(path)
+    builds = []
+    for step in _workflow_steps(path):
+        if "docker/build-push-action" not in str(step.get("uses", "")):
+            continue
+        with_ = step.get("with", {})
+        pushed = bool(with_.get("push", False))
+        if not pushed and not str(with_.get("tags", "")).strip().endswith(":ci"):
+            continue
+        raw = str(with_.get("labels", ""))
+        labels = raw
+        for step_id, block in metadata.items():
+            labels = labels.replace(
+                "${{ steps." + step_id + ".outputs.labels }}", str(block)
+            )
+        builds.append((step.get("name", "<unnamed>"), pushed, raw, labels))
+    return builds
+
+
+@pytest.mark.parametrize("path", [PUBLISH_WORKFLOW, FEATURE_WORKFLOW], ids=lambda p: p.name)
+def test_every_published_image_stamps_the_labels_the_policy_reads(path):
+    builds = _image_builds(path)
+    assert builds, f"{path.name} builds no images"
+    for name, _pushed, _raw, labels in builds:
+        for label in POLICY_LABELS:
+            assert label in labels, f"{path.name}: {name} does not stamp {label}"
+
+
+@pytest.mark.parametrize("path", [PUBLISH_WORKFLOW, FEATURE_WORKFLOW], ids=lambda p: p.name)
+def test_a_validation_image_is_labelled_exactly_as_the_pushed_one(path):
+    """The pair check reads what the validation image was stamped with.
+
+    A label block copied by hand into the validation build can differ from
+    the block the pushed image gets, and then the check passes an image that
+    never ships and misses the one that does. One source: the metadata step.
+    """
+
+    metadata = _metadata_labels(path)
+    sources = {"${{ steps." + step_id + ".outputs.labels }}" for step_id in metadata}
+    for name, pushed, raw, _labels in _image_builds(path):
+        if pushed:
+            continue
+        assert raw.strip() in sources, (
+            f"{path.name}: {name} stamps a label block of its own instead of "
+            "the metadata step's"
+        )
+
+
+@pytest.mark.parametrize("path, step_name", PAIR_CHECKS, ids=lambda v: getattr(v, "name", v))
+def test_the_pair_check_compares_the_labels_the_policy_reads(path, step_name):
+    text = path.read_text(encoding="utf-8")
+    assert step_name in text, f"{path.name} has no step {step_name!r}"
+    verify = text.split(step_name, 1)[1]
+    verify = verify.split("\n      - name:", 1)[0]
+    for label in POLICY_LABELS:
+        assert label in verify, f"{path.name}: the pair check never reads {label}"

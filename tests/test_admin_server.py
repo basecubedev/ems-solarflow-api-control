@@ -3223,6 +3223,11 @@ class _FakeSystemAlignment:
         self.development_acknowledgements = []
         self._ems_claimed = False
 
+    def upgrade_direction(self, build):
+        """Allowed by default; the production service reads image identities."""
+
+        return {"allowed": True, "state": "upgrade_available", "reason": ""}
+
     def validate_setup_discovery_operation(self, *, operation_id):
         if not operation_id:
             raise SystemAlignmentError(

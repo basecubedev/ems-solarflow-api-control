@@ -27,6 +27,7 @@ from admin.image_identity import (
     ImageIdentity,
     assess_upgrade,
     identify_image,
+    same_release_line,
 )
 
 
@@ -254,12 +255,6 @@ def _is_release_candidate(tag, github_prerelease=False):
     return bool(github_prerelease or (parsed and parsed[3][0] == 0))
 
 
-def _release_line(version):
-    """The ``(major, minor)`` a version belongs to."""
-
-    return version[:2] if version else None
-
-
 def _is_backwards(baseline, tag):
     """Whether ``tag`` is a lower version than ``baseline``, where both are known."""
 
@@ -279,7 +274,7 @@ def _blocks_as_downgrade(baseline, tag):
 
     if not _is_backwards(baseline, tag):
         return False
-    return _release_line(_version(tag)) != _release_line(_version(baseline))
+    return not same_release_line(_version(tag), _version(baseline))
 
 
 def _downgrade_baseline(active, prepared, rolling=None):
@@ -1780,23 +1775,31 @@ class ReleaseManager:
 
         The running image says so itself when it can: every published image
         declares the newest release it descends from, and that is where a
-        rolling ``latest`` or a development build sits on the version line.
-        Otherwise the newest release this manager has actually seen is used --
-        never a guess: with no catalogue and nothing cached there is nothing to
-        compare against, and the listing says so by keeping ``latest`` as its
-        default rather than proposing a version it cannot place.
+        rolling ``latest`` or a development build sits on the version line. That
+        declaration decides alone — where a build stands and what it may
+        install are different questions, and a release too old for this Admin
+        to install is still where the build stands. Ranking it against the catalogue instead let
+        a release published *after* the running build move the installation into
+        a line it is not in, which refused every release of its own line --
+        including a patch cut later than the running build -- as a downgrade.
+
+        Only an image that declares nothing falls back to the newest release
+        this manager has actually seen -- never a guess: with no catalogue and
+        nothing cached there is nothing to compare against, and the listing says
+        so by keeping ``latest`` as its default rather than proposing a version
+        it cannot place.
         """
 
         if not self._running_has_no_version():
             return None
+        declared = self._running_identity().contains_release
+        if declared and _version(declared):
+            return declared
         candidates = [
             tag
             for tag in (*known_tags, *self._newest_seen_tags)
             if _version(tag) and _is_admin_version(tag)
         ]
-        declared = self._running_identity().contains_release
-        if declared and _version(declared):
-            candidates.append(declared)
         return max(candidates, key=_version) if candidates else None
 
     def _running_is_rolling(self):

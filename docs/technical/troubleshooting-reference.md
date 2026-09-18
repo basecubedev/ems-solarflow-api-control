@@ -1183,6 +1183,21 @@ Build** again to re-resolve and re-verify the current pair, then re-plan and
 retry. This check is deliberate: it guarantees the executed System Build is
 exactly the one you verified.
 
+Two more HTTP 409 refusals happen at the same point, before any preflight: the
+confirmed upgrade re-checks the direction of the move itself. The move is
+judged against the EMS build that is *installed* — the image the EMS
+container was created from, whether that container is running or stopped —
+so a crashed or stopped EMS can still be upgraded or reinstalled. Only an
+absent container, or a Docker that does not answer, leaves the direction
+unproven.
+`upgrade_direction_blocked` means the verified build may not replace the
+running EMS build (the body carries the verdict's `reason` and
+`upgrade_state`, the same the verification step shows), and
+`upgrade_direction_unavailable` means the running EMS identity could not be
+read — typically Docker did not answer — so whether the build is a forward
+move is unproven. Nothing ran in either case; verify again once Docker
+answers.
+
 For Docker Bootstrap or advanced shell use, the equivalent manual recreate is:
 
 ```bash
@@ -1221,8 +1236,16 @@ stable error code:
   throttle (see the rate-limit section below);
 - `image_pull_network_error` — a network problem reaching the registry;
 - `image_pull_failed` — a generic pull failure (tag/repository/registry);
+- `image_pull_stalled` — the download stopped reporting progress for ten
+  minutes and was cancelled; a slow line that keeps reporting is never
+  cancelled, only silence is;
 - `target_digest_mismatch` — the pulled content digest did not equal the verified
   digest (a moved or re-pushed image).
+
+A recreate that stops reporting progress for ten minutes is cancelled the
+same way and keeps `compose_up_stalled` through the job and the transition
+record; Compose was already rewritten at that point, so the step list says
+so and the retry recreates from the pinned reference.
 
 In every case **no Compose change is written and the EMS container is not
 recreated**. Any backup or config steps that already ran before the pull are
