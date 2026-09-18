@@ -180,11 +180,26 @@ POLICY = [
         "build_serial",
     ),
     (
-        "5 one counter, a lower serial inside the declared line is a rollback",
+        "5 one counter, a lower serial of the same branch on the declared line is a rollback",
         _build(**DEV, tag="dev-x-bbbbbbb-11-1", declares="v0.8.4", serial=11),
         _build(**DEV, tag="dev-x-aaaaaaa-9-1", declares="v0.8.4", serial=9,
                digest="sha256:t"),
         ROLLBACK_AVAILABLE,
+        "build_serial",
+    ),
+    (
+        "5 one counter, a lower serial of another branch on the same line is refused",
+        _build(**DEV, tag="dev-x-bbbbbbb-11-1", declares="v0.8.4", serial=11),
+        _build(**DEV, tag="dev-y-aaaaaaa-9-1", declares="v0.8.4", serial=9,
+               digest="sha256:t"),
+        OLDER_THAN_RUNNING_BUILD,
+        "build_serial",
+    ),
+    (
+        "5 one counter, a lower serial that cannot say its branch is refused",
+        _build(**DEV, tag="dev-x-bbbbbbb-11-1", declares="v0.8.4", serial=11),
+        _build(**DEV, declares="v0.8.4", serial=9, digest="sha256:t"),
+        OLDER_THAN_RUNNING_BUILD,
         "build_serial",
     ),
     (
