@@ -936,6 +936,126 @@ test.describe("Guided Upgrade verified-fingerprint enforcement", { tag: ["@workf
     }, payload);
   }
 
+  function reconnectStatus(replacementActive: boolean | null) {
+    return {
+      ok: true,
+      active: true,
+      transition: {
+        operation_id: "reconnect-op",
+        mode: "guided_upgrade",
+        stage: "admin_reconnect_pending",
+        system_tag: "v9.9.10",
+        build_id: "v9.9.10-f7265fc",
+        revision: "f7265fc747c2223f126f0ee7801e030c6226edf4",
+        admin_image: "ghcr.io/basecubedev/solarflow-control-admin:v9.9.10",
+        ems_image: "ghcr.io/basecubedev/solarflow-control:v9.9.10",
+        expired: false,
+        worker_active: false,
+        worker_status_available: true,
+        replacement_active: replacementActive,
+        resume_available: false,
+        cancel_available: replacementActive === false,
+      },
+      known_good: null,
+    };
+  }
+
+  test("a replacement still pulling is waited on, one proven gone is not", async ({
+    page,
+  }) => {
+    let cancelBody: unknown = null;
+    let cancelled = false;
+    let replacementActive: boolean | null = true;
+
+    const login = new LoginPage(page);
+    await login.open();
+    await login.authenticate();
+    await page.locator('[data-start-path="manage_existing"]').click();
+    await page.locator('[data-open-maintenance-path="upgrade"]').click();
+    await expect(page.locator("#upgrade-release-select")).toBeEnabled();
+
+    await page.route("**/api/admin/system-alignment/status", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          cancelled
+            ? { ok: true, active: false, transition: null, known_good: null }
+            : reconnectStatus(replacementActive),
+        ),
+      }),
+    );
+    await page.route(
+      "**/api/admin/system-alignment/cancel",
+      async (route: Route) => {
+        cancelBody = route.request().postDataJSON();
+        cancelled = true;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            active: false,
+            status: "cancelled",
+            stage: "cancelled",
+            transition: {
+              operation_id: "reconnect-op",
+              mode: "guided_upgrade",
+              stage: "cancelled",
+            },
+          }),
+        });
+      },
+    );
+
+    // The sidecar is mid-pull: the console waits and offers nothing. Compose
+    // may be half rewritten, so there is nothing safe to abandon yet.
+    await forceRender(page, reconnectStatus(true));
+    await expect(page.locator("#system-alignment-reconnect")).toBeVisible();
+    await expect(page.locator("#system-alignment-partial")).toBeHidden();
+    await expect(page.locator("#system-alignment-abandon")).toBeDisabled();
+
+    // The container is gone and the Admin that answered is not the one it was
+    // to install. The poll surfaces it: the wait ends, the reason is named,
+    // and the escape opens without the deadline having to pass.
+    replacementActive = false;
+    await expect(page.locator("#system-alignment-partial")).toBeVisible();
+    await expect(page.locator("#system-alignment-reconnect")).toBeHidden();
+    await expect(page.locator("#system-alignment-partial")).toContainText(
+      /no longer running/i,
+    );
+    await expect(page.locator("#system-alignment-abandon")).toBeEnabled();
+
+    page.once("dialog", (dialog) => dialog.accept());
+    const cancelResponse = page.waitForResponse((response) =>
+      response.url().endsWith("/system-alignment/cancel"),
+    );
+    await page.locator("#system-alignment-abandon").click();
+    await cancelResponse;
+    expect(cancelBody).toEqual({ operation_id: "reconnect-op", confirm: true });
+
+    await expect(page.locator("#system-alignment-partial")).toBeHidden();
+    await expect(page.locator("#upgrade-release-select")).toBeEnabled();
+  });
+
+  test("a replacement that cannot be read keeps the console waiting", async ({
+    page,
+  }) => {
+    const login = new LoginPage(page);
+    await login.open();
+    await login.authenticate();
+    await page.locator('[data-start-path="manage_existing"]').click();
+    await page.locator('[data-open-maintenance-path="upgrade"]').click();
+    await expect(page.locator("#upgrade-release-select")).toBeEnabled();
+
+    // Neither running nor proven gone. An unreadable state authorizes nothing,
+    // so the console keeps waiting rather than offering a destructive action.
+    await forceRender(page, reconnectStatus(null));
+    await expect(page.locator("#system-alignment-reconnect")).toBeVisible();
+    await expect(page.locator("#system-alignment-partial")).toBeHidden();
+    await expect(page.locator("#system-alignment-abandon")).toBeDisabled();
+  });
+
   test("an expired transition can only be abandoned after its worker stops", async ({
     page,
   }) => {
