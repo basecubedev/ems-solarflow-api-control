@@ -215,7 +215,8 @@ class SystemAlignmentService:
     def __init__(self, *, resolver, transition_store, embedded_resources,
                  known_good_store, current_identity, persistent_ref, launcher,
                  current_ems_identity=None, release_archive_resources=None,
-                 operation_coordinator=None, replacement_activity=None, now=None):
+                 operation_coordinator=None, replacement_activity=None, now=None,
+                 installed_ems_identity=None):
         self._resolver = resolver
         self._transitions = transition_store
         self._embedded = embedded_resources
@@ -223,6 +224,10 @@ class SystemAlignmentService:
         self._known_good = known_good_store
         self._current_identity = current_identity
         self._current_ems_identity = current_ems_identity or (lambda: {})
+        # What is installed, running or not: the direction of a move is judged
+        # against it, because a stopped EMS is the one that needs the move.
+        # Recovery and known-good keep asking what is live.
+        self._installed_ems_identity = installed_ems_identity or self._current_ems_identity
         self._persistent_ref = persistent_ref
         self._launcher = launcher
         # Bound once, so every path into the resource importer registers its
@@ -987,11 +992,7 @@ class SystemAlignmentService:
                 "system_build_mismatch",
                 "the running Admin cannot be aligned to this build",
             )
-        try:
-            running_ems = self._current_ems_identity()
-        except Exception:
-            running_ems = None
-        direction = decide_upgrade_direction(running_ems, build)
+        direction = self.upgrade_direction(build)
         effective_alignment = verdict.effective_alignment
         return {
             "ok": True,
@@ -1009,10 +1010,31 @@ class SystemAlignmentService:
             "current_admin": self._current_admin_summary(running_identity),
             "alignment": effective_alignment,
             "admin_update_required": verdict.admin_update_required,
-            "upgrade_allowed": direction.allowed,
-            "upgrade_state": direction.state,
-            "upgrade_direction": direction.as_dict(),
+            "upgrade_allowed": direction["allowed"],
+            "upgrade_state": direction["state"],
+            "upgrade_direction": direction,
         }
+
+    def upgrade_direction(self, build) -> dict:
+        """Whether moving the running EMS onto ``build`` is allowed.
+
+        One verdict for the read-only validation and for the confirmed
+        execution, so the two can never disagree about a move. It is judged
+        against the installed EMS build -- the container's image, running or
+        stopped -- and an identity that cannot be read leaves the move
+        unproven: refused, but as itself, not as a build older than the one
+        installed.
+        """
+
+        try:
+            installed_ems = self._installed_ems_identity()
+        except Exception as exc:
+            raise SystemAlignmentError(
+                "upgrade_direction_unavailable",
+                "the installed EMS identity could not be read, so whether this "
+                "build is a forward move is unproven",
+            ) from exc
+        return decide_upgrade_direction(installed_ems, build).as_dict()
 
     def _current_admin_summary(self, running_identity) -> dict:
         """Summarize the running Admin's own identity (never the EMS build)."""

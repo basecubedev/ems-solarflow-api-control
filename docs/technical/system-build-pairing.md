@@ -458,10 +458,14 @@ preflight, backup, migration, Compose write, deployment, or transition. It then
 asks `SystemAlignmentService.upgrade_direction` — the one verdict validation
 also reports — and refuses a move that is not allowed with
 `upgrade_direction_blocked` (the verdict's `reason` and `upgrade_state` in the
-body), or one that cannot be decided because the running EMS identity could
+body), or one that cannot be decided because the installed EMS identity could
 not be read with `upgrade_direction_unavailable`; both are HTTP 409, both
 happen before the preflight, and validation answers the undecidable case with
-the same code rather than reporting the build as older. Because
+the same code rather than reporting the build as older. The verdict reads the
+*installed* EMS build — the image the EMS container was created from, running
+or stopped — because a crashed EMS is exactly the one an operator has to
+reinstall; the live identity that recovery and the known-good record rely on
+stays the running container's. Because
 the resolver can re-resolve a mutable tag to a different digest between Verify and
 Upgrade, this is what guarantees the executed pair is exactly the one the operator
 verified: if a re-resolve occurs and the identity (digests, revision, build id, or

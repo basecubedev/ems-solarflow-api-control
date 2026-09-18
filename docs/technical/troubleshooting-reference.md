@@ -1184,7 +1184,12 @@ retry. This check is deliberate: it guarantees the executed System Build is
 exactly the one you verified.
 
 Two more HTTP 409 refusals happen at the same point, before any preflight: the
-confirmed upgrade re-checks the direction of the move itself.
+confirmed upgrade re-checks the direction of the move itself. The move is
+judged against the EMS build that is *installed* — the image the EMS
+container was created from, whether that container is running or stopped —
+so a crashed or stopped EMS can still be upgraded or reinstalled. Only an
+absent container, or a Docker that does not answer, leaves the direction
+unproven.
 `upgrade_direction_blocked` means the verified build may not replace the
 running EMS build (the body carries the verdict's `reason` and
 `upgrade_state`, the same the verification step shows), and

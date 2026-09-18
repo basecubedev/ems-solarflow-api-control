@@ -42,7 +42,7 @@ from admin.config_export import (
     config_payload_bytes,
 )
 from admin.config_preview import ConfigPreviewGenerator
-from admin.deployment import DeploymentService, DockerCli
+from admin.deployment import DeploymentService, DockerCli, DockerError
 from admin.discovery import (
     CidrValidationError,
     DEFAULT_PORTS,
@@ -486,6 +486,8 @@ _UPGRADE_STATUS_CODES = {
     "compose_missing": 409,
     "system_build_verification_required": 409,
     "system_build_verification_stale": 409,
+    "upgrade_direction_blocked": 409,
+    "upgrade_direction_unavailable": 409,
 }
 
 _TRUSTED_UPGRADE_FAILURE_CODES = frozenset(
@@ -746,16 +748,40 @@ def _running_admin_identity(docker):
 
 
 def _running_ems_identity(docker):
-    """Read the running EMS image identity for safe partial-build recovery."""
+    """The image identity of the *running* EMS, for partial-build recovery.
 
+    Recovery and the known-good record ask what is live: an interrupted
+    deployment only counts as landed while the exact target is running.
+    """
+
+    return _ems_container_identity(docker, running_only=True)
+
+
+def _installed_ems_identity(docker):
+    """The image identity of the EMS container, running or stopped.
+
+    The container names the image it was created from, and that is the build
+    installed here even while nothing is running -- a crashed EMS is exactly
+    the one an operator has to reinstall or upgrade, so the direction of that
+    move is judged against it rather than refused as unknown.
+    """
+
+    return _ems_container_identity(docker, running_only=False)
+
+
+def _ems_container_identity(docker, *, running_only):
     container_name = os.environ.get("EMS_CONTAINER_NAME", DEFAULT_EMS_CONTAINER)
     try:
         container = docker.inspect_container(container_name)
+    except DockerError:
+        # Docker could not answer. Nothing is known about what is running,
+        # which is not the same as knowing that nothing is.
+        raise
     except Exception:
         container = None
     image_ref = None
     if isinstance(container, dict):
-        if container.get("status") != "running":
+        if running_only and container.get("status") != "running":
             return identify_image(docker, "")
         exact_image = getattr(docker, "inspect_container_image_id", None)
         if callable(exact_image):
@@ -814,6 +840,7 @@ def _build_system_alignment(
         known_good_store=KnownGoodStore(state_dir),
         current_identity=lambda: _running_admin_identity(docker),
         current_ems_identity=lambda: _running_ems_identity(docker),
+        installed_ems_identity=lambda: _installed_ems_identity(docker),
         persistent_ref=admin_image_ref_from_env,
         launcher=launcher,
         operation_coordinator=operation_coordinator,
@@ -1964,6 +1991,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             "invalid_transition",
             "mutation_in_progress",
             "not_resumable",
+            "upgrade_direction_blocked",
+            "upgrade_direction_unavailable",
             SETUP_RETURN_UNSUPPORTED,
             "system_build_mismatch",
             "system_build_resources_invalid",
@@ -3302,6 +3331,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=_UPGRADE_STATUS_CODES["system_build_verification_stale"],
             )
             return
+        if self._refuse_blocked_upgrade_direction(system_build):
+            return
         try:
             rejection, run_context = executor.preflight(
                 target_release,
@@ -3481,6 +3512,50 @@ class AdminHandler(BaseHTTPRequestHandler):
         self._start_guided_upgrade_job(
             operation_id, executor, run_context, pre_alignment
         )
+
+    def _refuse_blocked_upgrade_direction(self, system_build):
+        """Answer and stop when this move may not be made; else return ``False``.
+
+        Validation computes the same verdict, but a read-only route the browser
+        may act on is not where a mutation is authorized. The guard exists
+        because leaving a release line downwards crosses one-way config and
+        store migrations, so a verdict that cannot be obtained refuses too.
+        """
+
+        decide = getattr(self.server.system_alignment, "upgrade_direction", None)
+        try:
+            direction = decide(system_build) if callable(decide) else None
+        except Exception:
+            direction = None
+        if not isinstance(direction, dict) or "allowed" not in direction:
+            self._send_json(
+                {
+                    "ok": False,
+                    "status": "conflict",
+                    "reason": "upgrade_direction_unavailable",
+                    "message": (
+                        "Whether this build is a forward move could not be "
+                        "determined, so the upgrade was not started."
+                    ),
+                },
+                status=_UPGRADE_STATUS_CODES["upgrade_direction_unavailable"],
+            )
+            return True
+        if direction.get("allowed") is not True:
+            self._send_json(
+                {
+                    "ok": False,
+                    "status": "conflict",
+                    "reason": "upgrade_direction_blocked",
+                    "message": direction.get("reason")
+                    or "This build may not replace the running EMS build.",
+                    "upgrade_state": direction.get("state"),
+                    "upgrade_direction": direction,
+                },
+                status=_UPGRADE_STATUS_CODES["upgrade_direction_blocked"],
+            )
+            return True
+        return False
 
     def _start_guided_upgrade_job(
         self, operation_id, executor, run_context, pre_alignment

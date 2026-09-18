@@ -554,7 +554,9 @@ Maintenance is conservative by default:
   back up what they replace before writing.
 - **No silent downgrade.** Guided upgrade moves forward, or back inside the
   release line you are running, and never proposes going back by itself;
-  restore never installs an older EMS image.
+  restore never installs an older EMS image. The line you are on is read from
+  the EMS container's image even while that container is stopped, so a
+  crashed EMS can be upgraded or reinstalled from here.
 - **Preview before restore.** A restore always starts with a preview and is only
   applied after you confirm it.
 - **Confirmation before writes.** The Admin Console asks before it changes

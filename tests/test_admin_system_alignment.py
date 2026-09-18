@@ -135,7 +135,8 @@ class FakeReleaseArchive:
 def _service(tmp_path, *, build=None, resolver_error=None, running=None,
              persistent_ref=None, embedded=None, launched=None, known_good=None,
              running_ems=None, release_archive=None, launcher=None,
-             replacement_activity=None, now=None):
+             replacement_activity=None, current_ems_identity=None, now=None,
+             installed_ems_identity=None):
     running = running or ImageIdentity(
         image_ref=f"{ADMIN_IMAGE_REPO}:latest", digest="sha256:latest", revision="old",
         build_id="v0.7.0-old",
@@ -160,7 +161,8 @@ def _service(tmp_path, *, build=None, resolver_error=None, running=None,
             release_archive_resources=release_archive or FakeReleaseArchive(),
             known_good_store=known_good,
             current_identity=lambda: running,
-            current_ems_identity=lambda: running_ems,
+            current_ems_identity=current_ems_identity or (lambda: running_ems),
+            installed_ems_identity=installed_ems_identity,
             persistent_ref=lambda: persistent_ref or f"{ADMIN_IMAGE_REPO}:latest",
             launcher=launcher or (lambda record: launched.append(record)),
             replacement_activity=replacement_activity,
@@ -608,6 +610,58 @@ def test_development_manual_retry_requires_fresh_acknowledgement(tmp_path):
         development_risk_acknowledged=True,
     )
     assert retried["stage"] == STAGE_ADMIN_RECONNECT_PENDING
+
+
+# --- a stopped EMS is judged by the build it has installed -----------------
+
+
+def test_the_direction_is_judged_against_the_installed_ems_not_the_running_one(tmp_path):
+    """An EMS that is stopped or crashed has nothing running, and nothing
+    running used to read as identity_unknown -- every target refused, for the
+    installation that most needs a reinstall. The container still names the
+    image it was created from; the move is judged against that."""
+
+    installed = ImageIdentity(
+        image_ref=f"{EMS_IMAGE_REPO}:v0.7.0",
+        digest="sha256:installed",
+        version_label="v0.7.0",
+        release_tag="v0.7.0",
+        channel="stable",
+        build_serial=90,
+    )
+    service, *_ = _service(
+        tmp_path,
+        build=_build(),
+        current_ems_identity=lambda: ImageIdentity(),
+        installed_ems_identity=lambda: installed,
+    )
+
+    direction = service.upgrade_direction(_build())
+
+    assert direction["allowed"] is True
+    assert direction["state"] == "upgrade_available"
+
+
+# --- an unreadable running EMS leaves the direction unproven, not blocked ---
+
+
+def test_an_unreadable_running_ems_leaves_the_direction_unproven(tmp_path):
+    """Unproven is refused too, but as itself: the console said the move was
+    not a forward one, with a version reason, when Docker had simply not
+    answered. Validation and the confirmed execute must both say why."""
+
+    def unreadable():
+        raise RuntimeError("the Docker daemon is unreachable")
+
+    service, *_ = _service(tmp_path, build=_build(), current_ems_identity=unreadable)
+
+    with pytest.raises(SystemAlignmentError) as excinfo:
+        service.upgrade_direction(_build())
+    assert excinfo.value.code == "upgrade_direction_unavailable"
+
+    with pytest.raises(SystemAlignmentError) as excinfo:
+        service.validate_upgrade_target(requested_tag="v0.8.0")
+    assert excinfo.value.code == "upgrade_direction_unavailable"
 
 
 # --- the replacement probe is read once per window of polls ----------------

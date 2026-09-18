@@ -787,11 +787,13 @@ class UpgradeDirection:
 
 
 def decide_upgrade_direction(running_ems, target: SystemBuild) -> UpgradeDirection:
-    """Assess moving the running EMS build to ``target`` using identity only.
+    """Assess moving the installed EMS build to ``target`` using identity only.
 
-    ``running_ems`` is the running EMS :class:`ImageIdentity` (all-``None`` when
-    it cannot be inspected). Only the resolved :class:`SystemBuild` identity and
-    the running EMS identity settle the verdict; nothing is pulled or re-listed.
+    ``running_ems`` is the installed EMS :class:`ImageIdentity` -- the image
+    the EMS container was created from, whether it is running or stopped --
+    and all-``None`` when it cannot be inspected. Only the resolved
+    :class:`SystemBuild` identity and that identity settle the verdict;
+    nothing is pulled or re-listed.
 
     The target identity carries the resolved build serial. Without it the
     serial fallback in :func:`assess_upgrade` cannot fire, so every move from a
