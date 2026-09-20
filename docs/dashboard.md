@@ -61,14 +61,45 @@ section.
 ## Analytics View
 
 The Analytics tab is the home for long-term, InfluxDB-backed analysis: a single
-large primary chart with custom date ranges, drag-zoom, series overlays,
-sub-tabs and KPI cards. It is optional — when InfluxDB is not configured the tab
-shows a clean "InfluxDB analytics is not configured" info state, and the
-Aggregate/Devices history (SQLite) keeps working unchanged. See
+large primary chart with custom date ranges, [zooming](#zooming-a-chart), series
+overlays, sub-tabs and KPI cards. It is optional — when InfluxDB is not
+configured the tab shows a clean "InfluxDB analytics is not configured" info
+state, and the Aggregate/Devices history (SQLite) keeps working unchanged. See
 [Two history sources](#two-history-sources-sqlite-operational-vs-influxdb-analytics)
 for the SQLite vs InfluxDB split and the endpoints involved.
 
 ![Analytics tab demo screenshot](assets/preview-analytics.jpg)
+
+## Zooming A Chart
+
+Both time-series charts — the Analytics tab's large one and the lightweight
+History panel — are zoomed the same three ways:
+
+- **Drag** a band across the plot. The selection is drawn while the pointer is
+  down.
+- **Mouse wheel** over the plot. It zooms around the pointer, so whatever is
+  under it stays under it, and it never scrolls the page while the pointer is
+  over a chart.
+- The **`+` and `−` buttons** in the chart's top-left corner. They zoom around
+  the middle of the visible window.
+
+`↺ Back to live` appears in the same corner as soon as a chart is zoomed, and
+it is the reset: it returns the chart to the live window and resumes the 30s
+refresh. `ESC` does the same, and so does zooming all the way back out with the
+wheel or the `−` button. Changing the period, the device, the sub-tab or an
+overlay also returns to live.
+
+While a chart is zoomed its auto-refresh is paused, because a refresh resets
+the axis and the zoomed axis is the point. A zoom never narrows below a minute.
+
+What the two charts do with a zoom is the difference between them:
+
+- **Analytics (InfluxDB)** re-queries the backend for the visible window, which
+  is how it gets the finer bucket and aggregation window for it — see
+  [the query profiles](#two-history-sources-sqlite-operational-vs-influxdb-analytics).
+  The request is debounced, so a burst of wheel notches produces one request.
+- **History (SQLite)** does not re-query. It has a single profile, so its zoom
+  only rescales the axis of the data already loaded.
 
 ## Energy Statistics View
 
@@ -470,8 +501,10 @@ front-end uPlot chart can plot every series on one shared time axis. The
 The lightweight **History** panel (shown only on the Aggregate and Devices
 views) uses this endpoint for one combined chart of the default
 PV / Inverter Output / Battery series with a range selector and a device
-filter. It is intentionally minimal — no overlays, sub-tabs, zoom or KPIs — so
-these operational views stay quick to load.
+filter. It is intentionally minimal — no overlays, sub-tabs or KPIs — so these
+operational views stay quick to load. It [zooms](#zooming-a-chart), but only by
+rescaling the axis: there is one query profile here, so a narrower window never
+re-queries.
 
 #### `/api/analytics/series` and `/api/analytics/status` — analytics (InfluxDB)
 
@@ -492,8 +525,9 @@ same columnar shape as `/api/history/series`, with `source` set to `influxdb`.
 
 The **Analytics** tab is a dedicated, larger analysis workspace (the primary
 chart is ~560px tall on desktop) reusing the existing PV/Output/Battery/Grid
-colors, with a period selector, a device filter, custom date ranges, drag-zoom,
-overlays, sub-tabs, and KPI cards — one combined chart, never a chart explosion.
+colors, with a period selector, a device filter, custom date ranges,
+[zooming](#zooming-a-chart), overlays, sub-tabs, and KPI cards — one combined
+chart, never a chart explosion.
 
 The Analytics tab has sub-tabs that keep the same single chart and only change
 the visible series and KPI cards (no extra chart pages):
@@ -550,10 +584,10 @@ Performance and refresh behavior:
   separate `aggregateWindow(every: …, fn: mean)` step that smooths the raw
   series before plotting. A short window (`1s` for ≤ 1h) keeps short power
   spikes visible instead of averaging them into a 10s mean. Because profile
-  selection uses `end - start`, **zooming** into a sub-1h slice of a 24h / 7d /
-  30d view re-queries with the raw / `1s` detail profile, while a ~2h zoom uses
-  the raw / `10s` profile. Profiles are user-configurable; custom
-  `query_profiles` override these defaults.
+  selection uses `end - start`, [zooming](#zooming-a-chart) into a sub-1h slice
+  of a 24h / 7d / 30d view re-queries with the raw / `1s` detail profile, while
+  a ~2h zoom uses the raw / `10s` profile. Profiles are user-configurable;
+  custom `query_profiles` override these defaults.
 - Spike visibility is ultimately bounded by the actual sampling/write interval,
   not by the chart window. With the EMS writing roughly every 3s, a 1h chart can
   show ~3s-level detail, but a spike shorter than the write interval can still be
@@ -561,7 +595,8 @@ Performance and refresh behavior:
 - The Analytics tab auto-refreshes every 30s, but only while it is the active
   view; other views and a backgrounded browser tab do not trigger analytics
   fetches. Each sub-tab loads only its own series. The lightweight History panel
-  refreshes on the same cadence while Aggregate/Devices is on screen.
+  refreshes on the same cadence while Aggregate/Devices is on screen. Either
+  panel's refresh pauses while [its chart is zoomed](#zooming-a-chart).
 - Both panels are mobile-friendly (controls, overlay chips, sub-tabs and KPI
   cards reflow; charts use reduced heights on small screens) and show explicit
   loading and empty/unavailable states.
