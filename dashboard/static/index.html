@@ -333,7 +333,11 @@
                 </div>
                 <div class="analytics-chart-wrap">
                   <div id="analyticsChart" class="analytics-chart" role="img" aria-label="Combined PV, output and battery history chart"></div>
-                  <button type="button" id="analyticsBackToLive" class="analytics-back-to-live" hidden>↺ Back to live</button>
+                  <div class="analytics-zoom-controls" role="group" aria-label="Analytics chart zoom">
+                    <button type="button" id="analyticsZoomIn" class="analytics-zoom-button" aria-label="Zoom in" title="Zoom in (mouse wheel over the chart)">+</button>
+                    <button type="button" id="analyticsZoomOut" class="analytics-zoom-button" aria-label="Zoom out" title="Zoom out (mouse wheel over the chart)">−</button>
+                    <button type="button" id="analyticsBackToLive" class="analytics-back-to-live" hidden>↺ Back to live</button>
+                  </div>
                   <div id="analyticsLoading" class="analytics-loading" hidden>Loading…</div>
                 </div>
                 <div id="analyticsEmpty" class="analytics-empty" hidden>No samples in this period.</div>
@@ -379,6 +383,11 @@
       </div>
       <div class="analytics-chart-wrap">
         <div id="historyChart" class="analytics-chart history-chart" role="img" aria-label="PV, inverter output and battery power history"></div>
+        <div class="analytics-zoom-controls" role="group" aria-label="History chart zoom">
+          <button type="button" id="historyZoomIn" class="analytics-zoom-button" aria-label="Zoom in" title="Zoom in (mouse wheel over the chart)">+</button>
+          <button type="button" id="historyZoomOut" class="analytics-zoom-button" aria-label="Zoom out" title="Zoom out (mouse wheel over the chart)">−</button>
+          <button type="button" id="historyBackToLive" class="analytics-back-to-live" hidden>↺ Back to live</button>
+        </div>
         <div id="historyLoading" class="analytics-loading" hidden>Loading…</div>
       </div>
       <div id="historyEmpty" class="analytics-empty" hidden>No samples in this period.</div>

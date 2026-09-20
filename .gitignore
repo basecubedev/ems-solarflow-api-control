@@ -1,3 +1,8 @@
+# Product-film workspace: harness, captures, Remotion project and renders.
+# Gigabytes of frames and MP4s that are regenerated from the documented
+# steps in video/README.md, so nothing in here belongs in the source tree.
+/video/
+
 # local AI / research docs
 /docs/develop/
 /CODEX_AGENT_GUIDE.md

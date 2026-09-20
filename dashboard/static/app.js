@@ -12,6 +12,12 @@ const state = {
     chart: null,
     chartSignature: null,
     deviceOptions: [],
+    // Zoom viewport (epoch seconds) into the loaded history window; null means
+    // live. This panel never re-queries for a zoom -- the loaded window is the
+    // whole world here -- so the zoom only rescales the axis and pauses the
+    // refresh that would reset it.
+    zoom: null,
+    applyingScale: false,
   },
   // InfluxDB-backed long-term analytics shown in the dedicated Analytics tab.
   // ``available`` is null until probed; false renders the "not configured"
@@ -30,6 +36,10 @@ const state = {
     // they are not mistaken for a user zoom.
     zoom: null,
     applyingScale: false,
+    // The window the live view last showed. Zooming out is bounded by it, and
+    // reaching it is Back to live: after a zoom re-query the loaded data is
+    // only the zoomed window, so it cannot be its own ceiling.
+    liveExtent: null,
     // Cached uPlot instance signature; when unchanged across refreshes the
     // chart is updated in place (setData) instead of destroyed/recreated.
     chartSignature: null,
@@ -5554,14 +5564,18 @@ function clearCustomRange() {
 
 let analyticsZoomTimer = null;
 
-// Pure: decide whether a uPlot x-scale window is a zoom-in vs the full extent.
+// Pure: decide whether a uPlot x-scale window differs from the loaded extent.
+// Either direction counts. A window wider than the loaded data is what zooming
+// back out produces once a re-query has narrowed the data to the zoom itself,
+// and calling that "not a zoom" would leave the axis widened with a stale
+// viewport and no re-query behind it.
 function detectZoom(min, max, dataStart, dataEnd) {
   const nums = [min, max, dataStart, dataEnd];
   if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
   const span = dataEnd - dataStart;
   if (!(span > 0)) return null;
   const eps = span * 0.005;
-  if (min > dataStart + eps || max < dataEnd - eps) {
+  if (Math.abs(min - dataStart) > eps || Math.abs(max - dataEnd) > eps) {
     return { start: Math.floor(min), end: Math.ceil(max) };
   }
   return null;
@@ -5613,9 +5627,199 @@ function backToLive() {
   loadAnalytics(true);
 }
 
+function setZoomButtonsEnabled(kind, enabled) {
+  ["ZoomIn", "ZoomOut"].forEach((suffix) => {
+    const button = $(`${kind}${suffix}`);
+    if (button) button.disabled = !enabled;
+  });
+}
+
 function renderZoomControls() {
   const button = $("analyticsBackToLive");
   if (button) button.hidden = !state.analytics.zoom;
+  const historyButton = $("historyBackToLive");
+  if (historyButton) historyButton.hidden = !state.history.zoom;
+  // Fail closed: with nothing loaded there is no window to zoom, so the
+  // controls say so instead of moving an axis over an empty canvas.
+  setZoomButtonsEnabled("analytics", !!state.analytics.chart && !!zoomBounds("analytics"));
+  setZoomButtonsEnabled("history", !!state.history.chart && !!zoomBounds("history"));
+}
+
+// -- Zoom input: wheel and buttons -----------------------------------------
+//
+// Dragging a band across the chart was the only way in, and nothing on the page
+// said so. The wheel and the two buttons are the discoverable way, not a second
+// mechanism: each of them ends in chart.setScale("x", ...), which is what a drag
+// does, so the chart's own scale hook -- detectZoom, then the debounced
+// re-query -- stays the single owner of the viewport and of the request it
+// triggers. Neither input fetches, debounces or records a viewport itself.
+
+// Span multiplier for one wheel notch or one button press.
+const ZOOM_STEP = 1.6;
+// As far in as zooming goes. The EMS writes a snapshot every few seconds, so a
+// window below a minute is a handful of points stretched across the chart.
+const MIN_ZOOM_SPAN_S = 60;
+
+// Pure: the x window that zooming by `factor` (a span multiplier, below 1 zooms
+// in) around `center` produces, clamped into the outer bounds. Null when the
+// inputs do not describe a window -- which is what "nothing loaded, no zoom"
+// comes down to at the call site.
+function zoomWindow(min, max, center, factor, boundsStart, boundsEnd) {
+  const nums = [min, max, center, factor, boundsStart, boundsEnd];
+  if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  const outer = boundsEnd - boundsStart;
+  if (!(outer > 0) || !(max > min) || !(factor > 0)) return null;
+
+  const span = max - min;
+  const floor = Math.min(MIN_ZOOM_SPAN_S, outer);
+  const newSpan = Math.min(Math.max(span * factor, floor), outer);
+  // Whatever sits under the pointer stays under it: the centre keeps its
+  // relative place in the window, rather than the window keeping its middle.
+  const anchor = Math.min(Math.max(center, min), max);
+  const ratio = (anchor - min) / span;
+
+  let newMin = anchor - ratio * newSpan;
+  if (newMin < boundsStart) newMin = boundsStart;
+  if (newMin + newSpan > boundsEnd) newMin = boundsEnd - newSpan;
+  return { min: newMin, max: newMin + newSpan };
+}
+
+// The extent of a loaded series payload, or null when there is nothing to zoom.
+function dataExtent(data) {
+  const time = (data && data.time) || [];
+  if (time.length < 2) return null;
+  const start = Number(time[0]);
+  const end = Number(time[time.length - 1]);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || !(end > start)) return null;
+  return { start, end };
+}
+
+// How far out each chart can zoom. Analytics answers with the window the live
+// view showed, because a re-query shrinks its loaded data down to the zoom and
+// that data would otherwise become its own ceiling; History answers with its
+// loaded data, because that is all it will ever have.
+function zoomBounds(kind) {
+  if (kind === "analytics") {
+    const extent = state.analytics.liveExtent;
+    if (!extent || !(extent.end > extent.start)) return null;
+    return extent;
+  }
+  return dataExtent(state.history.data);
+}
+
+function zoomChart(kind) {
+  return kind === "analytics" ? state.analytics.chart : state.history.chart;
+}
+
+function zoomActive(kind) {
+  return kind === "analytics" ? state.analytics.zoom : state.history.zoom;
+}
+
+// The one place a zoom step is applied, for both charts and both inputs.
+function zoomBy(kind, factor, center) {
+  const chart = zoomChart(kind);
+  const bounds = zoomBounds(kind);
+  if (!chart || !chart.setScale || !chart.scales || !chart.scales.x || !bounds) return false;
+
+  const next = zoomWindow(
+    chart.scales.x.min,
+    chart.scales.x.max,
+    center,
+    factor,
+    bounds.start,
+    bounds.end
+  );
+  if (!next) return false;
+
+  // Zoomed all the way back out. That is Back to live -- the same action the
+  // button performs -- rather than a viewport that happens to equal it.
+  if (!detectZoom(next.min, next.max, bounds.start, bounds.end)) {
+    if (!zoomActive(kind)) return false;
+    if (kind === "analytics") backToLive();
+    else historyBackToLive();
+    return true;
+  }
+  chart.setScale("x", { min: next.min, max: next.max });
+  return true;
+}
+
+// The data value under the pointer, so the wheel zooms where the reader is
+// looking instead of at the middle of the window.
+function zoomCenterFromEvent(chart, event) {
+  const middle = (chart.scales.x.min + chart.scales.x.max) / 2;
+  const over = chart.over;
+  if (!over || !over.getBoundingClientRect || !chart.posToVal) return middle;
+  const rect = over.getBoundingClientRect();
+  const value = chart.posToVal(event.clientX - rect.left, "x");
+  return Number.isFinite(value) ? value : middle;
+}
+
+function onZoomWheel(kind, event) {
+  // The listener is non-passive so this can hold: the page must not scroll out
+  // from under a chart the pointer is over.
+  if (event.preventDefault) event.preventDefault();
+  const chart = zoomChart(kind);
+  if (!chart || !chart.scales || !chart.scales.x) return false;
+  const factor = event.deltaY < 0 ? 1 / ZOOM_STEP : ZOOM_STEP;
+  return zoomBy(kind, factor, zoomCenterFromEvent(chart, event));
+}
+
+function onZoomButton(kind, direction) {
+  const chart = zoomChart(kind);
+  if (!chart || !chart.scales || !chart.scales.x) return false;
+  const factor = direction === "in" ? 1 / ZOOM_STEP : ZOOM_STEP;
+  return zoomBy(kind, factor, (chart.scales.x.min + chart.scales.x.max) / 2);
+}
+
+function bindWheelZoom(kind, chart) {
+  const over = chart && chart.over;
+  if (!over || !over.addEventListener) return;
+  over.addEventListener("wheel", (event) => onZoomWheel(kind, event), { passive: false });
+}
+
+function clearHistoryZoom() {
+  state.history.zoom = null;
+}
+
+// Re-apply an active History viewport after a render. uPlot's setData resets
+// the x scale, and this panel reloads whenever its view is entered -- switching
+// to Devices and back is enough -- so without this the axis snaps to the live
+// window while the zoom state and the Back to live button say otherwise.
+function applyHistoryZoomToChart(chart) {
+  if (state.history.zoom && chart.setScale) {
+    state.history.applyingScale = true;
+    chart.setScale("x", { min: state.history.zoom.start, max: state.history.zoom.end });
+    state.history.applyingScale = false;
+  }
+}
+
+function historyBackToLive() {
+  clearHistoryZoom();
+  renderZoomControls();
+  loadHistory(true);
+}
+
+// The History panel refreshes every 30s and a refresh resets the axis. While it
+// is zoomed the window is the whole point, so the refresh waits -- the same
+// arrangement the Analytics tab already has.
+function historyShouldAutoRefresh() {
+  return historyVisible() && !state.history.zoom;
+}
+
+// Unlike the Analytics tab, this one may clear its own zoom when the window
+// returns to the loaded extent: nothing re-queries here, so the extent stays
+// the live window and a uPlot double-click reset means what it looks like.
+function onHistoryXScale(chart) {
+  if (state.history.applyingScale) return;
+  const xs = chart.data && chart.data[0];
+  if (!xs || xs.length < 2) return;
+  state.history.zoom = detectZoom(
+    chart.scales.x.min,
+    chart.scales.x.max,
+    xs[0],
+    xs[xs.length - 1]
+  );
+  renderZoomControls();
 }
 
 function renderAnalytics() {
@@ -5764,6 +5968,12 @@ function renderAnalyticsChart() {
     return;
   }
   if (empty) empty.hidden = true;
+  // Remembered while live, because a zoom re-query replaces this data with the
+  // zoomed window alone -- see zoomBounds().
+  if (!state.analytics.zoom) {
+    const extent = dataExtent(data);
+    if (extent) state.analytics.liveExtent = extent;
+  }
 
   const chartSeries = activeAnalyticsSeries().filter((id) => ANALYTICS_SERIES_META[id]);
   let usesPctScale = false;
@@ -5855,6 +6065,7 @@ function renderAnalyticsChart() {
   state.analytics.chartSignature = signature;
   state.analytics.applyingScale = false;
   applyAnalyticsZoomToChart(chart);
+  bindWheelZoom("analytics", chart);
   renderZoomControls();
 }
 
@@ -6106,6 +6317,8 @@ function renderHistoryChart() {
       state.history.chart = null;
     }
     state.history.chartSignature = null;
+    clearHistoryZoom();
+    renderZoomControls();
     container.innerHTML = "";
     if (empty) {
       const unavailable = !data || (data.meta && data.meta.unavailable);
@@ -6133,7 +6346,11 @@ function renderHistoryChart() {
     state.history.chartSignature === signature &&
     state.history.chart.setData
   ) {
+    state.history.applyingScale = true;
     state.history.chart.setData(seriesData);
+    state.history.applyingScale = false;
+    applyHistoryZoomToChart(state.history.chart);
+    renderZoomControls();
     return;
   }
 
@@ -6170,9 +6387,21 @@ function renderHistoryChart() {
     ],
     cursor: { focus: { prox: 24 } },
     legend: { live: true },
+    hooks: {
+      setScale: [
+        (chart, key) => {
+          if (key === "x") onHistoryXScale(chart);
+        },
+      ],
+    },
   };
+  state.history.applyingScale = true;
   state.history.chart = new uPlot(opts, seriesData, container);
   state.history.chartSignature = signature;
+  state.history.applyingScale = false;
+  applyHistoryZoomToChart(state.history.chart);
+  bindWheelZoom("history", state.history.chart);
+  renderZoomControls();
 }
 
 function startEvents() {
@@ -6577,9 +6806,24 @@ function initDashboardApp() {
   if (backToLiveButton) {
     backToLiveButton.addEventListener("click", () => backToLive());
   }
+  const historyBackToLiveButton = $("historyBackToLive");
+  if (historyBackToLiveButton) {
+    historyBackToLiveButton.addEventListener("click", () => historyBackToLive());
+  }
+  [
+    ["analyticsZoomIn", "analytics", "in"],
+    ["analyticsZoomOut", "analytics", "out"],
+    ["historyZoomIn", "history", "in"],
+    ["historyZoomOut", "history", "out"],
+  ].forEach(([id, kind, direction]) => {
+    const button = $(id);
+    if (button) button.addEventListener("click", () => onZoomButton(kind, direction));
+  });
   // ESC returns to live while zoomed (uPlot double-click already resets too).
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.analytics.zoom) backToLive();
+    if (event.key !== "Escape") return;
+    if (state.analytics.zoom) backToLive();
+    if (state.history.zoom) historyBackToLive();
   });
 
   document.querySelectorAll(".analytics-tabs button").forEach((button) => {
@@ -6618,6 +6862,8 @@ function initDashboardApp() {
       document.querySelectorAll(historyRangeSelector).forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
       state.history.range = button.dataset.historyRange;
+      clearHistoryZoom();
+      renderZoomControls();
       await loadHistory();
     });
   });
@@ -6626,6 +6872,8 @@ function initDashboardApp() {
   if (historyDeviceSelect) {
     historyDeviceSelect.addEventListener("change", async () => {
       state.history.device = historyDeviceSelect.value;
+      clearHistoryZoom();
+      renderZoomControls();
       await loadHistory();
     });
   }
@@ -6672,10 +6920,11 @@ function initDashboardApp() {
     if (historyVisible()) loadHistory();
     setInterval(loadAuthStatus, 60000);
     // Periodic refresh skips fetching while a panel is off-screen, the tab is
-    // backgrounded (lazy loading), or the analytics chart is zoomed.
+    // backgrounded (lazy loading), or its chart is zoomed -- a refresh resets
+    // the axis, and a zoomed axis is what the reader is looking at.
     setInterval(() => {
       if (analyticsShouldAutoRefresh()) loadAnalytics(false);
-      if (historyVisible()) loadHistory(false);
+      if (historyShouldAutoRefresh()) loadHistory(false);
     }, 30000);
   }
 }
@@ -6741,8 +6990,23 @@ if (typeof module !== "undefined") {
     renderHistoryChart,
     detectZoom,
     onAnalyticsXScale,
+    onHistoryXScale,
     backToLive,
     clearZoom,
+    historyBackToLive,
+    clearHistoryZoom,
+    applyHistoryZoomToChart,
+    historyShouldAutoRefresh,
+    renderZoomControls,
+    zoomWindow,
+    zoomBounds,
+    zoomBy,
+    onZoomWheel,
+    onZoomButton,
+    bindWheelZoom,
+    dataExtent,
+    ZOOM_STEP,
+    MIN_ZOOM_SPAN_S,
     toggleAnalyticsOverlay,
     applyCustomRange,
     clearCustomRange,

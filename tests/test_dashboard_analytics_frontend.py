@@ -613,3 +613,466 @@ console.log(JSON.stringify({{
     assert out["peak"] == 2500
     assert out["power"] == "2.50 kW"
     assert out["energy"] == "1.5 kWh"
+
+
+def test_analytics_and_history_zoom_controls_are_in_the_markup():
+    # Drag-zoom was undiscoverable: nothing on the page said the chart could be
+    # zoomed at all. Both charts now carry a visible +/- pair in the same corner
+    # as Back to live.
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    for element_id in (
+        "analyticsZoomIn",
+        "analyticsZoomOut",
+        "historyZoomIn",
+        "historyZoomOut",
+        "historyBackToLive",
+    ):
+        assert f'id="{element_id}"' in html
+    assert html.count('class="analytics-zoom-controls"') == 2
+
+
+def test_zoom_window_is_pure_and_clamps_to_the_bounds():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify({{
+  centred: app.zoomWindow(0, 1000, 500, 0.5, 0, 1000),
+  atPointer: app.zoomWindow(0, 1000, 800, 0.5, 0, 1000),
+  atLeftEdge: app.zoomWindow(0, 1000, 0, 0.5, 0, 1000),
+  shiftedOffTheRightBound: app.zoomWindow(600, 1000, 1000, 2, 0, 1000),
+  neverWiderThanTheBounds: app.zoomWindow(0, 1000, 500, 4, 0, 1000),
+  floored: app.zoomWindow(0, 1000, 500, 0.001, 0, 1000),
+  step: app.ZOOM_STEP,
+  minSpan: app.MIN_ZOOM_SPAN_S,
+  invalidNumber: app.zoomWindow(null, 1000, 500, 0.5, 0, 1000),
+  emptyBounds: app.zoomWindow(0, 1000, 500, 0.5, 0, 0),
+  emptyWindow: app.zoomWindow(500, 500, 500, 0.5, 0, 1000),
+  negativeFactor: app.zoomWindow(0, 1000, 500, -1, 0, 1000),
+}}));
+"""
+    out = run_node(script)
+    # The factor is a span multiplier, so 0.5 halves the window.
+    assert out["centred"] == {"min": 250, "max": 750}
+    # The centre keeps its place in the window: 800 sits at 80% before and after.
+    assert out["atPointer"] == {"min": 400, "max": 900}
+    assert out["atLeftEdge"] == {"min": 0, "max": 500}
+    # Widening past a bound shifts the window back inside instead of shrinking it.
+    assert out["shiftedOffTheRightBound"] == {"min": 200, "max": 1000}
+    assert out["neverWiderThanTheBounds"] == {"min": 0, "max": 1000}
+    # A minute is as far in as it goes, centred on the pointer.
+    assert out["floored"] == {"min": 470, "max": 530}
+    assert out["minSpan"] == 60
+    assert out["step"] > 1
+    # Fail closed on anything that does not describe a window.
+    for key in ("invalidNumber", "emptyBounds", "emptyWindow", "negativeFactor"):
+        assert out[key] is None, key
+
+
+def test_detect_zoom_reports_a_widened_window_too():
+    # Zooming back out after a re-query produces a window wider than the loaded
+    # data, because the re-query narrowed the data to the zoom. Reporting that as
+    # "not a zoom" would widen the axis and leave the stale viewport in the URL.
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify({{
+  widened: app.detectZoom(500, 1500, 1000, 1400),
+  unchanged: app.detectZoom(1000, 1400, 1000, 1400),
+}}));
+"""
+    out = run_node(script)
+    assert out["widened"] == {"start": 500, "end": 1500}
+    assert out["unchanged"] is None
+
+
+# One fake uPlot instance, shared by the zoom contracts below. Its setScale does
+# what uPlot's does -- move the scale, then fire the setScale hook -- which is
+# what makes "the wheel and the buttons run the drag-zoom's path" a claim these
+# tests can actually check rather than assert about the source.
+FAKE_CHART = """
+function makeChart(app, kind, min, max, data) {
+  const chart = {
+    data,
+    scales: { x: { min, max } },
+    listeners: [],
+    setScaleCalls: [],
+    over: {
+      getBoundingClientRect: () => ({ left: 0, width: 1000 }),
+      addEventListener: (type, handler, options) => {
+        chart.listeners.push({ type, options });
+        chart.handler = handler;
+      },
+    },
+    posToVal: (pos) => {
+      const scale = chart.scales.x;
+      return scale.min + (pos / 1000) * (scale.max - scale.min);
+    },
+    setScale: (key, range) => {
+      chart.setScaleCalls.push({ key, min: range.min, max: range.max });
+      chart.scales.x = { min: range.min, max: range.max };
+      if (kind === "analytics") app.onAnalyticsXScale(chart);
+      else app.onHistoryXScale(chart);
+    },
+  };
+  return chart;
+}
+
+// Deterministic debounce: the requery timer is captured rather than waited on,
+// so the test decides when the 180ms window elapses.
+function captureTimers() {
+  const captured = { pending: null };
+  global.setTimeout = (fn, ms) => {
+    captured.pending = { fn, ms };
+    return 1;
+  };
+  global.clearTimeout = () => {
+    captured.pending = null;
+  };
+  return captured;
+}
+"""
+
+
+def test_wheel_and_buttons_reach_the_backend_through_the_drag_zoom_path():
+    # The contract this whole feature stands on: neither input fetches, and
+    # neither debounces. Both move the chart's x scale, and everything after
+    # that -- viewport, Back to live, the one debounced request -- is the path
+    # a drag already used.
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+{FAKE_CHART}
+global.document = {{ hidden: false, getElementById: () => null }};
+const requests = [];
+global.fetch = async (url) => {{
+  requests.push(url);
+  return {{ ok: true, json: async () => ({{ available: false }}) }};
+}};
+const timers = captureTimers();
+
+app.state.demoMode = false;
+app.state.flowView = "analytics";
+app.state.range = "24h";
+app.state.analytics.zoom = null;
+app.state.analytics.liveExtent = {{ start: 0, end: 86400 }};
+const chart = makeChart(app, "analytics", 0, 86400, [[0, 86400]]);
+app.state.analytics.chart = chart;
+
+// 1) One wheel notch forward, pointer at the middle of the plot.
+let prevented = 0;
+app.onZoomWheel("analytics", {{
+  deltaY: -120,
+  clientX: 500,
+  preventDefault: () => {{ prevented += 1; }},
+}});
+const afterWheel = {{
+  prevented,
+  setScaleCalls: chart.setScaleCalls.length,
+  zoom: app.state.analytics.zoom,
+  requestsBeforeTimer: requests.length,
+  debounceMs: timers.pending && timers.pending.ms,
+}};
+
+// 2) The debounce elapses: exactly one request, carrying the zoom window.
+timers.pending.fn();
+await Promise.resolve();
+const afterDebounce = {{ requests: requests.slice() }};
+
+// 3) The + button, from the window the wheel left behind.
+app.onZoomButton("analytics", "in");
+const afterButton = {{
+  setScaleCalls: chart.setScaleCalls.length,
+  zoom: app.state.analytics.zoom,
+  requestsBeforeTimer: requests.length,
+}};
+timers.pending.fn();
+await Promise.resolve();
+
+// 4) The re-query has narrowed the loaded data down to the zoom itself. Zooming
+// back out therefore asks for a window wider than the data on the chart, and
+// that has to re-query too -- otherwise the - button goes dead after the first
+// zoom, because the data it is clamped against is the zoom.
+app.state.analytics.chart = makeChart(app, "analytics", 20000, 30000, [[20000, 30000]]);
+app.onZoomButton("analytics", "out");
+const afterZoomingOutOnce = {{
+  zoom: app.state.analytics.zoom,
+  requestsBeforeTimer: requests.length,
+  pendingTimer: timers.pending !== null,
+}};
+timers.pending.fn();
+await Promise.resolve();
+const wideningRequest = requests[requests.length - 1];
+
+// 5) Zooming out past the live window is Back to live, not a viewport that
+// happens to equal it.
+for (let step = 0; step < 6; step += 1) app.onZoomButton("analytics", "out");
+const afterZoomingOut = {{ zoom: app.state.analytics.zoom, requests: requests.length }};
+
+console.log(JSON.stringify({{
+  afterWheel,
+  afterDebounce,
+  afterButton,
+  afterZoomingOutOnce,
+  wideningRequest,
+  afterZoomingOut,
+}}));
+"""
+    out = run_node(f"(async () => {{{script}}})();")
+
+    # The wheel cancels the scroll, moves the scale once, and records a viewport
+    # through the scale hook -- without fetching anything itself.
+    assert out["afterWheel"]["prevented"] == 1
+    assert out["afterWheel"]["setScaleCalls"] == 1
+    assert out["afterWheel"]["zoom"] == {"start": 16200, "end": 70200}
+    assert out["afterWheel"]["requestsBeforeTimer"] == 0
+    assert out["afterWheel"]["debounceMs"] == 180
+
+    # One request when the shared debounce elapses, carrying the zoom window.
+    assert len(out["afterDebounce"]["requests"]) == 1
+    url = out["afterDebounce"]["requests"][0]
+    assert "/api/analytics/series" in url
+    assert "start=16200" in url
+    assert "end=70200" in url
+    assert "range=" not in url
+
+    # The button behaves identically: one scale move, no fetch of its own.
+    assert out["afterButton"]["setScaleCalls"] == 2
+    assert out["afterButton"]["zoom"] == {"start": 26325, "end": 60075}
+    assert out["afterButton"]["requestsBeforeTimer"] == 1
+
+    # Widening past the loaded data is a zoom too, and it re-queries.
+    assert out["afterZoomingOutOnce"]["zoom"] == {"start": 17000, "end": 33000}
+    assert out["afterZoomingOutOnce"]["requestsBeforeTimer"] == 2
+    assert out["afterZoomingOutOnce"]["pendingTimer"] is True
+    assert "start=17000" in out["wideningRequest"]
+    assert "end=33000" in out["wideningRequest"]
+
+    # Zooming out to the live window returns to live -- the same exit the
+    # Back to live button uses.
+    assert out["afterZoomingOut"]["zoom"] is None
+    assert out["afterZoomingOut"]["requests"] == 4
+
+
+def test_the_wheel_listener_is_non_passive_so_the_page_cannot_scroll_away():
+    # A passive listener cannot cancel the scroll, and a chart that zooms while
+    # the page slides out from under it is worse than no wheel at all.
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+{FAKE_CHART}
+global.document = {{ hidden: false, getElementById: () => null }};
+app.state.analytics.liveExtent = {{ start: 0, end: 86400 }};
+const chart = makeChart(app, "analytics", 0, 86400, [[0, 86400]]);
+app.state.analytics.chart = chart;
+app.bindWheelZoom("analytics", chart);
+
+let prevented = 0;
+chart.handler({{ deltaY: -120, clientX: 250, preventDefault: () => {{ prevented += 1; }} }});
+
+console.log(JSON.stringify({{
+  registered: chart.listeners,
+  prevented,
+  window: chart.scales.x,
+}}));
+"""
+    out = run_node(script)
+    assert out["registered"] == [{"type": "wheel", "options": {"passive": False}}]
+    assert out["prevented"] == 1
+    # Anchored on the pointer at 25% of the plot: 21600 keeps its quarter-way
+    # place in the narrowed window. Centred on the middle it would be
+    # 16200..70200 instead.
+    assert out["window"] == {"min": 8100, "max": 62100}
+
+
+def test_zoom_controls_are_disabled_until_something_is_loaded():
+    # Fail closed: with no chart and no loaded window there is nothing to zoom.
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const nodes = {{
+  analyticsZoomIn: {{ disabled: false }},
+  analyticsZoomOut: {{ disabled: false }},
+  historyZoomIn: {{ disabled: false }},
+  historyZoomOut: {{ disabled: false }},
+  analyticsBackToLive: {{ hidden: false }},
+  historyBackToLive: {{ hidden: false }},
+}};
+global.document = {{ hidden: false, getElementById: (id) => nodes[id] || null }};
+
+app.state.analytics.chart = null;
+app.state.analytics.liveExtent = null;
+app.state.analytics.zoom = null;
+app.state.history.chart = null;
+app.state.history.data = null;
+app.state.history.zoom = null;
+app.renderZoomControls();
+const empty = {{
+  analytics: nodes.analyticsZoomIn.disabled,
+  history: nodes.historyZoomIn.disabled,
+  analyticsBackToLive: nodes.analyticsBackToLive.hidden,
+  historyBackToLive: nodes.historyBackToLive.hidden,
+}};
+
+app.state.analytics.chart = {{ setScale: () => {{}} }};
+app.state.analytics.liveExtent = {{ start: 0, end: 86400 }};
+app.state.history.chart = {{ setScale: () => {{}} }};
+app.state.history.data = {{ time: [0, 86400] }};
+app.renderZoomControls();
+const loaded = {{
+  analytics: nodes.analyticsZoomOut.disabled,
+  history: nodes.historyZoomOut.disabled,
+}};
+
+console.log(JSON.stringify({{ empty, loaded }}));
+"""
+    out = run_node(script)
+    assert out["empty"]["analytics"] is True
+    assert out["empty"]["history"] is True
+    assert out["empty"]["analyticsBackToLive"] is True
+    assert out["empty"]["historyBackToLive"] is True
+    assert out["loaded"]["analytics"] is False
+    assert out["loaded"]["history"] is False
+
+
+def test_history_zoom_pauses_the_refresh_and_never_requeries():
+    # The History panel has no finer profile to ask for: its zoom only rescales
+    # the axis. So it must not fetch, and the 30s refresh -- which resets the
+    # axis -- has to wait while a window is being read.
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+{FAKE_CHART}
+const nodes = {{ historyBackToLive: {{ hidden: true }} }};
+global.document = {{ hidden: false, getElementById: (id) => nodes[id] || null }};
+const requests = [];
+global.fetch = async (url) => {{
+  requests.push(url);
+  return {{ ok: true, json: async () => ({{ time: [], series: {{}} }}) }};
+}};
+const timers = captureTimers();
+
+app.state.demoMode = false;
+app.state.flowView = "aggregated";
+app.state.history.zoom = null;
+app.state.history.data = {{ time: [0, 86400], series: {{}} }};
+const chart = makeChart(app, "history", 0, 86400, [[0, 86400]]);
+app.state.history.chart = chart;
+
+const live = {{
+  refresh: app.historyShouldAutoRefresh(),
+  buttonHidden: nodes.historyBackToLive.hidden,
+}};
+
+app.onZoomWheel("history", {{ deltaY: -120, clientX: 500, preventDefault: () => {{}} }});
+const zoomed = {{
+  zoom: app.state.history.zoom,
+  refresh: app.historyShouldAutoRefresh(),
+  buttonHidden: nodes.historyBackToLive.hidden,
+  url: app.historyFetchUrl(),
+  requests: requests.length,
+  pendingTimer: timers.pending !== null,
+}};
+
+app.historyBackToLive();
+await Promise.resolve();
+const back = {{
+  zoom: app.state.history.zoom,
+  refresh: app.historyShouldAutoRefresh(),
+  buttonHidden: nodes.historyBackToLive.hidden,
+  requests: requests.slice(),
+}};
+
+console.log(JSON.stringify({{ live, zoomed, back }}));
+"""
+    out = run_node(f"(async () => {{{script}}})();")
+    assert out["live"]["refresh"] is True
+    assert out["live"]["buttonHidden"] is True
+
+    # Zoomed: a viewport, a visible way back, no request and no pending one.
+    assert out["zoomed"]["zoom"] == {"start": 16200, "end": 70200}
+    assert out["zoomed"]["refresh"] is False
+    assert out["zoomed"]["buttonHidden"] is False
+    assert out["zoomed"]["requests"] == 0
+    assert out["zoomed"]["pendingTimer"] is False
+    # The History URL never carries a window: there is only one profile here.
+    assert "start=" not in out["zoomed"]["url"]
+    assert "end=" not in out["zoomed"]["url"]
+
+    # Back to live is the reset, and it reloads the live window once.
+    assert out["back"]["zoom"] is None
+    assert out["back"]["refresh"] is True
+    assert out["back"]["buttonHidden"] is True
+    assert len(out["back"]["requests"]) == 1
+    assert "/api/history/series" in out["back"]["requests"][0]
+    assert "start=" not in out["back"]["requests"][0]
+
+
+def test_a_history_refresh_keeps_the_window_the_reader_is_looking_at():
+    # uPlot's setData resets the x scale, and the History panel reloads whenever
+    # its view is entered -- switching to Devices and back is enough. Without
+    # re-applying the viewport the axis snaps to the live window while the zoom
+    # state, and the Back to live button with it, say otherwise.
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const container = {{ clientWidth: 600, innerHTML: "" }};
+const nodes = {{
+  historyChart: container,
+  historyEmpty: {{ hidden: false, textContent: "" }},
+  historyBackToLive: {{ hidden: true }},
+  historyZoomIn: {{ disabled: true }},
+  historyZoomOut: {{ disabled: true }},
+}};
+global.document = {{ hidden: false, getElementById: (id) => nodes[id] || null }};
+
+// A fake uPlot with the one behaviour under test: setData resets the x scale.
+global.uPlot = function (opts, data, host) {{
+  this.data = data;
+  this.scales = {{ x: {{ min: data[0][0], max: data[0][data[0].length - 1] }} }};
+  this.over = {{ addEventListener: () => {{}} }};
+  this.setData = (next) => {{
+    this.data = next;
+    this.scales.x = {{ min: next[0][0], max: next[0][next[0].length - 1] }};
+    if (opts.hooks && opts.hooks.setScale) {{
+      opts.hooks.setScale.forEach((hook) => hook(this, "x"));
+    }}
+  }};
+  this.setScale = (key, range) => {{
+    this.scales.x = {{ min: range.min, max: range.max }};
+    if (opts.hooks && opts.hooks.setScale) {{
+      opts.hooks.setScale.forEach((hook) => hook(this, "x"));
+    }}
+  }};
+  this.destroy = () => {{}};
+}};
+
+app.state.flowView = "aggregated";
+app.state.history.device = "";
+app.state.history.zoom = null;
+app.state.history.data = {{
+  time: [0, 43200, 86400],
+  series: {{ pv: [1, 2, 3], output: [1, 2, 3], battery: [1, 2, 3] }},
+}};
+app.renderHistoryChart();
+
+// The reader zooms into the middle of the day.
+app.onZoomButton("history", "in");
+const zoomed = {{
+  zoom: app.state.history.zoom,
+  window: app.state.history.chart.scales.x,
+  buttonHidden: nodes.historyBackToLive.hidden,
+}};
+
+// Leaving the view and coming back reloads the same window and re-renders
+// through the reuse path.
+app.renderHistoryChart();
+const afterReload = {{
+  zoom: app.state.history.zoom,
+  window: app.state.history.chart.scales.x,
+  buttonHidden: nodes.historyBackToLive.hidden,
+}};
+
+console.log(JSON.stringify({{ zoomed, afterReload }}));
+"""
+    out = run_node(script)
+    assert out["zoomed"]["zoom"] == {"start": 16200, "end": 70200}
+    assert out["zoomed"]["window"] == {"min": 16200, "max": 70200}
+    assert out["zoomed"]["buttonHidden"] is False
+
+    # The viewport, the axis and the button still agree after the reload.
+    assert out["afterReload"]["zoom"] == {"start": 16200, "end": 70200}
+    assert out["afterReload"]["window"] == {"min": 16200, "max": 70200}
+    assert out["afterReload"]["buttonHidden"] is False
