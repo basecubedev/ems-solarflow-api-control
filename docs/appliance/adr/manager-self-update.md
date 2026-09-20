@@ -82,6 +82,12 @@ What replaces it is a deadline, and a deadline is not equivalent:
 - **It is software.** A kernel that will not boot, a filesystem that will not
   mount or an init that never reaches the timer all defeat it, and A/B's boot
   selector would not have been defeated by any of them.
+- **A revert puts back a package that predates this one.** That package's unit
+  resolves the snapshot as a program, and its own postinst and state migration
+  clear the execute bit the snapshot needs, so a deadline armed for a revert to
+  such a manager can still fail to run. The installer restores the bit as it
+  exits, which covers the ordinary case; an agent restart inside the window
+  reopens it. Reverting to a manager that carries the fix is unaffected.
 
 The remaining backstop is a person at a keyboard:
 [../console-recovery.md](../console-recovery.md).
@@ -113,7 +119,8 @@ The remaining backstop is a person at a keyboard:
   old one were two changes, and doing them in that order is what kept a working
   update path at every point. The deletion is
   [single-image-appliance.md](single-image-appliance.md).
-- **None of this has run on a device.** The suite is green and the artefacts are
-  built and inspected; no appliance has installed a manager package over HTTPS.
-  What is proven is recorded in
+- **Almost none of this has run on a device.** The suite is green and the
+  artefacts are built and inspected. One appliance has installed a manager
+  package over HTTPS, and the deadline it armed could not run -- a defect since
+  fixed. What is proven is recorded in
   [../hardware-validation.md](../hardware-validation.md).

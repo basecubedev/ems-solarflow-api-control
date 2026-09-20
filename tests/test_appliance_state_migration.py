@@ -8,9 +8,12 @@ both copies when the two layouts disagree.
 """
 
 import json
+import os
+import stat
 
 import pytest
 
+from appliance import manager_verify
 from appliance.migration import (
     RESULT_ALREADY_DONE,
     RESULT_CONFLICT,
@@ -257,3 +260,31 @@ def test_no_auth_directory_is_created_under_the_web_state(tmp_path):
     assert not (paths.web_state_dir / "auth").exists()
     assert not hasattr(paths, "web_auth_dir")
     assert paths.auth_file == paths.install_root / "config" / "dashboard-auth.json"
+
+
+def test_migration_keeps_the_armed_reverter_executable(tmp_path):
+    """State migration must not disarm the manager's way back.
+
+    ``migrate_state`` normalises every file under agent state to 0600, and it
+    runs on each agent start as root as well as from the postinst. The armed
+    reverter lives there and systemd has to execute it, so a blanket mode
+    silently removes the deadline that is the only way back out of a manager
+    install.
+    """
+
+    paths = appliance_paths(tmp_path)
+    reverter = paths.packages_dir / manager_verify.REVERTER_NAME
+    reverter.parent.mkdir(parents=True, exist_ok=True)
+    reverter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    reverter.chmod(manager_verify.REVERTER_MODE)
+
+    ordinary = paths.packages_dir / "current.deb"
+    ordinary.write_bytes(b"deb")
+    ordinary.chmod(0o644)
+
+    migrate_state(paths)
+
+    # The normalisation itself must keep working.
+    assert stat.S_IMODE(ordinary.stat().st_mode) == 0o600
+    assert stat.S_IMODE(reverter.stat().st_mode) == manager_verify.REVERTER_MODE
+    assert os.access(reverter, os.X_OK)

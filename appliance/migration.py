@@ -14,6 +14,8 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from appliance.manager_verify import REVERTER_MODE, REVERTER_NAME
+
 OWNER_WEB = "web"
 OWNER_AGENT = "agent"
 # The shared password file is read from inside the EMS containers, so it belongs
@@ -121,6 +123,22 @@ def _ids(name, group):
     return uid, gid
 
 
+def _mode_for(target, directory_mode, file_mode):
+    """The mode one path gets, with the one file that must stay runnable.
+
+    Agent state is uniformly root-private, except that systemd executes the
+    reverter the manager arms before an install. A blanket file mode removes
+    its execute bit, and the deadline that is the only way back out of that
+    install then fails with 203/EXEC without ever deciding.
+    """
+
+    if target.is_dir():
+        return directory_mode
+    if target.name == REVERTER_NAME:
+        return REVERTER_MODE
+    return file_mode
+
+
 def _apply_ownership(path, owner, *, mode=None):
     """Set the final owner and mode; missing accounts are not an error."""
 
@@ -147,7 +165,7 @@ def _apply_ownership(path, owner, *, mode=None):
         except OSError:
             pass
         try:
-            target.chmod(directory_mode if target.is_dir() else file_mode)
+            target.chmod(_mode_for(target, directory_mode, file_mode))
         except OSError:
             pass
 

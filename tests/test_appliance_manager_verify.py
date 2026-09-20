@@ -133,7 +133,10 @@ def test_the_unit_names_the_directory_arming_actually_writes_to():
     )
     directory = str(installed_packages_dir())
 
-    assert f"ExecStart={directory}/{manager_verify.REVERTER_NAME} {directory}\n" in unit
+    assert (
+        f"ExecStart=/bin/sh {directory}/{manager_verify.REVERTER_NAME} {directory}\n"
+        in unit
+    )
     assert f"{appliance_paths.DEFAULT_STATE_DIR}/packages/" not in unit, (
         "that is the legacy directory migration.py moves away from"
     )
@@ -436,3 +439,30 @@ def test_the_timer_is_not_enabled_by_the_package():
     postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
 
     assert "ems-appliance-manager-verify.timer" not in postinst
+
+
+def test_the_deadline_does_not_hang_on_the_snapshot_being_executable():
+    """The execute bit is not something this unit may depend on.
+
+    Three separate things normalise the mode of everything under agent state --
+    the postinst, ``migration._apply_ownership`` and, on a revert, an older
+    package that carries no fix at all. Running the snapshot through its
+    interpreter takes the bit out of the load path wherever *this* unit is the
+    one installed.
+
+    It does not rescue a revert: that reinstalls the older unit too, which
+    resolves the snapshot as a program. Only the restore in
+    ``install-manager.sh`` covers that, and the ADR records it as a limit.
+    """
+
+    unit = (PACKAGING / "systemd" / "ems-appliance-manager-verify.service").read_text(
+        encoding="utf-8"
+    )
+    exec_start = next(
+        line for line in unit.splitlines() if line.startswith("ExecStart=")
+    )
+    assert exec_start.startswith("ExecStart=/bin/sh "), exec_start
+
+    # The snapshot is a /bin/sh script, so the interpreter has to be that one.
+    packaged = (PACKAGING / "bin" / "verify-manager.sh").read_text(encoding="utf-8")
+    assert packaged.splitlines()[0] == "#!/bin/sh", packaged.splitlines()[0]

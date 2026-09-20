@@ -413,9 +413,10 @@ root grow, do the services come up) and group 5 (does that hold on each storage
 class).
 
 The one update case this project still owns is the Appliance Manager's own
-package, and it has its own row in the results table below: no appliance has
-fetched and installed one over HTTPS, and the deadline in `manager_verify.py`
-has never expired on a board.
+package, and it has its own rows in the results table below. Both halves have
+now happened on a Pi 3B+: an appliance has fetched and installed one over
+HTTPS, and the deadline in `manager_verify.py` has expired on a board. It did
+not decide — the rows say what was observed.
 
 ### Group 5 — storage classes
 
@@ -605,6 +606,8 @@ This is the current evidence table. The rows above it are history.
 | The built image satisfies the single-slot contract, **rpi3** | **PASS** | `appliance-inspect-rpi-image.sh` on both — run on 2026-08-26 under its pre-rename name and switch, `appliance-inspect-rpi-ab-image.sh --variant single`: **33 pass, 0 fail, 12 NOT RUN, all twelve optional and each with its reason**. MBR with two partitions, `kernel8.img`, 20 device-tree blobs, `enable_uart=1`, the arm64 package installed and every enabled unit's program present |
 | The rescue account is in the flashed image | **PASS** | read out of the `4d3baa2` image's ext4 root: `ems-rescue`, uid 1001, shell `/bin/bash`, in the `sudo` group, and `/etc/shadow` holding exactly the shipped hash. `root` stays `*` |
 | The manager's install and deadline units are in the flashed image | **PASS** | same image: `ems-appliance-manager-verify.service`, its `.timer`, `verify-manager.sh`, `rescue-account.sh` and `rescue-password.hash` are all present, and the timer is **not** enabled — arming is what enables it |
+| A manager package installs over HTTPS on a Pi 3B+ | **PASS** | 2026-09-20 on a live board: `appliance-manager-v0.3.1` arm64 fetched from its GitHub release and installed. The operation log records `verifying_signature`, `fetching_package`, `staging_package`, `arming_deadline` and `starting_install`, and the outcome `installed` |
+| The armed deadline decides on a board | **FAIL** | that same install: armed 18:34:41Z, deadline 18:49:41Z, and `ems-appliance-manager-verify.service` failed every retry with `203/EXEC`. The postinst's agent-state tightening had reset the armed reverter to 0600, so systemd could not execute it; the verdict stayed `pending` and the revert never ran. Fixed in three places, because three reset the mode: the postinst's own tightening, `migration._apply_ownership`, which normalises agent state on every agent start as root as well, and `install-manager.sh`, which restores it on exit because a revert installs an older package that carries no fix at all. The regressions are `test_a_manager_install_leaves_the_armed_reverter_executable`, `test_migration_keeps_the_armed_reverter_executable` and `test_the_installer_restores_on_every_exit_including_a_failed_revert`. **A board has still not been observed completing a verdict** |
 | The single-slot release gates pass end to end, **rpi3** | **INCOMPLETE** | four gates ran in the builder VM on 2026-08-26 at `c8deb3e` and each passed — `source-authority`, `source-bundle`, `build-rpi3` (`RESULT: PASS`) and `image-inspection-rpi3` (33 mandatory pass, 0 fail, 0 mandatory NOT RUN, 12 optional NOT RUN). The run was cut off before it wrote a verdict, so **there is no gate verdict for rpi3** and none may be claimed. The rpi4/rpi5 single-slot gate of 2026-08-24 is unaffected |
 | The built image boots on a Pi 3B+ | NOT RUN | the board is available and the maintainer's live test is planned; nothing has been attempted yet |
 | A Pi 3B+ runs Docker, Admin, EMS and InfluxDB in 1 GB of RAM | NOT RUN | **unmeasured**, and the memory table's "1 GB suffices" was written about other boards |

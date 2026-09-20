@@ -11,6 +11,17 @@ Type=oneshot
 User=root
 # The snapshot the outgoing package left behind, not the copy the package ships
 # under /usr/lib -- that one is replaced by the very install being judged.
-ExecStart=/var/lib/ems-appliance-manager/agent/packages/verify-manager.armed.sh /var/lib/ems-appliance-manager/agent/packages
+#
+# Through /bin/sh, not as a program. Everything under agent state gets its mode
+# normalised by the postinst, by migration._apply_ownership on every agent
+# start, and -- on a revert -- by an older package that carries no fix for
+# either. systemd resolves ExecStart with access(X_OK), which refuses root too
+# when no execute bit is set, and the deadline then dies with 203/EXEC without
+# deciding. The interpreter takes the bit out of the load path for this unit.
+#
+# Not for every deadline: a revert reinstalls the older package's unit, which
+# resolves the snapshot as a program again. Only the restore in
+# install-manager.sh covers that, so it is not redundant with this line.
+ExecStart=/bin/sh /var/lib/ems-appliance-manager/agent/packages/verify-manager.armed.sh /var/lib/ems-appliance-manager/agent/packages
 # A revert unpacks a package; it must not be cut off half way.
 TimeoutStartSec=600

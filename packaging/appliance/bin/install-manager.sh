@@ -19,6 +19,35 @@ REQUEST="$STATE/install-request.json"
 RESULT="$STATE/install-result.json"
 PREVIOUS="$STATE/previous.deb"
 
+# dpkg runs the installed package's postinst, which tightens agent state and
+# leaves the armed reverter unable to run. A revert installs an older retained
+# package, and an older package carries no fix for that, so the restore belongs
+# here in the manager that drives the install and covers whatever dpkg put on.
+# A failure to restore is reported, never fatal: the package is already on, and
+# refusing to record that would lose more than the deadline it costs.
+#
+# On a trap rather than after each dpkg. A revert that itself fails is the one
+# moment the deadline is the last way out, and it leaves by a path no
+# hand-placed call covers; a trap cannot be forgotten by the next branch added
+# here. Restoring on a path that installed nothing is harmless -- the mode is
+# what the arming already chose.
+#
+# Signals as well as EXIT: the unit's TimeoutStartSec makes SIGTERM an ordinary
+# way for this to end, and dash does not run an EXIT trap for one. Each signal
+# handler re-raises after restoring, so systemd still sees how the unit died.
+ARMED_REVERTER="$STATE/verify-manager.armed.sh"
+
+restore_armed_reverter() {
+    [ -f "$ARMED_REVERTER" ] || return 0
+    chmod 0700 "$ARMED_REVERTER" 2>/dev/null \
+        || echo "install-manager: could not restore $ARMED_REVERTER" >&2
+}
+
+trap restore_armed_reverter EXIT
+trap 'restore_armed_reverter; trap - INT;  kill -s INT  $$' INT
+trap 'restore_armed_reverter; trap - TERM; kill -s TERM $$' TERM
+trap 'restore_armed_reverter; trap - HUP;  kill -s HUP  $$' HUP
+
 record() {
     # outcome, detail
     umask 077
