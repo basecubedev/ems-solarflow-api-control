@@ -2206,7 +2206,7 @@ def _labelled(channel, serial, release_tag, contains="v0.8.4"):
     }
 
 
-def _pinned_install(tmp_path, labels, *, readable=True, cached="latest"):
+def _pinned_install(tmp_path, labels, *, readable=True, cached="latest", payload=None):
     """A console whose compose image is ``repository@sha256:...``."""
 
     digest = "sha256:" + "f" * 64
@@ -2229,7 +2229,7 @@ def _pinned_install(tmp_path, labels, *, readable=True, cached="latest"):
     return ReleaseManager(
         data_dir=data,
         project_dir=project,
-        urlopen=_opener(payload=_pinned_payload()),
+        urlopen=_opener(payload=payload or _pinned_payload()),
         docker=_FakeDocker(container=container, images=images),
     )
 
@@ -2340,3 +2340,119 @@ def test_a_build_nothing_can_place_still_says_so(tmp_path):
     result = manager.list_releases()
 
     assert any("cannot be compared" in warning for warning in result["warnings"])
+
+
+# --- the declared release places the build, not the newest tag in the catalogue
+#
+# `latest` and a development build have no version of their own, so the listing
+# infers where they stand. The image already says: every published image carries
+# the release it was built past. Letting the newest catalogue tag outrank that
+# declaration moved the whole installation onto a line it is not on, and every
+# release of its own line -- including one cut *after* it -- became a refused
+# downgrade.
+
+
+def _line_above_and_a_later_patch():
+    """A newer line, plus a patch cut afterwards in the line below it."""
+
+    return [
+        {
+            "tag_name": tag,
+            "name": tag,
+            "published_at": published,
+            "prerelease": False,
+            "draft": False,
+            "zipball_url": f"https://example.test/{tag}.zip",
+        }
+        for tag, published in (
+            ("v0.8.7", "2026-09-17T09:00:00Z"),
+            ("v0.9.0", "2026-09-16T21:00:00Z"),
+            ("v0.8.4", "2026-09-13T00:00:00Z"),
+            ("v0.7.0", "2026-07-07T00:00:00Z"),
+        )
+    ]
+
+
+def test_a_rolling_install_stays_in_the_line_its_image_declares(tmp_path):
+    """A running `latest` built past v0.8.4 keeps the whole 0.8 line reachable.
+
+    Once v0.9.0 exists the inference put this installation in the 0.9 line, so
+    v0.8.7 -- a patch published *after* the running build and newer than
+    everything in it -- was refused as a downgrade, and so was the very release
+    the running image declares.
+    """
+
+    manager = _pinned_install(
+        tmp_path,
+        _labelled("latest", 169, "latest", contains="v0.8.4"),
+        payload=_line_above_and_a_later_patch(),
+    )
+    by_tag = {item["tag"]: item for item in manager.list_releases()["releases"]}
+
+    assert by_tag["v0.9.0"]["upgrade_state"] == "upgrade_available"
+    assert by_tag["v0.9.0"]["selectable"] is True
+    assert by_tag["v0.8.7"]["upgrade_state"] == "upgrade_available"
+    assert by_tag["v0.8.7"]["selectable"] is True
+    assert by_tag["v0.8.4"]["upgrade_state"] == "rollback_available"
+    assert by_tag["v0.8.4"]["selectable"] is True
+    # Leaving the declared line downwards stays refused.
+    assert by_tag["v0.7.0"]["upgrade_state"] == "downgrade_blocked"
+    assert by_tag["v0.7.0"]["selectable"] is False
+
+
+def test_a_development_install_stays_in_the_line_its_image_declares(tmp_path):
+    """A development build declares its release too, and is placed by it."""
+
+    manager = _pinned_install(
+        tmp_path,
+        _labelled(
+            "development", 45, "dev-feat-x-aaaaaaaaaa-1234567-99-1", contains="v0.8.4"
+        ),
+        payload=_line_above_and_a_later_patch(),
+    )
+    by_tag = {item["tag"]: item for item in manager.list_releases()["releases"]}
+
+    assert by_tag["v0.8.7"]["selectable"] is True
+    assert by_tag["v0.8.4"]["selectable"] is True
+    assert by_tag["v0.7.0"]["selectable"] is False
+
+
+def test_an_undeclared_rolling_install_still_falls_back_to_the_newest_tag(tmp_path):
+    """Without a declaration the newest release seen is still the only answer."""
+
+    manager = _pinned_install(
+        tmp_path,
+        {
+            key: value
+            for key, value in _labelled("latest", 169, "latest").items()
+            if key != "de.basecubedev.ems.contains_release"
+        },
+        payload=_line_above_and_a_later_patch(),
+    )
+    by_tag = {item["tag"]: item for item in manager.list_releases()["releases"]}
+
+    assert by_tag["v0.9.0"]["selectable"] is True
+    assert by_tag["v0.8.7"]["upgrade_state"] == "downgrade_blocked"
+    assert by_tag["v0.8.4"]["upgrade_state"] == "downgrade_blocked"
+
+
+def test_a_declaration_below_the_supported_floor_still_places_the_build(tmp_path):
+    """Where a build stands and what it may install are different questions.
+
+    Requiring the declared release to be installable left the one corner the
+    placement fix exists for: a build declaring something older than the
+    supported floor fell back to the newest tag in the catalogue, was placed in
+    a line it is nowhere near, and had every genuine upgrade below that line
+    refused as a downgrade.
+    """
+
+    manager = _pinned_install(
+        tmp_path,
+        _labelled("latest", 169, "latest", contains="v0.5.0"),
+        payload=_line_above_and_a_later_patch(),
+    )
+    by_tag = {item["tag"]: item for item in manager.list_releases()["releases"]}
+
+    assert manager._rolling_baseline() == "v0.5.0"
+    for tag in ("v0.9.0", "v0.8.7", "v0.8.4", "v0.7.0"):
+        assert by_tag[tag]["upgrade_state"] != "downgrade_blocked", tag

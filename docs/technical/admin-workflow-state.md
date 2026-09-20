@@ -490,6 +490,7 @@ the visible stage hides — also while a **resource verification is claimed**:
 | `resources_verified` | present | yes | the import finished; the claim is history |
 | `failed_recoverable` | present | yes | the attempt is over and a retry clears the claim |
 | any non-terminal stage, **expired** | any | yes *by the durable store* — but see the worker rule below | expiry closes every forward path; without this the record would wedge the store permanently |
+| `admin_reconnect_pending`, replacement **proven gone** | any | yes | the stage refuses because a sidecar may be mid-rewrite, and nothing in this process can see one; a sidecar proven absent whose Admin is proven not to be the target removes that reason without waiting for expiry |
 
 `SystemAlignmentService.status()` reports `cancel_available: false` for that
 window, so the console does not offer an action the store will refuse, and
@@ -1362,8 +1363,11 @@ Evaluated, deliberately **not** implemented:
   durable boundaries are each classified against B1 and concurrent callers in one
   process are serialized by the dispatch claim (§6.4e), but the sequence is still
   not crash-atomic: an Admin killed after `admin_reconnect_pending` is durable and
-  before the sidecar starts leaves an operation that nothing relaunches until the
-  transition expires (§5.5). The dispatch claim does not narrow this window — it
+  before the sidecar starts leaves an operation that nothing relaunches. Nothing
+  *automatically*, that is: the operation is escapable the moment the sidecar is
+  proven absent and the running Admin is proven not to be the target, so an
+  operator can abandon it and start again without waiting out the deadline. The
+  dispatch claim does not narrow this window — it
   is in-process state (P6) and holds nothing across a restart, deliberately.
   Closing it needs a durable "launcher dispatched"
   marker written before the launch and a restart-time reconciler that may

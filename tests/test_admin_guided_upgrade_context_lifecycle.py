@@ -13,6 +13,7 @@ See ``docs/technical/admin-workflow-state.md``.
 """
 
 import json
+import threading
 import time
 from types import SimpleNamespace
 
@@ -24,6 +25,8 @@ from admin.guided_upgrade import (
     guided_upgrade_request_fingerprint,
 )
 from admin.guided_upgrade_context import GuidedUpgradeContextStore
+from admin.server import continue_guided_upgrade, resume_pending_guided_upgrade
+from admin.system_alignment import SystemAlignmentError
 from tests.test_admin_server import _control_export_manager, _request, _serve
 from tests.test_admin_setup_cancellation_ownership import (
     _CancelRecordingAlignment,
@@ -344,3 +347,275 @@ def test_a_recoverable_failure_keeps_the_context(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# --- the replaced Admin continues its own upgrade --------------------------
+#
+# After the Admin container is replaced, the only thing that ever continued the
+# upgrade was a browser: an authenticated page load posted the resume. With the
+# console closed -- or simply not reloaded after the reconnect poller gave up --
+# the durable transition sat at admin_reconnect_pending until its deadline, and
+# the operator came back to an upgrade that could only be abandoned, with the
+# new Admin installed and the old EMS still running.
+
+
+class _ReconnectedUpgradeAlignment(_ExecutableUpgradeAlignment):
+    """Waiting at admin_reconnect_pending, as a replaced Admin finds it."""
+
+    def __init__(self, *, mode="guided_upgrade"):
+        super().__init__()
+        self.stage = "admin_reconnect_pending"
+        self.mode = mode
+        self.active = True
+
+    def resume(self, *, operation_id, **kwargs):
+        del kwargs
+        self.stage = "admin_aligned"
+        return {"operation_id": operation_id, "stage": self.stage}
+
+    def verify_resources(self, *, operation_id):
+        self.stage = "resources_verified"
+        return {"operation_id": operation_id, "stage": self.stage}
+
+    def transition_build(self, *, operation_id):
+        del operation_id
+        return self._system_build(TAG)
+
+
+def _reconnected(tmp_path, alignment, executor):
+    state_dir = tmp_path / "state"
+    _seed_context(state_dir, "op-1")
+    return _serve(
+        release_manager=_release_manager(tmp_path),
+        system_alignment=alignment,
+        guided_upgrade=executor,
+        guided_upgrade_context=GuidedUpgradeContextStore(state_dir),
+    )
+
+
+def test_a_replaced_admin_continues_its_upgrade_without_a_browser(tmp_path):
+    alignment = _ReconnectedUpgradeAlignment()
+    executor = _StubUpgradeExecutor(
+        {
+            "ok": True,
+            "status": "success",
+            "diagnostics": {"available": True, "summary": {"status": "ok"}},
+        }
+    )
+    srv, _base = _reconnected(tmp_path, alignment, executor)
+    try:
+        outcome = resume_pending_guided_upgrade(srv)
+        assert outcome is not None
+        assert _wait_for_stage(alignment, {"completed"}), alignment.stage
+    finally:
+        srv.shutdown()
+
+    assert executor.run_calls == 1
+
+
+def test_a_setup_transition_is_never_continued_as_an_upgrade(tmp_path):
+    alignment = _ReconnectedUpgradeAlignment(mode="fresh_install")
+    executor = _StubUpgradeExecutor({"ok": True, "status": "success"})
+    srv, _base = _reconnected(tmp_path, alignment, executor)
+    try:
+        assert resume_pending_guided_upgrade(srv) is None
+    finally:
+        srv.shutdown()
+
+    assert alignment.stage == "admin_reconnect_pending"
+    assert executor.run_calls == 0
+
+
+class _ObservedLock:
+    """A lock that reports when a caller had to wait behind another."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.waited = threading.Event()
+
+    def __enter__(self):
+        if not self._lock.acquire(blocking=False):
+            self.waited.set()
+            self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc_info):
+        self._lock.release()
+        return False
+
+
+class _ImportingUpgradeAlignment(_ReconnectedUpgradeAlignment):
+    """Held inside the resource import until the test lets it finish.
+
+    A second caller that reaches the import while it runs gets exactly what
+    the production service answers: the claim is taken, so it is refused.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.importing = False
+
+    def verify_resources(self, *, operation_id):
+        if self.importing:
+            raise SystemAlignmentError(
+                "resource_verification_in_progress",
+                "embedded resources are already being verified",
+            )
+        self.importing = True
+        self.entered.set()
+        assert self.release.wait(10), "the import was never released"
+        self.importing = False
+        return super().verify_resources(operation_id=operation_id)
+
+
+def test_a_second_continuation_waits_for_the_first_and_attaches_to_its_job(tmp_path):
+    """The replaced Admin and the browser both continue; only one may drive.
+
+    The startup thread and the browser's reconnect resume arrive in the same
+    moment, and the steps before the job -- reconnect, resource import, the
+    EMS-operation edge -- are durable and not idempotent against a caller in
+    the middle of them. The loser used to get the import's refusal, which the
+    console rendered as a failed upgrade while the upgrade ran on without it.
+    Interleaving pinned: the second caller arrives while the first is inside
+    the import, waits for it, and attaches to the job it started.
+    """
+
+    alignment = _ImportingUpgradeAlignment()
+    executor = _StubUpgradeExecutor(
+        {
+            "ok": True,
+            "status": "success",
+            "diagnostics": {"available": True, "summary": {"status": "ok"}},
+        }
+    )
+    srv, _base = _reconnected(tmp_path, alignment, executor)
+    lock = _ObservedLock()
+    srv.guided_upgrade_continuation_lock = lock
+    outcomes = {}
+
+    def continue_as(name):
+        try:
+            outcomes[name] = continue_guided_upgrade(srv, "op-1")
+        except Exception as exc:  # the interleaving under test may raise
+            outcomes[name] = exc
+
+    try:
+        first = threading.Thread(target=continue_as, args=("first",))
+        first.start()
+        assert alignment.entered.wait(5), "the first continuation never imported"
+        second = threading.Thread(target=continue_as, args=("second",))
+        second.start()
+        assert lock.waited.wait(5), "the second continuation did not wait for the first"
+        alignment.release.set()
+        first.join(10)
+        second.join(10)
+        assert _wait_for_stage(alignment, {"completed"}), alignment.stage
+    finally:
+        alignment.release.set()
+        srv.shutdown()
+
+    assert outcomes["first"]["outcome"] == "started"
+    assert outcomes["second"]["outcome"] == "reattached"
+    assert outcomes["second"]["job"] is outcomes["first"]["job"]
+    assert executor.run_calls == 1
+
+
+def test_the_startup_thread_and_a_request_take_the_same_continuation_lock(tmp_path):
+    """One driver at a time, across the two objects production continues from.
+
+    ``__main__`` hands the startup continuation the ``AdminRuntime``; a request
+    hands it the ``AdminServer``, and with HTTPS enabled there are two of those
+    over one runtime. A lock that lives on only one of them serializes nothing,
+    and the test that pinned the rule injected it onto a single object, so the
+    split never showed. Interleaving pinned: the runtime caller is inside the
+    resource import when the server caller arrives, which must wait rather than
+    reach the import and take its refusal.
+    """
+
+    alignment = _ImportingUpgradeAlignment()
+    executor = _StubUpgradeExecutor(
+        {
+            "ok": True,
+            "status": "success",
+            "diagnostics": {"available": True, "summary": {"status": "ok"}},
+        }
+    )
+    srv, _base = _reconnected(tmp_path, alignment, executor)
+    outcomes = {}
+
+    def continue_as(name, entry):
+        try:
+            outcomes[name] = continue_guided_upgrade(entry, "op-1")
+        except Exception as exc:  # the interleaving under test may raise
+            outcomes[name] = exc
+
+    try:
+        startup = threading.Thread(target=continue_as, args=("startup", srv.runtime))
+        startup.start()
+        assert alignment.entered.wait(5), "the startup continuation never imported"
+        request = threading.Thread(target=continue_as, args=("request", srv))
+        request.start()
+        # Parked on the lock, rather than through to the import and its refusal.
+        request.join(0.5)
+        assert request.is_alive(), (
+            "the request continuation did not wait for the startup one: "
+            f"{outcomes.get('request')!r}"
+        )
+        alignment.release.set()
+        startup.join(10)
+        request.join(10)
+        assert _wait_for_stage(alignment, {"completed"}), alignment.stage
+    finally:
+        alignment.release.set()
+        srv.shutdown()
+
+    assert outcomes["startup"]["outcome"] == "started"
+    assert outcomes["request"]["outcome"] == "reattached"
+    assert outcomes["request"]["job"] is outcomes["startup"]["job"]
+    assert executor.run_calls == 1
+
+
+class _ExpiredUpgradeAlignment(_ReconnectedUpgradeAlignment):
+    """Past its deadline: every forward path refuses, only abandon is left."""
+
+    def status(self, *, operation_active=None):
+        result = super().status(operation_active=operation_active)
+        result["transition"]["expired"] = True
+        return result
+
+    def resume(self, *, operation_id, **kwargs):
+        raise AssertionError("a record past its deadline must not be resumed")
+
+
+def test_an_expired_transition_is_left_for_the_operator_on_startup(tmp_path):
+    """Nothing to continue: every forward path refuses an expired record, so
+    the startup thread would only spend Docker calls to learn that. It says
+    so and leaves the escape to the operator."""
+
+    alignment = _ExpiredUpgradeAlignment()
+    executor = _StubUpgradeExecutor({"ok": True, "status": "success"})
+    srv, _base = _reconnected(tmp_path, alignment, executor)
+    try:
+        outcome = resume_pending_guided_upgrade(srv)
+    finally:
+        srv.shutdown()
+
+    assert outcome is not None and "expired" in outcome, outcome
+    assert "could not be continued" not in outcome, outcome
+    assert alignment.stage == "admin_reconnect_pending"
+    assert executor.run_calls == 0
+
+
+def test_nothing_is_continued_when_no_transition_is_pending(tmp_path):
+    alignment = _ExecutableUpgradeAlignment()
+    alignment.active = False
+    executor = _StubUpgradeExecutor({"ok": True, "status": "success"})
+    srv, _base = _reconnected(tmp_path, alignment, executor)
+    try:
+        assert resume_pending_guided_upgrade(srv) is None
+    finally:
+        srv.shutdown()
+
+    assert executor.run_calls == 0

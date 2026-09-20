@@ -33,7 +33,6 @@ import json
 import os
 import threading
 from datetime import datetime, timezone
-from enum import Enum
 from pathlib import Path
 
 from admin.admin_update import (
@@ -44,6 +43,7 @@ from admin.admin_update import (
     TRANSITION_MODE_ALIGN_EXISTING,
     TRANSITION_MODE_GUIDED_UPGRADE,
     ADMIN_UPDATER_CONTAINER_PREFIX,
+    ReplacementActivity,
     admin_update_sidecar_container_name,
 )
 from admin.guided_setup_workflow import (
@@ -243,14 +243,6 @@ class AdminWorkflowLifecycleError(Exception):
         if self.lifecycle is not None:
             payload["lifecycle"] = self.lifecycle
         return payload
-
-
-class ReplacementActivity(str, Enum):
-    """Whether an Admin replacement sidecar is running, gone, or unprovable."""
-
-    ACTIVE = "active"
-    INACTIVE = "inactive"
-    UNKNOWN = "unknown"
 
 
 _LIVE_CONTAINER_STATES = frozenset({"created", "restarting", "running"})

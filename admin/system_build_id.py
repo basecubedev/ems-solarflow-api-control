@@ -29,8 +29,11 @@ _STABLE_OR_RC = re.compile(
     r"[a-z0-9][a-z0-9.-]*$"
 )
 _LATEST = re.compile(r"^latest-[a-z0-9][a-z0-9.-]*$")
+# The first group is the line a development build belongs to: ``dev-<branch>``,
+# with the branch as the publish workflow spells it. Two builds of one branch
+# share it; two branches built past the same release do not.
 _DEVELOPMENT = re.compile(
-    rf"^dev-(?:[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?)-"
+    rf"^(dev-(?:[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?))-"
     rf"{_HEX_REVISION}-{_POSITIVE_INTEGER}-{_POSITIVE_INTEGER}$"
 )
 _LOCAL = re.compile(rf"^local-{_HEX_REVISION}(?:-dirty)?$")
@@ -105,6 +108,19 @@ def parse_system_build_id(value: str) -> ParsedSystemBuildId:
         if pattern.fullmatch(value):
             return ParsedSystemBuildId(value=value, kind=kind)
     raise ValueError("system build id has an unsupported format")
+
+
+def development_line(value) -> str | None:
+    """The ``dev-<branch>`` a development build id or tag belongs to.
+
+    ``None`` for anything that is not an immutable development identifier:
+    a release, ``latest``, a floating ``dev-<branch>`` alias, or nothing.
+    """
+
+    if not isinstance(value, str):
+        return None
+    match = _DEVELOPMENT.fullmatch(value)
+    return match.group(1) if match else None
 
 
 def validate_system_build_id(value: str) -> str:

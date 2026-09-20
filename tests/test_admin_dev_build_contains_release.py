@@ -269,24 +269,61 @@ def test_two_development_builds_are_still_ordered_by_their_run_numbers():
     Deciding these two by the release they declare would call every move
     between them an upgrade: they usually name the same release, and the one
     that differs is the count of commits on top, which the label cannot show.
+    So the serial keeps saying which of the two is newer -- it only stops
+    deciding, on its own, whether the backwards move is allowed.
     """
 
     newer = _dev("v0.8.4", serial=50)
+    # Yesterday's build of the same branch: the tag names the branch, because
+    # the declared release and the counter are shared with every other branch.
     older = ImageIdentity(
         digest="sha256:older-dev",
+        version_label="dev-feat-x-aaaaaaaaaa-1234566-98-1",
+        release_tag="dev-feat-x-aaaaaaaaaa-1234566-98-1",
         channel="development",
         build_serial=45,
         contains_release="v0.8.4",
     )
 
     back = _move(newer, older)
-    assert back.state == OLDER_THAN_RUNNING_BUILD
+    assert back.state == ROLLBACK_AVAILABLE
     assert back.basis == "build_serial"
-    assert back.blocked
+    assert not back.blocked
 
     forward = _move(older, newer)
     assert forward.state == UPGRADE_AVAILABLE
     assert forward.basis == "build_serial"
+
+
+def test_an_older_development_build_outside_the_line_stays_refused():
+    """The serial says "older"; the declarations say it is another line too."""
+
+    running = _dev("v0.8.4", serial=50)
+    older_line = ImageIdentity(
+        digest="sha256:older-line",
+        channel="development",
+        build_serial=45,
+        contains_release="v0.7.0",
+    )
+
+    back = _move(running, older_line)
+    assert back.state == OLDER_THAN_RUNNING_BUILD
+    assert back.blocked
+
+
+def test_an_older_development_build_that_declares_nothing_stays_refused():
+    """Without a declaration on both sides nothing places the two in one line."""
+
+    running = _dev("v0.8.4", serial=50)
+    undeclared = ImageIdentity(
+        digest="sha256:undeclared",
+        channel="development",
+        build_serial=45,
+    )
+
+    back = _move(running, undeclared)
+    assert back.state == OLDER_THAN_RUNNING_BUILD
+    assert back.blocked
 
 
 def test_a_rolling_install_rolls_back_inside_the_line_it_declares():

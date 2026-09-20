@@ -19,7 +19,11 @@ from admin.https import (
     ensure_admin_ssl_context,
 )
 from admin.releases import default_admin_data_dir
-from admin.server import create_admin_runtime, create_server
+from admin.server import (
+    create_admin_runtime,
+    create_server,
+    resume_pending_guided_upgrade,
+)
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8090
@@ -169,6 +173,18 @@ def main(argv=None):
     # mDNS is shared runtime state; start it exactly once for both listeners.
     mdns_status = runtime.mdns_provider.start()
     print(mdns_status["message"])
+
+    # An Admin installed by a Guided Upgrade finishes it. The durable
+    # transition already carries the operator's confirmation, and an open
+    # browser is not part of that contract: waiting for one left a completed
+    # Admin replacement sitting until its deadline. Off the serving threads,
+    # because continuing pulls an image.
+    def _continue_pending_upgrade():
+        outcome = resume_pending_guided_upgrade(runtime)
+        if outcome is not None:
+            print(outcome)
+
+    threading.Thread(target=_continue_pending_upgrade, daemon=True).start()
 
     try:
         threading.Event().wait()

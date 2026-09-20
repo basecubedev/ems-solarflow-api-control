@@ -116,6 +116,18 @@ class ReplacementDispatchCoordinator:
 
         return self._owned(operation_id, new_attempt=False)
 
+    def in_flight(self, operation_id) -> bool:
+        """Whether a caller in this process owns ``operation_id``'s attempt now.
+
+        The durable stage is written before the sidecar exists, so for the
+        length of the launch nothing outside this process can tell a
+        replacement being started from one that is gone. This process can.
+        """
+
+        with self._guard:
+            entry = self._entries.get(operation_id)
+            return entry is not None and entry.lock.locked()
+
     def owned_retry(self, operation_id):
         """Own an attempt that no settled one may answer for.
 

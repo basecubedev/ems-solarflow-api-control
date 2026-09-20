@@ -17,6 +17,8 @@ together for callers that just want an ``ImageIdentity``.
 
 from dataclasses import dataclass, field
 
+from admin.system_build_id import development_line
+
 
 LABEL_VERSION = "org.opencontainers.image.version"
 LABEL_REVISION = "org.opencontainers.image.revision"
@@ -237,6 +239,42 @@ class UpgradeAssessment:
         return self.state in BLOCKING_UPGRADE_STATES
 
 
+def release_line(version):
+    """The ``(major, minor)`` a comparable version belongs to, or ``None``.
+
+    Inside one line the two builds read the same config schema and the same
+    database, so undoing a patch is a move an operator may make; the one-way
+    migrations sit between lines. One definition, for the listing's downgrade
+    guard and for every branch of the policy below.
+    """
+
+    return version[:2] if version else None
+
+
+def same_release_line(a, b) -> bool:
+    line_a = release_line(a)
+    return line_a is not None and line_a == release_line(b)
+
+
+def _development_line_of(identity):
+    return development_line(identity.release_tag) or development_line(
+        identity.build_id
+    )
+
+
+def _same_development_line(current, target) -> bool:
+    """Whether two development builds come from the same branch.
+
+    Two branches built past the same release declare the same line and are
+    numbered by the same counter, so neither signal tells them apart; only the
+    branch in the immutable tag does. A build that cannot name its branch is
+    not on any line.
+    """
+
+    line = _development_line_of(current)
+    return line is not None and line == _development_line_of(target)
+
+
 def assess_upgrade(
     current,
     target,
@@ -289,10 +327,18 @@ def assess_upgrade(
        target is in, only that it is older -- and "older" was refusing v0.8.4
        to a ``latest`` built from v0.8.4 plus a handful of commits.
     5. Both serials are known and count runs of the same workflow -> a higher
-       target serial is an upgrade, otherwise
-       :data:`OLDER_THAN_RUNNING_BUILD`. This is what orders two development
+       target serial is an upgrade. This is what orders two development
        builds against each other, two rolling builds, and a running build that
-       declares no release against anything.
+       declares no release against anything. A lower serial is
+       :data:`ROLLBACK_AVAILABLE` where both sides state the same
+       ``major.minor`` -- going back to yesterday's experimental build is the
+       same move as undoing a patch, and the serial says which is older, not
+       whether the two share a line. For development builds the line is the
+       branch as well: two branches built past the same release declare the
+       same ``major.minor`` and count on the same counter, and only the
+       immutable tag tells them apart, so a lower serial is a rollback only
+       inside one branch, and a build that cannot name its branch is on no
+       line. Anything else lower stays :data:`OLDER_THAN_RUNNING_BUILD`.
     6. Nothing can prove an upgrade -> :data:`IDENTITY_UNKNOWN`, unless
        ``allow_unverified`` is set (the ``ADMIN_ALLOW_LEGACY_UNVERIFIED_UPGRADES``
        test override), in which case the move is allowed as
@@ -319,7 +365,7 @@ def assess_upgrade(
             )
         if target_version == current_version:
             return UpgradeAssessment(ALREADY_CURRENT, "semver")
-        if target_version[:2] == current_version[:2]:
+        if same_release_line(target_version, current_version):
             return UpgradeAssessment(ROLLBACK_AVAILABLE, "semver")
         return UpgradeAssessment(DOWNGRADE_BLOCKED, "semver")
 
@@ -357,7 +403,7 @@ def assess_upgrade(
             if target.channel == CHANNEL_DEVELOPMENT:
                 return UpgradeAssessment(UPGRADE_AVAILABLE, "contains_release")
             return UpgradeAssessment(ROLLBACK_AVAILABLE, "contains_release")
-        if target_states[:2] == running_states[:2]:
+        if same_release_line(target_states, running_states):
             return UpgradeAssessment(ROLLBACK_AVAILABLE, "contains_release")
         return UpgradeAssessment(DOWNGRADE_BLOCKED, "contains_release")
 
@@ -366,6 +412,11 @@ def assess_upgrade(
             return UpgradeAssessment(UPGRADE_AVAILABLE, "build_serial")
         if target.build_serial == current.build_serial:
             return UpgradeAssessment(ALREADY_CURRENT, "build_serial")
+        same_line = same_release_line(target_states, running_states)
+        if same_line and CHANNEL_DEVELOPMENT in (current.channel, target.channel):
+            same_line = _same_development_line(current, target)
+        if same_line:
+            return UpgradeAssessment(ROLLBACK_AVAILABLE, "build_serial")
         return UpgradeAssessment(OLDER_THAN_RUNNING_BUILD, "build_serial")
 
     if allow_unverified:

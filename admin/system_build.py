@@ -537,6 +537,14 @@ class SystemBuildResolver:
             _mismatch("admin and ems image channels differ")
         if admin.version_label != ems.version_label:
             _mismatch("admin and ems image version labels differ")
+        # The resolved build reports one of each and takes both from the Admin
+        # image, while the move is judged against the running EMS build and it
+        # is the EMS image that gets deployed. One image may answer for the
+        # other only where they are known to say the same thing.
+        if admin.contains_release != ems.contains_release:
+            _mismatch("admin and ems image declared releases differ")
+        if admin.build_serial != ems.build_serial:
+            _mismatch("admin and ems image build serials differ")
         if admin.version_label != tag:
             _mismatch("image version label does not match the requested build tag")
         if channel != CHANNEL_UNKNOWN and admin.channel != channel:
@@ -779,11 +787,13 @@ class UpgradeDirection:
 
 
 def decide_upgrade_direction(running_ems, target: SystemBuild) -> UpgradeDirection:
-    """Assess moving the running EMS build to ``target`` using identity only.
+    """Assess moving the installed EMS build to ``target`` using identity only.
 
-    ``running_ems`` is the running EMS :class:`ImageIdentity` (all-``None`` when
-    it cannot be inspected). Only the resolved :class:`SystemBuild` identity and
-    the running EMS identity settle the verdict; nothing is pulled or re-listed.
+    ``running_ems`` is the installed EMS :class:`ImageIdentity` -- the image
+    the EMS container was created from, whether it is running or stopped --
+    and all-``None`` when it cannot be inspected. Only the resolved
+    :class:`SystemBuild` identity and that identity settle the verdict;
+    nothing is pulled or re-listed.
 
     The target identity carries the resolved build serial. Without it the
     serial fallback in :func:`assess_upgrade` cannot fire, so every move from a
