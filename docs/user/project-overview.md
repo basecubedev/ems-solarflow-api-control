@@ -185,7 +185,7 @@ Optional InfluxDB integration adds long-term analysis with:
 - extended time ranges
 - custom date selection
 - device filters
-- zooming
+- zooming with the mouse wheel, the +/- buttons or a drag
 - grid, battery, PV and device views
 - comparison overlays for battery level, grid power and EMS targets
 
