@@ -172,3 +172,38 @@ def test_no_other_account_can_be_named_for_key_deployment(tmp_path):
         load_config(paths)
 
     assert refused.value.code == "ssh_key_accounts_unsupported"
+
+
+def test_enabling_writes_the_flag_and_the_policy_in_one_move(tmp_path, monkeypatch):
+    applied = {}
+
+    def recording_apply(paths, config, *, activation=None):
+        applied["policy"] = render_sshd_policy(paths, config)
+        return {"applied": True}
+
+    monkeypatch.setattr("appliance.host_config.apply_host_config", recording_apply)
+
+    paths = paths_at(tmp_path)
+    shell_access.apply(paths, ApplianceConfig(), value=True, activation=None)
+
+    assert shell_access.enabled(paths) is True
+    assert "    PubkeyAuthentication yes\n" in block_for(applied["policy"], shell_access.ACCOUNT), (
+        "the transaction must render the policy the new flag asks for, not the old one"
+    )
+
+
+def test_a_rolled_back_policy_takes_the_flag_back_with_it(tmp_path, monkeypatch):
+    """A flag left on after the transaction put the old files back would report
+    a reachable account while sshd still refuses it -- state and daemon
+    disagreeing is what that transaction exists to prevent."""
+
+    def refusing_apply(paths, config, *, activation=None):
+        raise RuntimeError("sshd refused the candidate policy")
+
+    monkeypatch.setattr("appliance.host_config.apply_host_config", refusing_apply)
+
+    paths = paths_at(tmp_path)
+    with pytest.raises(RuntimeError):
+        shell_access.apply(paths, ApplianceConfig(), value=True, activation=None)
+
+    assert shell_access.enabled(paths) is False

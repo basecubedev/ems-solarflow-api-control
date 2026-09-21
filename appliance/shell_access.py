@@ -86,8 +86,33 @@ def set_enabled(paths, value: bool) -> bool:
     return bool(value)
 
 
+def apply(paths, config, *, value, activation):
+    """Move the flag and the sshd policy together, or move neither.
+
+    The policy is rendered from the flag, so a flag that survived a rolled-back
+    transaction would leave the recorded state and the running daemon
+    disagreeing -- the exact drift the host-configuration transaction exists to
+    refuse. Both the console operation and the CLI verb come through here so
+    there is one way the two halves can move.
+
+    Imported inside the call because host_config reads this module to render
+    the block it is about to write.
+    """
+
+    from appliance.host_config import apply_host_config
+
+    previous = enabled(paths)
+    set_enabled(paths, value)
+    try:
+        return apply_host_config(paths, config, activation=activation)
+    except Exception:
+        set_enabled(paths, previous)
+        raise
+
+
 __all__ = [
     "ACCOUNT",
+    "apply",
     "SHELL_PATH",
     "STATE_NAME",
     "STATE_SCHEMA_VERSION",

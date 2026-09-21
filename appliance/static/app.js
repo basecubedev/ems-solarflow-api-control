@@ -496,6 +496,7 @@
     "ssh.key_add": "Adding a public key",
     "ssh.key_remove": "Removing a public key",
     "ssh.revoke_all": "Revoking every public key",
+    "ssh.shell_access": "Changing root-capable shell access",
     "support.archive": "Creating a support archive"
   };
 

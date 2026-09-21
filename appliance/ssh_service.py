@@ -9,6 +9,7 @@ enables the service, nothing else.
 import time
 from dataclasses import dataclass
 
+from appliance import shell_access
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
 from appliance.ssh_policy import parse_sshd_config
 from appliance.sshkeys import AuthorizedKeysStore, validate_public_key
@@ -19,6 +20,7 @@ TYPE_SSH_SERVICE = "ssh.service"
 TYPE_SSH_KEY_ADD = "ssh.key_add"
 TYPE_SSH_KEY_REMOVE = "ssh.key_remove"
 TYPE_SSH_REVOKE_ALL = "ssh.revoke_all"
+TYPE_SSH_SHELL_ACCESS = "ssh.shell_access"
 
 RECOMMENDED_DEFAULTS = {
     "permitrootlogin": "no",
@@ -177,6 +179,28 @@ class SshService:
             "note": "Password authentication stays disabled; only key-based logins are enabled.",
         }
 
+    def plan_shell_access(self, operation, enabled):
+        """Enable or disable the root-capable shell account.
+
+        Separate from ``plan_service``: that one decides whether sshd runs at
+        all, this one decides whether one account may authenticate. A key
+        already deployed on it stays refused until this is on.
+        """
+
+        values = {"enabled": bool(enabled)}
+        operation.requested_target.update(values)
+        self.operations.update_target(operation.operation_id, values)
+        return {
+            "type": TYPE_SSH_SHELL_ACCESS,
+            "account": shell_access.ACCOUNT,
+            "enabled": bool(enabled),
+            "currently_enabled": shell_access.enabled(self.paths),
+            "note": (
+                "This account reaches root through sudo. Enabling it admits any key "
+                "already deployed on it; it stays key-only and never accepts a password."
+            ),
+        }
+
     def plan_key_add(self, operation, *, account, public_key):
         store = self.keystore(account)
         try:
@@ -235,6 +259,8 @@ class SshService:
             return self._execute_key_remove(operation)
         if operation.type == TYPE_SSH_REVOKE_ALL:
             return self._execute_revoke_all(operation)
+        if operation.type == TYPE_SSH_SHELL_ACCESS:
+            return self._execute_shell_access(operation)
         raise SshServiceError("unknown_operation_type", f"{operation.type} is not executable")
 
     def _execute_service(self, operation):
@@ -250,6 +276,30 @@ class SshService:
             )
             raise SshServiceError("ssh_service_failed", "the SSH service could not be changed")
         payload = {"enabled": enabled, "service": self.systemd.unit_state(UNIT_SSH)}
+        self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
+        return payload
+
+    def _execute_shell_access(self, operation):
+        enabled = bool(operation.requested_target.get("enabled"))
+        self._advance(operation, "enabling_shell_access" if enabled else "disabling_shell_access")
+        from appliance.host_config import HostConfigError, live_activation
+
+        try:
+            shell_access.apply(
+                self.paths,
+                self.config,
+                value=enabled,
+                activation=live_activation(runner=self.runner),
+            )
+        except HostConfigError as exc:
+            self.operations.finish(
+                operation.operation_id,
+                STATE_FAILED_TERMINAL,
+                stage="shell_access_failed",
+                error={"code": exc.code, "message": exc.message},
+            )
+            raise SshServiceError(exc.code, exc.message)
+        payload = {"account": shell_access.ACCOUNT, "enabled": shell_access.enabled(self.paths)}
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
 
