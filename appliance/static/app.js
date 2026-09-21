@@ -496,6 +496,7 @@
     "ssh.key_add": "Adding a public key",
     "ssh.key_remove": "Removing a public key",
     "ssh.revoke_all": "Revoking every public key",
+    "ssh.shell_access": "Changing root-capable shell access",
     "support.archive": "Creating a support archive"
   };
 
@@ -2155,7 +2156,8 @@
           })
         ])
       ], "ssh-stage-service"),
-      actionCard("Add public key", "Paste an OpenSSH public key", [renderKeyForm(ssh)], "ssh-stage-add")
+      actionCard("Add public key", "Paste an OpenSSH public key", [renderKeyForm(ssh)], "ssh-stage-add"),
+      renderShellAccessCard(ssh)
     ]));
 
     (ssh.accounts || []).forEach(function (account) {
@@ -2282,6 +2284,49 @@
       expert() ? fact("Shell", rescue.shell) : null,
       el("p", { class: "control-stage-subtitle", text: verdict.hint })
     ], "rescue-account");
+  }
+
+  /* Two gates, and the operator has to see both: an enabled account with no key
+     admits nobody, and a deployed key on a disabled account opens nothing. This
+     account reaches root, so the card says so rather than leaving it to a doc. */
+  function renderShellAccessCard(ssh) {
+    var state = (ssh || {}).shell_access || {};
+    var on = state.enabled === true;
+    var body = [
+      el("p", { class: "control-stage-subtitle", "data-test": "shell-access-warning",
+        text: "This account has a shell and reaches root through sudo. A key deployed on it "
+          + "is root on this appliance. It is key-only and never accepts a password." }),
+      fact("Account", state.account || "\u2014", { mono: true }),
+      fact("Access", on ? "enabled" : "disabled"),
+      fact("Key deployment", state.key_deployment_allowed === false
+        ? "refused by appliance.conf" : "allowed from this console"),
+      el("div", { class: "control-stage-actions" }, [
+        el("button", {
+          type: "button", class: "primary-button compact", "data-test": "shell-access-enable",
+          text: "Enable shell access", disabled: on,
+          onclick: function () {
+            planOperation({
+              endpoint: "/api/ssh/shell-access/enable",
+              title: "Enable the root-capable shell account",
+              confirmLabel: "Enable",
+              danger: true
+            });
+          }
+        }),
+        el("button", {
+          type: "button", class: "ghost-button compact", "data-test": "shell-access-disable",
+          text: "Disable shell access", disabled: !on,
+          onclick: function () {
+            planOperation({
+              endpoint: "/api/ssh/shell-access/disable",
+              title: "Disable the root-capable shell account"
+            });
+          }
+        })
+      ])
+    ];
+    return actionCard("Root-capable shell access", "Key-only SSH shell, off until enabled",
+                      body, "ssh-stage-shell-access");
   }
 
   function renderKeyForm(ssh) {

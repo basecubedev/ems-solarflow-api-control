@@ -388,6 +388,49 @@ def _host_paths_drifted(paths, config):
     return any(recorded.get(key) != value for key, value in environment_values(paths, config).items())
 
 
+def command_shell_access(args):
+    """Report, enable or disable the root-capable SSH shell account.
+
+    Enabling is two facts, not one: this flag, and a key. The console deploys
+    keys; this verb moves the flag, and either half alone is still no login.
+    """
+
+    from appliance import shell_access
+    from appliance.commands import CommandRunner
+    from appliance.host_config import HostConfigError, live_activation
+
+    paths = resolve_paths()
+    config = load_config(paths)
+    if args.action == "status":
+        _print(
+            {
+                "account": shell_access.ACCOUNT,
+                "enabled": shell_access.enabled(paths),
+                "key_deployment_allowed": shell_access.ACCOUNT in config.ssh_key_accounts,
+                "sudoers": shell_access.SUDOERS_PATH,
+            },
+            args.json,
+        )
+        return EXIT_OK
+
+    if os.geteuid() != 0:
+        print("error: changing shell access needs root", file=sys.stderr)
+        return EXIT_ERROR
+
+    wanted = args.action == "enable"
+    runner = CommandRunner()
+    try:
+        shell_access.apply(
+            paths, config, value=wanted, activation=live_activation(runner=runner)
+        )
+    except HostConfigError as exc:
+        _print({"enabled": shell_access.enabled(paths), "error": exc.code,
+                "message": exc.message, **exc.rollback}, args.json)
+        return EXIT_ERROR
+    _print({"account": shell_access.ACCOUNT, "enabled": wanted}, args.json)
+    return EXIT_OK
+
+
 def command_host_config(args):
     """Show — or regenerate — the derived host-path files."""
 
@@ -753,6 +796,20 @@ def build_parser():
     )
     host_config.add_argument("--quiet", action="store_true", help="print only what changed")
     host_config.set_defaults(handler=command_host_config)
+
+    shell_access_parser = subparsers.add_parser(
+        "shell-access",
+        parents=[shared],
+        help="report, enable or disable the root-capable SSH shell account",
+    )
+    shell_access_parser.add_argument(
+        "action",
+        nargs="?",
+        default="status",
+        choices=("status", "enable", "disable"),
+        help="enabling admits a deployed key; without a key it is still no login",
+    )
+    shell_access_parser.set_defaults(handler=command_shell_access)
 
     backup_access = subparsers.add_parser(
         "backup-access",

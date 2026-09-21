@@ -72,6 +72,7 @@ PLAN_TYPES = {
     "network.hostname.plan": network.TYPE_HOSTNAME,
     "system.timezone.plan": timezone_config.TYPE_TIMEZONE,
     "ssh.plan_service": ssh_service.TYPE_SSH_SERVICE,
+    "ssh.plan_shell_access": ssh_service.TYPE_SSH_SHELL_ACCESS,
     "ssh.plan_key_add": ssh_service.TYPE_SSH_KEY_ADD,
     "ssh.plan_key_remove": ssh_service.TYPE_SSH_KEY_REMOVE,
     "ssh.plan_revoke_all": ssh_service.TYPE_SSH_REVOKE_ALL,
@@ -349,6 +350,8 @@ class AgentHandlers:
             return services.timezone.plan(operation, args["timezone"])
         if name == "ssh.plan_service":
             return services.ssh.plan_service(operation, args["enabled"])
+        if name == "ssh.plan_shell_access":
+            return services.ssh.plan_shell_access(operation, args["enabled"])
         if name == "ssh.plan_key_add":
             return services.ssh.plan_key_add(
                 operation, account=args["account"], public_key=args["public_key"]

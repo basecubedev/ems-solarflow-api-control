@@ -111,6 +111,7 @@ is refused as `invalid_request` before any handler runs.
 | `packages.py` | OS update state, installation and package-manager recovery |
 | `network.py` | Network overview, WLAN with automatic revert, hostname |
 | `ssh_service.py`, `sshkeys.py`, `backup_access.py` | SSH service, public keys, read-only backup access |
+| `shell_access.py` | Whether the root-capable `ems-shell` SSH account is enabled; a key alone is never a login |
 | `status.py`, `support_archive.py` | Fault-isolated status collection, bounded logs, support archive |
 | `agent.py`, `agent_client.py`, `services.py` | The privileged agent, its client and the service graph |
 | `auth.py`, `web.py`, `web_audit.py`, `static/` | Authentication, audit reporting to the agent, and the unprivileged web interface |

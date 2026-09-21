@@ -30,6 +30,8 @@ from appliance.paths import (
 # The Match block is generated from the same constant the effective policy is
 # judged against, so a change to one is a change to both.
 from appliance.rescue_account import ACCOUNT as RESCUE_ACCOUNT
+from appliance import shell_access
+from appliance.shell_access import ACCOUNT as SHELL_ACCOUNT
 from appliance.ssh_policy import FORCED_COMMAND
 
 HOST_PATHS_NAME = "host-paths.env"
@@ -91,8 +93,41 @@ def render_path_unit(paths):
     return HEADER + "[Path]\n" + "PathChanged=\n" + f"PathChanged={paths.install_root}\n"
 
 
-def render_sshd_policy(paths, config):
-    """The Match blocks for the two accounts this package creates.
+def render_shell_access_block(enabled):
+    """The shell account's directives, in whichever of its two states it is in.
+
+    Disabled means every authentication method refused, not merely no password:
+    an account whose only gate is whether somebody put a key in it has one gate,
+    and the console can put a key in it.
+
+    Enabled it is a real shell -- a TTY and no forced command -- but not a way
+    into the network behind the box, so forwarding and tunnelling stay closed.
+    """
+
+    if not enabled:
+        return (
+            f"Match User {SHELL_ACCOUNT}\n"
+            "    PubkeyAuthentication no\n"
+            "    PasswordAuthentication no\n"
+            "    KbdInteractiveAuthentication no\n"
+        )
+    return (
+        f"Match User {SHELL_ACCOUNT}\n"
+        "    PubkeyAuthentication yes\n"
+        "    PasswordAuthentication no\n"
+        "    KbdInteractiveAuthentication no\n"
+        "    PermitTTY yes\n"
+        "    AllowTcpForwarding no\n"
+        "    AllowAgentForwarding no\n"
+        "    X11Forwarding no\n"
+        "    PermitTunnel no\n"
+        "    GatewayPorts no\n"
+        "    PermitOpen none\n"
+    )
+
+
+def render_sshd_policy(paths, config, *, shell_access_enabled=None):
+    """The Match blocks for the three accounts this package creates.
 
     The backup account is confined to the configured export root. The rescue
     account is made unusable over SSH by password, which is what
@@ -100,11 +135,18 @@ def render_sshd_policy(paths, config):
     published in this repository, and it is meant for a keyboard or a serial
     console, neither of which sshd is involved in.
 
-    Scoped to those two accounts rather than set globally on purpose. This
-    package can be installed on a Raspberry Pi somebody already administers over
-    a password login, and a global policy here would lock them out of their own
+    The shell account is the one that can open a session and reach root, and it
+    is refused every authentication method until an operator enables it; the
+    flag is read from root-owned agent state when a caller does not name one.
+
+    Scoped to those accounts rather than set globally on purpose. This package
+    can be installed on a Raspberry Pi somebody already administers over a
+    password login, and a global policy here would lock them out of their own
     machine.
     """
+
+    if shell_access_enabled is None:
+        shell_access_enabled = shell_access.enabled(paths)
 
     return (
         HEADER
@@ -127,6 +169,7 @@ def render_sshd_policy(paths, config):
         + "    GatewayPorts no\n"
         + "    PermitOpen none\n"
         + f"    ForceCommand {FORCED_COMMAND}\n"
+        + render_shell_access_block(shell_access_enabled)
     )
 
 

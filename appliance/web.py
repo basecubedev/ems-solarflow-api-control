@@ -715,6 +715,12 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             "/api/manager/plan-revert": ("manager.plan_revert", lambda _: {}),
             "/api/ssh/enable": ("ssh.plan_service", lambda _: {"enabled": True}),
             "/api/ssh/disable": ("ssh.plan_service", lambda _: {"enabled": False}),
+            "/api/ssh/shell-access/enable": (
+                "ssh.plan_shell_access", lambda _: {"enabled": True},
+            ),
+            "/api/ssh/shell-access/disable": (
+                "ssh.plan_shell_access", lambda _: {"enabled": False},
+            ),
             "/api/ssh/keys": ("ssh.plan_key_add", self._key_fields),
             "/api/ssh/keys/remove-plan": ("ssh.plan_key_remove", self._fingerprint_fields),
             "/api/ssh/keys/revoke": ("ssh.plan_revoke_all", self._account_fields),

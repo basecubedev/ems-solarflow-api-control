@@ -267,6 +267,13 @@ MUTATING_OPERATIONS = (
         summary="Plan enabling or disabling SSH",
     ),
     _spec(
+        "ssh.plan_shell_access",
+        mutating=True,
+        takes_lock=True,
+        fields=(Field("enabled", KIND_BOOL),),
+        summary="Plan enabling or disabling the root-capable shell account",
+    ),
+    _spec(
         "ssh.plan_key_add",
         mutating=True,
         takes_lock=True,

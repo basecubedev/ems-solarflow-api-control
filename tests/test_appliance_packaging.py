@@ -462,7 +462,7 @@ def test_the_shipped_configuration_loads(tmp_path):
     assert config.web_user == "ems-appliance-web"
     assert config.socket_group == "ems-appliance"
     assert config.supported_architectures == ("arm64",)
-    assert config.ssh_key_accounts == ("ems-backup",)
+    assert config.ssh_key_accounts == ("ems-backup", "ems-shell")
     assert config.automatic_security_updates is False
 
 
@@ -919,3 +919,63 @@ def test_the_shipped_keyring_carries_the_key_that_actually_signs():
     assert signing_subkeys, (
         "the keyring carries no signing subkey; a release signed by one could not be verified"
     )
+
+
+SHELL_ACCOUNT_SCRIPT = PACKAGING / "bin" / "shell-account.sh"
+
+
+def run_shell_account(tmp_path, *, sudoers, account_exists=True):
+    """Run the packaged script with a scripted ``getent`` and its own sudoers path.
+
+    Executed rather than read: what broke a package install was the shell's own
+    behaviour under ``set -e``, which no assertion about the file's text would
+    have caught.
+    """
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    getent = fake_bin / "getent"
+    getent.write_text(f"#!/bin/sh\nexit {0 if account_exists else 2}\n", encoding="utf-8")
+    getent.chmod(0o755)
+
+    environment = dict(os.environ)
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    environment["EMS_APPLIANCE_SHELL_SUDOERS"] = str(sudoers)
+    return subprocess.run(
+        ["sh", str(SHELL_ACCOUNT_SCRIPT)],
+        capture_output=True, text=True, env=environment, timeout=60, check=False,
+    )
+
+
+def test_a_host_without_sudo_still_installs_the_package(tmp_path):
+    """The postinst calls this, and ``set -e`` made a missing /etc/sudoers.d take
+    the whole install down with it. An appliance that refuses to install because
+    one account cannot reach root is worse than one where it cannot: that one
+    has no console at all."""
+
+    result = run_shell_account(tmp_path, sudoers=tmp_path / "absent" / "ems-shell")
+
+    assert result.returncode == 0, result.stderr
+    assert "will not be able to reach root" in result.stdout, result.stdout
+
+
+def test_the_sudoers_drop_in_is_root_only_and_says_nopasswd(tmp_path):
+    """The account has no password at all, so a prompt would make it useless."""
+
+    sudoers_dir = tmp_path / "sudoers.d"
+    sudoers_dir.mkdir()
+    target = sudoers_dir / "ems-shell"
+
+    result = run_shell_account(tmp_path, sudoers=target)
+
+    assert result.returncode == 0, result.stderr
+    assert target.read_text(encoding="utf-8").strip() == "ems-shell ALL=(ALL:ALL) NOPASSWD: ALL"
+    assert target.stat().st_mode & 0o777 == 0o440
+
+
+def test_the_postinst_prepares_the_shell_account_and_the_build_ships_it():
+    postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+
+    assert "shell-account.sh" in postinst
+    assert "shell-account.sh" in build
