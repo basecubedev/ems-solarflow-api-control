@@ -78,6 +78,25 @@ The drop-in is validated with `visudo -cf` before it is installed, because a
 sudoers file that does not parse takes `sudo` away from every account on the
 host — including the rescue account someone would use to repair it.
 
+## Turning it on
+
+From the Appliance Manager console, **SSH → Root-capable shell access**: one
+button for the flag, and the ordinary *Add public key* form for the key, with
+`ems-shell` as the account. The card states what the account costs before the
+button is pressed.
+
+From a root shell already on the box:
+
+```sh
+ems-appliance shell-access status
+ems-appliance shell-access enable
+ems-appliance shell-access disable
+```
+
+Both go through the same transaction: the flag and the sshd policy move
+together, or neither moves. If sshd refuses the candidate policy, the files and
+the flag are put back and the failure says which half of the rollback succeeded.
+
 ## Lifecycle
 
 The account is created once by the package's `shell-account.sh`, which owns it

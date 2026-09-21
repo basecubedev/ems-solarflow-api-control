@@ -23,6 +23,8 @@ import json
 
 import pytest
 
+from pathlib import Path
+
 from appliance import shell_access
 from appliance.config import ApplianceConfig, ConfigError, load_config
 from appliance.host_config import render_sshd_policy
@@ -207,3 +209,42 @@ def test_a_rolled_back_policy_takes_the_flag_back_with_it(tmp_path, monkeypatch)
         shell_access.apply(paths, ApplianceConfig(), value=True, activation=None)
 
     assert shell_access.enabled(paths) is False
+
+
+def test_the_operation_is_allowlisted_and_holds_the_lock():
+    """The agent executes names, not requests. An operation that is not in the
+    allowlist cannot be reached at all, and one that changes a login policy
+    without the lock could interleave with the host-config transaction."""
+
+    from appliance.protocol import OPERATIONS
+
+    spec = OPERATIONS["ssh.plan_shell_access"]
+
+    assert spec.mutating is True
+    assert spec.takes_lock is True
+    assert [field.name for field in spec.fields] == ["enabled"]
+
+
+def test_the_console_card_posts_only_to_routes_the_web_service_maps():
+    """A button wired to a path nothing serves is a control that looks available
+    and does nothing; the pair is asserted rather than assumed."""
+
+    root = Path(__file__).resolve().parents[1]
+    app_js = (root / "appliance" / "static" / "app.js").read_text(encoding="utf-8")
+    web_py = (root / "appliance" / "web.py").read_text(encoding="utf-8")
+
+    for endpoint in ("/api/ssh/shell-access/enable", "/api/ssh/shell-access/disable"):
+        assert endpoint in app_js, f"{endpoint} is not reachable from the console"
+        assert f'"{endpoint}"' in web_py, f"{endpoint} is not served"
+
+
+def test_the_console_says_what_the_account_costs_before_it_is_enabled():
+    """The operator is deciding whether the console becomes a root login. That
+    belongs on the card, not only in a document they may never open."""
+
+    root = Path(__file__).resolve().parents[1]
+    app_js = (root / "appliance" / "static" / "app.js").read_text(encoding="utf-8")
+    card = app_js.split("function renderShellAccessCard(", 1)[1].split("\n  }\n", 1)[0]
+
+    assert "reaches root" in card
+    assert "never accepts a password" in card

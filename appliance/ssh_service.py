@@ -163,6 +163,14 @@ class SshService:
             "accounts": accounts,
             "hardening": hardening,
             "password_authentication": effective.get("passwordauthentication", "unknown"),
+            # Two independent gates, reported separately because an operator
+            # reading one of them has been told half the answer.
+            "shell_access": {
+                "account": shell_access.ACCOUNT,
+                "enabled": shell_access.enabled(self.paths) if self.paths else False,
+                "key_deployment_allowed": shell_access.ACCOUNT
+                in tuple(self.config.ssh_key_accounts),
+            },
         }
 
     # --- planning --------------------------------------------------------
