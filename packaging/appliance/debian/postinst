@@ -42,6 +42,26 @@ live_system() {
     return 0
 }
 
+# The agent tree is root-private, with one exception: the reverter the manager
+# arms just before an install is executed by systemd, and the tightening below
+# would leave it mode 0600. systemd then fails it with 203/EXEC, so the
+# deadline that is the only way back out of that install never decides.
+# Restoring the bit here also repairs an appliance an earlier install broke.
+ARMED_REVERTER_NAME=verify-manager.armed.sh
+
+harden_agent_state() {
+    for private in "$STATE_DIR/agent" "$LOG_DIR/agent" "$LOG_DIR/audit"; do
+        chown -R root:root "$private" || fail "cannot re-own $private"
+        chmod 0700 "$private"
+        find "$private" -mindepth 1 -type d -exec chmod 0700 {} +
+        find "$private" -mindepth 1 -type f -exec chmod 0600 {} +
+    done
+    armed=$STATE_DIR/agent/packages/$ARMED_REVERTER_NAME
+    if [ -f "$armed" ]; then
+        chmod 0700 "$armed" || fail "cannot restore $armed"
+    fi
+}
+
 case "$1" in
     configure)
         # The web service runs unprivileged and reaches the agent socket only
@@ -114,12 +134,7 @@ case "$1" in
 
         # An installation that predates the private-agent layout still has
         # group-readable agent state; the shared group is for the socket only.
-        for private in "$STATE_DIR/agent" "$LOG_DIR/agent" "$LOG_DIR/audit"; do
-            chown -R root:root "$private" || fail "cannot re-own $private"
-            chmod 0700 "$private"
-            find "$private" -mindepth 1 -type d -exec chmod 0700 {} +
-            find "$private" -mindepth 1 -type f -exec chmod 0600 {} +
-        done
+        harden_agent_state
 
         # Move any pre-existing shared-layout state into the web/agent split
         # before the services start against the new paths. A conflict keeps

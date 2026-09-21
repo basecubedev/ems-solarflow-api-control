@@ -187,8 +187,9 @@ Docker. It is not part of the EMS control loop and must not import from `ems/`.
 - `persistent_state.RETIRED_SCHEMAS` may be added to only by removing a state
   format, never by adding one. Dropping an axis makes the next package
   uninstallable on every appliance that recorded it.
-- Not confirmed on physical hardware — no image has booted on a board, and no
-  appliance has installed a manager package over HTTPS.
+- Barely confirmed on physical hardware — no image has booted on a board. One
+  appliance has installed a manager package over HTTPS, and the deadline it
+  armed failed to decide; that defect is fixed.
   `docs/appliance/hardware-validation.md` is the authority on what has and has
   not been proven; never upgrade a claim there without the evidence it names.
 

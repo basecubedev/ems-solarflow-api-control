@@ -60,10 +60,11 @@ The Appliance Manager is the software this console *is*. It is updated on its
 own, from **System Updates → Appliance Manager**, and nowhere else — `apt` does
 not offer it, because it is not in any package archive.
 
-> Like the rest of the appliance, this has never run on hardware. No appliance
-> has fetched and installed a manager package over a real network, and the
-> deadline described below has never expired on a board. It is tested in full
-> offline; that is not the same claim. See
+> Like the rest of the appliance, this has barely run on hardware. One
+> appliance has now fetched and installed a manager package over a real
+> network, and the deadline described below expired on that board without
+> deciding -- a defect since fixed. The rest is tested in full offline; that is
+> not the same claim. See
 > [what "not confirmed" means](index.md#what-not-confirmed-means).
 
 Nothing here happens on a schedule. There is no automatic update, no nightly

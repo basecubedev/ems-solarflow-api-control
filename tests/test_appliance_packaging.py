@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from appliance import manager_verify
+from appliance import paths as appliance_paths
 from appliance.config import load_allowed_images, load_config
 from appliance.paths import AppliancePaths
 from appliance.version import SUPPORTED_ARCHITECTURES, SUPPORTED_PI_MODELS
@@ -213,6 +215,118 @@ def test_the_postinst_tightens_a_previously_group_readable_agent_tree():
     postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
     assert "chown -R root:root" in postinst
     assert "chmod 0700" in postinst
+
+
+def _permission_hardening_block():
+    """The shipped hardening function, lifted out of the real postinst.
+
+    Extracted rather than restated: the test has to run the same lines the
+    package runs, and a renamed or restructured function has to fail here
+    loudly instead of passing against a stale copy.
+    """
+
+    postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
+    match = re.search(
+        r"^ARMED_REVERTER_NAME=.*?^harden_agent_state\(\) \{.*?^\}$",
+        postinst,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert match, "the postinst no longer defines harden_agent_state()"
+    return match.group(0)
+
+
+def _run_permission_hardening(tmp_path, state_dir, log_dir):
+    """Run the extracted hardening function against a fake tree, unprivileged."""
+
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    # chown to root needs privilege this test does not have, and the execute
+    # bit is what is under test; ownership is not.
+    chown = stub_bin / "chown"
+    chown.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    chown.chmod(0o755)
+
+    script = "\n".join(
+        [
+            "set -e",
+            f'STATE_DIR="{state_dir}"',
+            f'LOG_DIR="{log_dir}"',
+            'fail() { echo "$1" >&2; exit 1; }',
+            _permission_hardening_block(),
+            "harden_agent_state",
+        ]
+    )
+    env = dict(os.environ, PATH=f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
+    subprocess.run(["sh", "-c", script], check=True, env=env)
+
+
+def test_a_manager_install_leaves_the_armed_reverter_executable(tmp_path):
+    """The install must not disarm the reverter armed moments before it.
+
+    ``manager_verify.arm`` snapshots the outgoing package's reverter and
+    systemd executes it when the deadline expires. A copy without an execute
+    bit fails with 203/EXEC, so the deadline never decides and the only way
+    back out of a manager install is gone.
+    """
+
+    state_dir = tmp_path / "state"
+    log_dir = tmp_path / "log"
+    reverter = state_dir / "agent" / "packages" / manager_verify.REVERTER_NAME
+    reverter.parent.mkdir(parents=True)
+    ordinary = state_dir / "agent" / "operations" / "operations.json"
+    ordinary.parent.mkdir(parents=True)
+    (log_dir / "agent").mkdir(parents=True)
+    (log_dir / "audit").mkdir(parents=True)
+
+    reverter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    reverter.chmod(manager_verify.REVERTER_MODE)
+    ordinary.write_text("{}\n", encoding="utf-8")
+    ordinary.chmod(0o644)
+
+    _run_permission_hardening(tmp_path, state_dir, log_dir)
+
+    # The tightening itself must keep working.
+    assert stat.S_IMODE(ordinary.stat().st_mode) == 0o600
+    assert stat.S_IMODE(reverter.stat().st_mode) == manager_verify.REVERTER_MODE
+
+
+def installed_packages_dir():
+    """Where ``arm()`` puts the snapshot on an appliance the package installed."""
+
+    return appliance_paths.AppliancePaths(
+        install_root=Path(appliance_paths.DEFAULT_INSTALL_ROOT),
+        config_dir=Path(appliance_paths.DEFAULT_CONFIG_DIR),
+        state_dir=Path(appliance_paths.DEFAULT_STATE_DIR),
+        log_dir=Path(appliance_paths.DEFAULT_LOG_DIR),
+        runtime_dir=Path(appliance_paths.DEFAULT_RUNTIME_DIR),
+    ).packages_dir
+
+
+def test_the_postinst_restores_in_the_directory_arming_writes_to():
+    """The shell spells the directory out, and a spelled-out path drifts.
+
+    ``packages_dir`` has moved once already. If it moves again and this literal
+    does not, the restore silently stops matching anything and the 203/EXEC
+    defect returns with the suite green.
+    """
+
+    postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
+    expected = installed_packages_dir() / manager_verify.REVERTER_NAME
+    relative = expected.relative_to(appliance_paths.DEFAULT_STATE_DIR)
+    assert f'$STATE_DIR/{relative.parent}/$ARMED_REVERTER_NAME' in postinst, postinst
+    assert f"{appliance_paths.DEFAULT_STATE_DIR}/packages/" not in postinst, (
+        "that is the legacy directory migration.py moves away from"
+    )
+
+
+def test_the_postinst_names_the_reverter_the_manager_arms():
+    """Shell cannot import the constant, so the duplicated name is held to it.
+
+    The mode is not restated here: the test above proves it by behaviour.
+    """
+
+    postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
+    assert manager_verify.REVERTER_NAME in postinst
 
 
 # --- smoke-test drivers ----------------------------------------------------

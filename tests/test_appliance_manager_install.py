@@ -20,11 +20,16 @@ install it started. The verdict arrives in a file.
 """
 
 import json
+import os
+import re
+import stat
+import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
-from appliance import manager_install, manager_releases, manager_retention, persistent_state
+from appliance import manager_install, manager_releases, manager_retention, manager_verify, persistent_state
 from appliance import paths as appliance_paths
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -427,3 +432,139 @@ def test_the_staging_copy_is_never_named_from_the_record():
     for line in body.splitlines():
         if "Path(" in line or "packages_dir" in line:
             assert "build_id" not in line, line.strip()
+
+
+INSTALLER = Path(__file__).resolve().parents[1] / "packaging" / "appliance" / "bin" / "install-manager.sh"
+
+
+def _restore_function():
+    """The shipped restore, lifted out of the real installer script."""
+
+    match = re.search(
+        r"^ARMED_REVERTER=.*?^restore_armed_reverter\(\) \{.*?^\}$",
+        INSTALLER.read_text(encoding="utf-8"),
+        re.DOTALL | re.MULTILINE,
+    )
+    assert match, "install-manager.sh no longer defines restore_armed_reverter()"
+    return match.group(0)
+
+
+def _trap_lines():
+    """The shipped trap wiring, lifted out of the real installer script."""
+
+    lines = [
+        line
+        for line in INSTALLER.read_text(encoding="utf-8").splitlines()
+        if line.startswith("trap ")
+    ]
+    assert lines, "install-manager.sh no longer wires restore_armed_reverter to a trap"
+    return "\n".join(lines)
+
+
+def test_the_installer_rearms_the_reverter_whatever_dpkg_put_on(tmp_path):
+    """A revert installs an older package, and an older postinst has no fix.
+
+    The deadline that a revert arms has to be runnable afterwards, so the
+    manager driving the install restores the bit itself rather than trusting
+    the package it just put on to have left it alone.
+    """
+
+    state = tmp_path / "packages"
+    state.mkdir()
+    reverter = state / manager_verify.REVERTER_NAME
+    reverter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    reverter.chmod(0o600)  # what an unpatched postinst leaves behind
+
+    script = "\n".join(
+        ["set -eu", f'STATE="{state}"', _restore_function(), "restore_armed_reverter"]
+    )
+    subprocess.run(["sh", "-c", script], check=True, timeout=60)
+
+    assert stat.S_IMODE(reverter.stat().st_mode) == manager_verify.REVERTER_MODE
+    assert os.access(reverter, os.X_OK)
+
+
+def test_the_installer_restores_on_every_exit_including_a_failed_revert(tmp_path):
+    """A revert that fails is exactly when the deadline is the last way out.
+
+    That path leaves by ``fail``, which no call placed after a dpkg reaches, so
+    the restore hangs off EXIT. Proven by running the real wiring and leaving
+    through the failing path rather than by counting call sites.
+    """
+
+    state = tmp_path / "packages"
+    state.mkdir()
+    reverter = state / manager_verify.REVERTER_NAME
+    reverter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    reverter.chmod(0o600)
+
+    text = INSTALLER.read_text(encoding="utf-8")
+    assert "trap restore_armed_reverter EXIT" in text, text
+
+    script = "\n".join(
+        [
+            "set -eu",
+            f'STATE="{state}"',
+            _restore_function(),
+            "trap restore_armed_reverter EXIT",
+            # stand in for `fail revert_failed`: a non-zero exit taken without
+            # ever reaching a call site placed after a dpkg.
+            "exit 1",
+        ]
+    )
+    result = subprocess.run(["sh", "-c", script], timeout=60)
+    assert result.returncode == 1
+
+    assert stat.S_IMODE(reverter.stat().st_mode) == manager_verify.REVERTER_MODE
+    assert os.access(reverter, os.X_OK)
+
+
+def test_the_installer_restores_when_systemd_times_the_unit_out(tmp_path):
+    """The install unit has a 900 s TimeoutStartSec, so SIGTERM is a real exit.
+
+    dash does not run an EXIT trap on a signal, and the revert path has already
+    put an older package's postinst through the agent tree by then. Without a
+    signal trap the deadline armed for that revert cannot run at all.
+    """
+
+    state = tmp_path / "packages"
+    state.mkdir()
+    reverter = state / manager_verify.REVERTER_NAME
+    reverter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    reverter.chmod(0o600)
+
+    started = tmp_path / "started"
+    script = "\n".join(
+        [
+            "set -eu",
+            f'STATE="{state}"',
+            _restore_function(),
+            _trap_lines(),
+            f': > "{started}"',
+            # Short sleeps, not one long one: a shell defers a signal trap
+            # until the foreground command returns, so `sleep 30` would make
+            # this test measure its own patience instead of the restore.
+            "while :; do sleep 0.05; done",
+        ]
+    )
+    process = subprocess.Popen(["sh", "-c", script])
+    try:
+        deadline = time.monotonic() + 10
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert started.exists(), "the probe never started"
+        process.terminate()
+        process.wait(timeout=30)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+
+    assert stat.S_IMODE(reverter.stat().st_mode) == manager_verify.REVERTER_MODE
+    assert os.access(reverter, os.X_OK)
+
+
+def test_the_installer_names_the_reverter_the_manager_arms():
+    """Shell cannot import the constant, so the duplicated name is held to it."""
+
+    assert manager_verify.REVERTER_NAME in INSTALLER.read_text(encoding="utf-8")
