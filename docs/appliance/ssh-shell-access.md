@@ -35,10 +35,17 @@ default:
 Deploying a key does not set the flag, and setting the flag does not deploy a
 key.
 
-A third control is available and is not on by default: removing `ems-shell` from
-`ssh_key_accounts` in `/etc/ems-appliance-manager/appliance.conf` refuses
-console-deployed shell keys outright. An appliance administered only from a
-keyboard should do that.
+A third control is available and is not on by default: setting
+`shell_key_deployment = no` in `/etc/ems-appliance-manager/appliance.conf`
+refuses console-deployed shell keys outright. An appliance administered only
+from a keyboard should do that.
+
+It is its own key rather than a name left out of `ssh_key_accounts`, because
+that file is a dpkg conffile an upgrade never rewrites. Every appliance
+installed before this account existed carries a list naming only `ems-backup` —
+written when there was nothing else to name. Reading that as a refusal left the
+console unable to offer the account a key on exactly the boxes the feature was
+built for. An absent decision is not a decision.
 
 ## What the policy allows
 

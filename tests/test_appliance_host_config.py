@@ -351,10 +351,19 @@ def test_an_ssh_key_account_outside_the_package_is_refused(tmp_path):
 
 
 def test_the_packaged_ssh_key_account_is_accepted(tmp_path):
+    """The shell account joins the list unless the refusal was actually made.
+
+    This used to assert the list came back exactly as written. It cannot: the
+    file is a conffile an upgrade never rewrites, so every appliance older than
+    the shell account names only the backup one, and honouring that literally
+    refused a key on the account the operator had just enabled. The refusal is
+    ``shell_key_deployment = no`` -- see test_appliance_shell_access.py.
+    """
+
     paths = layout(tmp_path)
     write_conf(paths, "ssh_key_accounts = ems-backup\n")
 
-    assert load_config(paths).ssh_key_accounts == ("ems-backup",)
+    assert load_config(paths).ssh_key_accounts == ("ems-backup", "ems-shell")
 
 
 # --- live activation ---------------------------------------------------------
