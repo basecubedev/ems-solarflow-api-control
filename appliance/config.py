@@ -282,10 +282,17 @@ def _ssh_key_accounts(values):
     refuses this account every authentication method until the separate enable
     flag in :mod:`appliance.shell_access` is set, and that flag is not reachable
     by deploying a key.
+
+    Refusing that is a key of its own rather than a name missing from the list,
+    because this file is a dpkg conffile: an appliance that was installed before
+    the shell account existed keeps its own copy for ever, and a list written
+    when only one account existed would read as a deliberate refusal on every
+    upgraded box while meaning nothing of the sort. An absent decision is not a
+    decision. ``shell_key_deployment = no`` is one.
     """
 
     supported = (DEFAULT_BACKUP_USER, SHELL_ACCOUNT)
-    configured = _as_tuple(values, "ssh_key_accounts", supported)
+    configured = _as_tuple(values, "ssh_key_accounts", (DEFAULT_BACKUP_USER,))
     unsupported = [name for name in configured if name not in supported]
     if unsupported:
         raise ConfigError(
@@ -293,7 +300,12 @@ def _ssh_key_accounts(values):
             f"ssh_key_accounts must name only {' and '.join(supported)}; "
             f"{', '.join(unsupported)} is not an account this package manages keys for",
         )
-    return tuple(configured)
+    accounts = tuple(dict.fromkeys(configured))
+    if _as_bool(values, "shell_key_deployment", True):
+        if SHELL_ACCOUNT not in accounts:
+            accounts += (SHELL_ACCOUNT,)
+        return accounts
+    return tuple(name for name in accounts if name != SHELL_ACCOUNT)
 
 
 def _read_timezone(paths):

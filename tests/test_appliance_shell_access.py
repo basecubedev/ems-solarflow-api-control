@@ -248,3 +248,50 @@ def test_the_console_says_what_the_account_costs_before_it_is_enabled():
 
     assert "reaches root" in card
     assert "never accepts a password" in card
+
+
+def write_conf(paths, text):
+    paths.config_dir.mkdir(parents=True, exist_ok=True)
+    paths.appliance_conf.write_text("[appliance]\n" + text, encoding="utf-8")
+
+
+def test_an_appliance_upgraded_from_before_this_account_may_still_be_keyed(tmp_path):
+    """appliance.conf is a dpkg conffile, so an upgrade never rewrites it. Every
+    box installed before this account existed carries a list naming only the
+    backup account -- written when there was nothing else to name. Reading that
+    as a refusal left the console half of the feature inert on exactly the
+    appliances it was built for, which is how this was found: enabled, and no
+    way to give it a key."""
+
+    paths = paths_at(tmp_path)
+    write_conf(paths, "ssh_key_accounts = ems-backup\n")
+
+    assert shell_access.ACCOUNT in load_config(paths).ssh_key_accounts
+
+
+def test_a_refusal_that_was_actually_made_is_honoured(tmp_path):
+    paths = paths_at(tmp_path)
+    write_conf(paths, "ssh_key_accounts = ems-backup\nshell_key_deployment = no\n")
+    config = load_config(paths)
+
+    assert shell_access.ACCOUNT not in config.ssh_key_accounts
+    assert config.backup_user in config.ssh_key_accounts
+
+
+def test_refusing_deployment_leaves_the_backup_account_alone(tmp_path):
+    paths = paths_at(tmp_path)
+    write_conf(paths, "shell_key_deployment = no\n")
+
+    assert load_config(paths).ssh_key_accounts == ("ems-backup",)
+
+
+def test_the_console_offers_whichever_accounts_the_configuration_allows():
+    """The key form's account list is read from the backend payload. A form that
+    named accounts itself would have hidden this defect instead of showing it."""
+
+    root = Path(__file__).resolve().parents[1]
+    app_js = (root / "appliance" / "static" / "app.js").read_text(encoding="utf-8")
+    form = app_js.split("function renderKeyForm(", 1)[1].split("\n  }\n", 1)[0]
+
+    assert "ssh.accounts" in form
+    assert "ems-backup" not in form, "the account list must come from the backend"
