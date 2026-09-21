@@ -106,6 +106,8 @@ install -m 0755 "$PACKAGING/bin/backup-account.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/backup-account.sh"
 install -m 0755 "$PACKAGING/bin/rescue-account.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/rescue-account.sh"
+install -m 0755 "$PACKAGING/bin/shell-account.sh" \
+        "$STAGE/usr/lib/ems-appliance-manager/shell-account.sh"
 # The project's own Admin installer, unmodified. It is what writes the Admin
 # compose and environment files on a host that has none, so it is the appliance's
 # bootstrap too rather than a second installer that would drift from it.

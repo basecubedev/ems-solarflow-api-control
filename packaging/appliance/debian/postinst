@@ -104,6 +104,13 @@ case "$1" in
         /usr/lib/ems-appliance-manager/rescue-account.sh \
             || fail "the rescue account could not be prepared; see the message above"
 
+        # The way in over the network, for a box that is up but will not
+        # finish something. Created disabled: no key, and an sshd policy
+        # that refuses it every authentication method until an operator
+        # enables it. Creating it grants nothing.
+        /usr/lib/ems-appliance-manager/shell-account.sh \
+            || fail "the shell account could not be prepared; see the message above"
+
         mkdir -p "$CONFIG_DIR" || fail "cannot create $CONFIG_DIR"
         chmod 0755 "$CONFIG_DIR"
 

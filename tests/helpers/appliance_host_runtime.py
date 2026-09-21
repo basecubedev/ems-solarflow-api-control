@@ -10,6 +10,7 @@ really change them succeeds.
 """
 
 from appliance.commands import CommandResult
+from appliance.config import DEFAULT_BACKUP_USER
 from appliance.host_config import PATH_UNIT, path_unit_dropin, sshd_policy_file
 from appliance import ssh_policy
 from appliance.ssh_policy import parse_sshd_config
@@ -30,17 +31,30 @@ BASE_POLICY = {
 }
 
 
-def policy_of(sshd_dir):
-    """The Match policy the generated file currently asks sshd to apply."""
+def policy_of(sshd_dir, user=DEFAULT_BACKUP_USER):
+    """What sshd would apply to one account, with ``Match`` scoping honoured.
+
+    A flat fold of the file answers for no account at all. The drop-in holds one
+    block per package-owned account and sshd applies only the blocks whose
+    criteria match, which is why every consumer asks with ``-C user=``. Folding
+    them together made a disabled shell account's ``PubkeyAuthentication no``
+    read as the backup account losing key authentication.
+    """
 
     try:
         text = sshd_policy_file(str(sshd_dir)).read_text(encoding="utf-8")
     except OSError:
         return {}
     values = dict(BASE_POLICY)
+    applies = True
     for line in text.splitlines():
         entry = line.strip()
-        if not entry or entry.startswith("#") or entry.startswith("Match "):
+        if not entry or entry.startswith("#"):
+            continue
+        if entry.startswith("Match "):
+            applies = entry.split()[1:] == ["User", user]
+            continue
+        if not applies:
             continue
         key, _, value = entry.partition(" ")
         values[key.strip().lower()] = value.strip()

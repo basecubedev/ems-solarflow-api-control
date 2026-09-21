@@ -11,6 +11,8 @@ import configparser
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from appliance.shell_access import ACCOUNT as SHELL_ACCOUNT
+
 SECTION = "appliance"
 
 DEFAULT_TIMEZONE = "UTC"
@@ -91,7 +93,7 @@ class ApplianceConfig:
     socket_group: str = DEFAULT_SOCKET_GROUP
     backup_user: str = DEFAULT_BACKUP_USER
     deployment_user: str = DEFAULT_DEPLOYMENT_USER
-    ssh_key_accounts: tuple = (DEFAULT_BACKUP_USER,)
+    ssh_key_accounts: tuple = (DEFAULT_BACKUP_USER, SHELL_ACCOUNT)
     admin_container: str = DEFAULT_ADMIN_CONTAINER
     ems_container: str = DEFAULT_EMS_CONTAINER
     influx_container: str = DEFAULT_INFLUX_CONTAINER
@@ -268,21 +270,30 @@ def _deployment_user(values):
 def _ssh_key_accounts(values):
     """Whose authorized_keys a request may ever reach.
 
-    The backup account has no shell and is confined to a read-only SFTP view
-    of the export root. Any other name here would let an authenticated browser
-    deploy a key on an account that can open a session, which is the boundary
-    the unprivileged web process and the allowlisted agent exist to hold.
+    Two package-owned accounts, and no third name. The backup account has no
+    shell and is confined to a read-only SFTP view of the export root, so a key
+    on it opens no session.
+
+    The shell account is the opposite and deliberately so: it has a shell and
+    reaches root through sudo, which means an authenticated browser can deploy a
+    key that becomes root on this appliance. That was the owner's decision over
+    the alternative of keys only from a root shell already on the box. What
+    still holds the line is that a key alone is not a login -- the sshd policy
+    refuses this account every authentication method until the separate enable
+    flag in :mod:`appliance.shell_access` is set, and that flag is not reachable
+    by deploying a key.
     """
 
-    configured = _as_tuple(values, "ssh_key_accounts", (DEFAULT_BACKUP_USER,))
-    unsupported = [name for name in configured if name != DEFAULT_BACKUP_USER]
+    supported = (DEFAULT_BACKUP_USER, SHELL_ACCOUNT)
+    configured = _as_tuple(values, "ssh_key_accounts", supported)
+    unsupported = [name for name in configured if name not in supported]
     if unsupported:
         raise ConfigError(
             "ssh_key_accounts_unsupported",
-            f"ssh_key_accounts must be {DEFAULT_BACKUP_USER}; "
+            f"ssh_key_accounts must name only {' and '.join(supported)}; "
             f"{', '.join(unsupported)} is not an account this package manages keys for",
         )
-    return (DEFAULT_BACKUP_USER,)
+    return tuple(configured)
 
 
 def _read_timezone(paths):
