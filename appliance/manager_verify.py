@@ -19,7 +19,19 @@ from pathlib import Path
 
 DEADLINE_NAME = "verify-deadline.json"
 VERDICT_NAME = "verify-verdict.json"
+ATTEMPTS_NAME = "verify-revert-attempts"
 REVERTER_NAME = "verify-manager.armed.sh"
+
+# How the reverter asks dpkg what it has, named here so the shell script and the
+# tests cannot drift apart about it. ``${Version}`` alone also answers for a
+# package dpkg unpacked and never configured -- which is the state the deadline
+# exists to catch.
+DPKG_STATE_QUERY = "${db:Status-Status}|${Version}"
+DPKG_STATE_INSTALLED = "installed"
+
+# The reverter retries a refused revert rather than spending its one attempt on
+# a dpkg frontend lock that a tick later has cleared.
+REVERT_ATTEMPTS = 5
 
 PACKAGED_REVERTER = "/usr/lib/ems-appliance-manager/verify-manager.sh"
 VERIFY_TIMER = "ems-appliance-manager-verify.timer"
@@ -277,6 +289,12 @@ def arm(
     ), snapshot
 
 
+def attempts_path(paths):
+    """Where the reverter counts its refused reverts. Written only by it."""
+
+    return Path(paths.packages_dir) / ATTEMPTS_NAME
+
+
 def disarm(paths, runner):
     """Retire a deadline the appliance no longer needs judged."""
 
@@ -292,10 +310,14 @@ def disarm(paths, runner):
 
 
 __all__ = [
+    "DPKG_STATE_INSTALLED",
+    "DPKG_STATE_QUERY",
     "ManagerVerifyError",
+    "REVERT_ATTEMPTS",
     "VerifyDeadline",
     "VerifyVerdict",
     "arm",
+    "attempts_path",
     "deadline_path",
     "disarm",
     "read",

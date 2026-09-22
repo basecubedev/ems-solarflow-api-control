@@ -128,16 +128,24 @@ able to answer.
 answer must end up back where it was, and a deadline is what makes silence mean
 that rather than mean consent.
 
-A repeating timer asks, once a minute, whether the package dpkg reports is the
-one the install promised and whether the agent and the web service are running.
-That gate is narrow and is not a functional test of the manager.
+A repeating timer asks, once a minute, whether dpkg calls the manager
+*installed* at the version the install promised, and whether the agent and the
+web service are running. Both halves of the first question matter: dpkg reports
+a version for a package it unpacked and never configured, and for one it has
+only config files left for, and those are the states this exists to catch. That
+gate is narrow and is not a functional test of the manager.
 
 | Outcome | What the appliance does |
 |---|---|
 | The gate passes | The deadline is retired and the install stands. |
 | The gate has not passed when the deadline expires | `previous.deb` is installed again, and the console reports *reverted*. |
 | There is no `previous.deb` | The console reports *revert unavailable*, and the appliance is left to a person. |
-| `dpkg` refuses the previous package too | The console reports *revert failed*. |
+| `dpkg` refuses the previous package too | The next tick tries again, up to five times, and only then does the console report *revert failed*. |
+
+The retries are there because the commonest reason dpkg refuses is a frontend
+lock another `apt` run holds — often the operator repairing the package manager
+the console just told them to repair. Settling at the first refusal would spend
+the only automatic way back on a condition that clears itself a minute later.
 
 The reverter is a copy taken out of the *outgoing* package before anything is
 unpacked, so the code deciding keep-or-undo is not code the install brought with
