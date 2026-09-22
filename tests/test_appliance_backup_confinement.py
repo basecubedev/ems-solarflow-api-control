@@ -581,7 +581,7 @@ def exported_file(services, name, mode):
 
     import os
 
-    source = services.paths.export_paths()[name]
+    source = services.paths.export_paths()[name] / "backups"
     source.mkdir(parents=True, exist_ok=True)
     target = source / "ems-config-manual-20260922.tar.gz"
     handle = os.open(target, os.O_WRONLY | os.O_CREAT, mode)
@@ -634,3 +634,25 @@ def test_an_export_with_nothing_in_it_yet_is_not_called_unreadable(tmp_path):
     access = services.backup.export_access()
 
     assert access["unreadable"] == [], access
+
+
+def test_a_private_file_outside_the_archive_path_is_not_a_fault(tmp_path):
+    """The shared password store lives under `config` at 0600 on purpose.
+
+    Reporting that as "exported files are not readable" would say the appliance
+    is broken for doing the right thing, and would bury the one case that
+    matters: the archive an operator was just told exists.
+    """
+
+    import os
+
+    services = appliance(tmp_path)
+    source = services.paths.export_paths()["config"]
+    source.mkdir(parents=True, exist_ok=True)
+    handle = os.open(source / "dashboard-auth.json", os.O_WRONLY | os.O_CREAT, 0o600)
+    os.close(handle)
+
+    access = services.backup.export_access()
+
+    assert access["unreadable"] == [], access
+    assert access["status"] == "configured", access

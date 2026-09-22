@@ -208,10 +208,15 @@ a new top-level EMS directory appears. `ems-appliance-export.path` watches
 `data/backups` does not retrigger it.
 
 The appliance no longer claims otherwise: **Backup access** reports `degraded`
-with *exported files are not readable by ems-backup* when the newest file under
-a present export has neither a group-read nor an other-read bit. Until the
+with *exported files are not readable by ems-backup* when the newest archive
+under `data/backups` has neither a group-read nor an other-read bit. Until the
 export service runs again, fetch that archive through the Admin Console's own
 download instead.
+
+Only the archive path is judged. What else lives under an export is the
+business of whoever writes it — the shared password store sits under `config`
+at 0600 on purpose — and reporting that as a fault would call the appliance
+broken for doing the right thing.
 
 A bind mount that cannot be made read-only is unmounted again rather than left
 as a writable export.

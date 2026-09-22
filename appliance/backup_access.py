@@ -100,6 +100,10 @@ class ExportPath:
 # installed or on this process being able to become the account.
 READABLE_BY_OTHERS = stat.S_IRGRP | stat.S_IROTH
 
+# Where ems/backup.py puts its archives, relative to the EMS data directory.
+# `examples()` puts the matching /data/backups on the operator's screen.
+ARCHIVE_SUBDIRECTORY = "backups"
+
 
 def newest_file(path, *, max_entries=5000):
     """The most recent regular file under ``path``, or ``None``."""
@@ -335,26 +339,48 @@ class BackupAccessService:
         }
 
     def _unreadable_exports(self, present):
-        """Exports whose newest file the backup account cannot read.
+        """Exports whose newest backup archive the backup account cannot read.
 
         The one check that distinguishes "the export root is set up" from "the
         backup an operator was just told exists can be fetched". Newest rather
         than all of them: it is the file the operator is about to ask for, and
-        it is the one created after the last recursive ACL pass.
+        the one written after the last recursive ACL pass.
+
+        Only where the archives are -- the paths `examples()` puts on screen.
+        Everything else under an export is judged by whoever writes it: the
+        shared password store lives under `config` at 0600 on purpose, and
+        reporting that as a fault would say the appliance is broken for doing
+        the right thing.
         """
 
         names = []
         for item in present:
-            newest = newest_file(Path(item["path"]))
-            if newest is None:
-                continue
-            try:
-                mode = newest.stat().st_mode
-            except OSError:
-                continue
-            if not mode & READABLE_BY_OTHERS:
-                names.append(item["name"])
+            for directory in self._archive_directories(Path(item["path"]), item["name"]):
+                newest = newest_file(directory)
+                if newest is None:
+                    continue
+                try:
+                    mode = newest.stat().st_mode
+                except OSError:
+                    continue
+                if not mode & READABLE_BY_OTHERS:
+                    names.append(item["name"])
+                    break
         return names
+
+    @staticmethod
+    def _archive_directories(source, name):
+        """Where EMS writes its archives, inside one export source.
+
+        `data/backups` is the path `examples()` puts on screen; the separate
+        `backups` export publishes a directory no writer in this project uses,
+        and is checked only in case one does.
+        """
+
+        candidates = [source / ARCHIVE_SUBDIRECTORY]
+        if name == ARCHIVE_SUBDIRECTORY:
+            candidates.append(source)
+        return [item for item in candidates if item.is_dir()]
 
     def _recorded_status(self):
         """What the packaged setup script last wrote, for diagnosis only."""
