@@ -10,6 +10,7 @@ both copies when the two layouts disagree.
 import json
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -26,6 +27,8 @@ from appliance.migration import (
 from tests.helpers.appliance import appliance_paths
 
 pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def legacy_installation(tmp_path):
@@ -288,3 +291,166 @@ def test_migration_keeps_the_armed_reverter_executable(tmp_path):
     assert stat.S_IMODE(ordinary.stat().st_mode) == 0o600
     assert stat.S_IMODE(reverter.stat().st_mode) == manager_verify.REVERTER_MODE
     assert os.access(reverter, os.X_OK)
+
+
+# --- a destination the web account chose -------------------------------------
+
+
+def test_a_web_directory_replaced_by_a_symlink_does_not_hand_over_its_target(tmp_path):
+    """The web account owns these directories, so it can replace one with a link.
+
+    `migrate_state` then runs as root from the agent's start-up and from every
+    postinst. `mkdir(exist_ok=True)` succeeds through the link, and the
+    ownership pass that follows chowns and chmods whatever it points at --
+    os.chown and Path.chmod both follow symlinks. That turns the process the
+    architecture describes as having "no root and no way to run a host command"
+    into a way to take any path on the appliance.
+    """
+
+    paths = appliance_paths(tmp_path)
+    victim = tmp_path / "victim"
+    victim.mkdir(parents=True)
+    victim.chmod(0o700)
+    secret = victim / "secret"
+    secret.write_text("what only root may read\n")
+    secret.chmod(0o600)
+
+    planted = paths.web_preferences_dir
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.symlink_to(victim, target_is_directory=True)
+
+    migrate_state(paths)
+
+    assert stat.S_IMODE(victim.stat().st_mode) == 0o700, "the link target was re-moded"
+    assert stat.S_IMODE(secret.stat().st_mode) == 0o600, "a file under the target was re-moded"
+
+
+def test_an_agent_directory_replaced_by_a_symlink_does_not_hand_over_its_target(tmp_path):
+    paths = appliance_paths(tmp_path)
+    victim = tmp_path / "victim"
+    victim.mkdir(parents=True)
+    victim.chmod(0o755)
+
+    planted = paths.operations_dir
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.symlink_to(victim, target_is_directory=True)
+
+    migrate_state(paths)
+
+    assert stat.S_IMODE(victim.stat().st_mode) == 0o755
+
+
+def test_a_symlinked_destination_is_reported_rather_than_passed_over(tmp_path):
+    """Silence would leave an operator with a link nothing will ever resolve."""
+
+    paths = appliance_paths(tmp_path)
+    victim = tmp_path / "victim"
+    victim.mkdir(parents=True)
+    planted = paths.web_preferences_dir
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.symlink_to(victim, target_is_directory=True)
+
+    report = migrate_state(paths)
+
+    assert [entry.source for entry in report.unsafe] == [str(planted)]
+    assert "symlink" in report.unsafe[0].detail
+    assert not report.ok, "a planted link is a finding, not a clean run"
+
+
+def test_a_planted_link_does_not_also_block_every_later_install(tmp_path):
+    """Whoever can plant one already holds the web account.
+
+    `migrate-state` runs from the postinst under `|| fail`, so treating this as
+    fatal would hand the same account a way to refuse every future package.
+    Refusing to follow the link is the whole remedy; the appliance still runs.
+    """
+
+    paths = appliance_paths(tmp_path)
+    victim = tmp_path / "victim"
+    victim.mkdir(parents=True)
+    planted = paths.web_preferences_dir
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.symlink_to(victim, target_is_directory=True)
+
+    report = migrate_state(paths)
+
+    assert not report.fatal, [entry.to_dict() for entry in report.fatal]
+
+
+# --- the same question in the postinst ---------------------------------------
+
+
+POSTINST = ROOT / "packaging" / "appliance" / "debian" / "postinst"
+
+
+def _postinst_fragment(name):
+    """One shell function, lifted out of the real maintainer script."""
+
+    import re
+
+    match = re.search(
+        rf"^{name}\(\) \{{.*?^\}}$", POSTINST.read_text(encoding="utf-8"), re.DOTALL | re.MULTILINE
+    )
+    assert match, f"postinst no longer defines {name}()"
+    return match.group(0)
+
+
+def test_the_postinst_does_not_create_or_own_through_a_planted_link(tmp_path):
+    """`mkdir -p` succeeds through a link and `chown` follows it.
+
+    The same reach as the Python migration, from the script that runs first.
+    """
+
+    import subprocess
+
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    victim.chmod(0o700)
+    planted = tmp_path / "ui-preferences"
+    planted.symlink_to(victim, target_is_directory=True)
+
+    script = "\n".join(
+        [
+            "set -e",
+            'note() { echo "$1"; }',
+            'fail() { echo "$1" >&2; exit 1; }',
+            _postinst_fragment("ensure_directory"),
+            f'ensure_directory "{planted}" && chmod 0750 "{planted}"',
+            "exit 0",
+        ]
+    )
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=60)
+
+    assert result.returncode == 0, result.stderr
+    assert stat.S_IMODE(victim.stat().st_mode) == 0o700, "the link target was re-moded"
+    assert planted.is_symlink(), "the link itself was removed rather than left alone"
+
+
+def test_the_postinst_still_creates_an_ordinary_directory(tmp_path):
+    import subprocess
+
+    target = tmp_path / "web" / "ui-preferences"
+    script = "\n".join(
+        [
+            "set -e",
+            'note() { echo "$1"; }',
+            'fail() { echo "$1" >&2; exit 1; }',
+            _postinst_fragment("ensure_directory"),
+            f'ensure_directory "{target}"',
+        ]
+    )
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True, timeout=60)
+
+    assert result.returncode == 0, result.stderr
+    assert target.is_dir()
+
+
+def test_every_managed_directory_goes_through_the_guard():
+    """A loop added later must not reach for mkdir directly."""
+
+    text = POSTINST.read_text(encoding="utf-8")
+    body = text.split("case \"$1\" in", 1)[1]
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("mkdir -p") and "$directory" in stripped:
+            raise AssertionError(f"a managed directory bypasses ensure_directory: {stripped}")

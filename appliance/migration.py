@@ -28,6 +28,10 @@ RESULT_ALREADY_DONE = "already_done"
 RESULT_CONFLICT = "conflict"
 RESULT_REFUSED = "refused"
 RESULT_FAILED = "failed"
+# A managed path that is a symlink. Root will not chown or chmod through it and
+# will not move state into it, but the appliance still runs: making this fatal
+# would let whoever planted the link also block every future package install.
+RESULT_UNSAFE = "unsafe"
 
 DEPLOYMENT_USER = "ems-deploy"
 WEB_USER = "ems-appliance-web"
@@ -74,7 +78,7 @@ class MigrationReport:
         return [
             item
             for item in self.entries
-            if item.result in (RESULT_CONFLICT, RESULT_REFUSED, RESULT_FAILED)
+            if item.result in (RESULT_CONFLICT, RESULT_REFUSED, RESULT_FAILED, RESULT_UNSAFE)
         ]
 
     @property
@@ -92,6 +96,10 @@ class MigrationReport:
         return [item for item in self.entries if item.result == RESULT_CONFLICT]
 
     @property
+    def unsafe(self):
+        return [item for item in self.entries if item.result == RESULT_UNSAFE]
+
+    @property
     def ok(self):
         return not self.findings
 
@@ -103,6 +111,7 @@ class MigrationReport:
             "findings": [item.to_dict() for item in self.findings],
             "fatal": [item.to_dict() for item in self.fatal],
             "conflicts": [item.to_dict() for item in self.conflicts],
+            "unsafe": [item.to_dict() for item in self.unsafe],
             "entries": [item.to_dict() for item in self.entries],
         }
 
@@ -140,7 +149,16 @@ def _mode_for(target, directory_mode, file_mode):
 
 
 def _apply_ownership(path, owner, *, mode=None):
-    """Set the final owner and mode; missing accounts are not an error."""
+    """Set the final owner and mode; missing accounts are not an error.
+
+    Never through a symlink. The web account owns the directories this re-owns
+    and can replace one with a link, while this runs as root from every postinst
+    and from the agent's start-up -- and os.chown and Path.chmod both follow.
+    Following one would hand its target to whoever planted it.
+    """
+
+    if path.is_symlink():
+        return False
 
     if owner == OWNER_DEPLOYMENT:
         uid, gid = _ids(DEPLOYMENT_USER, DEPLOYMENT_USER)
@@ -155,10 +173,7 @@ def _apply_ownership(path, owner, *, mode=None):
         directory_mode = AGENT_DIRECTORY_MODE if mode is None else mode
         file_mode = AGENT_FILE_MODE
 
-    targets = [path]
-    if path.is_dir():
-        targets.extend(path.rglob("*"))
-    for target in targets:
+    def own(target):
         try:
             if uid is not None and gid is not None:
                 os.chown(target, uid, gid)
@@ -168,6 +183,19 @@ def _apply_ownership(path, owner, *, mode=None):
             target.chmod(_mode_for(target, directory_mode, file_mode))
         except OSError:
             pass
+
+    own(path)
+    if path.is_dir():
+        # os.walk rather than rglob: it does not descend into symlinked
+        # directories on any supported interpreter, where rglob's guarantee has
+        # moved between versions.
+        for root, directories, files in os.walk(path):
+            for name in directories + files:
+                target = Path(root) / name
+                if target.is_symlink():
+                    continue
+                own(target)
+    return True
 
 
 def _same_content(source, destination):
@@ -259,6 +287,17 @@ def _migrate_one(source, destination, owner, *, mode=None):
             "the old path is a symlink and was left untouched",
         )
 
+    # And a symlinked destination could redirect the copy just as far, with the
+    # added reach that the copy runs as root. Only the source was ever checked.
+    if destination.is_symlink():
+        return MigrationEntry(
+            str(source),
+            str(destination),
+            owner,
+            RESULT_REFUSED if source.exists() else RESULT_UNSAFE,
+            "the new path is a symlink and was left untouched",
+        )
+
     if not source.exists():
         if destination.exists():
             _apply_ownership(destination, owner, mode=mode)
@@ -340,24 +379,37 @@ def migrate_state(paths, *, create_directories=True):
     report = MigrationReport()
 
     if create_directories:
-        for directory in paths.web_directories():
-            try:
-                directory.mkdir(parents=True, exist_ok=True)
-            except OSError:
-                continue
-            _apply_ownership(
+        managed = [
+            (
                 directory,
                 OWNER_WEB,
-                mode=PRIVATE_DIRECTORY_MODE
+                PRIVATE_DIRECTORY_MODE
                 if directory == paths.web_sessions_dir
                 else DIRECTORY_MODE,
             )
-        for directory in paths.agent_directories():
+            for directory in paths.web_directories()
+        ]
+        managed += [
+            (directory, OWNER_AGENT, AGENT_DIRECTORY_MODE)
+            for directory in paths.agent_directories()
+        ]
+        for directory, owner, mode in managed:
+            if directory.is_symlink():
+                report.entries.append(
+                    MigrationEntry(
+                        str(directory),
+                        str(directory),
+                        owner,
+                        RESULT_UNSAFE,
+                        "this path is a symlink and was left untouched",
+                    )
+                )
+                continue
             try:
                 directory.mkdir(parents=True, exist_ok=True)
             except OSError:
                 continue
-            _apply_ownership(directory, OWNER_AGENT, mode=AGENT_DIRECTORY_MODE)
+            _apply_ownership(directory, owner, mode=mode)
 
     for source, destination, owner, mode in migration_plan(paths):
         report.entries.append(_migrate_one(Path(source), Path(destination), owner, mode=mode))
