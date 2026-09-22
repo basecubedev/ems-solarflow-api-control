@@ -9,6 +9,8 @@ state directory.
 
 import json
 import os
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -236,3 +238,89 @@ def _boot_services(monkeypatch, services):
     monkeypatch.setattr(cli, "build_services", lambda **_kwargs: services)
 
 
+
+
+# --- the console rollback and the deadline it runs against -------------------
+
+
+def armed_rollback(tmp_path, monkeypatch, *, dpkg_ok=True):
+    """An appliance mid-update: v2 installed, v1 kept, a deadline armed for v2."""
+
+    from appliance import artifact_trust, manager_retention, manager_verify
+    from appliance.paths import resolve_paths
+
+    paths = resolve_paths()
+    Path(paths.packages_dir).mkdir(parents=True, exist_ok=True)
+
+    older = tmp_path / "v1.deb"
+    older.write_bytes(b"GOOD v1 package")
+    newer = tmp_path / "v2.deb"
+    newer.write_bytes(b"BROKEN v2 package")
+    manager_retention.retain(
+        paths, older, sha256=artifact_trust.file_digest(older), version="0.1.0", rotate=False
+    )
+    manager_retention.retain(
+        paths, newer, sha256=artifact_trust.file_digest(newer), version="0.2.0"
+    )
+
+    reverter = tmp_path / "packaged-verify-manager.sh"
+    reverter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+    class Runner:
+        def __init__(self):
+            self.calls = []
+
+        def available(self, tool):
+            return True
+
+        def run(self, tool, arguments, timeout=None):
+            self.calls.append((tool, list(arguments)))
+            ok = dpkg_ok or tool != "dpkg"
+            return SimpleNamespace(ok=ok, stdout="", stderr="", returncode=0 if ok else 1)
+
+    runner = Runner()
+    manager_verify.arm(
+        paths,
+        runner,
+        expected_version="0.2.0",
+        build_id="b2",
+        previous=str(Path(paths.packages_dir) / "previous.deb"),
+        now=1_000_000,
+        reverter=str(reverter),
+    )
+    assert manager_verify.read(paths).armed
+
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr("appliance.commands.CommandRunner", lambda *a, **k: runner)
+    return paths, runner
+
+
+def test_a_console_rollback_retires_the_deadline_it_outran(appliance_env, monkeypatch):
+    """The deadline is still armed for the package the operator just removed.
+
+    console-recovery.md sends an operator to `ems-appliance rollback-manager`
+    exactly when the console has gone dark inside the window. The rollback puts
+    the working package back -- and leaves a deadline whose expected version can
+    now never be reached, so the next tick reinstalls the package the operator
+    came to get rid of and files it as a successful revert.
+    """
+
+    from appliance import manager_verify
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(appliance_env, monkeypatch)
+
+    assert command_rollback_manager(Args()) == 0
+    assert not manager_verify.read(paths).armed, "the deadline outlived the rescue"
+
+
+def test_a_console_rollback_that_fails_leaves_the_deadline_to_try(appliance_env, monkeypatch):
+    """Disarming on a rollback dpkg refused would remove the last way back."""
+
+    from appliance import manager_verify
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(appliance_env, monkeypatch, dpkg_ok=False)
+
+    assert command_rollback_manager(Args()) != 0
+    assert manager_verify.read(paths).armed

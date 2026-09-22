@@ -80,9 +80,18 @@ class Retention:
 
     @property
     def can_revert(self):
-        """A revert needs a file on disk, not merely a record of one."""
+        """A revert needs a file on disk, and one that is not what is already on.
 
-        return self.previous.present
+        Two slots holding the same package is a way back that leads nowhere;
+        offering it would spend an operator's one remaining move on reinstalling
+        what they are trying to get away from.
+        """
+
+        if not self.previous.present:
+            return False
+        if self.previous.sha256 and self.previous.sha256 == self.current.sha256:
+            return False
+        return True
 
     def to_dict(self):
         return {
@@ -224,8 +233,13 @@ def retain(
     current_path = directory / CURRENT_NAME
     previous_path = directory / PREVIOUS_NAME
 
+    # Re-keeping the archive already current would rotate it into both slots and
+    # take the one package this appliance is known to have run off the disk. A
+    # retried install and the same version offered again both arrive here.
+    already_current = bool(sha256) and existing.current.sha256 == sha256
+
     previous = existing.previous
-    if rotate and existing.current.present:
+    if rotate and existing.current.present and not already_current:
         # The archive itself moves, not just the record: a record naming a file
         # that is no longer there is exactly the shape rollback-manager has been
         # refusing on since it was written.
@@ -273,5 +287,11 @@ def revert_target(paths):
         raise RetentionError(
             "previous_package_missing",
             f"{retention.previous.path} is recorded but not on disk",
+        )
+    if retention.previous.sha256 and retention.previous.sha256 == retention.current.sha256:
+        raise RetentionError(
+            "previous_is_current",
+            "the kept package is the one that is installed, so going back to it "
+            "would change nothing",
         )
     return retention.previous

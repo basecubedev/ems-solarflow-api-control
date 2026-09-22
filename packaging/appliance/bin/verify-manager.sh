@@ -57,6 +57,7 @@ fi
 
 EXPECTED=$(text expected_version)
 PREVIOUS=$(text previous_path)
+PREVIOUS_SHA=$(text previous_sha256)
 DEADLINE_EPOCH=$(number deadline_epoch)
 [ -n "$DEADLINE_EPOCH" ] || DEADLINE_EPOCH=0
 NOW=$(date -u +%s)
@@ -97,6 +98,22 @@ if [ -z "$PREVIOUS" ] || [ ! -f "$PREVIOUS" ]; then
         "the deadline expired and this appliance has kept no earlier package to install"
     disarm
     exit 0
+fi
+
+# previous.deb is a slot, and retain() rewrites it on every install. An archive
+# that is no longer the one this deadline kept is not a way back -- it may be
+# the very package being undone -- so it is refused rather than installed.
+if [ -n "$PREVIOUS_SHA" ]; then
+    # "sha256:<hex>", the form artifact_trust.file_digest writes everywhere
+    # else. A sha256sum that could not run leaves the prefix alone, which
+    # matches nothing -- an archive that cannot be checked is not installed.
+    ACTUAL="sha256:$(sha256sum "$PREVIOUS" 2>/dev/null | cut -d" " -f1 || true)"
+    if [ "$ACTUAL" != "$PREVIOUS_SHA" ]; then
+        record revert_unavailable \
+            "the deadline expired and $PREVIOUS is no longer the package it kept"
+        disarm
+        exit 0
+    fi
 fi
 
 echo "verify-manager: the deadline expired without a healthy $PACKAGE; reinstalling $PREVIOUS" >&2
