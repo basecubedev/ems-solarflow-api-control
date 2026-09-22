@@ -2082,6 +2082,9 @@
     if (rescue.unreadable || rescue.password_is_default === null) {
       return { tone: "idle", label: "unknown", hint: "This appliance could not read whether the password is still the shipped one." };
     }
+    if (rescue.password_set === false) {
+      return { tone: "warn", label: "no password", hint: "This account has no password at all, so nobody can log in at the console with it. Its creation was interrupted before the password was set. Give it one with 'sudo passwd " + rescue.account + "'." };
+    }
     if (rescue.password_is_default) {
       return { tone: "warn", label: "shipped password", hint: "The password is the documented default, which is public knowledge. That is fine on a private network and a login for anyone who reaches this appliance from outside one. Change it with 'sudo passwd " + rescue.account + "' if that describes yours." };
     }

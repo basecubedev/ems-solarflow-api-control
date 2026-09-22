@@ -139,6 +139,7 @@ def test_the_report_is_json_serialisable_and_carries_no_hash(tmp_path):
         "account",
         "present",
         "password_is_default",
+        "password_set",
         "locked",
         "can_log_in",
         "shell",
@@ -284,3 +285,130 @@ def test_the_password_is_not_the_account_name():
     """
 
     assert rescue_account.DEFAULT_PASSWORD != rescue_account.ACCOUNT
+
+
+# --- an account that exists is not the same as an account that works ---------
+
+
+def test_an_account_with_no_password_at_all_is_not_reported_as_changed(tmp_path):
+    """`*` is what adduser --disabled-password writes, not a password.
+
+    `stored = field.lstrip("!*")` is empty for it, so `password_is_default` was
+    False and the console showed a green "changed / The password is no longer
+    the shipped one" over an account that has no password and cannot log in
+    anywhere. The one thing an operator would check before relying on it says
+    the opposite of the truth.
+    """
+
+    root = host(tmp_path, passwd=passwd_line(), shadow=shadow_line("*"))
+
+    state = rescue_account.state(root)
+
+    assert state.present
+    assert state.password_set is False
+    assert state.password_is_default is not False, "no password is not a changed password"
+    assert not state.can_log_in
+
+
+def test_a_locked_account_with_a_real_hash_still_has_a_password(tmp_path):
+    root = host(
+        tmp_path, passwd=passwd_line(), shadow=shadow_line("!" + rescue_account.default_hash())
+    )
+
+    state = rescue_account.state(root)
+
+    assert state.password_set is True
+
+
+def test_the_console_names_an_account_with_no_password(tmp_path):
+    source = (
+        Path(__file__).resolve().parents[1] / "appliance" / "static" / "app.js"
+    ).read_text(encoding="utf-8")
+
+    assert "password_set" in source, "the console cannot distinguish a state it never reads"
+
+
+def rescue_helper_run(tmp_path, *, shadow_field, chpasswd_exit=0):
+    """The shipped helper, against a fake getent/adduser/chpasswd/usermod."""
+
+    import os
+    import subprocess
+
+    tools = tmp_path / "tools"
+    tools.mkdir(parents=True, exist_ok=True)
+    shadow = tmp_path / "shadow"
+    shadow.write_text(f"{rescue_account.ACCOUNT}:{shadow_field}:20000:0:99999:7:::\n", "utf-8")
+    log = tools / "calls.log"
+
+    (tools / "getent").write_text(
+        "#!/bin/sh\n"
+        f'echo "getent $*" >> "{log}"\n'
+        'case "$1" in\n'
+        f'  passwd) [ "$2" = "{rescue_account.ACCOUNT}" ] && exit 0; exit 2 ;;\n'
+        "  shadow)\n"
+        f'    line=$(grep "^$2:" "{shadow}" 2>/dev/null) || exit 2\n'
+        '    printf "%s\\n" "$line"; exit 0 ;;\n'
+        "  group) exit 2 ;;\n"
+        "esac\n"
+        "exit 2\n",
+        encoding="utf-8",
+    )
+    (tools / "adduser").write_text(f'#!/bin/sh\necho "adduser $*" >> "{log}"\n', encoding="utf-8")
+    (tools / "usermod").write_text(f'#!/bin/sh\necho "usermod $*" >> "{log}"\n', encoding="utf-8")
+    (tools / "chpasswd").write_text(
+        f'#!/bin/sh\ncat >> "{log}.stdin"\necho "chpasswd $*" >> "{log}"\nexit {chpasswd_exit}\n',
+        encoding="utf-8",
+    )
+    for name in ("getent", "adduser", "usermod", "chpasswd"):
+        (tools / name).chmod(0o755)
+
+    environment = dict(os.environ)
+    environment["PATH"] = f"{tools}:{environment['PATH']}"
+    environment["EMS_APPLIANCE_DATADIR"] = str(PACKAGING / "config")
+    environment["EMS_APPLIANCE_RESCUE_HASH_FILE"] = str(
+        PACKAGING / "config" / "rescue-password.hash"
+    )
+    result = subprocess.run(
+        ["sh", str(PACKAGING / "bin" / "rescue-account.sh")],
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=60,
+    )
+    calls = log.read_text(encoding="utf-8") if log.is_file() else ""
+    return result, calls
+
+
+def test_an_account_left_without_a_password_gets_one_on_the_next_run(tmp_path):
+    """"Exists" is not "finished", and the rescue is what pays for the mistake.
+
+    The helper creates the account with --disabled-password and sets the
+    documented hash in a second step. Anything between the two -- a locked
+    /etc/shadow, a full filesystem, an interrupted install -- leaves an account
+    with no password. `dpkg --configure -a` then runs the helper again, it finds
+    the account, reports "already exists; leaving it untouched" and exits 0. The
+    install completes, and the account console-recovery.md calls "the account
+    you log in with at a keyboard and monitor" can never log in. Reinstalling
+    does not help: postrm never deletes it.
+    """
+
+    result, calls = rescue_helper_run(tmp_path, shadow_field="*")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "chpasswd" in calls, result.stdout + result.stderr
+
+
+def test_a_password_an_operator_chose_is_never_reset(tmp_path):
+    result, calls = rescue_helper_run(tmp_path, shadow_field="$6$operator$chose$this")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "chpasswd" not in calls
+
+
+def test_a_deliberately_locked_account_is_not_re_enabled(tmp_path):
+    """`passwd -l` leaves `!` in front of a hash; that is a decision, not a gap."""
+
+    result, calls = rescue_helper_run(tmp_path, shadow_field="!$6$operator$chose$this")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "chpasswd" not in calls

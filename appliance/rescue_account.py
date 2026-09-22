@@ -59,6 +59,11 @@ class RescueState:
 
     present: bool = False
     password_is_default: object = None
+    # A shadow field of "*" or "!" with nothing after it is what
+    # --disabled-password writes: not a password an operator chose, and not the
+    # shipped one either. Reporting that as "changed" told an operator their
+    # rescue was ready over an account that cannot log in anywhere.
+    password_set: object = None
     locked: bool = False
     shell: str = ""
     uid: int = 0
@@ -66,13 +71,19 @@ class RescueState:
 
     @property
     def can_log_in(self):
-        return self.present and not self.locked and self.shell not in NO_LOGIN_SHELLS
+        return (
+            self.present
+            and self.password_set is not False
+            and not self.locked
+            and self.shell not in NO_LOGIN_SHELLS
+        )
 
     def to_dict(self):
         return {
             "account": ACCOUNT,
             "present": self.present,
             "password_is_default": self.password_is_default,
+            "password_set": self.password_set,
             "locked": self.locked,
             "can_log_in": self.can_log_in,
             "shell": self.shell,
@@ -146,9 +157,13 @@ def state(root="/", *, account=ACCOUNT):
     except RescueAccountError as exc:
         return RescueState(present=True, locked=locked, shell=shell, uid=uid, unreadable=exc.message)
 
+    if not stored:
+        return RescueState(present=True, password_set=False, locked=locked, shell=shell, uid=uid)
+
     return RescueState(
         present=True,
         password_is_default=stored == expected,
+        password_set=True,
         locked=locked,
         shell=shell,
         uid=uid,
