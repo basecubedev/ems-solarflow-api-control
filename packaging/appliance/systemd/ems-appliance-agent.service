@@ -3,6 +3,11 @@
 Description=EMS SolarFlow Appliance Manager privileged host agent
 Documentation=file:///usr/share/doc/ems-appliance-manager/architecture.md
 After=local-fs.target
+# The agent reactivates an armed WLAN revert before it binds its socket, and
+# `nmcli connection up` against a NetworkManager that is not yet on the bus
+# fails. Ordering only: NetworkManager is optional on this host, and systemd
+# ignores an ordering against a unit that is not installed.
+After=NetworkManager.service
 Before=ems-appliance-web.service
 
 [Service]

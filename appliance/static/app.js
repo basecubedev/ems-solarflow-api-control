@@ -1939,7 +1939,7 @@
 
     main.appendChild(pageHead(
       "Network",
-      "A WLAN change can disconnect this session. The previous profile is kept and restored automatically when the new network fails."
+      "A WLAN change can disconnect this session. If the appliance is already on a WLAN, that profile is kept and restored automatically when the new network fails."
     ));
 
     var cards = [
