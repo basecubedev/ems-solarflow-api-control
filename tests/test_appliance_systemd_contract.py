@@ -334,3 +334,33 @@ def test_optional_host_tools_stay_recommendations():
         assert package in recommends, package
 
 
+
+
+def test_the_chroot_itself_still_carries_the_mode_sshd_requires():
+    """sshd refuses a ChrootDirectory that is not root-owned or is writable by
+    group or others, and it checks the path and its parents. That requirement
+    belongs to the export root, not to what is mounted inside it."""
+
+    rules = tmpfiles_rules()
+    root = rules["/srv/ems-appliance-export"]
+
+    assert root["mode"] == "0755"
+    assert root["owner"] == "root"
+    assert root["group"] == "root"
+
+
+def test_no_mode_is_asserted_on_a_path_something_is_mounted_over():
+    """setup-export-root.sh bind-mounts the EMS paths onto these three and
+    remounts them read-only. Every package install therefore ran
+    systemd-tmpfiles and collected three "fchownat() ... failed: Read-only file
+    system" errors -- observed on a live Pi 3B+ at 19:33, 23:04 and 23:41, once
+    per install. A mount point's own mode is invisible while something is
+    mounted over it, so the rule could never do anything but fail."""
+
+    rules = tmpfiles_rules()
+
+    for exported in ("config", "backups", "data"):
+        rule = rules[f"/srv/ems-appliance-export/{exported}"]
+        assert rule["mode"] == "-", rule
+        assert rule["owner"] == "-", rule
+        assert rule["group"] == "-", rule
