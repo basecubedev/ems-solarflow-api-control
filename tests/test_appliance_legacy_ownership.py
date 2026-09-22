@@ -354,6 +354,17 @@ def test_the_explicit_migration_refuses_a_home_holding_an_unknown_key(host):
 
 
 def test_the_explicit_migration_refuses_a_home_that_moved(host):
+    """Device and inode are a necessary condition for a schema-2 adoption.
+
+    A schema-2 record was written by an older package on this same live
+    filesystem, so the pair means something there -- unlike a schema-3 record
+    from an image build, where packing the tree into ext4 reassigns every inode.
+    That is why the comparison belongs here and not in `ownership_state`, and
+    the refusal is asserted by its reason: every later guard in this function
+    depends on running as root, so a check that passes only because the test
+    user is not root proves nothing.
+    """
+
     package_home(host)
     host.home.rename(host.root / "var" / "lib" / "moved-aside")
     host.home.mkdir(parents=True)
@@ -361,6 +372,7 @@ def test_the_explicit_migration_refuses_a_home_that_moved(host):
     result = host.run("migrate-ownership")
 
     assert result.returncode != 0, result.stdout + result.stderr
+    assert "device and inode changed" in result.stderr, result.stderr
     assert not host.home_marker().exists()
 
 

@@ -224,6 +224,19 @@ home_marker_exists() {
 # refused every appliance ever flashed -- so `backup-account status` reported
 # `current` from Python while this said `ownership_conflict`, and
 # migrate-ownership refused to resolve a state that had nothing wrong with it.
+# Only for the explicit adoption of a schema-2 record, whose header calls this
+# a necessary condition. Such a record was written by an older package on this
+# same live filesystem, so the pair means something there -- unlike a schema-3
+# record from an image build, where packing the tree into ext4 reassigns every
+# inode and comparing them refused every appliance ever flashed. That is why it
+# is here and not in home_matches_recorded_identity.
+home_identity_is_recorded() {
+    recorded_identity="$(record_value home_device):$(record_value home_inode)"
+    [ "$recorded_identity" != ":" ] || return 1
+    [ "$(home_identity "$1")" = "$recorded_identity" ] || return 1
+    return 0
+}
+
 home_matches_recorded_identity() {
     recorded_home=$(record_value home)
     [ -n "$recorded_home" ] || return 1
@@ -604,6 +617,9 @@ migrate_ownership_record() {
     home_matches_recorded_identity \
         || fail "$recorded_home is not the directory the record at $RECORD describes.
   Nothing was changed."
+    home_identity_is_recorded "$recorded_home" \
+        || fail "$recorded_home is no longer the directory the record at $RECORD was
+  written for: its device and inode changed, so it was replaced. Nothing was changed."
     if home_marker_exists; then
         fail "$recorded_home already holds a $HOME_MARKER_NAME that this record does not
   describe. Resolve that by hand; nothing was changed."
