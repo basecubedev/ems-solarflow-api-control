@@ -66,3 +66,55 @@ def test_the_shape_that_defect_produced_is_still_in_the_recorded_evidence():
     assert recorded["completed"] is True
     assert recorded["builder_environment"]["base_image_lock_id"] == ""
     assert recorded["builder_environment"]["base_image_sha512"] == ""
+
+
+# --- the finalizer hands the gates arguments they have to accept ------------
+
+
+def forwarded_gate_options():
+    """The long options appliance-finalize-rpi-release.sh puts into GATE_ARGS."""
+
+    import re
+
+    found = re.findall(
+        r'GATE_ARGS="\$GATE_ARGS\s+(--[a-z][a-z-]*)', text("appliance-finalize-rpi-release.sh")
+    )
+    assert found, "the finalizer no longer builds GATE_ARGS by appending to it"
+    return sorted(set(found))
+
+
+@pytest.mark.parametrize("option", forwarded_gate_options())
+def test_the_gates_accept_every_option_the_finalizer_hands_them(option):
+    """`--trusted-fingerprint` was forwarded to a parser that rejects unknowns.
+
+    The finalizer requires at least one trusted fingerprint and always passes
+    them on; the gates script has no such case and its catch-all prints
+    "unknown argument" and exits 2. The production gates therefore failed on
+    every run, so no release could ever be finalized -- which is consistent with
+    the rpi3 gate line standing at INCOMPLETE in hardware-validation.md.
+
+    The fingerprints are the finalizer's own business: the gates verify no
+    signatures at all.
+
+    Driven against the real script rather than by reading its cases, and stopped
+    at the first check after parsing by an invalid --mode, so nothing is built.
+    """
+
+    import subprocess
+
+    result = subprocess.run(
+        [
+            "sh",
+            str(SCRIPTS / "appliance-release-gates.sh"),
+            option,
+            "placeholder",
+            "--mode",
+            "not-a-mode",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    combined = result.stdout + result.stderr
+
+    assert "unknown argument" not in combined, combined[:400]

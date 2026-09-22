@@ -263,11 +263,12 @@ if not report.get("ok") or not report.get("compared"):
 print(f"bundle: {report['compared']} tracked objects, {report['symlinks']} symlinks, 0 findings")
 PY
 
+# The gates verify no signatures; the trusted fingerprints are this script's own
+# business and are used below. Handing them on made the gates reject the whole
+# invocation -- their parser has no such case and its catch-all exits 2 -- so
+# the production gates failed on every release this script has ever driven.
 GATE_ARGS=""
 for profile in $PROFILES; do GATE_ARGS="$GATE_ARGS --profile $profile"; done
-for fingerprint in $FINGERPRINTS; do
-    GATE_ARGS="$GATE_ARGS --trusted-fingerprint $fingerprint"
-done
 [ -n "$SOURCE_BUNDLE" ] && GATE_ARGS="$GATE_ARGS --source-bundle $SOURCE_BUNDLE"
 
 echo

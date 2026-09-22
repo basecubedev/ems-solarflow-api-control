@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from appliance import build_authority, release_attestation, runtime_gates
+from appliance import build_authority, release_attestation, release_trust, runtime_gates
 from tests.test_appliance_release_signature import SigningKey
 
 pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
@@ -129,7 +129,9 @@ def gate_report(tmp_path, verdict="RESULT: PASS"):
     return report
 
 
-def write_attestation(tmp_path, dist, prefix, authority, gate, *, profiles=None, name=None):
+def write_attestation(
+    tmp_path, dist, prefix, authority, gate, *, profiles=None, name=None, gates=None
+):
     """The signed record a production kit is assembled against.
 
     Built the way the finalizer builds it — by hashing the files that are
@@ -168,6 +170,12 @@ def write_attestation(tmp_path, dist, prefix, authority, gate, *, profiles=None,
             "environment_sha256": authority.builder_environment_sha256,
         },
         profiles=entries,
+        # What the finalizer records when --runtime-gates names a real file.
+        # Without it the attestation declares no evidence, and a kit assembled
+        # against such a release carries a runtime-gates.json nothing signed.
+        runtime_gates=(
+            {"sha256": release_trust.file_sha256(gates)} if gates is not None else None
+        ),
     )
     target = tmp_path / (name or "release-attestation.json")
     release_attestation.write(target, attestation)
@@ -255,7 +263,8 @@ def ready_args(tmp_path, dist, prefix, authority, *, gates=None):
     """Everything a kit needs before it may call itself physical_ready."""
 
     gate = gate_report(tmp_path)
-    attestation = write_attestation(tmp_path, dist, prefix, authority, gate)
+    evidence = runtime_gate_evidence(tmp_path, results=gates)
+    attestation = write_attestation(tmp_path, dist, prefix, authority, gate, gates=evidence)
     key = SigningKey(tmp_path / "gnupg", "EMS Kit Test <kit@ems.invalid>")
     keyring = key.keyring(tmp_path / "trusted.gpg")
     key.sign(attestation)
@@ -265,7 +274,7 @@ def ready_args(tmp_path, dist, prefix, authority, *, gates=None):
         "--attestation", str(attestation),
         "--keyring", str(keyring),
         "--trusted-fingerprint", key.fingerprint,
-        "--runtime-gates", str(runtime_gate_evidence(tmp_path, results=gates)),
+        "--runtime-gates", str(evidence),
         "--source-authority", str(source["authority"]),
         "--source-bundle", str(source["bundle"]),
         "--source-parity", str(source["parity"]),
@@ -615,3 +624,41 @@ def test_the_baseline_capture_calls_subcommands_that_exist():
     assert cli  # the module imports, so the parser above is the real one
 
 
+
+
+def test_a_kit_whose_attestation_names_no_runtime_gates_is_never_ready(tmp_path):
+    """Absent policy is not approval, the rule builder approval already states.
+
+    `--runtime-gates` is optional in the finalizer, so a mistyped path signs an
+    attestation that declares no evidence without a word of warning. Kit
+    assembly then fails with "no runtime gate evidence", and the natural repair
+    -- copy the previous release's runtime-gates.json in -- was accepted, so
+    `runtime_required_gates_pass` was carried by a file nothing signed and
+    nothing measured against this build. The signing key is not needed for it.
+    """
+
+    dist, prefix, authority = build_dist(tmp_path)
+    output = tmp_path / "kit"
+    gate = gate_report(tmp_path)
+    # The attestation the finalizer signs when --runtime-gates named nothing.
+    attestation = write_attestation(tmp_path, dist, prefix, authority, gate)
+    key = SigningKey(tmp_path / "gnupg", "EMS Kit Test <kit@ems.invalid>")
+    keyring = key.keyring(tmp_path / "trusted.gpg")
+    key.sign(attestation)
+    source = source_documents(tmp_path, authority)
+
+    result = run_kit(
+        dist,
+        output,
+        "--gate-report", str(gate),
+        "--attestation", str(attestation),
+        "--keyring", str(keyring),
+        "--trusted-fingerprint", key.fingerprint,
+        "--runtime-gates", str(runtime_gate_evidence(tmp_path)),
+        "--source-authority", str(source["authority"]),
+        "--source-bundle", str(source["bundle"]),
+        "--source-parity", str(source["parity"]),
+    )
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "runtime gate" in result.stdout + result.stderr

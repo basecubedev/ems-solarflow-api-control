@@ -306,16 +306,27 @@ def verify(attestation, *, dist, reports, prefixes, gate_report, runtime_gates=N
     if attestation.result != PASS:
         problems.append(f"{MISMATCH}: the attestation itself records {attestation.result!r}")
 
+    # Absent policy is not approval, the same rule builder approval states. An
+    # attestation signed without `--runtime-gates` declares no digest, and
+    # guarding the whole comparison on that made absence a skip: evidence the
+    # attestation never named then carried `runtime_required_gates_pass`, and a
+    # mistyped path on the finalizer produces exactly that attestation without
+    # a word of warning.
     declared_gates = str((attestation.runtime_gates or {}).get("sha256") or "")
-    if declared_gates:
-        if runtime_gates is None:
+    if not declared_gates:
+        if runtime_gates is not None:
             problems.append(
-                f"{MISMATCH}: the attestation records runtime gate evidence that was not supplied"
+                f"{MISMATCH}: runtime gate evidence was supplied for an attestation "
+                "that declares none, so nothing signed names it"
             )
-        else:
-            problems.extend(
-                _compare("release", "runtime gate evidence", Path(runtime_gates), declared_gates)
-            )
+    elif runtime_gates is None:
+        problems.append(
+            f"{MISMATCH}: the attestation records runtime gate evidence that was not supplied"
+        )
+    else:
+        problems.extend(
+            _compare("release", "runtime gate evidence", Path(runtime_gates), declared_gates)
+        )
 
     for entry in attestation.profiles:
         prefix = prefixes.get(entry.profile)
