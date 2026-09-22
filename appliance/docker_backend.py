@@ -49,6 +49,9 @@ class ContainerState:
     restart_count: int = 0
     health_output: str = ""
     ports: tuple = ()
+    # "host" means the container binds the host's ports directly and publishes
+    # none, so `docker ps --filter publish=` can never see it.
+    network_mode: str = ""
 
     def to_dict(self):
         return {
@@ -297,6 +300,8 @@ def _container_state(name, payload):
         for binding in bindings or []:
             ports.append(f"{binding.get('HostPort', '')}->{port}")
 
+    network_mode = str((payload.get("HostConfig") or {}).get("NetworkMode") or "")
+
     return ContainerState(
         name=name,
         exists=True,
@@ -310,6 +315,7 @@ def _container_state(name, payload):
         restart_count=int(payload.get("RestartCount") or 0),
         health_output=health_output,
         ports=tuple(ports),
+        network_mode=network_mode,
     )
 
 

@@ -389,9 +389,9 @@ expiry or delete
 | Container restarts repeatedly | Review the logs, then reinstall |
 | Compose file is missing | Manual: recreate it with `install-admin-console.sh`. With no Admin container either, the Admin page offers **Install Admin** instead |
 | Admin service is not defined | Manual: add the service with `install-admin-console.sh` |
-| Environment file is missing | Manual: recreate it with `install-admin-console.sh` |
+| Environment file is missing | Manual: recreate it with `install-admin-console.sh`. Install, Update and Rollback are refused while it is gone, because its hash is a required field of every Admin plan |
 | Bind path is missing | Recreate the required empty directory after confirmation |
-| Port is occupied | The conflicting process is shown; it is never killed automatically |
+| Port is occupied | The conflicting process is shown; it is never killed automatically. An Admin on the host network publishes no port, so Docker cannot be asked who owns it — the proof there is that the container runs host-networked and the Admin endpoint answers |
 
 Repair also reports image availability, container state, health-check state and
 file permissions.
@@ -449,7 +449,7 @@ None of these report `succeeded`:
 | Failure | Reported as |
 |---|---|
 | `api_unreachable` | the Docker command worked, the Admin did not answer |
-| `image_mismatch` | a different image than the recorded known-good one is running |
+| `image_mismatch` | a different image than the deployment asks for is running |
 | `version_mismatch` | the running Admin reports a different version |
 | `version_unreadable` | neither the health payload nor the image label names a version |
 | `container_missing` | there is nothing to start |
@@ -457,6 +457,16 @@ None of these report `succeeded`:
 
 `container_missing` and `image_mismatch` end as `manual_action_required` — a
 retry cannot fix either. The others end as `failed_recoverable`.
+
+Start, Restart and Repair measure against what the **deployment** names, not
+against the appliance's known-good record. The Admin console replaces itself
+through System Build and Guided Upgrade and writes nothing back here, so that
+record is stale afterwards while the deployment and the container agree with
+each other. Measuring against it made a healthy, up-to-date Admin report
+`image_mismatch` on every Start, Restart and Repair, with no appliance action
+able to clear it — and told the operator to reinstall a working Admin to
+satisfy a bookkeeping entry. A container that matches neither the record nor
+the deployment is still a fault.
 
 ## Logs
 

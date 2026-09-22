@@ -8,6 +8,7 @@ manage: a failed replacement is undone by restoring the saved deployment files
 and re-pinning the previous known-good digest.
 """
 
+import re
 import time
 from dataclasses import dataclass
 
@@ -568,6 +569,25 @@ class AdminLifecycleService:
         findings.append(self._port_finding())
         return findings
 
+    def _deployed_digest(self):
+        """The digest the Admin deployment asks for, or "" if unresolvable.
+
+        The Admin console replaces *itself* through System Build and Guided
+        Upgrade, rewriting this deployment and writing nothing back here -- the
+        appliance only ever reads Admin's records. The known-good entry is
+        therefore stale afterwards while the deployment and the container agree
+        with each other, and that agreement is what "should be running" means.
+        """
+
+        reference = str(self.deployment().image_reference or "")
+        if not reference or "${" in reference:
+            return ""
+        try:
+            image = self.docker.inspect_image(reference)
+        except DockerError:
+            return ""
+        return str(image.digest or "") if image.exists else ""
+
     def _identity_finding(self, container):
         """Is the container running the Admin the appliance last verified?"""
 
@@ -580,6 +600,15 @@ class AdminLifecycleService:
                 check="admin_identity",
                 ok=True,
                 detail="The running image matches the recorded known-good digest",
+            )
+        if active and active == self._deployed_digest():
+            # Reinstalling here would replace a working Admin to satisfy a
+            # bookkeeping entry the Admin console's own upgrade never refreshed.
+            return RepairFinding(
+                check="admin_identity",
+                ok=True,
+                detail=f"The container runs {active}, which is what the Admin deployment "
+                f"asks for; the appliance last recorded {expected} as known-good",
             )
         return RepairFinding(
             check="admin_identity",
@@ -640,6 +669,45 @@ class AdminLifecycleService:
             suggestion=suggestion,
         )
 
+    @staticmethod
+    def _one_process_listens(listeners):
+        """Whether every listening line belongs to one process.
+
+        A socket bound dual-stack prints one line per address family, so
+        counting lines reported a conflict that was not there. Two processes
+        really can share a port across families when ``bindv6only`` is set, so
+        the count cannot simply be dropped either -- the pid ``ss`` reports is
+        what separates the two. A line without one falls back to the count.
+        """
+
+        pids = set()
+        for line in listeners:
+            found = re.findall(r"pid=(\d+)", line)
+            if not found:
+                return len(listeners) == 1
+            pids.update(found)
+        return len(pids) == 1
+
+    def _admin_binds_the_host_port(self):
+        """Whether the Admin container is holding the port itself.
+
+        The appliance's own installer leaves Admin on the host network, where a
+        container publishes nothing at all -- so `docker ps --filter publish=`
+        coming back empty says nothing about ownership rather than proving a
+        conflict. What proves it instead is that the container runs on the host
+        network and the Admin endpoint answers on that port.
+        """
+
+        try:
+            container = self.docker.inspect_container(self.config.admin_container)
+        except DockerError:
+            return False
+        if not container.exists or container.state != CONTAINER_RUNNING:
+            return False
+        if str(container.network_mode).lower() != "host":
+            return False
+        return bool(self.health.probe(self.config.admin_health_url).reachable)
+
     def _port_finding(self):
         """Ownership of the Admin port is proven by Docker, never by a name.
 
@@ -678,11 +746,19 @@ class AdminLifecycleService:
                 "the Docker engine could not say which container publishes it",
                 "Start Docker so the appliance can prove who owns the port",
             )
-        if len(listeners) == 1 and owners == [self.config.admin_container]:
+        one_process = self._one_process_listens(listeners)
+        if one_process and owners == [self.config.admin_container]:
             return RepairFinding(
                 check="admin_port",
                 ok=True,
                 detail=f"Port {port} is published by the {self.config.admin_container} container",
+            )
+        if one_process and not owners and self._admin_binds_the_host_port():
+            return RepairFinding(
+                check="admin_port",
+                ok=True,
+                detail=f"Port {port} is bound by the {self.config.admin_container} container "
+                "on the host network",
             )
         return RepairFinding(
             check="admin_port",
@@ -1191,10 +1267,20 @@ class AdminLifecycleService:
         self._advance(operation, f"verifying_{action}", state=STATE_VERIFYING)
         running = action != "stop"
         expected = self.known_good.current() or {}
+        expected_digest = str(expected.get("admin_digest") or "")
+        expected_version = str(expected.get("admin_version") or "")
+        # Start and Restart bring up what the deployment names and can bring up
+        # nothing else, so holding the result against a record that the Admin
+        # console's own self-update never refreshes asks a question this action
+        # cannot answer -- and answers it with a terminal failure.
+        deployed = self._deployed_digest()
+        if running and deployed and deployed != expected_digest:
+            expected_digest = deployed
+            expected_version = ""
         verification = self.verify_admin(
             expect_running=running,
-            expected_version=str(expected.get("admin_version") or "") if running else "",
-            expected_digest=str(expected.get("admin_digest") or "") if running else "",
+            expected_version=expected_version if running else "",
+            expected_digest=expected_digest if running else "",
         )
         state = self.docker.inspect_container(container)
         payload = {
@@ -1374,6 +1460,18 @@ class AdminLifecycleService:
                 "admin_service_missing",
                 f"the compose file does not define the {deployment['service']} service",
             )
+        # Its hash is a required field of every Admin plan, and an unreadable
+        # file hashes to "". Without this the plan is shown in full and refused
+        # at confirmation with "plan again" -- advice that can never work,
+        # because planning again produces the same empty hash. The repair view
+        # already knows this check and names the same remedy.
+        if not deployment["env_exists"]:
+            raise AdminLifecycleError(
+                "admin_environment_missing",
+                f"the Admin environment file {deployment['env_file']} is missing; "
+                "recreate it with install-admin-console.sh before installing or "
+                "rolling back",
+            )
 
     def _require_no_admin_transition(self):
         """Stand back while the Admin console is replacing itself.
@@ -1407,6 +1505,10 @@ class AdminLifecycleService:
         """
 
         if state["deployment"]["service_defined"]:
+            # A deployment to edit has to be a complete one. An install planned
+            # against a half-present deployment is refused at confirmation for
+            # a missing field, with no advice that can be acted on.
+            self._require_deployment(state)
             return False
         if state["installed"]:
             # Something created this container without a compose file the

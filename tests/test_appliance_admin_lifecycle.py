@@ -10,7 +10,7 @@ Docker engine — no container is started.
 import pytest
 
 from appliance.admin_lifecycle import TYPE_INSTALL, TYPE_ROLLBACK
-from appliance.agent import AgentHandlers
+from appliance.agent import AgentError, AgentHandlers
 from appliance.operations import (
     STATE_FAILED_RECOVERABLE,
     STATE_FAILED_TERMINAL,
@@ -849,3 +849,164 @@ def test_a_listener_with_no_docker_daemon_running_is_a_conflict(tmp_path):
 
     assert finding.ok is False, finding
     assert finding.indeterminate is False, finding
+
+
+HOST_NETWORK_LISTENER = (
+    'LISTEN 0 4096 0.0.0.0:8090 0.0.0.0:* users:(("gunicorn",pid=743,fd=5))\n'
+    'LISTEN 0 4096 [::]:8090 [::]:* users:(("gunicorn",pid=743,fd=6))\n'
+)
+
+
+def test_the_appliances_own_host_networked_admin_owns_its_port(tmp_path):
+    """The shape the appliance's own installer produces, reported as a conflict.
+
+    `install-admin-console.sh` is called with only --tag/--install-dir/--no-start,
+    so NETWORK stays "host": the compose file gets `network_mode: host` and no
+    `ports:` mapping. Such a container publishes nothing, so
+    `docker ps --filter publish=8090` comes back empty -- which the code read as
+    proof that somebody else holds the port. Repair then always has one
+    non-manual finding left and can never report success, and the operator is
+    told to stop the Admin console in order to fix the Admin console.
+    """
+
+    services = healthy_appliance(tmp_path)
+    services.host.use_host_network(ADMIN_CONTAINER)
+    services.host.listening_ports = HOST_NETWORK_LISTENER
+
+    finding = port_finding(services)
+
+    assert finding.ok is True, finding.detail
+    assert finding.indeterminate is False, finding.detail
+
+
+def test_a_dual_stack_listener_is_one_socket_not_two_conflicts(tmp_path):
+    services = healthy_appliance(tmp_path)
+    services.host.publish_port(ADMIN_CONTAINER, 8090)
+    services.host.listening_ports = ADMIN_LISTENER + (
+        'LISTEN 0 4096 [::]:8090 [::]:* users:(("docker-proxy",pid=901,fd=5))\n'
+    )
+
+    finding = port_finding(services)
+
+    assert finding.ok is True, finding.detail
+
+
+def test_a_foreign_listener_on_a_host_networked_appliance_is_still_a_conflict(tmp_path):
+    """The relaxation must not swallow the case the check exists for."""
+
+    services = healthy_appliance(tmp_path)
+    services.host.use_host_network(ADMIN_CONTAINER)
+    services.host.containers.pop(ADMIN_CONTAINER)
+    services.host.listening_ports = FOREIGN_LISTENER
+
+    finding = port_finding(services)
+
+    assert finding.ok is False, finding.detail
+
+
+def test_an_admin_install_is_refused_at_plan_time_when_the_environment_file_is_gone(tmp_path):
+    """The plan was shown in full and then refused at confirmation, forever.
+
+    `environment_hash()` returns "" for an unreadable environment file, and the
+    empty value is refused three independent times when the confirmation is
+    validated -- with `operation_plan_requires_replanning`, whose remedy is to
+    plan again. Planning again produces the same empty hash, so Install, Update
+    and Rollback were blocked with no advice that could ever work. The state is
+    one this project produces itself: the installer writes `.env.admin` "for
+    reference", and the repair view already knows the check and names the
+    manual remedy.
+    """
+
+    services = healthy_appliance(tmp_path)
+    services.admin.deployment().env_file.unlink()
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers.dispatch({"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"})
+
+    assert excinfo.value.code == "admin_environment_missing"
+    assert "install-admin-console.sh" in excinfo.value.message
+
+
+def test_an_admin_rollback_is_refused_at_plan_time_without_an_environment_file(tmp_path):
+    services = healthy_appliance(tmp_path)
+    services.admin.deployment().env_file.unlink()
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers.dispatch({"operation": "admin.plan_rollback"})
+
+    assert excinfo.value.code == "admin_environment_missing"
+
+
+def admin_replaced_itself(services, *, from_tag="v1.0.0", to_tag="v1.1.0"):
+    """What the Admin console's own Guided Upgrade leaves behind.
+
+    It replaces the container from its sidecar and rewrites the deployment it
+    shares with the appliance. It writes nothing back to the appliance's
+    known-good record -- `admin_transition` states in so many words that this
+    side only ever reads that file.
+    """
+
+    host = services.host
+    host.publish_image(from_tag)
+    host.pull_local(f"{ADMIN_REPOSITORY}:{from_tag}")
+    services.admin.known_good.record(
+        admin_image=f"{ADMIN_REPOSITORY}:{from_tag}",
+        admin_digest=host.images[f"{ADMIN_REPOSITORY}:{from_tag}"]["_digest"],
+        admin_version=from_tag,
+    )
+    host.write_deployment(tag=to_tag, variable_tag=False)
+    host.publish_image(to_tag)
+    host.pull_local(f"{ADMIN_REPOSITORY}:{to_tag}")
+    host.run_container(ADMIN_CONTAINER, f"{ADMIN_REPOSITORY}:{to_tag}")
+    return services
+
+
+def test_a_restart_after_an_admin_side_self_update_is_not_a_failure(tmp_path):
+    """The known-good record goes stale and nothing on this side refreshes it.
+
+    Verifying a restart against that record asks a question a restart cannot
+    answer: it brings up what the deployment names and can bring up nothing
+    else. The appliance reported image_mismatch, mapped that to a terminal
+    MANUAL_ACTION_REQUIRED, and did the same for Repair -- so a healthy,
+    up-to-date Admin was permanently unrecoverable from the appliance.
+    """
+
+    services = admin_replaced_itself(healthy_appliance(tmp_path))
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "admin.plan_lifecycle", "action": "restart"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.state == STATE_SUCCEEDED, (record.state, record.error)
+
+
+def test_a_repair_does_not_demand_reinstalling_the_admin_the_deployment_asks_for(tmp_path):
+    services = admin_replaced_itself(healthy_appliance(tmp_path))
+
+    findings = {item.check: item for item in services.admin.inspect_repair()}
+
+    assert findings["admin_identity"].ok is True, findings["admin_identity"].detail
+    assert findings["admin_identity"].action == ""
+
+
+def test_a_container_matching_neither_the_record_nor_the_deployment_is_still_a_fault(tmp_path):
+    """The relaxation must not swallow a container nobody asked for."""
+
+    services = admin_replaced_itself(healthy_appliance(tmp_path))
+    services.host.publish_image("v9.9.9")
+    services.host.pull_local(f"{ADMIN_REPOSITORY}:v9.9.9")
+    services.host.run_container(ADMIN_CONTAINER, f"{ADMIN_REPOSITORY}:v9.9.9")
+
+    findings = {item.check: item for item in services.admin.inspect_repair()}
+
+    assert findings["admin_identity"].ok is False
+    assert findings["admin_identity"].action == "recreate_admin"
