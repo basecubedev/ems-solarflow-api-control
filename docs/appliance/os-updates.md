@@ -172,6 +172,25 @@ by the name of the slot: `previous.deb` is rewritten by every install, so a
 deadline that trusted the path alone could be made to reinstall the very package
 it was armed to undo.
 
+While a deadline is armed and has not been judged, the appliance refuses a
+second install or revert -- the console showed both buttons disabled, but only
+the browser was enforcing it, and each acceptance rotated the archive that
+deadline would restore out of the way-back slot and overwrote the deadline
+itself. Once the window has run out without a verdict both become available
+again, which is deliberate: taking them away on a board whose only alternative
+is a keyboard would be the failure the deadline exists to prevent.
+
+A revert that one of the two paths without Python performed -- the installer's
+own fallback, or the armed reverter -- is folded back into the retained record
+before the next install is planned. Neither can amend it, so the record went on
+naming the package `dpkg` refused as the current one, and the next update
+rotated *that* into the way-back slot.
+
+Execution is bound to the release the plan showed, by digest and by version,
+not merely to its release id: the index is read again at confirmation time, and
+an asset republished under the same id would otherwise install a different
+package than the one that was agreed to.
+
 An install offering the package already current keeps the way back it has rather
 than rotating it away — both slots holding one package is a revert that leads
 nowhere, and the console stops offering it.

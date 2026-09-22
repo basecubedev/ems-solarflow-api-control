@@ -271,6 +271,43 @@ def retain(
     return retention
 
 
+def adopt_previous_as_current(paths):
+    """Make the record say what is running after a revert Python never drove.
+
+    ``install-manager.sh`` and the armed reverter both put ``previous.deb``
+    back, and neither can amend this record -- there is no Python on those
+    paths by design. The record then goes on naming the package dpkg refused as
+    current, and the next install rotates *that* into the way-back slot, taking
+    the one archive this appliance is known to have run off the disk.
+
+    Idempotent: it clears ``previous``, so a second call finds nothing to do.
+    """
+
+    existing = read(paths)
+    if existing.unreadable or not existing.previous.present:
+        return existing
+
+    directory = Path(paths.packages_dir)
+    current_path = directory / CURRENT_NAME
+    _copy(directory / PREVIOUS_NAME, current_path)
+    current = RetainedPackage(
+        path=str(current_path),
+        sha256=existing.previous.sha256,
+        version=existing.previous.version,
+        build_id=existing.previous.build_id,
+        retained_at=existing.previous.retained_at,
+        architecture=existing.previous.architecture,
+        state_implements=dict(existing.previous.state_implements),
+        state_reads=dict(existing.previous.state_reads),
+    )
+    # No previous: the archive that was current is the one that was refused,
+    # and the one before it went when this install rotated. Saying there is a
+    # way back when there is none is what this whole record exists to prevent.
+    retention = Retention(current=current, previous=RetainedPackage())
+    _write_record(paths, retention)
+    return retention
+
+
 def revert_target(paths):
     """The archive a revert would install, or why there is none."""
 
