@@ -125,6 +125,45 @@ def render_authorized_keys(keys):
     return "".join(f"{key.line}\n" for key in keys)
 
 
+def unparsed_lines(text):
+    """Lines this parser does not understand, which are not this file's to drop.
+
+    OpenSSH accepts more than ``validate_public_key`` does: an options prefix
+    such as ``from="10.0.0.1",no-pty``, a ``cert-authority`` line, a key type
+    outside SUPPORTED_KEY_TYPES, and the operator's own comments. Rewriting the
+    file from the parsed list alone deleted every one of them on the next add or
+    remove -- silently, and with a success message. On ``ems-shell``, the
+    account that reaches root and exists for the case where the console is the
+    broken thing, that is an operator locked out by an operation that reported
+    success.
+    """
+
+    kept = []
+    for line in (text or "").splitlines():
+        entry = line.strip()
+        if not entry:
+            continue
+        if entry.startswith("#"):
+            kept.append(line)
+            continue
+        try:
+            validate_public_key(entry)
+        except ValidationError:
+            kept.append(line)
+    return kept
+
+
+def foreign_key_lines(text):
+    """Unparsed lines that are not comments, which sshd will still honour.
+
+    The attribution gate works on parsed keys, so an options-prefixed or
+    certificate line was invisible to it: the subsystem reported every key
+    attributed while sshd was accepting one nothing here could account for.
+    """
+
+    return [line for line in unparsed_lines(text) if not line.strip().startswith("#")]
+
+
 class AuthorizedKeysStore:
     """Read and atomically rewrite one account's ``authorized_keys``."""
 
@@ -142,10 +181,18 @@ class AuthorizedKeysStore:
         return self.ssh_dir / "authorized_keys"
 
     def list(self):
+        return parse_authorized_keys(self._text())
+
+    def _text(self):
         try:
-            return parse_authorized_keys(self.path.read_text(encoding="utf-8", errors="replace"))
+            return self.path.read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
-            return []
+            return ""
+
+    def unparsed(self):
+        """What is in the file that this store does not manage."""
+
+        return unparsed_lines(self._text())
 
     def _own(self, target):
         # Ownership boundary: root owns the key material, the account's group
@@ -158,13 +205,15 @@ class AuthorizedKeysStore:
         except (OSError, PermissionError):
             pass
 
-    def _write(self, keys):
+    def _write(self, keys, *, preserve=()):
         self.ssh_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(self.ssh_dir, SSH_DIR_MODE)
         self._own(self.ssh_dir)
 
         tmp = self.ssh_dir / f".authorized_keys.{os.getpid()}.tmp"
         with open(tmp, "w", encoding="utf-8") as handle:
+            for line in preserve:
+                handle.write(line.rstrip("\n") + "\n")
             handle.write(render_authorized_keys(keys))
             handle.flush()
             os.fsync(handle.fileno())
@@ -180,7 +229,7 @@ class AuthorizedKeysStore:
         existing = self.list()
         if any(item.fingerprint == key.fingerprint for item in existing):
             raise ValidationError("duplicate_public_key", "this key is already authorized")
-        self._write(existing + [key])
+        self._write(existing + [key], preserve=self.unparsed())
         return key
 
     def remove(self, fingerprint):
@@ -188,10 +237,18 @@ class AuthorizedKeysStore:
         remaining = [item for item in existing if item.fingerprint != fingerprint]
         if len(remaining) == len(existing):
             raise ValidationError("unknown_public_key", "no authorized key with that fingerprint")
-        self._write(remaining)
+        self._write(remaining, preserve=self.unparsed())
         return len(existing) - len(remaining)
 
     def revoke_all(self):
-        removed = len(self.list())
+        """Everything goes, including what this store cannot read.
+
+        The one place where preserving an unparsed line would defeat the point:
+        the operator asked for every way in to be closed, and a line that grants
+        access is a way in whether or not this parser understands it. The count
+        says how many lines went, not how many of them were parsable.
+        """
+
+        removed = len(self.list()) + len(self.unparsed())
         self._write([])
         return removed

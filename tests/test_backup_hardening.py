@@ -418,3 +418,56 @@ def test_sqlite_marked_privacy_relevant_not_secret(tmp_path):
     )
     assert entry["sensitive"] is False
     assert entry["privacy_relevant"] is True
+
+
+# ---------------------------------------------------------------------------
+# A write the filesystem refuses is a restore failure, not a crash
+# ---------------------------------------------------------------------------
+
+def test_a_write_the_filesystem_refuses_is_reported_as_a_backup_failure(tmp_path, monkeypatch):
+    """`_atomic_write` raises OSError, and every caller catches BackupError.
+
+    A full SD card -- the state this appliance reaches on its own, since nothing
+    prunes the rollback archive each restore creates -- makes the second file of
+    a restore fail with ENOSPC. The OSError then walks straight past
+    `except BackupError` in the Admin restore, in its auto-rollback and in the
+    dashboard's, so the half-applied restore is never rolled back, the rollback
+    archive is never named to the operator, and the job ends as "failed
+    unexpectedly" with no step detail.
+    """
+
+    base, config, config_path = write_project(tmp_path)
+    path = create(base, config, config_path)
+    with open(config_path, "w") as handle:
+        handle.write('{"changed": true}')
+
+    real_replace = os.replace
+
+    def refuse(source, target, *args, **kwargs):
+        if str(target).endswith("config.json"):
+            raise OSError(28, "No space left on device")
+        return real_replace(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(backup.os, "replace", refuse)
+
+    with pytest.raises(backup.BackupError) as excinfo:
+        backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+    assert "config.json" in str(excinfo.value)
+    assert "No space left on device" in str(excinfo.value)
+
+
+def test_a_directory_that_cannot_be_created_is_reported_as_a_backup_failure(
+    tmp_path, monkeypatch
+):
+    base, config, config_path = write_project(tmp_path)
+    path = create(base, config, config_path)
+    os.remove(os.path.join(base, "data", "runtime-state.json"))
+
+    def refuse(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(backup.os, "makedirs", refuse)
+
+    with pytest.raises(backup.BackupError):
+        backup.restore_backup(path, base_dir=base, on_conflict="replace")

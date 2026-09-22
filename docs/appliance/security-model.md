@@ -346,9 +346,21 @@ created, carrying a random secret that is also stored in the root-only record:
 /var/lib/ems-backup/.ssh                     root:ems-backup 0750, so sshd can read authorized_keys
 ```
 
-The record binds the account name, uid, primary gid, home path, the home's
-device and inode *and* the marker's secret. All of them have to match before
-anything is moved, quarantined, expired or deleted:
+The record binds the account name, uid, primary gid, home path and the marker's
+secret. All of them have to match before anything is moved, quarantined,
+expired or deleted, and so does the path to the home: every component above it
+must be a real directory, because a redirected ancestor makes the recorded path
+name somebody else's directory.
+
+The home's device and inode are recorded and **not** compared. Neither value
+survives the image build — the record is written while the root filesystem is
+still a directory tree on the builder's disk, and packing it into ext4
+reassigns inodes — so comparing them refused every appliance ever flashed. Both
+implementations follow that rule now; the packaged shell kept comparing them
+for a while, which made `ems-appliance backup-account status` report `current`
+while `backup-account.sh ownership-state` reported `ownership_conflict` for the
+same host, with no way out in the product. A contract test holds the two to one
+answer.
 
 | Situation | What purge does |
 |---|---|

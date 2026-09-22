@@ -178,13 +178,21 @@ def test_a_schema_less_record_reports_the_migration_state(host):
 
 
 def test_a_schema_less_record_keeps_backup_access_disabled(host):
+    """The key stays the operator's, and the exit code says nothing was done.
+
+    prerm reads a zero exit as proof that authentication was withdrawn, so
+    reporting success here cancelled the fail-closed gate with its own
+    fallback: `apt remove` said nothing, and purge went on to delete the sshd
+    Match block confining the live key that was left behind.
+    """
+
     home, _ = foreign_home(host)
     schema_less_record(host, home=home)
     host.run("ensure")
 
     result = host.run("disable")
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.returncode != 0, result.stdout + result.stderr
     assert (home / ".ssh" / "authorized_keys").read_text(encoding="utf-8") == FOREIGN_KEY
 
 
@@ -442,3 +450,76 @@ def test_an_owned_installation_is_never_reported_as_legacy(host):
     result = host.run("ownership-state")
 
     assert result.stdout.strip() == "current", result.stdout
+
+
+# --- one state machine, two implementations ---------------------------------
+
+
+def both_ownership_states(host):
+    """What the shell and the Python side each call the current state."""
+
+    from types import SimpleNamespace
+
+    shell = host.run("ownership-state").stdout.strip()
+    entry = None
+    if host.account_exists():
+        entry = SimpleNamespace(
+            pw_uid=int(host.account_field(2) or 0),
+            pw_gid=int(host.account_field(3) or 0),
+            pw_dir=host.account_field(5) or "",
+        )
+    paths = SimpleNamespace(package_state_dir=host.marker.parent)
+    python = backup_ownership.ownership_state(paths, BACKUP_USER, entry=entry)
+    return shell, python
+
+
+@pytest.mark.parametrize(
+    "prepare",
+    (
+        pytest.param(lambda host: host.run("ensure"), id="package-owned"),
+        pytest.param(
+            lambda host: (foreign_home(host), schema_less_record(host, home=host.home)),
+            id="schema-less-record",
+        ),
+        pytest.param(
+            lambda host: (host.add_account(home=host.home, uid=1500),
+                          schema_two_record(host, home=host.home)),
+            id="schema-two-record",
+        ),
+        pytest.param(lambda host: None, id="no-record"),
+    ),
+)
+def test_the_two_ownership_state_implementations_agree(host, prepare):
+    """A closed set of states answered twice, by two files, for one operator.
+
+    The shell kept comparing `device:inode` long after the comment on
+    `home_identity` said that comparison was abandoned because it "refused every
+    appliance ever flashed". So after the documented recovery -- reflash and
+    restore a backup -- `ems-appliance backup-account status` said `current`
+    while `backup-account.sh ownership-state` said `ownership_conflict`, and
+    `migrate-ownership` refused to resolve a state with nothing wrong with it.
+    Neither side had a test binding it to the other.
+    """
+
+    prepare(host)
+
+    shell, python = both_ownership_states(host)
+
+    assert shell == python, f"shell={shell!r} python={python!r}"
+
+
+def test_a_home_whose_inode_changed_is_still_the_recorded_home(host):
+    """The state after the documented reflash-and-restore recovery."""
+
+    import json
+
+    host.run("ensure")
+    record = host.record()
+    record["home_inode"] = str(int(record["home_inode"]) + 1)
+    record["home_device"] = str(int(record["home_device"]) + 1)
+    host.marker.write_text(json.dumps(record), encoding="utf-8")
+
+    shell, python = both_ownership_states(host)
+
+    assert shell == backup_ownership.STATE_CURRENT, shell
+    assert python == backup_ownership.STATE_CURRENT, python

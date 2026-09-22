@@ -14,6 +14,7 @@ intended.
 """
 
 import json
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -88,6 +89,39 @@ class ExportPath:
             "source_verified": self.source_verified,
             "confined": self.confined,
         }
+
+
+# A named-user ACL entry is capped by the file's mask, and that mask is derived
+# from the create mode's group bits. Measured on a POSIX-ACL filesystem: a file
+# created 0600 under a directory carrying `default:user:X:r-x` ends up with
+# `mask::---`, so the grant reads as present in getfacl and is effective for
+# nothing; created 0640 it ends up with `mask::r--` and works. An ordinary stat
+# is therefore the exact test, and it does not depend on the acl tools being
+# installed or on this process being able to become the account.
+READABLE_BY_OTHERS = stat.S_IRGRP | stat.S_IROTH
+
+
+def newest_file(path, *, max_entries=5000):
+    """The most recent regular file under ``path``, or ``None``."""
+
+    newest, stamp, count = None, -1.0, 0
+    try:
+        candidates = path.rglob("*")
+    except OSError:
+        return None
+    for entry in candidates:
+        if count >= max_entries:
+            break
+        try:
+            if not entry.is_file():
+                continue
+            modified = entry.stat().st_mtime
+        except OSError:
+            continue
+        count += 1
+        if modified > stamp:
+            newest, stamp = entry, modified
+    return newest
 
 
 def directory_size(path, *, max_entries=20000):
@@ -252,6 +286,7 @@ class BackupAccessService:
         unmounted = [
             item["name"] for item in present if item["state"] not in (STATE_MOUNTED,)
         ]
+        unreadable = self._unreadable_exports(present)
 
         if state["unmanaged"]:
             status = STATUS_DEGRADED
@@ -278,6 +313,13 @@ class BackupAccessService:
         elif not policy["confirmed"]:
             status = STATUS_DEGRADED
             detail = "sshd does not enforce: " + ", ".join(policy["violations"])
+        elif unreadable:
+            status = STATUS_DEGRADED
+            detail = (
+                f"exported files are not readable by {self.config.backup_user}: "
+                + ", ".join(unreadable)
+                + "; re-run the export setup so the recursive ACL covers them"
+            )
         else:
             status = STATUS_CONFIGURED
             detail = "read-only SFTP export root is active"
@@ -288,8 +330,31 @@ class BackupAccessService:
             "export_root": str(self.paths.export_root),
             "mounted": [item["name"] for item in exports if item["state"] == STATE_MOUNTED],
             "missing": [item["name"] for item in exports if not item["exists"]],
+            "unreadable": unreadable,
             "reported": recorded,
         }
+
+    def _unreadable_exports(self, present):
+        """Exports whose newest file the backup account cannot read.
+
+        The one check that distinguishes "the export root is set up" from "the
+        backup an operator was just told exists can be fetched". Newest rather
+        than all of them: it is the file the operator is about to ask for, and
+        it is the one created after the last recursive ACL pass.
+        """
+
+        names = []
+        for item in present:
+            newest = newest_file(Path(item["path"]))
+            if newest is None:
+                continue
+            try:
+                mode = newest.stat().st_mode
+            except OSError:
+                continue
+            if not mode & READABLE_BY_OTHERS:
+                names.append(item["name"])
+        return names
 
     def _recorded_status(self):
         """What the packaged setup script last wrote, for diagnosis only."""

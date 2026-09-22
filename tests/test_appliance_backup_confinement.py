@@ -571,3 +571,66 @@ def test_the_advertised_command_names_where_backups_actually_are(tmp_path):
 
     assert "/" + DEFAULT_BACKUP_DIR_NAME in commands, commands
     assert ":/backups " not in commands, "still sends the owner to the empty export"
+
+
+# --- whether the account can read what is exported --------------------------
+
+
+def exported_file(services, name, mode):
+    """One file under an export, created the way EMS creates its archives."""
+
+    import os
+
+    source = services.paths.export_paths()[name]
+    source.mkdir(parents=True, exist_ok=True)
+    target = source / "ems-config-manual-20260922.tar.gz"
+    handle = os.open(target, os.O_WRONLY | os.O_CREAT, mode)
+    os.close(handle)
+    return target
+
+
+def test_an_export_whose_newest_file_the_account_cannot_read_is_degraded(tmp_path):
+    """The mask a 0600 create mode derives makes the ACL grant effective for
+    nothing.
+
+    `setup-export-root.sh` grants `u:ems-backup:rX` with an explicit `m::rX`
+    because it knows a named-user entry is capped by the file's mask. That mask
+    is re-derived from each file's create mode, and `ems/backup.py` writes every
+    archive with `tempfile.mkstemp`, which is 0600. Measured on a POSIX-ACL
+    filesystem: `default:user:X:r-x` plus create mode 0600 yields
+    `user:X:r-x  #effective:---` and `mask::---`.
+
+    So the archive an operator was just told exists cannot be fetched over the
+    documented SFTP path -- while the appliance reported the export as
+    `configured`, because nothing ever asked whether one exported file was
+    readable.
+    """
+
+    services = appliance(tmp_path)
+    exported_file(services, "data", 0o600)
+
+    access = services.backup.export_access()
+
+    assert access["status"] == "degraded", access
+    assert services.config.backup_user in access["detail"], access["detail"]
+    assert "data" in access["unreadable"], access
+
+
+def test_an_export_whose_files_carry_a_group_read_bit_is_not_degraded(tmp_path):
+    """0640 leaves a non-empty mask, so the grant is effective."""
+
+    services = appliance(tmp_path)
+    exported_file(services, "data", 0o640)
+
+    access = services.backup.export_access()
+
+    assert access["unreadable"] == [], access
+
+
+def test_an_export_with_nothing_in_it_yet_is_not_called_unreadable(tmp_path):
+    services = appliance(tmp_path)
+    services.paths.export_paths()["data"].mkdir(parents=True, exist_ok=True)
+
+    access = services.backup.export_access()
+
+    assert access["unreadable"] == [], access

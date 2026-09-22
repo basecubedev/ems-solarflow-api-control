@@ -218,14 +218,21 @@ home_marker_exists() {
     [ -e "$marker" ] || [ -L "$marker" ]
 }
 
+# The same rule as home_is_recorded, minus the marker: one question about the
+# home, asked the same way on both sides of the split. It used to compare
+# device:inode, which the comment on home_identity says was abandoned because it
+# refused every appliance ever flashed -- so `backup-account status` reported
+# `current` from Python while this said `ownership_conflict`, and
+# migrate-ownership refused to resolve a state that had nothing wrong with it.
 home_matches_recorded_identity() {
     recorded_home=$(record_value home)
     [ -n "$recorded_home" ] || return 1
-    [ -L "$recorded_home" ] && return 1
+    if [ -L "$recorded_home" ]; then
+        return 1
+    fi
     [ -d "$recorded_home" ] || return 1
-    recorded_identity="$(record_value home_device):$(record_value home_inode)"
-    [ "$recorded_identity" != ":" ] || return 1
-    [ "$(home_identity "$recorded_home")" = "$recorded_identity" ] || return 1
+    [ "$(record_value home_device):$(record_value home_inode)" != ":" ] || return 1
+    real_chain "$recorded_home" || return 1
     return 0
 }
 
@@ -754,9 +761,17 @@ disable_account() {
     if ! account_exists; then
         return 0
     fi
+    # Non-zero, because prerm reads a zero exit as proof that authentication
+    # was withdrawn -- and nothing was withdrawn here. The CLI already returns
+    # an error for exactly this state, which is why prerm falls through to this
+    # script; answering 0 cancelled the fail-closed gate with its own fallback.
+    # apt remove then said nothing, and purge went on to delete the sshd Match
+    # block that confines the live key it left behind.
     if ! record_says_created || ! identity_matches; then
-        note "the backup account $BACKUP_USER is not the account this package created; leaving its key material untouched."
-        return 0
+        caution "the backup account $BACKUP_USER is not the account this package created;
+  its key material was left untouched and its authentication was not withdrawn. Adopt the
+  account with 'ems-appliance backup-access migrate-ownership' or remove it by hand."
+        return 1
     fi
     # The key file at a replaced home belongs to whoever put it there. Expiring
     # the account withdraws authentication without touching that file.
