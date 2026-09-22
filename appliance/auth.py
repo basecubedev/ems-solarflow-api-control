@@ -393,13 +393,49 @@ class LoginRateLimiter:
         return len(self._active(key)) >= self.max_failures
 
     def record_failure(self, key):
+        """Record one failure and name it, so an attempt nobody judged can be
+        taken back."""
+
         attempts = self._active(key)
-        attempts.append(self._time())
+        stamp = self._time()
+        attempts.append(stamp)
         self.failures[key] = attempts
-        if len(self.failures) > self.max_entries:
-            oldest = sorted(self.failures.items(), key=lambda item: max(item[1] or [0]))
-            for stale, _ in oldest[: len(self.failures) - self.max_entries]:
-                self.failures.pop(stale, None)
+        self._evict()
+        return stamp
+
+    def forget(self, key, stamp):
+        """Take back one recorded attempt. Missing is not an error."""
+
+        attempts = self.failures.get(key)
+        if not attempts or stamp is None:
+            return
+        try:
+            attempts.remove(stamp)
+        except ValueError:
+            return
+        if attempts:
+            self.failures[key] = attempts
+        else:
+            self.failures.pop(key, None)
+
+    def _evict(self):
+        """Expired keys first. Evicting a live one flushes somebody's lockout,
+        and an attacker with a /64 can make that happen on demand."""
+
+        if len(self.failures) <= self.max_entries:
+            return
+        cutoff = self._time() - self.window_seconds
+        for key in [
+            key
+            for key, attempts in self.failures.items()
+            if not attempts or max(attempts) <= cutoff
+        ]:
+            self.failures.pop(key, None)
+        if len(self.failures) <= self.max_entries:
+            return
+        oldest = sorted(self.failures.items(), key=lambda item: max(item[1] or [0]))
+        for stale, _ in oldest[: len(self.failures) - self.max_entries]:
+            self.failures.pop(stale, None)
 
     def reset(self, key):
         self.failures.pop(key, None)
