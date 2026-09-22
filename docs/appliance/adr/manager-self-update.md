@@ -45,7 +45,8 @@ installed on an operator's button.**
 - **Never automatic.** The manager updates when an operator asks. An automatic
   update distributes an untested package to every appliance at once, and the
   revert this path provides has to be a decision somebody made.
-- **Going back is a first-class outcome.** The same control installs an older
+- **Going back is a first-class outcome**, with one stated exception below.
+  The same control installs an older
   package as readily as a newer one, and `previous.deb` is retained before
   anything is unpacked. The appliance has no other recovery for its console.
   The first update is the one this nearly missed: the manager a card is flashed
@@ -101,6 +102,33 @@ The remaining backstop is a person at a keyboard:
 - **OS coverage.** `previous.deb` covers the manager. It does not cover the
   kernel, the firmware or the operating system, and `apt` on this appliance is
   deliberately unrestricted. A kernel that does not boot is a re-flash.
+- **Going back across a new state-schema axis.** "An older package as readily
+  as a newer one" holds for every axis that exists today and stops holding the
+  moment one is added. `ManagerUpdateService._state_schemas` reports
+  `merge(stamp.schemas, implemented)` — the running manager's whole implemented
+  set, whether or not any state exists in those formats — and
+  `artifact_trust.state_schema_problems` refuses every artefact that does not
+  declare an axis that set names. No package built before the axis existed can
+  declare it. Measured against a manager carrying one extra axis:
+
+  ```text
+  artifact_state_schema_undeclared: this appliance holds ssh_key_accounts
+  state; the artifact does not say whether its manager can read that format
+  ```
+
+  The appliance holds no such state, so the refusal is not only unwanted, it is
+  untrue. Both browser routes go together — the revert button and "install the
+  older release from the index" — and the two that remain are `sudo
+  ems-appliance rollback-manager`, which does not run this check, and the
+  unconfirmed-install deadline, which does not know about it. Nothing has
+  triggered this: no axis has been added since `5b34850`.
+
+  The remedy is a decision about what claiming an axis means, not a patch:
+  either an axis becomes blocking only once state in that format has been
+  written, or axes are introduced onto a grace list and come off it when the
+  format ships state. Whoever adds the next axis has to make that call first;
+  `RETIRED_SCHEMAS` is the counterpart this module already has for the opposite
+  direction, and there is no counterpart for this one.
 
 ## Consequences
 
