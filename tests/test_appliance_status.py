@@ -6,6 +6,7 @@ degrade its own section, never the whole overview.
 """
 
 import json
+import os
 import tarfile
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 from appliance.agent import AgentHandlers
 from appliance.hostprobe import HostProbe
 from appliance.status import (
+    FINDING_WARNING,
     HEALTH_ATTENTION,
     HEALTH_DEGRADED,
     HEALTH_HEALTHY,
@@ -507,3 +509,50 @@ def test_the_support_archive_carries_every_declared_log_source(tmp_path):
 
     for source in validation.LOG_SOURCES:
         assert f"logs/{source}.log" in plan["members"], source
+
+
+# --- a count is only as old as the index behind it --------------------------
+
+
+def age_the_package_index(tmp_path, services, seconds):
+    """Age the index against the service's own clock, not the wall clock.
+
+    The harness injects a fixed time, so an mtime derived from time.time() is
+    off by whatever the two differ by. Reading the reported age of an epoch-zero
+    mtime gives the service's "now" without reaching into it.
+    """
+
+    lists = host_files(tmp_path) / "var" / "lib" / "apt" / "lists"
+    lists.mkdir(parents=True, exist_ok=True)
+    os.utime(lists, (0, 0))
+    now = services.status.overview()["updates"]["index_age_seconds"]
+    stamp = now - seconds
+    os.utime(lists, (stamp, stamp))
+    return lists
+
+
+def test_an_index_nobody_refreshed_is_not_an_empty_list(tmp_path):
+    """The check never runs apt-get update, on purpose: a status poll must not
+    change the machine it reports on. The cost is that "0 security updates" is
+    only as old as the last refresh, and a live Pi 3B+ was found reporting
+    exactly that against an index untouched for twenty-three days. Nothing read
+    index_age_seconds, so nothing said so."""
+
+    services = appliance(tmp_path)
+    age_the_package_index(tmp_path, services, 23 * 24 * 60 * 60)
+
+    warnings = services.status.overview()["health"]["warnings"]
+    stale = [item for item in warnings if item["code"] == "package_index_stale"]
+
+    assert stale, [item["code"] for item in warnings]
+    assert "23 days" in stale[0]["message"]
+    assert stale[0]["severity"] == FINDING_WARNING
+
+
+def test_a_fresh_index_says_nothing(tmp_path):
+    services = appliance(tmp_path)
+    age_the_package_index(tmp_path, services, 3600)
+
+    codes = [item["code"] for item in services.status.overview()["health"]["warnings"]]
+
+    assert "package_index_stale" not in codes

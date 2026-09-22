@@ -42,6 +42,14 @@ VIEW_OVERVIEW = "overview"
 VIEW_ADMIN = "admin"
 VIEW_UPDATES = "updates"
 
+# An update check here is deliberately read-only: it never runs apt-get update,
+# which is what keeps a status poll from changing the machine it reports on.
+# The cost is that "0 security updates" is only ever as old as the last refresh,
+# and a live appliance was found reporting exactly that against an index nobody
+# had touched for twenty-three days. A week is generous for a security index
+# that moves daily.
+STALE_INDEX_SECONDS = 7 * 24 * 60 * 60
+
 SECTION_LABELS = {
     "system": "Raspberry Pi",
     "docker": "Docker",
@@ -307,6 +315,21 @@ class StatusService:
                         "A restart is needed to finish the updates",
                         "Some of the installed packages only take effect after a restart.",
                         "Restart the Raspberry Pi from the power actions on this page.",
+                    )
+                )
+            age = updates.get("index_age_seconds")
+            if isinstance(age, (int, float)) and age >= STALE_INDEX_SECONDS:
+                days = int(age // 86400)
+                findings.append(
+                    finding(
+                        "package_index_stale",
+                        FINDING_WARNING,
+                        VIEW_UPDATES,
+                        "The package index is out of date",
+                        f"Nothing has refreshed it for {days} days, so the counts above "
+                        "describe what was available then.",
+                        "Open System Updates and refresh the package index before trusting "
+                        "an empty list.",
                     )
                 )
             if not (updates.get("package_manager") or {}).get("healthy", True):

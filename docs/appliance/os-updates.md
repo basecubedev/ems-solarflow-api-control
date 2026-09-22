@@ -12,6 +12,19 @@ own.
 
 The update check is read-only: it never modifies a package or a package index.
 
+That has a consequence worth stating plainly: **an empty list is only as old as
+the last refresh.** Nothing on this appliance refreshes the package index on a
+schedule, so "0 security updates" means "none had been published when somebody
+last ran `apt-get update` here" — which may have been weeks ago. A live Pi 3B+
+was found reporting an empty list against an index nobody had touched for
+twenty-three days.
+
+The index age is shown beside the counts, and an index older than seven days
+raises a warning that names the number of days. Refreshing it is the
+**Refresh package indexes** action below; it is an operator's decision, because
+a status poll that changed the machine it reports on would not be read-only any
+more.
+
 | Item | Meaning |
 |---|---|
 | Security updates | Packages whose candidate comes from a security archive |

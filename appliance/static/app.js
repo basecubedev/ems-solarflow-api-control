@@ -1207,6 +1207,7 @@
         el("p", { class: "status-value", text: String(updates.security_count === undefined ? "—" : updates.security_count) }),
         fact("Security updates", updates.security_count),
         fact("Other updates", updates.normal_count),
+        fact("Index", indexAge(updates)),
         fact("Reboot required", updates.reboot_required)
       ], "card-updates"),
 
@@ -2327,6 +2328,18 @@
     ];
     return actionCard("Root-capable shell access", "Key-only SSH shell, off until enabled",
                       body, "ssh-stage-shell-access");
+  }
+
+  /* "0 security updates" means nothing without saying when anyone last looked.
+     The check never refreshes the index on purpose, so the age is part of the
+     answer rather than a detail. */
+  function indexAge(updates) {
+    var seconds = Number((updates || {}).index_age_seconds);
+    if (!isFinite(seconds) || seconds < 0) return "unknown";
+    var days = Math.floor(seconds / 86400);
+    if (days >= 1) return days + (days === 1 ? " day old" : " days old");
+    var hours = Math.floor(seconds / 3600);
+    return hours + (hours === 1 ? " hour old" : " hours old");
   }
 
   function renderKeyForm(ssh) {
