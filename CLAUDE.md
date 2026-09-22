@@ -187,9 +187,10 @@ Docker. It is not part of the EMS control loop and must not import from `ems/`.
 - `persistent_state.RETIRED_SCHEMAS` may be added to only by removing a state
   format, never by adding one. Dropping an axis makes the next package
   uninstallable on every appliance that recorded it.
-- Barely confirmed on physical hardware — no image has booted on a board. One
-  appliance has installed a manager package over HTTPS, and the deadline it
-  armed failed to decide; that defect is fixed.
+- Thinly confirmed on physical hardware. One Pi 3B+ has booted the image, grown
+  its root, come up, and taken five manager upgrades in place; its armed
+  deadline has decided once, `confirmed`. Nothing has been proven about a
+  revert, about EMS or InfluxDB on a board, or about any other model.
   `docs/appliance/hardware-validation.md` is the authority on what has and has
   not been proven; never upgrade a claim there without the evidence it names.
 
