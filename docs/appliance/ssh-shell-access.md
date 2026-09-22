@@ -137,6 +137,17 @@ operator changed.
 Creating it grants nothing: it is created with no key and with the enable flag
 off.
 
+Purging the package withdraws it. That order matters more than it looks: purge
+also deletes the sshd drop-in, and that drop-in is the gate — it is what refuses
+this account every authentication method while it is switched off. Removing the
+gate and leaving the account would make `apt purge` *widen* access, turning an
+off-by-default root login into an ordinary one under the host's own sshd
+defaults. So the sudo drop-in goes first, the account is expired and locked, and
+only then is the policy withdrawn. Expiry rather than `--lock` alone, because
+locking only the password leaves public-key authentication working — the only
+kind this account ever had. An account that still cannot be deleted is reported
+in the purge summary rather than passed over.
+
 ## See also
 
 - [ssh-backup-access.md](ssh-backup-access.md) — the SFTP account and its confinement
