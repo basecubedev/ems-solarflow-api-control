@@ -2300,6 +2300,12 @@
       fact("Access", on ? "enabled" : "disabled"),
       fact("Key deployment", state.key_deployment_allowed === false
         ? "refused by appliance.conf" : "allowed from this console"),
+      (state.home_writable === false
+        ? el("p", { class: "control-stage-subtitle", "data-test": "shell-access-home-broken",
+            text: "This account's home directory cannot be written by the agent, so a key "
+              + "cannot be deployed onto it. Update the Appliance Manager: the install moves "
+              + "the account to a writable home." })
+        : null),
       el("div", { class: "control-stage-actions" }, [
         el("button", {
           type: "button", class: "primary-button compact", "data-test": "shell-access-enable",

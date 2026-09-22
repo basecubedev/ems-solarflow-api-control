@@ -979,3 +979,73 @@ def test_the_postinst_prepares_the_shell_account_and_the_build_ships_it():
 
     assert "shell-account.sh" in postinst
     assert "shell-account.sh" in build
+
+
+def test_an_account_stranded_in_an_unwritable_home_is_moved(tmp_path):
+    """0.3.3 and 0.3.4 created ems-shell under /home, where the agent cannot
+    write a key. Those boxes already have the account, and the script leaves an
+    existing one alone on purpose -- that rule protects an operator's choice,
+    not a home no key can ever reach. Executed with a scripted getent and
+    usermod so the move is observed rather than read."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "getent").write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  passwd) echo "ems-shell:x:998:998::/home/ems-shell:/bin/bash"; exit 0 ;;\n'
+        "  group) exit 2 ;;\n"
+        "esac\nexit 2\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "usermod").write_text(
+        f'#!/bin/sh\necho "$@" >> {tmp_path}/usermod.calls\nexit 0\n', encoding="utf-8"
+    )
+    for tool in ("getent", "usermod"):
+        (fake_bin / tool).chmod(0o755)
+
+    sudoers = tmp_path / "sudoers.d"
+    sudoers.mkdir()
+    environment = dict(os.environ)
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    environment["EMS_APPLIANCE_SHELL_SUDOERS"] = str(sudoers / "ems-shell")
+    result = subprocess.run(
+        ["sh", str(SHELL_ACCOUNT_SCRIPT)],
+        capture_output=True, text=True, env=environment, timeout=60, check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    calls = (tmp_path / "usermod.calls").read_text(encoding="utf-8")
+    assert "-d /var/lib/ems-shell" in calls, calls
+    assert "-m" in calls, "the contents must move with the home, not be abandoned"
+
+
+def test_a_home_the_operator_chose_is_left_alone(tmp_path):
+    """Only the exact path this package shipped is moved. Anywhere else is a
+    decision somebody made, and an upgrade does not overrule it."""
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "getent").write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  passwd) echo "ems-shell:x:998:998::/srv/operator-chose-this:/bin/bash"; exit 0 ;;\n'
+        "esac\nexit 2\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "usermod").write_text(
+        f'#!/bin/sh\necho "$@" >> {tmp_path}/usermod.calls\nexit 0\n', encoding="utf-8"
+    )
+    for tool in ("getent", "usermod"):
+        (fake_bin / tool).chmod(0o755)
+
+    environment = dict(os.environ)
+    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+    environment["EMS_APPLIANCE_SHELL_SUDOERS"] = str(tmp_path / "absent" / "ems-shell")
+    result = subprocess.run(
+        ["sh", str(SHELL_ACCOUNT_SCRIPT)],
+        capture_output=True, text=True, env=environment, timeout=60, check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "usermod.calls").exists(), "an operator's home was moved"

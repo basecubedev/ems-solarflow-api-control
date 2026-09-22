@@ -42,6 +42,20 @@ SUDOERS_PATH = "/etc/sudoers.d/ems-shell"
 
 SHELL_PATH = "/bin/bash"
 
+# The agent writes authorized_keys and runs under ProtectHome=yes, which gives
+# it an empty read-only tmpfs where /home would be. A home under there cannot
+# be written from the one process that has to write it, so the account is
+# unusable no matter what the console reports. 0.3.3 and 0.3.4 shipped exactly
+# that, and it failed on a live appliance with EROFS rather than at any gate.
+UNWRITABLE_HOME_PREFIX = "/home/"
+
+
+def home_is_writable(home) -> bool:
+    """Whether the agent could write this account's authorized_keys."""
+
+    text = str(home or "")
+    return bool(text) and not text.startswith(UNWRITABLE_HOME_PREFIX)
+
 
 def state_path(paths):
     return Path(paths.agent_state_dir) / STATE_NAME
@@ -118,6 +132,7 @@ __all__ = [
     "STATE_SCHEMA_VERSION",
     "SUDOERS_PATH",
     "enabled",
+    "home_is_writable",
     "set_enabled",
     "state_path",
 ]
