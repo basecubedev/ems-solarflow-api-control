@@ -1071,13 +1071,18 @@ def run_postrm_purge(tmp_path, *, account_exists=True, deluser_works=True):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(exist_ok=True)
     calls = tmp_path / "calls"
-    state = tmp_path / "account-exists"
     if account_exists:
-        state.write_text("yes", encoding="utf-8")
+        (tmp_path / "account-exists-ems-shell").write_text("yes", encoding="utf-8")
 
+    # One marker per account. A single shared one made deluser ems-shell answer
+    # for ems-rescue as well, which hid whether the rescue refusal was written.
+    rescue = tmp_path / "account-exists-ems-rescue"
+    rescue.write_text("yes", encoding="utf-8")
     (fake_bin / "getent").write_text(
         f'#!/bin/sh\necho "getent $@" >> {calls}\n'
-        f'case "$1" in passwd) [ -f {state} ] && exit 0; exit 2 ;; esac\nexit 2\n',
+        f'case "$1" in\n'
+        f'  passwd) [ -f {tmp_path}/account-exists-"$2" ] && exit 0; exit 2 ;;\n'
+        f"esac\nexit 2\n",
         encoding="utf-8",
     )
     (fake_bin / "usermod").write_text(
@@ -1085,7 +1090,7 @@ def run_postrm_purge(tmp_path, *, account_exists=True, deluser_works=True):
     )
     (fake_bin / "deluser").write_text(
         f'#!/bin/sh\necho "deluser $@" >> {calls}\n'
-        + (f"rm -f {state}\n" if deluser_works else "")
+        + (f'rm -f {tmp_path}/account-exists-"$2"\n' if deluser_works else "")
         + "exit 0\n",
         encoding="utf-8",
     )
@@ -1187,3 +1192,64 @@ def test_the_purge_summary_still_prints_when_the_drop_in_is_out_of_reach(tmp_pat
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "purge did not complete" in result.stderr, result.stdout + result.stderr
+
+
+def test_purge_leaves_the_rescue_account_refused_over_ssh(tmp_path):
+    """ems-rescue survives a purge, and so must the only thing keeping it off the
+    network.
+
+    Its password is published in docs/appliance/console-recovery.md, and the
+    single reason that is not a LAN login is one Match block inside the policy
+    this purge deletes -- there is no global PasswordAuthentication anywhere in
+    the project. Deleting the gate and leaving the account would have made
+    `apt purge` hand every published credential a way in.
+
+    The account itself is not withdrawn: it is the documented way back into a
+    board that will not boot, and its password may be one the operator chose.
+    """
+
+    sshd_dir = tmp_path / "sshd_config.d"
+    result, _, _ = run_postrm_purge(tmp_path, account_exists=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    left = sshd_dir / "ems-appliance-rescue.conf"
+    assert left.exists(), "nothing keeps ems-rescue off the network after a purge"
+
+    policy = left.read_text(encoding="utf-8")
+    assert "Match User ems-rescue" in policy
+    assert "PasswordAuthentication no" in policy
+    assert "KbdInteractiveAuthentication no" in policy, (
+        "PasswordAuthentication alone leaves PAM's keyboard-interactive path, "
+        "which asks for the same published password"
+    )
+
+
+def test_the_refusal_left_behind_matches_the_one_the_package_generated():
+    """Two files now carry the same refusal and neither can import the other:
+    the postrm runs when appliance/*.py is already gone. Pinned here instead."""
+
+    from appliance.config import ApplianceConfig
+    from appliance.host_config import render_sshd_policy
+    from appliance.paths import AppliancePaths
+
+    generated = render_sshd_policy(
+        AppliancePaths(
+            install_root=Path("/opt/ems-solarflow"),
+            config_dir=Path("/etc/ems-appliance-manager"),
+            state_dir=Path("/var/lib/ems-appliance-manager"),
+            log_dir=Path("/var/log/ems-appliance-manager"),
+            runtime_dir=Path("/run/ems-appliance-manager"),
+            export_root=Path("/srv/ems-appliance-export"),
+        ),
+        ApplianceConfig(),
+    )
+    block = generated.split("Match User ems-rescue\n", 1)[1].split("Match User", 1)[0]
+    directives = {line.strip() for line in block.splitlines() if line.strip()}
+
+    postrm = (PACKAGING / "debian" / "postrm").read_text(encoding="utf-8")
+
+    for directive in directives:
+        assert directive in postrm, (
+            f"the generated policy refuses ems-rescue with {directive!r} and the "
+            "purge leftover does not"
+        )
