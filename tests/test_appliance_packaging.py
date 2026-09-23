@@ -660,9 +660,20 @@ def test_purge_does_not_depend_on_files_dpkg_has_already_removed():
 
 
 def test_purge_deletes_an_account_only_when_the_package_created_it():
+    """The backup account's deletion is gated on its ownership record.
+
+    Measured against that account's own deluser rather than the first one in the
+    file. A second account gained a retirement path of its own, and position in
+    the file was never what this invariant was about -- it is about which check
+    precedes which deletion.
+    """
+
     postrm = (PACKAGING / "debian" / "postrm").read_text(encoding="utf-8")
     gate = postrm.index("created_by_package")
-    assert postrm.index("deluser") > gate, "the ownership record must gate the deletion"
+
+    assert postrm.index('deluser --quiet "$BACKUP_USER"') > gate, (
+        "the ownership record must gate the deletion"
+    )
     assert "home_created_by_package" in postrm, postrm
 
 
@@ -1049,3 +1060,196 @@ def test_a_home_the_operator_chose_is_left_alone(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "usermod.calls").exists(), "an operator's home was moved"
+def run_postrm_purge(tmp_path, *, account_exists=True, deluser_works=True):
+    """Execute the purge branch with scripted account tooling.
+
+    Read as text this would prove only that some words are present. What matters
+    is the order: the account has to be shut before the sshd policy that gates
+    it is deleted, and a deluser that fails must still leave it unusable.
+    """
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir(exist_ok=True)
+    calls = tmp_path / "calls"
+    if account_exists:
+        (tmp_path / "account-exists-ems-shell").write_text("yes", encoding="utf-8")
+
+    # One marker per account. A single shared one made deluser ems-shell answer
+    # for ems-rescue as well, which hid whether the rescue refusal was written.
+    rescue = tmp_path / "account-exists-ems-rescue"
+    rescue.write_text("yes", encoding="utf-8")
+    (fake_bin / "getent").write_text(
+        f'#!/bin/sh\necho "getent $@" >> {calls}\n'
+        f'case "$1" in\n'
+        f'  passwd) [ -f {tmp_path}/account-exists-"$2" ] && exit 0; exit 2 ;;\n'
+        f"esac\nexit 2\n",
+        encoding="utf-8",
+    )
+    (fake_bin / "usermod").write_text(
+        f'#!/bin/sh\necho "usermod $@" >> {calls}\nexit 0\n', encoding="utf-8"
+    )
+    (fake_bin / "deluser").write_text(
+        f'#!/bin/sh\necho "deluser $@" >> {calls}\n'
+        + (f'rm -f {tmp_path}/account-exists-"$2"\n' if deluser_works else "")
+        + "exit 0\n",
+        encoding="utf-8",
+    )
+    for tool in ("getent", "usermod", "deluser"):
+        (fake_bin / tool).chmod(0o755)
+
+    sudoers = tmp_path / "sudoers.d" / "ems-shell"
+    sudoers.parent.mkdir(parents=True, exist_ok=True)
+    sudoers.write_text("ems-shell ALL=(ALL:ALL) NOPASSWD: ALL\n", encoding="utf-8")
+
+    sshd_dir = tmp_path / "sshd_config.d"
+    sshd_dir.mkdir(exist_ok=True)
+    (sshd_dir / "ems-appliance-backup.conf").write_text("Match User ems-shell\n", encoding="utf-8")
+
+    environment = dict(os.environ)
+    environment.update({
+        "PATH": f"{fake_bin}:{environment['PATH']}",
+        "EMS_APPLIANCE_SHELL_SUDOERS": str(sudoers),
+        "EMS_APPLIANCE_SSHD_DIR": str(sshd_dir),
+        "EMS_APPLIANCE_CONFIG_DIR": str(tmp_path / "etc"),
+        "EMS_APPLIANCE_STATE_DIR": str(tmp_path / "state"),
+        "EMS_APPLIANCE_LOG_DIR": str(tmp_path / "log"),
+        "EMS_APPLIANCE_RUNTIME_DIR": str(tmp_path / "run"),
+        "EMS_APPLIANCE_SYSTEMD_DIR": str(tmp_path / "systemd"),
+        "EMS_APPLIANCE_ORIGIN_DIR": str(tmp_path / "origin"),
+        "EMS_APPLIANCE_QUARANTINE_DIR": str(tmp_path / "quarantine"),
+    })
+    result = subprocess.run(
+        ["sh", str(PACKAGING / "debian" / "postrm"), "purge"],
+        capture_output=True, text=True, env=environment, timeout=120, check=False,
+    )
+    return result, (calls.read_text(encoding="utf-8") if calls.exists() else ""), sudoers
+
+
+def test_purge_withdraws_the_root_account_before_the_gate_that_held_it():
+    """The sshd Match block is what refuses this account every authentication
+    method while it is off. Deleting that policy and leaving the account would
+    make purge *widen* access: an off-by-default root login becomes an ordinary
+    one under the host's own sshd defaults."""
+
+    postrm = (PACKAGING / "debian" / "postrm").read_text(encoding="utf-8")
+    body = postrm.split('case "$1" in', 1)[1]
+
+    retire = body.index("retire_shell_account")
+    drop_policy = body.index('rm -f "$HOST_PATHS" "$SSHD_POLICY"')
+
+    assert retire < drop_policy, "the account must be shut before its gate is removed"
+
+
+def test_purge_removes_the_sudo_rights_and_expires_the_account(tmp_path):
+    result, calls, sudoers = run_postrm_purge(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert not sudoers.exists(), "the NOPASSWD drop-in outlived the package"
+    assert "--expiredate 1" in calls, (
+        "locking the password alone leaves public-key authentication working, "
+        "which is the only kind this account ever had"
+    )
+    assert "deluser" in calls
+
+
+def test_a_purge_that_cannot_delete_the_account_still_leaves_it_shut(tmp_path):
+    result, calls, sudoers = run_postrm_purge(tmp_path, deluser_works=False)
+
+    assert result.returncode == 0, result.stderr
+    assert not sudoers.exists()
+    assert "--expiredate 1" in calls
+    assert "ems-shell" in result.stderr, "a surviving account must be reported, not hidden"
+
+
+def test_a_sudoers_path_it_cannot_touch_does_not_abort_the_purge(tmp_path):
+    """postrm runs once and there is no second pass. Under set -e an unwritable
+    /etc/sudoers.d was enough to abort it part way, which leaves the package
+    half removed and the summary of what survived unprinted -- the one place an
+    operator would learn that anything was left behind."""
+
+    unwritable = tmp_path / "locked"
+    unwritable.mkdir()
+    unwritable.chmod(0o500)
+    try:
+        result, _, _ = run_postrm_purge(tmp_path, account_exists=False)
+    finally:
+        unwritable.chmod(0o700)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_the_purge_summary_still_prints_when_the_drop_in_is_out_of_reach(tmp_path):
+    """The stderr summary is the contract other purge tests assert on. A cleanup
+    step that aborts before it takes that away."""
+
+    sudoers = tmp_path / "locked" / "ems-shell"
+    sudoers.parent.mkdir(parents=True, exist_ok=True)
+    sudoers.parent.chmod(0o500)
+    try:
+        result, _, _ = run_postrm_purge(tmp_path, account_exists=True, deluser_works=False)
+    finally:
+        sudoers.parent.chmod(0o700)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "purge did not complete" in result.stderr, result.stdout + result.stderr
+
+
+def test_purge_leaves_the_rescue_account_refused_over_ssh(tmp_path):
+    """ems-rescue survives a purge, and so must the only thing keeping it off the
+    network.
+
+    Its password is published in docs/appliance/console-recovery.md, and the
+    single reason that is not a LAN login is one Match block inside the policy
+    this purge deletes -- there is no global PasswordAuthentication anywhere in
+    the project. Deleting the gate and leaving the account would have made
+    `apt purge` hand every published credential a way in.
+
+    The account itself is not withdrawn: it is the documented way back into a
+    board that will not boot, and its password may be one the operator chose.
+    """
+
+    sshd_dir = tmp_path / "sshd_config.d"
+    result, _, _ = run_postrm_purge(tmp_path, account_exists=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    left = sshd_dir / "ems-appliance-rescue.conf"
+    assert left.exists(), "nothing keeps ems-rescue off the network after a purge"
+
+    policy = left.read_text(encoding="utf-8")
+    assert "Match User ems-rescue" in policy
+    assert "PasswordAuthentication no" in policy
+    assert "KbdInteractiveAuthentication no" in policy, (
+        "PasswordAuthentication alone leaves PAM's keyboard-interactive path, "
+        "which asks for the same published password"
+    )
+
+
+def test_the_refusal_left_behind_matches_the_one_the_package_generated():
+    """Two files now carry the same refusal and neither can import the other:
+    the postrm runs when appliance/*.py is already gone. Pinned here instead."""
+
+    from appliance.config import ApplianceConfig
+    from appliance.host_config import render_sshd_policy
+    from appliance.paths import AppliancePaths
+
+    generated = render_sshd_policy(
+        AppliancePaths(
+            install_root=Path("/opt/ems-solarflow"),
+            config_dir=Path("/etc/ems-appliance-manager"),
+            state_dir=Path("/var/lib/ems-appliance-manager"),
+            log_dir=Path("/var/log/ems-appliance-manager"),
+            runtime_dir=Path("/run/ems-appliance-manager"),
+            export_root=Path("/srv/ems-appliance-export"),
+        ),
+        ApplianceConfig(),
+    )
+    block = generated.split("Match User ems-rescue\n", 1)[1].split("Match User", 1)[0]
+    directives = {line.strip() for line in block.splitlines() if line.strip()}
+
+    postrm = (PACKAGING / "debian" / "postrm").read_text(encoding="utf-8")
+
+    for directive in directives:
+        assert directive in postrm, (
+            f"the generated policy refuses ems-rescue with {directive!r} and the "
+            "purge leftover does not"
+        )

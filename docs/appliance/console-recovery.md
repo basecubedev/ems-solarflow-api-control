@@ -47,7 +47,16 @@ Only if you enabled it and added a key. `ems-rescue` is a password account and
 the shipped sshd policy refuses it a password — by `Match User ems-rescue`, and
 by refusing keyboard-interactive too, which is the path that otherwise still
 asks for it. Its password is published in this document, so it is a console
-credential and nothing else. This is a key login for whatever account you
+credential and nothing else.
+
+That refusal is the *only* thing keeping it off the network: there is no global
+`PasswordAuthentication no` anywhere in this project, by design, because the
+package installs on a Pi somebody may already administer over a password login.
+So the refusal has to outlive the package. Purging the manager deletes the
+generated policy, and purge therefore writes a standalone
+`/etc/ssh/sshd_config.d/ems-appliance-rescue.conf` carrying the same two
+directives and leaves it behind. Remove that file only once the account is gone
+or its password is one you chose. This is a key login for whatever account you
 configured:
 
 ```bash
