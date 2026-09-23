@@ -23,6 +23,9 @@ from appliance import artifact_trust
 DEADLINE_NAME = "verify-deadline.json"
 VERDICT_NAME = "verify-verdict.json"
 ATTEMPTS_NAME = "verify-revert-attempts"
+# The ticks the reverter has spent on the armed deadline: the window is
+# counted in them as well as on a clock this board restores stale at boot.
+TICKS_NAME = "verify-ticks"
 REVERTER_NAME = "verify-manager.armed.sh"
 
 # How the reverter asks dpkg what it has, named here so the shell script and the
@@ -278,6 +281,11 @@ def arm(
         verdict_path(paths).unlink()
     except FileNotFoundError:
         pass
+    # A tick count a previous deadline left behind would shorten this one.
+    try:
+        ticks_path(paths).unlink()
+    except FileNotFoundError:
+        pass
 
     # The deadline is written before the timer is started on purpose: a timer
     # that fired first would find nothing to judge. But a deadline with no timer
@@ -313,6 +321,10 @@ def arm(
     ), snapshot
 
 
+def ticks_path(paths):
+    return Path(paths.packages_dir) / TICKS_NAME
+
+
 def attempts_path(paths):
     """Where the reverter counts its refused reverts. Written only by it."""
 
@@ -328,6 +340,10 @@ def disarm(paths, runner):
         pass
     except OSError as exc:
         raise ManagerVerifyError("deadline_not_writable", f"{deadline_path(paths)}: {exc}")
+    try:
+        ticks_path(paths).unlink()
+    except OSError:
+        pass
     if runner is not None and runner.available("systemctl"):
         runner.run("systemctl", ["disable", "--now", VERIFY_TIMER], timeout=60)
     return True
@@ -338,6 +354,7 @@ __all__ = [
     "DPKG_STATE_QUERY",
     "ManagerVerifyError",
     "REVERT_ATTEMPTS",
+    "TICKS_NAME",
     "VerifyDeadline",
     "VerifyVerdict",
     "arm",
@@ -347,5 +364,6 @@ __all__ = [
     "read",
     "read_verdict",
     "reverter_path",
+    "ticks_path",
     "verdict_path",
 ]

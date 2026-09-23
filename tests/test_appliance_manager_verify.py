@@ -566,6 +566,68 @@ def test_the_reverter_reads_the_schema_version_the_manager_writes():
     assert f"DEADLINE_SCHEMA={manager_verify.DEADLINE_SCHEMA_VERSION}\n" in script
 
 
+def test_the_window_is_measured_in_the_ticks_that_judge_it_and_not_in_a_clock_this_board_does_not_have(
+    paths, packaged, tmp_path
+):
+    """The Pi has no real-time clock. systemd restores a stale time at boot and
+    only ever moves it forward, so a reboot inside the window set the clock
+    back to the last sync -- hours or days -- and a window measured on that
+    clock alone stretched by that much, with the console locked for all of it.
+    The ticks that judge the install are what the window is counted in.
+    """
+
+    deadline_at(paths, packaged, epoch=4_000_000_000)
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.2.0", agent="failed")
+
+    for tick in range(1, 15):
+        run_reverter(paths, tools, now=0)
+        assert "dpkg --force-confold" not in log.read_text(encoding="utf-8"), tick
+        assert manager_verify.deadline_path(paths).exists(), tick
+
+    run_reverter(paths, tools, now=0)
+
+    assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_REVERTED
+    assert "previous.deb" in log.read_text(encoding="utf-8")
+    assert not manager_verify.deadline_path(paths).exists()
+
+
+def test_a_confirmed_install_leaves_no_tick_count_behind(paths, packaged, tmp_path):
+    deadline_at(paths, packaged, epoch=4_000_000_000)
+    tools = tmp_path / "tools"
+    fake_tools(tools, installed_version="0.2.0")
+
+    run_reverter(paths, tools, now=0)
+
+    assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_CONFIRMED
+    assert not manager_verify.ticks_path(paths).exists()
+
+
+def test_arming_starts_a_fresh_tick_count(paths, packaged):
+    """A count a previous deadline left behind must not shorten the next one."""
+
+    manager_verify.ticks_path(paths).parent.mkdir(parents=True, exist_ok=True)
+    manager_verify.ticks_path(paths).write_text("9\n", encoding="utf-8")
+
+    arm(paths, packaged, FakeRunner())
+
+    assert not manager_verify.ticks_path(paths).exists()
+
+
+def test_the_tick_budget_matches_the_timer_that_produces_the_ticks():
+    """One authority for the tick length, checked rather than trusted."""
+
+    timer = (PACKAGING / "systemd" / "ems-appliance-manager-verify.timer").read_text(
+        encoding="utf-8"
+    )
+    interval = next(
+        int(line.partition("=")[2]) for line in timer.splitlines()
+        if line.startswith("OnUnitActiveSec=")
+    )
+
+    assert f"TICK_SECONDS={interval}\n" in REVERTER.read_text(encoding="utf-8")
+
+
 # --- properties that live outside Python -------------------------------------
 
 

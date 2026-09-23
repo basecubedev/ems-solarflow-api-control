@@ -16,6 +16,7 @@ STATE=${1:-/var/lib/ems-appliance-manager/agent/packages}
 DEADLINE="$STATE/verify-deadline.json"
 VERDICT="$STATE/verify-verdict.json"
 ATTEMPTS="$STATE/verify-revert-attempts"
+TICKS="$STATE/verify-ticks"
 PACKAGE=ems-appliance-manager
 TIMER=ems-appliance-manager-verify.timer
 SERVICES="ems-appliance-agent.service ems-appliance-web.service"
@@ -30,6 +31,14 @@ REVERT_ATTEMPTS=5
 # together. Fields read out of a record with another number may not mean
 # what they meant here.
 DEADLINE_SCHEMA=1
+
+# How far apart the ticks that run this are: ems-appliance-manager-verify.timer's
+# OnUnitActiveSec, and a test holds the two together. The board has no
+# real-time clock -- systemd restores a stale time at boot and only moves it
+# forward -- so the window is counted in these ticks as well as on the clock,
+# and whichever runs out first ends it. Ticks are at least this far apart, so
+# the budget can only lengthen the real-time window, never shorten it.
+TICK_SECONDS=60
 
 text() {
     sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$DEADLINE"
@@ -52,7 +61,7 @@ EOF
 }
 
 disarm() {
-    rm -f "$DEADLINE" "$ATTEMPTS"
+    rm -f "$DEADLINE" "$ATTEMPTS" "$TICKS"
     systemctl disable --now "$TIMER" >/dev/null 2>&1 || true
 }
 
@@ -70,7 +79,8 @@ fi
 # act on this record, and an armed one would tick behind that console forever.
 SCHEMA=$(number schema_version)
 DEADLINE_EPOCH=$(number deadline_epoch)
-if [ "$SCHEMA" != "$DEADLINE_SCHEMA" ] || [ -z "$DEADLINE_EPOCH" ]; then
+WINDOW=$(number window_seconds)
+if [ "$SCHEMA" != "$DEADLINE_SCHEMA" ] || [ -z "$DEADLINE_EPOCH" ] || [ -z "$WINDOW" ]; then
     record revert_unavailable \
         "the deadline record could not be read by this reverter (schema ${SCHEMA:-none}); nothing was judged and nothing was installed"
     disarm
@@ -108,8 +118,18 @@ if [ "$healthy" = yes ]; then
     exit 0
 fi
 
-if [ "$NOW" -lt "$DEADLINE_EPOCH" ]; then
-    echo "verify-manager: not healthy yet, $((DEADLINE_EPOCH - NOW))s left" >&2
+# One tick spent. Counted after the health gate, so a confirmed install
+# never writes the file, and read the way the revert attempts are.
+TICKS_N=$(cat "$TICKS" 2>/dev/null || echo 0)
+case "$TICKS_N" in '' | *[!0-9]*) TICKS_N=0 ;; esac
+TICKS_N=$((TICKS_N + 1))
+umask 077
+printf '%s\n' "$TICKS_N" > "$TICKS.part"
+mv "$TICKS.part" "$TICKS"
+
+if [ "$NOW" -lt "$DEADLINE_EPOCH" ] && [ "$((TICKS_N * TICK_SECONDS))" -lt "$WINDOW" ]; then
+    echo "verify-manager: not healthy yet, $((DEADLINE_EPOCH - NOW))s on the clock and" \
+         "$((WINDOW - TICKS_N * TICK_SECONDS))s of ticks left" >&2
     exit 0
 fi
 
