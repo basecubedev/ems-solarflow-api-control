@@ -219,6 +219,27 @@ def test_a_path_watcher_that_did_not_start_fails_the_installation(tmp_path):
     assert critical_failures(checks)
 
 
+def test_a_missing_required_tool_fails_the_installation(monkeypatch):
+    """An appliance that cannot run gpgv cannot verify its next package.
+
+    The comment above REQUIRED_TOOLS says none of them is optional; the check
+    entries said the opposite, so verify-install printed the failure and
+    exited 0, and the postinst declared the installation usable.
+    """
+
+    from appliance import install_check
+
+    monkeypatch.setattr(
+        install_check, "_which", lambda tool: "" if tool == "gpgv" else f"/usr/bin/{tool}"
+    )
+
+    checks = install_check.check_host_tools()
+
+    entry = by_name(checks)["host_tool:gpgv"]
+    assert entry["status"] == STATUS_FAILED
+    assert critical_failures(checks) == [entry]
+
+
 def test_a_refused_export_path_fails_the_installation(tmp_path):
     paths = appliance_paths(tmp_path)
     write_status(
