@@ -10,6 +10,14 @@
   var VIEW_KEY = "ems-appliance-view";
   var POLL_INTERVAL = 2000;
 
+  /* Operations are polled for responsiveness; the host state costs a docker
+     inspect and a statvfs, so it joins every nth tick rather than every one.
+     Without it the overview rendered a snapshot taken at sign-in for as long
+     as the page stayed open: Docker could die at 09:05 and the headline went
+     on saying "This appliance is healthy", and `verify.armed` stayed false for
+     the whole window after an install. */
+  var STATUS_EVERY_TICKS = 5;
+
   /* Cancel is only a legal transition out of a plan that has not started.
      Offering it during a running image write produced an internal-state alert
      rather than a cancellation; interrupting those needs a cooperative flag the
@@ -26,6 +34,7 @@
     operation: null,
     pending: null,
     pollTimer: null,
+    pollTicks: 0,
     busy: false,
     securityAudit: null,
     lastVerdict: undefined
@@ -720,8 +729,24 @@
 
   function startPolling() {
     stopPolling();
+    state.pollTicks = 0;
     state.pollTimer = window.setInterval(function () {
-      pollOperations().then(renderPolled);
+      state.pollTicks += 1;
+      if (state.pollTicks % STATUS_EVERY_TICKS !== 0) {
+        pollOperations().then(renderPolled);
+        return;
+      }
+      Promise.all([
+        api("/api/status").catch(function (exc) { return { error: exc.code }; }),
+        api("/api/manager").catch(function (exc) { return { error: exc.code }; }),
+        pollOperations()
+      ]).then(function (results) {
+        state.data.status = results[0];
+        state.data.manager = results[1];
+        // Through renderPolled, not render: a tick must not rebuild a field
+        // the operator has the cursor in.
+        renderPolled();
+      });
     }, POLL_INTERVAL);
   }
 
@@ -1025,10 +1050,10 @@
 
   function refresh() {
     if (!state.authenticated) return Promise.resolve();
-    /* The manager state joins the periodic refresh rather than being read once
-       when its page first rendered. Its verdict arrives *after* the operation
-       that started the install finished, so a card fetched once would still
-       report "nothing in flight" on an appliance that had already reverted. */
+    /* The manager state is read with the host state, here and on the periodic
+       tick. Its verdict arrives *after* the operation that started the install
+       finished, so a card fetched once would still report "nothing in flight"
+       on an appliance that had already reverted. */
     return Promise.all([
       api("/api/status").catch(function (exc) { return { error: exc.code }; }),
       api("/api/manager").catch(function (exc) { return { error: exc.code }; }),

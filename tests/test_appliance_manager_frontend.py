@@ -246,3 +246,58 @@ def test_an_unfetched_state_renders_as_unknown_rather_than_as_quiet():
     section = APP.split("function renderManagerUpdates(", 1)[1].split("\n  }", 1)[0]
 
     assert "Reading the manager state" in section
+
+
+@requires_node
+def test_the_periodic_tick_reads_the_host_state_and_not_only_the_operations():
+    """The overview rendered a snapshot taken at sign-in, for as long as it stayed open.
+
+    `startPolling` fetched `/api/operations` and nothing else; `/api/status`
+    and `/api/manager` were read only by `refresh()`, which runs at sign-in and
+    on a handful of user actions. So Docker could die at 09:05 and the headline
+    went on saying "This appliance is healthy" from the 09:00 payload, and
+    `verify.armed` stayed false for the whole window after a manager install --
+    the value the console's own update lock turns on.
+
+    Driven as the browser drives it: the real function, a fake timer, and a
+    count of what each tick asked for.
+    """
+
+    script = (
+        "var POLL_INTERVAL = " + APP.split("var POLL_INTERVAL = ", 1)[1].split(";", 1)[0] + ";\n"
+        "var STATUS_EVERY_TICKS = "
+        + APP.split("var STATUS_EVERY_TICKS = ", 1)[1].split(";", 1)[0]
+        + ";\n"
+        "var asked = [];\n"
+        "var state = { pollTimer: null, pollTicks: 0, data: {} };\n"
+        "var ticker = null;\n"
+        "var window = { setInterval: function (fn) { ticker = fn; return 1; },"
+        " clearInterval: function () { ticker = null; } };\n"
+        "function api(path) { asked.push(path); return Promise.resolve({}); }\n"
+        "function pollOperations() { asked.push('/api/operations'); return Promise.resolve({}); }\n"
+        "function renderPolled() {}\n"
+        "function render() {}\n"
+        + extract("stopPolling")
+        + "\n"
+        + extract("startPolling")
+        + "\n"
+        "startPolling();\n"
+        "for (var i = 0; i < STATUS_EVERY_TICKS * 2; i += 1) { ticker(); }\n"
+        "setTimeout(function () {\n"
+        "  console.log(JSON.stringify({\n"
+        "    status: asked.filter(function (p) { return p === '/api/status'; }).length,\n"
+        "    manager: asked.filter(function (p) { return p === '/api/manager'; }).length,\n"
+        "    operations: asked.filter(function (p) { return p === '/api/operations'; }).length\n"
+        "  }));\n"
+        "}, 0);\n"
+    )
+    result = subprocess.run(
+        [node, "-"], input=script, capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr
+    counts = json.loads(result.stdout.strip().splitlines()[-1])
+    ticks = int(APP.split("var STATUS_EVERY_TICKS = ", 1)[1].split(";", 1)[0])
+
+    assert counts["status"] == 2, counts
+    assert counts["manager"] == 2, counts
+    assert counts["operations"] == ticks * 2, counts
