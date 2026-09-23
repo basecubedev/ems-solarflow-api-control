@@ -29,10 +29,10 @@ from tests.helpers.appliance import (
 pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 
-def appliance(tmp_path, *, tag="v1.0.0", variable_tag=True):
+def appliance(tmp_path, *, tag="v1.0.0", variable_tag=True, environment=None):
     services = build_test_services(tmp_path, catalogue=StaticCatalogue(["v1.1.0", "v1.0.0"]))
     host = services.host
-    host.write_deployment(tag=tag, variable_tag=variable_tag)
+    host.write_deployment(tag=tag, variable_tag=variable_tag, environment=environment)
     host.publish_image(tag)
     host.pull_local(f"{ADMIN_REPOSITORY}:{tag}")
     host.run_container(ADMIN_CONTAINER, f"{ADMIN_REPOSITORY}:{tag}")
@@ -57,6 +57,25 @@ def compose_image(services):
 
     compose = (services.paths.install_root / "docker-compose.admin.yml").read_text(encoding="utf-8")
     return read_service_image(compose, services.config.admin_service)
+
+
+def compose_environment(services):
+    """The literal ``environment:`` entries the Admin container actually reads."""
+
+    compose = (services.paths.install_root / "docker-compose.admin.yml").read_text(encoding="utf-8")
+    values = {}
+    indent = None
+    for line in compose.splitlines():
+        if line.strip() == "environment:":
+            indent = len(line) - len(line.lstrip(" "))
+            continue
+        if indent is None or not line.strip():
+            continue
+        if len(line) - len(line.lstrip(" ")) <= indent:
+            break
+        key, _, value = line.strip().partition(":")
+        values[key.strip()] = value.strip().strip('"')
+    return values
 
 
 # --- resolution ------------------------------------------------------------
@@ -111,6 +130,19 @@ def test_a_literal_tag_deployment_is_also_pinned_by_digest(tmp_path):
 
     assert operation.state == STATE_SUCCEEDED
     assert compose_image(services) == plan["target_reference"]
+
+
+def test_the_pinned_tag_is_corrected_in_the_container_environment(tmp_path):
+    # The compose environment is where the Admin reads its own version from. A
+    # digest pin that leaves the installed tag standing makes the Admin report
+    # the release it was installed at, whatever is actually running.
+    services = appliance(tmp_path, environment={"EMS_ADMIN_TAG": "v1.0.0"})
+    services.host.publish_image("v1.1.0")
+
+    operation, _plan = install(services, channel="exact", tag="v1.1.0")
+
+    assert operation.state == STATE_SUCCEEDED
+    assert compose_environment(services)["EMS_ADMIN_TAG"] == "v1.1.0"
 
 
 def test_a_moved_tag_cannot_change_what_is_running(tmp_path):
@@ -252,6 +284,91 @@ def prepared_rollback(tmp_path):
     services.operations.acknowledge(services.operations.list()[0].operation_id)
     assert running_admin(services) is True
     return services
+
+
+# --- who the deployment files belong to ------------------------------------
+
+
+def _recorded_writes(monkeypatch):
+    """Record the owner every deployment write asks for, and write it for real."""
+
+    from appliance import admin_deployment
+
+    seen = []
+    real_write = admin_deployment.atomic_write
+
+    def recording(path, text, *arguments, **keywords):
+        seen.append((Path(path).name, keywords.get("owner")))
+        return real_write(path, text, *arguments, **keywords)
+
+    monkeypatch.setattr(admin_deployment, "atomic_write", recording)
+    return seen
+
+
+def _install_root_owner(services):
+    entry = services.paths.install_root.stat()
+    return (entry.st_uid, entry.st_gid)
+
+
+def test_an_installed_deployment_stays_with_the_account_that_runs_it(tmp_path, monkeypatch):
+    # The Admin container runs as the owner of the install root and updates itself
+    # from inside. A rewrite that took these files for the agent's own root and
+    # shared socket group locked it out of its own compose file -- which is how
+    # its update sidecar came to die in a rewrite it was never allowed to make.
+    services = appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    expected = _install_root_owner(services)
+    seen = _recorded_writes(monkeypatch)
+
+    operation, _plan = install(services, channel="exact", tag="v1.1.0")
+
+    assert operation.state == STATE_SUCCEEDED
+    assert seen, "the install wrote no deployment file"
+    for name, owner in seen:
+        assert owner == expected, f"{name} was written without the deployment owner"
+
+
+def test_a_restored_deployment_stays_with_that_account_too(tmp_path, monkeypatch):
+    # The rollback path writes the same two files. Handing them over on the way
+    # forward and taking them back on the way out would re-lock the Admin on
+    # exactly the recovery it needs, which is the worst place for it.
+    from appliance.admin_deployment import resolve_deployment, snapshot
+
+    services = appliance(tmp_path)
+    saved = snapshot(resolve_deployment(services.paths, services.config))
+    expected = _install_root_owner(services)
+    seen = _recorded_writes(monkeypatch)
+
+    assert saved.restore() is True
+
+    assert len(seen) == 2, seen
+    for name, owner in seen:
+        assert owner == expected, f"{name} was restored without the deployment owner"
+
+
+def test_a_staged_deployment_file_is_handed_over_before_it_has_its_name(
+    tmp_path, monkeypatch
+):
+    # On the staged file, never on the target afterwards: a second ownership pass
+    # is a second authority, and it leaves a window in which the Admin can see a
+    # file it may not write.
+    from appliance import paths as appliance_paths
+
+    target = tmp_path / "docker-compose.admin.yml"
+    chowned = []
+    monkeypatch.setattr(appliance_paths.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        appliance_paths.os, "chown", lambda path, uid, gid: chowned.append((str(path), uid, gid))
+    )
+
+    appliance_paths.atomic_write(target, "services: {}\n", owner=(1234, 5678))
+
+    assert len(chowned) == 1, chowned
+    staged, uid, gid = chowned[0]
+    assert (uid, gid) == (1234, 5678)
+    assert Path(staged).name.startswith(".docker-compose.admin.yml.")
+    assert staged.endswith(".tmp")
+    assert target.read_text(encoding="utf-8") == "services: {}\n"
 
 
 # --- rollback preflight ----------------------------------------------------

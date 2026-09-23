@@ -615,8 +615,32 @@ def own_by_root(path):
     return True
 
 
-def atomic_write(path, text, mode=0o640, *, owner_root=False):
-    """Write ``text`` to ``path`` atomically with an explicit file mode."""
+def own_by(path, owner):
+    """Give a staged file to ``owner``, a ``(uid, gid)`` pair; advisory.
+
+    The counterpart to :func:`own_by_root` for a file that lives in a tree the
+    agent does not own. Applied to the staged file, before the name exists: a
+    second ownership pass after the rename is a second authority, and it leaves a
+    window in which the owner can see a file it may not write.
+    """
+
+    if not owner:
+        return False
+    try:
+        if os.geteuid() != 0:
+            return False
+        os.chown(path, int(owner[0]), int(owner[1]))
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+def atomic_write(path, text, mode=0o640, *, owner_root=False, owner=None):
+    """Write ``text`` to ``path`` atomically with an explicit file mode.
+
+    ``owner`` hands the result to a ``(uid, gid)`` the caller resolved; without
+    it the file keeps the identity of the writing process.
+    """
 
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -631,6 +655,8 @@ def atomic_write(path, text, mode=0o640, *, owner_root=False):
         pass
     if owner_root:
         own_by_root(tmp)
+    else:
+        own_by(tmp, owner)
     os.replace(tmp, target)
     # The rename itself is a directory operation: without flushing the parent,
     # a power cut can leave the entry pointing at nothing while the file's own

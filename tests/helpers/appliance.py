@@ -308,7 +308,9 @@ class FakeHost:
 
     # --- deployment files ------------------------------------------------
 
-    def write_deployment(self, *, tag="v1.0.0", variable_tag=True, service=ADMIN_SERVICE):
+    def write_deployment(
+        self, *, tag="v1.0.0", variable_tag=True, service=ADMIN_SERVICE, environment=None
+    ):
         image = (
             f"{ADMIN_REPOSITORY}:${{EMS_ADMIN_TAG:-latest}}"
             if variable_tag
@@ -321,6 +323,12 @@ class FakeHost:
             ems_service="ems",
             ems_container=EMS_CONTAINER,
         )
+        if environment:
+            # The real installer writes an environment block; opt in where a test
+            # is about what the container actually reads.
+            entries = "".join(f'      {key}: "{value}"\n' for key, value in environment.items())
+            marker = f"    container_name: {ADMIN_CONTAINER}\n"
+            compose = compose.replace(marker, marker + "    environment:\n" + entries, 1)
         self.paths.install_root.mkdir(parents=True, exist_ok=True)
         (self.paths.install_root / "docker-compose.admin.yml").write_text(compose, encoding="utf-8")
         (self.paths.install_root / ".env.admin").write_text(

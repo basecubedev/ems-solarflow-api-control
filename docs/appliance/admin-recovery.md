@@ -63,6 +63,13 @@ installs EMS — the appliance deliberately has no second way to do that.
 
 ## Install a specific Admin version
 
+This is the first installation and the way back, not the everyday route. Once an
+Admin is running, the operator picks a version in the Admin console itself, which
+installs the matching Admin and EMS as one selection; the Admin rewrites its own
+deployment files to do that, which is why the appliance writes them without
+taking them (see [installation.md](installation.md)). Install from here when
+there is no Admin yet, or when the one that is there cannot install anything.
+
 The list comes from the registry the Admin image is pulled from, so it names
 the versions that exist for this appliance rather than the versions this
 project has tagged. A version the host configuration will not accept is still
