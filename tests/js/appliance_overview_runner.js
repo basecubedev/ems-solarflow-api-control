@@ -110,6 +110,10 @@ new Function(
     extractFunction("findingAction") +
     "\n" +
     extractFunction("attentionBySection") +
+    "\n" +
+    extractVar("BASIC_LOG_SOURCES") +
+    "\n" +
+    extractFunction("logSources") +
     "\nscope.findingsView = findingsView;" +
     "\nscope.overviewVerdict = overviewVerdict;" +
     "\nscope.duration = duration;" +
@@ -120,7 +124,8 @@ new Function(
     "\nscope.operationStage = operationStage;" +
     "\nscope.verdictAnnouncement = verdictAnnouncement;" +
     "\nscope.findingAction = findingAction;" +
-    "\nscope.attentionBySection = attentionBySection;"
+    "\nscope.attentionBySection = attentionBySection;" +
+    "\nscope.logSources = logSources;"
 )(scope);
 
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
@@ -141,6 +146,7 @@ process.stdout.write(
       return scope.findingAction(item, view);
     }),
     attention: scope.attentionBySection(status),
+    log_sources: scope.logSources(input.settings || {}, Boolean(input.expert)),
     durations: (input.durations || []).map(scope.duration),
     sizes: (input.sizes || []).map(scope.gigabytes),
     percentages: (input.percentages || []).map(scope.usedPercent),
