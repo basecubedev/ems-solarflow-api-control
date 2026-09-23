@@ -225,7 +225,59 @@ class ManagerUpdateService:
 
     # --- status -----------------------------------------------------------
 
+    def _verification_pending(self):
+        """An armed deadline inside its window that nothing has judged yet.
+
+        "An armed deadline blocks both Update and Revert" was an invariant that
+        lived only in app.js. The service accepted a second install while one
+        was live, and each acceptance rotates the archive that deadline would
+        restore out of the way-back slot and overwrites the deadline itself.
+
+        Only while the window is live. Once it has run out without a verdict the
+        operator gets both levers back -- that is deliberate and documented,
+        because taking them away on a board whose only alternative is a keyboard
+        at the console is the failure the deadline exists to avoid. What
+        protects the kept archive then is the digest the deadline records.
+        """
+
+        deadline = manager_verify.read(self.paths)
+        if not deadline.armed or manager_verify.read_verdict(self.paths).settled:
+            return None
+        remaining = int(deadline.deadline_epoch) - int(self._now())
+        if remaining <= 0:
+            return None
+        return {
+            "code": "manager_verification_pending",
+            "message": (
+                f"the install of {deadline.expected_version or 'the last package'} has not "
+                f"been judged yet; its deadline decides within {remaining} seconds"
+            ),
+        }
+
+    def _refuse_while_unjudged(self):
+        pending = self._verification_pending()
+        if pending:
+            raise ManagerUpdateError(pending["code"], pending["message"])
+
+    def _reconcile_outcome(self):
+        """Fold a revert the shell drove back into the record, once.
+
+        The two revert paths that run without Python -- install-manager.sh's
+        fallback and the armed deadline -- cannot amend the retention record,
+        so it is corrected here, at the one place that reads their result.
+        """
+
+        if manager_install.read_outcome(self.paths).outcome != manager_install.OUTCOME_REVERTED:
+            return
+        try:
+            manager_retention.adopt_previous_as_current(self.paths)
+        except manager_retention.RetentionError:
+            # A record this cannot rewrite is reported by everything that reads
+            # it; refusing to answer status as well would hide the state.
+            pass
+
     def status(self):
+        self._reconcile_outcome()
         retention = manager_retention.read(self.paths)
         return {
             "installed_version": self.installed_version,
@@ -242,6 +294,7 @@ class ManagerUpdateService:
     def plan_update(self, operation, release_id):
         """Say what would be installed and what stands in the way. Writes nothing."""
 
+        self._reconcile_outcome()
         self._advance(operation, "preflight")
         self._require_clock()
         candidate = self._candidate(release_id)
@@ -261,12 +314,21 @@ class ManagerUpdateService:
         )
         if verdict.outcome == persistent_state.STATE_BEHIND:
             blockers.append({"code": "state_schema_behind", "message": verdict.detail})
+        pending = self._verification_pending()
+        if pending:
+            blockers.append(pending)
 
         retention = manager_retention.read(self.paths)
         moving = direction(offered=release.version, installed=self.installed_version)
         self.operations.update_target(
             operation.operation_id,
-            {"release_id": candidate["release_id"], "version": release.version},
+            {
+                "release_id": candidate["release_id"],
+                "version": release.version,
+                # Sealed with the record, and spent in _require_planned_release.
+                # A release_id alone names a slot in an index, not an artefact.
+                "artifact_digest": release.artifact_digest,
+            },
         )
         return {
             "type": TYPE_MANAGER_UPDATE,
@@ -367,6 +429,7 @@ class ManagerUpdateService:
     # --- execution --------------------------------------------------------
 
     def execute(self, operation):
+        self._refuse_while_unjudged()
         if operation.type == TYPE_MANAGER_REVERT:
             return self._execute_revert(operation)
         return self._execute_update(operation)
@@ -387,9 +450,43 @@ class ManagerUpdateService:
             )
         try:
             release, archive = self._fetch_into(operation, candidate, staging)
+            self._require_planned_release(operation, release)
             return self._apply(operation, release=release, archive=archive)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+
+    def _require_planned_release(self, operation, release):
+        """The artefact the operator confirmed, not whatever the index offers now.
+
+        Execution resolves the release through the index a second time, so an
+        asset republished under the same release_id -- or an index host that is
+        not the one the plan was read from -- would install a different, also
+        validly signed package than the plan showed, downgrade warning and all.
+        ``verify_authority`` cannot catch that: it proves the record is
+        unchanged, not that the artefact is the same one.
+        """
+
+        target = operation.requested_target or {}
+        planned = str(target.get("artifact_digest") or "")
+        if not planned:
+            raise ManagerUpdateError(
+                "manager_plan_requires_replanning",
+                "this plan was made before the release binding existed and cannot be "
+                "executed; plan the update again",
+            )
+        if release.artifact_digest != planned:
+            raise ManagerUpdateError(
+                "manager_release_changed",
+                f"the index now offers {release.artifact_digest} under this release, not "
+                f"the {planned} this plan was confirmed for; plan the update again",
+            )
+        version = str(target.get("version") or "")
+        if version and release.version != version:
+            raise ManagerUpdateError(
+                "manager_release_changed",
+                f"the index now offers version {release.version} under this release, not "
+                f"the {version} this plan was confirmed for; plan the update again",
+            )
 
     def _verified_manifest(self, operation, candidate, staging):
         """The manifest, once its detached signature has been believed.

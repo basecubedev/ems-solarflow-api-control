@@ -28,6 +28,7 @@ from appliance import (
     persistent_state,
 )
 from appliance.agent import AgentHandlers
+from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
 from appliance.release_fetch import FetchError
 from tests.helpers.appliance import build_test_services
 
@@ -198,6 +199,17 @@ def plan_and_execute(services, operation, **fields):
         }
     )
     return services.operations.get(planned["operation"]["operation_id"]), planned["plan"]
+
+
+def judged(services):
+    """The deadline the last install armed, decided and retired.
+
+    What the reverter leaves behind once it has confirmed the install, and the
+    state the console offers Update and Revert in: both are gated on an armed,
+    unjudged deadline, and the service refuses inside that window too.
+    """
+
+    manager_verify.disarm(services.paths, services.runner)
 
 
 def seed_previous(services, *, version="0.1.0", body=b"the package that is running"):
@@ -474,6 +486,7 @@ def test_a_revert_installs_the_kept_archive_and_swaps_what_is_kept(tmp_path):
     services, _ = build(tmp_path)
     seed_previous(services)
     plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
 
     record, _ = plan_and_execute(services, "manager.plan_revert")
 
@@ -491,6 +504,7 @@ def test_a_revert_that_no_longer_hashes_to_what_was_kept_is_refused(tmp_path):
     services, _ = build(tmp_path)
     seed_previous(services)
     plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
     (services.paths.packages_dir / manager_retention.PREVIOUS_NAME).write_bytes(b"tampered")
 
     record, _ = plan_and_execute(services, "manager.plan_revert")
@@ -503,6 +517,7 @@ def test_a_revert_arms_its_own_deadline(tmp_path):
     services, _ = build(tmp_path)
     seed_previous(services)
     plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
 
     plan_and_execute(services, "manager.plan_revert")
 
@@ -660,3 +675,225 @@ def test_a_record_that_cannot_be_read_still_refuses_everything(tmp_path, monkeyp
 
     assert recorded is None
     assert verdict.outcome == persistent_state.STATE_UNREADABLE
+# --- the package the operator confirmed -------------------------------------
+
+
+def test_a_release_republished_between_plan_and_confirm_is_refused(tmp_path):
+    """Execution resolves the release through the index a second time.
+
+    `_execute_update` reads only `release_id` out of the sealed record, fetches
+    the index and manifest again and installs what is offered now. Neither the
+    version nor the artefact digest the plan showed is compared, so an asset
+    republished under the same release_id -- or an index host that is not the
+    one the plan was read from -- installs a different, also validly signed
+    package than the one the operator agreed to, downgrade warning and all.
+    `verify_authority` does not catch it: it proves the record is unchanged, not
+    that the artefact is the same one. The neighbouring Admin path binds
+    `digest` and `reference` into its sealed fields.
+    """
+
+    services, service = build(tmp_path)
+    scripted = service.scripted
+    handler = handlers(services)
+    planned = handler.dispatch({"operation": "manager.plan_update", "release_id": RELEASE_ID})
+    assert planned["plan"]["digest"] == ARCHIVE_DIGEST
+
+    other = b"a different package, also validly signed" * 64
+    scripted.responses[f"{BASE}/{ARCHIVE_NAME}"] = other
+    scripted.responses[f"{BASE}/{RELEASE_ID}.manifest.json"] = manifest_payload(
+        digest="sha256:" + hashlib.sha256(other).hexdigest(), size=len(other)
+    )
+
+    handler.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.state == STATE_FAILED_TERMINAL, record.state
+    assert record.error["code"] == "manager_release_changed", record.error
+    assert not manager_install.request_path(services.paths).exists()
+
+
+def test_a_version_swapped_under_one_release_id_is_refused(tmp_path):
+    services, service = build(tmp_path)
+    scripted = service.scripted
+    handler = handlers(services)
+    planned = handler.dispatch({"operation": "manager.plan_update", "release_id": RELEASE_ID})
+
+    scripted.responses[f"{BASE}/{RELEASE_ID}.manifest.json"] = manifest_payload(version="0.0.9")
+
+    handler.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.state == STATE_FAILED_TERMINAL, record.state
+    assert record.error["code"] == "manager_release_changed", record.error
+
+
+def test_the_package_the_plan_showed_still_installs(tmp_path):
+    services, _ = build(tmp_path)
+
+    record, _ = plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    assert record.state == STATE_SUCCEEDED, (record.state, record.error)
+
+
+# --- the record after a revert nothing in Python drove ----------------------
+
+
+def reverted_install(services):
+    """What install-manager.sh leaves behind when dpkg refused the new package.
+
+    It puts `previous.deb` back and records the outcome, and it cannot amend
+    the retention record -- there is no Python on that path by design. The
+    record therefore goes on naming the package dpkg refused as current.
+    """
+
+    import json
+
+    manager_install.result_path(services.paths).write_text(
+        json.dumps(
+            {
+                "outcome": manager_install.OUTCOME_REVERTED,
+                "detail": "the install failed and previous.deb was put back",
+                "finished_at": "2026-09-22T01:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_a_revert_the_shell_drove_is_reconciled_before_the_next_install(tmp_path):
+    """The record described the intent of an install, never its outcome.
+
+    After that revert the appliance runs what is in `previous.deb` while the
+    record says `current` is the package dpkg refused. The next update rotates
+    *that* into the way-back slot, so the one archive this appliance is known to
+    have run is gone -- and the deadline armed for the new install points at a
+    package dpkg has already refused once.
+    """
+
+    services, service = build(tmp_path)
+    seed_previous(services, version="0.1.0", body=b"the package that is running")
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    reverted_install(services)
+
+    record = manager_retention.read(services.paths)
+    assert record.current.version == "0.2.0", "precondition: the record names the refused one"
+
+    service.status()
+
+    healed = manager_retention.read(services.paths)
+    assert healed.current.version == "0.1.0", healed.to_dict()
+    assert healed.current.sha256 == "sha256:" + hashlib.sha256(
+        b"the package that is running"
+    ).hexdigest()
+    assert not healed.can_revert, "there is no older package left to go back to"
+
+
+def test_a_successful_install_leaves_the_record_alone(tmp_path):
+    services, service = build(tmp_path)
+    seed_previous(services, version="0.1.0")
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    manager_install.result_path(services.paths).write_text(
+        '{"outcome": "installed", "detail": "", "finished_at": "2026-09-22T01:00:00Z"}',
+        encoding="utf-8",
+    )
+
+    service.status()
+
+    record = manager_retention.read(services.paths)
+    assert record.current.version == "0.2.0"
+    assert record.previous.version == "0.1.0"
+
+
+# --- an armed deadline is a backend fact, not a browser one -----------------
+
+
+def armed_deadline(services, *, now, window=900):
+    reverter = services.paths.packages_dir / "packaged-verify-manager.sh"
+    reverter.parent.mkdir(parents=True, exist_ok=True)
+    reverter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    previous = services.paths.packages_dir / "previous.deb"
+    previous.write_bytes(b"the package that is running")
+    manager_verify.arm(
+        services.paths,
+        services.runner,
+        expected_version="0.2.0",
+        build_id="b",
+        previous=str(previous),
+        now=now,
+        window_seconds=window,
+        reverter=str(reverter),
+    )
+
+
+def test_a_second_install_inside_an_unjudged_window_is_refused(tmp_path):
+    """"An armed deadline blocks both buttons" lived only in app.js.
+
+    `plan_update`, `plan_revert` and `execute` never refused because of one.
+    Two ways past the console's own gate: the operation lock ends at
+    `install_started`, so a second plan is accepted seconds after the first
+    while dpkg is still unpacking, and the console deliberately re-enables
+    Update once the window closes without a verdict. Each acceptance rotates
+    the last known-good archive out of the way-back slot and overwrites the
+    deadline that would have restored it.
+    """
+
+    services, service = build(tmp_path)
+    armed_deadline(services, now=int(services.clock()))
+    handler = handlers(services)
+
+    answer = handler.dispatch({"operation": "manager.plan_update", "release_id": RELEASE_ID})
+
+    assert answer.get("plan", {}).get("blockers"), answer
+    codes = [item["code"] for item in answer["plan"]["blockers"]]
+    assert "manager_verification_pending" in codes, codes
+
+
+def test_a_deadline_that_has_run_out_without_a_verdict_does_not_block(tmp_path):
+    """Documented console behaviour: the operator gets both levers back.
+
+    Taking them away on a board whose only alternative is a keyboard at the
+    console is the failure the deadline was written to avoid. What protects the
+    kept archive then is the digest the deadline records, not a refusal here.
+    """
+
+    services, service = build(tmp_path)
+    armed_deadline(services, now=int(services.clock()) - 4000)
+    handler = handlers(services)
+
+    answer = handler.dispatch({"operation": "manager.plan_update", "release_id": RELEASE_ID})
+
+    codes = [item["code"] for item in answer["plan"]["blockers"]]
+    assert "manager_verification_pending" not in codes, codes
+
+
+def test_an_execution_inside_an_unjudged_window_is_refused(tmp_path):
+    """The plan may predate the deadline; the install must still not run."""
+
+    services, service = build(tmp_path)
+    handler = handlers(services)
+    planned = handler.dispatch({"operation": "manager.plan_update", "release_id": RELEASE_ID})
+    armed_deadline(services, now=int(services.clock()))
+
+    handler.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.state == STATE_FAILED_TERMINAL, record.state
+    assert record.error["code"] == "manager_verification_pending", record.error
