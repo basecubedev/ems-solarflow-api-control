@@ -573,6 +573,43 @@ def test_malformed_json_is_refused(tmp_path, services):
         thread.join(timeout=5)
 
 
+@pytest.mark.parametrize("document", [b"[]\n", b"5\n", b'"x"\n'])
+def test_a_json_document_that_is_not_an_object_is_refused(tmp_path, services, document):
+    """Valid JSON that is not an object is a request too, and gets the answer
+    protocol.validate_request already has for it -- not a dropped connection.
+
+    The handler popped actor and source_ip off the payload before anything
+    judged its shape, so a list or a number raised out of handle() and the
+    peer saw the socket close instead of invalid_request.
+    """
+
+    import os
+
+    server = AgentServer(
+        services,
+        socket_path=tmp_path / "agent.sock",
+        handlers=AgentHandlers(services, executor=lambda target: target()),
+        allowed_uids=(os.getuid(),),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(5)
+        connection.connect(str(server.socket_path))
+        connection.sendall(document)
+        raw = connection.recv(65536)
+        connection.close()
+        assert raw, "the agent closed the connection without a reply"
+        reply = json.loads(raw.decode("utf-8"))
+        assert reply["ok"] is False
+        assert reply["error"]["code"] == "invalid_request"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_no_host_process_is_started_by_a_refused_request(handlers, services):
     services.host.calls.clear()
     with pytest.raises(ProtocolError):
