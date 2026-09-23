@@ -290,14 +290,22 @@ def main(argv=None):
         stale = stale_problems(kit, manifest, attestation)
 
     gates_ok, gates_detail = False, f"{RUNTIME_GATES} is missing"
+    declared_gates = str(((attestation.runtime_gates if attestation else None) or {}).get("sha256")
+                         or "")
     if (kit / RUNTIME_GATES).is_file():
         try:
             gates = runtime_gates.read(kit / RUNTIME_GATES)
         except runtime_gates.RuntimeGateError as error:
             gates_detail = f"{error.code}: {error.message}"
         else:
-            gates_ok = gates.required_pass
             gates_detail = ", ".join(f"{k}={v}" for k, v in gates.summary().items())
+            if not declared_gates:
+                # Absent policy is not approval. Without a digest in the
+                # attestation this file is evidence nothing signed and nothing
+                # bound to this build.
+                gates_detail += "; the attestation names no runtime gate evidence"
+            else:
+                gates_ok = gates.required_pass
 
     freshness = None
     if attestation is not None and args.project_root:

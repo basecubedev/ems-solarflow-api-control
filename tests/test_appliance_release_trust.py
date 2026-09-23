@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+from dataclasses import replace
+
 from appliance import build_authority, release_attestation, release_trust, runtime_gates
 from tests.test_appliance_hardware_kit import (
     VERSION,
@@ -371,6 +373,42 @@ def test_runtime_gate_evidence_substituted_after_the_attestation_is_refused(rele
     problems = release_attestation.verify(attestation, runtime_gates=release.gates, **kwargs)
 
     assert any("runtime gate evidence" in problem for problem in problems), problems
+
+
+@requires_gpg
+def test_runtime_gate_evidence_the_attestation_never_named_is_refused(release):
+    """Absent policy is not approval -- the rule builder approval already states.
+
+    `--runtime-gates` is optional in the finalizer, so an attestation can be
+    signed declaring none. `verify()` guarded the whole comparison on the
+    attestation having declared a digest, so absence was a skip rather than a
+    refusal: a hand-written runtime-gates.json handed to the assembler around
+    such an attestation satisfies `runtime_required_gates_pass` and the kit
+    reports `physical_ready: true`, carried by a file nothing signed and nothing
+    measured. The signing key is not needed for that.
+
+    The realistic route is not adversarial: a mistyped `--runtime-gates` path
+    declares no gates without warning and signs anyway, and the natural repair
+    -- copy the last release's evidence in -- certifies gates that never ran
+    against this build.
+    """
+
+    from appliance import release_attestation
+
+    attestation = release_attestation.read(release.attestation)
+    entry = attestation.profiles[0]
+    ungated = replace(attestation, runtime_gates={})
+
+    problems = release_attestation.verify(
+        ungated,
+        dist={entry.profile: release.dist},
+        reports={entry.profile: release.dist / "reports"},
+        prefixes={entry.profile: release.prefix},
+        gate_report=release.gate,
+        runtime_gates=release.gates,
+    )
+
+    assert any("runtime gate" in problem for problem in problems), problems
 
 
 @requires_gpg
