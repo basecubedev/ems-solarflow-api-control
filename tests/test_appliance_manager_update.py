@@ -536,3 +536,127 @@ def test_the_status_surfaces_a_reverting_verdict(tmp_path):
 
     assert status["verdict"]["verdict"] == manager_verify.VERDICT_REVERTED
     assert status["verdict"]["settled"] is True
+
+
+# --- an axis nothing has written yet ----------------------------------------
+
+
+def retained_with_declaration(services, *, version="0.1.0", body=b"the package that is running"):
+    """A kept package that says what its manager implements, as a real one does.
+
+    `prepare()` records the manifest's declaration; a package retained without
+    one is deliberately never refused, so a fixture without it cannot exercise
+    the compatibility gate at all.
+    """
+
+    archive = services.paths.packages_dir
+    archive.mkdir(parents=True, exist_ok=True)
+    staged = archive / "seed.deb"
+    staged.write_bytes(body)
+    manager_retention.retain(
+        services.paths,
+        staged,
+        sha256="sha256:" + hashlib.sha256(body).hexdigest(),
+        version=version,
+        build_id="20260801000000",
+        state_implements=persistent_state.implemented_schemas(),
+        state_reads=persistent_state.readable_floors(),
+        rotate=False,
+    )
+    staged.unlink()
+
+
+def test_an_axis_nothing_has_written_does_not_refuse_the_kept_package(tmp_path, monkeypatch):
+    """The first version to add an axis took the way back on the box it landed on.
+
+    `_state_schemas` reported `merge(stamp.schemas, implemented)` -- the running
+    manager's whole implemented set, whether or not any state exists in those
+    formats -- and `compatibility_problems` refuses every artefact that does not
+    declare an axis that set names. No package built before the axis existed can
+    declare one, so both browser routes went at once: the revert button and
+    "install the older release from the index".
+
+    The refusal even said something untrue: "this appliance holds <axis> state"
+    about an appliance that holds none.
+    """
+
+    services, service = build(tmp_path)
+    retained_with_declaration(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    original = persistent_state.implemented_schemas
+    monkeypatch.setattr(
+        persistent_state, "implemented_schemas", lambda: {**original(), "ssh_key_accounts": 1}
+    )
+
+    planned = plan(services, "manager.plan_revert")
+
+    codes = [item["code"] for item in planned["plan"]["blockers"]]
+    assert "artifact_state_schema_undeclared" not in codes, planned["plan"]["blockers"]
+
+
+def test_an_axis_the_appliance_really_recorded_still_refuses_a_package(tmp_path):
+    """The gate must keep biting for a format that is actually on the disk."""
+
+    services, service = build(tmp_path)
+    retained_with_declaration(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    stamp = persistent_state.read_stamp(services.paths.state_dir)
+    persistent_state.write_stamp(
+        services.paths.state_dir,
+        schemas={**stamp.schemas, "ssh_key_accounts": 1},
+        written_by={"version": "0.3.0"},
+        written_at="0",
+    )
+
+    planned = plan(services, "manager.plan_revert")
+
+    codes = [item["code"] for item in planned["plan"]["blockers"]]
+    assert "artifact_state_schema_undeclared" in codes, planned["plan"]["blockers"]
+
+
+def test_planning_and_executing_judge_the_same_state(tmp_path, monkeypatch):
+    """A plan that shows no blocker must not be refused at confirmation.
+
+    Execution claims the running manager's axes into the record before dpkg
+    runs. If the comparison were made against the record as the claim leaves
+    it, an install the plan accepted would be refused a moment later by a fact
+    the execution itself had just written.
+    """
+
+    services, service = build(tmp_path)
+    retained_with_declaration(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged = manager_verify.disarm(services.paths, services.runner)
+    assert judged
+
+    original = persistent_state.implemented_schemas
+    monkeypatch.setattr(
+        persistent_state, "implemented_schemas", lambda: {**original(), "ssh_key_accounts": 1}
+    )
+
+    record, _ = plan_and_execute(services, "manager.plan_revert")
+
+    assert record.state == "succeeded", (record.state, record.error)
+
+
+def test_a_record_that_cannot_be_read_still_refuses_everything(tmp_path, monkeypatch):
+    """Undecidable is not permission."""
+
+    services, service = build(tmp_path)
+    retained_with_declaration(services)
+    monkeypatch.setattr(
+        persistent_state,
+        "reconcile",
+        lambda *a, **k: (
+            persistent_state.StampReconciliation(
+                outcome=persistent_state.STATE_UNREADABLE, detail="unreadable"
+            ),
+            persistent_state.read_stamp(services.paths.state_dir),
+        ),
+    )
+
+    recorded, verdict = service._state_schemas(claim=False)
+
+    assert recorded is None
+    assert verdict.outcome == persistent_state.STATE_UNREADABLE

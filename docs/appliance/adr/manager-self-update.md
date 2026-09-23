@@ -53,6 +53,19 @@ installed on an operator's button.**
   nothing to rotate into `previous` and the first failed verification had nowhere
   to go. The image build now seeds the record while the archive is still in hand
   — the only moment it can be seeded at all.
+- **Compatibility is judged against what the partition records**, not against
+  that plus everything the running manager could write. Those are different
+  claims, and folding them together made the first version to add a
+  state-schema axis refuse every package built before it — including the one it
+  had just replaced — because no older package can declare an axis that did not
+  exist. Both browser routes went at once, the revert button and installing the
+  older release from the index, and the refusal named state the appliance does
+  not hold: *this appliance holds `<axis>` state*. Executing still claims the
+  running manager's axes, because the record has to be durable before the
+  package that must read it is unpacked; a claim is a note about what may be
+  written, not evidence about what is there. A partition with no record at all
+  is the one exception: whatever it holds was written by the manager running
+  now, so that manager's own set is the honest answer there.
 - **The refusals happen before dpkg runs.** Signature, digest, architecture and
   state-schema compatibility are all checked while this project's Python is
   still the code that started the process. Afterwards the module files are the

@@ -129,14 +129,32 @@ class ManagerUpdateService:
     # --- what this appliance's state is formatted as ----------------------
 
     def _state_schemas(self, *, claim):
-        """The recorded schemas, claiming unclaimed axes only when asked to.
+        """What this partition records its state as, and the reconciliation verdict.
 
-        ``None`` is undecidable and every caller refuses on it. Planning reads;
-        executing claims, so the record is durable before the package that has
-        to be able to read it is unpacked.
+        The record, never the record plus everything this manager could write.
+        Folding the implemented set in invented state: the first version to add
+        an axis then refused every package built before it -- including the one
+        it had just replaced -- because no older package can declare an axis
+        that did not exist, and both browser routes go together, the revert
+        button and installing the older release from the index. The message was
+        untrue as well, naming state the appliance does not hold.
+
+        Read before the claim, so planning and executing answer alike. ``None``
+        is undecidable and every caller refuses on it. Executing still claims,
+        because the record has to be durable before the package that must be
+        able to read it is unpacked -- but a claim is a note about what may be
+        written, not evidence about what is there, so it is not what an
+        artefact is measured against.
+
+        A partition with no record at all is the exception: nothing has claimed
+        anything there, and whatever state it holds was written by the manager
+        running now, so that manager's own set is the honest answer. Answering
+        "nothing" would let a package install that cannot read what is already
+        on the disk.
         """
 
-        verdict, stamp = persistent_state.reconcile(
+        before = persistent_state.read_stamp(self.state_mountpoint)
+        verdict, _ = persistent_state.reconcile(
             self.state_mountpoint,
             written_by={"version": self.installed_version},
             written_at=str(self._now()),
@@ -144,7 +162,9 @@ class ManagerUpdateService:
         )
         if verdict.outcome == persistent_state.STATE_UNREADABLE:
             return None, verdict
-        return persistent_state.merge(stamp.schemas, verdict.implemented), verdict
+        if not before.present:
+            return dict(verdict.implemented), verdict
+        return dict(before.schemas), verdict
 
     # --- discovery --------------------------------------------------------
 
