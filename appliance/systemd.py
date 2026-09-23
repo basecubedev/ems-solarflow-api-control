@@ -8,6 +8,10 @@ are simply not reachable from here.
 
 UNIT_DOCKER = "docker.service"
 UNIT_SSH = "ssh.service"
+# Trixie can start sshd from a socket with the service disabled, and this
+# package installs onto foreign Raspberry Pi OS hosts. Turning "SSH" off
+# without this leaves port 22 open behind a console that says it is closed.
+UNIT_SSH_SOCKET = "ssh.socket"
 UNIT_AVAHI = "avahi-daemon.service"
 UNIT_NETWORK_MANAGER = "NetworkManager.service"
 UNIT_APPLIANCE_WEB = "ems-appliance-web.service"
@@ -24,6 +28,7 @@ UNIT_BACKUP_ACCESS_DISABLE = "ems-appliance-backup-access-disable.service"
 READABLE_UNITS = (
     UNIT_DOCKER,
     UNIT_SSH,
+    UNIT_SSH_SOCKET,
     UNIT_AVAHI,
     UNIT_NETWORK_MANAGER,
     UNIT_APPLIANCE_WEB,
@@ -43,7 +48,7 @@ READABLE_UNITS = (
 
 # Readable is not controllable: nothing above may be started or stopped
 # from a request, and this list is what says so.
-CONTROLLABLE_UNITS = (UNIT_DOCKER, UNIT_SSH)
+CONTROLLABLE_UNITS = (UNIT_DOCKER, UNIT_SSH, UNIT_SSH_SOCKET)
 
 
 class SystemdError(Exception):

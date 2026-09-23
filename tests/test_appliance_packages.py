@@ -446,3 +446,85 @@ def test_the_disk_space_check_reads_the_probe_root_not_the_host(tmp_path):
 
     assert present["available"] is True
     assert present["path"].startswith(str(tmp_path))
+
+
+def test_a_filesystem_with_no_space_left_is_a_blocker(tmp_path, monkeypatch):
+    """The blocker turned itself off at exactly the worst input.
+
+    `free_megabytes` is 0 both when the probe could not run and when there
+    really is less than a megabyte left, and the blocker reads
+    `if state.free_megabytes and ...` -- so zero is falsy and no blocker is
+    listed. The console then enables the confirm button, `apt-get upgrade` runs
+    on a full filesystem and dies inside the dpkg transaction. The documented
+    way out of a broken package manager on this appliance is re-flashing.
+    """
+
+    services = appliance(tmp_path)
+    monkeypatch.setattr(
+        services.packages.probe,
+        "filesystem",
+        lambda path: {"path": path, "available": True, "free_mb": 0, "total_mb": 8000},
+    )
+    handlers = handlers_for(services)
+
+    plan = handlers.dispatch({"operation": "updates.plan", "scope": "security"})["plan"]
+
+    assert "insufficient_disk_space" in [item["code"] for item in plan["blockers"]], plan[
+        "blockers"
+    ]
+
+
+def test_a_filesystem_that_could_not_be_measured_is_a_blocker(tmp_path, monkeypatch):
+    """Not knowing how much room there is is not proof that there is enough."""
+
+    services = appliance(tmp_path)
+    monkeypatch.setattr(
+        services.packages.probe, "filesystem", lambda path: {"path": path, "available": False}
+    )
+    handlers = handlers_for(services)
+
+    plan = handlers.dispatch({"operation": "updates.plan", "scope": "security"})["plan"]
+
+    codes = [item["code"] for item in plan["blockers"]]
+    assert "free_space_unknown" in codes, plan["blockers"]
+
+
+def test_a_filesystem_with_room_is_not_a_blocker(tmp_path, monkeypatch):
+    services = appliance(tmp_path)
+    monkeypatch.setattr(
+        services.packages.probe,
+        "filesystem",
+        lambda path: {"path": path, "available": True, "free_mb": 8000, "total_mb": 16000},
+    )
+    handlers = handlers_for(services)
+
+    plan = handlers.dispatch({"operation": "updates.plan", "scope": "security"})["plan"]
+
+    codes = [item["code"] for item in plan["blockers"]]
+    assert "insufficient_disk_space" not in codes
+    assert "free_space_unknown" not in codes
+
+
+def test_an_install_confirmed_before_the_disk_filled_is_still_refused(tmp_path, monkeypatch):
+    """The plan is a preview; the filesystem may fill between it and the press."""
+
+    services = appliance(tmp_path)
+    handlers = handlers_for(services)
+    planned = handlers.dispatch({"operation": "updates.plan", "scope": "security"})
+    monkeypatch.setattr(
+        services.packages.probe,
+        "filesystem",
+        lambda path: {"path": path, "available": True, "free_mb": 0, "total_mb": 8000},
+    )
+
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.stage == "blocked", record.stage
+    assert record.error["code"] == "insufficient_disk_space", record.error

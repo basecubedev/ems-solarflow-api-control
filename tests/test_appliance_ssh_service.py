@@ -426,3 +426,55 @@ def test_the_shown_commands_use_paths_inside_the_chroot(tmp_path):
     assert ":/data/backups" in commands, "the /backups export is empty; see export_sources()"
     assert ":/config" in commands
     assert str(services.paths.install_root) not in commands
+
+
+# --- a host whose sshd is socket-activated ----------------------------------
+
+
+def socket_activated(services):
+    """Trixie's shape: ssh.socket holds port 22 and starts sshd per connection."""
+
+    services.host.absent_units.discard("ssh.socket")
+    services.host.units["ssh.socket"] = {"active": "active", "enabled": "enabled"}
+    services.host.units["ssh.service"] = {"active": "inactive", "enabled": "disabled"}
+    return services
+
+
+def test_ssh_held_open_by_a_socket_unit_is_not_reported_as_off(tmp_path):
+    """The console said SSH was off while the box went on answering.
+
+    `ssh.socket` holds port 22 and starts sshd per connection, which Trixie can
+    do and which this package is explicitly installed onto foreign Raspberry Pi
+    OS hosts. Reading only `ssh.service` reports `enabled: false` over a box
+    that still admits a key -- including one already deployed on the
+    sudo-capable `ems-shell`. The image path already knows this case and checks
+    it; the runtime path did not.
+    """
+
+    services = socket_activated(appliance(tmp_path))
+
+    status = services.ssh.status()
+
+    assert status["enabled"] is True, status
+
+
+def test_disabling_ssh_takes_the_socket_with_it(tmp_path):
+    services = socket_activated(appliance(tmp_path))
+
+    plan_and_execute(services, "ssh.plan_service", enabled=False)
+
+    assert services.host.units["ssh.socket"]["enabled"] == "disabled"
+    assert services.host.units["ssh.service"]["enabled"] == "disabled"
+    assert services.ssh.status()["enabled"] is False
+
+
+def test_enabling_ssh_on_a_socket_host_uses_the_socket(tmp_path):
+    """`ssh.service` cannot bind port 22 while the socket holds it."""
+
+    services = socket_activated(appliance(tmp_path))
+    services.host.units["ssh.socket"]["enabled"] = "disabled"
+    services.host.units["ssh.socket"]["active"] = "inactive"
+
+    plan_and_execute(services, "ssh.plan_service", enabled=True)
+
+    assert services.host.units["ssh.socket"]["enabled"] == "enabled"

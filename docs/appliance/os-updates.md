@@ -40,7 +40,12 @@ Before installing, the plan shows:
 ```
 
 Blockers stop the confirmation: an active package-manager lock, an interrupted
-dpkg run, or insufficient free space.
+dpkg run, insufficient free space — and free space that could not be measured
+at all, because not knowing how much room there is is not proof that there is
+enough. A filesystem with nothing left on it reads as zero, which used to be
+indistinguishable from "the probe did not run" and let the update through at
+exactly the worst moment: `apt` then dies inside the dpkg transaction, and the
+documented repair for a broken package manager here is re-flashing.
 
 During installation the operation reports its stage, captures bounded output and
 prevents a second package operation. Afterwards it runs a dpkg consistency
