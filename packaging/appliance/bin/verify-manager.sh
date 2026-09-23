@@ -25,6 +25,12 @@ SERVICES="ems-appliance-agent.service ems-appliance-web.service"
 # attempt spends the only automatic way back on a condition that clears itself.
 REVERT_ATTEMPTS=5
 
+# The one deadline record layout this reverter can act on: the number
+# manager_verify.DEADLINE_SCHEMA_VERSION writes, and a test holds the two
+# together. Fields read out of a record with another number may not mean
+# what they meant here.
+DEADLINE_SCHEMA=1
+
 text() {
     sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$DEADLINE"
 }
@@ -55,11 +61,25 @@ if [ ! -f "$DEADLINE" ]; then
     exit 0
 fi
 
+# The record is judged before any field in it is trusted. manager_verify.read()
+# already refuses a version it does not know, and the console reports that
+# record as unreadable -- a reverter that read the same file field by field
+# would then install previous.deb behind a console saying nothing is in
+# flight. A record with no deadline in it cannot have expired either; the old
+# default of 0 was a deadline in 1970. Disarmed rather than left: nothing can
+# act on this record, and an armed one would tick behind that console forever.
+SCHEMA=$(number schema_version)
+DEADLINE_EPOCH=$(number deadline_epoch)
+if [ "$SCHEMA" != "$DEADLINE_SCHEMA" ] || [ -z "$DEADLINE_EPOCH" ]; then
+    record revert_unavailable \
+        "the deadline record could not be read by this reverter (schema ${SCHEMA:-none}); nothing was judged and nothing was installed"
+    disarm
+    exit 0
+fi
+
 EXPECTED=$(text expected_version)
 PREVIOUS=$(text previous_path)
 PREVIOUS_SHA=$(text previous_sha256)
-DEADLINE_EPOCH=$(number deadline_epoch)
-[ -n "$DEADLINE_EPOCH" ] || DEADLINE_EPOCH=0
 NOW=$(date -u +%s)
 
 # ${Version} answers for a package dpkg unpacked and never configured, and for

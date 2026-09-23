@@ -122,6 +122,7 @@ would be no deadline at all.
 | The deadline expires first | The previous package is installed again, by itself, and the page reports it. |
 | There is no previous package to go back to | It says so, and waits for you. A first install has nothing behind it. |
 | Even the previous package refuses to install | It says so, and waits for you. |
+| The record of the deadline cannot be read | Nothing is installed and nothing is undone. It says so, and waits for you. |
 
 The undo is a copy taken out of the package being *replaced*, saved before the
 new one is unpacked, so the thing deciding whether to keep the update is not
