@@ -15,6 +15,7 @@ asks whether the artefacts already built are a release, builds nothing, and
 cannot reach PASS without a signature that verifies against a trusted key.
 """
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -122,6 +123,31 @@ def test_an_unsupported_profile_is_refused_before_anything_runs(tmp_path):
 
     assert result.returncode == 2
     assert "build_identifier_invalid" in result.stdout + result.stderr
+
+
+def test_an_unresolvable_profile_list_is_reported_as_not_run(tmp_path):
+    """A host that cannot answer the question has not failed the gate.
+
+    The script called a ``fail`` it never defined, so a host without python3
+    exited 127 with ``fail: not found`` -- a status the header does not name,
+    which CI reports as a failed release gate without saying why.
+    """
+
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "python3").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    (stub / "python3").chmod(0o755)
+    env = {**os.environ, "PATH": f"{stub}:{os.environ['PATH']}"}
+
+    result = subprocess.run(
+        ["sh", str(GATES), "--output", str(tmp_path / "out")],
+        capture_output=True, text=True, check=False, env=env, timeout=120,
+    )
+
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "the profile list could not be resolved" in result.stderr
+    assert "RESULT: NOT RUN" in result.stderr
+    assert "not found" not in result.stderr
 
 
 def test_the_builder_guest_runs_qualification_and_never_signs():

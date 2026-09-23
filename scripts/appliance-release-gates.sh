@@ -58,6 +58,14 @@ usage() {
     sed -n '3,42p' "$0"
 }
 
+# A gate that could not be asked has not failed: 3 is the header's "a required
+# gate did not run", and it never prints PASS.
+not_run() {
+    echo "appliance-release-gates: $1" >&2
+    echo "RESULT: NOT RUN ($2)" >&2
+    exit 3
+}
+
 # Everything the running mode claims.
 required_gate() {
     case "$MODE" in
@@ -167,7 +175,7 @@ PY
 }
 
 [ -n "$PROFILES" ] || PROFILES=$(default_profiles) \
-    || fail "the profile list could not be resolved" hardware_profile_unknown
+    || not_run "the profile list could not be resolved" hardware_profile_unknown
 mkdir -p "$OUTPUT/gates" "$OUTPUT/reports"
 
 for profile in $PROFILES; do
