@@ -136,6 +136,17 @@ def test_one_stack_owns_the_interface_and_the_layer_says_which():
 # --- the overlay -------------------------------------------------------------
 
 
+def test_the_inspector_checks_exactly_the_files_the_overlay_ships():
+    """The overlay tree is the one authority for what the layer contributes;
+    the inspector's list only mirrors it. A file added to the overlay that
+    nothing looks for on the artefact is a bound on SD writes that can go
+    missing silently."""
+
+    from appliance import image_inspect
+
+    assert overlay_entries(OVERLAY) == sorted(image_inspect.ROOT_OVERLAY_FILES)
+
+
 # --- the configuration that selects it ---------------------------------------
 
 IMAGE = ROOT / "packaging" / "appliance" / "image"

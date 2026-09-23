@@ -67,6 +67,12 @@ def populate_root(
     """A root carrying exactly what an appliance image has to carry."""
 
     base.mkdir(parents=True, exist_ok=True)
+    # The layer overlay, as the build applies it.
+    for name in image_inspect.ROOT_OVERLAY_FILES:
+        path = base / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {Path(name).name}\n")
+
     for helper in image_inspect.RUNTIME_HELPERS:
         path = base / helper
         path.parent.mkdir(parents=True, exist_ok=True)

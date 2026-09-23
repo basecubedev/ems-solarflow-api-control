@@ -205,6 +205,28 @@ def test_an_image_whose_only_dhcp_client_is_network_manager_passes(single_image)
     assert findings["network_manager_enabled:root"].result == PASS
 
 
+@requires_mkfs
+def test_a_root_the_layer_overlay_never_reached_is_a_failure(tmp_path):
+    """rpi-image-gen derives the overlay directory from the layer file's stem,
+    and the layer says so itself: a rename on either side stops it being
+    applied and the build reports nothing. Each overlay file bounds a write
+    to the SD card, so an image without them outlives the card by years."""
+
+    root_tree = tmp_path / "root"
+    populate_root(root_tree)
+    (root_tree / "etc/docker/daemon.json").unlink()
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, "kernel8.img": b"k",
+         "initramfs8": b"i", "bcm2712-rpi-5-b.dtb": b"d"},
+    )
+    findings = by_check(contents(assemble_mbr(tmp_path / "appliance.img", boot, root)))
+
+    assert findings["rootfs_overlay_applied:root"].result == FAIL
+    assert "etc/docker/daemon.json" in findings["rootfs_overlay_applied:root"].detail
+
+
 # --- the whole inspection ----------------------------------------------------
 
 

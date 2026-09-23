@@ -238,6 +238,18 @@ RUNTIME_HELPERS = (
     f"usr/lib/ems-appliance-manager/{backup_ownership.ACCOUNT_ORIGIN_NAME}",
 )
 
+# What the layer's rootfs overlay contributes. rpi-image-gen derives the overlay
+# directory from the layer file's own stem, so a rename on either side stops it
+# being applied and the build says nothing -- the layer file states exactly
+# that. Each of these bounds a write to the SD card: unbounded Docker json-file
+# logs and journald's default of 10% of the root outlive the card by years.
+# tests/test_appliance_image.py keeps this equal to the overlay tree itself.
+ROOT_OVERLAY_FILES = (
+    "etc/docker/daemon.json",
+    "etc/systemd/journald.conf.d/50-ems-appliance.conf",
+    "etc/systemd/system.conf.d/50-ems-appliance-watchdog.conf",
+)
+
 # A board that never reaches the network cannot be asked anything, and the image
 # ships no login account. The serial line is the only channel a first boot has,
 # and it is where a root that will not mount says so.
@@ -555,6 +567,18 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
         f"missing: {', '.join(missing_helpers)}"
         if missing_helpers
         else f"{len(RUNTIME_HELPERS)} helpers present",
+    )
+
+    # Presence, not content: none of these paths exists in a stock Debian
+    # root, so presence is exactly "the overlay was applied". The values in
+    # them stay owned by the overlay files.
+    missing_overlay = [name for name in ROOT_OVERLAY_FILES if not reader.is_file(name)]
+    record(
+        "rootfs_overlay_applied",
+        not missing_overlay,
+        f"the layer overlay was not applied: missing {', '.join(missing_overlay)}"
+        if missing_overlay
+        else f"{len(ROOT_OVERLAY_FILES)} overlay files present",
     )
     return findings
 
