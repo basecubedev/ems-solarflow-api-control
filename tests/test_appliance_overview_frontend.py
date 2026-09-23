@@ -40,6 +40,7 @@ def _render(
     operations=(),
     extra=(),
     log=None,
+    settings=None,
 ):
     node = shutil.which("node")
     if not node:
@@ -58,6 +59,7 @@ def _render(
                 "operations": list(operations),
                 "extra": list(extra),
                 "log": log,
+                "settings": settings,
             }
         ),
         text=True,
@@ -291,6 +293,27 @@ def test_a_log_that_is_empty_is_still_shown_as_empty():
 
     assert view["note"] == "0 lines"
     assert view["body"] == "(empty)"
+# --- the log list ----------------------------------------------------------
+
+DECLARED = ["appliance_web", "manager_verify", "grow_root", "admin_container", "operations", "audit"]
+
+
+def test_the_log_list_is_the_backend_s_rather_than_a_copy():
+    """The backend declares which logs may be read; the browser held a copy of
+    nine while sixteen were declared, and the manager card pointed at one of
+    the seven it could not open."""
+
+    assert _render(_status(), settings={"log_sources": DECLARED}, expert=True)["log_sources"] == DECLARED
+
+
+def test_basic_mode_still_offers_the_three_a_first_look_needs():
+    view = _render(_status(), settings={"log_sources": DECLARED}, expert=False)["log_sources"]
+    assert view == ["admin_container", "operations", "audit"]
+
+
+def test_a_source_the_backend_does_not_declare_is_not_offered():
+    view = _render(_status(), settings={"log_sources": ["operations"]}, expert=False)["log_sources"]
+    assert view == ["operations"]
 
 
 # --- getting there ---------------------------------------------------------

@@ -2488,10 +2488,30 @@
       ], "diag-support")
     ]));
 
-    var sources = expert()
-      ? ["appliance_web", "appliance_agent", "operations", "audit", "admin_container", "ems_container", "docker_daemon", "boot", "packages"]
-      : ["admin_container", "operations", "audit"];
-    main.appendChild(logPanel(state.data.logSource || sources[0], "Logs", sources));
+    var settings = state.data.settings;
+    if (settings === undefined) {
+      state.data.settings = null;
+      loadInto("settings", "/api/settings");
+    }
+    var sources = logSources(settings || {}, expert());
+    if (!sources.length) {
+      main.appendChild(el("p", { class: "empty-state", text: "Log sources are loading." }));
+    } else {
+      main.appendChild(logPanel(state.data.logSource || sources[0], "Logs", sources));
+    }
+  }
+
+  /* The three a first look needs; expert mode offers every source the
+     backend declares. The list itself is the backend's -- a copy here
+     stopped at nine while sixteen were declared, and the manager card
+     pointed the operator at manager_verify, one of the seven it could not
+     open. */
+  var BASIC_LOG_SOURCES = ["admin_container", "operations", "audit"];
+
+  function logSources(settings, expert) {
+    var declared = (settings || {}).log_sources || [];
+    if (expert) return declared.slice();
+    return BASIC_LOG_SOURCES.filter(function (item) { return declared.indexOf(item) !== -1; });
   }
 
   /* An empty log and a log nobody could read are two statements; the panel

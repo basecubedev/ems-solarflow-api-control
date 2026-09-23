@@ -508,6 +508,21 @@ def test_an_unknown_log_source_is_refused(signed_in):
     assert payload["error"] == "invalid_log_source"
 
 
+def test_the_console_is_offered_every_log_source_it_may_read(signed_in):
+    """One list. The browser held a copy of nine sources while the backend
+    declared sixteen, so the journals the manager card itself points at --
+    manager_verify among them -- could not be opened from the console."""
+
+    from appliance import validation
+
+    _services, _app, client = signed_in
+
+    status, payload, _ = client.get("/api/settings")
+
+    assert status == 200
+    assert payload["log_sources"] == list(validation.LOG_SOURCES)
+
+
 def test_settings_never_expose_a_host_secret(signed_in):
     _, _, client = signed_in
     payload = client.get("/api/settings")[1]

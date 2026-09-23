@@ -253,6 +253,13 @@ manifest of everything it contains. Check the manifest before sharing it.
 | `docker_daemon` | Docker service journal |
 | `boot` | Boot warnings |
 | `packages` | Package-manager log |
+| `manager_install` | The unit that runs `dpkg` for a manager self-update |
+| `manager_verify` | The deadline that decides whether a manager install stays |
+| `export` | The read-only export mounts for the backup account |
+| `config_seed` | First-boot configuration seeding |
+| `grow_root` | The one-shot root growth on a freshly imaged card |
+| `sshd_keys` | The sshd drop-in and host-key generation |
+| `backup_access` | The unit that disables backup access when the export fails |
 
 All log output is bounded and redacted before it reaches the browser. A log the
 appliance could not read says so, because an empty log and an unreadable one

@@ -692,6 +692,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             "allow_prerelease": config.images.allow_prerelease,
             "backup_user": config.backup_user,
             "ssh_key_accounts": list(config.ssh_key_accounts),
+            # The one list of logs the console may open; the browser held a
+            # copy that stopped at nine while sixteen were declared.
+            "log_sources": list(validation.LOG_SOURCES),
             "web_port": config.web_port,
             "admin_port": config.admin_port,
             "security_audit": self.app.audit_status(),
