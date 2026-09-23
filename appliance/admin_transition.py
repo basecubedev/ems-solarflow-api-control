@@ -22,6 +22,10 @@ Both cases are reported rather than silently ignored.
 
 Nothing here is written. The appliance never edits the transition file: that
 record belongs to Admin, and clearing it is Admin's business or the operator's.
+Which is why the stage has to be read: Admin keeps the record after it is done
+and moves its deadline forward with the last write, so a record that is over
+looks live to a clock for up to a full window afterwards -- and that window is
+exactly when an operator reaches for the repair tools.
 """
 
 import json
@@ -43,6 +47,13 @@ STATE_NONE = "none"
 STATE_LIVE = "live"
 STATE_EXPIRED = "expired"
 STATE_UNREADABLE = "unreadable"
+STATE_FINISHED = "finished"
+
+# Admin's own TERMINAL_TRANSITION_STAGES: the two it refuses to advance out of.
+# Copied because the appliance runs outside every container and cannot import
+# the authority; a contract test pins the pair. Anything this side does not
+# recognise is absent from here and therefore keeps blocking.
+FINISHED_STAGES = frozenset({"completed", "cancelled"})
 
 
 def admin_data_dir(paths, deployment=None):
@@ -125,6 +136,14 @@ def read_transition(path, *, now=None):
         "stage": str(payload.get("stage") or ""),
         "expires_at": str(payload.get("expires_at") or ""),
     }
+    if record["stage"] in FINISHED_STAGES:
+        # Admin renews the expiry on every durable step, the completing one
+        # included, so a record it has finished with still names an hour in the
+        # future. The stage says the operation is over; the clock only bounds
+        # one that is not.
+        record["state"] = STATE_FINISHED
+        return record
+
     expires = _expiry(payload.get("expires_at"))
     if expires is None:
         # A transition with no usable expiry can never be classified as over,

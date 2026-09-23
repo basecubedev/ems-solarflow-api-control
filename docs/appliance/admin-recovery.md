@@ -370,8 +370,16 @@ In practice:
 |---|---|
 | none | works normally |
 | live, within its expiry | refuses Admin-mutating operations |
+| stage `completed` or `cancelled` | works normally, whatever the expiry says |
 | past its expiry | works normally |
 | corrupt or unreadable | works normally |
+
+The stage matters as much as the clock, because Admin keeps the record after it
+is finished and moves the deadline forward with the last write it makes — the
+completing one included. A record that is over therefore looks live to a clock
+for up to a full window afterwards, and that window is exactly when an operator
+reaches for these tools. Any stage the appliance does not recognise keeps
+blocking, and so does `failed_recoverable`, which Admin may still act on.
 
 If Admin is genuinely stuck inside a live transition, either wait for the
 expiry or delete
