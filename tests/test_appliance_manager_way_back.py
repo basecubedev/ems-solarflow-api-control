@@ -240,3 +240,46 @@ def test_every_tool_the_appliance_runs_is_on_the_allowlist():
                 missing.setdefault(tool, []).append(path.name)
 
     assert missing == {}, f"tools a CommandRunner would refuse: {missing}"
+
+
+def test_re_keeping_what_is_already_current_does_not_spend_the_way_back(paths, tmp_path):
+    """Rotation is how a way back is made; it is also how one is destroyed.
+
+    An operator who reinstalls the version already on -- a retry after a half
+    failure, or the same package offered again -- rotates ``current.deb`` into
+    ``previous.deb`` and then writes the identical archive back into
+    ``current.deb``. Both slots then hold the same package, ``can_revert``
+    still reports true, and the one archive the appliance is known to have run
+    is gone.
+    """
+
+    from appliance import artifact_trust
+
+    older = archive(tmp_path, "older.deb", b"the manager the image carried")
+    newer = archive(tmp_path, "newer.deb", b"the manager that was installed")
+    retention.retain(
+        paths, older, sha256=artifact_trust.file_digest(older), version="0.1.0", rotate=False
+    )
+    retention.retain(paths, newer, sha256=artifact_trust.file_digest(newer), version="0.2.0")
+
+    again = retention.retain(
+        paths, newer, sha256=artifact_trust.file_digest(newer), version="0.2.0"
+    )
+
+    assert again.previous.version == "0.1.0", "the way back was overwritten with what is current"
+    assert Path(again.previous.path).read_bytes() == b"the manager the image carried"
+    assert again.previous.sha256 != again.current.sha256
+
+
+def test_a_way_back_that_is_the_package_it_leads_back_from_is_no_way_back(paths, tmp_path):
+    """can_revert may not report a revert that would reinstall what is on."""
+
+    from appliance import artifact_trust
+
+    only = archive(tmp_path, "only.deb", b"the only package this card ever had")
+    digest = artifact_trust.file_digest(only)
+    retention.retain(paths, only, sha256=digest, version="0.1.0", rotate=False)
+
+    again = retention.retain(paths, only, sha256=digest, version="0.1.0")
+
+    assert not again.can_revert, "reinstalling the running package is not going back"

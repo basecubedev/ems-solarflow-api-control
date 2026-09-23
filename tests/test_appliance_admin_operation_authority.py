@@ -185,6 +185,43 @@ def test_a_legacy_record_without_a_schema_version_requires_replanning(tmp_path):
     assert operation.result["admin_untouched"] is True, operation.result
 
 
+def test_a_record_from_an_older_schema_does_not_execute_a_non_admin_operation(tmp_path):
+    """The version gate lived in validate_operation, which only the four Admin
+    types reach. Every other type was judged by verify_authority alone, and
+    that recomputes the fingerprint from the record's *own* schema_version --
+    so a record an older manager wrote verified against itself and ran. That
+    is exactly the retryable record recover_interrupted leaves behind when a
+    manager package change restarts the agent.
+    """
+
+    from appliance import operation_schema
+
+    services = appliance(tmp_path)
+    planned = handlers(services).dispatch({"operation": "system.plan_reboot"})
+    services.host.calls.clear()
+
+    def written_by_an_older_manager(payload):
+        payload["schema_version"] = 1
+        target = payload["requested_target"]
+        target[operation_schema.AUTHORITY_FIELD] = operation_schema.authority_fingerprint(
+            operation_id=payload["operation_id"],
+            operation_type=payload["type"],
+            schema_version=1,
+            target=target,
+            plan_hash=target[operation_schema.AUTHORITY_PLAN_FIELD],
+        )
+
+    corrupt(services, planned, written_by_an_older_manager)
+    operation = execute(services, planned)
+
+    assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
+    assert operation.error["code"] == "operation_plan_requires_replanning", operation.error
+    rebooted = [
+        call for call in services.host.calls if call[0] == "systemctl" and "reboot" in call[1]
+    ]
+    assert not rebooted, services.host.calls
+
+
 def test_a_malformed_digest_does_not_execute(tmp_path):
     services = appliance(tmp_path)
     planned = plan_install(services, channel="exact", tag="v1.1.0")

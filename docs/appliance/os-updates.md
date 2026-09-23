@@ -34,6 +34,7 @@ more.
 | Firmware update | A `raspi-firmware` / bootloader / `firmware-*` upgrade is pending |
 | Reboot required | `/var/run/reboot-required` exists, with the packages that set it |
 | Package-manager health | dpkg consistency and whether another package manager holds the lock |
+| Update check | whether apt could list what is available; a failure is reported on its own and does not mean dpkg needs recovery |
 
 ## Install security updates
 
@@ -59,6 +60,31 @@ enough. A filesystem with nothing left on it reads as zero, which used to be
 indistinguishable from "the probe did not run" and let the update through at
 exactly the worst moment: `apt` then dies inside the dpkg transaction, and the
 documented repair for a broken package manager here is re-flashing.
+
+### Installing them without being asked
+
+`automatic_security_updates` in `/etc/ems-appliance-manager/appliance.conf` is
+off by default. Turned on, `ems-appliance-auto-update.timer` runs once a day at
+a randomised hour and installs the waiting **security** updates — and nothing
+else. It takes effect at the next run; no unit has to be enabled by hand.
+
+It is a caller of the agent, not a second one beside it. The same plan, the
+same blockers, the same operation lock and the same audit entry the console
+produces, so a full disk, an interrupted `dpkg`, a held lock or an operator
+already working on the appliance all stop it exactly as they stop a person.
+That is the reason `unattended-upgrades` is not used and is not a dependency:
+it would run `apt` outside every one of those gates, and a `dpkg` transaction
+that dies half way here is recovered by re-flashing and restoring a backup.
+
+Two things it never does. It never installs a full upgrade — that is an
+operator's decision. And it never reboots, however plainly the updates ask for
+one: the reboot is reported and left to somebody who knows whether the battery
+this appliance controls can be left alone for two minutes. `ems-appliance
+auto-update` runs the same thing by hand.
+
+Every outcome, including declining, exits 0. A daily timer that leaves a failed
+unit behind because the package manager was busy teaches an operator to stop
+reading it; what happened is in the journal and in the operation record.
 
 During installation the operation reports its stage, captures bounded output and
 prevents a second package operation. Afterwards it runs a dpkg consistency
@@ -153,12 +179,21 @@ a version for a package it unpacked and never configured, and for one it has
 only config files left for, and those are the states this exists to catch. That
 gate is narrow and is not a functional test of the manager.
 
+The window is measured in those ticks as much as on the clock: fifteen checks
+a minute apart, and a reboot inside the window does not restart the count. The
+board has no real-time clock, so a reboot restores a stale time and a window
+measured on that clock alone stretched by however far the clock was behind,
+with the console locked for all of it. Whichever runs out first — the clock or
+the ticks — ends the window; time the appliance spent powered off no longer
+counts against it.
+
 | Outcome | What the appliance does |
 |---|---|
 | The gate passes | The deadline is retired and the install stands. |
 | The gate has not passed when the deadline expires | `previous.deb` is installed again, and the console reports *reverted*. |
 | There is no `previous.deb` | The console reports *revert unavailable*, and the appliance is left to a person. |
 | `dpkg` refuses the previous package too | The next tick tries again, up to five times, and only then does the console report *revert failed*. |
+| The deadline record cannot be read by the reverter | Nothing is installed. The record is retired, the console reports *revert unavailable*, and the appliance is left to a person. A record the *console* cannot read, but the reverter can, holds Install and Revert shut until the reverter retires it. |
 
 The retries are there because the commonest reason dpkg refuses is a frontend
 lock another `apt` run holds — often the operator repairing the package manager
@@ -167,7 +202,33 @@ the only automatic way back on a condition that clears itself a minute later.
 
 The reverter is a copy taken out of the *outgoing* package before anything is
 unpacked, so the code deciding keep-or-undo is not code the install brought with
-it.
+it. It goes back to the archive the deadline kept, checked by digest rather than
+by the name of the slot: `previous.deb` is rewritten by every install, so a
+deadline that trusted the path alone could be made to reinstall the very package
+it was armed to undo.
+
+While a deadline is armed and has not been judged, the appliance refuses a
+second install or revert -- the console showed both buttons disabled, but only
+the browser was enforcing it, and each acceptance rotated the archive that
+deadline would restore out of the way-back slot and overwrote the deadline
+itself. Once the window has run out without a verdict both become available
+again, which is deliberate: taking them away on a board whose only alternative
+is a keyboard would be the failure the deadline exists to prevent.
+
+A revert that one of the two paths without Python performed -- the installer's
+own fallback, or the armed reverter -- is folded back into the retained record
+before the next install is planned. Neither can amend it, so the record went on
+naming the package `dpkg` refused as the current one, and the next update
+rotated *that* into the way-back slot.
+
+Execution is bound to the release the plan showed, by digest and by version,
+not merely to its release id: the index is read again at confirmation time, and
+an asset republished under the same id would otherwise install a different
+package than the one that was agreed to.
+
+An install offering the package already current keeps the way back it has rather
+than rotating it away — both slots holding one package is a revert that leads
+nowhere, and the console stops offering it.
 
 The deadline is software rather than firmware, and what that is worth is
 written down rather than glossed:

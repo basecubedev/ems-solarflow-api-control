@@ -100,6 +100,20 @@ def test_reboot_requirement_is_read_from_the_marker(tmp_path):
 # --- fault isolation -------------------------------------------------------
 
 
+def test_the_docker_section_names_the_container_the_ems_runs_in(tmp_path):
+    """The console must not guess the EMS by its name; the backend says which."""
+
+    from tests.helpers.appliance import appliance_config, build_test_services
+
+    host_files(tmp_path)
+    services = build_test_services(tmp_path, config=appliance_config(ems_container="ems"))
+
+    section = services.status.overview()["docker"]
+
+    assert section["ems_container"] == "ems"
+    assert "ems" in [item["name"] for item in section["containers"]]
+
+
 def test_a_failing_section_does_not_take_down_the_overview():
     def explode():
         raise RuntimeError("probe failed")
@@ -170,6 +184,18 @@ def test_the_last_successful_operation_is_reported(tmp_path):
     assert last["type"] == "admin.lifecycle"
 
 
+def test_a_failed_update_check_is_reported_as_itself(tmp_path):
+    """Ties the finding to the string the package service actually produces."""
+
+    services = appliance(tmp_path)
+    services.host.fail_command("apt-get")
+
+    codes = [item["code"] for item in services.status.overview()["health"]["warnings"]]
+
+    assert "update_check_failed" in codes, codes
+    assert "package_manager_unhealthy" not in codes, codes
+
+
 # --- logs ------------------------------------------------------------------
 
 
@@ -210,6 +236,46 @@ def test_log_output_is_bounded_by_the_requested_line_count(tmp_path):
     )
     log = services.status.read_log("operations", 25)
     assert log["lines"] <= 25
+
+
+def test_a_log_the_reader_could_not_open_is_not_an_empty_log(tmp_path):
+    """An empty log and a log nobody could read are two statements.
+
+    journalctl missing raised before the process ever started, the helper
+    caught everything and substituted "", and the console reported 0 lines
+    and (empty) -- the same words it uses for a unit that logged nothing.
+    """
+
+    services = appliance(tmp_path)
+    services.host.tools.discard("journalctl")
+
+    log = services.status.read_log("appliance_agent", 20)
+
+    assert log["text"] == ""
+    assert log["unreadable"] == "CommandError"
+
+
+def test_a_log_file_that_cannot_be_opened_is_not_an_empty_log(tmp_path):
+    services = appliance(tmp_path)
+    services.paths.operations_log.mkdir(parents=True, exist_ok=True)
+
+    log = services.status.read_log("operations", 20)
+
+    assert log["text"] == ""
+    assert log["unreadable"] == "IsADirectoryError"
+
+
+def test_a_log_that_is_simply_empty_still_says_empty(tmp_path):
+    """The other side: the fix must not answer unreadable for every quiet log."""
+
+    services = appliance(tmp_path)
+    services.paths.operations_log.parent.mkdir(parents=True, exist_ok=True)
+    services.paths.operations_log.write_text("", encoding="utf-8")
+
+    log = services.status.read_log("operations", 20)
+
+    assert log["text"] == ""
+    assert log["unreadable"] == ""
 
 
 # --- support archive -------------------------------------------------------
@@ -506,6 +572,29 @@ def test_a_readable_unit_is_not_thereby_a_controllable_one():
         assert unit not in CONTROLLABLE_UNITS
 
 
+def test_the_archive_says_a_log_could_not_be_read(tmp_path):
+    """The bundle is read by somebody who cannot ask the host; an empty file
+    there says the unit logged nothing, which is not what happened."""
+
+    services = appliance(tmp_path)
+    services.host.tools.discard("journalctl")
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "support.plan_archive"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    operation = services.operations.get(planned["operation"]["operation_id"])
+
+    with tarfile.open(operation.result["path"], "r:gz") as archive:
+        text = archive.extractfile("logs/appliance_agent.log").read().decode("utf-8")
+
+    assert text.startswith("unavailable: CommandError"), text
+
+
 def test_the_support_archive_carries_every_declared_log_source(tmp_path):
     """The bundle is what an operator sends when they cannot read the host.
 
@@ -568,3 +657,42 @@ def test_a_fresh_index_says_nothing(tmp_path):
     codes = [item["code"] for item in services.status.overview()["health"]["warnings"]]
 
     assert "package_index_stale" not in codes
+def test_a_stopped_ems_container_is_not_a_healthy_appliance(tmp_path):
+    """The whole point of the box stands still and it calls itself healthy.
+
+    `_health` reads the Docker daemon, the Admin container, update counts, the
+    reboot flag, package-manager health and two fill levels. It never looks at
+    `docker.containers` -- the list that carries the EMS itself. So with Docker
+    up and Admin healthy, an exited `ems-solarflow-api-control` leaves the
+    headline at "This appliance is healthy." and the findings panel at "Nothing
+    needs your attention", with only a small "exited" on one tile.
+    """
+
+    services = appliance(tmp_path)
+    services.host.run_container(
+        services.config.ems_container, f"{ADMIN_REPOSITORY}:v1.0.0", state="exited"
+    )
+
+    health = services.status.overview()["health"]
+
+    assert health["level"] != HEALTH_HEALTHY, health
+    assert "ems_not_running" in [item["code"] for item in health["warnings"]], health["warnings"]
+
+
+def test_a_running_ems_container_is_not_a_finding(tmp_path):
+    services = appliance(tmp_path)
+    services.host.run_container(services.config.ems_container, f"{ADMIN_REPOSITORY}:v1.0.0")
+
+    health = services.status.overview()["health"]
+
+    assert "ems_not_running" not in [item["code"] for item in health["warnings"]]
+
+
+def test_an_appliance_with_no_ems_installed_is_not_accused_of_a_stopped_one(tmp_path):
+    """No EMS yet is the state a fresh appliance is in, and Admin already says so."""
+
+    services = appliance(tmp_path)
+
+    codes = [item["code"] for item in services.status.overview()["health"]["warnings"]]
+
+    assert "ems_not_running" not in codes

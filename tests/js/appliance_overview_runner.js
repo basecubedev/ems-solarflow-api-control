@@ -110,6 +110,16 @@ new Function(
     extractFunction("findingAction") +
     "\n" +
     extractFunction("attentionBySection") +
+    "\n" +
+    extractFunction("emsState") +
+    "\n" +
+    extractFunction("emsContainerName") +
+    "\n" +
+    extractFunction("logSummary") +
+    "\n" +
+    extractVar("BASIC_LOG_SOURCES") +
+    "\n" +
+    extractFunction("logSources") +
     "\nscope.findingsView = findingsView;" +
     "\nscope.overviewVerdict = overviewVerdict;" +
     "\nscope.duration = duration;" +
@@ -120,17 +130,23 @@ new Function(
     "\nscope.operationStage = operationStage;" +
     "\nscope.verdictAnnouncement = verdictAnnouncement;" +
     "\nscope.findingAction = findingAction;" +
-    "\nscope.attentionBySection = attentionBySection;"
+    "\nscope.attentionBySection = attentionBySection;" +
+    "\nscope.emsState = emsState;" +
+    "\nscope.emsContainerName = emsContainerName;" +
+    "\nscope.logSummary = logSummary;" +
+    "\nscope.logSources = logSources;"
 )(scope);
 
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
 const status = input.status || {};
 const view = input.view || "overview";
-const findings = scope.findingsView(status);
+// The browser's own findings (the audit reporter) ride beside the backend's.
+const extra = input.extra || [];
+const findings = scope.findingsView(status, extra);
 
 process.stdout.write(
   JSON.stringify({
-    verdict: scope.overviewVerdict(status),
+    verdict: scope.overviewVerdict(status, extra),
     announcement: {
       first: scope.verdictAnnouncement(undefined, "This appliance is healthy."),
       unchanged: scope.verdictAnnouncement("This appliance is healthy.", "This appliance is healthy."),
@@ -140,7 +156,10 @@ process.stdout.write(
     actions: findings.findings.map(function (item) {
       return scope.findingAction(item, view);
     }),
-    attention: scope.attentionBySection(status),
+    attention: scope.attentionBySection(status, extra),
+    ems: { state: scope.emsState(status.docker || {}), name: scope.emsContainerName(status.docker || {}) },
+    log: scope.logSummary(input.log || null),
+    log_sources: scope.logSources(input.settings || {}, Boolean(input.expert)),
     durations: (input.durations || []).map(scope.duration),
     sizes: (input.sizes || []).map(scope.gigabytes),
     percentages: (input.percentages || []).map(scope.usedPercent),

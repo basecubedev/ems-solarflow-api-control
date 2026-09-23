@@ -83,12 +83,27 @@ firmware-level authority that acts when the software does not.
 
 What replaces it is a deadline, and a deadline is not equivalent:
 
-- It is armed by the outgoing package before the install starts, and the
-  reverter it runs is a copy taken out of that package — not one the incoming
-  install brought with it.
+- It is armed by the outgoing package before the install starts, and what it
+  runs is `verify-manager.armed.sh`: a copy of the reverter script taken out
+  of that package before anything is unpacked. That is all that is
+  snapshotted. `ems-appliance-manager-verify.service` and its timer are
+  installed under `/usr/lib/systemd/system` by dpkg and daemon-reloaded by
+  the incoming package's postinst, so the unit that runs it is installed by
+  the package being judged. A manager package whose verify unit carries a
+  wrong `ExecStart` path, resolves the snapshot as a program, or names a
+  stale packages directory arms a deadline nothing can run: the install
+  stands unjudged until the window passes and the console frees the
+  controls again. The execute-bit case on the revert path below is one
+  instance of that class. Snapshotting the units too is an open decision,
+  not taken here: it would enlarge the most dangerous path in the project,
+  needs a removal path an older reverted package cannot run, and has no
+  hardware evidence behind it yet.
 - A repeating timer, not a one-shot: a reboot inside the window would cancel a
   single `OnActiveSec=` firing, and rebooting is exactly what an operator does
-  when the console stops answering.
+  when the console stops answering. The same tick is what measures the
+  window -- fifteen of them beside the clock -- because a board without a
+  real-time clock restores a stale time at boot, and a window measured on that
+  clock alone stretches by however far it was behind.
 - Its health gate is narrow and the script says so: the package dpkg reports is
   the one the install promised, and the two units that make the appliance
   reachable are running. It is not a functional test of the manager.

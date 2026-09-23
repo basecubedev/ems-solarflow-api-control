@@ -9,8 +9,10 @@ down with it.
 import time
 
 from appliance import rescue_account, validation
-from appliance.docker_backend import DAEMON_RUNNING
+from appliance.docker_backend import CONTAINER_RUNNING, DAEMON_RUNNING
+from appliance.packages import UPDATE_CHECK_FAILED
 from appliance.redaction import bounded_redacted_log
+from appliance.ssh_policy import REFUSAL_ACCEPTED, REFUSAL_UNKNOWN
 from appliance.systemd import (
     UNIT_APPLIANCE_AGENT,
     UNIT_APPLIANCE_WEB,
@@ -41,6 +43,7 @@ VIEW_DIAGNOSTICS = "diagnostics"
 VIEW_OVERVIEW = "overview"
 VIEW_ADMIN = "admin"
 VIEW_UPDATES = "updates"
+VIEW_ACCESS = "access"
 
 # An update check here is deliberately read-only: it never runs apt-get update,
 # which is what keeps a status poll from changing the machine it reports on.
@@ -171,8 +174,30 @@ class StatusService:
             # Reported, never demanded: the console says whether the rescue
             # account still carries the shipped password so an operator can see
             # the answer without going to look for it.
-            "rescue": rescue_account.state(getattr(self.probe, "root", "/")).to_dict(),
+            "rescue": self._rescue(),
         }
+
+    def _rescue(self):
+        """The rescue account, and whether sshd actually refuses it a password.
+
+        The Match block the package writes is a promise; only the running
+        daemon knows whether it read it, so it is asked. A question that
+        cannot be answered is carried as unknown, never as a refusal: the
+        password behind it is public knowledge and the account reaches root.
+        """
+
+        rescue = rescue_account.state(getattr(self.probe, "root", "/")).to_dict()
+        try:
+            rescue["ssh"] = self.ssh.rescue_password_refusal()
+        except Exception as exc:
+            rescue["ssh"] = {
+                "state": REFUSAL_UNKNOWN,
+                "user": rescue_account.ACCOUNT,
+                "restrictions": {},
+                "violations": [],
+                "error": str(exc)[:200],
+            }
+        return rescue
 
     def docker_state(self):
         daemon = self.docker.daemon_state()
@@ -180,7 +205,13 @@ class StatusService:
         if daemon["state"] == DAEMON_RUNNING:
             for name in self.config.managed_containers:
                 containers.append(self.docker.inspect_container(name).to_dict())
-        return {"daemon": daemon, "containers": containers}
+        # The list is the configured set; which of them is the EMS is said
+        # here too, so the console never picks it by a name pattern.
+        return {
+            "daemon": daemon,
+            "containers": containers,
+            "ems_container": self.config.ems_container,
+        }
 
     def admin_state(self):
         return self.admin.detect()
@@ -261,6 +292,31 @@ class StatusService:
                     )
                 )
 
+        if docker.get("status") == SECTION_OK:
+            # The container the whole appliance exists to run. Nothing in the
+            # health summary looked at this list, so an exited EMS left the
+            # headline at "This appliance is healthy" with a small "exited" on
+            # one tile as the only sign. A container that is not there at all
+            # is a different state, and Admin already reports that one.
+            for container in docker.get("containers", []) or []:
+                if container.get("name") != self.config.ems_container:
+                    continue
+                if not container.get("exists") or container.get("state") == CONTAINER_RUNNING:
+                    continue
+                findings.append(
+                    finding(
+                        "ems_not_running",
+                        FINDING_ERROR,
+                        VIEW_OVERVIEW,
+                        "The EMS is not running",
+                        f"The {container.get('name')} container reports "
+                        f"{container.get('state') or 'no state'}, so nothing is controlling "
+                        "the battery.",
+                        "Open Admin and start it, and read its container log if it will "
+                        "not stay up.",
+                    )
+                )
+
         admin = sections.get("admin", {})
         if admin.get("status") == SECTION_OK:
             if not admin.get("installed"):
@@ -332,6 +388,23 @@ class StatusService:
                         "an empty list.",
                     )
                 )
+            # A check that could not ask the mirror is reported as that, and
+            # never as a package manager in need of the repairs the console
+            # offers, none of which reaches a mirror.
+            if updates.get("error") == UPDATE_CHECK_FAILED:
+                findings.append(
+                    finding(
+                        "update_check_failed",
+                        FINDING_WARNING,
+                        VIEW_UPDATES,
+                        "The update check did not finish",
+                        "apt could not list what is available, so the counts on this page are "
+                        "not an answer; an unreachable mirror or a broken sources list is the "
+                        "usual cause.",
+                        "Open System Updates and refresh the package indexes; the appliance "
+                        "log names the repository that did not answer.",
+                    )
+                )
             if not (updates.get("package_manager") or {}).get("healthy", True):
                 findings.append(
                     finding(
@@ -379,6 +452,24 @@ class StatusService:
                             "Open Diagnostics to collect a support archive before freeing space.",
                         )
                     )
+            # Only the alarming answer is a finding. Refused is what ships;
+            # unknown and absent are carried by the card, because neither is
+            # something an operator can act on from the overview.
+            refusal = (system.get("rescue") or {}).get("ssh") or {}
+            if refusal.get("state") == REFUSAL_ACCEPTED:
+                findings.append(
+                    finding(
+                        "rescue_password_accepted_over_ssh",
+                        FINDING_ERROR,
+                        VIEW_ACCESS,
+                        "The rescue password is a network login",
+                        f"sshd would take {rescue_account.ACCOUNT}'s password from the "
+                        "network, and that password is published with this project.",
+                        f"Change it at the console with 'sudo passwd {rescue_account.ACCOUNT}', "
+                        "then check that /etc/ssh/sshd_config still includes "
+                        "/etc/ssh/sshd_config.d/*.conf and reload sshd.",
+                    )
+                )
 
         last = None
         operations = sections.get("operations", {})
@@ -399,14 +490,19 @@ class StatusService:
         source = validation.validate_log_source(source)
         lines = validation.validate_line_count(lines)
 
+        # An empty log and a log nobody could read are two statements, and
+        # the console and the support archive used to get "" for both. The
+        # readers that swallow their failure name it instead; the ones that
+        # raise are turned into an error response by the agent as before.
+        unreadable = ""
         if source == validation.LOG_SOURCE_APPLIANCE_WEB:
-            raw = self._unit_or_file(UNIT_APPLIANCE_WEB, self.paths.appliance_log, lines)
+            raw, unreadable = self._unit_or_file(UNIT_APPLIANCE_WEB, self.paths.appliance_log, lines)
         elif source == validation.LOG_SOURCE_APPLIANCE_AGENT:
-            raw = self._unit_or_file(UNIT_APPLIANCE_AGENT, None, lines)
+            raw, unreadable = self._unit_or_file(UNIT_APPLIANCE_AGENT, None, lines)
         elif source == validation.LOG_SOURCE_OPERATIONS:
-            raw = self._tail_file(self.paths.operations_log, lines)
+            raw, unreadable = self._tail_file(self.paths.operations_log, lines)
         elif source == validation.LOG_SOURCE_AUDIT:
-            raw = self._tail_file(self.paths.audit_log, lines)
+            raw, unreadable = self._tail_file(self.paths.audit_log, lines)
         elif source == validation.LOG_SOURCE_ADMIN_CONTAINER:
             raw = self.docker.container_logs(self.config.admin_container, lines)
         elif source == validation.LOG_SOURCE_EMS_CONTAINER:
@@ -416,28 +512,40 @@ class StatusService:
         elif source == validation.LOG_SOURCE_BOOT:
             raw = self.systemd.boot_warnings(lines)
         elif source in UNIT_LOG_SOURCES:
-            raw = self._unit_or_file(UNIT_LOG_SOURCES[source], None, lines)
+            raw, unreadable = self._unit_or_file(UNIT_LOG_SOURCES[source], None, lines)
         elif source == validation.LOG_SOURCE_PACKAGES:
-            raw = self._tail_file(self.probe.root / DPKG_LOG, lines)
+            raw, unreadable = self._tail_file(self.probe.root / DPKG_LOG, lines)
         else:
             raise validation.ValidationError("log_source_unrouted", f"{source} has no reader")
 
         bounded = bounded_redacted_log(raw, max_lines=lines)
         bounded["source"] = source
+        bounded["unreadable"] = unreadable
         return bounded
 
     def _unit_or_file(self, unit, fallback, lines):
+        """The unit's journal, or the file it also writes, and why not.
+
+        A journal that answered is the answer, empty or not. Only when it
+        could not be asked does the file decide, and only when that gave
+        nothing either is the journal's failure reported -- the same
+        exception-class shorthand section() and the support archive use.
+        """
+
         try:
-            text = self.systemd.journal(unit, lines)
-        except Exception:
-            text = ""
-        if text.strip():
-            return text
-        return self._tail_file(fallback, lines) if fallback is not None else ""
+            text, failure = self.systemd.journal(unit, lines), ""
+        except Exception as exc:
+            text, failure = "", exc.__class__.__name__
+        if text.strip() or fallback is None:
+            return text, failure
+        fallback_text, _fallback_failure = self._tail_file(fallback, lines)
+        if fallback_text:
+            return fallback_text, ""
+        return "", failure
 
     def _tail_file(self, path, lines):
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
-        except (OSError, AttributeError):
-            return ""
-        return "\n".join(content.splitlines()[-int(lines) :])
+        except (OSError, AttributeError) as exc:
+            return "", exc.__class__.__name__
+        return "\n".join(content.splitlines()[-int(lines) :]), ""

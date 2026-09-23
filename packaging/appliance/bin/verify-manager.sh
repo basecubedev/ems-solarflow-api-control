@@ -16,6 +16,7 @@ STATE=${1:-/var/lib/ems-appliance-manager/agent/packages}
 DEADLINE="$STATE/verify-deadline.json"
 VERDICT="$STATE/verify-verdict.json"
 ATTEMPTS="$STATE/verify-revert-attempts"
+TICKS="$STATE/verify-ticks"
 PACKAGE=ems-appliance-manager
 TIMER=ems-appliance-manager-verify.timer
 SERVICES="ems-appliance-agent.service ems-appliance-web.service"
@@ -24,6 +25,20 @@ SERVICES="ems-appliance-agent.service ems-appliance-web.service"
 # repairing the package manager is the console action a bad install invites. One
 # attempt spends the only automatic way back on a condition that clears itself.
 REVERT_ATTEMPTS=5
+
+# The one deadline record layout this reverter can act on: the number
+# manager_verify.DEADLINE_SCHEMA_VERSION writes, and a test holds the two
+# together. Fields read out of a record with another number may not mean
+# what they meant here.
+DEADLINE_SCHEMA=1
+
+# How far apart the ticks that run this are: ems-appliance-manager-verify.timer's
+# OnUnitActiveSec, and a test holds the two together. The board has no
+# real-time clock -- systemd restores a stale time at boot and only moves it
+# forward -- so the window is counted in these ticks as well as on the clock,
+# and whichever runs out first ends it. Ticks are at least this far apart, so
+# the budget can only lengthen the real-time window, never shorten it.
+TICK_SECONDS=60
 
 text() {
     sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$DEADLINE"
@@ -46,7 +61,7 @@ EOF
 }
 
 disarm() {
-    rm -f "$DEADLINE" "$ATTEMPTS"
+    rm -f "$DEADLINE" "$ATTEMPTS" "$TICKS"
     systemctl disable --now "$TIMER" >/dev/null 2>&1 || true
 }
 
@@ -55,10 +70,26 @@ if [ ! -f "$DEADLINE" ]; then
     exit 0
 fi
 
+# The record is judged before any field in it is trusted. manager_verify.read()
+# already refuses a version it does not know, and the console reports that
+# record as unreadable -- a reverter that read the same file field by field
+# would then install previous.deb behind a console saying nothing is in
+# flight. A record with no deadline in it cannot have expired either; the old
+# default of 0 was a deadline in 1970. Disarmed rather than left: nothing can
+# act on this record, and an armed one would tick behind that console forever.
+SCHEMA=$(number schema_version)
+DEADLINE_EPOCH=$(number deadline_epoch)
+WINDOW=$(number window_seconds)
+if [ "$SCHEMA" != "$DEADLINE_SCHEMA" ] || [ -z "$DEADLINE_EPOCH" ] || [ -z "$WINDOW" ]; then
+    record revert_unavailable \
+        "the deadline record could not be read by this reverter (schema ${SCHEMA:-none}); nothing was judged and nothing was installed"
+    disarm
+    exit 0
+fi
+
 EXPECTED=$(text expected_version)
 PREVIOUS=$(text previous_path)
-DEADLINE_EPOCH=$(number deadline_epoch)
-[ -n "$DEADLINE_EPOCH" ] || DEADLINE_EPOCH=0
+PREVIOUS_SHA=$(text previous_sha256)
 NOW=$(date -u +%s)
 
 # ${Version} answers for a package dpkg unpacked and never configured, and for
@@ -87,8 +118,18 @@ if [ "$healthy" = yes ]; then
     exit 0
 fi
 
-if [ "$NOW" -lt "$DEADLINE_EPOCH" ]; then
-    echo "verify-manager: not healthy yet, $((DEADLINE_EPOCH - NOW))s left" >&2
+# One tick spent. Counted after the health gate, so a confirmed install
+# never writes the file, and read the way the revert attempts are.
+TICKS_N=$(cat "$TICKS" 2>/dev/null || echo 0)
+case "$TICKS_N" in '' | *[!0-9]*) TICKS_N=0 ;; esac
+TICKS_N=$((TICKS_N + 1))
+umask 077
+printf '%s\n' "$TICKS_N" > "$TICKS.part"
+mv "$TICKS.part" "$TICKS"
+
+if [ "$NOW" -lt "$DEADLINE_EPOCH" ] && [ "$((TICKS_N * TICK_SECONDS))" -lt "$WINDOW" ]; then
+    echo "verify-manager: not healthy yet, $((DEADLINE_EPOCH - NOW))s on the clock and" \
+         "$((WINDOW - TICKS_N * TICK_SECONDS))s of ticks left" >&2
     exit 0
 fi
 
@@ -97,6 +138,22 @@ if [ -z "$PREVIOUS" ] || [ ! -f "$PREVIOUS" ]; then
         "the deadline expired and this appliance has kept no earlier package to install"
     disarm
     exit 0
+fi
+
+# previous.deb is a slot, and retain() rewrites it on every install. An archive
+# that is no longer the one this deadline kept is not a way back -- it may be
+# the very package being undone -- so it is refused rather than installed.
+if [ -n "$PREVIOUS_SHA" ]; then
+    # "sha256:<hex>", the form artifact_trust.file_digest writes everywhere
+    # else. A sha256sum that could not run leaves the prefix alone, which
+    # matches nothing -- an archive that cannot be checked is not installed.
+    ACTUAL="sha256:$(sha256sum "$PREVIOUS" 2>/dev/null | cut -d" " -f1 || true)"
+    if [ "$ACTUAL" != "$PREVIOUS_SHA" ]; then
+        record revert_unavailable \
+            "the deadline expired and $PREVIOUS is no longer the package it kept"
+        disarm
+        exit 0
+    fi
 fi
 
 echo "verify-manager: the deadline expired without a healthy $PACKAGE; reinstalling $PREVIOUS" >&2

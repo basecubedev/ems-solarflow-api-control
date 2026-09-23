@@ -52,6 +52,7 @@ def every_finding(tmp_path):
             "status": "ok",
             "security_count": 2,
             "reboot_required": True,
+            "error": "update_check_failed",
             "package_manager": {"healthy": False},
         },
         "system": {
@@ -60,6 +61,7 @@ def every_finding(tmp_path):
                 "root": {"available": True, "used_percent": 95},
                 "ems_data": {"available": True, "used_percent": 97},
             },
+            "rescue": {"ssh": {"state": "accepted"}},
         },
         "network": {"status": "unavailable"},
     }
@@ -142,3 +144,74 @@ def test_a_healthy_appliance_has_nothing_to_report(tmp_path):
     health = health_for(tmp_path, {"docker": {"status": "ok", "daemon": {"state": "running"}}})
     assert health["warnings"] == []
     assert health["level"] == HEALTH_HEALTHY
+
+
+def test_a_rescue_password_reachable_over_ssh_is_an_error(tmp_path):
+    """The rescue password is printed in this repository.
+
+    A daemon that would take it from the network is the one thing on this
+    appliance that turns "public knowledge" into remote root, and it is an
+    error on the overview rather than a fact on a card three pages in.
+    """
+
+    def health(ssh):
+        rescue = {"rescue": {"ssh": ssh}} if ssh is not None else {}
+        return health_for(tmp_path, {"system": {"status": "ok", **rescue}})
+
+    degraded = health({"state": "accepted"})
+    assert degraded["level"] == HEALTH_DEGRADED
+    (finding,) = degraded["warnings"]
+    assert finding["severity"] == "error"
+    assert finding["code"] == "rescue_password_accepted_over_ssh"
+    assert finding["section"] == "access"
+
+    # Refused is the shipped state; unknown and absent are carried by the
+    # card, because neither is a finding an operator can act on from here.
+    for quiet in ({"state": "refused"}, {"state": "unknown"}, {"state": "absent"}, None):
+        assert health(quiet)["warnings"] == [], quiet
+def test_an_update_check_that_failed_does_not_accuse_dpkg(tmp_path):
+    """An unreachable mirror is not a broken package manager.
+
+    ``healthy`` went false on any error, including apt failing to list what is
+    available, and the overview then told the operator dpkg needed recovery
+    and offered repairs -- ``dpkg --configure -a``, ``apt-get -f install`` --
+    neither of which reaches a mirror. Meanwhile the tile said zero security
+    updates, which was not an answer either.
+    """
+
+    health = health_for(
+        tmp_path,
+        {
+            "updates": {
+                "status": "ok",
+                "security_count": 0,
+                "error": "update_check_failed",
+                "package_manager": {"healthy": True, "dpkg_issues": [], "lock_state": "free"},
+            }
+        },
+    )
+
+    codes = {item["code"]: item for item in health["warnings"]}
+    assert "package_manager_unhealthy" not in codes
+    failed = codes["update_check_failed"]
+    assert failed["severity"] == "warning"
+    assert failed["section"] == "updates"
+    assert "dpkg" not in failed["message"].lower()
+    assert "not an answer" in failed["message"]
+
+
+def test_an_interrupted_dpkg_still_asks_for_the_repair(tmp_path):
+    """The guard on the other side: the real case keeps its error."""
+
+    health = health_for(
+        tmp_path,
+        {
+            "updates": {
+                "status": "ok",
+                "security_count": 0,
+                "package_manager": {"healthy": False, "dpkg_issues": ["libbroken"]},
+            }
+        },
+    )
+
+    assert "package_manager_unhealthy" in {item["code"] for item in health["warnings"]}

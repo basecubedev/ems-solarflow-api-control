@@ -16,6 +16,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from appliance.paths import sync_parent
+
 RECORD_NAME = "retention.json"
 RECORD_SCHEMA_VERSION = 2
 READABLE_RECORD_VERSIONS = (1, 2)
@@ -80,9 +82,18 @@ class Retention:
 
     @property
     def can_revert(self):
-        """A revert needs a file on disk, not merely a record of one."""
+        """A revert needs a file on disk, and one that is not what is already on.
 
-        return self.previous.present
+        Two slots holding the same package is a way back that leads nowhere;
+        offering it would spend an operator's one remaining move on reinstalling
+        what they are trying to get away from.
+        """
+
+        if not self.previous.present:
+            return False
+        if self.previous.sha256 and self.previous.sha256 == self.current.sha256:
+            return False
+        return True
 
     def to_dict(self):
         return {
@@ -167,6 +178,7 @@ def _write_record(paths, retention):
             os.fsync(stream.fileno())
         os.chmod(staging, FILE_MODE)
         os.replace(staging, target)
+        sync_parent(target)
     except OSError as exc:
         try:
             os.unlink(staging)
@@ -180,8 +192,13 @@ def _copy(source, target):
     os.close(handle)
     try:
         shutil.copyfile(source, staging)
+        # copyfile flushes nothing, and this archive is the way back: a
+        # durable name over unwritten bytes is the same defect one level down.
+        with open(staging, "rb") as copied:
+            os.fsync(copied.fileno())
         os.chmod(staging, FILE_MODE)
         os.replace(staging, target)
+        sync_parent(target)
     except OSError as exc:
         try:
             os.unlink(staging)
@@ -224,8 +241,13 @@ def retain(
     current_path = directory / CURRENT_NAME
     previous_path = directory / PREVIOUS_NAME
 
+    # Re-keeping the archive already current would rotate it into both slots and
+    # take the one package this appliance is known to have run off the disk. A
+    # retried install and the same version offered again both arrive here.
+    already_current = bool(sha256) and existing.current.sha256 == sha256
+
     previous = existing.previous
-    if rotate and existing.current.present:
+    if rotate and existing.current.present and not already_current:
         # The archive itself moves, not just the record: a record naming a file
         # that is no longer there is exactly the shape rollback-manager has been
         # refusing on since it was written.
@@ -240,6 +262,12 @@ def retain(
             state_implements=dict(existing.current.state_implements),
             state_reads=dict(existing.current.state_reads),
         )
+        # The rotation copy has just overwritten the bytes the record on
+        # disk still describes. Made true again before anything else may
+        # fail: a copy of the new archive that dies here -- ENOSPC is the
+        # ordinary way -- would otherwise leave a record naming one package
+        # over the bytes of another, and prepare_revert refusing for ever.
+        _write_record(paths, Retention(current=existing.current, previous=previous))
 
     _copy(source, current_path)
     current = RetainedPackage(
@@ -253,6 +281,43 @@ def retain(
         state_reads=dict(state_reads or {}),
     )
     retention = Retention(current=current, previous=previous)
+    _write_record(paths, retention)
+    return retention
+
+
+def adopt_previous_as_current(paths):
+    """Make the record say what is running after a revert Python never drove.
+
+    ``install-manager.sh`` and the armed reverter both put ``previous.deb``
+    back, and neither can amend this record -- there is no Python on those
+    paths by design. The record then goes on naming the package dpkg refused as
+    current, and the next install rotates *that* into the way-back slot, taking
+    the one archive this appliance is known to have run off the disk.
+
+    Idempotent: it clears ``previous``, so a second call finds nothing to do.
+    """
+
+    existing = read(paths)
+    if existing.unreadable or not existing.previous.present:
+        return existing
+
+    directory = Path(paths.packages_dir)
+    current_path = directory / CURRENT_NAME
+    _copy(directory / PREVIOUS_NAME, current_path)
+    current = RetainedPackage(
+        path=str(current_path),
+        sha256=existing.previous.sha256,
+        version=existing.previous.version,
+        build_id=existing.previous.build_id,
+        retained_at=existing.previous.retained_at,
+        architecture=existing.previous.architecture,
+        state_implements=dict(existing.previous.state_implements),
+        state_reads=dict(existing.previous.state_reads),
+    )
+    # No previous: the archive that was current is the one that was refused,
+    # and the one before it went when this install rotated. Saying there is a
+    # way back when there is none is what this whole record exists to prevent.
+    retention = Retention(current=current, previous=RetainedPackage())
     _write_record(paths, retention)
     return retention
 
@@ -273,5 +338,11 @@ def revert_target(paths):
         raise RetentionError(
             "previous_package_missing",
             f"{retention.previous.path} is recorded but not on disk",
+        )
+    if retention.previous.sha256 and retention.previous.sha256 == retention.current.sha256:
+        raise RetentionError(
+            "previous_is_current",
+            "the kept package is the one that is installed, so going back to it "
+            "would change nothing",
         )
     return retention.previous

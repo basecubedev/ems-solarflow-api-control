@@ -209,7 +209,7 @@
      The shell's one live region speaks instead, and only when the sentence
      itself changed. */
   function verdictLine(status) {
-    var verdict = overviewVerdict(status);
+    var verdict = overviewVerdict(status, sessionFindings());
     var spoken = verdictAnnouncement(state.lastVerdict, verdict.text);
     state.lastVerdict = verdict.text;
     if (spoken) announce(spoken);
@@ -591,6 +591,7 @@
     container_unhealthy: "the Docker health check reports unhealthy",
     image_mismatch: "a different image than expected is running",
     api_unreachable: "the Admin web interface did not answer",
+    start_timed_out: "the start command did not return in time; Docker may still be starting",
     version_unreadable: "the Admin version could not be read",
     version_mismatch: "the running Admin reports a different version"
   };
@@ -1139,14 +1140,23 @@
     return text;
   }
 
-  function overviewVerdict(status) {
+  function overviewVerdict(status, extra) {
     var payload = status || {};
     if (payload.error) return { text: "This appliance could not be read.", tone: "bad" };
     var level = (payload.health || {}).level;
-    if (level === "degraded") {
+    /* The panel under this line ranks the browser's own findings beside the
+       backend's; reading health.level alone printed "This appliance is
+       healthy" over a red finding on the same screen. The worst of them can
+       raise the verdict, never lower it, and info moves nothing -- the same
+       mapping status.health_level() applies on the backend. */
+    var worst = (extra || []).reduce(function (carried, item) {
+      var severity = (item || {}).severity;
+      return rankSeverity(severity) < rankSeverity(carried) ? severity : carried;
+    }, "");
+    if (level === "degraded" || worst === "error") {
       return { text: "Something on this appliance is not working.", tone: "bad" };
     }
-    if (level === "attention") {
+    if (level === "attention" || worst === "warning") {
       return { text: "This appliance is running and needs a little attention.", tone: "warn" };
     }
     if (level === "healthy") return { text: "This appliance is healthy.", tone: "ok" };
@@ -1255,10 +1265,13 @@
     return "bad";
   }
 
+  /* The list is already the configured set, and the backend names which
+     entry is the EMS. A name pattern reported a container the operator had
+     not configured as the EMS, and missed the one they had. */
   function emsState(docker) {
     var containers = docker.containers || [];
     for (var i = 0; i < containers.length; i += 1) {
-      if (/ems-solarflow$|api-control/.test(containers[i].name)) return containers[i].state;
+      if (containers[i].name === docker.ems_container) return containers[i].state;
     }
     return "unknown";
   }
@@ -1266,7 +1279,7 @@
   function emsContainerName(docker) {
     var containers = docker.containers || [];
     for (var i = 0; i < containers.length; i += 1) {
-      if (/ems-solarflow$|api-control/.test(containers[i].name)) return containers[i].name;
+      if (containers[i].name === docker.ems_container) return containers[i].name;
     }
     return null;
   }
@@ -1655,12 +1668,19 @@
     var expiry = Number(verify.deadline_epoch) || 0;
     now = Number(now) || 0;
     var inFlight = armed && !(now && expiry && now >= expiry);
+    /* A record this manager cannot read is not unarmed. The reverter that
+       judges it is the outgoing package's, which may read a record this
+       version cannot -- an older manager installed over a newer one -- so
+       it may fire. Held closed until that reverter retires it on its next
+       tick, which it does for a record nobody can act on as well. */
+    var unreadable = !armed && !!verify.unreadable;
     return {
       armed: armed,
       inFlight: inFlight,
       expiredUnjudged: armed && !inFlight,
-      canUpdate: !inFlight,
-      canRevert: (manager || {}).can_revert === true && !inFlight
+      unreadable: unreadable,
+      canUpdate: !inFlight && !unreadable,
+      canRevert: (manager || {}).can_revert === true && !inFlight && !unreadable
     };
   }
 
@@ -1762,6 +1782,8 @@
             ? tone("warn", "waiting for the deadline")
             : actions.expiredUnjudged
               ? tone("bad", "deadline expired without a verdict")
+              : actions.unreadable
+              ? tone("warn", "deadline record unreadable")
               : (verdict.settled
                   ? tone(MANAGER_VERDICTS[verdict.verdict] ? MANAGER_VERDICTS[verdict.verdict][0] : "warn",
                          format(verdict.verdict))
@@ -1781,14 +1803,31 @@
             + "package is installed again. Nothing else can be started until it settles."
         })
       ]));
+    } else if (actions.unreadable) {
+      main.appendChild(el("p", { class: "empty-state", "data-test": "manager-deadline-unreadable" }, [
+        el("strong", { text: "A deadline record this manager cannot read is on this appliance. " }),
+        el("span", {
+          text: "It may be one another version of the manager armed and is still judging, or one "
+            + "nothing can act on; this console cannot tell which, so installing and reverting wait "
+            + "until the reverter retires it on its next tick. Check ems-appliance-manager-verify.timer "
+            + "if it does not go away. (" + format(verify.unreadable) + ")"
+        })
+      ]));
     } else if (actions.expiredUnjudged) {
       main.appendChild(el("p", { class: "empty-state", "data-test": "manager-deadline-expired" }, [
         el("strong", { text: "The deadline passed and nothing judged it. " }),
+        /* What the reverter actually does in this state: the next tick of the
+           timer, up to a minute away, installs the previous package if the
+           install has still not proved itself. The old text promised nothing
+           would be reverted, which was false for that minute every time. */
         el("span", {
           text: "This appliance armed a deadline for " + format(verify.expected_version)
-            + " and its window has closed without a verdict, so nothing was reverted and nothing "
-            + "will be. Installing or reverting is available again; the next install replaces "
-            + "this deadline. Check ems-appliance-manager-verify.timer if it keeps happening."
+            + " and the window for proving that install has closed. The next tick of "
+            + "ems-appliance-manager-verify.timer, within about a minute, puts the previous package "
+            + "back if the install has still not proved itself. Installing or reverting is free "
+            + "again because a deadline that has passed can no longer be waited on; an install "
+            + "started now replaces this deadline, and a tick already under way may still put the "
+            + "previous package back. Check the timer if this keeps happening."
         })
       ]));
     } else if (verdict.settled && verdict.verdict !== "confirmed") {
@@ -2105,6 +2144,11 @@
     if (!rescue || !rescue.present) {
       return { tone: "warn", label: "not present", hint: "This appliance has no rescue account. A console login is the only way back in when the web console does not answer." };
     }
+    /* Judged before the password is: whether it is still the shipped one
+       matters less than whether sshd would take it from the network. */
+    if ((rescue.ssh || {}).state === "accepted") {
+      return { tone: "bad", label: "password reachable over SSH", hint: "The running sshd would accept this account's password from the network, and that password is public knowledge. Change it with 'sudo passwd " + rescue.account + "', then check that /etc/ssh/sshd_config still includes /etc/ssh/sshd_config.d/*.conf and reload sshd." };
+    }
     if (rescue.unreadable || rescue.password_is_default === null) {
       return { tone: "idle", label: "unknown", hint: "This appliance could not read whether the password is still the shipped one." };
     }
@@ -2115,6 +2159,19 @@
       return { tone: "warn", label: "shipped password", hint: "The password is the documented default, which is public knowledge. That is fine on a private network and a login for anyone who reaches this appliance from outside one. Change it with 'sudo passwd " + rescue.account + "' if that describes yours." };
     }
     return { tone: "ok", label: "changed", hint: "The password is no longer the shipped one." };
+  }
+
+  /* What the running daemon answered when asked about this account -- not
+     what the package wrote. Four states, and only one of them is quiet. */
+  function rescueSshLabel(ssh) {
+    var labels = {
+      "refused": "refused by the running sshd",
+      "accepted": "ACCEPTED over the network",
+      "unknown": "could not be checked",
+      "absent": "sshd is not installed"
+    };
+    var state = (ssh || {}).state;
+    return labels[state] || labels["unknown"];
   }
 
   function renderAccess(main) {
@@ -2310,6 +2367,7 @@
       el("p", { class: "status-value", text: rescue.account || "ems-rescue" }),
       el("div", {}, [tone(verdict.tone, verdict.label)]),
       fact("Can log in", rescue.can_log_in),
+      fact("SSH password", rescueSshLabel(rescue.ssh)),
       expert() ? fact("Shell", rescue.shell) : null,
       el("p", { class: "control-stage-subtitle", text: verdict.hint })
     ], "rescue-account");
@@ -2456,10 +2514,46 @@
       ], "diag-support")
     ]));
 
-    var sources = expert()
-      ? ["appliance_web", "appliance_agent", "operations", "audit", "admin_container", "ems_container", "docker_daemon", "boot", "packages"]
-      : ["admin_container", "operations", "audit"];
-    main.appendChild(logPanel(state.data.logSource || sources[0], "Logs", sources));
+    var settings = state.data.settings;
+    if (settings === undefined) {
+      state.data.settings = null;
+      loadInto("settings", "/api/settings");
+    }
+    var sources = logSources(settings || {}, expert());
+    if (!sources.length) {
+      main.appendChild(el("p", { class: "empty-state", text: "Log sources are loading." }));
+    } else {
+      main.appendChild(logPanel(state.data.logSource || sources[0], "Logs", sources));
+    }
+  }
+
+  /* The three a first look needs; expert mode offers every source the
+     backend declares. The list itself is the backend's -- a copy here
+     stopped at nine while sixteen were declared, and the manager card
+     pointed the operator at manager_verify, one of the seven it could not
+     open. */
+  var BASIC_LOG_SOURCES = ["admin_container", "operations", "audit"];
+
+  function logSources(settings, expert) {
+    var declared = (settings || {}).log_sources || [];
+    if (expert) return declared.slice();
+    return BASIC_LOG_SOURCES.filter(function (item) { return declared.indexOf(item) !== -1; });
+  }
+
+  /* An empty log and a log nobody could read are two statements; the panel
+     printed "0 lines" and "(empty)" for both. */
+  function logSummary(log) {
+    if (!log) return null;
+    if (log.unreadable) {
+      return {
+        note: "This log could not be read (" + log.unreadable + ").",
+        body: "(this log could not be read)"
+      };
+    }
+    return {
+      note: log.lines + " lines" + (log.truncated ? " (truncated)" : ""),
+      body: log.text || "(empty)"
+    };
   }
 
   function logPanel(source, title, sources) {
@@ -2490,9 +2584,10 @@
     ]));
 
     var log = state.data.log;
-    if (log && log.source === source) {
-      wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: log.lines + " lines" + (log.truncated ? " (truncated)" : "") }));
-      wrapper.appendChild(el("pre", { class: "log-view", "data-test": "log-output", text: log.text || "(empty)" }));
+    var summary = log && log.source === source ? logSummary(log) : null;
+    if (summary) {
+      wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: summary.note }));
+      wrapper.appendChild(el("pre", { class: "log-view", "data-test": "log-output", text: summary.body }));
     } else {
       wrapper.appendChild(el("p", { class: "empty-state", text: "No log loaded." }));
     }
@@ -2535,6 +2630,9 @@
       ], "settings-sessions"),
       card("Update policy", [
         fact("Automatic security updates", settings.automatic_security_updates),
+        el("p", { class: "section-hint", text: settings.automatic_security_updates
+          ? "Waiting security updates install once a day at a randomised hour, through the same plan and the same blockers as the button above. Never a full upgrade, and never a reboot \u2014 a reboot the updates ask for is reported and left to you."
+          : "Security updates wait for somebody to press Install. Turn this on in appliance.conf to have them installed once a day instead." }),
         fact("Admin repository", settings.admin_repository, { mono: true }),
         fact("Prereleases allowed", settings.allow_prerelease)
       ], "settings-updates"),

@@ -25,7 +25,7 @@ TMPFILES=/usr/lib/tmpfiles.d/ems-appliance-manager.conf
 # installed onto a plain Raspberry Pi OS never grows its root at all -- which is
 # the ordinary case once the manager ships as a package rather than inside an
 # image.
-UNITS="ems-appliance-config-seed.service ems-appliance-agent.service ems-appliance-web.service ems-appliance-sshd-keys.service ems-appliance-export.service ems-appliance-export.path ems-appliance-grow-root.service"
+UNITS="ems-appliance-config-seed.service ems-appliance-agent.service ems-appliance-web.service ems-appliance-sshd-keys.service ems-appliance-export.service ems-appliance-export.path ems-appliance-auto-update.timer ems-appliance-export-acl.path ems-appliance-grow-root.service"
 
 fail() {
     echo "ems-appliance: $1" >&2
@@ -216,6 +216,11 @@ case "$1" in
             # created later is silently never published.
             systemctl start ems-appliance-export.path \
                 || fail "the export path watcher failed to start; see 'journalctl -u ems-appliance-export.path'"
+            # Non-fatal: it only re-grants an ACL the export run above has just
+            # granted, so an appliance without it is correct until the next
+            # archive rather than unusable.
+            systemctl start ems-appliance-export-acl.path \
+                || note "the export ACL watcher did not start; archives written later may not be readable until the next boot"
 
             # Fail-closed: this enables the backup account only after the
             # effective confinement was validated, reloaded and read back, and

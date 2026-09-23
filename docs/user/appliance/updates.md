@@ -13,8 +13,9 @@ Two different things get updated on an appliance, and they behave differently.
 The appliance runs Raspberry Pi OS, and its packages are patched in place by
 `apt`. **System Updates** shows what is pending: security updates, other package
 updates, whether a kernel or firmware upgrade is among them, whether a reboot is
-required afterwards, and whether the package manager is healthy. The check
-itself changes nothing.
+required afterwards, and whether the package manager is healthy. A check that
+could not reach its mirrors is reported as exactly that, and the counts then
+describe nothing. The check itself changes nothing.
 
 - **Install security updates** is the basic action. Only the packages the
   appliance itself found are upgraded — your browser never names a package.
@@ -111,9 +112,11 @@ anything.
 
 Once a minute, it checks whether the version now installed is the one the update
 promised, and whether the manager's two services are running. The window is
-fifteen minutes, and it survives a reboot inside it — rebooting is exactly what
-you would try when a console stops answering, so a deadline a reboot cancelled
-would be no deadline at all.
+fifteen minutes of the appliance running — the board has no real-time clock,
+so the deadline is counted in the checks themselves rather than in wall-clock
+time — and it survives a reboot inside it: rebooting is exactly what you would
+try when a console stops answering, so a deadline a reboot cancelled would be
+no deadline at all.
 
 | What happens | What the appliance does |
 | --- | --- |
@@ -121,6 +124,7 @@ would be no deadline at all.
 | The deadline expires first | The previous package is installed again, by itself, and the page reports it. |
 | There is no previous package to go back to | It says so, and waits for you. A first install has nothing behind it. |
 | Even the previous package refuses to install | It says so, and waits for you. |
+| The record of the deadline cannot be read | Nothing is installed and nothing is undone. It says so, and waits for you. |
 
 The undo is a copy taken out of the package being *replaced*, saved before the
 new one is unpacked, so the thing deciding whether to keep the update is not

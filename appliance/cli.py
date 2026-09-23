@@ -262,7 +262,7 @@ def command_rollback_manager(args):
     a person is at the keyboard here, so there is no unit and no deadline.
     """
 
-    from appliance import manager_install, manager_releases, manager_retention
+    from appliance import manager_install, manager_releases, manager_retention, manager_verify
 
     paths = resolve_paths()
     if os.geteuid() != 0:
@@ -286,9 +286,24 @@ def command_rollback_manager(args):
     result = runner.run("dpkg", ["--force-confold", "--install", archive], timeout=600)
     print(result.stdout or result.stderr)
     if not result.ok:
+        # Left armed on purpose: a rollback dpkg refused is the moment the
+        # deadline is the last way out.
         print(
             "the package could not be installed; "
             f"{retention.previous.path} is what this appliance was running",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    # The deadline was armed for the package this command just removed, and its
+    # expected version can no longer be reached. Left standing, the next tick
+    # judges the rescue unhealthy and reinstalls what the operator came to undo.
+    try:
+        manager_verify.disarm(paths, runner)
+    except manager_verify.ManagerVerifyError as exc:
+        print(
+            f"error: {target.version or 'the retained package'} is installed, but the install "
+            f"deadline could not be retired ({exc.message}); it will undo this rollback",
             file=sys.stderr,
         )
         return EXIT_ERROR
@@ -505,6 +520,44 @@ def command_host_config(args):
     return EXIT_OK
 
 
+def command_auto_update(args):
+    """Install the waiting security updates, if the operator asked for that.
+
+    Run by ems-appliance-auto-update.timer and by an operator who wants the
+    same thing now. Everything it does goes through the agent, so it is the
+    same plan, the same blockers, the same operation lock and the same audit
+    entry the console produces -- an `unattended-upgrades` beside it would be a
+    writer none of those gates cover.
+
+    Exit 0 for every ordinary outcome, including refusing: a daily timer that
+    leaves a failed unit behind because the package manager was busy teaches an
+    operator to ignore it. What happened is on stdout and in the operation
+    record either way.
+    """
+
+    from appliance.packages import run_scheduled_security_updates
+
+    paths = resolve_paths()
+    config = load_config(paths)
+    try:
+        client = _client(paths, local=getattr(args, "local", False))
+    except SystemExit as exc:
+        print(f"automatic security updates: {exc}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+
+    result = run_scheduled_security_updates(client, config)
+    if getattr(args, "json", False):
+        _print(result, True)
+    elif result["ran"]:
+        print(f"installed {result['installed']} security update(s)")
+    else:
+        detail = result.get("detail") or ", ".join(result.get("blockers", []))
+        print(f"nothing installed: {result['reason']}" + (f" ({detail})" if detail else ""))
+    if result.get("reboot_required"):
+        print("a reboot is required; it is left to an operator", file=sys.stderr)
+    return EXIT_OK
+
+
 def command_backup_access(args):
     """Activate or disable the confined backup account, fail-closed."""
 
@@ -592,16 +645,19 @@ def command_agent(args):
         print(f"recovered {len(recovered)} interrupted operation(s)")
     # A WLAN change interrupted inside its revert window left the new profile
     # active with nothing to take it back; NetworkManager then reconnects to it
-    # on every boot.
-    restored = services.network.recover_revert()
-    if restored:
-        print(f"restored the previous WLAN profile {restored}")
-    elif services.network.pending_revert():
-        print(
-            "a WLAN revert is still armed and could not be applied; it will be tried again",
-            file=sys.stderr,
-        )
-    serve_agent(services, args.socket or paths.agent_socket)
+    # on every boot. After the socket is bound, never before: nmcli waits up to
+    # 90 s and that is the unit's own start timeout.
+    def recover_wifi():
+        restored = services.network.recover_revert()
+        if restored:
+            print(f"restored the previous WLAN profile {restored}")
+        elif services.network.pending_revert():
+            print(
+                "a WLAN revert is still armed and could not be applied; it will be tried again",
+                file=sys.stderr,
+            )
+
+    serve_agent(services, args.socket or paths.agent_socket, after_ready=recover_wifi)
     return EXIT_OK
 
 
@@ -831,6 +887,13 @@ def build_parser():
         help="enabling admits a deployed key; without a key it is still no login",
     )
     shell_access_parser.set_defaults(handler=command_shell_access)
+
+    auto_update = subparsers.add_parser(
+        "auto-update",
+        parents=[shared],
+        help="install waiting security updates, if automatic_security_updates is on",
+    )
+    auto_update.set_defaults(handler=command_auto_update)
 
     backup_access = subparsers.add_parser(
         "backup-access",

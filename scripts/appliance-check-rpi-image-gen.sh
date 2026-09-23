@@ -10,8 +10,8 @@
 # labels its root is mounted through.
 #
 # Exit status: 0 compatible and buildable, 1 incompatible or the source identity
-# could not be proven, 2 the command line is wrong, 3 compatible but this host is
-# missing build dependencies.
+# could not be proven, 2 the command line is wrong, 3 compatible but this host
+# cannot build: a binary, a package, the qemu-aarch64 binfmt or the architecture.
 #
 # Both supported source forms are accepted: a git checkout at the pinned commit,
 # and a release tarball whose SHA-256 the fetch script verified and recorded.
@@ -56,9 +56,14 @@ from appliance import rpi_image_gen
 directory, output_format = sys.argv[1:3]
 lock = rpi_image_gen.read_lock()
 report = rpi_image_gen.probe_checkout(directory, lock)
+# One authority for "can this host build": the checkout's dependencies and
+# the host's binfmt and architecture, judged together. A verdict read from
+# the checkout alone printed PASS beside a missing qemu handler and started
+# a build that died in mmdebstrap twenty-five minutes later.
+host = rpi_image_gen.build_host_state(report.dependencies)
 summary = report.to_dict()
 summary["lock"] = lock.to_dict()
-summary["build_host"] = rpi_image_gen.build_host_state(report.dependencies).to_dict()
+summary["build_host"] = host.to_dict()
 
 if output_format == "json":
     print(json.dumps(summary, indent=2, sort_keys=True))
@@ -74,20 +79,20 @@ else:
     if dependencies.unverified_packages:
         print("unverifiable:      " + ", ".join(dependencies.unverified_packages))
     print(f"source identity:   {report.source_identity}")
-    host = rpi_image_gen.build_host_state(dependencies)
     if host.missing_binfmt:
         print("missing binfmt:    " + ", ".join(host.missing_binfmt))
     if host.unsupported_architecture:
         print("architecture:      " + host.unsupported_architecture)
-    if report.compatible and report.buildable:
+    if report.compatible and host.buildable:
         print(f"RESULT: PASS ({lock.release} {lock.commit[:12]})")
     elif report.compatible:
-        print(f"RESULT: NOT RUN ({report.reason})")
+        # A host-only refusal leaves the checkout's reason blank.
+        print(f"RESULT: NOT RUN ({report.reason or rpi_image_gen.REASON_DEPENDENCIES})")
     else:
         print(f"RESULT: FAIL ({report.reason})")
 
 if not report.compatible:
     sys.exit(1)
-if not report.buildable:
+if not host.buildable:
     sys.exit(3)
 PY

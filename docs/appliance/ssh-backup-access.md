@@ -201,11 +201,17 @@ file 0600:  user:ems-backup:r-x  #effective:---   mask::---
 file 0640:  user:ems-backup:r-x  #effective:r--   mask::r--
 ```
 
-So an archive created after the last export run carries the grant and is not
-readable until the recursive pass runs again — at boot, on a reinstall, or when
-a new top-level EMS directory appears. `ems-appliance-export.path` watches
-`/opt/ems-solarflow` and not its subdirectories, so writing a file under
-`data/backups` does not retrigger it.
+So an archive created after the last export run carries the grant with an empty
+mask. `ems-appliance-export-acl.path` watches `data/backups` for exactly that
+and starts `ems-appliance-export-acl.service`, which runs
+`setup-export-root.sh --refresh-acl`: the recursive grant and nothing else.
+
+Its own watcher and its own unit, rather than a second path on
+`ems-appliance-export.path`, for two reasons. A full export run rebuilds the
+read-only binds, which would cut an SFTP fetch that is in progress. And its
+`ExecStartPost` re-activates the confinement, which races the
+`backup-access activate` an install is already running — measured: the package
+install fails that way.
 
 The appliance no longer claims otherwise: **Backup access** reports `degraded`
 with *exported files are not readable by ems-backup* when the newest archive
@@ -402,7 +408,7 @@ sudo ems-appliance backup-access disable    # revoke until it is verified again
 
 | Step | What happens to backup access |
 |---|---|
-| `apt remove` | authentication is disabled first, the account is expired, the binds are unmounted; the key material is preserved next to `authorized_keys` |
+| `apt remove` | authentication is disabled first, the account is expired, the binds are unmounted, and a bind that cannot be unmounted stops the removal; the key material is preserved next to `authorized_keys` |
 | reinstall / upgrade | the keys are restored, but only once the effective confinement is verified again |
 | `apt purge` | the ACL entries this feature granted are withdrawn, the generated sshd policy and host configuration are removed, the package-created account, its package-created home and its keys are removed, and the export root is removed once nothing is mounted |
 
@@ -412,7 +418,11 @@ surviving key would open an *unconfined* SFTP session over the whole host after
 the next sshd reload. **Removal fails closed**: if neither
 `ems-appliance backup-access disable` nor the direct maintainer fallback can
 revoke the authentication, the removal stops and says why, instead of leaving a
-usable key without the chroot that confined it.
+usable key without the chroot that confined it. An export bind that is still
+mounted stops the removal the same way — usually an open SFTP session of the
+backup account holds it, `fuser -vm <target>` names the process — because
+once the package is gone nothing on the host names those mounts, and the
+space they pin never comes back.
 
 Purge is ownership-gated. The package records that it created the account:
 

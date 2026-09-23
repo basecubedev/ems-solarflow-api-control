@@ -33,6 +33,10 @@ ACL_RECOVERY="$PACKAGE_STATE/acl-recovery.tsv"
 ACL_STATE_FILE="$PACKAGE_STATE/acl-transaction.state"
 SSHD_POLICY="$SSHD_DIR/ems-appliance-backup.conf"
 BACKUP_USER=ems-backup
+SHELL_USER=${EMS_APPLIANCE_SHELL_ACCOUNT:-ems-shell}
+SHELL_SUDOERS=${EMS_APPLIANCE_SHELL_SUDOERS:-/etc/sudoers.d/ems-shell}
+RESCUE_USER=${EMS_APPLIANCE_RESCUE_ACCOUNT:-ems-rescue}
+RESCUE_POLICY="$SSHD_DIR/ems-appliance-rescue.conf"
 EXPORT_ROOT=/srv/ems-appliance-export
 EXPORTS="config backups data"
 DISABLED_SUFFIX=.disabled-by-appliance
@@ -42,6 +46,66 @@ HOME_MARKER_NAME=.ems-appliance-backup-home
 HOME_MARKER_SCHEMA=1
 TAB=$(printf '\t')
 incomplete=""
+
+# Purge removes the sshd policy, and that policy is what refuses the shell
+# account every authentication method while it is switched off. Withdrawing the
+# gate and leaving the account behind would turn a closed, off-by-default root
+# login into an open one -- purge would widen access instead of ending it. So
+# the account is shut before the policy goes, and shut in the order that
+# survives a failure: sudo first, then the account, then deletion.
+# ems-rescue is not withdrawn: it is the documented way back into a board that
+# will not boot, its password may be one the operator chose, and deleting it
+# would trade a network hole for a box nobody can log into. What must not go
+# away with the package is the *refusal*. The only thing keeping that account
+# off the network is a Match block in the generated policy this purge is about
+# to delete, and there is no global PasswordAuthentication anywhere -- so the
+# published password in docs/appliance/console-recovery.md would become a valid
+# LAN login the moment the package was removed. Removing software must not
+# widen access.
+#
+# Written before the generated policy goes, left behind on purpose, and named
+# in the purge summary so it is not a surprise.
+keep_rescue_off_the_network() {
+    getent passwd "$RESCUE_USER" >/dev/null 2>&1 || return 0
+    [ -d "$SSHD_DIR" ] || return 0
+    {
+        echo "# Left by ems-appliance-manager on purge, deliberately."
+        echo "# $RESCUE_USER has a documented default password and survives the purge;"
+        echo "# this keeps it a console account rather than a network login."
+        echo "# Remove it only once that account is gone or its password is yours."
+        echo "Match User $RESCUE_USER"
+        echo "    PasswordAuthentication no"
+        echo "    KbdInteractiveAuthentication no"
+    } > "$RESCUE_POLICY" 2>/dev/null || {
+        incomplete="$incomplete the-$RESCUE_USER-ssh-refusal"
+        echo "ems-appliance: $RESCUE_POLICY could not be written, so $RESCUE_USER is" \
+             "reachable over SSH with its documented password." >&2
+        return 0
+    }
+    chmod 0644 "$RESCUE_POLICY" 2>/dev/null || true
+    echo "ems-appliance: kept $RESCUE_POLICY so $RESCUE_USER stays a console account." >&2
+}
+
+retire_shell_account() {
+    # Tolerated, never fatal. Everything else in this branch is written that way
+    # for the same reason: a postrm that aborts leaves the package half removed,
+    # and there is no second pass to finish it. An unwritable /etc/sudoers.d is
+    # enough to abort under set -e, which is exactly how this was found.
+    rm -f "$SHELL_SUDOERS" 2>/dev/null || true
+    getent passwd "$SHELL_USER" >/dev/null 2>&1 || return 0
+
+    # Expiry, not just --lock: locking only the password leaves public-key
+    # authentication working, which is the only kind this account ever had.
+    usermod --expiredate 1 --lock "$SHELL_USER" >/dev/null 2>&1 || true
+    deluser --quiet "$SHELL_USER" >/dev/null 2>&1 || true
+
+    if getent passwd "$SHELL_USER" >/dev/null 2>&1; then
+        incomplete="$incomplete the-$SHELL_USER-account"
+        echo "ems-appliance: $SHELL_USER could not be removed; it was expired and locked" \
+             "and its sudo rights were withdrawn." >&2
+    fi
+}
+
 
 host_path() {
     [ -r "$HOST_PATHS" ] || return 0
@@ -562,8 +626,12 @@ case "$1" in
         # Every generated artefact is withdrawn together: the environment file,
         # the path-unit drop-in and the sshd Match policy that confined the
         # account. A surviving policy would name a chroot that no longer exists.
+        # Before the policy is withdrawn, not after: that policy is the gate.
+        retire_shell_account
+        keep_rescue_off_the_network
         rm -f "$HOST_PATHS" "$SSHD_POLICY"
         rm -rf "$SYSTEMD_DIR/ems-appliance-export.path.d"
+        rm -rf "$SYSTEMD_DIR/ems-appliance-export-acl.path.d"
         # The postinst wrote this one, so dpkg does not know to take it away. A
         # declaration outliving the account it describes would offer the next
         # installation an identity nobody can check any more.

@@ -35,6 +35,13 @@ FIRMWARE_PREFIXES = ("raspi-firmware", "raspberrypi-bootloader", "firmware-")
 
 LOCK_FREE = "free"
 LOCK_HELD = "held"
+
+# The two ways a check can end without an answer. The first says the
+# appliance could not ask what is available -- an unreachable mirror, a
+# broken sources list -- and nothing about dpkg; the second that there is
+# no apt to ask at all.
+UPDATE_CHECK_FAILED = "update_check_failed"
+PACKAGE_MANAGER_UNAVAILABLE = "package_manager_unavailable"
 LOCK_UNKNOWN = "unknown"
 
 
@@ -97,7 +104,20 @@ class PackageState:
 
     @property
     def healthy(self):
-        return not self.dpkg_issues and self.lock_state != LOCK_HELD and not self.error
+        """Whether dpkg and apt would take an install.
+
+        A report, not a gate: the blockers decide installs on their own. A
+        failed update check is not held against the package manager -- it
+        says the mirror could not be asked, and the console reports that as
+        itself. Every other error, including one this build does not know,
+        stays unhealthy.
+        """
+
+        return (
+            not self.dpkg_issues
+            and self.lock_state != LOCK_HELD
+            and self.error in ("", UPDATE_CHECK_FAILED)
+        )
 
     def to_dict(self):
         return {
@@ -205,7 +225,7 @@ class PackageService:
 
         state = PackageState()
         if not self.runner.available("apt-get"):
-            state.error = "package_manager_unavailable"
+            state.error = PACKAGE_MANAGER_UNAVAILABLE
             return state
 
         simulated = self.runner.run(
@@ -214,7 +234,7 @@ class PackageService:
         if simulated.ok:
             state.updates = parse_simulated_upgrade(simulated.stdout)
         else:
-            state.error = "update_check_failed"
+            state.error = UPDATE_CHECK_FAILED
 
         selections = self.runner.run("dpkg", ["--get-selections"], timeout=60)
         state.held = parse_held_packages(selections.stdout if selections.ok else "")
@@ -467,3 +487,89 @@ class PackageService:
             self._operation_log.record(
                 operation.operation_id, stage, operation_type=operation.type, detail=detail
             )
+
+
+# --- the schedule ------------------------------------------------------------
+
+SCHEDULE_ACTOR = "schedule"
+
+
+def run_scheduled_security_updates(client, config):
+    """Install the waiting security updates, if the operator asked for that.
+
+    Driven through the agent, exactly as the browser drives it: the same plan,
+    the same blockers, the same operation lock, the same audit entry. A second
+    path that ran ``apt`` on its own -- `unattended-upgrades`, a cron line --
+    would be a writer this appliance's gates do not cover, and those gates are
+    the difference between a patched OS and one whose dpkg transaction died
+    half way, for which the documented recovery is re-flashing and restoring a
+    backup.
+
+    Never a full upgrade, and never a reboot: an operator decides both. A
+    reboot the updates ask for is reported and left to them, because the
+    battery this appliance controls does not stop needing control while it
+    restarts.
+
+    Returns what happened, so the caller can say it rather than guess:
+    ``ran`` plus a ``reason`` for every case where it did not.
+    """
+
+    if not config.automatic_security_updates:
+        return {"ran": False, "reason": "not_enabled"}
+
+    from appliance.agent_client import AgentCallError, AgentUnavailableError
+
+    try:
+        planned = client.call("updates.plan", actor=SCHEDULE_ACTOR, scope=UPDATE_SCOPE_SECURITY)
+    except AgentUnavailableError as exc:
+        return {"ran": False, "reason": "agent_unavailable", "detail": str(exc)}
+    except AgentCallError as exc:
+        # An operator at the console owns the appliance; a timer waits for the
+        # next one rather than competing for the lock.
+        if exc.code in ("operation_in_progress", "operation_conflict"):
+            return {"ran": False, "reason": "busy", "detail": exc.message}
+        # A planner that refuses because there is nothing waiting is the
+        # ordinary daily answer, not a failure to report as one.
+        if exc.code == "no_updates_available":
+            return {"ran": False, "reason": "nothing_to_install"}
+        return {"ran": False, "reason": "plan_failed", "detail": exc.message}
+
+    plan = planned["plan"]
+    operation_id = planned["operation"]["operation_id"]
+    blockers = [item["code"] for item in plan.get("blockers", [])]
+    reboot = bool(plan.get("reboot_required_before"))
+
+    def abandon(reason, **extra):
+        try:
+            client.call("operations.cancel", actor=SCHEDULE_ACTOR, operation_id=operation_id)
+        except (AgentCallError, AgentUnavailableError):
+            pass
+        return {"ran": False, "reason": reason, "reboot_required": reboot, **extra}
+
+    if blockers:
+        return abandon("blocked", blockers=blockers)
+    if not plan.get("package_count"):
+        return abandon("nothing_to_install")
+
+    try:
+        client.call(
+            "operations.execute",
+            actor=SCHEDULE_ACTOR,
+            operation_id=operation_id,
+            confirmation_token=planned["confirmation_token"],
+        )
+    except (AgentCallError, AgentUnavailableError) as exc:
+        return {
+            "ran": False,
+            "reason": "install_failed",
+            "detail": getattr(exc, "message", str(exc)),
+            "reboot_required": reboot,
+        }
+
+    return {
+        "ran": True,
+        "reason": "",
+        "installed": int(plan.get("package_count") or 0),
+        "operation_id": operation_id,
+        "reboot_required": reboot,
+    }

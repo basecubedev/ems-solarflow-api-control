@@ -10,6 +10,7 @@ no second concurrent mutation.
 import json
 import os
 import socket
+from pathlib import Path
 import stat
 import threading
 
@@ -40,6 +41,8 @@ from tests.helpers.appliance import (
 )
 
 pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
+
+PACKAGING = Path(__file__).resolve().parents[1] / "packaging" / "appliance"
 
 
 @pytest.fixture
@@ -575,6 +578,43 @@ def test_malformed_json_is_refused(tmp_path, services):
         thread.join(timeout=5)
 
 
+@pytest.mark.parametrize("document", [b"[]\n", b"5\n", b'"x"\n'])
+def test_a_json_document_that_is_not_an_object_is_refused(tmp_path, services, document):
+    """Valid JSON that is not an object is a request too, and gets the answer
+    protocol.validate_request already has for it -- not a dropped connection.
+
+    The handler popped actor and source_ip off the payload before anything
+    judged its shape, so a list or a number raised out of handle() and the
+    peer saw the socket close instead of invalid_request.
+    """
+
+    import os
+
+    server = AgentServer(
+        services,
+        socket_path=tmp_path / "agent.sock",
+        handlers=AgentHandlers(services, executor=lambda target: target()),
+        allowed_uids=(os.getuid(),),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(5)
+        connection.connect(str(server.socket_path))
+        connection.sendall(document)
+        raw = connection.recv(65536)
+        connection.close()
+        assert raw, "the agent closed the connection without a reply"
+        reply = json.loads(raw.decode("utf-8"))
+        assert reply["ok"] is False
+        assert reply["error"]["code"] == "invalid_request"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_no_host_process_is_started_by_a_refused_request(handlers, services):
     services.host.calls.clear()
     with pytest.raises(ProtocolError):
@@ -857,3 +897,102 @@ def test_turning_on_sshd_is_audited(handlers, services):
     )
 
     assert "ssh.service" in [entry["action"] for entry in services.audit.tail()]
+def test_a_slow_recovery_does_not_hold_up_readiness(tmp_path, monkeypatch):
+    """The socket comes first; a radio that is slow to answer comes after.
+
+    `command_agent` reactivated an armed WLAN revert before `serve_agent` bound
+    the socket. `nmcli connection up` waits 90 s by itself and the unit's start
+    timeout is the same 90 s, so systemd declared the start failed and SIGTERMed
+    the whole cgroup -- killing the nmcli that was restoring the WLAN. The
+    intent file survives that, `Restart=on-failure` brings the agent back three
+    seconds later, and the starts land 93 s apart, so `StartLimitBurst` in a
+    ten-second window never catches the loop. The appliance then has no agent
+    at all, while the web service comes up on `Wants=` and shows a console that
+    cannot execute a single operation.
+
+    The order is asserted directly rather than by timing: readiness is recorded
+    when it is sent, and the recovery records when it runs.
+    """
+
+    order = []
+    services = build_test_services(tmp_path)
+    agent_socket = tmp_path / "agent.sock"
+
+    monkeypatch.setattr("appliance.agent.notify_ready", lambda: order.append("ready"))
+
+    def recovery():
+        order.append("recovery")
+
+    running = threading.Event()
+    serving = {}
+    real_serve_forever = AgentServer.serve_forever
+
+    def capture(self, *args, **kwargs):
+        order.append("serving")
+        serving["server"] = self
+        running.set()
+        return real_serve_forever(self, *args, **kwargs)
+
+    monkeypatch.setattr(AgentServer, "serve_forever", capture)
+    thread = threading.Thread(
+        target=serve_agent,
+        args=(services, agent_socket),
+        kwargs={"after_ready": recovery},
+        daemon=True,
+    )
+    thread.start()
+    try:
+        assert running.wait(10), "serve_forever was never reached"
+    finally:
+        serving["server"].shutdown()
+        thread.join(timeout=10)
+
+    assert order == ["ready", "recovery", "serving"], order
+
+
+def test_the_agent_start_path_hands_the_wlan_recovery_to_the_post_ready_hook(tmp_path, monkeypatch):
+    """A recovery placed before the bind is the boot loop, so it goes after it.
+
+    Driven through `command_agent` rather than read out of it: what matters is
+    that the recovery reaches `serve_agent` as work to do once readiness is
+    reported, and that nothing has run it by the time `serve_agent` is called.
+    """
+
+    from appliance import cli
+
+    handed = {}
+    ran = []
+
+    def fake_serve(services, socket_path, *, after_ready=None):
+        handed["after_ready"] = after_ready
+        handed["ran_before_serve"] = list(ran)
+        if after_ready is not None:
+            after_ready()
+        return None
+
+    monkeypatch.setattr(cli, "serve_agent", fake_serve)
+    monkeypatch.setattr(cli, "resolve_paths", lambda: build_test_services(tmp_path).paths)
+    monkeypatch.setattr(cli, "ensure_directories", lambda paths, role=None: None)
+    monkeypatch.setattr(cli, "migrate_state", lambda paths: None)
+    monkeypatch.setattr(cli, "write_report", lambda paths, report: None)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+
+    services = build_test_services(tmp_path)
+    services.network.recover_revert = lambda: ran.append("recovery") or None
+    monkeypatch.setattr(cli, "build_services", lambda paths: services)
+
+    cli.command_agent(type("Args", (), {"socket": tmp_path / "agent.sock"})())
+
+    assert handed["after_ready"] is not None, "the recovery never reached serve_agent"
+    assert handed["ran_before_serve"] == [], "the recovery ran before the socket was bound"
+    assert ran == ["recovery"]
+
+
+def test_the_agent_unit_says_how_long_a_start_may_take():
+    """DefaultTimeoutStartSec is 90 s, which is exactly nmcli's own wait."""
+
+    unit = (PACKAGING / "systemd" / "ems-appliance-agent.service").read_text(encoding="utf-8")
+
+    assert "TimeoutStartSec=" in unit
+    value = [line for line in unit.splitlines() if line.startswith("TimeoutStartSec=")][0]
+    assert int(value.split("=", 1)[1]) >= 180, value

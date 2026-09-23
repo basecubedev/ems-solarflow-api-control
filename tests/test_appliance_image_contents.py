@@ -16,7 +16,7 @@ import struct
 
 import pytest
 
-from appliance import image_inspect
+from appliance import image_inspect, media_sizing
 from appliance.image_inspect import FAIL, PASS
 from tests.helpers.appliance_image import (
     APPLIANCE_VERSION,
@@ -48,10 +48,13 @@ REQUIRED_UNITS = tuple(sorted(image_inspect.REQUIRED_UNITS.values()))
 def assemble_mbr(target, boot, root):
     """One image file with an MBR naming a FAT boot and an ext4 root."""
 
+    # The table declares the profile's geometry; only the small filesystems
+    # are written at those offsets, so the file stays far smaller than the
+    # partitions it describes -- exactly what the inspection must not trust.
     first = 8 * 1024 * 1024 // SECTOR
-    boot_sectors = (boot.stat().st_size + SECTOR - 1) // SECTOR
+    boot_sectors = media_sizing.BOOT_PARTITION_BYTES // SECTOR
     root_start = first + boot_sectors
-    root_sectors = (root.stat().st_size + SECTOR - 1) // SECTOR
+    root_sectors = media_sizing.ROOT_PARTITION_BYTES // SECTOR
 
     sector = bytearray(SECTOR)
     for index, (kind, start, count, bootable) in enumerate(
@@ -124,6 +127,62 @@ def test_a_partition_of_an_unexpected_type_is_left_unnamed(tmp_path, single_imag
     assert labels == ["", "root"]
 
 
+def resized_root(single_image, target, sectors):
+    """The image with its root entry rewritten to ``sectors``, start kept."""
+
+    import shutil
+
+    shutil.copyfile(single_image, target)
+    offset = image_inspect.MBR_TABLE_OFFSET + image_inspect.MBR_ENTRY_SIZE
+    with target.open("r+b") as handle:
+        handle.seek(offset + 8)
+        first_lba, _ = struct.unpack("<II", handle.read(8))
+        handle.seek(offset + 8)
+        handle.write(struct.pack("<II", first_lba, sectors))
+    return target, first_lba
+
+
+@requires_mkfs
+def test_the_partition_sizes_the_profile_declares_are_read_back_out_of_the_image(single_image):
+    """media_sizing is what the signed attestation states minimum_media_bytes
+    from, and nothing read the built image back: a profile size that stopped
+    reaching genimage was attested rather than detected."""
+
+    findings = by_check(image_inspect.inspect(single_image, contents=False))
+
+    assert findings["partition_size:boot"].result == PASS
+    assert findings["partition_size:root"].result == PASS
+    assert findings["image_fits_minimum_media"].result == PASS
+
+
+@requires_mkfs
+def test_a_root_partition_genimage_sized_by_percentage_fails_the_inspection(tmp_path, single_image):
+    """genimage's layer default fills the medium; a root that came out as the
+    whole of a 16 GB card is not the 8 GiB the profile declares."""
+
+    root_entry = image_inspect.read_mbr_partitions(single_image)[1]
+    target, _ = resized_root(
+        single_image, tmp_path / "filled.img", 16_000_000_000 // SECTOR - root_entry.first_lba
+    )
+
+    findings = by_check(image_inspect.inspect(target, contents=False))
+
+    assert findings["partition_size:root"].result == FAIL
+    assert str(media_sizing.ROOT_PARTITION_BYTES) in findings["partition_size:root"].detail
+
+
+@requires_mkfs
+def test_an_image_that_does_not_fit_the_attested_floor_fails_the_inspection(tmp_path, single_image):
+    """The operator buys the card the attestation names, and dd stops short."""
+
+    target, _ = resized_root(single_image, tmp_path / "long.img", 15_000_000_000 // SECTOR)
+
+    findings = by_check(image_inspect.inspect(target, contents=False))
+
+    assert findings["image_fits_minimum_media"].result == FAIL
+    assert str(media_sizing.MINIMUM_MEDIA_BYTES) in findings["image_fits_minimum_media"].detail
+
+
 # --- the verdict -------------------------------------------------------------
 
 
@@ -166,6 +225,35 @@ def test_a_root_that_ships_a_host_private_key_is_refused_here_too(tmp_path):
 
 
 @requires_mkfs
+def test_a_host_key_behind_a_symlinked_etc_ssh_is_not_read_as_no_key(tmp_path):
+    """listdir answers () for "empty" and for "not a directory I can read"
+    alike. A key that cannot be looked for is not a key that is absent, and
+    every card flashed from such a release would carry the same private host
+    key, published in the release artefact.
+    """
+
+    import shutil
+
+    root_tree = tmp_path / "root"
+    populate_root(root_tree)
+    shutil.rmtree(root_tree / "etc/ssh")
+    (root_tree / "etc/ssh-real").mkdir(parents=True)
+    (root_tree / "etc/ssh-real/sshd_config").write_text("Port 22\n")
+    (root_tree / "etc/ssh-real/ssh_host_ed25519_key").write_text("PRIVATE")
+    (root_tree / "etc/ssh").symlink_to("ssh-real")
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, "kernel8.img": b"k",
+         "initramfs8": b"i", "bcm2712-rpi-5-b.dtb": b"d"},
+    )
+    findings = by_check(contents(assemble_mbr(tmp_path / "appliance.img", boot, root)))
+
+    assert findings["no_host_key_shipped:root"].result == FAIL
+    assert "etc/ssh" in findings["no_host_key_shipped:root"].detail
+
+
+@requires_mkfs
 def test_the_units_a_single_slot_host_can_run_are_the_ones_required(single_image):
     findings = by_check(contents(single_image))
 
@@ -174,6 +262,82 @@ def test_the_units_a_single_slot_host_can_run_are_the_ones_required(single_image
     assert findings["grow_root_service_enabled:root"].result == PASS
     for check in ("health_service_enabled:root", "persistence_service_enabled:root"):
         assert check not in findings
+
+
+@requires_mkfs
+def test_an_image_that_could_run_two_dhcp_clients_is_refused(tmp_path):
+    """The hook always writes the three mask links, so requiring them is
+    exactly "the hook ran", and an image where it did not is refused rather
+    than excused."""
+
+    root_tree = tmp_path / "root"
+    populate_root(root_tree)
+    (root_tree / "etc/systemd/system/systemd-networkd.service").unlink()
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, "kernel8.img": b"k",
+         "initramfs8": b"i", "bcm2712-rpi-5-b.dtb": b"d"},
+    )
+    findings = by_check(contents(assemble_mbr(tmp_path / "appliance.img", boot, root)))
+
+    assert findings["one_network_stack:root"].result == FAIL
+    assert "systemd-networkd.service" in findings["one_network_stack:root"].detail
+
+
+@requires_mkfs
+def test_an_image_whose_only_dhcp_client_is_network_manager_passes(single_image):
+    findings = by_check(contents(single_image))
+
+    assert findings["one_network_stack:root"].result == PASS
+    assert findings["network_manager_enabled:root"].result == PASS
+
+
+@requires_mkfs
+def test_a_root_the_layer_overlay_never_reached_is_a_failure(tmp_path):
+    """rpi-image-gen derives the overlay directory from the layer file's stem,
+    and the layer says so itself: a rename on either side stops it being
+    applied and the build reports nothing. Each overlay file bounds a write
+    to the SD card, so an image without them outlives the card by years."""
+
+    root_tree = tmp_path / "root"
+    populate_root(root_tree)
+    (root_tree / "etc/docker/daemon.json").unlink()
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, "kernel8.img": b"k",
+         "initramfs8": b"i", "bcm2712-rpi-5-b.dtb": b"d"},
+    )
+    findings = by_check(contents(assemble_mbr(tmp_path / "appliance.img", boot, root)))
+
+    assert findings["rootfs_overlay_applied:root"].result == FAIL
+    assert "etc/docker/daemon.json" in findings["rootfs_overlay_applied:root"].detail
+
+
+@requires_mkfs
+def test_an_image_that_did_not_enable_the_export_watcher_is_a_failure(tmp_path):
+    """The export units reach the image only through the postinst's offline
+    `ln -sf` fallback. If that loop is restricted or reordered, the card boots
+    with no /srv/ems-appliance-export, the documented way to fetch a backup
+    returns an empty directory, and the backup account still reads as active.
+    """
+
+    root_tree = tmp_path / "root"
+    populate_root(root_tree)
+    # Shipped by dpkg, simply not linked into multi-user.target.wants -- which
+    # is exactly what a changed fallback loop produces.
+    (root_tree / image_inspect.WANTS_DIRECTORY / "ems-appliance-export.path").unlink()
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, "kernel8.img": b"k",
+         "initramfs8": b"i", "bcm2712-rpi-5-b.dtb": b"d"},
+    )
+    findings = by_check(contents(assemble_mbr(tmp_path / "appliance.img", boot, root)))
+
+    assert findings["export_path_enabled:root"].result == FAIL
+    assert findings["export_path_enabled:root"].detail == "installed but not enabled"
 
 
 # --- the whole inspection ----------------------------------------------------

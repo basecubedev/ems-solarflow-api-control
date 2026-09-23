@@ -257,6 +257,16 @@ def test_the_security_model_lists_the_absent_capabilities():
         assert absent in security, absent
 
 
+def test_the_log_table_lists_every_source_the_console_can_open():
+    """The table is the third copy of the list; this is what keeps it whole."""
+
+    from appliance import validation
+
+    troubleshooting = read("troubleshooting.md")
+    for source in validation.LOG_SOURCES:
+        assert f"`{source}`" in troubleshooting, source
+
+
 def test_troubleshooting_answers_every_required_question():
     troubleshooting = read("troubleshooting.md")
     for question in (

@@ -260,6 +260,68 @@ def test_real_sshd_confines_the_two_accounts_and_nobody_else(tmp_path):
     )
 
 
+def rendered_policy():
+    from appliance.config import ApplianceConfig
+    from appliance.host_config import render_sshd_policy
+    from appliance.paths import AppliancePaths
+
+    return render_sshd_policy(
+        AppliancePaths(
+            install_root=Path("/opt/ems-solarflow"),
+            config_dir=Path("/etc/ems-appliance-manager"),
+            state_dir=Path("/var/lib/ems-appliance-manager"),
+            log_dir=Path("/var/log/ems-appliance-manager"),
+            runtime_dir=Path("/run/ems-appliance-manager"),
+            export_root=Path("/srv/ems-appliance-export"),
+        ),
+        ApplianceConfig(),
+        shell_access_enabled=False,
+    )
+
+
+def sshd_config_for(tmp_path, name, body):
+    """A file sshd will parse: a host key of its own, then ``body``."""
+
+    key = tmp_path / f"{name}-hostkey"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+                   check=True, capture_output=True, timeout=60)
+    config = tmp_path / f"{name}-sshd_config"
+    config.write_text(f"HostKey {key}\n" + body, encoding="utf-8")
+    return config
+
+
+@pytest.mark.skipif(find_sshd() is None, reason="no sshd to ask; the parser is the authority here")
+def test_the_refusal_check_agrees_with_the_daemon_it_checks(tmp_path):
+    """The generator at host_config and the check at ssh_policy, held together.
+
+    What the console reports about the rescue password is whatever
+    ``sshd -T -C user=ems-rescue`` answers, so it is sshd's own scoping of the
+    Match block that decides -- once for the drop-in the package writes, and
+    once for the host whose sshd never read it.
+    """
+
+    from appliance.ssh_policy import evaluate_password_refusal, parse_sshd_config
+
+    sshd = find_sshd()
+
+    def refusal(config):
+        result = subprocess.run(
+            [sshd, "-T", "-C", "user=ems-rescue,host=h,addr=1.2.3.4", "-f", str(config)],
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        return evaluate_password_refusal(parse_sshd_config(result.stdout))
+
+    applied = refusal(sshd_config_for(tmp_path, "applied", rendered_policy()))
+    assert applied["violations"] == [], applied
+
+    # An /etc/ssh/sshd_config carried over from an older install has no
+    # Include for the drop-in directory: the block is on disk, and sshd
+    # answers with its defaults, which take a password.
+    never_read = refusal(sshd_config_for(tmp_path, "bare", ""))
+    assert "passwordauthentication" in never_read["violations"], never_read
+    assert "kbdinteractiveauthentication" in never_read["violations"], never_read
+
+
 UNIT = ROOT / "packaging" / "appliance" / "systemd" / "ems-appliance-sshd-keys.service"
 
 

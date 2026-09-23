@@ -335,6 +335,33 @@ def test_a_commit_that_cannot_be_made_durable_leaves_no_authoritative_manifest(h
     assert not manifest_committed(harness), manifest_text(harness)
 
 
+def test_an_incomplete_rollback_after_the_rename_still_writes_the_recovery_manifest(harness):
+    """The recovery writer runs *after* a failure in the commit, and the commit
+    renames the staged manifest away before its last two steps. Its content is
+    then under the authoritative name; a writer that still looked for it under
+    the staged one ended on a false test, reported a loss that never happened,
+    and left the evidence postrm looks for as an orphaned .staged file.
+    """
+
+    fail_the_parent_flush(harness)
+    # Seven grants succeed -- one traversal grant on the install root, then
+    # -R and -R -d per export -- and every restore the rollback makes after
+    # them fails, which is what leaves it incomplete and makes the recovery
+    # manifest necessary at all.
+    harness.environment["EMS_STUB_SETFACL_FAIL_FROM"] = "8"
+
+    result = harness.run()
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert harness.acl_recovery.is_file(), sorted(
+        item.name for item in harness.acl_manifest.parent.iterdir()
+    )
+    assert "unresolved=" in harness.acl_recovery.read_text(encoding="utf-8")
+    staged = harness.acl_recovery.with_name(harness.acl_recovery.name + ".staged")
+    assert not staged.exists(), "the recovery manifest was left under its staging name"
+    assert "could not be written to the recovery manifest" not in result.stderr, result.stderr
+
+
 def test_a_failed_commit_restores_the_previous_manifest_exactly(harness):
     assert harness.run().returncode == 0
     previous = harness.acl_manifest.read_text(encoding="utf-8")

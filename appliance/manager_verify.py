@@ -4,8 +4,9 @@
 A package install commits itself: dpkg replaces the manager, systemd restarts
 it, and silence means the new one stays. This arms a repeating timer to make
 silence mean the opposite, and the reverter it runs is a copy taken out of the
-*outgoing* package before anything is unpacked, so the code deciding
-keep-or-undo is not code the install brought with it.
+*outgoing* package before anything is unpacked. That copy is the script alone:
+the unit that runs it and the timer come from the package being judged, which
+is the limit the ADR records.
 
 See docs/appliance/adr/manager-self-update.md for what this does not replace.
 """
@@ -17,9 +18,15 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from appliance import artifact_trust
+from appliance.paths import sync_parent
+
 DEADLINE_NAME = "verify-deadline.json"
 VERDICT_NAME = "verify-verdict.json"
 ATTEMPTS_NAME = "verify-revert-attempts"
+# The ticks the reverter has spent on the armed deadline: the window is
+# counted in them as well as on a clock this board restores stale at boot.
+TICKS_NAME = "verify-ticks"
 REVERTER_NAME = "verify-manager.armed.sh"
 
 # How the reverter asks dpkg what it has, named here so the shell script and the
@@ -70,6 +77,7 @@ class VerifyDeadline:
     expected_version: str = ""
     build_id: str = ""
     previous_path: str = ""
+    previous_sha256: str = ""
     operation_id: str = ""
     armed_at: int = 0
     deadline_epoch: int = 0
@@ -140,6 +148,10 @@ def _write(target, payload, *, mode=FILE_MODE):
             os.fsync(stream.fileno())
         os.chmod(staging, mode)
         os.replace(staging, target)
+        # arm() starts the install that replaces this process right after
+        # this returns; a directory entry that is not on disk yet is a
+        # deadline a power cut erases while the unjudged install stands.
+        sync_parent(target)
     except OSError as exc:
         try:
             os.unlink(staging)
@@ -169,6 +181,7 @@ def read(paths):
         expected_version=str(payload.get("expected_version") or ""),
         build_id=str(payload.get("build_id") or ""),
         previous_path=str(payload.get("previous_path") or ""),
+        previous_sha256=str(payload.get("previous_sha256") or ""),
         operation_id=str(payload.get("operation_id") or ""),
         armed_at=int(payload.get("armed_at") or 0),
         deadline_epoch=int(payload.get("deadline_epoch") or 0),
@@ -204,8 +217,13 @@ def _snapshot_reverter(paths, reverter):
     os.close(handle)
     try:
         shutil.copyfile(source, staging)
+        # copyfile flushes nothing: the reverter is the only way back, so
+        # its bytes and its name are both made durable.
+        with open(staging, "rb") as copied:
+            os.fsync(copied.fileno())
         os.chmod(staging, REVERTER_MODE)
         os.replace(staging, target)
+        sync_parent(target)
     except OSError as exc:
         try:
             os.unlink(staging)
@@ -213,6 +231,17 @@ def _snapshot_reverter(paths, reverter):
             pass
         raise ManagerVerifyError("reverter_not_writable", f"{target}: {exc}")
     return target
+
+
+def _digest_of(previous):
+    """What is in the kept archive now, or nothing if it cannot be read."""
+
+    if not previous:
+        return ""
+    try:
+        return artifact_trust.file_digest(previous)
+    except OSError:
+        return ""
 
 
 def arm(
@@ -237,6 +266,12 @@ def arm(
     directory.mkdir(parents=True, exist_ok=True)
     snapshot = _snapshot_reverter(paths, reverter)
 
+    # The archive, not the slot it sits in. ``previous.deb`` is a name that
+    # ``manager_retention.retain`` rewrites on every install, so a deadline that
+    # kept only the path can be made to reinstall a package this appliance has
+    # never run -- including the one it was armed to undo.
+    previous_sha256 = _digest_of(previous)
+
     deadline = int(now) + int(window_seconds)
     _write(
         deadline_path(paths),
@@ -245,6 +280,7 @@ def arm(
             "expected_version": expected_version,
             "build_id": build_id,
             "previous_path": str(previous or ""),
+            "previous_sha256": previous_sha256,
             "operation_id": operation_id,
             "armed_at": int(now),
             "deadline_epoch": deadline,
@@ -253,6 +289,11 @@ def arm(
     )
     try:
         verdict_path(paths).unlink()
+    except FileNotFoundError:
+        pass
+    # A tick count a previous deadline left behind would shorten this one.
+    try:
+        ticks_path(paths).unlink()
     except FileNotFoundError:
         pass
 
@@ -282,11 +323,16 @@ def arm(
         expected_version=expected_version,
         build_id=build_id,
         previous_path=str(previous or ""),
+        previous_sha256=previous_sha256,
         operation_id=operation_id,
         armed_at=int(now),
         deadline_epoch=deadline,
         window_seconds=int(window_seconds),
     ), snapshot
+
+
+def ticks_path(paths):
+    return Path(paths.packages_dir) / TICKS_NAME
 
 
 def attempts_path(paths):
@@ -304,6 +350,10 @@ def disarm(paths, runner):
         pass
     except OSError as exc:
         raise ManagerVerifyError("deadline_not_writable", f"{deadline_path(paths)}: {exc}")
+    try:
+        ticks_path(paths).unlink()
+    except OSError:
+        pass
     if runner is not None and runner.available("systemctl"):
         runner.run("systemctl", ["disable", "--now", VERIFY_TIMER], timeout=60)
     return True
@@ -314,6 +364,7 @@ __all__ = [
     "DPKG_STATE_QUERY",
     "ManagerVerifyError",
     "REVERT_ATTEMPTS",
+    "TICKS_NAME",
     "VerifyDeadline",
     "VerifyVerdict",
     "arm",
@@ -323,5 +374,6 @@ __all__ = [
     "read",
     "read_verdict",
     "reverter_path",
+    "ticks_path",
     "verdict_path",
 ]

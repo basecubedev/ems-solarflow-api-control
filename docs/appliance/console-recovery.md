@@ -47,7 +47,23 @@ Only if you enabled it and added a key. `ems-rescue` is a password account and
 the shipped sshd policy refuses it a password — by `Match User ems-rescue`, and
 by refusing keyboard-interactive too, which is the path that otherwise still
 asks for it. Its password is published in this document, so it is a console
-credential and nothing else. This is a key login for whatever account you
+credential and nothing else. That refusal is what the package writes, and
+the Overview reports whether the running daemon keeps it — as an error when
+it does not. It can fail to: an `/etc/ssh/sshd_config` carried over from an
+older install has no `Include /etc/ssh/sshd_config.d/*.conf`, and dpkg does
+not rewrite a modified conffile, so the block is on disk and sshd never read
+it.
+
+credential and nothing else.
+
+That refusal is the *only* thing keeping it off the network: there is no global
+`PasswordAuthentication no` anywhere in this project, by design, because the
+package installs on a Pi somebody may already administer over a password login.
+So the refusal has to outlive the package. Purging the manager deletes the
+generated policy, and purge therefore writes a standalone
+`/etc/ssh/sshd_config.d/ems-appliance-rescue.conf` carrying the same two
+directives and leaves it behind. Remove that file only once the account is gone
+or its password is one you chose. This is a key login for whatever account you
 configured:
 
 ```bash
@@ -103,6 +119,12 @@ cat /var/lib/ems-appliance-manager/agent/packages/verify-verdict.json
 `revert_unavailable` or `revert_failed` means the appliance stopped and is
 waiting for a person — you. An install done by hand with `dpkg` arms nothing, so
 there is no verdict at all and the command above is the only route.
+
+Running `rollback-manager` while a deadline is still armed is safe: the command
+retires the deadline once the older package is on, because its expected version
+can no longer be reached and a deadline left standing would undo the rescue at
+the next tick. A rollback `dpkg` refuses leaves the deadline armed — that is
+the one moment it is the last way out.
 
 ### 4. A serial console
 

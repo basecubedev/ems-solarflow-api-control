@@ -139,6 +139,31 @@ def test_a_deadline_whose_window_closed_stops_blocking():
     assert expired["canRevert"] is True
 
 
+def test_an_expired_deadline_is_not_described_as_one_that_will_never_revert():
+    """The next tick of the timer reverts in exactly this state.
+
+    The console said "nothing was reverted and nothing will be" of a deadline
+    whose window had closed -- the state in which verify-manager.sh falls
+    straight through to installing the previous package on its next tick,
+    up to a minute later. The documents were right and the console was wrong.
+    """
+
+    section = APP.split("function renderManagerUpdates(", 1)[1].split("\n  }", 1)[0]
+
+    assert "nothing was reverted and nothing will be" not in section
+    # The lead the browser tests assert on survives.
+    assert "nothing judged it" in section
+    assert "may still" in section and "previous package" in section
+
+
+def test_what_the_console_says_about_an_expired_deadline_agrees_with_the_documents():
+    document = (ROOT / "docs" / "user" / "appliance" / "updates.md").read_text(encoding="utf-8")
+    section = APP.split("function renderManagerUpdates(", 1)[1].split("\n  }", 1)[0]
+
+    assert "The previous package is installed again, by itself" in document
+    assert "nothing will be" not in section
+
+
 @requires_node
 def test_a_clock_it_cannot_read_keeps_the_deadline_shut():
     """Fail closed: a deadline this cannot place in time may still fire."""
@@ -152,6 +177,43 @@ def test_a_clock_it_cannot_read_keeps_the_deadline_shut():
         result = evaluate("managerActions", armed, unusable)
         assert result["canUpdate"] is False, unusable
         assert result["canRevert"] is False, unusable
+
+
+@requires_node
+def test_a_deadline_record_the_console_could_not_read_is_not_reported_as_quiet():
+    """Unreadable is not unarmed.
+
+    manager_verify.read() carries ``unreadable`` for a record it cannot place,
+    and this gate read only ``armed``: the card said nothing in flight and both
+    buttons were free while a reverter -- the outgoing package's, which may
+    well read a record this manager cannot -- was about to act on it. The
+    record is held closed until the reverter retires it on its next tick.
+    """
+
+    unreadable = manager(
+        can_revert=True,
+        verify={"armed": False, "unreadable": "deadline record version 2 cannot be read"},
+    )
+
+    result = evaluate("managerActions", unreadable, 1001)
+    assert result["unreadable"] is True
+    assert result["inFlight"] is False
+    assert result["canUpdate"] is False
+    assert result["canRevert"] is False
+
+    quiet = evaluate("managerActions", manager(can_revert=True, verify={"armed": False}), 1001)
+    assert quiet["unreadable"] is False
+    assert quiet["canUpdate"] is True
+
+
+def test_the_console_names_the_record_it_could_not_read():
+    section = APP.split("function renderManagerUpdates(", 1)[1]
+
+    assert '"data-test": "manager-deadline-unreadable"' in section
+    assert "deadline record unreadable" in section
+    # The expired case keeps its own words; the two must stay distinct.
+    assert '"data-test": "manager-deadline-expired"' in section
+    assert "nothing judged it" in section
 
 
 @requires_node

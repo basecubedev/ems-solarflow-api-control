@@ -40,12 +40,18 @@ PATH_UNIT = "ems-appliance-export.path"
 # `backup-access activate`. Re-arming the watcher above does not start it:
 # systemd does not treat PathChanged= as satisfied at unit start.
 EXPORT_UNIT = "ems-appliance-export.service"
+# Watches the directory EMS writes its archives into, and starts a unit that
+# only re-grants the ACL. Separate from PATH_UNIT because a full export run
+# would tear the mounts down under an SFTP session and race the
+# `backup-access activate` an install is doing.
+ACL_PATH_UNIT = "ems-appliance-export-acl.path"
 SSHD_POLICY_NAME = "ems-appliance-backup.conf"
 DEFAULT_SYSTEMD_DIR = "/etc/systemd/system"
 DEFAULT_SSHD_DIR = "/etc/ssh/sshd_config.d"
 
 ARTIFACT_ENVIRONMENT = "environment_file"
 ARTIFACT_PATH_UNIT = "path_unit_dropin"
+ARTIFACT_ACL_PATH_UNIT = "acl_path_unit_dropin"
 ARTIFACT_SSHD_POLICY = "sshd_policy"
 
 HEADER = (
@@ -73,6 +79,10 @@ def path_unit_dropin(systemd_dir=DEFAULT_SYSTEMD_DIR):
     return Path(systemd_dir) / f"{PATH_UNIT}.d" / "host-paths.conf"
 
 
+def acl_path_unit_dropin(systemd_dir=DEFAULT_SYSTEMD_DIR):
+    return Path(systemd_dir) / f"{ACL_PATH_UNIT}.d" / "host-paths.conf"
+
+
 def sshd_policy_file(sshd_dir=DEFAULT_SSHD_DIR):
     return Path(sshd_dir) / SSHD_POLICY_NAME
 
@@ -95,6 +105,22 @@ def render_path_unit(paths):
     """A drop-in that replaces the packaged watch path instead of adding to it."""
 
     return HEADER + "[Path]\n" + "PathChanged=\n" + f"PathChanged={paths.install_root}\n"
+
+
+def render_acl_path_unit(paths):
+    """The drop-in for the watcher that re-grants the ACL on a new archive.
+
+    A named-user ACL on a file is capped by that file's mask, the mask comes
+    from the create mode, and `ems/backup.py` writes every archive at 0600 --
+    so a backup made after the last export run carries the grant with an empty
+    mask and the account cannot read it. Writing there does not change the
+    install root's inode, so the export watcher never saw it.
+    """
+
+    from appliance.backup_access import ARCHIVE_SUBDIRECTORY
+
+    archives = paths.ems_data_dir / ARCHIVE_SUBDIRECTORY
+    return HEADER + "[Path]\n" + "PathChanged=\n" + f"PathChanged={archives}\n"
 
 
 def render_shell_access_block(enabled):
@@ -183,6 +209,11 @@ def artifacts(paths, config, *, systemd_dir=DEFAULT_SYSTEMD_DIR, sshd_dir=DEFAUL
     return (
         (ARTIFACT_ENVIRONMENT, host_paths_file(paths), render_environment(paths, config)),
         (ARTIFACT_PATH_UNIT, path_unit_dropin(systemd_dir), render_path_unit(paths)),
+        (
+            ARTIFACT_ACL_PATH_UNIT,
+            acl_path_unit_dropin(systemd_dir),
+            render_acl_path_unit(paths),
+        ),
         (ARTIFACT_SSHD_POLICY, sshd_policy_file(sshd_dir), render_sshd_policy(paths, config)),
     )
 

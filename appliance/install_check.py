@@ -626,7 +626,6 @@ def check_host_tools():
                 f"{tool} is available"
                 if present
                 else f"{tool} is missing; install {package} ({purpose})",
-                critical=False,
             )
         )
     return checks

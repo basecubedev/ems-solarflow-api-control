@@ -358,7 +358,10 @@ seed archive is unpacked into, the EMS data and the operator's backups, about
 The enforced floor is **14,500,000,000 bytes**, below the nominal 16 GB because
 media are marketed in decimal gigabytes and vendors differ by a few percent, so
 a genuine 16 GB card must pass. It is declared in `appliance/media_sizing.py`
-and recorded in every image's `minimum_media_bytes` build metadata.
+and recorded in every image's `minimum_media_bytes` build metadata, and the
+image inspection reads the built image's partition table back: a release fails
+when the partitions are not the declared sizes, or when what the table
+describes does not fit that floor.
 
 The growth is a transaction: measure, mutate, verify, and only then record. A
 card whose filesystem did not actually grow leaves no marker and is retried on
@@ -432,7 +435,7 @@ never reported for another.**
 
 | Class | Board | Status |
 |---|---|---|
-| microSD | Pi 3B+ | NOT RUN |
+| microSD | Pi 3B+ | PARTIAL — 1.1, 1.3, 1.4, 1.5, 1.6 and 1.11 on a Pi 3B+ on microSD, each carried by a row in the evidence table below. 1.2, 1.7 to 1.10, 1.12 and 1.13 are NOT RUN. |
 | microSD | Pi 4 | NOT RUN |
 | microSD | Pi 5 | NOT RUN |
 | USB SSD | Pi 4 | NOT RUN |

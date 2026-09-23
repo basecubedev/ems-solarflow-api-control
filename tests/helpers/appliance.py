@@ -18,6 +18,7 @@ from appliance.commands import CommandError, CommandResult
 from appliance.config import ApplianceConfig, AllowedImages
 from appliance.health import HealthResult
 from appliance.paths import AppliancePaths
+from appliance.rescue_account import ACCOUNT as RESCUE_ACCOUNT
 from appliance.services import build_services
 
 ADMIN_REPOSITORY = "ghcr.io/basecubedev/ems-solarflow-admin"
@@ -94,6 +95,15 @@ chrootdirectory {export_root}
 forcecommand internal-sftp -R -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat,lsetstat,fsync,copy-data
 """
 
+# Mirrors the rescue account's Match block as sshd applies it: the two methods
+# the shipped policy refuses that account, and pubkey left to the global
+# setting so a key login stays open.
+SSHD_RESCUE_MATCH = """permitrootlogin no
+passwordauthentication no
+kbdinteractiveauthentication no
+pubkeyauthentication yes
+"""
+
 
 class FakeHost:
     """A scripted Raspberry Pi host."""
@@ -162,6 +172,9 @@ class FakeHost:
         self.calls = []
         self.compose_up_fails = False
         self.start_docker_succeeds = True
+        # systemctl start is a client waiting on a job; killed at its timeout,
+        # the job goes on without it and the daemon comes up, or does not.
+        self.docker_start_times_out = False
         self.docker_api_broken = False
         self.docker_ps_fails = False
         self.container_start_sticks = True
@@ -169,6 +182,7 @@ class FakeHost:
         # stop returns 0 and the container is running again a moment later.
         self.stop_container_sticks = True
         self.sshd_backup_match = SSHD_BACKUP_MATCH.format(export_root=paths.export_root)
+        self.sshd_rescue_match = SSHD_RESCUE_MATCH
         self.sshd_config_valid = True
         self.reload_failures = set()
         self.failing_tools = set()
@@ -354,8 +368,8 @@ class FakeHost:
             return CommandResult(tool, tuple(args), 1, "", f"unhandled tool {tool}")
         return handler(list(args))
 
-    def _result(self, tool, args, code=0, stdout="", stderr=""):
-        return CommandResult(tool, tuple(args), code, stdout, stderr)
+    def _result(self, tool, args, code=0, stdout="", stderr="", *, timed_out=False):
+        return CommandResult(tool, tuple(args), code, stdout, stderr, timed_out=timed_out)
 
     # --- docker ----------------------------------------------------------
 
@@ -503,6 +517,12 @@ class FakeHost:
             unit = args[-1]
             self.units.setdefault(unit, {})
             if unit == "docker.service":
+                if self.docker_start_times_out:
+                    self.docker_running = self.start_docker_succeeds
+                    self.units[unit]["active"] = (
+                        "active" if self.start_docker_succeeds else "activating"
+                    )
+                    return self._result("systemctl", args, 124, "", "", timed_out=True)
                 self.docker_running = self.start_docker_succeeds
                 self.units[unit]["active"] = "active" if self.start_docker_succeeds else "failed"
                 if not self.start_docker_succeeds:
@@ -651,9 +671,27 @@ class FakeHost:
             if self.sshd_config_valid:
                 return self._result("sshd", args, 0, "")
             return self._result("sshd", args, 1, "", "/etc/ssh/sshd_config: line 4: Bad option")
-        if "-C" in args and self.sshd_backup_match is not None:
+        # sshd scopes a Match block by the connection it is asked about, so
+        # the fake answers per account: a query for the rescue account that
+        # got the backup block would let a test pass on the wrong policy.
+        user = self._connection_user(args)
+        if user == RESCUE_ACCOUNT and self.sshd_rescue_match is not None:
+            return self._result("sshd", args, 0, self.sshd_rescue_match)
+        if user and self.sshd_backup_match is not None:
             return self._result("sshd", args, 0, self.sshd_backup_match)
         return self._result("sshd", args, 0, SSHD_CONFIG)
+
+    @staticmethod
+    def _connection_user(args):
+        """The account a ``-C user=...`` connection specification names."""
+
+        if "-C" not in args:
+            return ""
+        for item in str(args[args.index("-C") + 1]).split(","):
+            key, _, value = item.partition("=")
+            if key == "user":
+                return value
+        return ""
 
     def _ss(self, args):
         return self._result(

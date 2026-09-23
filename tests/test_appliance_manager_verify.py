@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from appliance import manager_verify
+from appliance import artifact_trust, manager_verify
 from appliance import paths as appliance_paths
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -85,6 +85,38 @@ def arm(paths, packaged, runner, **kwargs):
         reverter=kwargs.pop("reverter", str(packaged)),
         **kwargs,
     )
+
+
+def fsync_spy(monkeypatch):
+    """Records, for every fsync, whether it was a directory."""
+
+    import os
+    import stat
+
+    real = os.fsync
+    synced = []
+
+    def spy(fd):
+        synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+        return real(fd)
+
+    monkeypatch.setattr(os, "fsync", spy)
+    return synced
+
+
+def test_the_deadline_is_durable_before_the_install_that_replaces_this_process_starts(
+    paths, packaged, monkeypatch
+):
+    """arm() writes the deadline and then starts the install that replaces
+    the agent. The bytes were fsynced; the directory entry was not, so a
+    power cut before the journal committed left read() with FileNotFoundError,
+    armed=False, and an unjudged install standing with no way back."""
+
+    synced = fsync_spy(monkeypatch)
+
+    arm(paths, packaged, FakeRunner())
+
+    assert True in synced, "no directory entry was flushed"
 
 
 # --- arming ------------------------------------------------------------------
@@ -498,6 +530,136 @@ def test_a_tick_with_no_deadline_disarms_itself(paths, tmp_path):
     assert "disable --now" in log.read_text(encoding="utf-8")
 
 
+def unreadable_deadline(paths, packaged, mutate):
+    """An armed deadline, rewritten the way a record this code cannot place looks."""
+
+    deadline_at(paths, packaged, epoch=1)
+    path = manager_verify.deadline_path(paths)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    mutate(record)
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_a_deadline_record_this_manager_cannot_read_is_not_acted_on(paths, packaged, tmp_path):
+    """Two readers, one fact.
+
+    manager_verify.read() refuses a record whose schema_version it does not
+    know and the console then showed nothing in flight -- while the reverter,
+    which never looked at the version, read the same file field by field and
+    installed previous.deb on the next tick, under a console that had just
+    said nothing would. A record this reverter cannot place is not evidence
+    it can act on; it is retired with a verdict that says so, not installed.
+    """
+
+    def foreign_schema(record):
+        record["schema_version"] = max(manager_verify.READABLE_DEADLINE_VERSIONS) + 1
+
+    unreadable_deadline(paths, packaged, foreign_schema)
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.2.0", agent="failed")
+
+    result = run_reverter(paths, tools, now=0)
+
+    assert result.returncode == 0, result.stderr
+    assert "dpkg --force-confold" not in log.read_text(encoding="utf-8")
+    verdict = manager_verify.read_verdict(paths)
+    assert verdict.verdict == manager_verify.VERDICT_UNAVAILABLE, verdict
+    assert "could not be read" in verdict.detail
+    assert not manager_verify.deadline_path(paths).exists()
+    assert "disable --now" in log.read_text(encoding="utf-8")
+
+
+def test_a_deadline_with_no_epoch_is_not_read_as_one_that_already_expired(
+    paths, packaged, tmp_path
+):
+    """A missing deadline defaulted to 0, and 0 is in the past."""
+
+    def no_epoch(record):
+        del record["deadline_epoch"]
+
+    unreadable_deadline(paths, packaged, no_epoch)
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.2.0", agent="failed")
+
+    result = run_reverter(paths, tools, now=0)
+
+    assert result.returncode == 0, result.stderr
+    assert "dpkg --force-confold" not in log.read_text(encoding="utf-8")
+    assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_UNAVAILABLE
+    assert not manager_verify.deadline_path(paths).exists()
+
+
+def test_the_reverter_reads_the_schema_version_the_manager_writes():
+    """One number, two languages: the test is what keeps them one."""
+
+    script = REVERTER.read_text(encoding="utf-8")
+
+    assert "schema_version" in script
+    assert f"DEADLINE_SCHEMA={manager_verify.DEADLINE_SCHEMA_VERSION}\n" in script
+
+
+def test_the_window_is_measured_in_the_ticks_that_judge_it_and_not_in_a_clock_this_board_does_not_have(
+    paths, packaged, tmp_path
+):
+    """The Pi has no real-time clock. systemd restores a stale time at boot and
+    only ever moves it forward, so a reboot inside the window set the clock
+    back to the last sync -- hours or days -- and a window measured on that
+    clock alone stretched by that much, with the console locked for all of it.
+    The ticks that judge the install are what the window is counted in.
+    """
+
+    deadline_at(paths, packaged, epoch=4_000_000_000)
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.2.0", agent="failed")
+
+    for tick in range(1, 15):
+        run_reverter(paths, tools, now=0)
+        assert "dpkg --force-confold" not in log.read_text(encoding="utf-8"), tick
+        assert manager_verify.deadline_path(paths).exists(), tick
+
+    run_reverter(paths, tools, now=0)
+
+    assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_REVERTED
+    assert "previous.deb" in log.read_text(encoding="utf-8")
+    assert not manager_verify.deadline_path(paths).exists()
+
+
+def test_a_confirmed_install_leaves_no_tick_count_behind(paths, packaged, tmp_path):
+    deadline_at(paths, packaged, epoch=4_000_000_000)
+    tools = tmp_path / "tools"
+    fake_tools(tools, installed_version="0.2.0")
+
+    run_reverter(paths, tools, now=0)
+
+    assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_CONFIRMED
+    assert not manager_verify.ticks_path(paths).exists()
+
+
+def test_arming_starts_a_fresh_tick_count(paths, packaged):
+    """A count a previous deadline left behind must not shorten the next one."""
+
+    manager_verify.ticks_path(paths).parent.mkdir(parents=True, exist_ok=True)
+    manager_verify.ticks_path(paths).write_text("9\n", encoding="utf-8")
+
+    arm(paths, packaged, FakeRunner())
+
+    assert not manager_verify.ticks_path(paths).exists()
+
+
+def test_the_tick_budget_matches_the_timer_that_produces_the_ticks():
+    """One authority for the tick length, checked rather than trusted."""
+
+    timer = (PACKAGING / "systemd" / "ems-appliance-manager-verify.timer").read_text(
+        encoding="utf-8"
+    )
+    interval = next(
+        int(line.partition("=")[2]) for line in timer.splitlines()
+        if line.startswith("OnUnitActiveSec=")
+    )
+
+    assert f"TICK_SECONDS={interval}\n" in REVERTER.read_text(encoding="utf-8")
+
+
 # --- properties that live outside Python -------------------------------------
 
 
@@ -539,6 +701,36 @@ def test_the_timer_is_not_enabled_by_the_package():
     postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
 
     assert "ems-appliance-manager-verify.timer" not in postinst
+
+
+def test_what_the_deadline_snapshots_is_the_script_and_the_ADR_says_only_that():
+    """Only verify-manager.sh is copied out of the outgoing package.
+
+    The unit that runs it and the timer are installed under /usr/lib by the
+    package being judged, and its postinst daemon-reloads them -- so a wrong
+    ExecStart path, a unit that resolves the snapshot as a program, or a stale
+    packages directory in the *incoming* package arms a deadline nothing can
+    run. The ADR and this module claimed more than the snapshot provides; a
+    document that promises what the code does not is what CLAUDE.md sends
+    every future change through.
+    """
+
+    # Whitespace-normalised: the claims are sentences, and prose wraps.
+    def prose(path):
+        return " ".join(path.read_text(encoding="utf-8").split())
+
+    adr = prose(ROOT / "docs" / "appliance" / "adr" / "manager-self-update.md")
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+    module = prose(ROOT / "appliance" / "manager_verify.py")
+
+    for unit in ("ems-appliance-manager-verify.service", "ems-appliance-manager-verify.timer"):
+        assert f'"$PACKAGING/systemd/{unit}"' in build, unit
+    assert '"$STAGE/usr/lib/systemd/system/"' in build
+
+    assert "the unit that runs it is installed by the package being judged" in adr
+    assert "not one the incoming install brought with it" not in adr
+    assert "the code deciding keep-or-undo is not code the install brought with it" not in module
+    assert "the unit that runs it and the timer come from the package being judged" in module
 
 
 def test_the_deadline_does_not_hang_on_the_snapshot_being_executable():
@@ -608,3 +800,41 @@ def test_a_refused_revert_is_cured_before_it_is_tried_again(paths, packaged, tmp
     calls = log.read_text(encoding="utf-8")
     assert "dpkg --configure -a" in calls, calls
     assert not manager_verify.read_verdict(paths).settled, "the tick must still leave a retry"
+def test_an_archive_swapped_under_an_armed_deadline_is_refused(paths, packaged, tmp_path):
+    """`previous.deb` is a slot, and retain() rewrites it on every install.
+
+    A second install while a deadline is unjudged rotates the unjudged package
+    into that slot. The deadline then names a path holding the very package it
+    was armed to undo, and reverting to it reports success for reinstalling the
+    problem.
+    """
+
+    deadline_at(paths, packaged, epoch=1)
+    kept = paths.packages_dir / "previous.deb"
+    kept.write_bytes(b"the package the deadline was armed to undo")
+
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.9.9")
+
+    run_reverter(paths, tools, now=0)
+
+    assert "previous.deb" not in log.read_text(encoding="utf-8"), "a swapped archive was installed"
+    assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_UNAVAILABLE
+    assert not manager_verify.deadline_path(paths).exists()
+
+
+def test_the_deadline_records_what_the_kept_archive_held_when_it_armed(paths, packaged):
+    kept = paths.packages_dir / "previous.deb"
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    kept.write_bytes(b"an earlier package")
+
+    deadline, _ = arm(paths, packaged, FakeRunner(), previous=str(kept))
+
+    assert deadline.previous_sha256 == artifact_trust.file_digest(kept)
+    assert manager_verify.read(paths).previous_sha256 == deadline.previous_sha256
+
+
+def test_a_deadline_armed_with_nothing_kept_records_no_digest(paths, packaged):
+    deadline, _ = arm(paths, packaged, FakeRunner(), previous="")
+
+    assert deadline.previous_sha256 == ""

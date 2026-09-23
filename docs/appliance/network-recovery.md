@@ -8,6 +8,22 @@ The overview shows the active interface, the Ethernet and WLAN state, IP
 addresses, hostname, mDNS name and connectivity. Expert mode adds the gateway
 and DNS servers per interface. The WLAN card shows the SSID and signal quality.
 
+## One stack owns the interface
+
+NetworkManager is the only network stack the image enables. `systemd-networkd`,
+its socket and its wait-online unit are masked there, because the appliance
+steers the interface through `nmcli` — including the rollback after a WLAN
+change — and an address a second DHCP client holds cannot be taken back that
+way. Two stacks meant two leases on `eth0`, and the appliance vanished from the
+address its owner had bookmarked once the lease NetworkManager never held ran
+out. `ems-appliance image-check` and the release image inspection refuse an
+image where that is not so (`one_network_stack`, `network_manager_enabled`).
+
+This decides the image only. An Appliance Manager installed as a `.deb` on an
+existing Raspberry Pi OS leaves that host's network stack alone, so such a host
+may still run a second DHCP client, which the appliance can neither see nor
+undo.
+
 ## Change the WLAN
 
 A WLAN change can disconnect the browser you are using, so it is handled as a
@@ -49,6 +65,15 @@ Details that matter:
   `nmcli` before NetworkManager holds its bus name; the intent survives that and
   is retried at the next start, up to three times, rather than being discarded
   while the console reports the profile restored.
+- The recovery runs **after the agent has bound its socket and reported
+  readiness**, not before. `nmcli connection up` waits up to 90 s by itself, and
+  90 s is also what systemd allows a start by default — so doing it first meant
+  systemd declaring the start failed and killing the whole control group,
+  including the `nmcli` that was restoring the WLAN. `Restart=on-failure` then
+  repeated that every 93 seconds, which is too far apart for `StartLimitBurst`
+  to catch, so the appliance had no agent at all while the web service came up
+  and showed a console that could not execute anything. The unit now states its
+  own `TimeoutStartSec` rather than inheriting one that matches nmcli's wait.
 - The passphrase is handed to `nmcli` on **stdin**, so it never appears in the
   host process table, in an operation record, in the audit log or in any log
   file.

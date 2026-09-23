@@ -109,7 +109,78 @@ def test_only_the_units_a_single_slot_host_can_run_are_enabled():
         assert unit not in enabled, unit
 
 
+MASKED_NETWORK_UNITS = (
+    "systemd-networkd.service",
+    "systemd-networkd.socket",
+    "systemd-networkd-wait-online.service",
+)
+
+
+def test_one_stack_owns_the_interface_and_the_layer_says_which():
+    """appliance/network.py steers the interface through nmcli, and an address
+    systemd-networkd holds cannot be taken back that way. Two stacks means two
+    DHCP leases, and an appliance that vanishes from the address its owner
+    bookmarked when the lease NetworkManager never held runs out. The base
+    layer is upstream's and may enable either, so the decision is made here."""
+
+    assert "NetworkManager.service" in hooks(LAYER)[-1]
+    masking = [hook for hook in hooks(LAYER) if "systemd-networkd" in str(hook)]
+    assert len(masking) == 1, "exactly one hook decides the network stack"
+    for unit in MASKED_NETWORK_UNITS:
+        assert unit in str(masking[0]), unit
+    # Masked rather than disabled: a later package upgrade re-enables a
+    # disabled unit, and nothing re-enables a masked one.
+    assert "/dev/null" in str(masking[0])
+
+
+POSTINST = ROOT / "packaging" / "appliance" / "debian" / "postinst"
+# The one unit the image enables that is not this project's: Debian's, enabled
+# explicitly because the networkd units are masked beside it.
+FOREIGN_UNITS = {"NetworkManager.service"}
+
+
+def units_line(path):
+    for line in text(path).splitlines():
+        if line.startswith("UNITS="):
+            return tuple(sorted(line.split("=", 1)[1].strip('"').split()))
+    raise AssertionError("the postinst declares no UNITS")
+
+
+def test_the_units_the_postinst_enables_are_the_units_the_image_is_checked_for():
+    """One authority. The postinst is what actually enables them, in the image
+    chroot and on a live host alike; the inspector must ask for the same set,
+    and the layer's enable-units line may only be a subset of it because the
+    rest arrive through the postinst's offline fallback. Three lists agreed
+    on four units and disagreed on three, and the three -- the export units
+    and the host-key unit -- were never verified on the artefact."""
+
+    from appliance import image_inspect
+
+    # Timers hang off timers.target, which the inspector does not read; the
+    # units it verifies are the ones wanted by multi-user.target.
+    declared = {unit for unit in units_line(POSTINST) if not unit.endswith(".timer")}
+    checked = set(image_inspect.REQUIRED_UNITS.values())
+
+    assert declared <= checked, sorted(declared - checked)
+    assert checked - declared == FOREIGN_UNITS, sorted(checked - declared)
+
+    enabled = hooks(LAYER)[-1]
+    for unit in [token for token in enabled.split()[2:] if token.endswith((".service", ".path"))]:
+        assert unit in declared or unit in FOREIGN_UNITS, unit
+
+
 # --- the overlay -------------------------------------------------------------
+
+
+def test_the_inspector_checks_exactly_the_files_the_overlay_ships():
+    """The overlay tree is the one authority for what the layer contributes;
+    the inspector's list only mirrors it. A file added to the overlay that
+    nothing looks for on the artefact is a bound on SD writes that can go
+    missing silently."""
+
+    from appliance import image_inspect
+
+    assert overlay_entries(OVERLAY) == sorted(image_inspect.ROOT_OVERLAY_FILES)
 
 
 # --- the configuration that selects it ---------------------------------------
@@ -155,6 +226,17 @@ def test_each_profile_adds_only_its_device_layer(board):
 
 SCRIPTS = ROOT / "scripts"
 BUILDER = SCRIPTS / "appliance-build-rpi-image.sh"
+
+
+def test_the_builder_names_the_size_the_profile_actually_declares():
+    """Two authorities for one number: the script still said 16.5 GiB, a
+    leftover of the abandoned double-root layout, beside media_sizing's
+    8.25 GiB."""
+
+    from appliance import media_sizing
+
+    assert f"{media_sizing.IMAGE_BYTES / media_sizing.GIB:.2f} GiB" in text(BUILDER)
+    assert "16.5 GiB" not in text(BUILDER)
 
 
 # --- what a release of it has to pass ----------------------------------------

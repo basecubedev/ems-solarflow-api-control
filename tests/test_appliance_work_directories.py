@@ -143,8 +143,26 @@ def test_an_atomic_write_flushes_the_directory_entry_too():
 
     source = inspect.getsource(paths.atomic_write)
 
-    assert "_sync_parent" in source
-    assert "os.fsync" in inspect.getsource(paths._sync_parent)
+    assert "sync_parent" in source
+    assert "os.fsync" in inspect.getsource(paths.sync_parent)
+
+
+def test_every_writer_the_deadline_relies_on_flushes_the_directory_entry_too():
+    """One helper, five writers. A sixth hand-rolled mkstemp/replace sequence
+    without the parent flush is a failing test here rather than a silent gap."""
+
+    import inspect
+
+    from appliance import manager_retention, manager_verify, persistent_state
+
+    for writer in (
+        manager_verify._write,
+        manager_verify._snapshot_reverter,
+        manager_retention._write_record,
+        manager_retention._copy,
+        persistent_state.write_stamp,
+    ):
+        assert "sync_parent(" in inspect.getsource(writer), writer.__qualname__
 
 
 def _extract_shell_function(name, script_name):

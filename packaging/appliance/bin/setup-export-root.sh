@@ -70,12 +70,26 @@ entries=""
 missing=""
 
 teardown() {
+    remaining=""
     for name in $EXPORTS; do
         target="$EXPORT_ROOT/$name"
         while mountpoint -q "$target" 2>/dev/null; do
             umount "$target" || break
         done
+        # The break above swallows a refused umount (EBUSY under an open
+        # SFTP session), so only the kernel's answer after the loop says
+        # whether this target is still an exported view.
+        if mountpoint -q "$target" 2>/dev/null; then
+            remaining="$remaining $target"
+        fi
     done
+    if [ -n "$remaining" ]; then
+        # Once the package is gone nothing on the host names these mounts,
+        # so this line and the exit status are the operator's only notice.
+        echo "ems-appliance: these export mounts could not be removed:$remaining" >&2
+        return 1
+    fi
+    return 0
 }
 
 record() {
@@ -720,12 +734,19 @@ acl_rollback() {
 # Every step is checked: a cleanup that lost both the ACL state and the record of
 # it is the one outcome nobody can recover from, so it is never reported as done.
 acl_write_recovery() {
+    # This runs after a failure, and the failure may be in the commit: once
+    # acl_manifest_commit has renamed the staged manifest, its content is
+    # under the authoritative name and the staged path names nothing.
+    recovery_source=$ACL_STAGED
+    if [ ! -f "$recovery_source" ] && [ "$ACL_MANIFEST_RENAMED" = yes ]; then
+        recovery_source=$ACL_MANIFEST
+    fi
     {
         echo "# ems-appliance ACL recovery manifest v$ACL_SCHEMA"
         echo "schema=$ACL_SCHEMA"
         echo "user=$BACKUP_USER"
         echo "install_root=$INSTALL_ROOT"
-        echo "installation_id=$(sed -n 's/^installation_id=//p' "$ACL_STAGED" 2>/dev/null | head -n 1)"
+        echo "installation_id=$(sed -n 's/^installation_id=//p' "$recovery_source" 2>/dev/null | head -n 1)"
         echo "operation_id=$$"
         echo "recorded_at=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
         echo "state=recovery_required"
@@ -735,7 +756,10 @@ acl_write_recovery() {
         [ -f "$ACL_ROOTS" ] && sed 's/^/opened\t/' "$ACL_ROOTS"
         [ -f "$ACL_BEFORE" ] && sed 's/^/before\t/' "$ACL_BEFORE"
         [ -f "$ACL_AFTER.observed" ] && sed 's/^/observed\t/' "$ACL_AFTER.observed"
-        [ -f "$ACL_STAGED" ] && cat "$ACL_STAGED"
+        # The last command decides the group's status, so an optional
+        # section must not be an AND-list here: a cat that fails still
+        # fails the group, a section that is absent no longer does.
+        if [ -f "$recovery_source" ]; then cat "$recovery_source"; fi
     } > "$ACL_RECOVERY.staged" 2>/dev/null \
         || return 1
     chmod 0600 "$ACL_RECOVERY.staged" 2>/dev/null || true
@@ -971,9 +995,17 @@ bind_read_only() {
 
 # --- entry point ------------------------------------------------------------
 
+# --refresh-acl re-grants the recursive read ACL and nothing else: no mounts are
+# touched, no status file is written, and the confinement is not re-activated.
+# A backup archive is created 0600, which caps the inherited named-user grant to
+# nothing, and only this pass repairs that -- but running the whole setup for it
+# would tear the exports down and back up under an SFTP session, and would race
+# the `backup-access activate` of a concurrent install.
+REFRESH_ACL_ONLY=no
 case "${1:-}" in
     --teardown|"") ;;
-    *) echo "usage: $0 [--teardown]" >&2; exit 2 ;;
+    --refresh-acl) REFRESH_ACL_ONLY=yes ;;
+    *) echo "usage: $0 [--teardown|--refresh-acl]" >&2; exit 2 ;;
 esac
 
 # The path watcher, the postinst and an operator can all start a run at the
@@ -988,7 +1020,7 @@ if [ -z "${EMS_APPLIANCE_EXPORT_LOCKED:-}" ] && command -v flock >/dev/null 2>&1
 fi
 
 if [ "${1:-}" = "--teardown" ]; then
-    teardown
+    teardown || exit 1
     exit 0
 fi
 
@@ -1020,7 +1052,10 @@ require_real_chain "the EMS installation root" "$INSTALL_ROOT"
 require_exclusive_export_root
 
 if [ ! -d "$INSTALL_ROOT" ]; then
-    teardown
+    # Binds of an installation that is no longer there must not stay up
+    # behind an account that is still authenticated: a failure here is a
+    # unit failure, and the unit's OnFailure disables the account.
+    teardown || fail "the export mounts of a removed EMS installation could not be removed"
     status="pending"
     detail="no EMS installation found yet"
     for name in $EXPORTS; do
@@ -1098,6 +1133,10 @@ for name in $EXPORTS; do
 
     record_granted_acl "$handle" recursive "$source_dir"
 
+    if [ "$REFRESH_ACL_ONLY" = yes ]; then
+        continue
+    fi
+
     if mount_proves "$target_dir" "$identity"; then
         add_entry "$name" "$source_dir" "$target_dir" "mounted" "true"
         continue
@@ -1116,6 +1155,11 @@ done
 
 acl_manifest_commit
 acl_close_roots
+
+if [ "$REFRESH_ACL_ONLY" = yes ]; then
+    echo "ems-appliance: re-granted the read ACL on the exported sources."
+    exit 0
+fi
 
 missing=$(echo "$missing" | sed 's/^ *//')
 if [ "$status" = "configured" ] && [ -n "$missing" ]; then

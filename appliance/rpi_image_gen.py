@@ -601,14 +601,14 @@ class Compatibility:
     def compatible(self):
         return not any(finding.result == FAIL for finding in self.findings)
 
-    @property
-    def buildable(self):
-        return self.compatible and not self.missing_dependencies
+    # Deliberately no ``buildable`` here: whether a build can run is a fact
+    # about the host as much as about the checkout, and BuildHost is the one
+    # authority that judges both. A second, checkout-only answer let the
+    # check script print PASS beside a missing qemu binfmt handler.
 
     def to_dict(self):
         return {
             "compatible": self.compatible,
-            "buildable": self.buildable,
             "reason": self.reason,
             "revision": self.revision,
             "source_identity": self.source_identity,
