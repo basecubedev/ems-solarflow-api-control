@@ -159,7 +159,7 @@ def test_a_pinned_checkout_is_compatible_and_buildable(tmp_path, lock):
     report = probe(checkout(tmp_path, lock), lock)
 
     assert report.compatible
-    assert report.buildable
+    assert not report.missing_dependencies
     assert report.reason == ""
     assert not failed(report)
 
@@ -170,7 +170,7 @@ def test_a_checkout_missing_build_dependencies_is_compatible_but_not_buildable(t
     )
 
     assert report.compatible
-    assert not report.buildable
+    assert report.missing_dependencies
     assert report.reason == rpi_image_gen.REASON_DEPENDENCIES
     assert "mmdebstrap" in report.missing_dependencies
 
@@ -300,7 +300,7 @@ def test_package_only_entries_are_probed_through_the_package_database(tmp_path, 
 
     assert report.dependencies.missing_packages == ("dctrl-tools",)
     assert "python3-jsonschema" in report.dependencies.resolved
-    assert not report.buildable
+    assert report.missing_dependencies
 
 
 def test_package_only_entries_with_no_package_database_are_not_assumed_present(tmp_path, lock):
@@ -310,7 +310,7 @@ def test_package_only_entries_with_no_package_database_are_not_assumed_present(t
     report = probe(root, lock, package_query=None)
 
     assert report.dependencies.unverified_packages == ("python3-debian",)
-    assert not report.buildable
+    assert report.missing_dependencies
     assert report.reason == rpi_image_gen.REASON_DEPENDENCIES
 
 
