@@ -228,6 +228,17 @@ SCRIPTS = ROOT / "scripts"
 BUILDER = SCRIPTS / "appliance-build-rpi-image.sh"
 
 
+def test_the_builder_names_the_size_the_profile_actually_declares():
+    """Two authorities for one number: the script still said 16.5 GiB, a
+    leftover of the abandoned double-root layout, beside media_sizing's
+    8.25 GiB."""
+
+    from appliance import media_sizing
+
+    assert f"{media_sizing.IMAGE_BYTES / media_sizing.GIB:.2f} GiB" in text(BUILDER)
+    assert "16.5 GiB" not in text(BUILDER)
+
+
 # --- what a release of it has to pass ----------------------------------------
 
 GATES = SCRIPTS / "appliance-release-gates.sh"

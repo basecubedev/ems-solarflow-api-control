@@ -16,7 +16,7 @@ import struct
 
 import pytest
 
-from appliance import image_inspect
+from appliance import image_inspect, media_sizing
 from appliance.image_inspect import FAIL, PASS
 from tests.helpers.appliance_image import (
     APPLIANCE_VERSION,
@@ -48,10 +48,13 @@ REQUIRED_UNITS = tuple(sorted(image_inspect.REQUIRED_UNITS.values()))
 def assemble_mbr(target, boot, root):
     """One image file with an MBR naming a FAT boot and an ext4 root."""
 
+    # The table declares the profile's geometry; only the small filesystems
+    # are written at those offsets, so the file stays far smaller than the
+    # partitions it describes -- exactly what the inspection must not trust.
     first = 8 * 1024 * 1024 // SECTOR
-    boot_sectors = (boot.stat().st_size + SECTOR - 1) // SECTOR
+    boot_sectors = media_sizing.BOOT_PARTITION_BYTES // SECTOR
     root_start = first + boot_sectors
-    root_sectors = (root.stat().st_size + SECTOR - 1) // SECTOR
+    root_sectors = media_sizing.ROOT_PARTITION_BYTES // SECTOR
 
     sector = bytearray(SECTOR)
     for index, (kind, start, count, bootable) in enumerate(
@@ -122,6 +125,62 @@ def test_a_partition_of_an_unexpected_type_is_left_unnamed(tmp_path, single_imag
     labels = [item.label for item in image_inspect.read_mbr_partitions(target)]
 
     assert labels == ["", "root"]
+
+
+def resized_root(single_image, target, sectors):
+    """The image with its root entry rewritten to ``sectors``, start kept."""
+
+    import shutil
+
+    shutil.copyfile(single_image, target)
+    offset = image_inspect.MBR_TABLE_OFFSET + image_inspect.MBR_ENTRY_SIZE
+    with target.open("r+b") as handle:
+        handle.seek(offset + 8)
+        first_lba, _ = struct.unpack("<II", handle.read(8))
+        handle.seek(offset + 8)
+        handle.write(struct.pack("<II", first_lba, sectors))
+    return target, first_lba
+
+
+@requires_mkfs
+def test_the_partition_sizes_the_profile_declares_are_read_back_out_of_the_image(single_image):
+    """media_sizing is what the signed attestation states minimum_media_bytes
+    from, and nothing read the built image back: a profile size that stopped
+    reaching genimage was attested rather than detected."""
+
+    findings = by_check(image_inspect.inspect(single_image, contents=False))
+
+    assert findings["partition_size:boot"].result == PASS
+    assert findings["partition_size:root"].result == PASS
+    assert findings["image_fits_minimum_media"].result == PASS
+
+
+@requires_mkfs
+def test_a_root_partition_genimage_sized_by_percentage_fails_the_inspection(tmp_path, single_image):
+    """genimage's layer default fills the medium; a root that came out as the
+    whole of a 16 GB card is not the 8 GiB the profile declares."""
+
+    root_entry = image_inspect.read_mbr_partitions(single_image)[1]
+    target, _ = resized_root(
+        single_image, tmp_path / "filled.img", 16_000_000_000 // SECTOR - root_entry.first_lba
+    )
+
+    findings = by_check(image_inspect.inspect(target, contents=False))
+
+    assert findings["partition_size:root"].result == FAIL
+    assert str(media_sizing.ROOT_PARTITION_BYTES) in findings["partition_size:root"].detail
+
+
+@requires_mkfs
+def test_an_image_that_does_not_fit_the_attested_floor_fails_the_inspection(tmp_path, single_image):
+    """The operator buys the card the attestation names, and dd stops short."""
+
+    target, _ = resized_root(single_image, tmp_path / "long.img", 15_000_000_000 // SECTOR)
+
+    findings = by_check(image_inspect.inspect(target, contents=False))
+
+    assert findings["image_fits_minimum_media"].result == FAIL
+    assert str(media_sizing.MINIMUM_MEDIA_BYTES) in findings["image_fits_minimum_media"].detail
 
 
 # --- the verdict -------------------------------------------------------------

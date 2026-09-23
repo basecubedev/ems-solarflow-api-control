@@ -23,7 +23,7 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from appliance import backup_ownership, image_filesystems
+from appliance import backup_ownership, image_filesystems, media_sizing
 from appliance.image_shape import IMAGE
 
 SECTOR_SIZE = 512
@@ -40,6 +40,15 @@ SINGLE_SLOT_PARTITIONS = (
     ("boot", "vfat"),
     ("root", "ext"),
 )
+
+# media_sizing is what the signed attestation states minimum_media_bytes from,
+# and nothing read the built image back: a profile size that stopped reaching
+# genimage was attested rather than detected. Exact equality on purpose -- a
+# tolerance is what let the number drift in the first place.
+DECLARED_PARTITION_BYTES = {
+    "boot": media_sizing.BOOT_PARTITION_BYTES,
+    "root": media_sizing.ROOT_PARTITION_BYTES,
+}
 
 
 class ImageError(Exception):
@@ -787,6 +796,27 @@ def inspect(
             )
         else:
             findings.append(Finding(f"filesystem:{label}", PASS, signature))
+
+        declared = DECLARED_PARTITION_BYTES[label]
+        findings.append(
+            Finding(
+                f"partition_size:{label}",
+                PASS if partition.size_bytes == declared else FAIL,
+                f"{partition.size_bytes} bytes, the profile declares {declared}",
+            )
+        )
+
+    # Measured from the table rather than stat(): what a flash writes is what
+    # the table describes, and the attested floor is a promise about that.
+    written = (max(item.last_lba for item in partitions) + 1) * SECTOR_SIZE
+    findings.append(
+        Finding(
+            "image_fits_minimum_media",
+            PASS if written <= media_sizing.MINIMUM_MEDIA_BYTES else FAIL,
+            f"{written} bytes written; the release attests a "
+            f"{media_sizing.MINIMUM_MEDIA_BYTES} byte floor",
+        )
+    )
 
     if contents:
         findings.extend(

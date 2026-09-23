@@ -298,7 +298,8 @@ EXTRA=$(find "$IMAGE_DIR_NAME" -maxdepth 1 -name '*.img' -type f ! -name "$IMAGE
 cp "$BUILT" "$OUTPUT/$NAME.img" || fail "the built image could not be collected" output_unusable
 ( cd "$OUTPUT" && sha256sum "$NAME.img" > "$NAME.img.sha256" )
 
-# The raw image is 16.5 GiB and mostly empty; no common release host accepts a
+# The raw image is the 8.25 GiB the two declared partitions come to, and mostly
+# empty; no common release host accepts a
 # file that size. Imager and balenaEtcher write .img.xz straight to the card,
 # so the operator unpacks nothing. Its checksum covers the compressed file,
 # because a digest over the raw image cannot verify what was downloaded.
