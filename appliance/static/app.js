@@ -209,7 +209,7 @@
      The shell's one live region speaks instead, and only when the sentence
      itself changed. */
   function verdictLine(status) {
-    var verdict = overviewVerdict(status);
+    var verdict = overviewVerdict(status, sessionFindings());
     var spoken = verdictAnnouncement(state.lastVerdict, verdict.text);
     state.lastVerdict = verdict.text;
     if (spoken) announce(spoken);
@@ -1139,14 +1139,23 @@
     return text;
   }
 
-  function overviewVerdict(status) {
+  function overviewVerdict(status, extra) {
     var payload = status || {};
     if (payload.error) return { text: "This appliance could not be read.", tone: "bad" };
     var level = (payload.health || {}).level;
-    if (level === "degraded") {
+    /* The panel under this line ranks the browser's own findings beside the
+       backend's; reading health.level alone printed "This appliance is
+       healthy" over a red finding on the same screen. The worst of them can
+       raise the verdict, never lower it, and info moves nothing -- the same
+       mapping status.health_level() applies on the backend. */
+    var worst = (extra || []).reduce(function (carried, item) {
+      var severity = (item || {}).severity;
+      return rankSeverity(severity) < rankSeverity(carried) ? severity : carried;
+    }, "");
+    if (level === "degraded" || worst === "error") {
       return { text: "Something on this appliance is not working.", tone: "bad" };
     }
-    if (level === "attention") {
+    if (level === "attention" || worst === "warning") {
       return { text: "This appliance is running and needs a little attention.", tone: "warn" };
     }
     if (level === "healthy") return { text: "This appliance is healthy.", tone: "ok" };

@@ -126,11 +126,13 @@ new Function(
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
 const status = input.status || {};
 const view = input.view || "overview";
-const findings = scope.findingsView(status);
+// The browser's own findings (the audit reporter) ride beside the backend's.
+const extra = input.extra || [];
+const findings = scope.findingsView(status, extra);
 
 process.stdout.write(
   JSON.stringify({
-    verdict: scope.overviewVerdict(status),
+    verdict: scope.overviewVerdict(status, extra),
     announcement: {
       first: scope.verdictAnnouncement(undefined, "This appliance is healthy."),
       unchanged: scope.verdictAnnouncement("This appliance is healthy.", "This appliance is healthy."),
@@ -140,7 +142,7 @@ process.stdout.write(
     actions: findings.findings.map(function (item) {
       return scope.findingAction(item, view);
     }),
-    attention: scope.attentionBySection(status),
+    attention: scope.attentionBySection(status, extra),
     durations: (input.durations || []).map(scope.duration),
     sizes: (input.sizes || []).map(scope.gigabytes),
     percentages: (input.percentages || []).map(scope.usedPercent),

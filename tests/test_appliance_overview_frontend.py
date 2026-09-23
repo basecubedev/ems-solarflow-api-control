@@ -38,6 +38,7 @@ def _render(
     plan=None,
     expert=False,
     operations=(),
+    extra=(),
 ):
     node = shutil.which("node")
     if not node:
@@ -54,6 +55,7 @@ def _render(
                 "plan": plan,
                 "expert": expert,
                 "operations": list(operations),
+                "extra": list(extra),
             }
         ),
         text=True,
@@ -118,6 +120,41 @@ def test_a_status_that_could_not_be_read_is_never_reported_as_healthy():
     assert view["findings"]["hidden"] is False
     assert view["findings"]["findings"][0]["severity"] == "error"
     assert "agent_unavailable" in view["findings"]["findings"][0]["message"]
+
+
+def test_a_finding_the_page_shows_is_in_the_verdict_above_it():
+    """One judgement, read twice.
+
+    The findings panel, the headline and the nav marks all rank the browser's
+    own findings beside the backend's; the verdict sentence read health.level
+    alone and printed "This appliance is healthy" over a red finding on the
+    same screen.
+    """
+
+    view = _render(
+        _status("healthy"),
+        extra=[_finding(code="security_audit_degraded", severity="error", section="settings",
+                        title="Sign-ins are not being recorded")],
+    )
+
+    assert view["findings"]["findings"][0]["code"] == "security_audit_degraded"
+    assert view["verdict"]["tone"] == "bad"
+    assert "healthy" not in view["verdict"]["text"].lower()
+
+
+def test_a_browser_warning_is_not_reported_as_broken():
+    view = _render(_status("healthy"), extra=[_finding(severity="warning")])
+    assert view["verdict"]["tone"] == "warn"
+
+
+def test_the_backend_verdict_is_not_lowered_by_a_quiet_browser():
+    """The fix may raise the verdict, never replace the backend's judgement."""
+
+    view = _render(_status("degraded", [_finding()]), extra=[_finding(severity="info")])
+    assert view["verdict"]["tone"] == "bad"
+
+    quiet = _render(_status("healthy"), extra=[_finding(severity="info")])
+    assert quiet["verdict"]["tone"] == "ok"
 
 
 def test_the_verdict_is_spoken_only_when_it_changes():
