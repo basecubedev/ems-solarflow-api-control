@@ -310,6 +310,26 @@ def test_a_bind_that_cannot_be_made_read_only_is_not_left_mounted(harness):
     assert all(item["state"] != "mounted" for item in harness.status()["paths"])
 
 
+def test_a_teardown_that_left_a_bind_mounted_does_not_report_success(harness):
+    """Once the package is gone nothing on the host names these mounts, so the
+    exit status and the line naming the targets are the operator's only notice.
+
+    ``umount`` refuses with EBUSY while an SFTP session of the backup account
+    holds a directory under an export open; ``break`` used to swallow that and
+    the function, the dispatcher and the process all reported success.
+    """
+
+    for name in EXPORT_NAMES:
+        harness.mark_mounted(harness.export_root / name, options="ro,relatime")
+    harness.environment["EMS_STUB_UMOUNT_RC"] = "32"
+
+    result = harness.run("--teardown")
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    for name in EXPORT_NAMES:
+        assert str(harness.export_root / name) in result.stderr, result.stderr
+
+
 def test_a_foreign_mount_is_revalidated_after_it_has_been_unmounted(harness):
     """Unmounting reveals the real target; it must be checked again, not used."""
 

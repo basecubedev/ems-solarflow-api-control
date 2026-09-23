@@ -70,12 +70,26 @@ entries=""
 missing=""
 
 teardown() {
+    remaining=""
     for name in $EXPORTS; do
         target="$EXPORT_ROOT/$name"
         while mountpoint -q "$target" 2>/dev/null; do
             umount "$target" || break
         done
+        # The break above swallows a refused umount (EBUSY under an open
+        # SFTP session), so only the kernel's answer after the loop says
+        # whether this target is still an exported view.
+        if mountpoint -q "$target" 2>/dev/null; then
+            remaining="$remaining $target"
+        fi
     done
+    if [ -n "$remaining" ]; then
+        # Once the package is gone nothing on the host names these mounts,
+        # so this line and the exit status are the operator's only notice.
+        echo "ems-appliance: these export mounts could not be removed:$remaining" >&2
+        return 1
+    fi
+    return 0
 }
 
 record() {
@@ -998,7 +1012,7 @@ if [ -z "${EMS_APPLIANCE_EXPORT_LOCKED:-}" ] && command -v flock >/dev/null 2>&1
 fi
 
 if [ "${1:-}" = "--teardown" ]; then
-    teardown
+    teardown || exit 1
     exit 0
 fi
 
@@ -1030,7 +1044,10 @@ require_real_chain "the EMS installation root" "$INSTALL_ROOT"
 require_exclusive_export_root
 
 if [ ! -d "$INSTALL_ROOT" ]; then
-    teardown
+    # Binds of an installation that is no longer there must not stay up
+    # behind an account that is still authenticated: a failure here is a
+    # unit failure, and the unit's OnFailure disables the account.
+    teardown || fail "the export mounts of a removed EMS installation could not be removed"
     status="pending"
     detail="no EMS installation found yet"
     for name in $EXPORTS; do

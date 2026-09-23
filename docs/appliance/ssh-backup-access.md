@@ -402,7 +402,7 @@ sudo ems-appliance backup-access disable    # revoke until it is verified again
 
 | Step | What happens to backup access |
 |---|---|
-| `apt remove` | authentication is disabled first, the account is expired, the binds are unmounted; the key material is preserved next to `authorized_keys` |
+| `apt remove` | authentication is disabled first, the account is expired, the binds are unmounted, and a bind that cannot be unmounted stops the removal; the key material is preserved next to `authorized_keys` |
 | reinstall / upgrade | the keys are restored, but only once the effective confinement is verified again |
 | `apt purge` | the ACL entries this feature granted are withdrawn, the generated sshd policy and host configuration are removed, the package-created account, its package-created home and its keys are removed, and the export root is removed once nothing is mounted |
 
@@ -412,7 +412,11 @@ surviving key would open an *unconfined* SFTP session over the whole host after
 the next sshd reload. **Removal fails closed**: if neither
 `ems-appliance backup-access disable` nor the direct maintainer fallback can
 revoke the authentication, the removal stops and says why, instead of leaving a
-usable key without the chroot that confined it.
+usable key without the chroot that confined it. An export bind that is still
+mounted stops the removal the same way — usually an open SFTP session of the
+backup account holds it, `fuser -vm <target>` names the process — because
+once the package is gone nothing on the host names those mounts, and the
+space they pin never comes back.
 
 Purge is ownership-gated. The package records that it created the account:
 

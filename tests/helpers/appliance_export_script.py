@@ -168,6 +168,9 @@ case "$tool" in
         exit 1
         ;;
     umount)
+        # A refused umount (EBUSY under an open SFTP session) leaves the
+        # target mounted, so the refusal comes before the state is touched.
+        [ "${EMS_STUB_UMOUNT_RC:-0}" = 0 ] || exit "$EMS_STUB_UMOUNT_RC"
         target=$1
         simulated=0
         grep -Fxq "simulated=$target" "$state" 2>/dev/null && simulated=1
