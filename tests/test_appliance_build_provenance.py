@@ -428,6 +428,60 @@ def test_the_check_script_reports_a_modified_tarball_tree_as_a_failure(tmp_path,
     ), output
 
 
+# The check script's own module, replaced by a checkout that is compatible and
+# fully provisioned on a host whose kernel has no qemu-aarch64 handler: the
+# one case in which the two buildable authorities used to disagree.
+GATE_FAKE = """
+from types import SimpleNamespace
+REASON_DEPENDENCIES = "rpi_image_gen_dependencies_missing"
+def _ns(**kw):
+    ns = SimpleNamespace(**kw); ns.to_dict = lambda: {}; return ns
+def read_lock(*a, **k):
+    return _ns(release="v2.7.0", commit="0" * 40)
+def probe_checkout(directory, lock, **k):
+    deps = _ns(missing_binaries=(), missing_packages=(), unverified_packages=())
+    return _ns(findings=(), dependencies=deps, compatible=True, buildable=True,
+               missing_dependencies=(),
+               reason="", source_identity="tarball-verified")
+def build_host_state(dependencies=None, **k):
+    return _ns(buildable=False, unsupported_architecture="",
+               missing_binfmt=("qemu-aarch64 (/proc/sys/fs/binfmt_misc/qemu-aarch64 "
+                               "is not registered)",),
+               missing_binaries=(), missing_packages=(), unverified_packages=())
+"""
+
+
+def test_a_host_without_the_binfmt_handler_is_not_a_source_authority_pass(tmp_path):
+    """A host that cannot cross-build is NOT RUN, never PASS.
+
+    The script printed the missing handler and then PASS, because its verdict
+    read Compatibility.buildable, which knows nothing about the host, while
+    BuildHost.buildable was built for printing only. Passing starts a build
+    that dies in mmdebstrap 25 minutes later, and the release gates count that
+    as a failure -- a blocked release for a host-wide kernel setting.
+    """
+
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "appliance").mkdir()
+    (tmp_path / "gen").mkdir()
+    shutil.copy(SCRIPTS / "appliance-check-rpi-image-gen.sh", tmp_path / "scripts")
+    (tmp_path / "appliance/__init__.py").write_text("")
+    (tmp_path / "appliance/rpi_image_gen.py").write_text(GATE_FAKE)
+
+    # cwd is load-bearing: ``python3 -`` puts it ahead of PYTHONPATH, so run
+    # from the repository root this would silently import the real module.
+    result = subprocess.run(
+        ["sh", str(tmp_path / "scripts/appliance-check-rpi-image-gen.sh"),
+         "--rpi-image-gen", str(tmp_path / "gen")],
+        cwd=tmp_path, capture_output=True, text=True, timeout=120,
+    )
+
+    output = result.stdout + result.stderr
+    assert "missing binfmt" in output, output
+    assert "RESULT: NOT RUN" in output, output
+    assert result.returncode == 3, output
+
+
 # --- finding 5: an artefact cannot claim a build it did not come from ---------
 
 
