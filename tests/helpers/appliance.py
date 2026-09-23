@@ -130,6 +130,11 @@ class FakeHost:
             "ems-appliance-agent.service": {"active": "active", "enabled": "enabled"},
         }
         self.accounts = {}
+        # Units a test says this host does not have at all, so `is-enabled`
+        # answers the way systemctl does for one that is not installed. The
+        # default host runs sshd the classic way, with no socket unit; a test
+        # that wants Trixie's socket activation removes it from here.
+        self.absent_units = {"ssh.socket"}
         self.hostname = "ems-solarflow"
         self.apt_simulation = APT_SIMULATION
         self.apt_exit_code = 0
@@ -480,6 +485,11 @@ class FakeHost:
         if args[:1] == ["is-active"]:
             return self._result("systemctl", args, 0, self.units.get(args[1], {}).get("active", "inactive"))
         if args[:1] == ["is-enabled"]:
+            # A unit the host does not have answers non-zero with nothing on
+            # stdout, which is a different fact from "disabled" -- and the one
+            # that says whether ssh.socket exists here at all.
+            if args[1] not in self.units and args[1] in self.absent_units:
+                return self._result("systemctl", args, 1, "", f"Failed to get unit file state for {args[1]}")
             return self._result("systemctl", args, 0, self.units.get(args[1], {}).get("enabled", "disabled"))
         if args[:1] == ["enable"]:
             unit = args[-1]

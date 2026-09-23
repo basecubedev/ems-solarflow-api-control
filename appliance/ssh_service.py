@@ -13,7 +13,7 @@ from appliance import shell_access
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
 from appliance.ssh_policy import parse_sshd_config
 from appliance.sshkeys import AuthorizedKeysStore, validate_public_key
-from appliance.systemd import UNIT_SSH
+from appliance.systemd import UNIT_SSH, UNIT_SSH_SOCKET
 from appliance.validation import ValidationError
 
 TYPE_SSH_SERVICE = "ssh.service"
@@ -145,8 +145,20 @@ class SshService:
             result = self.runner.run("sshd", ["-T"], timeout=20)
         return parse_sshd_config(result.stdout if result.ok else "")
 
+    def _socket_state(self):
+        """What ``ssh.socket`` is on this host, or ``None`` if it has none."""
+
+        try:
+            state = self.systemd.unit_state(UNIT_SSH_SOCKET)
+        except Exception:
+            return None
+        if state["enabled"] in ("unknown", "not-found") and not state["running"]:
+            return None
+        return state
+
     def status(self):
         unit = self.systemd.unit_state(UNIT_SSH)
+        socket = self._socket_state()
         effective = self.effective_config()
         accounts = []
         for name in self.config.ssh_key_accounts:
@@ -176,7 +188,13 @@ class SshService:
 
         return {
             "service": unit,
-            "enabled": unit["running"],
+            "socket": socket,
+            # Either one admits a login. A host whose sshd is socket-activated
+            # keeps ssh.service inactive and still answers on port 22, so
+            # reading the service alone reported SSH as off over a box that
+            # went on accepting keys -- including one on the sudo-capable
+            # shell account.
+            "enabled": bool(unit["running"] or (socket or {}).get("running")),
             "accounts": accounts,
             "hardening": hardening,
             "password_authentication": effective.get("passwordauthentication", "unknown"),
@@ -295,7 +313,20 @@ class SshService:
     def _execute_service(self, operation):
         enabled = bool(operation.requested_target.get("enabled"))
         self._advance(operation, "enabling_ssh" if enabled else "disabling_ssh")
-        result = self.systemd.enable(UNIT_SSH) if enabled else self.systemd.disable(UNIT_SSH)
+        socket = self._socket_state()
+        if enabled:
+            # The socket owns port 22 where the host has one, and ss.service
+            # cannot bind it while that is true. Turning SSH on there means
+            # turning the socket on.
+            result = self.systemd.enable(UNIT_SSH_SOCKET if socket else UNIT_SSH)
+        else:
+            result = self.systemd.disable(UNIT_SSH)
+            if socket:
+                # Both, always: leaving the socket would keep the port open
+                # behind a console that says it is closed.
+                socket_result = self.systemd.disable(UNIT_SSH_SOCKET)
+                if result.ok and not socket_result.ok:
+                    result = socket_result
         if not result.ok:
             self.operations.finish(
                 operation.operation_id,
@@ -304,7 +335,11 @@ class SshService:
                 error={"code": "ssh_service_failed", "message": "systemctl reported an error"},
             )
             raise SshServiceError("ssh_service_failed", "the SSH service could not be changed")
-        payload = {"enabled": enabled, "service": self.systemd.unit_state(UNIT_SSH)}
+        payload = {
+            "enabled": enabled,
+            "service": self.systemd.unit_state(UNIT_SSH),
+            "socket": self._socket_state(),
+        }
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
 

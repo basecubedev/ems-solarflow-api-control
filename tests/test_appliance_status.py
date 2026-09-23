@@ -484,11 +484,23 @@ def test_no_log_source_falls_through_to_the_package_log(tmp_path):
 
 
 def test_a_readable_unit_is_not_thereby_a_controllable_one():
-    """Reading a journal and starting a unit are different authorities."""
+    """Reading a journal and starting a unit are different authorities.
 
-    from appliance.systemd import CONTROLLABLE_UNITS, READABLE_UNITS, UNIT_DOCKER, UNIT_SSH
+    `ssh.socket` is on the controllable list beside `ssh.service` because on a
+    host that has one it *is* SSH: it holds port 22 and starts sshd per
+    connection, so turning SSH off without it leaves the port open behind a
+    console that says it is closed.
+    """
 
-    assert CONTROLLABLE_UNITS == (UNIT_DOCKER, UNIT_SSH)
+    from appliance.systemd import (
+        CONTROLLABLE_UNITS,
+        READABLE_UNITS,
+        UNIT_DOCKER,
+        UNIT_SSH,
+        UNIT_SSH_SOCKET,
+    )
+
+    assert CONTROLLABLE_UNITS == (UNIT_DOCKER, UNIT_SSH, UNIT_SSH_SOCKET)
     for unit in APPLIANCE_UNIT_SOURCES.values():
         assert unit in READABLE_UNITS
         assert unit not in CONTROLLABLE_UNITS

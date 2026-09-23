@@ -72,6 +72,10 @@ class PackageState:
     reboot_required: bool = False
     reboot_packages: list = field(default_factory=list)
     free_megabytes: int = 0
+    # Whether the probe could answer at all. Without it, "0 MB free" and "the
+    # probe did not run" were the same value, and the blocker treated both as
+    # nothing to worry about.
+    free_space_known: bool = True
     index_age_seconds: int = None
     error: str = ""
 
@@ -112,6 +116,7 @@ class PackageState:
                 "lock_state": self.lock_state,
             },
             "free_megabytes": self.free_megabytes,
+            "free_space_known": self.free_space_known,
             "index_age_seconds": self.index_age_seconds,
             "error": self.error,
         }
@@ -224,7 +229,8 @@ class PackageService:
         state.reboot_packages = reboot["packages"]
 
         filesystem = self.probe.filesystem("/var")
-        state.free_megabytes = filesystem.get("free_mb", 0) if filesystem.get("available") else 0
+        state.free_space_known = bool(filesystem.get("available"))
+        state.free_megabytes = int(filesystem.get("free_mb", 0)) if state.free_space_known else 0
 
         lists_dir = self.probe.root / "var/lib/apt/lists"
         try:
@@ -255,6 +261,7 @@ class PackageService:
             "package_count": len(targets),
             "blockers": blockers,
             "free_megabytes": state.free_megabytes,
+            "free_space_known": state.free_space_known,
             "minimum_free_megabytes": self.config.minimum_free_megabytes,
             "reboot_required_before": state.reboot_required,
             "package_manager": state.to_dict()["package_manager"],
@@ -313,7 +320,20 @@ class PackageService:
                     "message": "a previous package operation was interrupted; run the repair first",
                 }
             )
-        if state.free_megabytes and state.free_megabytes < self.config.minimum_free_megabytes:
+        if not state.free_space_known:
+            # Not knowing how much room there is is not proof that there is
+            # enough. apt dying inside a dpkg transaction leaves a package
+            # manager whose documented repair on this appliance is re-flashing.
+            blockers.append(
+                {
+                    "code": "free_space_unknown",
+                    "message": (
+                        "the free space on /var could not be measured, so there is no "
+                        "proof this update has room to finish"
+                    ),
+                }
+            )
+        elif state.free_megabytes < self.config.minimum_free_megabytes:
             blockers.append(
                 {
                     "code": "insufficient_disk_space",

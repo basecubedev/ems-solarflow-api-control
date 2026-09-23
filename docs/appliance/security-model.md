@@ -249,6 +249,7 @@ cannot regress silently.
 | Logout | destroys the session |
 | Password reset | rotates a generation marker, invalidating **all** sessions |
 | Pre-auth exposure | only the login page and whether a password exists |
+| SSH on/off | covers `ssh.socket` as well as `ssh.service`. On a host whose sshd is socket-activated the socket holds port 22 and starts sshd per connection, so acting on the service alone reported SSH as off over a box that went on accepting keys |
 
 There is no unauthenticated network password-reset endpoint. Recovery is
 `sudo ems-appliance password-reset` on the console or over SSH.
