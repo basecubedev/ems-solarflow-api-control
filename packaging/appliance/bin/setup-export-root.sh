@@ -720,12 +720,19 @@ acl_rollback() {
 # Every step is checked: a cleanup that lost both the ACL state and the record of
 # it is the one outcome nobody can recover from, so it is never reported as done.
 acl_write_recovery() {
+    # This runs after a failure, and the failure may be in the commit: once
+    # acl_manifest_commit has renamed the staged manifest, its content is
+    # under the authoritative name and the staged path names nothing.
+    recovery_source=$ACL_STAGED
+    if [ ! -f "$recovery_source" ] && [ "$ACL_MANIFEST_RENAMED" = yes ]; then
+        recovery_source=$ACL_MANIFEST
+    fi
     {
         echo "# ems-appliance ACL recovery manifest v$ACL_SCHEMA"
         echo "schema=$ACL_SCHEMA"
         echo "user=$BACKUP_USER"
         echo "install_root=$INSTALL_ROOT"
-        echo "installation_id=$(sed -n 's/^installation_id=//p' "$ACL_STAGED" 2>/dev/null | head -n 1)"
+        echo "installation_id=$(sed -n 's/^installation_id=//p' "$recovery_source" 2>/dev/null | head -n 1)"
         echo "operation_id=$$"
         echo "recorded_at=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
         echo "state=recovery_required"
@@ -735,7 +742,10 @@ acl_write_recovery() {
         [ -f "$ACL_ROOTS" ] && sed 's/^/opened\t/' "$ACL_ROOTS"
         [ -f "$ACL_BEFORE" ] && sed 's/^/before\t/' "$ACL_BEFORE"
         [ -f "$ACL_AFTER.observed" ] && sed 's/^/observed\t/' "$ACL_AFTER.observed"
-        [ -f "$ACL_STAGED" ] && cat "$ACL_STAGED"
+        # The last command decides the group's status, so an optional
+        # section must not be an AND-list here: a cat that fails still
+        # fails the group, a section that is absent no longer does.
+        if [ -f "$recovery_source" ]; then cat "$recovery_source"; fi
     } > "$ACL_RECOVERY.staged" 2>/dev/null \
         || return 1
     chmod 0600 "$ACL_RECOVERY.staged" 2>/dev/null || true
