@@ -496,6 +496,10 @@ sudo systemctl start ems-appliance-export.service
 | `/etc/ems-appliance-manager/host-paths.env` | the agent, web and export units (`EnvironmentFile=`), `setup-export-root.sh`, the purge script |
 | `/etc/systemd/system/ems-appliance-export.path.d/host-paths.conf` | the export watcher, which cannot expand variables itself |
 
+Every unit that reads either file is ordered after
+`ems-appliance-config-seed.service`, which rewrites them at boot when
+`appliance.conf` drifted, so a boot after a change never binds the old roots.
+
 `ems-appliance host-config` without `--apply` prints what is configured and
 whether the generated files still agree; `verify-install` fails on drift.
 
