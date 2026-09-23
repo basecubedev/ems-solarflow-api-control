@@ -309,3 +309,73 @@ def test_the_status_payload_carries_no_transition_when_there_is_none(tmp_path):
     payload = handlers.dispatch({"operation": "admin.get"})
 
     assert payload["transition"]["state"] == admin_transition.STATE_NONE
+
+
+# --- a transition Admin has finished ----------------------------------------
+
+
+def test_a_finished_transition_is_not_one_in_flight(tmp_path):
+    """Admin keeps the record after it finishes, with the clock moved forward.
+
+    `_progressed` renews `expires_at` on every durable write, the completing
+    one included, so a *successful* self-upgrade leaves a record naming up to
+    an hour in the future. Nothing removes it: `PendingTransitionStore.clear()`
+    has no production caller. Classifying by the clock alone therefore made the
+    appliance stand back from its own repair tools for that hour, right after
+    the upgrade those tools exist to recover from.
+    """
+
+    services = healthy_appliance(tmp_path)
+    write_transition(services, live_transition(stage="completed"))
+
+    record = admin_transition.read_transition(
+        admin_transition.transition_path(services.paths, services.admin.deployment())
+    )
+
+    assert record["state"] == admin_transition.STATE_FINISHED
+    assert admin_transition.blocks_admin_mutation(record) is False
+
+
+@pytest.mark.parametrize("operation,fields", MUTATING_PLANS)
+@pytest.mark.parametrize("stage", ["completed", "cancelled"])
+def test_no_admin_plan_is_blocked_after_admin_finished(tmp_path, stage, operation, fields):
+    services = healthy_appliance(tmp_path)
+    write_transition(services, live_transition(stage=stage))
+
+    assert plan_code(services, operation, fields) != "admin_transition_in_flight"
+
+
+def test_a_stage_this_side_does_not_know_still_blocks(tmp_path):
+    """Fail closed: only the two stages Admin itself calls terminal release it."""
+
+    services = healthy_appliance(tmp_path)
+    write_transition(services, live_transition(stage="some_future_stage"))
+
+    record = admin_transition.read_transition(
+        admin_transition.transition_path(services.paths, services.admin.deployment())
+    )
+
+    assert record["state"] == admin_transition.STATE_LIVE
+    assert admin_transition.blocks_admin_mutation(record) is True
+
+
+def test_a_stage_admin_may_still_act_on_keeps_blocking(tmp_path):
+    """`failed_recoverable` is cancellable on Admin's side, so it is not over."""
+
+    services = healthy_appliance(tmp_path)
+    write_transition(services, live_transition(stage="failed_recoverable"))
+
+    record = admin_transition.read_transition(
+        admin_transition.transition_path(services.paths, services.admin.deployment())
+    )
+
+    assert admin_transition.blocks_admin_mutation(record) is True
+
+
+def test_the_appliance_stands_back_for_exactly_the_stages_admin_calls_unfinished():
+    """One authority for which stages are terminal, copied and pinned."""
+
+    from admin.admin_update import TERMINAL_TRANSITION_STAGES, VALID_TRANSITION_STAGES
+
+    assert set(admin_transition.FINISHED_STAGES) == set(TERMINAL_TRANSITION_STAGES)
+    assert set(admin_transition.FINISHED_STAGES) <= set(VALID_TRANSITION_STAGES)
