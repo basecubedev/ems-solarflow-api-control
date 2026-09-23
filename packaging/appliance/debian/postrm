@@ -564,6 +564,7 @@ case "$1" in
         # account. A surviving policy would name a chroot that no longer exists.
         rm -f "$HOST_PATHS" "$SSHD_POLICY"
         rm -rf "$SYSTEMD_DIR/ems-appliance-export.path.d"
+        rm -rf "$SYSTEMD_DIR/ems-appliance-export-acl.path.d"
         # The postinst wrote this one, so dpkg does not know to take it away. A
         # declaration outliving the account it describes would offer the next
         # installation an identity nobody can check any more.

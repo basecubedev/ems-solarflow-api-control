@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow appliance export ACL refresh
+Documentation=file:///usr/share/doc/ems-appliance-manager/ssh-backup-access.md
+After=local-fs.target
+ConditionPathExists=/usr/lib/ems-appliance-manager/setup-export-root.sh
+
+[Service]
+Type=oneshot
+# No sandboxing, for the same reason as the export unit: a private mount
+# namespace would hide the shared binds this walks.
+EnvironmentFile=-/etc/ems-appliance-manager/host-paths.env
+# --refresh-acl and nothing else. No mounts are touched, so an SFTP session in
+# progress is not torn down, and there is no ExecStartPost re-activating the
+# confinement -- doing that here would race the `backup-access activate` the
+# install runs, which is what a full export run triggered from a watcher did.
+ExecStart=/usr/lib/ems-appliance-manager/setup-export-root.sh --refresh-acl

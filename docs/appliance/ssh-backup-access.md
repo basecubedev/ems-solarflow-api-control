@@ -201,11 +201,17 @@ file 0600:  user:ems-backup:r-x  #effective:---   mask::---
 file 0640:  user:ems-backup:r-x  #effective:r--   mask::r--
 ```
 
-So an archive created after the last export run carries the grant and is not
-readable until the recursive pass runs again — at boot, on a reinstall, or when
-a new top-level EMS directory appears. `ems-appliance-export.path` watches
-`/opt/ems-solarflow` and not its subdirectories, so writing a file under
-`data/backups` does not retrigger it.
+So an archive created after the last export run carries the grant with an empty
+mask. `ems-appliance-export-acl.path` watches `data/backups` for exactly that
+and starts `ems-appliance-export-acl.service`, which runs
+`setup-export-root.sh --refresh-acl`: the recursive grant and nothing else.
+
+Its own watcher and its own unit, rather than a second path on
+`ems-appliance-export.path`, for two reasons. A full export run rebuilds the
+read-only binds, which would cut an SFTP fetch that is in progress. And its
+`ExecStartPost` re-activates the confinement, which races the
+`backup-access activate` an install is already running — measured: the package
+install fails that way.
 
 The appliance no longer claims otherwise: **Backup access** reports `degraded`
 with *exported files are not readable by ems-backup* when the newest archive

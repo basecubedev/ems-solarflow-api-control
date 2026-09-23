@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# A backup written after the last export run is not readable for the backup
+# account until the recursive ACL pass runs again: a named-user entry on a file
+# is capped by that file's mask, the mask is derived from the create mode, and
+# every archive is written 0600. Creating a file under data/backups does not
+# change the install root's inode, so ems-appliance-export.path never saw it.
+[Unit]
+Description=Watch the EMS backup directory for archives that need the export ACL
+Documentation=file:///usr/share/doc/ems-appliance-manager/ssh-backup-access.md
+
+[Path]
+PathChanged=/opt/ems-solarflow/data/backups
+Unit=ems-appliance-export-acl.service
+
+[Install]
+WantedBy=multi-user.target
