@@ -18,6 +18,7 @@ STATE=/var/lib/ems-appliance-manager/agent/packages
 REQUEST="$STATE/install-request.json"
 RESULT="$STATE/install-result.json"
 PREVIOUS="$STATE/previous.deb"
+PACKAGE=ems-appliance-manager
 
 # dpkg runs the installed package's postinst, which tightens agent state and
 # leaves the armed reverter unable to run. A revert installs an older retained
@@ -73,6 +74,7 @@ fail() {
 # with sed rather than a JSON parser keeps this script free of interpreters that
 # the install itself is replacing.
 ARCHIVE=$(sed -n 's/.*"archive"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REQUEST")
+WANTED=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REQUEST")
 [ -n "$ARCHIVE" ] || fail request_invalid "the request names no archive"
 [ -f "$ARCHIVE" ] || fail request_invalid "$ARCHIVE is not a file"
 
@@ -96,6 +98,18 @@ echo "install-manager: the install failed; attempting to complete it" >&2
 # A half-configured package is the state everything else here is trying to
 # avoid, so try the ordinary cure once before reaching for the previous package.
 dpkg --configure -a || true
+
+# Whether the cure worked is a question about dpkg's database, not about an
+# exit code: an install that failed before unpacking leaves nothing to
+# configure, so `--configure -a` succeeds having done nothing. Reverting from
+# here would throw away an update that is now complete and healthy, restart
+# both services twice more, and file the run as `reverted`.
+KNOWN=$(dpkg-query -W -f '${db:Status-Status}|${Version}' "$PACKAGE" 2>/dev/null || true)
+if [ -n "$WANTED" ] && [ "$KNOWN" = "installed|$WANTED" ]; then
+    record installed "$ARCHIVE was left installed by dpkg --configure -a"
+    echo "install-manager: installed"
+    exit 0
+fi
 
 if [ -f "$PREVIOUS" ]; then
     echo "install-manager: reinstalling $PREVIOUS" >&2

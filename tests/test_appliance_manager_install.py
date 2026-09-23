@@ -568,3 +568,195 @@ def test_the_installer_names_the_reverter_the_manager_arms():
     """Shell cannot import the constant, so the duplicated name is held to it."""
 
     assert manager_verify.REVERTER_NAME in INSTALLER.read_text(encoding="utf-8")
+
+
+# --- the installer as the unit runs it ---------------------------------------
+
+
+def installer_under(state):
+    """The shipped installer, pointed at a directory a test can write.
+
+    Everything but the one ``STATE=`` assignment runs verbatim; that the shipped
+    value is the directory the agent writes is pinned separately by
+    ``test_the_installer_reads_the_directory_the_agent_writes``.
+    """
+
+    text = INSTALLER.read_text(encoding="utf-8")
+    patched, count = re.subn(
+        r"^STATE=.*$", f'STATE="{state}"', text, count=1, flags=re.MULTILINE
+    )
+    assert count == 1, "install-manager.sh no longer assigns STATE on one line"
+    script = state / "install-manager-under-test.sh"
+    script.write_text(patched, encoding="utf-8")
+    return script
+
+
+def fake_dpkg(directory, *, status, version, install_fails, configure=None, previous_ok=True):
+    """A dpkg whose idea of what is installed a test can move.
+
+    ``status``/``version`` are what dpkg-query answers; ``configure`` is what
+    ``dpkg --configure -a`` leaves behind, as ``(exit, status, version)``.
+    """
+
+    directory.mkdir(parents=True, exist_ok=True)
+    log = directory / "calls.log"
+    db = directory / "dpkg-db"
+    db.write_text(f"{status}|{version}\n", encoding="utf-8")
+
+    configure_exit, configure_status, configure_version = configure or (0, status, version)
+    (directory / "dpkg").write_text(
+        "#!/bin/sh\n"
+        f'echo "dpkg $*" >> "{log}"\n'
+        'case "$*" in\n'
+        "  *--configure*)\n"
+        f'    printf "%s|%s\\n" "{configure_status}" "{configure_version}" > "{db}"\n'
+        f"    exit {configure_exit} ;;\n"
+        "  *previous.deb*)\n"
+        f'    printf "%s|%s\\n" installed 0.1.0 > "{db}"\n'
+        f"    exit {0 if previous_ok else 1} ;;\n"
+        "  *--install*)\n"
+        f"    exit {1 if install_fails else 0} ;;\n"
+        "esac\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    (directory / "dpkg-query").write_text(
+        "#!/bin/sh\n"
+        f'echo "dpkg-query $*" >> "{log}"\n'
+        "fmt=\n"
+        "want=\n"
+        'for arg in "$@"; do\n'
+        '  if [ "$want" = yes ]; then fmt=$arg; want=; continue; fi\n'
+        '  [ "$arg" = "-f" ] && want=yes\n'
+        "done\n"
+        f'state=$(cut -d"|" -f1 < "{db}")\n'
+        f'known=$(cut -d"|" -f2 < "{db}")\n'
+        'printf %s "$fmt" | sed -e "s/[$]{Version}/$known/g" '
+        '-e "s/[$]{db:Status-Status}/$state/g"\n',
+        encoding="utf-8",
+    )
+    for name in ("dpkg", "dpkg-query"):
+        (directory / name).chmod(0o755)
+    return log
+
+
+def run_installer(state, tools):
+    environment = dict(os.environ)
+    environment["PATH"] = f"{tools}:{environment['PATH']}"
+    return subprocess.run(
+        ["sh", str(installer_under(state))],
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=120,
+    )
+
+
+def staged(state, *, version="0.2.0", previous=True):
+    state.mkdir(parents=True, exist_ok=True)
+    archive = state / "current.deb"
+    archive.write_bytes(b"the package being installed")
+    if previous:
+        (state / "previous.deb").write_bytes(b"the package that was running")
+    (state / manager_install.REQUEST_NAME).write_text(
+        json.dumps({"archive": str(archive), "version": version, "build_id": "b", "sha256": "x"}),
+        encoding="utf-8",
+    )
+    return archive
+
+
+def installer_outcome(state):
+    return json.loads((state / manager_install.RESULT_NAME).read_text(encoding="utf-8"))
+
+
+def test_an_install_that_dpkg_completes_on_the_second_pass_is_not_undone(tmp_path):
+    """`dpkg --configure -a` is a cure, and a cure that worked is not a failure.
+
+    A postinst that times out under load leaves the new package half-configured;
+    the second pass finishes it, and the appliance is then running exactly what
+    the operator asked for. Reinstalling the previous package from there throws
+    a healthy update away, restarts both services twice more, and files the run
+    as `reverted`.
+    """
+
+    state = tmp_path / "packages"
+    staged(state, version="0.2.0")
+    tools = tmp_path / "tools"
+    log = fake_dpkg(
+        tools,
+        status="installed",
+        version="0.1.0",
+        install_fails=True,
+        configure=(0, "installed", "0.2.0"),
+    )
+
+    result = run_installer(state, tools)
+
+    assert "previous.deb" not in log.read_text(encoding="utf-8"), "a healthy install was undone"
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_INSTALLED
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_configure_that_reports_success_without_installing_still_reverts(tmp_path):
+    """An install that failed before unpacking leaves nothing to configure.
+
+    `dpkg --configure -a` then exits 0 having done nothing, so its exit code
+    cannot stand in for the question -- what is installed has to be read back.
+    """
+
+    state = tmp_path / "packages"
+    staged(state, version="0.2.0")
+    tools = tmp_path / "tools"
+    log = fake_dpkg(
+        tools,
+        status="installed",
+        version="0.1.0",
+        install_fails=True,
+        configure=(0, "installed", "0.1.0"),
+    )
+
+    run_installer(state, tools)
+
+    assert "previous.deb" in log.read_text(encoding="utf-8")
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_REVERTED
+
+
+def test_a_half_configured_package_at_the_new_version_is_not_taken_for_installed(tmp_path):
+    """Unpacked at the right version is not the same as installed."""
+
+    state = tmp_path / "packages"
+    staged(state, version="0.2.0")
+    tools = tmp_path / "tools"
+    log = fake_dpkg(
+        tools,
+        status="installed",
+        version="0.1.0",
+        install_fails=True,
+        configure=(1, "half-configured", "0.2.0"),
+    )
+
+    run_installer(state, tools)
+
+    assert "previous.deb" in log.read_text(encoding="utf-8")
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_REVERTED
+
+
+def test_an_install_dpkg_accepts_outright_is_recorded_without_a_second_pass(tmp_path):
+    state = tmp_path / "packages"
+    staged(state, version="0.2.0")
+    tools = tmp_path / "tools"
+    log = fake_dpkg(tools, status="installed", version="0.1.0", install_fails=False)
+
+    result = run_installer(state, tools)
+
+    assert result.returncode == 0, result.stderr
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_INSTALLED
+    assert "--configure" not in log.read_text(encoding="utf-8")
+
+
+def test_the_installer_asks_dpkg_the_question_manager_verify_names():
+    """Both scripts read one fact; only one place decides how it is asked."""
+
+    script = INSTALLER.read_text(encoding="utf-8")
+    assert f"-f '{manager_verify.DPKG_STATE_QUERY}'" in script
+    assert f'"{manager_verify.DPKG_STATE_INSTALLED}|$WANTED"' in script

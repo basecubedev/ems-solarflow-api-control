@@ -13,6 +13,7 @@ temporary state directory, because a script nobody runs is a plan.
 
 import json
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path
@@ -251,13 +252,41 @@ def test_the_verdict_the_reverter_leaves_is_read_back(paths):
 # --- the reverter itself -----------------------------------------------------
 
 
-def fake_tools(directory, *, installed_version, agent="active", web="active", dpkg_exit=0):
-    """A PATH whose systemctl, dpkg and dpkg-query answer as instructed."""
+def fake_tools(
+    directory,
+    *,
+    installed_version,
+    installed_status="installed",
+    agent="active",
+    web="active",
+    dpkg_exit=0,
+):
+    """A PATH whose systemctl, dpkg and dpkg-query answer as instructed.
+
+    The dpkg-query fake honours the format string it is handed. One that prints
+    the version whatever it was asked for cannot tell a package dpkg calls
+    installed from one it calls half-configured, which is the distinction the
+    reverter turns on.
+    """
 
     directory.mkdir(parents=True, exist_ok=True)
     log = directory / "calls.log"
+    query = (
+        "#!/bin/sh\n"
+        'echo "dpkg-query $*" >> "LOG_PATH"\n'
+        "fmt=\n"
+        "want=\n"
+        'for arg in "$@"; do\n'
+        '  if [ "$want" = yes ]; then fmt=$arg; want=; continue; fi\n'
+        '  [ "$arg" = "-f" ] && want=yes\n'
+        "done\n"
+        'printf %s "$fmt" | sed -e "s/[$]{Version}/VERSION/g" '
+        '-e "s/[$]{db:Status-Status}/STATUS/g"\n'
+    )
     (directory / "dpkg-query").write_text(
-        f'#!/bin/sh\necho "dpkg-query $*" >> "{log}"\nprintf %s "{installed_version}"\n',
+        query.replace("LOG_PATH", str(log))
+        .replace("VERSION", installed_version)
+        .replace("STATUS", installed_status),
         encoding="utf-8",
     )
     (directory / "dpkg").write_text(
@@ -378,14 +407,85 @@ def test_an_expired_deadline_with_nothing_to_revert_to_asks_for_a_person(
     assert verdict.settled
 
 
-def test_a_revert_that_dpkg_refuses_is_reported_as_such(paths, packaged, tmp_path):
+def test_a_package_dpkg_has_not_configured_is_never_confirmed(paths, packaged, tmp_path):
+    """`${Version}` answers for a package dpkg never finished configuring.
+
+    A postinst that dies after restarting the two units leaves the new version
+    unpacked and half-configured, with both services up. Asking only for the
+    version reads that as the install the deadline was armed for, confirms it,
+    and throws away the one automatic way back -- so the check has to ask dpkg
+    what state the package is in, not merely which version it knows about.
+    """
+
+    deadline_at(paths, packaged, epoch=1)
+    tools = tmp_path / "tools"
+    fake_tools(tools, installed_version="0.2.0", installed_status="half-configured")
+
+    run_reverter(paths, tools, now=0)
+
+    verdict = manager_verify.read_verdict(paths)
+    assert verdict.verdict != manager_verify.VERDICT_CONFIRMED, verdict.detail
+    assert verdict.verdict == manager_verify.VERDICT_REVERTED
+
+
+def test_a_package_dpkg_only_has_config_files_for_is_never_confirmed(paths, packaged, tmp_path):
+    """dpkg-query still reports a version for a package that is no longer on."""
+
+    deadline_at(paths, packaged, epoch=1)
+    tools = tmp_path / "tools"
+    fake_tools(tools, installed_version="0.2.0", installed_status="config-files")
+
+    run_reverter(paths, tools, now=0)
+
+    assert manager_verify.read_verdict(paths).verdict != manager_verify.VERDICT_CONFIRMED
+
+
+def test_a_revert_dpkg_refuses_once_is_tried_again_on_the_next_tick(paths, packaged, tmp_path):
+    """The lock another dpkg holds is gone a tick later; the deadline is not.
+
+    An operator repairing the package manager from the console holds the dpkg
+    frontend lock for as long as apt runs. Settling on revert_failed at the
+    first refusal spends the only automatic way back on a condition that clears
+    itself, and disarming takes away the tick that would have retried.
+    """
+
     deadline_at(paths, packaged, epoch=1)
     tools = tmp_path / "tools"
     fake_tools(tools, installed_version="0.9.9", dpkg_exit=1)
 
     run_reverter(paths, tools, now=0)
 
+    assert not manager_verify.read_verdict(paths).settled
+    assert manager_verify.deadline_path(paths).exists(), "the next tick has to be able to retry"
+
+
+def test_a_revert_that_keeps_being_refused_settles_rather_than_ticking_forever(
+    paths, packaged, tmp_path
+):
+    deadline_at(paths, packaged, epoch=1)
+    tools = tmp_path / "tools"
+    fake_tools(tools, installed_version="0.9.9", dpkg_exit=1)
+
+    for _ in range(manager_verify.REVERT_ATTEMPTS):
+        run_reverter(paths, tools, now=0)
+
     assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_REVERT_FAILED
+    assert not manager_verify.deadline_path(paths).exists()
+
+
+def test_a_retried_revert_that_succeeds_is_recorded_as_a_revert(paths, packaged, tmp_path):
+    """The attempt counter must not outlive the deadline it belongs to."""
+
+    deadline_at(paths, packaged, epoch=1)
+    tools = tmp_path / "tools"
+    fake_tools(tools, installed_version="0.9.9", dpkg_exit=1)
+    run_reverter(paths, tools, now=0)
+
+    fake_tools(tools, installed_version="0.9.9", dpkg_exit=0)
+    run_reverter(paths, tools, now=0)
+
+    assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_REVERTED
+    assert not manager_verify.attempts_path(paths).exists()
 
 
 def test_a_tick_with_no_deadline_disarms_itself(paths, tmp_path):
@@ -466,3 +566,22 @@ def test_the_deadline_does_not_hang_on_the_snapshot_being_executable():
     # The snapshot is a /bin/sh script, so the interpreter has to be that one.
     packaged = (PACKAGING / "bin" / "verify-manager.sh").read_text(encoding="utf-8")
     assert packaged.splitlines()[0] == "#!/bin/sh", packaged.splitlines()[0]
+
+
+def test_the_reverter_asks_dpkg_the_question_this_module_names():
+    """One authority for how "is it installed" is asked, two readers of it."""
+
+    script = REVERTER.read_text(encoding="utf-8")
+    assert f"-f '{manager_verify.DPKG_STATE_QUERY}'" in script
+    assert f"= {manager_verify.DPKG_STATE_INSTALLED}" in script
+    assert f"REVERT_ATTEMPTS={manager_verify.REVERT_ATTEMPTS}" in script
+    assert f'ATTEMPTS="$STATE/{manager_verify.ATTEMPTS_NAME}"' in script
+
+
+def test_disarming_takes_the_attempt_count_with_it():
+    """A count that outlived its deadline would shorten the next one."""
+
+    script = REVERTER.read_text(encoding="utf-8")
+    match = re.search(r"^disarm\(\) \{.*?^\}$", script, re.DOTALL | re.MULTILINE)
+    assert match, "verify-manager.sh no longer defines disarm()"
+    assert '"$ATTEMPTS"' in match.group(0)

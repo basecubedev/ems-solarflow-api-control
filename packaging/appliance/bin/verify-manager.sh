@@ -15,9 +15,15 @@ set -eu
 STATE=${1:-/var/lib/ems-appliance-manager/agent/packages}
 DEADLINE="$STATE/verify-deadline.json"
 VERDICT="$STATE/verify-verdict.json"
+ATTEMPTS="$STATE/verify-revert-attempts"
 PACKAGE=ems-appliance-manager
 TIMER=ems-appliance-manager-verify.timer
 SERVICES="ems-appliance-agent.service ems-appliance-web.service"
+
+# The dpkg frontend lock is held for as long as an operator's apt run takes, and
+# repairing the package manager is the console action a bad install invites. One
+# attempt spends the only automatic way back on a condition that clears itself.
+REVERT_ATTEMPTS=5
 
 text() {
     sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$DEADLINE"
@@ -40,7 +46,7 @@ EOF
 }
 
 disarm() {
-    rm -f "$DEADLINE"
+    rm -f "$DEADLINE" "$ATTEMPTS"
     systemctl disable --now "$TIMER" >/dev/null 2>&1 || true
 }
 
@@ -55,9 +61,18 @@ DEADLINE_EPOCH=$(number deadline_epoch)
 [ -n "$DEADLINE_EPOCH" ] || DEADLINE_EPOCH=0
 NOW=$(date -u +%s)
 
-INSTALLED=$(dpkg-query -W -f '${Version}' "$PACKAGE" 2>/dev/null || true)
+# ${Version} answers for a package dpkg unpacked and never configured, and for
+# one it has only config files left for. Those are what the deadline exists to
+# catch, so the state dpkg is in is read alongside the version.
+KNOWN=$(dpkg-query -W -f '${db:Status-Status}|${Version}' "$PACKAGE" 2>/dev/null || true)
+INSTALLED_STATE=${KNOWN%%|*}
+case "$KNOWN" in
+    *"|"*) INSTALLED=${KNOWN#*|} ;;
+    *) INSTALLED= ;;
+esac
 
 healthy=yes
+[ "$INSTALLED_STATE" = installed ] || healthy=no
 [ -n "$EXPECTED" ] && [ "$INSTALLED" = "$EXPECTED" ] || healthy=no
 for service in $SERVICES; do
     systemctl is-active --quiet "$service" || healthy=no
@@ -91,7 +106,19 @@ if dpkg --force-confold --install "$PREVIOUS"; then
     exit 0
 fi
 
+attempts=$(cat "$ATTEMPTS" 2>/dev/null || echo 0)
+case "$attempts" in '' | *[!0-9]*) attempts=0 ;; esac
+attempts=$((attempts + 1))
+if [ "$attempts" -lt "$REVERT_ATTEMPTS" ]; then
+    umask 077
+    printf '%s\n' "$attempts" > "$ATTEMPTS.part"
+    mv "$ATTEMPTS.part" "$ATTEMPTS"
+    echo "verify-manager: $PREVIOUS was refused (attempt $attempts of $REVERT_ATTEMPTS); the next tick tries again" >&2
+    exit 0
+fi
+
 dpkg --configure -a || true
-record revert_failed "the deadline expired and $PREVIOUS could not be installed either"
+record revert_failed \
+    "the deadline expired and $PREVIOUS could not be installed in $REVERT_ATTEMPTS attempts"
 disarm
 exit 0
