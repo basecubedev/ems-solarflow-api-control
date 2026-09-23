@@ -244,6 +244,9 @@ REQUIRED_UNITS = {
     # silently never published.
     "export_path_enabled": "ems-appliance-export.path",
     "export_service_enabled": "ems-appliance-export.service",
+    # The archive watcher: re-grants the backup account's ACL when EMS writes
+    # a new archive, so a backup made after boot is readable without one.
+    "export_acl_path_enabled": "ems-appliance-export-acl.path",
     # The one DHCP client. Debian's networkd units are masked beside this
     # (MASKED_NETWORK_UNITS); nmcli is the only interface this appliance can
     # take an address back on.
