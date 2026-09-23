@@ -635,11 +635,20 @@ def atomic_write(path, text, mode=0o640, *, owner_root=False):
     # The rename itself is a directory operation: without flushing the parent,
     # a power cut can leave the entry pointing at nothing while the file's own
     # bytes are already durable.
-    _sync_parent(target)
+    sync_parent(target)
     return target
 
 
-def _sync_parent(target):
+def sync_parent(target):
+    """Flush the directory entry a rename just made; advisory, never fatal.
+
+    Shared by every writer that stages a file and renames it into place:
+    the deadline, the reverter snapshot, the retained archives and their
+    record, the partition stamp. A copy of this sequence without the
+    parent flush is durable bytes under a name that may not survive a
+    power cut.
+    """
+
     try:
         handle = os.open(str(Path(target).parent), os.O_RDONLY)
     except OSError:

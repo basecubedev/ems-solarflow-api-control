@@ -16,6 +16,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from appliance.paths import sync_parent
+
 RECORD_NAME = "retention.json"
 RECORD_SCHEMA_VERSION = 2
 READABLE_RECORD_VERSIONS = (1, 2)
@@ -176,6 +178,7 @@ def _write_record(paths, retention):
             os.fsync(stream.fileno())
         os.chmod(staging, FILE_MODE)
         os.replace(staging, target)
+        sync_parent(target)
     except OSError as exc:
         try:
             os.unlink(staging)
@@ -189,8 +192,13 @@ def _copy(source, target):
     os.close(handle)
     try:
         shutil.copyfile(source, staging)
+        # copyfile flushes nothing, and this archive is the way back: a
+        # durable name over unwritten bytes is the same defect one level down.
+        with open(staging, "rb") as copied:
+            os.fsync(copied.fileno())
         os.chmod(staging, FILE_MODE)
         os.replace(staging, target)
+        sync_parent(target)
     except OSError as exc:
         try:
             os.unlink(staging)

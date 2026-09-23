@@ -87,6 +87,38 @@ def arm(paths, packaged, runner, **kwargs):
     )
 
 
+def fsync_spy(monkeypatch):
+    """Records, for every fsync, whether it was a directory."""
+
+    import os
+    import stat
+
+    real = os.fsync
+    synced = []
+
+    def spy(fd):
+        synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+        return real(fd)
+
+    monkeypatch.setattr(os, "fsync", spy)
+    return synced
+
+
+def test_the_deadline_is_durable_before_the_install_that_replaces_this_process_starts(
+    paths, packaged, monkeypatch
+):
+    """arm() writes the deadline and then starts the install that replaces
+    the agent. The bytes were fsynced; the directory entry was not, so a
+    power cut before the journal committed left read() with FileNotFoundError,
+    armed=False, and an unjudged install standing with no way back."""
+
+    synced = fsync_spy(monkeypatch)
+
+    arm(paths, packaged, FakeRunner())
+
+    assert True in synced, "no directory entry was flushed"
+
+
 # --- arming ------------------------------------------------------------------
 
 
