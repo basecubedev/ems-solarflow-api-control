@@ -354,6 +354,21 @@ def validate_recovery(recovery, target=None):
     return True
 
 
+def _require_schema_version(operation):
+    """Refuse a record another version of this code wrote.
+
+    The authority fingerprint covers the record's own schema_version, so a
+    record an older manager wrote verifies against itself; only this
+    comparison says whether the running code knows what that record means.
+    """
+
+    version = getattr(operation, "schema_version", 0)
+    if version != OPERATION_SCHEMA_VERSION:
+        raise OperationSchemaError(
+            f"this plan was written for operation schema {version or 'none'}; plan again"
+        )
+
+
 def validate_confirmation(operation, *, repositories=(), architectures=()):
     """Everything that has to hold before an operation may start.
 
@@ -361,6 +376,10 @@ def validate_confirmation(operation, *, repositories=(), architectures=()):
     the two are separated by however long the operator took to decide.
     """
 
+    # Every type, not only the four with a structural schema: the retryable
+    # record recover_interrupted keeps across a manager restart is the one
+    # most likely to have been written by another version.
+    _require_schema_version(operation)
     if operation.type in REQUIRED_FIELDS:
         return validate_operation(
             operation, repositories=repositories, architectures=architectures
@@ -375,11 +394,7 @@ def validate_operation(operation, *, repositories=(), architectures=()):
     instead of only that it is no longer the plan that was confirmed.
     """
 
-    version = getattr(operation, "schema_version", 0)
-    if version != OPERATION_SCHEMA_VERSION:
-        raise OperationSchemaError(
-            f"this plan was written for operation schema {version or 'none'}; plan again"
-        )
+    _require_schema_version(operation)
 
     # An unknown type has no known authority, so nothing can decide it is safe.
     required = REQUIRED_FIELDS.get(operation.type)
