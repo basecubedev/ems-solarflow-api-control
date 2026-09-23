@@ -405,14 +405,19 @@ class StatusService:
         source = validation.validate_log_source(source)
         lines = validation.validate_line_count(lines)
 
+        # An empty log and a log nobody could read are two statements, and
+        # the console and the support archive used to get "" for both. The
+        # readers that swallow their failure name it instead; the ones that
+        # raise are turned into an error response by the agent as before.
+        unreadable = ""
         if source == validation.LOG_SOURCE_APPLIANCE_WEB:
-            raw = self._unit_or_file(UNIT_APPLIANCE_WEB, self.paths.appliance_log, lines)
+            raw, unreadable = self._unit_or_file(UNIT_APPLIANCE_WEB, self.paths.appliance_log, lines)
         elif source == validation.LOG_SOURCE_APPLIANCE_AGENT:
-            raw = self._unit_or_file(UNIT_APPLIANCE_AGENT, None, lines)
+            raw, unreadable = self._unit_or_file(UNIT_APPLIANCE_AGENT, None, lines)
         elif source == validation.LOG_SOURCE_OPERATIONS:
-            raw = self._tail_file(self.paths.operations_log, lines)
+            raw, unreadable = self._tail_file(self.paths.operations_log, lines)
         elif source == validation.LOG_SOURCE_AUDIT:
-            raw = self._tail_file(self.paths.audit_log, lines)
+            raw, unreadable = self._tail_file(self.paths.audit_log, lines)
         elif source == validation.LOG_SOURCE_ADMIN_CONTAINER:
             raw = self.docker.container_logs(self.config.admin_container, lines)
         elif source == validation.LOG_SOURCE_EMS_CONTAINER:
@@ -422,28 +427,40 @@ class StatusService:
         elif source == validation.LOG_SOURCE_BOOT:
             raw = self.systemd.boot_warnings(lines)
         elif source in UNIT_LOG_SOURCES:
-            raw = self._unit_or_file(UNIT_LOG_SOURCES[source], None, lines)
+            raw, unreadable = self._unit_or_file(UNIT_LOG_SOURCES[source], None, lines)
         elif source == validation.LOG_SOURCE_PACKAGES:
-            raw = self._tail_file(self.probe.root / DPKG_LOG, lines)
+            raw, unreadable = self._tail_file(self.probe.root / DPKG_LOG, lines)
         else:
             raise validation.ValidationError("log_source_unrouted", f"{source} has no reader")
 
         bounded = bounded_redacted_log(raw, max_lines=lines)
         bounded["source"] = source
+        bounded["unreadable"] = unreadable
         return bounded
 
     def _unit_or_file(self, unit, fallback, lines):
+        """The unit's journal, or the file it also writes, and why not.
+
+        A journal that answered is the answer, empty or not. Only when it
+        could not be asked does the file decide, and only when that gave
+        nothing either is the journal's failure reported -- the same
+        exception-class shorthand section() and the support archive use.
+        """
+
         try:
-            text = self.systemd.journal(unit, lines)
-        except Exception:
-            text = ""
-        if text.strip():
-            return text
-        return self._tail_file(fallback, lines) if fallback is not None else ""
+            text, failure = self.systemd.journal(unit, lines), ""
+        except Exception as exc:
+            text, failure = "", exc.__class__.__name__
+        if text.strip() or fallback is None:
+            return text, failure
+        fallback_text, _fallback_failure = self._tail_file(fallback, lines)
+        if fallback_text:
+            return fallback_text, ""
+        return "", failure
 
     def _tail_file(self, path, lines):
         try:
             content = path.read_text(encoding="utf-8", errors="replace")
-        except (OSError, AttributeError):
-            return ""
-        return "\n".join(content.splitlines()[-int(lines) :])
+        except (OSError, AttributeError) as exc:
+            return "", exc.__class__.__name__
+        return "\n".join(content.splitlines()[-int(lines) :]), ""

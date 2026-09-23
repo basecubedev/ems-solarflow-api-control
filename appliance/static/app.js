@@ -2474,6 +2474,22 @@
     main.appendChild(logPanel(state.data.logSource || sources[0], "Logs", sources));
   }
 
+  /* An empty log and a log nobody could read are two statements; the panel
+     printed "0 lines" and "(empty)" for both. */
+  function logSummary(log) {
+    if (!log) return null;
+    if (log.unreadable) {
+      return {
+        note: "This log could not be read (" + log.unreadable + ").",
+        body: "(this log could not be read)"
+      };
+    }
+    return {
+      note: log.lines + " lines" + (log.truncated ? " (truncated)" : ""),
+      body: log.text || "(empty)"
+    };
+  }
+
   function logPanel(source, title, sources) {
     var wrapper = el("section", { class: "action-card", "data-test": "log-panel" }, [
       el("div", { class: "action-card-head" }, [
@@ -2502,9 +2518,10 @@
     ]));
 
     var log = state.data.log;
-    if (log && log.source === source) {
-      wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: log.lines + " lines" + (log.truncated ? " (truncated)" : "") }));
-      wrapper.appendChild(el("pre", { class: "log-view", "data-test": "log-output", text: log.text || "(empty)" }));
+    var summary = log && log.source === source ? logSummary(log) : null;
+    if (summary) {
+      wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: summary.note }));
+      wrapper.appendChild(el("pre", { class: "log-view", "data-test": "log-output", text: summary.body }));
     } else {
       wrapper.appendChild(el("p", { class: "empty-state", text: "No log loaded." }));
     }

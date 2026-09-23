@@ -39,6 +39,7 @@ def _render(
     expert=False,
     operations=(),
     extra=(),
+    log=None,
 ):
     node = shutil.which("node")
     if not node:
@@ -56,6 +57,7 @@ def _render(
                 "expert": expert,
                 "operations": list(operations),
                 "extra": list(extra),
+                "log": log,
             }
         ),
         text=True,
@@ -262,6 +264,33 @@ def test_a_container_that_only_looks_like_the_ems_is_not_reported_as_it():
     }
 
     assert _render(status)["ems"] == {"name": None, "state": "unknown"}
+
+
+# --- the log panel ---------------------------------------------------------
+
+
+def test_a_log_that_could_not_be_read_is_not_shown_as_an_empty_one():
+    """0 lines and (empty) were the panel's words for both."""
+
+    view = _render(
+        _status(),
+        log={"source": "manager_verify", "text": "", "lines": 0, "truncated": False,
+             "unreadable": "CommandError"},
+    )["log"]
+
+    assert "could not be read" in view["note"]
+    assert "CommandError" in view["note"]
+    assert view["body"] != "(empty)"
+
+
+def test_a_log_that_is_empty_is_still_shown_as_empty():
+    view = _render(
+        _status(),
+        log={"source": "operations", "text": "", "lines": 0, "truncated": False, "unreadable": ""},
+    )["log"]
+
+    assert view["note"] == "0 lines"
+    assert view["body"] == "(empty)"
 
 
 # --- getting there ---------------------------------------------------------

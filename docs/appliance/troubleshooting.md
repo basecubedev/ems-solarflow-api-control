@@ -254,5 +254,7 @@ manifest of everything it contains. Check the manifest before sharing it.
 | `boot` | Boot warnings |
 | `packages` | Package-manager log |
 
-All log output is bounded and redacted before it reaches the browser.
+All log output is bounded and redacted before it reaches the browser. A log the
+appliance could not read says so, because an empty log and an unreadable one
+are not the same statement; the support archive records the same distinction.
 
