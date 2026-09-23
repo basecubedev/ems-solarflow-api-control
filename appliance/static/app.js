@@ -2565,6 +2565,9 @@
       ], "settings-sessions"),
       card("Update policy", [
         fact("Automatic security updates", settings.automatic_security_updates),
+        el("p", { class: "section-hint", text: settings.automatic_security_updates
+          ? "Waiting security updates install once a day at a randomised hour, through the same plan and the same blockers as the button above. Never a full upgrade, and never a reboot \u2014 a reboot the updates ask for is reported and left to you."
+          : "Security updates wait for somebody to press Install. Turn this on in appliance.conf to have them installed once a day instead." }),
         fact("Admin repository", settings.admin_repository, { mono: true }),
         fact("Prereleases allowed", settings.allow_prerelease)
       ], "settings-updates"),

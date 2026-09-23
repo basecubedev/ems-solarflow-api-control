@@ -60,6 +60,31 @@ indistinguishable from "the probe did not run" and let the update through at
 exactly the worst moment: `apt` then dies inside the dpkg transaction, and the
 documented repair for a broken package manager here is re-flashing.
 
+### Installing them without being asked
+
+`automatic_security_updates` in `/etc/ems-appliance-manager/appliance.conf` is
+off by default. Turned on, `ems-appliance-auto-update.timer` runs once a day at
+a randomised hour and installs the waiting **security** updates — and nothing
+else. It takes effect at the next run; no unit has to be enabled by hand.
+
+It is a caller of the agent, not a second one beside it. The same plan, the
+same blockers, the same operation lock and the same audit entry the console
+produces, so a full disk, an interrupted `dpkg`, a held lock or an operator
+already working on the appliance all stop it exactly as they stop a person.
+That is the reason `unattended-upgrades` is not used and is not a dependency:
+it would run `apt` outside every one of those gates, and a `dpkg` transaction
+that dies half way here is recovered by re-flashing and restoring a backup.
+
+Two things it never does. It never installs a full upgrade — that is an
+operator's decision. And it never reboots, however plainly the updates ask for
+one: the reboot is reported and left to somebody who knows whether the battery
+this appliance controls can be left alone for two minutes. `ems-appliance
+auto-update` runs the same thing by hand.
+
+Every outcome, including declining, exits 0. A daily timer that leaves a failed
+unit behind because the package manager was busy teaches an operator to stop
+reading it; what happened is in the journal and in the operation record.
+
 During installation the operation reports its stage, captures bounded output and
 prevents a second package operation. Afterwards it runs a dpkg consistency
 check, detects the reboot requirement, reports the changed package count and

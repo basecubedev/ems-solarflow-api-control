@@ -528,3 +528,114 @@ def test_an_install_confirmed_before_the_disk_filled_is_still_refused(tmp_path, 
 
     assert record.stage == "blocked", record.stage
     assert record.error["code"] == "insufficient_disk_space", record.error
+# --- automatic security updates ---------------------------------------------
+
+
+def config_with(services, **values):
+    services.config = services.config.__class__(**{**services.config.__dict__, **values})
+    services.packages.config = services.config
+    return services
+
+
+def auto_update(services):
+    from appliance.agent_client import InProcessAgentClient
+    from appliance.packages import run_scheduled_security_updates
+
+    return run_scheduled_security_updates(
+        InProcessAgentClient(handlers_for(services)), services.config
+    )
+
+
+def test_the_schedule_does_nothing_while_the_operator_has_not_asked_for_it(tmp_path):
+    """Off by default, and off means nothing runs -- not even a plan.
+
+    `automatic_security_updates` was reported to the operator on the settings
+    card and read by nothing: `grep` found the flag in config.py, web.py and
+    app.js and in no code path that installs anything. A switch that is shown
+    as on and does nothing is worse than an absent one.
+    """
+
+    services = config_with(appliance(tmp_path), automatic_security_updates=False)
+
+    result = auto_update(services)
+
+    assert result["ran"] is False
+    assert result["reason"] == "not_enabled"
+    assert services.operations.list() == []
+
+
+def test_the_schedule_installs_the_security_updates_it_found(tmp_path):
+    services = config_with(appliance(tmp_path), automatic_security_updates=True)
+
+    result = auto_update(services)
+
+    assert result["ran"] is True, result
+    assert result["installed"] > 0, result
+    record = services.operations.list()[0]
+    assert record.state == STATE_SUCCEEDED, (record.state, record.error)
+    assert record.type == "updates.install"
+
+
+def test_the_schedule_installs_only_security_updates(tmp_path):
+    """A full upgrade is an operator's decision, never a timer's."""
+
+    services = config_with(appliance(tmp_path), automatic_security_updates=True)
+
+    auto_update(services)
+
+    upgrades = [
+        args for tool, args, _ in services.host.calls if tool == "apt-get" and "upgrade" in args
+    ]
+    assert upgrades, services.host.calls
+    for args in upgrades:
+        assert "full-upgrade" not in args, args
+        assert "dist-upgrade" not in args, args
+
+
+def test_the_schedule_stands_back_from_every_blocker_the_console_has(tmp_path):
+    """The gates are the same ones; a timer may not be the way past them."""
+
+    services = config_with(appliance(tmp_path), automatic_security_updates=True)
+    services.host.dpkg_audit = "libbroken\n"
+
+    result = auto_update(services)
+
+    assert result["ran"] is False
+    assert result["reason"] == "blocked", result
+    assert "dpkg_incomplete" in result["blockers"], result
+
+
+def test_the_schedule_yields_to_an_operation_already_running(tmp_path):
+    """An operator at the console owns the appliance; a timer waits."""
+
+    services = config_with(appliance(tmp_path), automatic_security_updates=True)
+    handlers = handlers_for(services)
+    handlers.dispatch({"operation": "updates.plan", "scope": "security"})
+
+    result = auto_update(services)
+
+    assert result["ran"] is False
+    assert result["reason"] == "busy", result
+
+
+def test_the_schedule_says_so_when_there_is_nothing_to_install(tmp_path):
+    services = config_with(appliance(tmp_path), automatic_security_updates=True)
+    services.host.apt_simulation = NO_UPDATES
+
+    result = auto_update(services)
+
+    assert result["ran"] is False
+    assert result["reason"] == "nothing_to_install", result
+
+
+def test_the_schedule_never_reboots_on_its_own(tmp_path):
+    """A reboot is visible to whoever is relying on the battery right now."""
+
+    services = config_with(appliance(tmp_path), automatic_security_updates=True)
+    (services.paths.install_root.parent / "var" / "run").mkdir(parents=True, exist_ok=True)
+
+    result = auto_update(services)
+
+    reboots = [args for tool, args, _ in services.host.calls if tool == "systemctl" and "reboot" in args]
+    assert reboots == []
+    assert "reboot_required" in result

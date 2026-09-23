@@ -1271,3 +1271,38 @@ def test_the_refusal_left_behind_matches_the_one_the_package_generated():
             f"the generated policy refuses ems-rescue with {directive!r} and the "
             "purge leftover does not"
         )
+def test_the_automatic_update_timer_is_shipped_and_enabled():
+    """Turning the flag on must not also mean enabling a unit by hand."""
+
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+    postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
+    prerm = (PACKAGING / "debian" / "prerm").read_text(encoding="utf-8")
+    service = unit(PACKAGING / "systemd" / "ems-appliance-auto-update.service")
+    timer = unit(PACKAGING / "systemd" / "ems-appliance-auto-update.timer")
+
+    assert "ems-appliance-auto-update.service" in build
+    assert "ems-appliance-auto-update.timer" in build
+    assert "ems-appliance-auto-update.timer" in postinst
+    assert "ems-appliance-auto-update.timer" in prerm
+    assert service["Service"]["ExecStart"] == "/usr/bin/ems-appliance auto-update"
+    assert service["Service"]["User"] == "root"
+    # Not at the same minute on every appliance in the world.
+    assert timer["Timer"]["RandomizedDelaySec"]
+    assert timer["Timer"]["Persistent"] == "true"
+
+
+def test_the_appliance_ships_no_second_unattended_upgrader():
+    """apt has one owner here, and the gates that make it safe are around it.
+
+    `unattended-upgrades` or a cron line would run apt outside the operation
+    lock, the disk-space blocker and the dpkg-health blocker, and a dpkg
+    transaction that dies half way on this appliance is recovered by
+    re-flashing and restoring a backup.
+    """
+
+    control = (PACKAGING / "debian" / "control").read_text(encoding="utf-8")
+    postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
+
+    assert "unattended-upgrades" not in control
+    assert "unattended-upgrades" not in postinst
+    assert not list((PACKAGING).glob("**/cron*"))

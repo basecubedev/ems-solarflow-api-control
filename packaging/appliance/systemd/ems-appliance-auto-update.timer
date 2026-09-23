@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow appliance automatic security updates
+Documentation=file:///usr/share/doc/ems-appliance-manager/os-updates.md
+
+[Timer]
+# Daily, well away from the hour every other appliance would pick, and
+# persistent so a box that was off does not simply skip a day.
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=3h
+Persistent=true
+Unit=ems-appliance-auto-update.service
+
+[Install]
+WantedBy=timers.target
