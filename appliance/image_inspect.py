@@ -211,6 +211,7 @@ OPERATOR_CONFIG_DIR = "etc/ems-appliance-manager"
 OPERATOR_TEMPLATE_DIR = "usr/share/ems-appliance-manager"
 
 UNIT_DIRECTORY = "usr/lib/systemd/system"
+SSH_DIRECTORY = "etc/ssh"
 
 
 # The units the root must carry enabled.
@@ -563,13 +564,26 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
     )
 
 
-    keys = [name for name in reader.listdir("etc/ssh") if name.startswith("ssh_host_")]
-    private = [name for name in keys if not name.endswith(".pub")]
-    record(
-        "no_host_key_shipped",
-        not private,
-        f"the image carries {', '.join(private)}" if private else "no host key is shipped",
-    )
+    if not reader.is_dir(SSH_DIRECTORY):
+        # listdir answers () for an empty directory and for a path it cannot
+        # list at all, so a symlinked or unreadable /etc/ssh used to read as
+        # proof that no host key ships. It is also not a shape this appliance
+        # has: ems-appliance-sshd-keys.service refuses a symlinked /etc/ssh
+        # and would never make the keys.
+        record(
+            "no_host_key_shipped",
+            False,
+            f"/{SSH_DIRECTORY} is not a directory this inspection can list, "
+            "so whether the image ships a private host key cannot be answered",
+        )
+    else:
+        keys = [name for name in reader.listdir(SSH_DIRECTORY) if name.startswith("ssh_host_")]
+        private = [name for name in keys if not name.endswith(".pub")]
+        record(
+            "no_host_key_shipped",
+            not private,
+            f"the image carries {', '.join(private)}" if private else "no host key is shipped",
+        )
 
 
     missing_helpers = [name for name in RUNTIME_HELPERS if not reader.is_file(name)]

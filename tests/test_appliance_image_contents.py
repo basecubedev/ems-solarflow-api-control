@@ -166,6 +166,35 @@ def test_a_root_that_ships_a_host_private_key_is_refused_here_too(tmp_path):
 
 
 @requires_mkfs
+def test_a_host_key_behind_a_symlinked_etc_ssh_is_not_read_as_no_key(tmp_path):
+    """listdir answers () for "empty" and for "not a directory I can read"
+    alike. A key that cannot be looked for is not a key that is absent, and
+    every card flashed from such a release would carry the same private host
+    key, published in the release artefact.
+    """
+
+    import shutil
+
+    root_tree = tmp_path / "root"
+    populate_root(root_tree)
+    shutil.rmtree(root_tree / "etc/ssh")
+    (root_tree / "etc/ssh-real").mkdir(parents=True)
+    (root_tree / "etc/ssh-real/sshd_config").write_text("Port 22\n")
+    (root_tree / "etc/ssh-real/ssh_host_ed25519_key").write_text("PRIVATE")
+    (root_tree / "etc/ssh").symlink_to("ssh-real")
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, "kernel8.img": b"k",
+         "initramfs8": b"i", "bcm2712-rpi-5-b.dtb": b"d"},
+    )
+    findings = by_check(contents(assemble_mbr(tmp_path / "appliance.img", boot, root)))
+
+    assert findings["no_host_key_shipped:root"].result == FAIL
+    assert "etc/ssh" in findings["no_host_key_shipped:root"].detail
+
+
+@requires_mkfs
 def test_the_units_a_single_slot_host_can_run_are_the_ones_required(single_image):
     findings = by_check(contents(single_image))
 
