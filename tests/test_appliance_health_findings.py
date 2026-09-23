@@ -60,6 +60,7 @@ def every_finding(tmp_path):
                 "root": {"available": True, "used_percent": 95},
                 "ems_data": {"available": True, "used_percent": 97},
             },
+            "rescue": {"ssh": {"state": "accepted"}},
         },
         "network": {"status": "unavailable"},
     }
@@ -142,3 +143,28 @@ def test_a_healthy_appliance_has_nothing_to_report(tmp_path):
     health = health_for(tmp_path, {"docker": {"status": "ok", "daemon": {"state": "running"}}})
     assert health["warnings"] == []
     assert health["level"] == HEALTH_HEALTHY
+
+
+def test_a_rescue_password_reachable_over_ssh_is_an_error(tmp_path):
+    """The rescue password is printed in this repository.
+
+    A daemon that would take it from the network is the one thing on this
+    appliance that turns "public knowledge" into remote root, and it is an
+    error on the overview rather than a fact on a card three pages in.
+    """
+
+    def health(ssh):
+        rescue = {"rescue": {"ssh": ssh}} if ssh is not None else {}
+        return health_for(tmp_path, {"system": {"status": "ok", **rescue}})
+
+    degraded = health({"state": "accepted"})
+    assert degraded["level"] == HEALTH_DEGRADED
+    (finding,) = degraded["warnings"]
+    assert finding["severity"] == "error"
+    assert finding["code"] == "rescue_password_accepted_over_ssh"
+    assert finding["section"] == "access"
+
+    # Refused is the shipped state; unknown and absent are carried by the
+    # card, because neither is a finding an operator can act on from here.
+    for quiet in ({"state": "refused"}, {"state": "unknown"}, {"state": "absent"}, None):
+        assert health(quiet)["warnings"] == [], quiet

@@ -47,6 +47,13 @@ Only if you enabled it and added a key. `ems-rescue` is a password account and
 the shipped sshd policy refuses it a password — by `Match User ems-rescue`, and
 by refusing keyboard-interactive too, which is the path that otherwise still
 asks for it. Its password is published in this document, so it is a console
+credential and nothing else. That refusal is what the package writes, and
+the Overview reports whether the running daemon keeps it — as an error when
+it does not. It can fail to: an `/etc/ssh/sshd_config` carried over from an
+older install has no `Include /etc/ssh/sshd_config.d/*.conf`, and dpkg does
+not rewrite a modified conffile, so the block is on disk and sshd never read
+it.
+
 credential and nothing else.
 
 That refusal is the *only* thing keeping it off the network: there is no global

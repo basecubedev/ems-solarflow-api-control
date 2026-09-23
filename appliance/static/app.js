@@ -2118,6 +2118,11 @@
     if (!rescue || !rescue.present) {
       return { tone: "warn", label: "not present", hint: "This appliance has no rescue account. A console login is the only way back in when the web console does not answer." };
     }
+    /* Judged before the password is: whether it is still the shipped one
+       matters less than whether sshd would take it from the network. */
+    if ((rescue.ssh || {}).state === "accepted") {
+      return { tone: "bad", label: "password reachable over SSH", hint: "The running sshd would accept this account's password from the network, and that password is public knowledge. Change it with 'sudo passwd " + rescue.account + "', then check that /etc/ssh/sshd_config still includes /etc/ssh/sshd_config.d/*.conf and reload sshd." };
+    }
     if (rescue.unreadable || rescue.password_is_default === null) {
       return { tone: "idle", label: "unknown", hint: "This appliance could not read whether the password is still the shipped one." };
     }
@@ -2128,6 +2133,19 @@
       return { tone: "warn", label: "shipped password", hint: "The password is the documented default, which is public knowledge. That is fine on a private network and a login for anyone who reaches this appliance from outside one. Change it with 'sudo passwd " + rescue.account + "' if that describes yours." };
     }
     return { tone: "ok", label: "changed", hint: "The password is no longer the shipped one." };
+  }
+
+  /* What the running daemon answered when asked about this account -- not
+     what the package wrote. Four states, and only one of them is quiet. */
+  function rescueSshLabel(ssh) {
+    var labels = {
+      "refused": "refused by the running sshd",
+      "accepted": "ACCEPTED over the network",
+      "unknown": "could not be checked",
+      "absent": "sshd is not installed"
+    };
+    var state = (ssh || {}).state;
+    return labels[state] || labels["unknown"];
   }
 
   function renderAccess(main) {
@@ -2323,6 +2341,7 @@
       el("p", { class: "status-value", text: rescue.account || "ems-rescue" }),
       el("div", {}, [tone(verdict.tone, verdict.label)]),
       fact("Can log in", rescue.can_log_in),
+      fact("SSH password", rescueSshLabel(rescue.ssh)),
       expert() ? fact("Shell", rescue.shell) : null,
       el("p", { class: "control-stage-subtitle", text: verdict.hint })
     ], "rescue-account");

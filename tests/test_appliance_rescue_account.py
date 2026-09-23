@@ -234,6 +234,9 @@ def test_the_password_is_documented_where_an_operator_will_look():
     # The trade is stated, not buried.
     assert "public knowledge" in recovery
     assert "optional" in recovery.lower()
+    # The refusal is a promise the package writes; whether the daemon keeps it
+    # is reported, and the document says so rather than asserting it.
+    assert "reports whether the running daemon" in recovery
 
 
 # --- what the console is allowed to say --------------------------------------
@@ -412,3 +415,113 @@ def test_a_deliberately_locked_account_is_not_re_enabled(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "chpasswd" not in calls
+# --- what the running daemon says --------------------------------------------
+
+
+def appliance_paths():
+    from appliance.paths import AppliancePaths
+
+    return AppliancePaths(
+        install_root=Path("/opt/ems-solarflow"),
+        config_dir=Path("/etc/ems-appliance-manager"),
+        state_dir=Path("/var/lib/ems-appliance-manager"),
+        log_dir=Path("/var/log/ems-appliance-manager"),
+        runtime_dir=Path("/run/ems-appliance-manager"),
+        export_root=Path("/srv/ems-appliance-export"),
+    )
+
+
+def test_the_running_daemon_is_asked_whether_it_refuses_the_rescue_password(tmp_path):
+    """A drop-in on disk is a promise; ``sshd -T -C user=ems-rescue`` is the fact.
+
+    The backup account's confinement is read back from the daemon before the
+    console calls it confined. The refusal of the rescue password -- printed in
+    this repository, on an account that reaches root -- was documented and
+    never asked for.
+    """
+
+    from tests.helpers.appliance import build_test_services
+
+    services = build_test_services(tmp_path)
+    payload = services.status.system()["rescue"]
+
+    assert payload["ssh"]["state"] == "refused"
+    assert payload["ssh"]["user"] == rescue_account.ACCOUNT
+    assert payload["ssh"]["violations"] == []
+
+
+def test_a_dropin_the_daemon_never_read_is_a_network_login(tmp_path):
+    """The concrete case.
+
+    An ``/etc/ssh/sshd_config`` carried over from an older install has no
+    ``Include /etc/ssh/sshd_config.d/*.conf`` line, and dpkg never rewrites a
+    modified conffile. The Match block the package wrote is on disk; the
+    daemon applies the global policy, which on a Raspberry Pi somebody already
+    administers over a password says yes.
+    """
+
+    from tests.helpers.appliance import SSHD_CONFIG, build_test_services
+
+    services = build_test_services(tmp_path)
+    services.host.sshd_rescue_match = SSHD_CONFIG.replace(
+        "passwordauthentication no", "passwordauthentication yes"
+    )
+    payload = services.status.system()["rescue"]["ssh"]
+
+    assert payload["state"] == "accepted"
+    assert payload["restrictions"]["passwordauthentication"]["value"] == "yes"
+    # Not written at all, so sshd's default applies -- and that default asks
+    # for the same password through PAM.
+    assert "kbdinteractiveauthentication" in payload["violations"]
+
+
+def test_a_policy_that_could_not_be_read_is_never_a_refusal(tmp_path):
+    """Not knowing is its own answer, and it is not the reassuring one."""
+
+    from tests.helpers.appliance import build_test_services
+
+    failing = build_test_services(tmp_path / "failing")
+    failing.host.fail_command("sshd")
+    assert failing.status.system()["rescue"]["ssh"]["state"] == "unknown"
+
+    without = build_test_services(tmp_path / "without")
+    without.host.tools.discard("sshd")
+    assert without.status.system()["rescue"]["ssh"]["state"] == "absent"
+
+
+def test_the_check_asks_for_exactly_what_the_policy_writes():
+    """Generator and check name the same directives, or one of them drifts.
+
+    The rescue block leaves ``PubkeyAuthentication`` to the global setting on
+    purpose -- console-recovery.md offers a key login on that account -- so the
+    check must not demand it either.
+    """
+
+    from appliance.config import ApplianceConfig
+    from appliance.host_config import render_sshd_policy
+    from appliance.ssh_policy import RESCUE_REFUSED_METHODS, parse_sshd_config
+
+    policy = render_sshd_policy(appliance_paths(), ApplianceConfig(), shell_access_enabled=False)
+    block = policy.split(f"Match User {rescue_account.ACCOUNT}\n", 1)[1].split("Match ", 1)[0]
+    written = parse_sshd_config(block)
+
+    assert dict(RESCUE_REFUSED_METHODS) == {
+        option: value for option, value in written.items() if option != "permitrootlogin"
+    }
+    assert "pubkeyauthentication" not in dict(RESCUE_REFUSED_METHODS)
+
+
+def test_the_console_names_the_state_the_daemon_reported():
+    """Four answers, and the alarming one comes before the password verdict."""
+
+    app = (ROOT / "appliance" / "static" / "app.js").read_text(encoding="utf-8")
+    section = app.split("function rescueState(rescue) {", 1)[1].split("\n  }", 1)[0]
+    card = app.split("function rescueCard() {", 1)[1].split("\n  }", 1)[0]
+
+    assert 'state === "accepted"' in section
+    assert section.index('"accepted"') < section.index("password_is_default"), (
+        "a password sshd accepts from the network is reported before whether it is the shipped one"
+    )
+    assert "SSH password" in card
+    for state in ("refused", "accepted", "unknown", "absent"):
+        assert f'"{state}"' in app.split("function rescueSshLabel(", 1)[1].split("\n  }", 1)[0]
