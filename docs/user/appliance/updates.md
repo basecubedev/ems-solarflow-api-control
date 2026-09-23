@@ -13,8 +13,9 @@ Two different things get updated on an appliance, and they behave differently.
 The appliance runs Raspberry Pi OS, and its packages are patched in place by
 `apt`. **System Updates** shows what is pending: security updates, other package
 updates, whether a kernel or firmware upgrade is among them, whether a reboot is
-required afterwards, and whether the package manager is healthy. The check
-itself changes nothing.
+required afterwards, and whether the package manager is healthy. A check that
+could not reach its mirrors is reported as exactly that, and the counts then
+describe nothing. The check itself changes nothing.
 
 - **Install security updates** is the basic action. Only the packages the
   appliance itself found are upgraded — your browser never names a package.
