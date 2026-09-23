@@ -210,11 +210,41 @@ mmdebstrap:
           echo "ssh is still enabled in the image: $left" >&2
           exit 1
       }
-    # Five units. The host-identity one is this project's own rather than
+    # One stack owns eth0. appliance/network.py steers the interface through
+    # nmcli, and an address systemd-networkd holds cannot be taken back that
+    # way: two stacks means two DHCP leases, and an appliance that vanishes
+    # from the address its owner bookmarked once the lease NetworkManager never
+    # held runs out -- which is what the one booted board showed. The base layer
+    # is upstream's and may enable either, so the decision is made here rather
+    # than inherited. Masked rather than disabled, because a package upgrade
+    # re-enables a disabled unit and nothing re-enables a masked one; done with
+    # ln and find so it does not depend on a systemctl in the build environment.
+    - |-
+      set -eu
+      mkdir -p "$1/etc/systemd/system"
+      find "$1/etc/systemd/system" -path '*.wants/systemd-networkd*' -delete 2>/dev/null || true
+      for unit in systemd-networkd.service systemd-networkd.socket \
+                  systemd-networkd-wait-online.service; do
+          ln -sfn /dev/null "$1/etc/systemd/system/$unit"
+          [ "$(readlink "$1/etc/systemd/system/$unit")" = /dev/null ] || {
+              echo "ems-appliance: $unit is not masked in the image" >&2
+              exit 1
+          }
+      done
+      left=$(find "$1/etc/systemd/system" -path '*.wants/systemd-networkd*' -print 2>/dev/null || true)
+      [ -z "$left" ] || {
+          echo "ems-appliance: systemd-networkd is still enabled in the image: $left" >&2
+          exit 1
+      }
+    # Six units. The host-identity one is this project's own rather than
     # Debian's: sshd-keygen.service is WantedBy the ssh units alone, which this
     # image ships disabled, and its ConditionFirstBoot has passed by the time an
     # owner presses Enable SSH. A card with no host key cannot start sshd at all
     # and, worse, fails the policy check that governs the backup account.
+    # NetworkManager is enabled explicitly rather than left to its postinst:
+    # with networkd masked above it is the only DHCP client, and an image
+    # without it never reaches the network at all.
     - $BDEBSTRAP_HOOKS/enable-units "$1" ems-appliance-agent.service \
         ems-appliance-web.service ems-appliance-grow-root.service \
-        ems-appliance-config-seed.service ems-appliance-sshd-keys.service
+        ems-appliance-config-seed.service ems-appliance-sshd-keys.service \
+        NetworkManager.service

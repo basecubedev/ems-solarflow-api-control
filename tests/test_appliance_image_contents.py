@@ -176,6 +176,35 @@ def test_the_units_a_single_slot_host_can_run_are_the_ones_required(single_image
         assert check not in findings
 
 
+@requires_mkfs
+def test_an_image_that_could_run_two_dhcp_clients_is_refused(tmp_path):
+    """The hook always writes the three mask links, so requiring them is
+    exactly "the hook ran", and an image where it did not is refused rather
+    than excused."""
+
+    root_tree = tmp_path / "root"
+    populate_root(root_tree)
+    (root_tree / "etc/systemd/system/systemd-networkd.service").unlink()
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, "kernel8.img": b"k",
+         "initramfs8": b"i", "bcm2712-rpi-5-b.dtb": b"d"},
+    )
+    findings = by_check(contents(assemble_mbr(tmp_path / "appliance.img", boot, root)))
+
+    assert findings["one_network_stack:root"].result == FAIL
+    assert "systemd-networkd.service" in findings["one_network_stack:root"].detail
+
+
+@requires_mkfs
+def test_an_image_whose_only_dhcp_client_is_network_manager_passes(single_image):
+    findings = by_check(contents(single_image))
+
+    assert findings["one_network_stack:root"].result == PASS
+    assert findings["network_manager_enabled:root"].result == PASS
+
+
 # --- the whole inspection ----------------------------------------------------
 
 

@@ -8,6 +8,22 @@ The overview shows the active interface, the Ethernet and WLAN state, IP
 addresses, hostname, mDNS name and connectivity. Expert mode adds the gateway
 and DNS servers per interface. The WLAN card shows the SSID and signal quality.
 
+## One stack owns the interface
+
+NetworkManager is the only network stack the image enables. `systemd-networkd`,
+its socket and its wait-online unit are masked there, because the appliance
+steers the interface through `nmcli` — including the rollback after a WLAN
+change — and an address a second DHCP client holds cannot be taken back that
+way. Two stacks meant two leases on `eth0`, and the appliance vanished from the
+address its owner had bookmarked once the lease NetworkManager never held ran
+out. `ems-appliance image-check` and the release image inspection refuse an
+image where that is not so (`one_network_stack`, `network_manager_enabled`).
+
+This decides the image only. An Appliance Manager installed as a `.deb` on an
+existing Raspberry Pi OS leaves that host's network stack alone, so such a host
+may still run a second DHCP client, which the appliance can neither see nor
+undo.
+
 ## Change the WLAN
 
 A WLAN change can disconnect the browser you are using, so it is handled as a

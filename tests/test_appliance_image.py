@@ -109,6 +109,30 @@ def test_only_the_units_a_single_slot_host_can_run_are_enabled():
         assert unit not in enabled, unit
 
 
+MASKED_NETWORK_UNITS = (
+    "systemd-networkd.service",
+    "systemd-networkd.socket",
+    "systemd-networkd-wait-online.service",
+)
+
+
+def test_one_stack_owns_the_interface_and_the_layer_says_which():
+    """appliance/network.py steers the interface through nmcli, and an address
+    systemd-networkd holds cannot be taken back that way. Two stacks means two
+    DHCP leases, and an appliance that vanishes from the address its owner
+    bookmarked when the lease NetworkManager never held runs out. The base
+    layer is upstream's and may enable either, so the decision is made here."""
+
+    assert "NetworkManager.service" in hooks(LAYER)[-1]
+    masking = [hook for hook in hooks(LAYER) if "systemd-networkd" in str(hook)]
+    assert len(masking) == 1, "exactly one hook decides the network stack"
+    for unit in MASKED_NETWORK_UNITS:
+        assert unit in str(masking[0]), unit
+    # Masked rather than disabled: a later package upgrade re-enables a
+    # disabled unit, and nothing re-enables a masked one.
+    assert "/dev/null" in str(masking[0])
+
+
 # --- the overlay -------------------------------------------------------------
 
 

@@ -181,6 +181,19 @@ OPTIONAL_CHECKS = frozenset()
 
 APPLIANCE_BINARY = "usr/bin/ems-appliance"
 WANTS_DIRECTORY = "etc/systemd/system/multi-user.target.wants"
+# Where a unit is masked: a link to /dev/null under /etc, which systemd reads
+# before anything under /usr/lib.
+ETC_UNIT_DIRECTORY = "etc/systemd/system"
+
+# The second network stack. NetworkManager (REQUIRED_UNITS) is the one DHCP
+# client this appliance can steer, so these are masked in the image rather
+# than left to whatever the base layer enabled: two clients on eth0 took two
+# leases, and the address an owner bookmarked was the one that went away.
+MASKED_NETWORK_UNITS = (
+    "systemd-networkd.service",
+    "systemd-networkd.socket",
+    "systemd-networkd-wait-online.service",
+)
 
 
 # --- what the image has to contain ------------------------------------------
@@ -209,6 +222,10 @@ REQUIRED_UNITS = {
     # everything on this appliance writes to that root.
     "grow_root_service_enabled": "ems-appliance-grow-root.service",
     "config_seed_service_enabled": "ems-appliance-config-seed.service",
+    # The one DHCP client. Debian's networkd units are masked beside this
+    # (MASKED_NETWORK_UNITS); nmcli is the only interface this appliance can
+    # take an address back on.
+    "network_manager_enabled": "NetworkManager.service",
 }
 
 
@@ -488,6 +505,27 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
         "unit_programs_present",
         not unrunnable,
         "; ".join(unrunnable) if unrunnable else "every enabled unit has its program",
+    )
+
+    # One stack may configure the interface. Required unconditionally rather
+    # than only when the unit file exists: the layer hook always writes the
+    # three links, so their presence is exactly "the hook ran", and an image
+    # where it did not is refused rather than excused.
+    unmasked = []
+    for unit in MASKED_NETWORK_UNITS:
+        path = f"{ETC_UNIT_DIRECTORY}/{unit}"
+        try:
+            target = reader.readlink(path) if reader.is_symlink(path) else ""
+        except image_filesystems.FilesystemError:
+            target = ""
+        if target != "/dev/null":
+            unmasked.append(unit)
+    record(
+        "one_network_stack",
+        not unmasked,
+        f"a second DHCP client can claim the interface: {', '.join(unmasked)} not masked"
+        if unmasked
+        else "NetworkManager is the only stack that can configure the interface",
     )
 
 
