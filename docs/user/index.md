@@ -59,7 +59,8 @@ Three user paths, all converging on the same standard `config/config.json`.
 | Appliance image | A Raspberry Pi dedicated to EMS — Pi 3, 3B+, 4 or 5 | [appliance/index.md](appliance/index.md) |
 
 The appliance is a prepared image rather than an install onto an existing
-system. It is **not confirmed on physical hardware** — see
+system. It is **partly confirmed on physical hardware**: one Pi 3B+ has run the
+image since 2026-08-29, without EMS on it — see
 [what that means](appliance/index.md#what-not-confirmed-means).
 
 Developer Setup is a source-checkout path for contributing, not a normal user

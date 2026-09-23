@@ -78,7 +78,7 @@ would make it a statement about the release.
 | Read-only root write audit | **PASS** — 5 cases against a genuinely read-only root; nothing written outside the declared mutable set |
 | Full regression at this revision | **PASS** — 10 986 passed, 12 skipped, 0 failed (`pytest -m "not docker"`) |
 | Appliance browser E2E | **PASS** — 100 passed, Chromium and Firefox |
-| Physical Raspberry Pi | **NOT RUN** — no board has booted either image. A Pi 3B+ is on hand, and it cannot boot the A/B image at all |
+| Physical Raspberry Pi | **PARTIAL** — a Pi 3B+ has booted the **single-slot** image and has been running it since 2026-08-29; the evidence rows below carry that, each naming how it was read. The **A/B** image has never booted, and that board cannot boot it at all. No Pi 4 or Pi 5 has run either image |
 | Physical readiness | **NOT READY** — at the release-build revision `physical_ready=true` with twelve invariants held and none unmet (`physical_tested=false`); the branch has since moved past that revision, and `release_not_stale` is one of those twelve, so the verdict does not carry to HEAD |
 <!-- CURRENT-RC-END -->
 
@@ -585,7 +585,7 @@ The simulated tiers are not a substitute for any of the NOT RUN rows.
 | Date | Board | Storage | Image build | Group | Result | Notes |
 |---|---|---|---|---|---|---|
 | — | — | — | — | 0 | NOT RUN | The build host had 12 of upstream's dependencies missing and no arm64 binfmt handler; installing either needs root. Every source, contract and provenance gate in group 0 that does not need a build passed against the real pinned v2.7.0 tree. |
-| — | — | — | — | 1–5 | NOT RUN | No Raspberry Pi hardware was available when this gate was written. |
+| — | — | — | — | 1–5 | NOT RUN | No Raspberry Pi hardware was available when this gate was written. Group 1 has since been answered for the single-slot image on a Pi 3B+ on microSD — boot, root growth, and the agent and web service coming up — in the evidence table below, not here: this table records *gate* runs, and no gate has been run on a board. |
 
 The code-level scope is closed: every gate that does not require a builder host
 or a physical board has been run and passed. What remains is a real image build
@@ -595,9 +595,12 @@ on a suitable builder, and then this table.
 
 One image, one writable root, patched by `apt` (see
 [adr/single-image-appliance.md](adr/single-image-appliance.md)). It builds, and
-the artefacts it produces satisfy their contract. **Nothing about it has been
-confirmed on physical hardware**, and none of the A/B results recorded above
-make that true either: a different partition table, a different boot device and
+the artefacts it produces satisfy their contract. **Part of it is now confirmed
+on physical hardware** — a Pi 3B+ has been running it since 2026-08-29, and the
+evidence table below says exactly which claims that does and does not carry;
+what it does not carry is every claim that needs EMS and InfluxDB installed,
+because they are not on that board. None of the A/B results recorded above make
+any of it true either: a different partition table, a different boot device and
 a writable root are exactly the things a physical boot has to answer for.
 
 This is the current evidence table. The rows above it are history.
@@ -626,7 +629,7 @@ This is the current evidence table. The rows above it are history.
 | Debian's `sshd-keygen.service` produces the host keys on first boot | NOT RUN | **still unproven, and deliberately not upgraded.** What the live board proves is the *other* unit: `ems-appliance-sshd-keys.service` ran at first boot and logged `ssh-keygen: generating new host keys: RSA ECDSA ED25519` at 2026-08-29T22:48:37Z. That is this project's own unit doing the work, which is a different claim from Debian's shipping one firing |
 | `apt full-upgrade` completes on the booted image | NOT RUN | the source-level refusal is lifted; that a real upgrade completes is a different claim |
 | The root partition grows to the medium on first boot | **PASS** | `ems-appliance-grow-root.service` ran on the live board on 2026-08-30 and printed its own verdict: `disk=16172187648 partition=8589934592 tail=7305412096 filesystem=8589934592`, then `partition grown to 15895346688 bytes`, `filesystem grown to 15895343104 bytes`, `/dev/mmcblk0p2 now fills the medium`, `RESULT: PASS`. The one-shot gate holds too: on the next boot the same unit is `skipped, unmet condition check ConditionPath…`. read on 2026-09-22 from the board's own journal and status API over the LAN (`/api/logs/*`, `/api/status`, `/api/manager`), captured while the appliance was running |
-| An image built in CI is the same thing | NOT RUN | `.github/workflows/appliance-image.yml` **has** been dispatched: 2026-08-27, all three boards green in 28.6 minutes wall clock. That establishes it builds; it does not establish that what it builds is the same artefact, because nothing compared the two and no board has booted either. It cannot produce a signable release by design — a hosted runner is not the approved builder |
+| An image built in CI is the same thing | NOT RUN | `.github/workflows/appliance-image.yml` **has** been dispatched: 2026-08-27, all three boards green in 28.6 minutes wall clock. That establishes it builds; it does not establish that what it builds is the same artefact, because nothing compared the two and **no board has booted a CI-built image** — the board below runs one built in the builder VM. It cannot produce a signable release by design — a hosted runner is not the approved builder |
 
 ### The A/B path after the shared build scripts were changed
 

@@ -95,15 +95,20 @@ A Raspberry Pi 3, 3B+, 4 or 5, and a card of 16 GB or larger. There is one
 image file per board and they are not interchangeable — the kernel and firmware
 differ.
 
-On a **Raspberry Pi 3 or 3B+** nobody has booted it yet, and 1 GB of RAM against
-Docker, EMS and InfluxDB is unmeasured. Anything older than a Pi 3 cannot run
+On a **Raspberry Pi 3 or 3B+** one board has been running the image since
+2026-08-29 — but without EMS, Admin or InfluxDB on it, so 1 GB of RAM against
+Docker, EMS and InfluxDB together is still unmeasured. Anything older than a Pi 3 cannot run
 it at all.
 
 ### Has anyone run it on a real Pi?
 
-Not yet. It is built and exercised automatically on every change, but it is
-**not confirmed on physical hardware** — the same wording this project uses for
-the Zendure Hub and Hyper generations. See
+Partly — it is **partly confirmed on physical hardware**. One Raspberry Pi 3B+
+has been running the image since 2026-08-29: it
+boots, it grew its root partition to the card, the console answers, and it has
+installed signed Appliance Manager packages over HTTPS and stepped back from
+one. That board does **not** run EMS, Admin or InfluxDB, so the part that
+matters most for daily use is still unmeasured, and no Pi 4 or Pi 5 has booted
+the image at all. See
 [what that means](appliance/index.md#what-not-confirmed-means), and
 [if you are the first](appliance/index.md#if-you-are-the-first) if you try one.
 

@@ -25,15 +25,17 @@ containers as `TZ` the next time the deployment starts.
 
 | Item | Supported |
 |---|---|
-| Hardware | Raspberry Pi 3, 3B+, 4 and 5 — all **reverse-engineered**: derived, built and inspected offline. No image has booted on a board (see [the hardware gate](hardware-validation.md)) |
+| Hardware | Raspberry Pi 3, 3B+, 4 and 5 — **reverse-engineered**: derived, built and inspected offline. One **Pi 3B+** has been running the image since 2026-08-29; no Pi 4 or Pi 5 has booted it (see [the hardware gate](hardware-validation.md)) |
 | Operating system | Raspberry Pi OS 64-bit (Trixie). The appliance image is built from Trixie; the manager package also installs on Bookworm |
 | Architecture | `arm64` only |
 | Package | `ems-appliance-manager_<version>_arm64.deb` |
 
 Other boards and 32-bit systems are out of scope for this release.
 
-The **Raspberry Pi 3 and 3B+** are built for, and nobody has booted the image on
-one yet. That board boots from SD and nothing else: upstream's `rpi3` device
+The **Raspberry Pi 3 and 3B+** are built for, and one 3B+ has been running the
+image since 2026-08-29 — without EMS, Admin or InfluxDB on it, so whether 1 GB
+of RAM carries those is still unmeasured. That board boots from SD and nothing
+else: upstream's `rpi3` device
 layer accepts no USB or NVMe storage type, so no such artefact exists. See
 [../user/hardware-requirements.md](../user/hardware-requirements.md) for what a
 Pi 3 can and cannot be used for.

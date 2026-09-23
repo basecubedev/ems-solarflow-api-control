@@ -19,7 +19,8 @@ contributing.
 
 Admin Console, Docker Bootstrap and the appliance image are the three user setup
 paths; all converge on the same standard `config/config.json` layout. The
-appliance is **not confirmed on physical hardware** -- see
+appliance is **partly confirmed on physical hardware**: one Pi 3B+ has run the
+image since 2026-08-29, without EMS on it -- see
 [what that means](user/appliance/index.md#what-not-confirmed-means). Developer Setup is a
 source-checkout path for development and contributing, not a normal user setup.
 

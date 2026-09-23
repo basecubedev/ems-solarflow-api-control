@@ -66,7 +66,7 @@ EMS runs in two shapes, and they do not have the same hardware requirements.
 |---|---|---|
 | Raspberry Pi 5 | Yes | Yes |
 | Raspberry Pi 4 (2 GB or more recommended) | Yes | Yes |
-| Raspberry Pi 3 / 3B+ | Not tested — see below | Built for it, never booted on one — see below |
+| Raspberry Pi 3 / 3B+ | Not tested with EMS on it — see below | One 3B+ has run the image since 2026-08-29, without EMS — see below |
 | Raspberry Pi Zero 2 W | Not tested — 512 MB, Wi-Fi only | **No** — no image is built for it |
 | Raspberry Pi 2 and older | No — no 64-bit OS | No |
 
