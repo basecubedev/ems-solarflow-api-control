@@ -222,6 +222,18 @@ REQUIRED_UNITS = {
     # everything on this appliance writes to that root.
     "grow_root_service_enabled": "ems-appliance-grow-root.service",
     "config_seed_service_enabled": "ems-appliance-config-seed.service",
+    # The image deletes the host keys the build chroot made; this unit is the
+    # only thing that makes new ones (Debian's sshd-keygen.service is WantedBy
+    # the ssh units alone, and this image ships ssh off). Without it sshd
+    # cannot start, and backup-access reads the missing policy as a reason
+    # to expire the backup account.
+    "sshd_keys_service_enabled": "ems-appliance-sshd-keys.service",
+    # Enabled by the postinst's offline fallback, never by the layer's
+    # enable-units line. Without them the export root is never built and an
+    # EMS installed after the first boot is, in the postinst's own words,
+    # silently never published.
+    "export_path_enabled": "ems-appliance-export.path",
+    "export_service_enabled": "ems-appliance-export.service",
     # The one DHCP client. Debian's networkd units are masked beside this
     # (MASKED_NETWORK_UNITS); nmcli is the only interface this appliance can
     # take an address back on.

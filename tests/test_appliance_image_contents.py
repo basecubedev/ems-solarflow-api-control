@@ -227,6 +227,31 @@ def test_a_root_the_layer_overlay_never_reached_is_a_failure(tmp_path):
     assert "etc/docker/daemon.json" in findings["rootfs_overlay_applied:root"].detail
 
 
+@requires_mkfs
+def test_an_image_that_did_not_enable_the_export_watcher_is_a_failure(tmp_path):
+    """The export units reach the image only through the postinst's offline
+    `ln -sf` fallback. If that loop is restricted or reordered, the card boots
+    with no /srv/ems-appliance-export, the documented way to fetch a backup
+    returns an empty directory, and the backup account still reads as active.
+    """
+
+    root_tree = tmp_path / "root"
+    populate_root(root_tree)
+    # Shipped by dpkg, simply not linked into multi-user.target.wants -- which
+    # is exactly what a changed fallback loop produces.
+    (root_tree / image_inspect.WANTS_DIRECTORY / "ems-appliance-export.path").unlink()
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, "kernel8.img": b"k",
+         "initramfs8": b"i", "bcm2712-rpi-5-b.dtb": b"d"},
+    )
+    findings = by_check(contents(assemble_mbr(tmp_path / "appliance.img", boot, root)))
+
+    assert findings["export_path_enabled:root"].result == FAIL
+    assert findings["export_path_enabled:root"].detail == "installed but not enabled"
+
+
 # --- the whole inspection ----------------------------------------------------
 
 

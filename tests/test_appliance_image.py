@@ -133,6 +133,42 @@ def test_one_stack_owns_the_interface_and_the_layer_says_which():
     assert "/dev/null" in str(masking[0])
 
 
+POSTINST = ROOT / "packaging" / "appliance" / "debian" / "postinst"
+# The one unit the image enables that is not this project's: Debian's, enabled
+# explicitly because the networkd units are masked beside it.
+FOREIGN_UNITS = {"NetworkManager.service"}
+
+
+def units_line(path):
+    for line in text(path).splitlines():
+        if line.startswith("UNITS="):
+            return tuple(sorted(line.split("=", 1)[1].strip('"').split()))
+    raise AssertionError("the postinst declares no UNITS")
+
+
+def test_the_units_the_postinst_enables_are_the_units_the_image_is_checked_for():
+    """One authority. The postinst is what actually enables them, in the image
+    chroot and on a live host alike; the inspector must ask for the same set,
+    and the layer's enable-units line may only be a subset of it because the
+    rest arrive through the postinst's offline fallback. Three lists agreed
+    on four units and disagreed on three, and the three -- the export units
+    and the host-key unit -- were never verified on the artefact."""
+
+    from appliance import image_inspect
+
+    # Timers hang off timers.target, which the inspector does not read; the
+    # units it verifies are the ones wanted by multi-user.target.
+    declared = {unit for unit in units_line(POSTINST) if not unit.endswith(".timer")}
+    checked = set(image_inspect.REQUIRED_UNITS.values())
+
+    assert declared <= checked, sorted(declared - checked)
+    assert checked - declared == FOREIGN_UNITS, sorted(checked - declared)
+
+    enabled = hooks(LAYER)[-1]
+    for unit in [token for token in enabled.split()[2:] if token.endswith((".service", ".path"))]:
+        assert unit in declared or unit in FOREIGN_UNITS, unit
+
+
 # --- the overlay -------------------------------------------------------------
 
 
