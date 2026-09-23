@@ -180,7 +180,13 @@ class StatusService:
         if daemon["state"] == DAEMON_RUNNING:
             for name in self.config.managed_containers:
                 containers.append(self.docker.inspect_container(name).to_dict())
-        return {"daemon": daemon, "containers": containers}
+        # The list is the configured set; which of them is the EMS is said
+        # here too, so the console never picks it by a name pattern.
+        return {
+            "daemon": daemon,
+            "containers": containers,
+            "ems_container": self.config.ems_container,
+        }
 
     def admin_state(self):
         return self.admin.detect()

@@ -1264,10 +1264,13 @@
     return "bad";
   }
 
+  /* The list is already the configured set, and the backend names which
+     entry is the EMS. A name pattern reported a container the operator had
+     not configured as the EMS, and missed the one they had. */
   function emsState(docker) {
     var containers = docker.containers || [];
     for (var i = 0; i < containers.length; i += 1) {
-      if (/ems-solarflow$|api-control/.test(containers[i].name)) return containers[i].state;
+      if (containers[i].name === docker.ems_container) return containers[i].state;
     }
     return "unknown";
   }
@@ -1275,7 +1278,7 @@
   function emsContainerName(docker) {
     var containers = docker.containers || [];
     for (var i = 0; i < containers.length; i += 1) {
-      if (/ems-solarflow$|api-control/.test(containers[i].name)) return containers[i].name;
+      if (containers[i].name === docker.ems_container) return containers[i].name;
     }
     return null;
   }

@@ -110,6 +110,10 @@ new Function(
     extractFunction("findingAction") +
     "\n" +
     extractFunction("attentionBySection") +
+    "\n" +
+    extractFunction("emsState") +
+    "\n" +
+    extractFunction("emsContainerName") +
     "\nscope.findingsView = findingsView;" +
     "\nscope.overviewVerdict = overviewVerdict;" +
     "\nscope.duration = duration;" +
@@ -120,7 +124,9 @@ new Function(
     "\nscope.operationStage = operationStage;" +
     "\nscope.verdictAnnouncement = verdictAnnouncement;" +
     "\nscope.findingAction = findingAction;" +
-    "\nscope.attentionBySection = attentionBySection;"
+    "\nscope.attentionBySection = attentionBySection;" +
+    "\nscope.emsState = emsState;" +
+    "\nscope.emsContainerName = emsContainerName;"
 )(scope);
 
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
@@ -143,6 +149,7 @@ process.stdout.write(
       return scope.findingAction(item, view);
     }),
     attention: scope.attentionBySection(status, extra),
+    ems: { state: scope.emsState(status.docker || {}), name: scope.emsContainerName(status.docker || {}) },
     durations: (input.durations || []).map(scope.duration),
     sizes: (input.sizes || []).map(scope.gigabytes),
     percentages: (input.percentages || []).map(scope.usedPercent),

@@ -100,6 +100,20 @@ def test_reboot_requirement_is_read_from_the_marker(tmp_path):
 # --- fault isolation -------------------------------------------------------
 
 
+def test_the_docker_section_names_the_container_the_ems_runs_in(tmp_path):
+    """The console must not guess the EMS by its name; the backend says which."""
+
+    from tests.helpers.appliance import appliance_config, build_test_services
+
+    host_files(tmp_path)
+    services = build_test_services(tmp_path, config=appliance_config(ems_container="ems"))
+
+    section = services.status.overview()["docker"]
+
+    assert section["ems_container"] == "ems"
+    assert "ems" in [item["name"] for item in section["containers"]]
+
+
 def test_a_failing_section_does_not_take_down_the_overview():
     def explode():
         raise RuntimeError("probe failed")

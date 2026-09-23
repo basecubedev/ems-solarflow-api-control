@@ -225,6 +225,45 @@ def test_no_finding_is_shown_as_its_code():
     )
 
 
+# --- the EMS tile ----------------------------------------------------------
+
+
+def test_the_ems_tile_reads_the_container_this_appliance_is_configured_with():
+    """The list is already the configured set; a name pattern is a guess.
+
+    The tile picked the EMS out of docker.containers by matching the name
+    against /ems-solarflow$|api-control/, while the backend built that list
+    from the configured names and never said which one is the EMS. With
+    ems_container = ems in appliance.conf nothing matched and the tile read
+    unknown.
+    """
+
+    status = {
+        "docker": {
+            "ems_container": "ems",
+            "containers": [
+                {"name": "ems-solarflow-admin", "exists": True, "state": "running"},
+                {"name": "ems", "exists": True, "state": "running"},
+            ],
+        }
+    }
+
+    assert _render(status)["ems"] == {"name": "ems", "state": "running"}
+
+
+def test_a_container_that_only_looks_like_the_ems_is_not_reported_as_it():
+    """A stale container still named like the default is not the EMS."""
+
+    status = {
+        "docker": {
+            "ems_container": "ems",
+            "containers": [{"name": "ems-solarflow-api-control", "exists": True, "state": "running"}],
+        }
+    }
+
+    assert _render(status)["ems"] == {"name": None, "state": "unknown"}
+
+
 # --- getting there ---------------------------------------------------------
 
 
