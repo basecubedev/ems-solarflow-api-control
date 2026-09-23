@@ -104,6 +104,29 @@ Both go through the same transaction: the flag and the sshd policy move
 together, or neither moves. If sshd refuses the candidate policy, the files and
 the flag are put back and the failure says which half of the rollback succeeded.
 
+## Where the account lives, and why it is not /home
+
+The home is `/var/lib/ems-shell`, beside `/var/lib/ems-backup`.
+
+Not because the root filesystem is read-only — it is not; the image is a single
+writable ext4 root and the build refuses a kernel command line asking for `ro`.
+The reason is the agent: `ems-appliance-agent.service` runs with
+`ProtectHome=yes`, so systemd gives it an empty read-only tmpfs where `/home`
+would be. The agent is the one process that writes `authorized_keys`, so a home
+under `/home` cannot be keyed from the console at all.
+
+`0.3.3` and `0.3.4` shipped the account at `/home/ems-shell`, copied from the
+rescue account — which never writes into its home, because it is a password
+account for a keyboard. A live appliance failed the key deployment with
+`[Errno 30] Read-only file system: '/home/ems-shell'` rather than refusing at
+any gate. An upgrade moves an account still sitting at that exact path, and
+only that path: anywhere else is somewhere an operator put it.
+
+That guard is weaker than the ownership record `backup-account.sh` keeps for
+`ems-backup`. It is proportionate here because it can only ever fire on the one
+path two known releases shipped, and because the alternative is an account that
+no console can ever give a key to.
+
 ## Lifecycle
 
 The account is created once by the package's `shell-account.sh`, which owns it

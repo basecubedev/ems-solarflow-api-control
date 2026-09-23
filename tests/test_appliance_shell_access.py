@@ -295,3 +295,72 @@ def test_the_console_offers_whichever_accounts_the_configuration_allows():
 
     assert "ssh.accounts" in form
     assert "ems-backup" not in form, "the account list must come from the backend"
+
+
+def test_a_home_under_slash_home_is_reported_as_unusable():
+    """The agent writes authorized_keys under ProtectHome=yes, which gives it an
+    empty read-only tmpfs where /home would be. 0.3.3 and 0.3.4 put the account
+    there, and a live appliance failed the key deployment with EROFS instead of
+    refusing at any gate. The answer is reported next to the gates now."""
+
+    assert shell_access.home_is_writable("/var/lib/ems-shell") is True
+    assert shell_access.home_is_writable("/home/ems-shell") is False
+    assert shell_access.home_is_writable("") is False
+    assert shell_access.home_is_writable(None) is False
+
+
+def test_the_packaged_account_script_asks_for_a_writable_home():
+    """Asserted against the packaged script because that is what dpkg runs, and
+    a Python constant agreeing with itself would prove nothing."""
+
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "packaging" / "appliance" / "bin" / "shell-account.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "HOME_DIR=${EMS_APPLIANCE_SHELL_HOME:-/var/lib/$ACCOUNT}" in script
+    assert shell_access.home_is_writable("/var/lib/ems-shell")
+
+
+class _Runner:
+    def __init__(self, passwd):
+        self._passwd = passwd
+
+    def available(self, tool):
+        return True
+
+    def run(self, tool, args=(), **kwargs):
+        from appliance.commands import CommandResult
+
+        return CommandResult(tool=tool, args=tuple(args), returncode=0,
+                             stdout=self._passwd, stderr="")
+
+
+def service_for(home):
+    from appliance.ssh_service import SshService
+
+    return SshService(
+        runner=_Runner(f"ems-shell:x:998:998::{home}:/bin/bash\n"),
+        systemd=None, config=ApplianceConfig(), operations=None, paths=None,
+    )
+
+
+def test_a_key_is_refused_before_the_operation_runs_not_after(tmp_path):
+    """The refusal used to arrive as a bare OSError at the end of an apply: the
+    plan said yes because list() answers an absent file with [], and only the
+    write discovered the read-only tmpfs. CLAUDE.md's rule for the manager
+    update is the same one -- every refusal happens before it runs."""
+
+    from appliance.ssh_service import SshServiceError
+
+    with pytest.raises(SshServiceError) as refused:
+        service_for("/home/ems-shell").keystore(shell_access.ACCOUNT)
+
+    assert refused.value.code == "home_unwritable"
+    assert "cannot be written" in refused.value.message
+
+
+def test_a_writable_home_is_not_refused(tmp_path):
+    store = service_for("/var/lib/ems-shell").keystore(shell_access.ACCOUNT)
+
+    assert store is not None

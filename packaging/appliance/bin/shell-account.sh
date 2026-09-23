@@ -24,7 +24,14 @@
 set -eu
 
 ACCOUNT=${EMS_APPLIANCE_SHELL_ACCOUNT:-ems-shell}
-HOME_DIR=${EMS_APPLIANCE_SHELL_HOME:-/home/$ACCOUNT}
+# Not /home. The agent that writes authorized_keys runs under
+# ProtectHome=yes, which gives it an empty read-only tmpfs there, so a key
+# deployed onto a home under /home fails with EROFS and the account can never
+# be used. ems-backup lives beside this for the same reason.
+HOME_DIR=${EMS_APPLIANCE_SHELL_HOME:-/var/lib/$ACCOUNT}
+# What 0.3.3 and 0.3.4 shipped. Only a home still at that exact path is
+# moved: anywhere else is a place an operator chose.
+UNUSABLE_HOME=/home/$ACCOUNT
 SHELL_PATH=${EMS_APPLIANCE_SHELL_PATH:-/bin/bash}
 SUDOERS=${EMS_APPLIANCE_SHELL_SUDOERS:-/etc/sudoers.d/ems-shell}
 
@@ -73,8 +80,26 @@ install_sudoers() {
     return 0
 }
 
+# An account this package created under the unusable default is repaired, and
+# only that one. "Left exactly as it is" protects an operator's choice; it was
+# never meant to preserve a home no key can ever be written to.
+migrate_unusable_home() {
+    current=$(getent passwd "$ACCOUNT" | cut -d: -f6)
+    [ "$current" = "$UNUSABLE_HOME" ] || return 0
+    note "moving $ACCOUNT out of $UNUSABLE_HOME, which the agent cannot write"
+    if usermod -d "$HOME_DIR" -m "$ACCOUNT" >/dev/null 2>&1; then
+        note "$ACCOUNT now lives at $HOME_DIR"
+        return 0
+    fi
+    # Reported rather than fatal: a package that refuses to install leaves the
+    # appliance with no console at all, and the CLI status says the account is
+    # unusable so nobody is told it works.
+    note "$ACCOUNT could not be moved to $HOME_DIR and stays unusable for keys"
+}
+
 if getent passwd "$ACCOUNT" >/dev/null 2>&1; then
     note "the shell account $ACCOUNT already exists; leaving it untouched"
+    migrate_unusable_home
     [ -f "$SUDOERS" ] || install_sudoers
     exit 0
 fi

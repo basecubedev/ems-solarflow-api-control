@@ -402,11 +402,22 @@ def command_shell_access(args):
     paths = resolve_paths()
     config = load_config(paths)
     if args.action == "status":
+        import pwd
+
+        try:
+            home = pwd.getpwnam(shell_access.ACCOUNT).pw_dir
+        except KeyError:
+            home = ""
         _print(
             {
                 "account": shell_access.ACCOUNT,
                 "enabled": shell_access.enabled(paths),
                 "key_deployment_allowed": shell_access.ACCOUNT in config.ssh_key_accounts,
+                "home": home,
+                # An account whose home the agent cannot write is not a login,
+                # however many gates are open. Reported here so nobody learns it
+                # from a failed key deployment.
+                "home_writable": shell_access.home_is_writable(home),
                 "sudoers": shell_access.SUDOERS_PATH,
             },
             args.json,

@@ -114,6 +114,17 @@ class SshService:
         account = self.account(name)
         if not account.exists or not account.home:
             raise SshServiceError("account_missing", f"the host account {name} does not exist")
+        if not shell_access.home_is_writable(account.home):
+            # Refused before the operation runs, not discovered by the write at
+            # the end of it. This agent has ProtectHome=yes, so a home under
+            # /home is an empty read-only tmpfs from where it stands, and
+            # AuthorizedKeysStore.list() answers an absent file with [] -- which
+            # made the plan succeed and only the apply fail, with a bare OSError.
+            raise SshServiceError(
+                "home_unwritable",
+                f"{account.home} cannot be written by the appliance agent, so no key "
+                f"can be deployed on {name}; update the Appliance Manager to move it",
+            )
         return AuthorizedKeysStore(account.home, owner_uid=account.uid, owner_gid=account.gid)
 
     def effective_config(self, user=None):
@@ -157,6 +168,12 @@ class SshService:
                 "compliant": actual.lower() == expected if actual else None,
             }
 
+        shell_home = next(
+            (entry.get("home") or "" for entry in accounts
+             if entry.get("name") == shell_access.ACCOUNT),
+            "",
+        )
+
         return {
             "service": unit,
             "enabled": unit["running"],
@@ -170,6 +187,10 @@ class SshService:
                 "enabled": shell_access.enabled(self.paths) if self.paths else False,
                 "key_deployment_allowed": shell_access.ACCOUNT
                 in tuple(self.config.ssh_key_accounts),
+                # Reported next to the gates rather than discovered when a key
+                # write fails: an account whose home the agent cannot reach is
+                # not a login, and saying so is cheaper than an EROFS at the end.
+                "home_writable": shell_access.home_is_writable(shell_home),
             },
         }
 
