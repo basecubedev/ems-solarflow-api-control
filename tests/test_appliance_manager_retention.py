@@ -145,6 +145,33 @@ def test_a_half_finished_retain_does_not_cost_the_way_back_for_good(
     kept = torn_retain(paths, tmp_path, monkeypatch, digests=True)
 
     assert artifact_trust.file_digest(Path(kept.previous.path)) == kept.previous.sha256
+def fsync_spy(monkeypatch):
+    """Records, for every fsync, whether it was a directory."""
+
+    import os
+    import stat
+
+    real = os.fsync
+    synced = []
+
+    def spy(fd):
+        synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+        return real(fd)
+
+    monkeypatch.setattr(os, "fsync", spy)
+    return synced
+
+
+def test_a_kept_archive_is_durable_and_so_is_its_name(paths, tmp_path, monkeypatch):
+    """shutil.copyfile fsyncs nothing: the kept .deb had neither durable bytes
+    nor a durable directory entry, and it is the one way back."""
+
+    synced = fsync_spy(monkeypatch)
+
+    retention.retain(paths, archive(tmp_path, "a.deb", b"one"), sha256="aaa", version="0.1.0")
+
+    assert synced.count(False) >= 2, "the copied archive itself was not flushed"
+    assert True in synced, "no directory entry was flushed"
 
 
 def test_only_one_step_back_is_kept(paths, tmp_path):

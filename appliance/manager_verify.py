@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from appliance import artifact_trust
+from appliance.paths import sync_parent
 
 DEADLINE_NAME = "verify-deadline.json"
 VERDICT_NAME = "verify-verdict.json"
@@ -147,6 +148,10 @@ def _write(target, payload, *, mode=FILE_MODE):
             os.fsync(stream.fileno())
         os.chmod(staging, mode)
         os.replace(staging, target)
+        # arm() starts the install that replaces this process right after
+        # this returns; a directory entry that is not on disk yet is a
+        # deadline a power cut erases while the unjudged install stands.
+        sync_parent(target)
     except OSError as exc:
         try:
             os.unlink(staging)
@@ -212,8 +217,13 @@ def _snapshot_reverter(paths, reverter):
     os.close(handle)
     try:
         shutil.copyfile(source, staging)
+        # copyfile flushes nothing: the reverter is the only way back, so
+        # its bytes and its name are both made durable.
+        with open(staging, "rb") as copied:
+            os.fsync(copied.fileno())
         os.chmod(staging, REVERTER_MODE)
         os.replace(staging, target)
+        sync_parent(target)
     except OSError as exc:
         try:
             os.unlink(staging)

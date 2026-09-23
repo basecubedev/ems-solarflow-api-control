@@ -23,6 +23,7 @@ from appliance import (
     manager_verify,
     operation_schema,
 )
+from appliance.paths import sync_parent
 
 STAMP_SCHEMA_VERSION = 1
 READABLE_STAMP_VERSIONS = (1,)
@@ -269,6 +270,7 @@ def write_stamp(mountpoint, *, schemas, written_by=None, written_at=""):
             os.fsync(stream.fileno())
         os.chmod(staging, FILE_MODE)
         os.replace(staging, target)
+        sync_parent(target)
     except OSError as exc:
         try:
             os.unlink(staging)

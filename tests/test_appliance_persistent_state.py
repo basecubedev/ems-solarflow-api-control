@@ -251,3 +251,28 @@ def test_dropping_a_retired_axis_would_refuse_the_package():
 
     assert len(problems) == len(persistent_state.RETIRED_SCHEMAS)
     assert {problem["code"] for problem in problems} == {"artifact_state_schema_undeclared"}
+
+
+def fsync_spy(monkeypatch):
+    """Records, for every fsync, whether it was a directory."""
+
+    import os
+    import stat
+
+    real = os.fsync
+    synced = []
+
+    def spy(fd):
+        synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+        return real(fd)
+
+    monkeypatch.setattr(os, "fsync", spy)
+    return synced
+
+
+def test_the_partitions_claim_is_durable_before_it_is_relied_on(tmp_path, monkeypatch):
+    synced = fsync_spy(monkeypatch)
+
+    persistent_state.write_stamp(tmp_path, schemas={"manager_verify": 1})
+
+    assert True in synced, "no directory entry was flushed"
