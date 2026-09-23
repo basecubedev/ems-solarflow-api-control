@@ -84,7 +84,7 @@ not all answer the same way:
 | Shape | Console or SSH login |
 |---|---|
 | Manager package on your own Raspberry Pi OS | Yes — your own account, the one you set up when you installed the OS |
-| **The appliance image** | **Console only.** `ems-rescue` with a documented password, for the case where nothing else answers — see [console-recovery.md](console-recovery.md). No SSH password login and no shipped authorized key: a shipped *key* is a credential every device shares, and unlike a console password it is reachable over the network |
+| **The appliance image** | **Console, and SSH if you set it up beforehand.** `ems-rescue` at a keyboard, with a documented password, for the case where nothing else answers — see [console-recovery.md](console-recovery.md). Over the network there is `ems-shell`, which has a shell and reaches root through `sudo`, but only once an operator has switched it on *and* deployed a key — see [ssh-shell-access.md](ssh-shell-access.md). No SSH password login and no shipped authorized key: a shipped *key* is a credential every device shares, and unlike a console password it is reachable over the network |
 
 Both installation shapes answer this identically. The rescue account comes from
 the package rather than from the image, and neither accepts an SSH password.
@@ -95,17 +95,24 @@ On an appliance image the recovery paths are therefore, in order:
    the WLAN profile, and fix it there.
 2. Wait out the WLAN revert. A change that loses connectivity returns to the
    previous profile on its own, so a wrong passphrase is not a lockout.
-3. Add your own SSH key through the manager **while it is still reachable**.
-   That does not buy you a shell — the only key-eligible account is
-   `ems-backup`, which is chroot-confined, read-only and SFTP-only. What it buys
-   is the ability to retrieve your configuration, data and backups from a box
-   you can otherwise no longer reach, so step 4 costs you nothing.
-4. Re-flash. This erases the card: writing the image back replaces the
+3. Use **`ems-shell`**, if it was switched on before the lockout. It has a real
+   shell and reaches root through `sudo`, so a box that is up but unreachable
+   on the network can be fixed from a machine on the same LAN — including
+   putting the WLAN back by hand. It is off by default and admits nobody until
+   both the switch is on and a key is deployed, which is why it only helps if
+   that was done in advance: see [ssh-shell-access.md](ssh-shell-access.md).
+4. Add your own SSH key through the manager **while it is still reachable**. If
+   `ems-shell` is enabled, that is a shell. If it is not, the key still reaches
+   `ems-backup` — chroot-confined, read-only, SFTP-only — which retrieves your
+   configuration, data and backups from a box you can otherwise no longer
+   reach, so step 5 costs you nothing.
+5. Re-flash. This erases the card: writing the image back replaces the
    operator's configuration, data and on-box backups with a fresh installation.
-   The backup in step 3 is not a convenience — it is the only copy.
+   The backup in step 4 is not a convenience — it is the only copy.
 
-Step 3 is the one worth doing early. There is no way to add a key to a box you
-can no longer reach.
+Steps 3 and 4 are the ones worth doing early, and both have to be done *before*
+the lockout: there is no way to switch on an account, or add a key, on a box
+you can no longer reach.
 
 ## First-boot provisioning portal
 

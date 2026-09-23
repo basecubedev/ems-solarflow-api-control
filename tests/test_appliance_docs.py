@@ -217,6 +217,27 @@ def test_wlan_recovery_is_documented():
     assert "Ethernet" in network
 
 
+def test_the_lockout_procedure_knows_the_account_that_gives_a_shell():
+    """It told an operator to re-flash while a root shell was available.
+
+    The procedure predates `ems-shell` and still said the only key-eligible
+    account is `ems-backup`, "chroot-confined, read-only and SFTP-only", so a
+    shell "is not what it buys" -- and the next step is re-flashing, which
+    erases the configuration, the data and the on-box backups. `ems-shell` has
+    a shell, reaches root through sudo, is in `ssh_key_accounts` by default and
+    is switched on from the console.
+    """
+
+    from appliance import shell_access
+
+    network = read("network-recovery.md")
+
+    assert shell_access.ACCOUNT in network
+    assert "ssh-shell-access.md" in network
+    # The old claim must be gone, not merely contradicted further down.
+    assert "the only key-eligible account is" not in network
+
+
 def test_the_security_model_documents_the_privilege_boundary():
     security = read("security-model.md")
     assert "no root" in security
