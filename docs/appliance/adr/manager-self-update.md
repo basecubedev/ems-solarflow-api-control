@@ -100,7 +100,10 @@ What replaces it is a deadline, and a deadline is not equivalent:
   hardware evidence behind it yet.
 - A repeating timer, not a one-shot: a reboot inside the window would cancel a
   single `OnActiveSec=` firing, and rebooting is exactly what an operator does
-  when the console stops answering.
+  when the console stops answering. The same tick is what measures the
+  window -- fifteen of them beside the clock -- because a board without a
+  real-time clock restores a stale time at boot, and a window measured on that
+  clock alone stretches by however far it was behind.
 - Its health gate is narrow and the script says so: the package dpkg reports is
   the one the install promised, and the two units that make the appliance
   reachable are running. It is not a functional test of the manager.

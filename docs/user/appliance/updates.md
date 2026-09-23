@@ -112,9 +112,11 @@ anything.
 
 Once a minute, it checks whether the version now installed is the one the update
 promised, and whether the manager's two services are running. The window is
-fifteen minutes, and it survives a reboot inside it — rebooting is exactly what
-you would try when a console stops answering, so a deadline a reboot cancelled
-would be no deadline at all.
+fifteen minutes of the appliance running — the board has no real-time clock,
+so the deadline is counted in the checks themselves rather than in wall-clock
+time — and it survives a reboot inside it: rebooting is exactly what you would
+try when a console stops answering, so a deadline a reboot cancelled would be
+no deadline at all.
 
 | What happens | What the appliance does |
 | --- | --- |

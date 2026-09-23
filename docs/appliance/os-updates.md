@@ -179,6 +179,14 @@ a version for a package it unpacked and never configured, and for one it has
 only config files left for, and those are the states this exists to catch. That
 gate is narrow and is not a functional test of the manager.
 
+The window is measured in those ticks as much as on the clock: fifteen checks
+a minute apart, and a reboot inside the window does not restart the count. The
+board has no real-time clock, so a reboot restores a stale time and a window
+measured on that clock alone stretched by however far the clock was behind,
+with the console locked for all of it. Whichever runs out first — the clock or
+the ticks — ends the window; time the appliance spent powered off no longer
+counts against it.
+
 | Outcome | What the appliance does |
 |---|---|
 | The gate passes | The deadline is retired and the install stands. |
