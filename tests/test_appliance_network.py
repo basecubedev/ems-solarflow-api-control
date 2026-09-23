@@ -436,3 +436,147 @@ def test_a_timezone_the_appliance_does_not_carry_is_refused(tmp_path):
         )
 
     assert "timezone" in str(error.value).lower()
+
+
+# --- what the appliance measures, and what it promises ------------------------
+
+
+def test_a_wlan_joined_through_a_differently_named_profile_counts_as_joined(tmp_path):
+    """`nmcli device show` reports no SSID, so the profile id stood in for one.
+
+    rpi-imager writes its WLAN profile as `preconfigured`, and a second profile
+    for the same network becomes `HomeNet 1`. Connecting activates the existing
+    profile, the comparison against the requested SSID fails for 90 seconds, and
+    a working connection is torn down and reported as
+    `the new WLAN did not reach connectivity`.
+    """
+
+    services = build_test_services(tmp_path)
+    services.host.wifi_ssid = "HomeNet"
+    services.host.wifi_profile = "preconfigured"
+
+    assert services.network.wifi_link("HomeNet") is True
+    assert services.network.wifi_link("GuestNet") is False
+
+
+def test_a_revert_that_did_not_happen_keeps_its_intent_for_the_next_boot(tmp_path):
+    """The one durable record of the way back, deleted whatever nmcli answered.
+
+    At boot the agent races NetworkManager, so `connection up` can fail with
+    "NetworkManager is not running". The record went anyway, the appliance
+    reconnected to the unreachable profile at every later boot, and the console
+    printed that the previous profile had been restored.
+    """
+
+    services = build_test_services(tmp_path)
+    services.network.arm_revert("op-1", "HomeNet")
+    services.host.nmcli_revert_ok = False
+
+    restored = services.network.recover_revert()
+
+    assert restored is None, "a revert that failed must not report a restored profile"
+    assert services.network.pending_revert() is not None, "the way back was thrown away"
+
+
+def test_a_recovered_revert_that_worked_retires_its_intent(tmp_path):
+    services = build_test_services(tmp_path)
+    services.network.arm_revert("op-1", "HomeNet")
+
+    assert services.network.recover_revert() == "HomeNet"
+    assert services.network.pending_revert() is None
+
+
+def test_a_revert_the_appliance_keeps_retrying_eventually_gives_up(tmp_path):
+    """An intent nothing can ever satisfy must not delay every later boot."""
+
+    from appliance.network import REVERT_RECOVERY_ATTEMPTS
+
+    services = build_test_services(tmp_path)
+    services.network.arm_revert("op-1", "HomeNet")
+    services.host.nmcli_revert_ok = False
+
+    for _ in range(REVERT_RECOVERY_ATTEMPTS):
+        services.network.recover_revert()
+
+    assert services.network.pending_revert() is None
+
+
+def test_a_missing_nmcli_at_boot_does_not_stop_the_agent_binding_its_socket(tmp_path):
+    """CommandError propagated past recover_revert and aborted command_agent."""
+
+    services = build_test_services(tmp_path)
+    services.network.arm_revert("op-1", "HomeNet")
+    services.host.tools.discard("nmcli")
+
+    assert services.network.recover_revert() is None
+    assert services.network.pending_revert() is not None
+
+
+def test_a_failed_online_revert_leaves_its_intent_for_the_next_boot(tmp_path):
+    services = build_test_services(tmp_path)
+    services.host.wifi_connect_ok = False
+    services.host.nmcli_revert_ok = False
+
+    record, _ = plan_and_execute(
+        services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE
+    )
+
+    assert record.stage == "revert_failed"
+    assert services.network.pending_revert() is not None
+
+
+def test_a_plan_that_cannot_read_the_active_profile_is_refused(tmp_path):
+    """Degrading to "no previous profile" arms nothing and promises a revert."""
+
+    services = build_test_services(tmp_path)
+    services.host.nmcli_active_profile_ok = False
+    handlers = handlers_for(services)
+
+    with pytest.raises(Exception) as excinfo:
+        handlers.dispatch(
+            {"operation": "network.wifi.plan", "ssid": "GuestNet", "passphrase": PASSPHRASE}
+        )
+
+    assert getattr(excinfo.value, "code", "") == "wifi_profile_unreadable"
+
+
+def test_a_first_wlan_join_does_not_promise_a_revert_it_cannot_arm(tmp_path):
+    """An appliance on Ethernet has no WLAN profile to fall back to."""
+
+    services = build_test_services(tmp_path)
+    services.host.wifi_device_state = "disconnected"
+    services.host.wifi_profile = ""
+    _, plan = plan_and_execute(
+        services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE
+    )
+
+    assert plan["previous_profile"] == ""
+    assert "reactivated automatically" not in plan["warning"], plan["warning"]
+
+
+def test_a_device_listing_nmcli_refused_is_not_reported_as_no_interfaces(tmp_path):
+    """An empty list reads as "this appliance has no network", which is a lie."""
+
+    services = build_test_services(tmp_path)
+    services.host.nmcli_device_status_ok = False
+
+    record = services.network.status()
+
+    assert record["error"] == "network_manager_unreachable", record
+
+
+def test_the_agent_is_ordered_after_the_thing_it_asks_to_reconnect():
+    """`nmcli connection up` before NetworkManager holds its bus name fails."""
+
+    from pathlib import Path
+
+    unit = (
+        Path(__file__).resolve().parents[1]
+        / "packaging"
+        / "appliance"
+        / "systemd"
+        / "ems-appliance-agent.service"
+    ).read_text(encoding="utf-8")
+
+    assert "After=NetworkManager.service" in unit
+    assert "Requires=NetworkManager.service" not in unit, "NetworkManager is optional here"

@@ -57,8 +57,10 @@ eth0:ethernet:unavailable:
 lo:loopback:unmanaged:
 """
 
+# The real field set: `nmcli -t -f IP4,IP6,GENERAL device show` has no
+# GENERAL.SSID -- verified against nmcli 1.52.1. A fixture that invents one
+# proves away the question of how the appliance learns which SSID it joined.
 NMCLI_DEVICE_SHOW = """GENERAL.CONNECTION:HomeNet
-GENERAL.SSID:HomeNet
 IP4.ADDRESS[1]:192.168.1.50/24
 IP4.GATEWAY:192.168.1.1
 IP4.DNS[1]:192.168.1.1
@@ -136,10 +138,16 @@ class FakeHost:
         self.nmcli_connectivity = "full"
         self.wifi_connect_ok = True
         self.nmcli_scan_ok = True
+        self.nmcli_revert_ok = True
+        self.nmcli_active_profile_ok = True
+        self.nmcli_device_status_ok = True
         # The WLAN device's own view, which is what "the operator can still
         # reach me" actually depends on. Host-wide connectivity is a different
         # question and this fake keeps the two separable on purpose.
         self.wifi_ssid = "HomeNet"
+        # NetworkManager's profile id, which an operator or rpi-imager may have
+        # named anything at all; it is not the SSID.
+        self.wifi_profile = "HomeNet"
         self.wifi_device_state = "connected"
         self.wifi_address = "192.168.1.50/24"
         self.wifi_gateway = "192.168.1.1"
@@ -522,6 +530,8 @@ class FakeHost:
         if "general" in joined and "CONNECTIVITY" in joined:
             return self._result("nmcli", args, 0, f"{self.nmcli_connectivity}\n")
         if "device status" in joined:
+            if not self.nmcli_device_status_ok:
+                return self._result("nmcli", args, 1, "", "Error: NetworkManager is not running")
             return self._result("nmcli", args, 0, self._device_status())
         if "device show" in joined:
             return self._result("nmcli", args, 0, self._device_show())
@@ -530,30 +540,37 @@ class FakeHost:
                 return self._result("nmcli", args, 1, "", "Error: scan failed")
             return self._result("nmcli", args, 0, NMCLI_WIFI_LIST)
         if "connection show --active" in joined:
-            return self._result("nmcli", args, 0, "HomeNet:802-11-wireless:wlan0\n")
+            if not self.nmcli_active_profile_ok:
+                return self._result("nmcli", args, 1, "", "Error: NetworkManager is not running")
+            return self._result(
+                "nmcli", args, 0, f"{self.wifi_profile}:802-11-wireless:wlan0\n"
+            )
+        if "802-11-wireless.ssid" in joined and "connection show" in joined:
+            return self._result("nmcli", args, 0, f"802-11-wireless.ssid:{self.wifi_ssid}\n")
         if "device wifi connect" in joined:
             if not self.wifi_connect_ok:
                 return self._result("nmcli", args, 1, "", "Error: Connection activation failed")
             self.wifi_ssid = args[args.index("connect") + 1]
+            self.wifi_profile = self.wifi_ssid
             self.wifi_device_state = "connected"
             return self._result("nmcli", args, 0, "Device 'wlan0' successfully activated\n")
         if "connection up" in joined:
+            if not self.nmcli_revert_ok:
+                return self._result("nmcli", args, 1, "", "Error: NetworkManager is not running")
             self.nmcli_connectivity = "full"
+            self.wifi_profile = args[args.index("up") + 1]
             return self._result("nmcli", args, 0, "Connection successfully activated\n")
         return self._result("nmcli", args, 0, "")
 
     def _device_status(self):
         return (
-            f"wlan0:wifi:{self.wifi_device_state}:{self.wifi_ssid}\n"
+            f"wlan0:wifi:{self.wifi_device_state}:{self.wifi_profile}\n"
             "eth0:ethernet:unavailable:\n"
             "lo:loopback:unmanaged:\n"
         )
 
     def _device_show(self):
-        lines = [
-            f"GENERAL.CONNECTION:{self.wifi_ssid}",
-            f"GENERAL.SSID:{self.wifi_ssid}",
-        ]
+        lines = [f"GENERAL.CONNECTION:{self.wifi_profile}"]
         if self.wifi_address:
             lines.append(f"IP4.ADDRESS[1]:{self.wifi_address}")
         if self.wifi_gateway:

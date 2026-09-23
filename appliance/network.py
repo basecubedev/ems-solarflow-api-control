@@ -18,6 +18,7 @@ from pathlib import Path
 
 from dataclasses import dataclass, field
 
+from appliance.commands import CommandError
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED, STATE_VERIFYING
 from appliance.paths import atomic_write
 from appliance.validation import validate_hostname
@@ -28,6 +29,11 @@ TYPE_HOSTNAME = "network.hostname"
 STATE_CONNECTED = "connected"
 
 WIFI_PROFILE_PREFIX = "ems-appliance-"
+
+# A revert intent nothing can ever satisfy would otherwise delay every later
+# boot by the activation timeout. Three boots is enough for NetworkManager to
+# have come up; more than that and the profile is gone, not merely late.
+REVERT_RECOVERY_ATTEMPTS = 3
 
 
 class NetworkError(Exception):
@@ -100,7 +106,13 @@ def parse_device_status(text):
 
 
 def parse_device_details(text):
-    details = {"addresses": [], "gateway": "", "dns": [], "ssid": ""}
+    """What `nmcli -t -f IP4,IP6,GENERAL device show` reports.
+
+    It reports no SSID. The profile it names is an id an operator or rpi-imager
+    chose, which is why the SSID is resolved from the profile separately.
+    """
+
+    details = {"addresses": [], "gateway": "", "dns": [], "connection": ""}
     for line in (text or "").splitlines():
         key, _, value = line.partition(":")
         key, value = key.strip(), value.strip()
@@ -114,9 +126,8 @@ def parse_device_details(text):
             details["gateway"] = value
         elif key.startswith("IP4.DNS"):
             details["dns"].append(value)
-        elif key in ("GENERAL.CONNECTION", "GENERAL.SSID"):
-            if key == "GENERAL.SSID":
-                details["ssid"] = value
+        elif key == "GENERAL.CONNECTION":
+            details["connection"] = value
     return details
 
 
@@ -188,7 +199,13 @@ class NetworkService:
         status = self.runner.run(
             "nmcli", ["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"], timeout=20
         )
-        interfaces = parse_device_status(status.stdout if status.ok else "")
+        if not status.ok:
+            # An empty interface list reads as "this appliance has no network",
+            # which is a different and much more alarming statement than "the
+            # thing that knows would not answer".
+            record["error"] = "network_manager_unreachable"
+            return record
+        interfaces = parse_device_status(status.stdout)
         for interface in interfaces:
             if interface.kind in ("loopback",):
                 continue
@@ -202,7 +219,7 @@ class NetworkService:
             interface.gateway = parsed["gateway"]
             interface.dns = parsed["dns"]
             if interface.kind == "wifi":
-                interface.ssid = parsed["ssid"] or interface.connection
+                interface.ssid = self.profile_ssid(interface.connection) or interface.connection
                 interface.signal = self._signal_for(interface.ssid)
             record["interfaces"].append(interface.to_dict())
             if interface.state.startswith(STATE_CONNECTED) and not record["active_connection"]:
@@ -240,10 +257,45 @@ class NetworkService:
             )
         return parse_wifi_list(result.stdout)
 
+    def profile_ssid(self, profile):
+        """The SSID a NetworkManager profile is configured for.
+
+        `nmcli device show` has no GENERAL.SSID field, so the profile id was
+        standing in for the SSID -- and rpi-imager names its profile
+        `preconfigured`, nmtui a second one `HomeNet 1`. Comparing a requested
+        SSID against that id makes a working connection read as a failed join.
+        """
+
+        if not profile:
+            return ""
+        try:
+            result = self.runner.run(
+                "nmcli",
+                ["-t", "-f", "802-11-wireless.ssid", "connection", "show", profile],
+                timeout=20,
+            )
+        except CommandError:
+            return ""
+        if not result.ok:
+            return ""
+        for line in (result.stdout or "").splitlines():
+            fields = _split_escaped(line)
+            if len(fields) >= 2 and fields[0].strip() == "802-11-wireless.ssid":
+                return ":".join(fields[1:]).strip()
+        return ""
+
     def active_wifi_profile(self):
         result = self.runner.run(
             "nmcli", ["-t", "-f", "NAME,TYPE,DEVICE", "connection", "show", "--active"], timeout=20
         )
+        if not result.ok:
+            # Degrading to "there is no previous profile" arms no way back and
+            # then shows the operator a plan that promises one.
+            raise NetworkError(
+                "wifi_profile_unreadable",
+                "the active WLAN profile could not be read, so no automatic way back "
+                "could be armed for this change",
+            )
         for line in (result.stdout or "").splitlines():
             parts = _split_escaped(line)
             if len(parts) >= 2 and "wireless" in parts[1]:
@@ -279,7 +331,7 @@ class NetworkService:
                 timeout=20,
             )
             parsed = parse_device_details(detail.stdout if detail.ok else "")
-            joined = parsed["ssid"] or interface.connection
+            joined = self.profile_ssid(interface.connection) or interface.connection
             if joined != ssid:
                 continue
             if parsed["addresses"]:
@@ -320,8 +372,13 @@ class NetworkService:
             "previous_profile": previous,
             "revert_timeout_seconds": self.config.wifi_revert_timeout_seconds,
             "warning": "Applying a WLAN change can disconnect this browser session. "
-            "The previous profile is kept and reactivated automatically if the new "
-            "network does not reach connectivity.",
+            + (
+                "The previous profile is kept and reactivated automatically if the new "
+                "network does not reach connectivity."
+                if previous
+                else "This appliance has no WLAN profile to fall back to, so nothing "
+                "takes the change back if the new network does not reach connectivity."
+            ),
         }
 
     def plan_hostname(self, operation, hostname):
@@ -388,7 +445,14 @@ class NetworkService:
                 pass
 
     def recover_revert(self):
-        """Reactivate an armed profile the process that armed it never reached."""
+        """Reactivate an armed profile the process that armed it never reached.
+
+        A failed attempt keeps the record. At boot the agent races
+        NetworkManager, so `connection up` can come back with "NetworkManager is
+        not running"; discarding the only durable note of the way back on that
+        answer is how an appliance ends up reconnecting to an unreachable
+        profile at every later boot, while the console reports it restored.
+        """
 
         intent = self.pending_revert()
         if not intent:
@@ -397,9 +461,27 @@ class NetworkService:
         if not previous:
             self.disarm_revert()
             return None
-        self._revert(previous)
-        self.disarm_revert()
-        return previous
+        if self._revert(previous):
+            self.disarm_revert()
+            return previous
+        if self._count_revert_attempt(intent) >= REVERT_RECOVERY_ATTEMPTS:
+            self.disarm_revert()
+        return None
+
+    def _count_revert_attempt(self, intent):
+        try:
+            attempts = int(intent.get("attempts") or 0) + 1
+        except (TypeError, ValueError):
+            attempts = 1
+        path = self._revert_intent_path()
+        if path is not None:
+            record = dict(intent)
+            record["attempts"] = attempts
+            try:
+                atomic_write(path, json.dumps(record) + "\n")
+            except OSError:
+                pass
+        return attempts
 
     def discard_secret(self, operation_id):
         """Drop a passphrase a plan will never apply.
@@ -457,7 +539,10 @@ class NetworkService:
 
         self._advance(operation, "reverting_wifi")
         reverted = self._revert(previous)
-        self.disarm_revert()
+        # Kept when the revert did not happen, so the next agent start tries
+        # again rather than leaving the appliance on a network nobody reaches.
+        if reverted:
+            self.disarm_revert()
         payload = {
             "ssid": ssid,
             "reverted": reverted,
@@ -487,11 +572,19 @@ class NetworkService:
             self._sleep(3)
 
     def _revert(self, previous_profile):
-        """Reactivate the saved profile. The previous profile is never deleted."""
+        """Reactivate the saved profile. The previous profile is never deleted.
+
+        A host without nmcli raises rather than answering, and this runs in the
+        agent's start-up path before the socket is bound -- so the one place
+        that must never propagate is this one.
+        """
 
         if not previous_profile:
             return False
-        result = self.runner.run("nmcli", ["connection", "up", previous_profile], timeout=90)
+        try:
+            result = self.runner.run("nmcli", ["connection", "up", previous_profile], timeout=90)
+        except CommandError:
+            return False
         return bool(result.ok)
 
     def _execute_hostname(self, operation):

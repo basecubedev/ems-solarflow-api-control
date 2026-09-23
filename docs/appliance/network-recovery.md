@@ -35,6 +35,20 @@ Details that matter:
   NetworkManager's host-wide connectivity value: with a cable plugged in that
   value reads `full` whatever the radio did, and on a LAN without internet it
   never reads `full` even when the join was perfect.
+- Which SSID the device joined is resolved from the **active profile's
+  configured SSID**, not from the profile's name. `nmcli device show` reports
+  no SSID at all, and a profile may be called anything — rpi-imager writes
+  `preconfigured`, a second profile for one network becomes `HomeNet 1`.
+  Comparing against the name made a working connection read as a failed join.
+- There is an automatic way back **only when the appliance is already on a
+  WLAN**. On an Ethernet-only appliance the first WLAN join has nothing to fall
+  back to, and the confirmation says so rather than promising a revert. If the
+  active profile cannot be read at all, the change is refused instead of being
+  planned without a way back.
+- A revert that did not happen **keeps its record**. At boot the agent can reach
+  `nmcli` before NetworkManager holds its bus name; the intent survives that and
+  is retried at the next start, up to three times, rather than being discarded
+  while the console reports the profile restored.
 - The passphrase is handed to `nmcli` on **stdin**, so it never appears in the
   host process table, in an operation record, in the audit log or in any log
   file.

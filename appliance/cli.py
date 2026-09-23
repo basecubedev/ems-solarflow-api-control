@@ -596,6 +596,11 @@ def command_agent(args):
     restored = services.network.recover_revert()
     if restored:
         print(f"restored the previous WLAN profile {restored}")
+    elif services.network.pending_revert():
+        print(
+            "a WLAN revert is still armed and could not be applied; it will be tried again",
+            file=sys.stderr,
+        )
     serve_agent(services, args.socket or paths.agent_socket)
     return EXIT_OK
 
