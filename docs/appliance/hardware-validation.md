@@ -432,7 +432,7 @@ never reported for another.**
 
 | Class | Board | Status |
 |---|---|---|
-| microSD | Pi 3B+ | NOT RUN |
+| microSD | Pi 3B+ | PARTIAL — 1.1, 1.3, 1.4, 1.5, 1.6 and 1.11 on a Pi 3B+ on microSD, each carried by a row in the evidence table below. 1.2, 1.7 to 1.10, 1.12 and 1.13 are NOT RUN. |
 | microSD | Pi 4 | NOT RUN |
 | microSD | Pi 5 | NOT RUN |
 | USB SSD | Pi 4 | NOT RUN |

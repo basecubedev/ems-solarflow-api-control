@@ -157,6 +157,66 @@ def test_the_prose_above_the_block_cannot_contradict_it():
         assert "It is not stale here" not in intro
 
 
+def _page():
+    root = Path(__file__).resolve().parents[1]
+    return (root / "docs/appliance/hardware-validation.md").read_text(encoding="utf-8")
+
+
+def _evidence_verdict(page, case):
+    """The verdict cell of one row of the current evidence table.
+
+    A renamed row fails here rather than skipping: a guard that switches
+    itself off when its row goes missing is no guard.
+    """
+
+    table = page.split("This is the current evidence table.")[1]
+    rows = [line for line in table.splitlines() if line.startswith(f"| {case} |")]
+    assert rows, f"the evidence table has no row {case!r}"
+    return rows[0].split("|")[2].strip().strip("*")
+
+
+def test_the_authoritative_block_cannot_deny_a_boot_the_evidence_table_records():
+    """The one authoritative status block said no board had booted either
+    image while the evidence table forty lines below recorded the boot as
+    PASS, read from the running board. Scoped to the RC markers on purpose:
+    the historical blocks further down carry the same NOT RUN legitimately,
+    and the document forbids rewriting them.
+    """
+
+    page = _page()
+    verdict = _evidence_verdict(page, "The built image boots on a Pi 3B+")
+    body = page.split("<!-- CURRENT-RC-BEGIN -->")[1].split("<!-- CURRENT-RC-END -->")[0]
+    rows = [line for line in body.splitlines() if line.startswith("| Physical Raspberry Pi |")]
+    assert rows, "the authoritative block has no Physical Raspberry Pi row"
+
+    if verdict == "PASS":
+        assert "NOT RUN" not in rows[0], (
+            "the evidence table records the boot as PASS; the authoritative block denies it"
+        )
+
+
+def test_a_storage_class_is_not_reported_as_not_run_while_group_1_is_proven_on_it():
+    """Group 5's microSD row said NOT RUN while six of Group 1's thirteen cases
+    had been run on a Pi 3B+ on microSD and were carried by evidence rows. It
+    has to say which cases it covers rather than collapse them into one word."""
+
+    import re
+
+    page = _page()
+    verdict = _evidence_verdict(page, "The built image boots on a Pi 3B+")
+    group = re.split(r"^### Group 5 .*storage classes\s*$", page, maxsplit=1, flags=re.M)[1]
+    group = group.split("\n## ", 1)[0]
+    rows = [line for line in group.splitlines() if line.startswith("| microSD | Pi 3B+ |")]
+    assert rows, "Group 5 has no microSD / Pi 3B+ row"
+    status = rows[0].split("|")[3]
+
+    if verdict == "PASS":
+        assert "NOT RUN" not in status.split("PARTIAL")[0], status
+        assert "PARTIAL" in status, status
+        for case in ("1.1", "1.6"):
+            assert case in status, case
+
+
 def test_readiness_is_not_claimed_while_the_evidence_is_stale():
     """`release_not_stale` is one of the required readiness invariants, so a
     stale release cannot also be physically ready. Saying so anyway is how a
