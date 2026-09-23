@@ -348,7 +348,16 @@ a file it wrote.
 A policy that cannot be *read* is not a policy that holds. `ems-appliance
 host-config --apply` fails and rolls back rather than reporting an applied
 configuration whose confinement nothing confirmed, and a successful apply never
-reports an unread policy as verified:
+reports an unread policy as verified.
+
+Changing the installation root re-runs the export setup as part of that apply.
+Re-arming the path watcher alone moves no mount — systemd does not treat
+`PathChanged=` as satisfied when the unit starts, only a real inotify event
+does — so the export root used to keep the read-only binds of the *old* root
+while the apply reported itself verified, and the backup account stayed
+authenticated against them behind a confinement that had checked nothing.
+An export setup that fails rolls the configuration back with
+`export_setup_failed`.
 
 ```text
 verified            every runtime component that was expected to be live was read and agreed
