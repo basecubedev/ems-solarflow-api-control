@@ -173,8 +173,7 @@ Docker. It is not part of the EMS control loop and must not import from `ems/`.
   (`manager_update.py`, `manager_releases.py`, `manager_retention.py`,
   `manager_install.py`, `manager_verify.py`), never on a timer and always on an
   operator's button, with an older package installable as readily as a newer
-  one -- which stops holding the moment a state-schema axis is added, and the
-  ADR says why before anyone adds one. Three properties are not negotiable: `dpkg` runs from its own systemd
+  one. Three properties are not negotiable: `dpkg` runs from its own systemd
   unit rather than the agent's cgroup, every refusal happens before it runs,
   and the reverter is a copy taken out of the *outgoing* package. **Doing
   nothing commits an install here**, so the deadline in `manager_verify.py` is
