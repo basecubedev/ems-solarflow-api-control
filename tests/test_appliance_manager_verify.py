@@ -585,3 +585,26 @@ def test_disarming_takes_the_attempt_count_with_it():
     match = re.search(r"^disarm\(\) \{.*?^\}$", script, re.DOTALL | re.MULTILINE)
     assert match, "verify-manager.sh no longer defines disarm()"
     assert '"$ATTEMPTS"' in match.group(0)
+
+
+def test_a_refused_revert_is_cured_before_it_is_tried_again(paths, packaged, tmp_path):
+    """The interrupted dpkg the revert trips over is the one it can repair.
+
+    `ems-appliance-manager-install.service` has TimeoutStartSec=900 and the
+    deadline window is 900 s, so both run out in the same moment: systemd
+    SIGTERMs the install cgroup with dpkg inside it and the database is left
+    interrupted. The revert then gets the usual refusal, and running
+    `dpkg --configure -a` only after the attempts are spent means every retry
+    fails for a reason the script already knows how to clear.
+    `install-manager.sh` does it the other way round and says why.
+    """
+
+    deadline_at(paths, packaged, epoch=1)
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.9.9", dpkg_exit=1)
+
+    run_reverter(paths, tools, now=0)
+
+    calls = log.read_text(encoding="utf-8")
+    assert "dpkg --configure -a" in calls, calls
+    assert not manager_verify.read_verdict(paths).settled, "the tick must still leave a retry"
