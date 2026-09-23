@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow appliance automatic security updates
+Documentation=file:///usr/share/doc/ems-appliance-manager/os-updates.md
+# The agent owns every package mutation on this appliance, and this is one of
+# its callers rather than a second one: it plans, is blocked by the same
+# blockers and leaves the same operation record the console does.
+After=ems-appliance-agent.service
+Wants=ems-appliance-agent.service
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=-/etc/ems-appliance-manager/host-paths.env
+# Does nothing at all unless automatic_security_updates is on in
+# appliance.conf, and exits 0 whenever it declines -- a daily timer that leaves
+# a failed unit behind because the package manager was busy teaches an operator
+# to stop reading it. What happened is in the journal and in the operation
+# record either way.
+ExecStart=/usr/bin/ems-appliance auto-update
+# apt on a Pi 3B+ is slow, and the install unit for the manager package allows
+# the same order of magnitude.
+TimeoutStartSec=3600

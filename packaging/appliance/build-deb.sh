@@ -119,6 +119,8 @@ install -m 0644 "$PACKAGING/systemd/ems-appliance-export.service" "$STAGE/usr/li
 install -m 0644 "$PACKAGING/systemd/ems-appliance-sshd-keys.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-export.path" "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-auto-update.service" "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-auto-update.timer" "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-backup-access-disable.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-config-seed.service" \

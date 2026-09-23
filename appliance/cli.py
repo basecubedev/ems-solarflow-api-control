@@ -505,6 +505,44 @@ def command_host_config(args):
     return EXIT_OK
 
 
+def command_auto_update(args):
+    """Install the waiting security updates, if the operator asked for that.
+
+    Run by ems-appliance-auto-update.timer and by an operator who wants the
+    same thing now. Everything it does goes through the agent, so it is the
+    same plan, the same blockers, the same operation lock and the same audit
+    entry the console produces -- an `unattended-upgrades` beside it would be a
+    writer none of those gates cover.
+
+    Exit 0 for every ordinary outcome, including refusing: a daily timer that
+    leaves a failed unit behind because the package manager was busy teaches an
+    operator to ignore it. What happened is on stdout and in the operation
+    record either way.
+    """
+
+    from appliance.packages import run_scheduled_security_updates
+
+    paths = resolve_paths()
+    config = load_config(paths)
+    try:
+        client = _client(paths, local=getattr(args, "local", False))
+    except SystemExit as exc:
+        print(f"automatic security updates: {exc}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+
+    result = run_scheduled_security_updates(client, config)
+    if getattr(args, "json", False):
+        _print(result, True)
+    elif result["ran"]:
+        print(f"installed {result['installed']} security update(s)")
+    else:
+        detail = result.get("detail") or ", ".join(result.get("blockers", []))
+        print(f"nothing installed: {result['reason']}" + (f" ({detail})" if detail else ""))
+    if result.get("reboot_required"):
+        print("a reboot is required; it is left to an operator", file=sys.stderr)
+    return EXIT_OK
+
+
 def command_backup_access(args):
     """Activate or disable the confined backup account, fail-closed."""
 
@@ -831,6 +869,13 @@ def build_parser():
         help="enabling admits a deployed key; without a key it is still no login",
     )
     shell_access_parser.set_defaults(handler=command_shell_access)
+
+    auto_update = subparsers.add_parser(
+        "auto-update",
+        parents=[shared],
+        help="install waiting security updates, if automatic_security_updates is on",
+    )
+    auto_update.set_defaults(handler=command_auto_update)
 
     backup_access = subparsers.add_parser(
         "backup-access",

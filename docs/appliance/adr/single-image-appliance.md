@@ -53,7 +53,7 @@ and one writable ext4 root, patched in place by `apt`.
 | partition table | MBR, boot + root |
 | root filesystem | writable |
 | kernel command line | `root=/dev/disk/by-slot/system rw` |
-| OS patches | `apt` (unattended only if the operator enables `automatic_security_updates`, which defaults to false) |
+| OS patches | `apt`, through the agent's own plan and blockers. Unattended only if the operator enables `automatic_security_updates`, which defaults to false; a daily timer then drives the same path the console does, security scope only, never a reboot |
 | Manager patches | a signed `.deb`, installed on an operator's button |
 | failed OS update | write the card again and restore a backup |
 | failed Manager update | a deadline reinstalls the previous package |
