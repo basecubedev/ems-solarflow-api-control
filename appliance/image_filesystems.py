@@ -256,6 +256,20 @@ class Ext4Reader:
         inode = self._resolve(path)
         return bool(inode) and inode["mode"] & S_IFMT == S_IFDIR
 
+    def is_executable(self, path):
+        """Whether the kernel would run this file at all.
+
+        systemd resolves ExecStart with access(X_OK) and fails the unit with
+        203/EXEC when it comes back no -- for root as well. An inspection that
+        asks only whether the image carries the program cannot see that, and
+        the mode is right here in the inode.
+        """
+
+        inode = self._resolve(path)
+        if not inode or inode["mode"] & S_IFMT != S_IFREG:
+            return False
+        return bool(inode["mode"] & 0o111)
+
     def is_symlink(self, path):
         """Whether the final component itself is a link, without following it."""
 
@@ -431,6 +445,15 @@ class FatReader:
     def is_file(self, path):
         entry = self._entry(path)
         return bool(entry) and not entry["directory"]
+
+    def is_executable(self, path):
+        """FAT carries no Unix modes, so a file here is as runnable as it gets.
+
+        Nothing in this project puts a unit's program on the boot partition;
+        the answer exists so one reader interface serves both.
+        """
+
+        return self.is_file(path)
 
     def listdir(self, path="/"):
         if str(path).strip("/") == "":

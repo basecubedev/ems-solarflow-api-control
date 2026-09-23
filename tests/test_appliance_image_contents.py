@@ -228,3 +228,37 @@ def test_a_unit_whose_program_is_present_passes(single_image):
     findings = by_check(contents(single_image))
 
     assert findings["unit_programs_present:root"].result == PASS
+
+
+@requires_mkfs
+def test_a_unit_whose_program_is_not_executable_is_a_failure(tmp_path):
+    """Present is not runnable, and systemd fails it with 203/EXEC.
+
+    The one appliance that has booted logged that failure 255 times in four
+    and a half hours, for exactly this reason on a different file. The check
+    asks whether the image carries the program and never whether the kernel
+    would run it -- yet `Ext4Reader` has the mode in hand. A mode flattened by
+    a source bundle, a build-script change or a umask in the build chroot ships
+    a card whose root partition silently stays at its flashed size, with every
+    gate reporting PASS.
+    """
+
+    root_tree = tmp_path / "root"
+    populate_root(root_tree)
+    grower = root_tree / "usr/lib/ems-appliance-manager/grow-root.sh"
+    grower.chmod(0o644)
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, "kernel8.img": b"k",
+         "initramfs8": b"i", "bcm2712-rpi-5-b.dtb": b"d"},
+    )
+    image = assemble_mbr(tmp_path / "appliance.img", boot, root)
+
+    findings = by_check(contents(image))
+
+    assert findings["unit_programs_present:root"].result == FAIL, findings[
+        "unit_programs_present:root"
+    ].detail
+    assert "grow-root.sh" in findings["unit_programs_present:root"].detail
+    assert "203/EXEC" in findings["unit_programs_present:root"].detail
