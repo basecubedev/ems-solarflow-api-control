@@ -10,6 +10,7 @@ import time
 
 from appliance import rescue_account, validation
 from appliance.docker_backend import CONTAINER_RUNNING, DAEMON_RUNNING
+from appliance.packages import UPDATE_CHECK_FAILED
 from appliance.redaction import bounded_redacted_log
 from appliance.ssh_policy import REFUSAL_ACCEPTED, REFUSAL_UNKNOWN
 from appliance.systemd import (
@@ -385,6 +386,23 @@ class StatusService:
                         "describe what was available then.",
                         "Open System Updates and refresh the package index before trusting "
                         "an empty list.",
+                    )
+                )
+            # A check that could not ask the mirror is reported as that, and
+            # never as a package manager in need of the repairs the console
+            # offers, none of which reaches a mirror.
+            if updates.get("error") == UPDATE_CHECK_FAILED:
+                findings.append(
+                    finding(
+                        "update_check_failed",
+                        FINDING_WARNING,
+                        VIEW_UPDATES,
+                        "The update check did not finish",
+                        "apt could not list what is available, so the counts on this page are "
+                        "not an answer; an unreachable mirror or a broken sources list is the "
+                        "usual cause.",
+                        "Open System Updates and refresh the package indexes; the appliance "
+                        "log names the repository that did not answer.",
                     )
                 )
             if not (updates.get("package_manager") or {}).get("healthy", True):

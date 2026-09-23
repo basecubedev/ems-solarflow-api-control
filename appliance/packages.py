@@ -35,6 +35,13 @@ FIRMWARE_PREFIXES = ("raspi-firmware", "raspberrypi-bootloader", "firmware-")
 
 LOCK_FREE = "free"
 LOCK_HELD = "held"
+
+# The two ways a check can end without an answer. The first says the
+# appliance could not ask what is available -- an unreachable mirror, a
+# broken sources list -- and nothing about dpkg; the second that there is
+# no apt to ask at all.
+UPDATE_CHECK_FAILED = "update_check_failed"
+PACKAGE_MANAGER_UNAVAILABLE = "package_manager_unavailable"
 LOCK_UNKNOWN = "unknown"
 
 
@@ -97,7 +104,20 @@ class PackageState:
 
     @property
     def healthy(self):
-        return not self.dpkg_issues and self.lock_state != LOCK_HELD and not self.error
+        """Whether dpkg and apt would take an install.
+
+        A report, not a gate: the blockers decide installs on their own. A
+        failed update check is not held against the package manager -- it
+        says the mirror could not be asked, and the console reports that as
+        itself. Every other error, including one this build does not know,
+        stays unhealthy.
+        """
+
+        return (
+            not self.dpkg_issues
+            and self.lock_state != LOCK_HELD
+            and self.error in ("", UPDATE_CHECK_FAILED)
+        )
 
     def to_dict(self):
         return {
@@ -205,7 +225,7 @@ class PackageService:
 
         state = PackageState()
         if not self.runner.available("apt-get"):
-            state.error = "package_manager_unavailable"
+            state.error = PACKAGE_MANAGER_UNAVAILABLE
             return state
 
         simulated = self.runner.run(
@@ -214,7 +234,7 @@ class PackageService:
         if simulated.ok:
             state.updates = parse_simulated_upgrade(simulated.stdout)
         else:
-            state.error = "update_check_failed"
+            state.error = UPDATE_CHECK_FAILED
 
         selections = self.runner.run("dpkg", ["--get-selections"], timeout=60)
         state.held = parse_held_packages(selections.stdout if selections.ok else "")

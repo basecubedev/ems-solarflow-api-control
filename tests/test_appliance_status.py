@@ -184,6 +184,18 @@ def test_the_last_successful_operation_is_reported(tmp_path):
     assert last["type"] == "admin.lifecycle"
 
 
+def test_a_failed_update_check_is_reported_as_itself(tmp_path):
+    """Ties the finding to the string the package service actually produces."""
+
+    services = appliance(tmp_path)
+    services.host.fail_command("apt-get")
+
+    codes = [item["code"] for item in services.status.overview()["health"]["warnings"]]
+
+    assert "update_check_failed" in codes, codes
+    assert "package_manager_unhealthy" not in codes, codes
+
+
 # --- logs ------------------------------------------------------------------
 
 
