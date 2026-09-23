@@ -182,6 +182,70 @@ def test_setup_is_refused_once_a_password_exists(appliance):
     assert payload["error"] == "password_already_configured"
 
 
+def test_a_foreign_page_cannot_set_the_first_password(appliance):
+    """The documented first-start window, reachable from any page on the LAN.
+
+    `/api/session/setup` is routed before any check runs, so a page the
+    operator happens to open could send a simple cross-origin POST -- text/plain
+    needs no preflight -- and claim the password that opens the Appliance
+    Manager, the Admin console and the dashboard. The operator is then locked
+    out of the only browser recovery UI and needs a console or SSH.
+    """
+
+    _, app, client = appliance
+    status, payload, _ = client.post(
+        "/api/session/setup",
+        {"password": "pwn-by-a-web-page", "confirmation": "pwn-by-a-web-page"},
+        headers={"Origin": "http://evil.example"},
+    )
+
+    assert status == 403, payload
+    assert payload["error"] == "csrf_origin_rejected"
+    assert not app.auth.configured(), "a foreign page enrolled this appliance"
+
+
+def test_a_rebound_host_cannot_set_the_first_password(appliance):
+    _, app, client = appliance
+    status, payload, _ = client.post(
+        "/api/session/setup",
+        {"password": "pwn-by-a-web-page", "confirmation": "pwn-by-a-web-page"},
+        headers={"Host": "attacker.example", "Origin": "http://attacker.example"},
+    )
+
+    assert status == 403, payload
+    assert payload["error"] == "csrf_host_rejected"
+    assert not app.auth.configured()
+
+
+def test_a_foreign_page_cannot_burn_the_operators_login_attempts(appliance):
+    """Five failures from the operator's own IP lock them out for five minutes."""
+
+    _, app, client = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+
+    status, payload, _ = client.post(
+        "/api/session/login",
+        {"password": "wrong-on-purpose"},
+        headers={"Origin": "http://evil.example"},
+    )
+
+    assert status == 403, payload
+    assert payload["error"] == "csrf_origin_rejected"
+
+
+def test_enrolment_and_login_still_work_without_an_origin_header(appliance):
+    """A non-browser caller sends no Origin, and always sends a Host."""
+
+    _, _, client = appliance
+    status, _, _ = client.post(
+        "/api/session/setup", {"password": PASSWORD, "confirmation": PASSWORD}
+    )
+    assert status == 200
+
+    status, _, _ = client.post("/api/session/login", {"password": PASSWORD})
+    assert status == 200
+
+
 def test_there_is_no_unauthenticated_password_reset_endpoint(appliance):
     _, app, client = appliance
     app.auth.create(PASSWORD, PASSWORD)
@@ -842,3 +906,112 @@ def test_a_transport_failure_does_not_count_against_the_rate_limiter(appliance):
     status, payload, _ = client.post("/api/session/login", {"password": PASSWORD})
 
     assert status == 200, payload
+
+
+# --- the rate limiter under concurrency --------------------------------------
+
+
+def test_concurrent_logins_cannot_spend_more_than_the_documented_budget(appliance):
+    """Protected interleaving: every caller reaches the limit check before any
+    of them has recorded a failure against it.
+
+    `login` reads the limiter under the lock, releases it, derives the password
+    hash -- hundreds of milliseconds on a Pi, deliberately outside the lock --
+    and only then records the failure. Until it does, every concurrent attempt
+    sees a clean slate, so the documented budget of five per five minutes
+    becomes "as many as the attacker holds open connections". Each of those
+    derivations is 600 000 PBKDF2 rounds in the root agent, which is the one
+    process an operator recovers through.
+
+    The gate is forced open deterministically rather than by timing: `verify`
+    blocks until the test has seen all callers pass the check point.
+    """
+
+    import threading
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+
+    callers = 10
+    budget = app.rate_limiter.max_failures
+    reached_check = threading.Semaphore(0)
+    release = threading.Event()
+    verifications = []
+    counter = threading.Lock()
+
+    real_limited = app.rate_limiter.limited
+
+    def counting_limited(key):
+        answer = real_limited(key)
+        reached_check.release()
+        return answer
+
+    def blocking_verify(password):
+        with counter:
+            verifications.append(password)
+        assert release.wait(timeout=10), "the test never released the verifications"
+        return False
+
+    app.rate_limiter.limited = counting_limited
+    app.auth.verify = blocking_verify
+
+    refused = []
+    threads = [
+        threading.Thread(target=lambda: _attempt_login(app, refused)) for _ in range(callers)
+    ]
+    for thread in threads:
+        thread.start()
+    for _ in range(callers):
+        assert reached_check.acquire(timeout=10), "not every caller reached the limit check"
+    release.set()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert len(verifications) <= budget, (
+        f"{len(verifications)} password derivations for a budget of {budget}"
+    )
+    assert len(refused) >= callers - budget
+
+
+def _attempt_login(app, refused):
+    from appliance.auth import AuthError
+
+    try:
+        app.login("wrong-on-purpose", source_ip="203.0.113.7")
+    except AuthError as exc:
+        if exc.code == "login_rate_limited":
+            refused.append(exc.code)
+
+
+def test_an_attempt_the_agent_could_not_judge_is_still_not_counted(appliance):
+    """The password was never read, so it must not push towards a lockout."""
+
+    from appliance.auth import AuthError
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+
+    def unavailable(password):
+        raise AuthError("agent_unavailable", "the agent is not reachable")
+
+    app.auth.verify = unavailable
+    for _ in range(app.rate_limiter.max_failures + 2):
+        with pytest.raises(AuthError) as excinfo:
+            app.login(PASSWORD, source_ip="203.0.113.8")
+        assert excinfo.value.code == "agent_unavailable"
+
+    assert not app.rate_limiter.limited("203.0.113.8")
+
+
+def test_a_correct_password_clears_what_the_attempt_itself_recorded(appliance):
+    from appliance.auth import AuthError
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+
+    for _ in range(app.rate_limiter.max_failures - 1):
+        with pytest.raises(AuthError):
+            app.login("wrong-on-purpose", source_ip="203.0.113.9")
+
+    assert app.login(PASSWORD, source_ip="203.0.113.9") is not None
+    assert not app.rate_limiter.limited("203.0.113.9")

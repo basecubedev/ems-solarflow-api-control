@@ -245,6 +245,13 @@ class ApplianceWebApp:
         with self._lock:
             limited = self.rate_limiter.limited(source_ip)
             retry_after = self.rate_limiter.retry_after(source_ip) if limited else 0
+            # Counted here rather than after the derivation. The check and the
+            # count have to be one step under the lock, or every concurrent
+            # attempt passes a check that no failure has been recorded against
+            # yet and the budget becomes the attacker's open-connection count --
+            # each one a PBKDF2 derivation in the root agent. Taken back below
+            # on a success and on an attempt the agent could not judge.
+            attempt = None if limited else self.rate_limiter.record_failure(source_ip)
         if limited:
             self.audit.record(
                 "login.failure",
@@ -260,14 +267,14 @@ class ApplianceWebApp:
         try:
             verified = self.auth.verify(password)
         except AuthError as exc:
+            with self._lock:
+                self.rate_limiter.forget(source_ip, attempt)
             self.audit.record(
                 "login.failure", source_ip=source_ip, result=RESULT_FAILURE, reason=exc.code
             )
             raise
 
         if not verified:
-            with self._lock:
-                self.rate_limiter.record_failure(source_ip)
             self.audit.record(
                 "login.failure",
                 source_ip=source_ip,
@@ -415,11 +422,17 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         self.app.sessions.touch(session.session_id, self.app.auth.generation())
         return session
 
-    def _require_csrf(self, session):
-        token = self.headers.get(CSRF_HEADER) or ""
-        if not token or not secrets.compare_digest(token, session.csrf_token or ""):
-            self._error(403, "csrf_token_invalid", "the CSRF token is missing or invalid")
-            return False
+    def _require_same_origin(self):
+        """The half of the CSRF gate that needs no session to apply.
+
+        Enrolment and login are reachable before anyone holds a token, so the
+        token comparison has nothing to compare against -- but the question of
+        whether a foreign page may reach the route at all is the same one, and
+        the answer is the same. Without it a page opened anywhere on the LAN can
+        claim the first password during the documented first-start window, or
+        burn the operator's login attempts against their own address.
+        """
+
         host = (self.headers.get("Host") or "").split("/", 1)[0]
         if not self.app.names_this_appliance(host):
             # Under DNS rebinding the browser makes Origin and Host agree on the
@@ -432,12 +445,19 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             # accept "http://evil-<host>", which ends with the real host. An
             # absent Origin is left to the token and the SameSite cookie: a
             # browser always sends one, and refusing without it would only lock
-            # out non-browser callers that already hold a 256-bit token.
+            # out non-browser callers.
             _, _, authority = origin.partition("://")
             if not authority or authority.split("/", 1)[0] != host:
                 self._error(403, "csrf_origin_rejected", "the request origin is not accepted")
                 return False
         return True
+
+    def _require_csrf(self, session):
+        token = self.headers.get(CSRF_HEADER) or ""
+        if not token or not secrets.compare_digest(token, session.csrf_token or ""):
+            self._error(403, "csrf_token_invalid", "the CSRF token is missing or invalid")
+            return False
+        return self._require_same_origin()
 
     def _agent(self, operation, session, **fields):
         try:
@@ -476,9 +496,13 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
 
         if path == TEST_RESET_PATH:
             return self._test_reset(body)
-        if path == "/api/session/setup":
-            return self._setup_password(body)
-        if path == "/api/session/login":
+        if path in ("/api/session/setup", "/api/session/login"):
+            # Before the session that a token would come from exists, so the
+            # gate is the origin alone.
+            if not self._require_same_origin():
+                return None
+            if path == "/api/session/setup":
+                return self._setup_password(body)
             return self._login(body)
         if path == "/api/session/logout":
             return self._logout()

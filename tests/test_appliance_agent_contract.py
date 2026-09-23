@@ -407,7 +407,9 @@ def test_sensitive_operations_are_audited(handlers, services):
         }
     )
     actions = [entry["action"] for entry in services.audit.tail()]
-    assert actions == []  # a lifecycle restart is audited by the web layer, not the plan table
+    # The web layer may only report the five authentication events in
+    # WEB_AUDIT_EVENTS, so nothing else would have recorded this one.
+    assert "admin.lifecycle" in actions
 
     install_planned = None
     services.operations.acknowledge(planned["operation"]["operation_id"])
@@ -813,3 +815,45 @@ def test_a_notification_that_cannot_be_delivered_does_not_stop_the_agent(tmp_pat
     monkeypatch.setenv("NOTIFY_SOCKET", str(tmp_path / "nothing-is-bound-here.sock"))
     assert notify_ready() is False
     assert "could not notify systemd of readiness" in capsys.readouterr().err
+
+
+def test_every_plannable_mutation_is_audited():
+    """The class the individual gaps were instances of.
+
+    `_audit` returns silently for a type it does not know, so a plan added to
+    PLAN_TYPES without a line in AUDITED_PLANS leaves no trace at all -- and
+    the omission is invisible until someone looks for the event after an
+    incident. Turning on the root-capable shell account was one of them.
+    """
+
+    from appliance.agent import AUDITED_PLANS, PLAN_TYPES
+
+    missing = sorted(set(PLAN_TYPES.values()) - set(AUDITED_PLANS))
+
+    assert missing == [], f"plannable mutations with no audit action: {missing}"
+
+
+def test_turning_on_the_root_capable_shell_account_is_audited(handlers, services):
+    planned = handlers.dispatch({"operation": "ssh.plan_shell_access", "enabled": True})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+
+    assert "ssh.shell_access" in [entry["action"] for entry in services.audit.tail()]
+
+
+def test_turning_on_sshd_is_audited(handlers, services):
+    planned = handlers.dispatch({"operation": "ssh.plan_service", "enabled": True})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+
+    assert "ssh.service" in [entry["action"] for entry in services.audit.tail()]

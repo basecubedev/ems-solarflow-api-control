@@ -242,7 +242,8 @@ cannot regress silently.
 | Independence | none — one secret for the Appliance Manager, the Admin console and the dashboard, in one shared store |
 | Transport | **Plain HTTP on every interface.** The manager terminates no TLS and has no certificate; anyone who can reach the port sees the login page |
 | Session cookie | `HttpOnly`, `SameSite=Strict`, `Path=/`. The `Secure` attribute is set only when a reverse proxy in front of it terminates TLS — the appliance never does |
-| CSRF | `X-Appliance-CSRF` must match the session token on every mutation; a foreign `Origin` is refused |
+| CSRF | `X-Appliance-CSRF` must match the session token on every mutation, and the `Host` must name this appliance; a foreign `Origin` is refused |
+| CSRF before a session exists | Enrolment and login hold no token, so the `Host` and `Origin` halves apply to them on their own. Without that, a page opened anywhere on the LAN could claim the first password during the first-start window, or spend the operator's login attempts against their own address |
 | Rate limiting | 5 failures per source address per 5 minutes, then `429` |
 | Expiration | idle timeout plus an absolute maximum lifetime |
 | Logout | destroys the session |
@@ -284,11 +285,16 @@ result and operation ID:
 
 ```text
 login success and failure, logout, password change, password reset,
-admin install / update / rollback / repair,
+admin install / update / rollback / repair, admin start / stop / restart,
 OS update, package recovery,
-SSH enable or disable, SSH key added or removed, all keys revoked,
+SSH enable or disable, root-capable shell access enable or disable,
+SSH key added or removed, all keys revoked, support archive,
 network change, hostname change, reboot, shutdown
 ```
+
+Every plan the agent will execute is on that list, and a test holds it there:
+`_audit` returns silently for a type it does not recognise, so a plan added
+without an audit action would leave no trace at all.
 
 Passwords, tokens, WLAN passphrases and full SSH keys are never recorded.
 
