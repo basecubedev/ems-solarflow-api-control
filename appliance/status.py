@@ -11,6 +11,7 @@ import time
 from appliance import rescue_account, validation
 from appliance.docker_backend import DAEMON_RUNNING
 from appliance.redaction import bounded_redacted_log
+from appliance.ssh_policy import REFUSAL_ACCEPTED, REFUSAL_UNKNOWN
 from appliance.systemd import (
     UNIT_APPLIANCE_AGENT,
     UNIT_APPLIANCE_WEB,
@@ -41,6 +42,7 @@ VIEW_DIAGNOSTICS = "diagnostics"
 VIEW_OVERVIEW = "overview"
 VIEW_ADMIN = "admin"
 VIEW_UPDATES = "updates"
+VIEW_ACCESS = "access"
 
 # An update check here is deliberately read-only: it never runs apt-get update,
 # which is what keeps a status poll from changing the machine it reports on.
@@ -171,8 +173,30 @@ class StatusService:
             # Reported, never demanded: the console says whether the rescue
             # account still carries the shipped password so an operator can see
             # the answer without going to look for it.
-            "rescue": rescue_account.state(getattr(self.probe, "root", "/")).to_dict(),
+            "rescue": self._rescue(),
         }
+
+    def _rescue(self):
+        """The rescue account, and whether sshd actually refuses it a password.
+
+        The Match block the package writes is a promise; only the running
+        daemon knows whether it read it, so it is asked. A question that
+        cannot be answered is carried as unknown, never as a refusal: the
+        password behind it is public knowledge and the account reaches root.
+        """
+
+        rescue = rescue_account.state(getattr(self.probe, "root", "/")).to_dict()
+        try:
+            rescue["ssh"] = self.ssh.rescue_password_refusal()
+        except Exception as exc:
+            rescue["ssh"] = {
+                "state": REFUSAL_UNKNOWN,
+                "user": rescue_account.ACCOUNT,
+                "restrictions": {},
+                "violations": [],
+                "error": str(exc)[:200],
+            }
+        return rescue
 
     def docker_state(self):
         daemon = self.docker.daemon_state()
@@ -379,6 +403,24 @@ class StatusService:
                             "Open Diagnostics to collect a support archive before freeing space.",
                         )
                     )
+            # Only the alarming answer is a finding. Refused is what ships;
+            # unknown and absent are carried by the card, because neither is
+            # something an operator can act on from the overview.
+            refusal = (system.get("rescue") or {}).get("ssh") or {}
+            if refusal.get("state") == REFUSAL_ACCEPTED:
+                findings.append(
+                    finding(
+                        "rescue_password_accepted_over_ssh",
+                        FINDING_ERROR,
+                        VIEW_ACCESS,
+                        "The rescue password is a network login",
+                        f"sshd would take {rescue_account.ACCOUNT}'s password from the "
+                        "network, and that password is published with this project.",
+                        f"Change it at the console with 'sudo passwd {rescue_account.ACCOUNT}', "
+                        "then check that /etc/ssh/sshd_config still includes "
+                        "/etc/ssh/sshd_config.d/*.conf and reload sshd.",
+                    )
+                )
 
         last = None
         operations = sections.get("operations", {})

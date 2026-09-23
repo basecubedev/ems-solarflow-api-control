@@ -6,7 +6,7 @@ network with a shell:
 | Account | Over SSH | Reaches root |
 | --- | --- | --- |
 | `ems-backup` | SFTP only — chroot into the export root, forced command, no TTY | no |
-| `ems-rescue` | refused: the shipped policy denies it password and keyboard-interactive | yes, at a keyboard or serial console |
+| `ems-rescue` | refused: the shipped policy denies it password and keyboard-interactive, and the Overview reports whether the running sshd applies that | yes, at a keyboard or serial console |
 | `ems-shell` | key only, once enabled | yes, through `sudo` |
 
 `ems-shell` exists for the case the other two do not cover: the box is up, the

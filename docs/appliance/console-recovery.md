@@ -47,8 +47,12 @@ Only if you enabled it and added a key. `ems-rescue` is a password account and
 the shipped sshd policy refuses it a password — by `Match User ems-rescue`, and
 by refusing keyboard-interactive too, which is the path that otherwise still
 asks for it. Its password is published in this document, so it is a console
-credential and nothing else. This is a key login for whatever account you
-configured:
+credential and nothing else. That refusal is what the package writes, and
+the Overview reports whether the running daemon keeps it — as an error when
+it does not. It can fail to: an `/etc/ssh/sshd_config` carried over from an
+older install has no `Include /etc/ssh/sshd_config.d/*.conf`, and dpkg does
+not rewrite a modified conffile, so the block is on disk and sshd never read
+it. This is a key login for whatever account you configured:
 
 ```bash
 ssh <your-account>@ems-solarflow.local

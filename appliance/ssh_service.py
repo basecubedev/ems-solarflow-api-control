@@ -11,7 +11,8 @@ from dataclasses import dataclass
 
 from appliance import shell_access
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
-from appliance.ssh_policy import parse_sshd_config
+from appliance.rescue_account import ACCOUNT as RESCUE_ACCOUNT
+from appliance.ssh_policy import parse_sshd_config, read_password_refusal
 from appliance.sshkeys import AuthorizedKeysStore, validate_public_key
 from appliance.systemd import UNIT_SSH, UNIT_SSH_SOCKET
 from appliance.validation import ValidationError
@@ -155,6 +156,14 @@ class SshService:
         if state["enabled"] in ("unknown", "not-found") and not state["running"]:
             return None
         return state
+    def rescue_password_refusal(self):
+        """Whether the running daemon refuses the rescue account its password.
+
+        Asked per account, because that refusal lives in a Match block a
+        bare ``sshd -T`` never enters.
+        """
+
+        return read_password_refusal(self.runner, user=RESCUE_ACCOUNT)
 
     def status(self):
         unit = self.systemd.unit_state(UNIT_SSH)

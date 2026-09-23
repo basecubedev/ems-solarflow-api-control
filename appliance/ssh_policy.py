@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The one effective-SSH-policy model the appliance judges the backup account by.
+"""The one effective-SSH-policy model the appliance judges its accounts by.
 
 ``sshd -T -C user=…`` is the only authority for what the running daemon would
 apply, and every consumer — activation, ``backup-access status``,
 ``host-config`` drift detection and ``verify-install`` — must judge the same
 directives against the same expectations. A second, smaller model somewhere
 would report "confined" for a policy nobody checked.
+
+The backup account is judged by its confinement. The rescue account, whose
+password is printed in this repository, is judged by whether that password
+is refused at all. Both are read back from the daemon, because the drop-in
+the package writes is a promise and only ``sshd`` knows whether it read it.
 """
 
 OPTION_CHROOT = "chrootdirectory"
@@ -140,3 +145,76 @@ def read_effective_policy(runner, *, user, export_root):
     )
     effective = parse_sshd_config(result.stdout) if result.ok else {}
     return evaluate_policy(effective, export_root=export_root)
+
+
+# --- the rescue account -------------------------------------------------------
+
+# The two methods the shipped policy refuses the rescue account, named once so
+# the Match block host_config writes and the question asked of the running
+# daemon cannot drift apart. ``pubkeyauthentication`` is deliberately absent:
+# the block leaves it to the global setting, and console-recovery.md offers a
+# key login on that account.
+RESCUE_REFUSED_METHODS = (
+    ("passwordauthentication", "no"),
+    ("kbdinteractiveauthentication", "no"),
+)
+
+REFUSAL_REFUSED = "refused"
+REFUSAL_ACCEPTED = "accepted"
+REFUSAL_UNKNOWN = "unknown"
+REFUSAL_ABSENT = "absent"
+
+
+def evaluate_password_refusal(effective):
+    """Does this effective policy refuse the account its password?
+
+    The same per-option shape as :func:`evaluate_policy`, so a card can show
+    which directive the daemon answered differently.
+    """
+
+    effective = effective or {}
+    restrictions = {}
+    for option, expected in RESCUE_REFUSED_METHODS:
+        actual = str(effective.get(option, ""))
+        restrictions[option] = {
+            "value": actual,
+            "expected": expected,
+            "confirmed": actual.lower() == expected,
+        }
+    violations = [
+        option for option, _ in RESCUE_REFUSED_METHODS if not restrictions[option]["confirmed"]
+    ]
+    return {"restrictions": restrictions, "violations": violations}
+
+
+def read_password_refusal(runner, *, user):
+    """Whether the running daemon refuses ``user`` a password, asked of the daemon.
+
+    A drop-in on disk is a promise. An ``/etc/ssh/sshd_config`` carried over
+    from an older install has no ``Include`` line for the drop-in directory,
+    dpkg never rewrites a modified conffile, and a daemon that was not reloaded
+    runs what it read before -- in each case the block is there and sshd
+    applies its defaults, which take a password.
+
+    There is deliberately no fallback to a bare ``sshd -T`` here, unlike
+    ``SshService.effective_config``: without ``-C`` sshd skips every Match
+    block, so an answer that is not about this account is not an answer, and
+    it reads as unknown rather than as a refusal. Absent means there is no
+    sshd to ask, which is the state a flashed image ships in.
+    """
+
+    verdict = {"state": REFUSAL_ABSENT, "user": user, "restrictions": {}, "violations": []}
+    if runner is None or not runner.available("sshd"):
+        return verdict
+    result = runner.run(
+        "sshd",
+        ["-T", "-C", f"user={user},host=localhost,addr=127.0.0.1"],
+        timeout=20,
+    )
+    effective = parse_sshd_config(result.stdout) if result.ok else {}
+    if not effective:
+        verdict["state"] = REFUSAL_UNKNOWN
+        return verdict
+    verdict.update(evaluate_password_refusal(effective))
+    verdict["state"] = REFUSAL_ACCEPTED if verdict["violations"] else REFUSAL_REFUSED
+    return verdict
