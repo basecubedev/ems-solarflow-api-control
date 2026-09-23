@@ -106,6 +106,15 @@ if dpkg --force-confold --install "$PREVIOUS"; then
     exit 0
 fi
 
+# Before the next attempt, not after the last one. The install unit's
+# TimeoutStartSec and this window are both 900 s, so they run out together:
+# systemd SIGTERMs the install cgroup with dpkg inside it and the database is
+# left interrupted -- which is exactly what the refusal above is, and exactly
+# what this clears. Running it only once the attempts were spent meant every
+# retry failed for a reason already in hand. install-manager.sh does it in this
+# order and says why.
+dpkg --configure -a || true
+
 attempts=$(cat "$ATTEMPTS" 2>/dev/null || echo 0)
 case "$attempts" in '' | *[!0-9]*) attempts=0 ;; esac
 attempts=$((attempts + 1))
@@ -117,7 +126,6 @@ if [ "$attempts" -lt "$REVERT_ATTEMPTS" ]; then
     exit 0
 fi
 
-dpkg --configure -a || true
 record revert_failed \
     "the deadline expired and $PREVIOUS could not be installed in $REVERT_ATTEMPTS attempts"
 disarm
