@@ -36,6 +36,10 @@ from appliance.ssh_policy import FORCED_COMMAND
 
 HOST_PATHS_NAME = "host-paths.env"
 PATH_UNIT = "ems-appliance-export.path"
+# The unit that actually binds the exports and then hands the result to
+# `backup-access activate`. Re-arming the watcher above does not start it:
+# systemd does not treat PathChanged= as satisfied at unit start.
+EXPORT_UNIT = "ems-appliance-export.service"
 SSHD_POLICY_NAME = "ems-appliance-backup.conf"
 DEFAULT_SYSTEMD_DIR = "/etc/systemd/system"
 DEFAULT_SSHD_DIR = "/etc/ssh/sshd_config.d"
@@ -766,6 +770,18 @@ class LiveActivation:
                     "watched_path_not_applied",
                     f"{PATH_UNIT} still watches {', '.join(armed) or 'nothing'}",
                 )
+        # A watcher pointed at the new root moves no mount. Without this the
+        # export root kept the read-only binds of the *old* install root, the
+        # backup account stayed authenticated against them behind a confinement
+        # nothing had checked, and this reported applied and verified. The unit
+        # re-runs the export setup and hands the result to
+        # `backup-access activate`, which is the fail-closed gate.
+        if not self.runner.run("systemctl", ["start", EXPORT_UNIT], timeout=600).ok:
+            raise HostConfigError(
+                "export_setup_failed",
+                f"{EXPORT_UNIT} could not publish {paths.install_root} into "
+                f"{paths.export_root}",
+            )
         if not self.sshd_usable:
             return True
         self._reload_ssh()

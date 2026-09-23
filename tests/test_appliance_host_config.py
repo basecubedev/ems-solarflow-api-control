@@ -544,3 +544,45 @@ def test_a_complaint_that_is_not_about_our_policy_still_does_not_roll_back(tmp_p
 
     assert host_paths_file(paths).is_file(), report
     assert sshd_policy_file(str(tmp_path / "etc" / "ssh" / "sshd_config.d")).is_file()
+
+
+def test_applying_a_new_root_actually_re_exports_it(tmp_path):
+    """Re-arming the watcher moves no mount at all.
+
+    systemd deliberately does not treat `PathChanged=` as satisfied when the
+    unit starts -- only a real inotify event or a nonexistence-to-existence
+    transition triggers the service. So `host-config --apply` restarted the
+    watcher, read back that it watches the new root, and reported
+    `applied: true` with `runtime.verified: true` while `/srv/ems-appliance-
+    export` still carried the read-only binds of the *old* installation root.
+    The backup account stayed authenticated against them, behind a confinement
+    that had checked nothing, until the next boot or a chance inotify event.
+    """
+
+    paths = layout(tmp_path, install_root=tmp_path / "srv" / "ems-new")
+    paths.install_root.mkdir(parents=True, exist_ok=True)
+    host = host_for(tmp_path)
+
+    report = apply_with(paths, host, tmp_path)
+
+    started = [
+        args for tool, args in host.calls if tool == "systemctl" and tuple(args)[:1] == ("start",)
+    ]
+    assert any("ems-appliance-export.service" in tuple(args) for args in started), (
+        f"the exports were never re-applied: {host.calls}"
+    )
+    assert report["runtime"]["verified"] is True, report
+
+
+def test_an_export_setup_that_fails_does_not_report_the_root_applied(tmp_path):
+    """Reporting applied over exports that did not move is the whole defect."""
+
+    paths = layout(tmp_path, install_root=tmp_path / "srv" / "ems-new")
+    paths.install_root.mkdir(parents=True, exist_ok=True)
+    host = host_for(tmp_path)
+    host.fail("systemctl", "start")
+
+    with pytest.raises(HostConfigError):
+        apply_with(paths, host, tmp_path)
+
+    assert not host_paths_file(paths).exists()
