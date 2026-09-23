@@ -130,7 +130,16 @@ class SupportArchiveService:
         for source in validation.LOG_SOURCES:
             try:
                 log = self.status_service.read_log(source, MAX_LOG_LINES)
-                members.append((f"logs/{source}.log", log["text"]))
+                # A reader that swallowed its failure says so here the same
+                # way one that raised does; an empty member would claim the
+                # unit logged nothing.
+                unreadable = log.get("unreadable") or ""
+                members.append(
+                    (
+                        f"logs/{source}.log",
+                        log["text"] or (f"unavailable: {unreadable}" if unreadable else ""),
+                    )
+                )
             except Exception as exc:
                 members.append((f"logs/{source}.log", f"unavailable: {exc.__class__.__name__}"))
         try:

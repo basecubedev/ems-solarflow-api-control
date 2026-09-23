@@ -209,7 +209,7 @@
      The shell's one live region speaks instead, and only when the sentence
      itself changed. */
   function verdictLine(status) {
-    var verdict = overviewVerdict(status);
+    var verdict = overviewVerdict(status, sessionFindings());
     var spoken = verdictAnnouncement(state.lastVerdict, verdict.text);
     state.lastVerdict = verdict.text;
     if (spoken) announce(spoken);
@@ -1139,14 +1139,23 @@
     return text;
   }
 
-  function overviewVerdict(status) {
+  function overviewVerdict(status, extra) {
     var payload = status || {};
     if (payload.error) return { text: "This appliance could not be read.", tone: "bad" };
     var level = (payload.health || {}).level;
-    if (level === "degraded") {
+    /* The panel under this line ranks the browser's own findings beside the
+       backend's; reading health.level alone printed "This appliance is
+       healthy" over a red finding on the same screen. The worst of them can
+       raise the verdict, never lower it, and info moves nothing -- the same
+       mapping status.health_level() applies on the backend. */
+    var worst = (extra || []).reduce(function (carried, item) {
+      var severity = (item || {}).severity;
+      return rankSeverity(severity) < rankSeverity(carried) ? severity : carried;
+    }, "");
+    if (level === "degraded" || worst === "error") {
       return { text: "Something on this appliance is not working.", tone: "bad" };
     }
-    if (level === "attention") {
+    if (level === "attention" || worst === "warning") {
       return { text: "This appliance is running and needs a little attention.", tone: "warn" };
     }
     if (level === "healthy") return { text: "This appliance is healthy.", tone: "ok" };
@@ -1255,10 +1264,13 @@
     return "bad";
   }
 
+  /* The list is already the configured set, and the backend names which
+     entry is the EMS. A name pattern reported a container the operator had
+     not configured as the EMS, and missed the one they had. */
   function emsState(docker) {
     var containers = docker.containers || [];
     for (var i = 0; i < containers.length; i += 1) {
-      if (/ems-solarflow$|api-control/.test(containers[i].name)) return containers[i].state;
+      if (containers[i].name === docker.ems_container) return containers[i].state;
     }
     return "unknown";
   }
@@ -1266,7 +1278,7 @@
   function emsContainerName(docker) {
     var containers = docker.containers || [];
     for (var i = 0; i < containers.length; i += 1) {
-      if (/ems-solarflow$|api-control/.test(containers[i].name)) return containers[i].name;
+      if (containers[i].name === docker.ems_container) return containers[i].name;
     }
     return null;
   }
@@ -2462,6 +2474,22 @@
     main.appendChild(logPanel(state.data.logSource || sources[0], "Logs", sources));
   }
 
+  /* An empty log and a log nobody could read are two statements; the panel
+     printed "0 lines" and "(empty)" for both. */
+  function logSummary(log) {
+    if (!log) return null;
+    if (log.unreadable) {
+      return {
+        note: "This log could not be read (" + log.unreadable + ").",
+        body: "(this log could not be read)"
+      };
+    }
+    return {
+      note: log.lines + " lines" + (log.truncated ? " (truncated)" : ""),
+      body: log.text || "(empty)"
+    };
+  }
+
   function logPanel(source, title, sources) {
     var wrapper = el("section", { class: "action-card", "data-test": "log-panel" }, [
       el("div", { class: "action-card-head" }, [
@@ -2490,9 +2518,10 @@
     ]));
 
     var log = state.data.log;
-    if (log && log.source === source) {
-      wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: log.lines + " lines" + (log.truncated ? " (truncated)" : "") }));
-      wrapper.appendChild(el("pre", { class: "log-view", "data-test": "log-output", text: log.text || "(empty)" }));
+    var summary = log && log.source === source ? logSummary(log) : null;
+    if (summary) {
+      wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: summary.note }));
+      wrapper.appendChild(el("pre", { class: "log-view", "data-test": "log-output", text: summary.body }));
     } else {
       wrapper.appendChild(el("p", { class: "empty-state", text: "No log loaded." }));
     }

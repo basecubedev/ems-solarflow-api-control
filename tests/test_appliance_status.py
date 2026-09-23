@@ -100,6 +100,20 @@ def test_reboot_requirement_is_read_from_the_marker(tmp_path):
 # --- fault isolation -------------------------------------------------------
 
 
+def test_the_docker_section_names_the_container_the_ems_runs_in(tmp_path):
+    """The console must not guess the EMS by its name; the backend says which."""
+
+    from tests.helpers.appliance import appliance_config, build_test_services
+
+    host_files(tmp_path)
+    services = build_test_services(tmp_path, config=appliance_config(ems_container="ems"))
+
+    section = services.status.overview()["docker"]
+
+    assert section["ems_container"] == "ems"
+    assert "ems" in [item["name"] for item in section["containers"]]
+
+
 def test_a_failing_section_does_not_take_down_the_overview():
     def explode():
         raise RuntimeError("probe failed")
@@ -210,6 +224,46 @@ def test_log_output_is_bounded_by_the_requested_line_count(tmp_path):
     )
     log = services.status.read_log("operations", 25)
     assert log["lines"] <= 25
+
+
+def test_a_log_the_reader_could_not_open_is_not_an_empty_log(tmp_path):
+    """An empty log and a log nobody could read are two statements.
+
+    journalctl missing raised before the process ever started, the helper
+    caught everything and substituted "", and the console reported 0 lines
+    and (empty) -- the same words it uses for a unit that logged nothing.
+    """
+
+    services = appliance(tmp_path)
+    services.host.tools.discard("journalctl")
+
+    log = services.status.read_log("appliance_agent", 20)
+
+    assert log["text"] == ""
+    assert log["unreadable"] == "CommandError"
+
+
+def test_a_log_file_that_cannot_be_opened_is_not_an_empty_log(tmp_path):
+    services = appliance(tmp_path)
+    services.paths.operations_log.mkdir(parents=True, exist_ok=True)
+
+    log = services.status.read_log("operations", 20)
+
+    assert log["text"] == ""
+    assert log["unreadable"] == "IsADirectoryError"
+
+
+def test_a_log_that_is_simply_empty_still_says_empty(tmp_path):
+    """The other side: the fix must not answer unreadable for every quiet log."""
+
+    services = appliance(tmp_path)
+    services.paths.operations_log.parent.mkdir(parents=True, exist_ok=True)
+    services.paths.operations_log.write_text("", encoding="utf-8")
+
+    log = services.status.read_log("operations", 20)
+
+    assert log["text"] == ""
+    assert log["unreadable"] == ""
 
 
 # --- support archive -------------------------------------------------------
@@ -504,6 +558,29 @@ def test_a_readable_unit_is_not_thereby_a_controllable_one():
     for unit in APPLIANCE_UNIT_SOURCES.values():
         assert unit in READABLE_UNITS
         assert unit not in CONTROLLABLE_UNITS
+
+
+def test_the_archive_says_a_log_could_not_be_read(tmp_path):
+    """The bundle is read by somebody who cannot ask the host; an empty file
+    there says the unit logged nothing, which is not what happened."""
+
+    services = appliance(tmp_path)
+    services.host.tools.discard("journalctl")
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "support.plan_archive"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    operation = services.operations.get(planned["operation"]["operation_id"])
+
+    with tarfile.open(operation.result["path"], "r:gz") as archive:
+        text = archive.extractfile("logs/appliance_agent.log").read().decode("utf-8")
+
+    assert text.startswith("unavailable: CommandError"), text
 
 
 def test_the_support_archive_carries_every_declared_log_source(tmp_path):
