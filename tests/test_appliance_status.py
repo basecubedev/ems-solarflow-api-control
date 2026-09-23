@@ -568,3 +568,42 @@ def test_a_fresh_index_says_nothing(tmp_path):
     codes = [item["code"] for item in services.status.overview()["health"]["warnings"]]
 
     assert "package_index_stale" not in codes
+def test_a_stopped_ems_container_is_not_a_healthy_appliance(tmp_path):
+    """The whole point of the box stands still and it calls itself healthy.
+
+    `_health` reads the Docker daemon, the Admin container, update counts, the
+    reboot flag, package-manager health and two fill levels. It never looks at
+    `docker.containers` -- the list that carries the EMS itself. So with Docker
+    up and Admin healthy, an exited `ems-solarflow-api-control` leaves the
+    headline at "This appliance is healthy." and the findings panel at "Nothing
+    needs your attention", with only a small "exited" on one tile.
+    """
+
+    services = appliance(tmp_path)
+    services.host.run_container(
+        services.config.ems_container, f"{ADMIN_REPOSITORY}:v1.0.0", state="exited"
+    )
+
+    health = services.status.overview()["health"]
+
+    assert health["level"] != HEALTH_HEALTHY, health
+    assert "ems_not_running" in [item["code"] for item in health["warnings"]], health["warnings"]
+
+
+def test_a_running_ems_container_is_not_a_finding(tmp_path):
+    services = appliance(tmp_path)
+    services.host.run_container(services.config.ems_container, f"{ADMIN_REPOSITORY}:v1.0.0")
+
+    health = services.status.overview()["health"]
+
+    assert "ems_not_running" not in [item["code"] for item in health["warnings"]]
+
+
+def test_an_appliance_with_no_ems_installed_is_not_accused_of_a_stopped_one(tmp_path):
+    """No EMS yet is the state a fresh appliance is in, and Admin already says so."""
+
+    services = appliance(tmp_path)
+
+    codes = [item["code"] for item in services.status.overview()["health"]["warnings"]]
+
+    assert "ems_not_running" not in codes

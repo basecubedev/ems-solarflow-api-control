@@ -9,7 +9,7 @@ down with it.
 import time
 
 from appliance import rescue_account, validation
-from appliance.docker_backend import DAEMON_RUNNING
+from appliance.docker_backend import CONTAINER_RUNNING, DAEMON_RUNNING
 from appliance.redaction import bounded_redacted_log
 from appliance.systemd import (
     UNIT_APPLIANCE_AGENT,
@@ -258,6 +258,31 @@ class StatusService:
                         f"The container engine reports {daemon.get('state') or 'no state'}.",
                         "Nothing containerised runs without it. Collect a support archive in "
                         "Diagnostics; a restart from the Overview is the usual repair.",
+                    )
+                )
+
+        if docker.get("status") == SECTION_OK:
+            # The container the whole appliance exists to run. Nothing in the
+            # health summary looked at this list, so an exited EMS left the
+            # headline at "This appliance is healthy" with a small "exited" on
+            # one tile as the only sign. A container that is not there at all
+            # is a different state, and Admin already reports that one.
+            for container in docker.get("containers", []) or []:
+                if container.get("name") != self.config.ems_container:
+                    continue
+                if not container.get("exists") or container.get("state") == CONTAINER_RUNNING:
+                    continue
+                findings.append(
+                    finding(
+                        "ems_not_running",
+                        FINDING_ERROR,
+                        VIEW_OVERVIEW,
+                        "The EMS is not running",
+                        f"The {container.get('name')} container reports "
+                        f"{container.get('state') or 'no state'}, so nothing is controlling "
+                        "the battery.",
+                        "Open Admin and start it, and read its container log if it will "
+                        "not stay up.",
                     )
                 )
 
