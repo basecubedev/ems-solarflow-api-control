@@ -49,8 +49,18 @@ case "$1" in
         fi
         # The export binds must go before the package does, or the mount points
         # survive as stale read-only views of EMS data.
-        if [ -x "$LIBDIR/setup-export-root.sh" ]; then
-            "$LIBDIR/setup-export-root.sh" --teardown || true
+        if [ -x "$LIBDIR/setup-export-root.sh" ] \
+           && ! "$LIBDIR/setup-export-root.sh" --teardown; then
+            # The script above named the targets; it is the only thing that
+            # still can. Removing the package now would leave read-only views
+            # of the EMS directories mounted with nothing on the host naming
+            # them, and the space they pin never comes back. The units above
+            # are already stopped; the authentication is already disabled.
+            echo "ems-appliance: an export bind mount could not be removed (see above)." >&2
+            echo "  Close whatever holds it -- an open SFTP session of the backup account" >&2
+            echo "  is the usual cause, 'fuser -vm <target>' names the process -- and run the" >&2
+            echo "  removal again. The backup account's authentication is already disabled." >&2
+            exit 1
         fi
 
         if command -v sshd >/dev/null 2>&1 && sshd -t >/dev/null 2>&1; then

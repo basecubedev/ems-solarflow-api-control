@@ -188,6 +188,30 @@ def test_removal_aborts_when_authentication_cannot_be_disabled(host):
     assert result.returncode != 0, result.stdout + result.stderr
 
 
+def test_removal_stops_when_an_export_bind_survived_the_teardown(host):
+    """The teardown named the targets; prerm is the only thing that can still
+    refuse on its behalf. Removing the package over a surviving bind would
+    leave read-only views of the EMS directories mounted with nothing on the
+    host naming them. The authentication is revoked above that step, so this
+    can only fail on the mounts.
+    """
+
+    host.run("ensure")
+    host.write_key()
+    host.stub_command("ems-appliance", "exit 0")
+    host.stub_command(
+        "setup-export-root.sh",
+        'echo "ems-appliance: these export mounts could not be removed:'
+        ' /srv/ems-appliance-export/data" >&2\nexit 1',
+    )
+
+    result = host.run_prerm("remove", EMS_APPLIANCE_LIBDIR=str(host.stub_dir))
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "could not be removed" in result.stderr, result.stderr
+    assert "authentication could not be disabled" not in result.stderr, result.stderr
+
+
 def test_removal_falls_back_to_the_direct_key_removal(host):
     host.run("ensure")
     keys = host.write_key()
