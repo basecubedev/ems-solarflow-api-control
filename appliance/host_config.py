@@ -770,18 +770,6 @@ class LiveActivation:
                     "watched_path_not_applied",
                     f"{PATH_UNIT} still watches {', '.join(armed) or 'nothing'}",
                 )
-        # A watcher pointed at the new root moves no mount. Without this the
-        # export root kept the read-only binds of the *old* install root, the
-        # backup account stayed authenticated against them behind a confinement
-        # nothing had checked, and this reported applied and verified. The unit
-        # re-runs the export setup and hands the result to
-        # `backup-access activate`, which is the fail-closed gate.
-        if not self.runner.run("systemctl", ["start", EXPORT_UNIT], timeout=600).ok:
-            raise HostConfigError(
-                "export_setup_failed",
-                f"{EXPORT_UNIT} could not publish {paths.install_root} into "
-                f"{paths.export_root}",
-            )
         if not self.sshd_usable:
             return True
         self._reload_ssh()
@@ -799,6 +787,22 @@ class LiveActivation:
             raise HostConfigError(
                 "ssh_policy_not_applied",
                 "the running SSH daemon does not apply: " + ", ".join(policy["violations"]),
+            )
+
+        # Last, and only once the policy above is live. A watcher pointed at the
+        # new root moves no mount -- systemd does not treat PathChanged= as
+        # satisfied at unit start -- so without this the export root kept the
+        # binds of the *old* install root while this reported applied and
+        # verified, and the backup account stayed authenticated against them
+        # behind a confinement nothing had checked. The unit re-runs the export
+        # setup and hands the result to `backup-access activate`; running it
+        # before the reload meant activating against a policy sshd had not read
+        # yet, which refuses and failed the whole package install.
+        if not self.runner.run("systemctl", ["start", EXPORT_UNIT], timeout=600).ok:
+            raise HostConfigError(
+                "export_setup_failed",
+                f"{EXPORT_UNIT} could not publish {paths.install_root} into "
+                f"{paths.export_root}",
             )
         return True
 
