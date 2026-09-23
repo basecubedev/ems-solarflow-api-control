@@ -450,11 +450,19 @@ LANDING_PAGES = (
 @pytest.mark.parametrize("page", LANDING_PAGES, ids=lambda page: page.name)
 def test_every_page_a_reader_lands_on_says_the_same_thing_about_the_appliance(page):
     """Three pages introduce it. A reader who meets a different claim on each
-    cannot tell which one is current."""
+    cannot tell which one is current.
 
-    text = " ".join((ROOT / page).read_text(encoding="utf-8").split())
+    The claim moved from "not confirmed" to "partly confirmed" when a Pi 3B+
+    had been running the image for three weeks and hardware-validation.md
+    carried the evidence, while these three pages still said no board had ever
+    booted one. Saying less than the evidence proves is the same defect as
+    saying more.
+    """
 
-    assert "not confirmed on physical hardware" in text.replace("**", "")
+    text = " ".join((ROOT / page).read_text(encoding="utf-8").split()).replace("**", "")
+
+    assert "partly confirmed on physical hardware" in text
+    assert "not confirmed on physical hardware" not in text
 
 
 def test_the_faq_points_at_the_console_account_without_making_it_the_normal_path():

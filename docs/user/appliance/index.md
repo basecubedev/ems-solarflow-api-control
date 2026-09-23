@@ -5,9 +5,13 @@ runs your energy management and nothing else. You flash one card, plug it in,
 and manage it from a browser. There is no shell to learn and no operating
 system to maintain by hand.
 
-> **Not confirmed on physical hardware.** The image is built and tested
-> automatically, but nobody has yet run one on a Raspberry Pi and reported back.
-> See [what that means](#what-not-confirmed-means) below before you rely on it.
+> **Partly confirmed on physical hardware.** One Raspberry Pi 3B+ has been
+> running this image since 2026-08-29: it boots, it grew its root partition to
+> the card, the console answers, and it has installed signed Appliance Manager
+> packages over HTTPS and stepped back from one. What is *not* settled is the
+> part that matters most for daily use — that board does not run EMS, Admin or
+> InfluxDB, so nothing is known about a Pi 3's 1 GB of RAM carrying them. No Pi
+> 4 or Pi 5 has run it at all. See [what that means](#what-not-confirmed-means).
 
 ## Choose your path
 
@@ -61,17 +65,22 @@ This project uses the same words for the appliance as for its inverter support:
 The appliance is in the third group. Every part of it is exercised
 automatically — the package installs and its services start on a booted 64-bit
 guest, the update mechanism is tested against a real Docker engine, the image
-layout is audited — but none of that runs on a Raspberry Pi.
+layout is audited — and one Pi 3B+ has been running the image since 2026-08-29.
 
-Concretely, these are the things only real hardware can settle:
+What that one board has settled:
 
-- whether the image boots at all on a board — it has not
-- whether the first boot grows the root partition to fill a real card
-- how the system behaves when power is cut mid-update
+- the image boots, and the first boot grew the root partition to fill the card
+- the agent and the web console come up and answer
+- an appliance fetches and installs a signed Appliance Manager package over
+  HTTPS from a real network, and steps back from one
+
+What only real hardware can settle and nothing has:
+
 - whether a Raspberry Pi 3's 1 GB of RAM carries Docker, Admin, EMS and
-  InfluxDB together, which is unmeasured rather than estimated
-- whether an appliance can fetch and install a signed Appliance Manager package
-  over HTTPS from a real network
+  InfluxDB together — **that board runs none of them**, so this is still
+  unmeasured rather than estimated
+- whether a Pi 4 or Pi 5 boots the image at all; neither has been tried
+- how the system behaves when power is cut mid-update
 - SD-card wear over time
 
 ### If you are the first

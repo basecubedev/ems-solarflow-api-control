@@ -362,7 +362,7 @@ A dedicated **appliance image** is also available for a Raspberry Pi that should
 | Shelly Pro grid meter | Local HTTP | Validated on real hardware |
 | Zendure Smart Meter 3CT / D0 | HTTP or MQTT | Implemented; testers wanted |
 | Other supported grid meters | HTTP, MQTT or Home Assistant | Model-dependent |
-| Appliance image (Raspberry Pi 3 / 4 / 5) | — | Reverse-engineered; no board has booted one |
+| Appliance image (Raspberry Pi 3 / 4 / 5) | Pi 3B+ only, and without EMS on it | One 3B+ runs the image since 2026-08-29; no Pi 4 or Pi 5 has booted it |
 
 **Validated** means confirmed on real hardware.  
 **Family-supported** means the model shares a known supported protocol but has not yet been individually confirmed.  
