@@ -85,6 +85,68 @@ def test_the_archive_moves_and_not_only_the_record(paths, tmp_path):
     assert Path(target.path).read_bytes() == b"one"
 
 
+def torn_retain(paths, tmp_path, monkeypatch, *, digests=False):
+    """Two good retains, then a third whose second copy fails.
+
+    The rotation copy has already overwritten the bytes the record described
+    when the copy of the new archive fails -- ENOSPC is the ordinary way, the
+    download reserved room for one archive and retention writes two more.
+    """
+
+    from appliance import artifact_trust
+
+    def keep(name, body, version):
+        source = archive(tmp_path, name, body)
+        sha256 = artifact_trust.file_digest(source) if digests else name[0] * 3
+        return source, sha256, version
+
+    for name, body, version in (("a.deb", b"one", "0.1.0"), ("b.deb", b"two", "0.2.0")):
+        source, sha256, version = keep(name, body, version)
+        retention.retain(paths, source, sha256=sha256, version=version)
+
+    real_copy = retention._copy
+    copies = []
+
+    def flaky(source, target):
+        copies.append(target)
+        if len(copies) == 2:
+            raise retention.RetentionError("retention_not_writable", "No space left on device")
+        return real_copy(source, target)
+
+    monkeypatch.setattr(retention, "_copy", flaky)
+    source, sha256, version = keep("c.deb", b"three", "0.3.0")
+    with pytest.raises(retention.RetentionError):
+        retention.retain(paths, source, sha256=sha256, version=version)
+    return retention.read(paths)
+
+
+def test_a_retain_that_fails_half_way_leaves_a_record_that_matches_the_files(
+    paths, tmp_path, monkeypatch
+):
+    """Three writes with no record in between: the first copy destroyed the
+    bytes the record still described, and a failure in the second made that
+    lie permanent -- can_revert stayed true, the console offered the button,
+    and prepare_revert refused with manager_artifact_corrupt for ever."""
+
+    kept = torn_retain(paths, tmp_path, monkeypatch)
+
+    assert Path(kept.previous.path).read_bytes() == b"two"
+    assert kept.previous.sha256 == "bbb"
+    assert kept.previous.version == "0.2.0"
+
+
+def test_a_half_finished_retain_does_not_cost_the_way_back_for_good(
+    paths, tmp_path, monkeypatch
+):
+    """The exact comparison prepare_revert makes."""
+
+    from appliance import artifact_trust
+
+    kept = torn_retain(paths, tmp_path, monkeypatch, digests=True)
+
+    assert artifact_trust.file_digest(Path(kept.previous.path)) == kept.previous.sha256
+
+
 def test_only_one_step_back_is_kept(paths, tmp_path):
     for index, (name, body, version) in enumerate(
         [("a.deb", b"one", "0.1.0"), ("b.deb", b"two", "0.2.0"), ("c.deb", b"three", "0.3.0")]

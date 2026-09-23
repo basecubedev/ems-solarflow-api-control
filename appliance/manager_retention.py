@@ -254,6 +254,12 @@ def retain(
             state_implements=dict(existing.current.state_implements),
             state_reads=dict(existing.current.state_reads),
         )
+        # The rotation copy has just overwritten the bytes the record on
+        # disk still describes. Made true again before anything else may
+        # fail: a copy of the new archive that dies here -- ENOSPC is the
+        # ordinary way -- would otherwise leave a record naming one package
+        # over the bytes of another, and prepare_revert refusing for ever.
+        _write_record(paths, Retention(current=existing.current, previous=previous))
 
     _copy(source, current_path)
     current = RetainedPackage(
