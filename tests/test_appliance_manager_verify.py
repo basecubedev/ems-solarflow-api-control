@@ -498,6 +498,74 @@ def test_a_tick_with_no_deadline_disarms_itself(paths, tmp_path):
     assert "disable --now" in log.read_text(encoding="utf-8")
 
 
+def unreadable_deadline(paths, packaged, mutate):
+    """An armed deadline, rewritten the way a record this code cannot place looks."""
+
+    deadline_at(paths, packaged, epoch=1)
+    path = manager_verify.deadline_path(paths)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    mutate(record)
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_a_deadline_record_this_manager_cannot_read_is_not_acted_on(paths, packaged, tmp_path):
+    """Two readers, one fact.
+
+    manager_verify.read() refuses a record whose schema_version it does not
+    know and the console then showed nothing in flight -- while the reverter,
+    which never looked at the version, read the same file field by field and
+    installed previous.deb on the next tick, under a console that had just
+    said nothing would. A record this reverter cannot place is not evidence
+    it can act on; it is retired with a verdict that says so, not installed.
+    """
+
+    def foreign_schema(record):
+        record["schema_version"] = max(manager_verify.READABLE_DEADLINE_VERSIONS) + 1
+
+    unreadable_deadline(paths, packaged, foreign_schema)
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.2.0", agent="failed")
+
+    result = run_reverter(paths, tools, now=0)
+
+    assert result.returncode == 0, result.stderr
+    assert "dpkg --force-confold" not in log.read_text(encoding="utf-8")
+    verdict = manager_verify.read_verdict(paths)
+    assert verdict.verdict == manager_verify.VERDICT_UNAVAILABLE, verdict
+    assert "could not be read" in verdict.detail
+    assert not manager_verify.deadline_path(paths).exists()
+    assert "disable --now" in log.read_text(encoding="utf-8")
+
+
+def test_a_deadline_with_no_epoch_is_not_read_as_one_that_already_expired(
+    paths, packaged, tmp_path
+):
+    """A missing deadline defaulted to 0, and 0 is in the past."""
+
+    def no_epoch(record):
+        del record["deadline_epoch"]
+
+    unreadable_deadline(paths, packaged, no_epoch)
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.2.0", agent="failed")
+
+    result = run_reverter(paths, tools, now=0)
+
+    assert result.returncode == 0, result.stderr
+    assert "dpkg --force-confold" not in log.read_text(encoding="utf-8")
+    assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_UNAVAILABLE
+    assert not manager_verify.deadline_path(paths).exists()
+
+
+def test_the_reverter_reads_the_schema_version_the_manager_writes():
+    """One number, two languages: the test is what keeps them one."""
+
+    script = REVERTER.read_text(encoding="utf-8")
+
+    assert "schema_version" in script
+    assert f"DEADLINE_SCHEMA={manager_verify.DEADLINE_SCHEMA_VERSION}\n" in script
+
+
 # --- properties that live outside Python -------------------------------------
 
 

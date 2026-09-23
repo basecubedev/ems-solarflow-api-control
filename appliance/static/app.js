@@ -1668,12 +1668,19 @@
     var expiry = Number(verify.deadline_epoch) || 0;
     now = Number(now) || 0;
     var inFlight = armed && !(now && expiry && now >= expiry);
+    /* A record this manager cannot read is not unarmed. The reverter that
+       judges it is the outgoing package's, which may read a record this
+       version cannot -- an older manager installed over a newer one -- so
+       it may fire. Held closed until that reverter retires it on its next
+       tick, which it does for a record nobody can act on as well. */
+    var unreadable = !armed && !!verify.unreadable;
     return {
       armed: armed,
       inFlight: inFlight,
       expiredUnjudged: armed && !inFlight,
-      canUpdate: !inFlight,
-      canRevert: (manager || {}).can_revert === true && !inFlight
+      unreadable: unreadable,
+      canUpdate: !inFlight && !unreadable,
+      canRevert: (manager || {}).can_revert === true && !inFlight && !unreadable
     };
   }
 
@@ -1775,6 +1782,8 @@
             ? tone("warn", "waiting for the deadline")
             : actions.expiredUnjudged
               ? tone("bad", "deadline expired without a verdict")
+              : actions.unreadable
+              ? tone("warn", "deadline record unreadable")
               : (verdict.settled
                   ? tone(MANAGER_VERDICTS[verdict.verdict] ? MANAGER_VERDICTS[verdict.verdict][0] : "warn",
                          format(verdict.verdict))
@@ -1792,6 +1801,16 @@
           text: "This appliance is waiting for " + format(verify.expected_version)
             + " to prove itself. If no healthy result appears before the deadline, the previous "
             + "package is installed again. Nothing else can be started until it settles."
+        })
+      ]));
+    } else if (actions.unreadable) {
+      main.appendChild(el("p", { class: "empty-state", "data-test": "manager-deadline-unreadable" }, [
+        el("strong", { text: "A deadline record this manager cannot read is on this appliance. " }),
+        el("span", {
+          text: "It may be one another version of the manager armed and is still judging, or one "
+            + "nothing can act on; this console cannot tell which, so installing and reverting wait "
+            + "until the reverter retires it on its next tick. Check ems-appliance-manager-verify.timer "
+            + "if it does not go away. (" + format(verify.unreadable) + ")"
         })
       ]));
     } else if (actions.expiredUnjudged) {

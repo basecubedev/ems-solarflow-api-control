@@ -155,6 +155,43 @@ def test_a_clock_it_cannot_read_keeps_the_deadline_shut():
 
 
 @requires_node
+def test_a_deadline_record_the_console_could_not_read_is_not_reported_as_quiet():
+    """Unreadable is not unarmed.
+
+    manager_verify.read() carries ``unreadable`` for a record it cannot place,
+    and this gate read only ``armed``: the card said nothing in flight and both
+    buttons were free while a reverter -- the outgoing package's, which may
+    well read a record this manager cannot -- was about to act on it. The
+    record is held closed until the reverter retires it on its next tick.
+    """
+
+    unreadable = manager(
+        can_revert=True,
+        verify={"armed": False, "unreadable": "deadline record version 2 cannot be read"},
+    )
+
+    result = evaluate("managerActions", unreadable, 1001)
+    assert result["unreadable"] is True
+    assert result["inFlight"] is False
+    assert result["canUpdate"] is False
+    assert result["canRevert"] is False
+
+    quiet = evaluate("managerActions", manager(can_revert=True, verify={"armed": False}), 1001)
+    assert quiet["unreadable"] is False
+    assert quiet["canUpdate"] is True
+
+
+def test_the_console_names_the_record_it_could_not_read():
+    section = APP.split("function renderManagerUpdates(", 1)[1]
+
+    assert '"data-test": "manager-deadline-unreadable"' in section
+    assert "deadline record unreadable" in section
+    # The expired case keeps its own words; the two must stay distinct.
+    assert '"data-test": "manager-deadline-expired"' in section
+    assert "nothing judged it" in section
+
+
+@requires_node
 def test_a_missing_payload_enables_nothing_it_cannot_prove():
     result = evaluate("managerActions", {})
 

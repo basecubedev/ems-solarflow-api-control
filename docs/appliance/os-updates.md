@@ -185,6 +185,7 @@ gate is narrow and is not a functional test of the manager.
 | The gate has not passed when the deadline expires | `previous.deb` is installed again, and the console reports *reverted*. |
 | There is no `previous.deb` | The console reports *revert unavailable*, and the appliance is left to a person. |
 | `dpkg` refuses the previous package too | The next tick tries again, up to five times, and only then does the console report *revert failed*. |
+| The deadline record cannot be read by the reverter | Nothing is installed. The record is retired, the console reports *revert unavailable*, and the appliance is left to a person. A record the *console* cannot read, but the reverter can, holds Install and Revert shut until the reverter retires it. |
 
 The retries are there because the commonest reason dpkg refuses is a frontend
 lock another `apt` run holds — often the operator repairing the package manager
