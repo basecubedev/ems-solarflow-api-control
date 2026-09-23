@@ -63,16 +63,31 @@ ensure_directory() {
     return 0
 }
 
+harden_once() {
+    chown -R root:root "$1" || return 1
+    chmod 0700 "$1" || return 1
+    find "$1" -mindepth 1 -type d -exec chmod 0700 {} + || return 1
+    find "$1" -mindepth 1 -type f -exec chmod 0600 {} + || return 1
+    return 0
+}
+
 harden_agent_state() {
     for private in "$STATE_DIR/agent" "$LOG_DIR/agent" "$LOG_DIR/audit"; do
         if [ -L "$private" ]; then
             note "$private is a symlink; leaving it untouched"
             continue
         fi
-        chown -R root:root "$private" || fail "cannot re-own $private"
-        chmod 0700 "$private"
-        find "$private" -mindepth 1 -type d -exec chmod 0700 {} +
-        find "$private" -mindepth 1 -type f -exec chmod 0600 {} +
+        # The agent this install replaces is still running at this point -- it
+        # restarts further down -- and every writer in it stages a file and
+        # os.replace()s it, while the audit log rotates by rename. `find -exec
+        # ... +` collects names up to ARG_MAX and chmods them afterwards, so a
+        # name that vanished in between is an ENOENT about a file that was
+        # never ours to normalise. Under set -e that ended the postinst in the
+        # middle of the permissions pass, with chmod's message and none of
+        # ours. One retry covers the race; a second failure is real and is
+        # named.
+        harden_once "$private" || harden_once "$private" \
+            || fail "cannot normalise the permissions of $private"
     done
     armed=$STATE_DIR/agent/packages/$ARMED_REVERTER_NAME
     if [ -f "$armed" ]; then

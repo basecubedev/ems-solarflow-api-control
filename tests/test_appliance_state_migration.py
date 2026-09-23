@@ -454,3 +454,106 @@ def test_every_managed_directory_goes_through_the_guard():
         stripped = line.strip()
         if stripped.startswith("mkdir -p") and "$directory" in stripped:
             raise AssertionError(f"a managed directory bypasses ensure_directory: {stripped}")
+
+
+def _harden_environment(tmp_path, *, failing_call):
+    """A state tree, and a chmod that refuses exactly one call."""
+
+    state = tmp_path / "state"
+    log = tmp_path / "log"
+    (state / "agent" / "packages").mkdir(parents=True)
+    (state / "agent" / "packages" / "current.deb").write_bytes(b"a package")
+    (log / "agent").mkdir(parents=True)
+    (log / "audit").mkdir(parents=True)
+
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    attempts = tools / "attempts"
+    (tools / "chmod").write_text(
+        "#!/bin/sh\n"
+        f'count=$(cat "{attempts}" 2>/dev/null || echo 0)\n'
+        f'echo $((count + 1)) > "{attempts}"\n'
+        f'if [ "$count" = "{failing_call}" ]; then\n'
+        '  echo "chmod: cannot access: No such file or directory" >&2\n'
+        "  exit 1\n"
+        "fi\n"
+        'exec /usr/bin/chmod "$@"\n',
+        encoding="utf-8",
+    )
+    (tools / "chmod").chmod(0o755)
+    (tools / "chown").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (tools / "chown").chmod(0o755)
+    return state, log, tools
+
+
+def _run_harden(tmp_path, state, log, tools, fragments):
+    """The shipped function, called the way line 144 calls it: bare, under set -e."""
+
+    import subprocess
+
+    script = "\n".join(
+        [
+            "set -e",
+            'note() { echo "$1"; }',
+            'fail() { echo "ems-appliance: $1" >&2; exit 1; }',
+            f'STATE_DIR="{state}"',
+            f'LOG_DIR="{log}"',
+            "ARMED_REVERTER_NAME=verify-manager.armed.sh",
+            *fragments,
+            "harden_agent_state",
+            "echo REACHED-THE-END",
+        ]
+    )
+    environment = dict(os.environ)
+    environment["PATH"] = f"{tools}:{environment['PATH']}"
+    return subprocess.run(
+        ["sh", "-c", script], capture_output=True, text=True, env=environment, timeout=60
+    )
+
+
+def test_the_permissions_pass_survives_a_file_the_agent_replaced_under_it(tmp_path):
+    """The agent this install replaces is still writing while this runs.
+
+    `find -exec chmod +` collects names up to ARG_MAX and chmods them
+    afterwards, so a staging name the running agent os.replace()d in between
+    yields ENOENT and find exits non-zero. Called bare under `set -e`, that
+    ended the postinst in the middle of the permissions pass -- with chmod's
+    message and none of the project's own -- leaving the package
+    half-configured, the services never restarted and verify-install never run.
+    Measured against the pre-fix function: rc 1, no output, no `ems-appliance:`
+    line.
+
+    The race is modelled with a chmod that refuses one call, not by timing.
+    """
+
+    state, log, tools = _harden_environment(tmp_path, failing_call=1)
+
+    result = _run_harden(
+        tmp_path,
+        state,
+        log,
+        tools,
+        [_postinst_fragment("harden_once"), _postinst_fragment("harden_agent_state")],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "REACHED-THE-END" in result.stdout
+
+
+def test_a_permissions_failure_that_is_real_is_still_named(tmp_path):
+    """The retry must not turn a genuine refusal into silence."""
+
+    state, log, tools = _harden_environment(tmp_path, failing_call=0)
+    (tools / "chmod").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    (tools / "chmod").chmod(0o755)
+
+    result = _run_harden(
+        tmp_path,
+        state,
+        log,
+        tools,
+        [_postinst_fragment("harden_once"), _postinst_fragment("harden_agent_state")],
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "cannot normalise the permissions" in result.stderr
