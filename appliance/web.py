@@ -9,6 +9,7 @@ cannot escalate beyond the agent's fixed allowlist.
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import posixpath
@@ -216,8 +217,15 @@ class ApplianceWebApp:
         if configured and name in (configured, f"{configured}.local"):
             return True
         # An address literal is the appliance's own LAN address as typed by the
-        # operator; a name we cannot resolve to ourselves is not.
-        return bool(re.fullmatch(r"[0-9.]+", name)) or bool(re.fullmatch(r"[0-9a-f:]+", name))
+        # operator; a name we cannot resolve to ourselves is not. Parsed as an
+        # address rather than matched as characters: "cafe" is hex digits and
+        # a name anyone on the LAN can register, and the bracket and port
+        # stripping above already hands this a bare address.
+        try:
+            ipaddress.ip_address(name)
+        except ValueError:
+            return False
+        return True
 
     def probe_hostname(self):
         import socket

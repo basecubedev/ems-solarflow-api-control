@@ -714,6 +714,32 @@ def test_a_request_naming_a_foreign_host_is_refused(signed_in):
     assert payload["error"] == "csrf_host_rejected"
 
 
+def test_a_hex_word_is_not_an_address_literal(signed_in):
+    """'cafe' is a name somebody on the LAN can register, not an address.
+
+    The literal branch matched any run of hex digits and colons, or of digits
+    and dots, so a single-label name an attacker registers over DHCP passed
+    the host half of the rebinding check that exists to exclude it.
+    """
+
+    _services, app, client = signed_in
+    app.probe_hostname = lambda: "ems-appliance"
+
+    status, payload, _ = client.post(
+        "/api/network/scan", headers={"Host": "cafe", "Origin": "http://cafe"}
+    )
+
+    assert status == 403, payload
+    assert payload["error"] == "csrf_host_rejected"
+    # The literals the branch exists for keep working, and only those.
+    assert app.names_this_appliance("192.168.1.5") is True
+    assert app.names_this_appliance("192.168.1.5:8443") is True
+    assert app.names_this_appliance("[fd00::1]:8080") is True
+    assert app.names_this_appliance("fd00::1") is True
+    assert app.names_this_appliance("1.2.3.4.5") is False
+    assert app.names_this_appliance("abcdef") is False
+
+
 def test_a_support_archive_can_actually_be_retrieved(signed_in):
     """The docs tell an operator to attach it, and on an A/B image there is no
     shell and the file lives in root-owned agent state."""
