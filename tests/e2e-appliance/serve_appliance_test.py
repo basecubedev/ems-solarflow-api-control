@@ -28,6 +28,7 @@ from tests.helpers.appliance import (  # noqa: E402
     APT_SIMULATION,
     ADMIN_REPOSITORY,
     appliance_config,
+    FrozenClock,
     build_test_services,
     IMAGE_SOURCE,
     SSHD_BACKUP_MATCH,
@@ -141,7 +142,7 @@ def seed_manager_state(services, *, kept=False, verdict="", armed=False, deadlin
         )
 
 
-def seed_host_files(root):
+def seed_host_files(root, *, now=None):
     (root / "etc").mkdir(parents=True, exist_ok=True)
     (root / "etc" / "os-release").write_text(OS_RELEASE, encoding="utf-8")
     (root / "proc" / "device-tree").mkdir(parents=True, exist_ok=True)
@@ -155,7 +156,16 @@ def seed_host_files(root):
     (thermal / "temp").write_text("51234\n", encoding="utf-8")
     (root / "var" / "lib" / "dpkg").mkdir(parents=True, exist_ok=True)
     (root / "var" / "lib" / "dpkg" / "lock-frontend").write_text("", encoding="utf-8")
-    (root / "var" / "lib" / "apt" / "lists").mkdir(parents=True, exist_ok=True)
+    lists = root / "var" / "lib" / "apt" / "lists"
+    lists.mkdir(parents=True, exist_ok=True)
+    if now is not None:
+        # Stamped against the fixture's own clock, which starts ahead of real
+        # time. A directory created "now" by the wall clock reads as months old
+        # to the services, and how old drifts with the calendar -- so the fixture
+        # would have grown a stale-index warning on its own, on a date nobody
+        # chose.
+        fresh = now - 3600
+        os.utime(lists, (fresh, fresh))
     (root / "var" / "run").mkdir(parents=True, exist_ok=True)
     return root
 
@@ -164,13 +174,15 @@ def main():
     os.environ["EMS_APPLIANCE_TEST_MODE"] = "1"
     port = int(os.environ.get("EMS_APPLIANCE_E2E_PORT", "8124"))
     root = Path(tempfile.mkdtemp(prefix="ems-appliance-e2e-"))
-    seed_host_files(root)
+    clock = FrozenClock()
+    seed_host_files(root, now=clock.now)
 
     # Prereleases are enabled here so the install list has both groups to show.
     # The catalogue and the host configuration state it together: a fake that
     # offers a candidate the agent would refuse is a fake that proves nothing.
     services = build_test_services(
         root,
+        clock=clock,
         config=appliance_config(
             images=AllowedImages(
                 repositories=(ADMIN_REPOSITORY,),
