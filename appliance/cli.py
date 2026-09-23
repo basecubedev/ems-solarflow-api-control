@@ -309,6 +309,11 @@ def command_migrate_state(args):
             f"warning: {entry.source} needs a decision: {entry.detail}",
             file=sys.stderr,
         )
+    for entry in report.unsafe:
+        print(
+            f"warning: {entry.source} was left untouched: {entry.detail}",
+            file=sys.stderr,
+        )
     # A conflict preserves both copies and waits for an operator; only a move
     # that did not arrive makes the layout unusable.
     return EXIT_ERROR if report.fatal else EXIT_OK

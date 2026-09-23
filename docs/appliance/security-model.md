@@ -57,6 +57,15 @@ on state.
 Files the agent writes are `root:root 0600`; the agent unit runs with
 `UMask=0077` so anything it creates outside that list is root-only too.
 
+The web account owns the directories under `web/`, so it can replace one of
+them with a symlink. Two root passes walk that layout — the package's postinst
+and `migrate_state`, which the agent also runs at every start — and `chown`,
+`chmod` and `mkdir -p` all follow a link. Both passes therefore refuse to touch
+a managed path that is a symlink, and neither descends into one. The refusal is
+reported rather than fatal: whoever can plant such a link already holds the web
+account, and failing the install would hand them a way to block every later
+package as well.
+
 The web account can neither write, read nor list the agent tree. That matters
 because an operation record carries the live confirmation token of its plan and
 a known-good file carries the rollback identity: a group-readable record would
