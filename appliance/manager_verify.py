@@ -4,8 +4,9 @@
 A package install commits itself: dpkg replaces the manager, systemd restarts
 it, and silence means the new one stays. This arms a repeating timer to make
 silence mean the opposite, and the reverter it runs is a copy taken out of the
-*outgoing* package before anything is unpacked, so the code deciding
-keep-or-undo is not code the install brought with it.
+*outgoing* package before anything is unpacked. That copy is the script alone:
+the unit that runs it and the timer come from the package being judged, which
+is the limit the ADR records.
 
 See docs/appliance/adr/manager-self-update.md for what this does not replace.
 """

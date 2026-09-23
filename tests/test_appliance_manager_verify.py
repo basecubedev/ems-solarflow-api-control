@@ -541,6 +541,36 @@ def test_the_timer_is_not_enabled_by_the_package():
     assert "ems-appliance-manager-verify.timer" not in postinst
 
 
+def test_what_the_deadline_snapshots_is_the_script_and_the_ADR_says_only_that():
+    """Only verify-manager.sh is copied out of the outgoing package.
+
+    The unit that runs it and the timer are installed under /usr/lib by the
+    package being judged, and its postinst daemon-reloads them -- so a wrong
+    ExecStart path, a unit that resolves the snapshot as a program, or a stale
+    packages directory in the *incoming* package arms a deadline nothing can
+    run. The ADR and this module claimed more than the snapshot provides; a
+    document that promises what the code does not is what CLAUDE.md sends
+    every future change through.
+    """
+
+    # Whitespace-normalised: the claims are sentences, and prose wraps.
+    def prose(path):
+        return " ".join(path.read_text(encoding="utf-8").split())
+
+    adr = prose(ROOT / "docs" / "appliance" / "adr" / "manager-self-update.md")
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+    module = prose(ROOT / "appliance" / "manager_verify.py")
+
+    for unit in ("ems-appliance-manager-verify.service", "ems-appliance-manager-verify.timer"):
+        assert f'"$PACKAGING/systemd/{unit}"' in build, unit
+    assert '"$STAGE/usr/lib/systemd/system/"' in build
+
+    assert "the unit that runs it is installed by the package being judged" in adr
+    assert "not one the incoming install brought with it" not in adr
+    assert "the code deciding keep-or-undo is not code the install brought with it" not in module
+    assert "the unit that runs it and the timer come from the package being judged" in module
+
+
 def test_the_deadline_does_not_hang_on_the_snapshot_being_executable():
     """The execute bit is not something this unit may depend on.
 

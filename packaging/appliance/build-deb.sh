@@ -130,6 +130,9 @@ install -m 0755 "$PACKAGING/bin/install-manager.sh" \
 # The deadline that reverts an install nobody confirmed. Neither unit is enabled
 # by the package: arming copies the reverter out of this tree first, so the
 # script that judges an install is the one shipped by the package it replaces.
+# Only the script is snapshotted. These two units are what dpkg installs from
+# *this* package and what its postinst reloads, so they judge the install they
+# came with; the ADR records that as the deadline's limit.
 install -m 0644 "$PACKAGING/systemd/ems-appliance-manager-verify.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-manager-verify.timer" \
