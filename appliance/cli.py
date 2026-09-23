@@ -592,16 +592,19 @@ def command_agent(args):
         print(f"recovered {len(recovered)} interrupted operation(s)")
     # A WLAN change interrupted inside its revert window left the new profile
     # active with nothing to take it back; NetworkManager then reconnects to it
-    # on every boot.
-    restored = services.network.recover_revert()
-    if restored:
-        print(f"restored the previous WLAN profile {restored}")
-    elif services.network.pending_revert():
-        print(
-            "a WLAN revert is still armed and could not be applied; it will be tried again",
-            file=sys.stderr,
-        )
-    serve_agent(services, args.socket or paths.agent_socket)
+    # on every boot. After the socket is bound, never before: nmcli waits up to
+    # 90 s and that is the unit's own start timeout.
+    def recover_wifi():
+        restored = services.network.recover_revert()
+        if restored:
+            print(f"restored the previous WLAN profile {restored}")
+        elif services.network.pending_revert():
+            print(
+                "a WLAN revert is still armed and could not be applied; it will be tried again",
+                file=sys.stderr,
+            )
+
+    serve_agent(services, args.socket or paths.agent_socket, after_ready=recover_wifi)
     return EXIT_OK
 
 

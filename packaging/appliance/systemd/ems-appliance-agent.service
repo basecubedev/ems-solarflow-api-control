@@ -32,6 +32,12 @@ Group=ems-appliance
 # and the verification CLI use. Optional so an unconfigured host still boots.
 EnvironmentFile=-/etc/ems-appliance-manager/host-paths.env
 ExecStart=/usr/bin/ems-appliance agent
+# Longer than anything in the start path. DefaultTimeoutStartSec is 90 s, which
+# is exactly nmcli's own wait for `connection up`, so a start that has any
+# reason to be slow used to be killed rather than waited for -- and with
+# Restart=on-failure the retries landed 93 s apart, which StartLimitBurst in a
+# ten-second window never catches.
+TimeoutStartSec=300
 Restart=on-failure
 RestartSec=3
 # Everything the agent creates is root-only by default; the socket is chmodded
