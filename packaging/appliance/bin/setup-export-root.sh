@@ -995,9 +995,17 @@ bind_read_only() {
 
 # --- entry point ------------------------------------------------------------
 
+# --refresh-acl re-grants the recursive read ACL and nothing else: no mounts are
+# touched, no status file is written, and the confinement is not re-activated.
+# A backup archive is created 0600, which caps the inherited named-user grant to
+# nothing, and only this pass repairs that -- but running the whole setup for it
+# would tear the exports down and back up under an SFTP session, and would race
+# the `backup-access activate` of a concurrent install.
+REFRESH_ACL_ONLY=no
 case "${1:-}" in
     --teardown|"") ;;
-    *) echo "usage: $0 [--teardown]" >&2; exit 2 ;;
+    --refresh-acl) REFRESH_ACL_ONLY=yes ;;
+    *) echo "usage: $0 [--teardown|--refresh-acl]" >&2; exit 2 ;;
 esac
 
 # The path watcher, the postinst and an operator can all start a run at the
@@ -1125,6 +1133,10 @@ for name in $EXPORTS; do
 
     record_granted_acl "$handle" recursive "$source_dir"
 
+    if [ "$REFRESH_ACL_ONLY" = yes ]; then
+        continue
+    fi
+
     if mount_proves "$target_dir" "$identity"; then
         add_entry "$name" "$source_dir" "$target_dir" "mounted" "true"
         continue
@@ -1143,6 +1155,11 @@ done
 
 acl_manifest_commit
 acl_close_roots
+
+if [ "$REFRESH_ACL_ONLY" = yes ]; then
+    echo "ems-appliance: re-granted the read ACL on the exported sources."
+    exit 0
+fi
 
 missing=$(echo "$missing" | sed 's/^ *//')
 if [ "$status" = "configured" ] && [ -n "$missing" ]; then

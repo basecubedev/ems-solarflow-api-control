@@ -1306,3 +1306,47 @@ def test_the_appliance_ships_no_second_unattended_upgrader():
     assert "unattended-upgrades" not in control
     assert "unattended-upgrades" not in postinst
     assert not list((PACKAGING).glob("**/cron*"))
+def test_the_acl_refresh_units_are_shipped_and_enabled():
+    """The pass that makes a new archive readable, without the mount work."""
+
+    from appliance.backup_access import ARCHIVE_SUBDIRECTORY
+
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+    postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
+    service = unit(PACKAGING / "systemd" / "ems-appliance-export-acl.service")
+    watcher = PACKAGING / "systemd" / "ems-appliance-export-acl.path"
+
+    assert "ems-appliance-export-acl.service" in build
+    assert "ems-appliance-export-acl.path" in build
+    assert "ems-appliance-export-acl.path" in postinst
+    assert service["Service"]["ExecStart"].endswith("--refresh-acl")
+    # No ExecStartPost: re-activating the confinement from a watcher races the
+    # `backup-access activate` an install is running, which fails the install.
+    assert "ExecStartPost" not in service["Service"]
+    assert f"PathChanged=/opt/ems-solarflow/data/{ARCHIVE_SUBDIRECTORY}" in watcher.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_the_acl_refresh_touches_no_mounts():
+    """Tearing the binds down would cut an SFTP fetch that is in progress."""
+
+    script = (PACKAGING / "bin" / "setup-export-root.sh").read_text(encoding="utf-8")
+    body = script.split("REFRESH_ACL_ONLY=no", 1)[1]
+
+    assert '--refresh-acl) REFRESH_ACL_ONLY=yes' in body
+    guarded = [
+        line
+        for line in body.splitlines()
+        if 'if [ "$REFRESH_ACL_ONLY" = yes ]; then' in line
+    ]
+    assert len(guarded) == 2, guarded
+
+
+def test_removal_takes_the_acl_units_with_it():
+    prerm = (PACKAGING / "debian" / "prerm").read_text(encoding="utf-8")
+    postrm = (PACKAGING / "debian" / "postrm").read_text(encoding="utf-8")
+
+    assert "ems-appliance-export-acl.path" in prerm
+    assert "ems-appliance-export-acl.service" in prerm
+    assert "ems-appliance-export-acl.path.d" in postrm

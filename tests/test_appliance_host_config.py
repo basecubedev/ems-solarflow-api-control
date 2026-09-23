@@ -586,3 +586,62 @@ def test_an_export_setup_that_fails_does_not_report_the_root_applied(tmp_path):
         apply_with(paths, host, tmp_path)
 
     assert not host_paths_file(paths).exists()
+def test_the_acl_watcher_sees_the_directory_the_archives_land_in(tmp_path):
+    """A new archive is the moment the ACL grant has to be re-applied.
+
+    A named-user ACL on a file is capped by that file's mask, the mask comes
+    from the create mode, and `ems/backup.py` writes every archive at 0600 --
+    so it inherits the grant with an empty mask and `ems-backup` cannot read
+    it. The recursive pass repairs that, but writing under `data/backups` does
+    not change the install root's inode, so the export watcher never saw it.
+
+    Its own watcher and its own unit on purpose: a full export run tears the
+    binds down and rebuilds them, which would cut an SFTP fetch in progress,
+    and its `backup-access activate` races the one an install is running -- a
+    package install measurably fails that way.
+    """
+
+    from appliance.backup_access import ARCHIVE_SUBDIRECTORY
+    from appliance.host_config import render_acl_path_unit
+
+    paths = layout(tmp_path, install_root=tmp_path / "srv" / "ems")
+
+    watched = [
+        line.partition("=")[2]
+        for line in render_acl_path_unit(paths).splitlines()
+        if line.startswith("PathChanged=") and line.partition("=")[2]
+    ]
+
+    assert watched == [str(paths.ems_data_dir / ARCHIVE_SUBDIRECTORY)], watched
+
+
+def test_the_export_watcher_still_watches_only_the_install_root(tmp_path):
+    """Adding the archive path here is what broke a package install."""
+
+    from appliance.host_config import render_path_unit
+
+    paths = layout(tmp_path, install_root=tmp_path / "srv" / "ems")
+
+    watched = [
+        line.partition("=")[2]
+        for line in render_path_unit(paths).splitlines()
+        if line.startswith("PathChanged=") and line.partition("=")[2]
+    ]
+
+    assert watched == [str(paths.install_root)], watched
+
+
+def test_applying_writes_the_acl_watcher_dropin(tmp_path):
+    from appliance.host_config import acl_path_unit_dropin
+
+    paths = layout(tmp_path, install_root=tmp_path / "srv" / "ems")
+    systemd_dir = tmp_path / "etc" / "systemd" / "system"
+
+    apply_host_config(
+        paths,
+        ApplianceConfig(),
+        systemd_dir=str(systemd_dir),
+        sshd_dir=str(tmp_path / "etc" / "ssh" / "sshd_config.d"),
+    )
+
+    assert acl_path_unit_dropin(str(systemd_dir)).is_file()
