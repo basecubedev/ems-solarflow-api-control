@@ -245,6 +245,13 @@ Concretely:
   EMS mutations remain blocked until the transition reaches
   `resources_verified`; an uncertain or mismatched Admin identity is a hard
   alignment failure, not a compatibility warning.
+- **Deployment files it cannot write.** Before pulling, the updater checks that
+  the compose file, its env file and their directory are readable and writable by
+  this process, and refuses with `compose_not_writable` if they are not; the
+  byte-for-byte snapshot that follows reports an unreadable path as
+  `compose_unreadable`. Both are logged refusals that release the plan. The
+  failure they replace was silent: a sidecar that died inside the rewrite with no
+  `FAILED` line, leaving a transition claimed until its deadline expired.
 - **Pending state.** `data/admin/state/pending-admin-update.json` is written
   atomically (temp file + fsync + rename), tolerates a missing file, and surfaces
   a clear recovery error for corrupt JSON instead of crashing. It holds no

@@ -298,6 +298,35 @@ def _resolve_env_file(environ, compose_file):
     return candidate if candidate.exists() else None
 
 
+# Rewriting the compose/env files is how the Admin replaces itself, so a process
+# that may not write them cannot update at all. Name the cause rather than
+# reporting a bare permission error from inside the rewrite.
+COMPOSE_ACCESS_HINT = (
+    "The Admin Console updates itself by rewriting these files; check their "
+    "ownership on the host."
+)
+
+
+def _compose_access_problem(compose_file, env_file):
+    """Name the first deployment path this process cannot both read and write.
+
+    Checked before the pull so an Admin that may not rewrite its own deployment
+    files refuses by name instead of failing part-way through the rewrite.
+    """
+
+    for path in (compose_file, env_file):
+        if path is None or not path.exists():
+            continue
+        if not os.access(path, os.R_OK):
+            return f"{path} cannot be read by the Admin Console."
+        if not os.access(path, os.W_OK):
+            return f"{path} cannot be written by the Admin Console."
+    directory = compose_file.parent
+    if not os.access(directory, os.W_OK | os.X_OK):
+        return f"{directory} does not allow the Admin Console to write its compose backup."
+    return None
+
+
 def _log_path(store, plan_id):
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(plan_id))[:64] or "unknown"
     return Path(store.state_dir).parent / "logs" / f"admin-update-{safe}.log"
@@ -430,6 +459,10 @@ def apply_admin_update(
             )
         return result
 
+    access_problem = _compose_access_problem(compose_file, env_file)
+    if access_problem:
+        return fail("compose_not_writable", f"{access_problem} {COMPOSE_ACCESS_HINT}")
+
     pending["stage"] = STAGE_STARTED
     pending["updated_at"] = utc_now_iso()
     store.write(pending)
@@ -455,7 +488,13 @@ def apply_admin_update(
     # rewrite leaves behind, so rollback can restore/remove each exactly.
     default_env = compose_file.parent / ".env.admin"
     bak_file = compose_file.with_name(compose_file.name + ".bak")
-    txn = ComposeEnvTransaction([compose_file, env_file or default_env, bak_file])
+    try:
+        txn = ComposeEnvTransaction([compose_file, env_file or default_env, bak_file])
+    except OSError as exc:
+        return fail(
+            "compose_unreadable",
+            f"Could not read the Admin deployment files: {exc}. {COMPOSE_ACCESS_HINT}",
+        )
 
     def rollback_fail(code, message):
         rollback_failures = txn.rollback()

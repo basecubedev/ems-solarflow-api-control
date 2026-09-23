@@ -642,6 +642,79 @@ def test_rollback_metadata_never_leaks_env_secrets(tmp_path, monkeypatch):
     assert secret not in log_path.read_text(encoding="utf-8")
 
 
+# --- deployment files this process may not write -------------------------
+
+
+def _require_permission_simulation():
+    """Mode-based refusals cannot be simulated for root, which bypasses them."""
+
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("permission simulation is unreliable as root")
+
+
+def test_worker_refuses_inaccessible_compose_before_pulling(tmp_path):
+    # On the appliance the agent owns the Admin compose/env (root:ems-appliance
+    # 0640) while the updater runs as the Admin's own uid. The update has to
+    # refuse by name before pulling: the observed failure was a sidecar that died
+    # inside the snapshot with no FAILED line and a claim left standing.
+    _require_permission_simulation()
+    store, plan_id, compose = _seed_compose(tmp_path)
+    docker = FakeDocker()
+    log_path = tmp_path / "update.log"
+    compose.chmod(0o000)
+    try:
+        result = update_apply.apply_admin_update(
+            plan_id,
+            store=store,
+            docker=docker,
+            environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+            compose_recreate=lambda cf, svc: pytest.fail("must not recreate"),
+            log=update_apply._FileLogger(log_path),
+            delay_seconds=0,
+        )
+    finally:
+        compose.chmod(0o644)
+
+    assert result["ok"] is False
+    assert result["error"] == "compose_not_writable"
+    assert docker.pulled == []  # refused before any registry work
+    assert store.read()["stage"] == STAGE_FAILED
+    assert "FAILED[compose_not_writable]" in log_path.read_text(encoding="utf-8")
+
+
+def test_worker_reports_unreadable_snapshot_path(tmp_path):
+    # Compose and env are accessible, but a stale .bak from an earlier deployment
+    # is not. The snapshot reads it before anything else touches it, so that
+    # failure has to be reported too rather than escape as a PermissionError.
+    _require_permission_simulation()
+    store, plan_id, compose = _seed_compose(tmp_path)
+    original = compose.read_bytes()
+    bak = compose.with_name(compose.name + ".bak")
+    bak.write_text("stale\n", encoding="utf-8")
+    log_path = tmp_path / "update.log"
+    bak.chmod(0o000)
+    try:
+        result = update_apply.apply_admin_update(
+            plan_id,
+            store=store,
+            docker=FakeDocker(),
+            environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+            compose_recreate=lambda cf, svc: pytest.fail("must not recreate"),
+            log=update_apply._FileLogger(log_path),
+            delay_seconds=0,
+        )
+    finally:
+        bak.chmod(0o644)
+
+    assert result["ok"] is False
+    assert result["error"] == "compose_unreadable"
+    assert compose.read_bytes() == original
+    assert store.read()["stage"] == STAGE_FAILED
+    assert "FAILED[compose_unreadable]" in log_path.read_text(encoding="utf-8")
+
+
 # --- HTTP API: auth, CSRF, and gating ------------------------------------
 
 
@@ -1887,6 +1960,49 @@ def test_v2_admin_update_rejects_moved_tag_before_compose_mutation(tmp_path):
     assert result["error"] == "target_digest_mismatch"
     assert compose.read_bytes() == original
     assert store.read().stage == TRANSITION_STAGE_FAILED_RECOVERABLE
+
+
+def test_v2_admin_update_refuses_inaccessible_compose_recoverably(tmp_path):
+    # The board symptom: the sidecar died inside the snapshot, so the transition
+    # kept its updater claim at admin_reconnect_pending until the deadline
+    # expired, and the guided workflow hung on it. The refusal must be a
+    # recoverable failure the operator can retry out of instead.
+    _require_permission_simulation()
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(
+        make_transition_record(
+            now=T0,
+            stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+            **_txn_kwargs(),
+        ),
+        now=T0,
+    )
+    compose = tmp_path / "docker-compose.admin.yml"
+    compose.write_text("image: " + CURRENT_REF + "\n", encoding="utf-8")
+    # The resolved build is genuinely on the registry, so the refusal can only
+    # come from the deployment files and not from the digest gate before them.
+    docker = FakeDocker(
+        images={record.admin_image: _image(record.admin_image, record.admin_digest)}
+    )
+    compose.chmod(0o000)
+    try:
+        result = update_apply.apply_system_transition_admin_update(
+            record.operation_id,
+            store=store,
+            docker=docker,
+            environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+            compose_recreate=lambda *_args: pytest.fail("must not recreate"),
+            delay_seconds=0,
+            now=T0,
+        )
+    finally:
+        compose.chmod(0o644)
+
+    assert result["ok"] is False
+    assert result["error"] == "compose_not_writable"
+    assert store.read().stage == TRANSITION_STAGE_FAILED_RECOVERABLE
+    # The way out: a retry returns to the updater stage and releases the claim.
+    assert store.retry(record.operation_id, now=T0).admin_update_claimed_at is None
 
 
 def test_transition_status_reads_never_mutate_or_consume_state(tmp_path):
