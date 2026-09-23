@@ -71,6 +71,10 @@ def populate_root(
         path = base / helper
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("#!/bin/sh\n")
+        # What dpkg installs them as. A fixture that leaves them unexecutable
+        # models an image systemd would fail 203/EXEC on every boot, which is
+        # not the correctly built image these helpers stand for.
+        path.chmod(0o755)
 
     if dpkg:
         (base / "var/lib/dpkg").mkdir(parents=True)
@@ -121,6 +125,7 @@ def populate_root(
     helper = base / "usr/lib/ems-appliance-manager/grow-root.sh"
     helper.parent.mkdir(parents=True, exist_ok=True)
     helper.write_text("#!/bin/sh\n")
+    helper.chmod(0o755)
 
     (base / "etc/fstab").write_text(fstab)
 

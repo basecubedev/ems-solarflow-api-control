@@ -355,6 +355,16 @@ def _missing_exec_paths(reader, unit):
         relative = program.lstrip("/")
         if not (reader.is_file(relative) or reader.is_symlink(relative)):
             missing.append(f"{unit} runs {program}, which the image does not carry")
+            continue
+        # Present is not runnable. systemd resolves ExecStart with access(X_OK)
+        # and fails the unit 203/EXEC when it comes back no, root included --
+        # the failure the one booted appliance logged 255 times in 4h39m. A
+        # symlink is followed by that call, so it is checked through the link.
+        if not reader.is_executable(relative):
+            missing.append(
+                f"{unit} runs {program}, which the image carries without an execute bit; "
+                "systemd would fail it with 203/EXEC"
+            )
     return missing
 
 
