@@ -122,6 +122,12 @@ def populate_root(
         }.get(unit, "/usr/bin/ems-appliance")
         (units_dir / unit).write_text(f"[Unit]\n[Service]\nExecStart={program}\n")
         (wants / unit).symlink_to(f"/usr/lib/systemd/system/{unit}")
+    # Masked the way the layer hook masks them: a link to /dev/null under /etc,
+    # which is what the inspector requires of the second network stack.
+    etc_units = base / image_inspect.ETC_UNIT_DIRECTORY
+    etc_units.mkdir(parents=True, exist_ok=True)
+    for unit in image_inspect.MASKED_NETWORK_UNITS:
+        (etc_units / unit).symlink_to("/dev/null")
     helper = base / "usr/lib/ems-appliance-manager/grow-root.sh"
     helper.parent.mkdir(parents=True, exist_ok=True)
     helper.write_text("#!/bin/sh\n")
