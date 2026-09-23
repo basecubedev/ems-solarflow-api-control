@@ -358,7 +358,10 @@ seed archive is unpacked into, the EMS data and the operator's backups, about
 The enforced floor is **14,500,000,000 bytes**, below the nominal 16 GB because
 media are marketed in decimal gigabytes and vendors differ by a few percent, so
 a genuine 16 GB card must pass. It is declared in `appliance/media_sizing.py`
-and recorded in every image's `minimum_media_bytes` build metadata.
+and recorded in every image's `minimum_media_bytes` build metadata, and the
+image inspection reads the built image's partition table back: a release fails
+when the partitions are not the declared sizes, or when what the table
+describes does not fit that floor.
 
 The growth is a transaction: measure, mutate, verify, and only then record. A
 card whose filesystem did not actually grow leaves no marker and is retried on

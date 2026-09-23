@@ -23,7 +23,7 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from appliance import backup_ownership, image_filesystems
+from appliance import backup_ownership, image_filesystems, media_sizing
 from appliance.image_shape import IMAGE
 
 SECTOR_SIZE = 512
@@ -40,6 +40,15 @@ SINGLE_SLOT_PARTITIONS = (
     ("boot", "vfat"),
     ("root", "ext"),
 )
+
+# media_sizing is what the signed attestation states minimum_media_bytes from,
+# and nothing read the built image back: a profile size that stopped reaching
+# genimage was attested rather than detected. Exact equality on purpose -- a
+# tolerance is what let the number drift in the first place.
+DECLARED_PARTITION_BYTES = {
+    "boot": media_sizing.BOOT_PARTITION_BYTES,
+    "root": media_sizing.ROOT_PARTITION_BYTES,
+}
 
 
 class ImageError(Exception):
@@ -211,6 +220,7 @@ OPERATOR_CONFIG_DIR = "etc/ems-appliance-manager"
 OPERATOR_TEMPLATE_DIR = "usr/share/ems-appliance-manager"
 
 UNIT_DIRECTORY = "usr/lib/systemd/system"
+SSH_DIRECTORY = "etc/ssh"
 
 
 # The units the root must carry enabled.
@@ -222,6 +232,18 @@ REQUIRED_UNITS = {
     # everything on this appliance writes to that root.
     "grow_root_service_enabled": "ems-appliance-grow-root.service",
     "config_seed_service_enabled": "ems-appliance-config-seed.service",
+    # The image deletes the host keys the build chroot made; this unit is the
+    # only thing that makes new ones (Debian's sshd-keygen.service is WantedBy
+    # the ssh units alone, and this image ships ssh off). Without it sshd
+    # cannot start, and backup-access reads the missing policy as a reason
+    # to expire the backup account.
+    "sshd_keys_service_enabled": "ems-appliance-sshd-keys.service",
+    # Enabled by the postinst's offline fallback, never by the layer's
+    # enable-units line. Without them the export root is never built and an
+    # EMS installed after the first boot is, in the postinst's own words,
+    # silently never published.
+    "export_path_enabled": "ems-appliance-export.path",
+    "export_service_enabled": "ems-appliance-export.service",
     # The one DHCP client. Debian's networkd units are masked beside this
     # (MASKED_NETWORK_UNITS); nmcli is the only interface this appliance can
     # take an address back on.
@@ -236,6 +258,18 @@ RUNTIME_HELPERS = (
     # Written by the postinst, not shipped by dpkg: without it a flashed image
     # cannot establish ownership of the account it carries.
     f"usr/lib/ems-appliance-manager/{backup_ownership.ACCOUNT_ORIGIN_NAME}",
+)
+
+# What the layer's rootfs overlay contributes. rpi-image-gen derives the overlay
+# directory from the layer file's own stem, so a rename on either side stops it
+# being applied and the build says nothing -- the layer file states exactly
+# that. Each of these bounds a write to the SD card: unbounded Docker json-file
+# logs and journald's default of 10% of the root outlive the card by years.
+# tests/test_appliance_image.py keeps this equal to the overlay tree itself.
+ROOT_OVERLAY_FILES = (
+    "etc/docker/daemon.json",
+    "etc/systemd/journald.conf.d/50-ems-appliance.conf",
+    "etc/systemd/system.conf.d/50-ems-appliance-watchdog.conf",
 )
 
 # A board that never reaches the network cannot be asked anything, and the image
@@ -539,13 +573,26 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
     )
 
 
-    keys = [name for name in reader.listdir("etc/ssh") if name.startswith("ssh_host_")]
-    private = [name for name in keys if not name.endswith(".pub")]
-    record(
-        "no_host_key_shipped",
-        not private,
-        f"the image carries {', '.join(private)}" if private else "no host key is shipped",
-    )
+    if not reader.is_dir(SSH_DIRECTORY):
+        # listdir answers () for an empty directory and for a path it cannot
+        # list at all, so a symlinked or unreadable /etc/ssh used to read as
+        # proof that no host key ships. It is also not a shape this appliance
+        # has: ems-appliance-sshd-keys.service refuses a symlinked /etc/ssh
+        # and would never make the keys.
+        record(
+            "no_host_key_shipped",
+            False,
+            f"/{SSH_DIRECTORY} is not a directory this inspection can list, "
+            "so whether the image ships a private host key cannot be answered",
+        )
+    else:
+        keys = [name for name in reader.listdir(SSH_DIRECTORY) if name.startswith("ssh_host_")]
+        private = [name for name in keys if not name.endswith(".pub")]
+        record(
+            "no_host_key_shipped",
+            not private,
+            f"the image carries {', '.join(private)}" if private else "no host key is shipped",
+        )
 
 
     missing_helpers = [name for name in RUNTIME_HELPERS if not reader.is_file(name)]
@@ -555,6 +602,18 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
         f"missing: {', '.join(missing_helpers)}"
         if missing_helpers
         else f"{len(RUNTIME_HELPERS)} helpers present",
+    )
+
+    # Presence, not content: none of these paths exists in a stock Debian
+    # root, so presence is exactly "the overlay was applied". The values in
+    # them stay owned by the overlay files.
+    missing_overlay = [name for name in ROOT_OVERLAY_FILES if not reader.is_file(name)]
+    record(
+        "rootfs_overlay_applied",
+        not missing_overlay,
+        f"the layer overlay was not applied: missing {', '.join(missing_overlay)}"
+        if missing_overlay
+        else f"{len(ROOT_OVERLAY_FILES)} overlay files present",
     )
     return findings
 
@@ -737,6 +796,27 @@ def inspect(
             )
         else:
             findings.append(Finding(f"filesystem:{label}", PASS, signature))
+
+        declared = DECLARED_PARTITION_BYTES[label]
+        findings.append(
+            Finding(
+                f"partition_size:{label}",
+                PASS if partition.size_bytes == declared else FAIL,
+                f"{partition.size_bytes} bytes, the profile declares {declared}",
+            )
+        )
+
+    # Measured from the table rather than stat(): what a flash writes is what
+    # the table describes, and the attested floor is a promise about that.
+    written = (max(item.last_lba for item in partitions) + 1) * SECTOR_SIZE
+    findings.append(
+        Finding(
+            "image_fits_minimum_media",
+            PASS if written <= media_sizing.MINIMUM_MEDIA_BYTES else FAIL,
+            f"{written} bytes written; the release attests a "
+            f"{media_sizing.MINIMUM_MEDIA_BYTES} byte floor",
+        )
+    )
 
     if contents:
         findings.extend(
