@@ -7,7 +7,16 @@ Documentation=file:///usr/share/doc/ems-appliance-manager/architecture.md
 # from running once: a file that exists is never read, compared or rewritten.
 After=local-fs.target
 RequiresMountsFor=/etc/ems-appliance-manager
-Before=ems-appliance-agent.service ems-appliance-web.service
+# Every reader of the generated files starts after this writes them. The
+# export unit reads host-paths.env and hands the roots it binds to
+# backup-access activate; started first on a boot after appliance.conf
+# changed, it would bind the old roots and authenticate the account
+# against them before the new sshd policy exists. The watcher is held for
+# the same reason: the directory it watches comes from the drop-in the
+# same apply writes. An ordering edge only -- no Wants or Requires, so a
+# seed that fails does not take the exports down with it.
+Before=ems-appliance-agent.service ems-appliance-web.service \
+       ems-appliance-export.service ems-appliance-export.path
 
 [Service]
 Type=oneshot

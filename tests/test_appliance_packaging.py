@@ -602,6 +602,7 @@ def test_the_agent_may_use_netlink_and_no_unrelated_address_family():
 
 EXPORT_PATH_UNIT = PACKAGING / "systemd" / "ems-appliance-export.path"
 EXPORT_SERVICE_UNIT = PACKAGING / "systemd" / "ems-appliance-export.service"
+SEED_UNIT = PACKAGING / "systemd" / "ems-appliance-config-seed.service"
 
 
 def test_the_shipped_path_unit_watches_the_default_install_root():
@@ -634,6 +635,23 @@ def test_the_units_read_the_generated_host_path_environment():
     for path in (AGENT_UNIT, WEB_UNIT, EXPORT_SERVICE_UNIT):
         text = path.read_text(encoding="utf-8")
         assert "EnvironmentFile=-/etc/ems-appliance-manager/host-paths.env" in text, path.name
+
+
+def test_every_unit_reading_the_generated_host_paths_starts_after_the_unit_that_writes_it():
+    """host-paths.env is rewritten at boot whenever appliance.conf drifted.
+
+    Both units are only WantedBy multi-user.target, so without an ordering
+    edge systemd may start the export unit first: it then binds the old
+    roots and hands them to `backup-access activate` before the new sshd
+    policy exists. The watcher is held too, because the directory it watches
+    comes from the drop-in the same apply writes. The edge is accepted from
+    either side, so this states the property rather than one spelling of it.
+    """
+
+    ordered_first = set(unit(SEED_UNIT)["Unit"].get("Before", "").split())
+    for path in (AGENT_UNIT, WEB_UNIT, EXPORT_SERVICE_UNIT, EXPORT_PATH_UNIT):
+        after = set(unit(path)["Unit"].get("After", "").split())
+        assert path.name in ordered_first or SEED_UNIT.name in after, path.name
 
 
 # --- backup access teardown -------------------------------------------------
