@@ -113,6 +113,12 @@ cat /var/lib/ems-appliance-manager/agent/packages/verify-verdict.json
 waiting for a person — you. An install done by hand with `dpkg` arms nothing, so
 there is no verdict at all and the command above is the only route.
 
+Running `rollback-manager` while a deadline is still armed is safe: the command
+retires the deadline once the older package is on, because its expected version
+can no longer be reached and a deadline left standing would undo the rescue at
+the next tick. A rollback `dpkg` refuses leaves the deadline armed — that is
+the one moment it is the last way out.
+
 ### 4. A serial console
 
 A Pi that does not reach a login prompt shows why only here. Both images already

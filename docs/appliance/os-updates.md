@@ -167,7 +167,14 @@ the only automatic way back on a condition that clears itself a minute later.
 
 The reverter is a copy taken out of the *outgoing* package before anything is
 unpacked, so the code deciding keep-or-undo is not code the install brought with
-it.
+it. It goes back to the archive the deadline kept, checked by digest rather than
+by the name of the slot: `previous.deb` is rewritten by every install, so a
+deadline that trusted the path alone could be made to reinstall the very package
+it was armed to undo.
+
+An install offering the package already current keeps the way back it has rather
+than rotating it away — both slots holding one package is a revert that leads
+nowhere, and the console stops offering it.
 
 The deadline is software rather than firmware, and what that is worth is
 written down rather than glossed:

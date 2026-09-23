@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from appliance import manager_verify
+from appliance import artifact_trust, manager_verify
 from appliance import paths as appliance_paths
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -608,3 +608,41 @@ def test_a_refused_revert_is_cured_before_it_is_tried_again(paths, packaged, tmp
     calls = log.read_text(encoding="utf-8")
     assert "dpkg --configure -a" in calls, calls
     assert not manager_verify.read_verdict(paths).settled, "the tick must still leave a retry"
+def test_an_archive_swapped_under_an_armed_deadline_is_refused(paths, packaged, tmp_path):
+    """`previous.deb` is a slot, and retain() rewrites it on every install.
+
+    A second install while a deadline is unjudged rotates the unjudged package
+    into that slot. The deadline then names a path holding the very package it
+    was armed to undo, and reverting to it reports success for reinstalling the
+    problem.
+    """
+
+    deadline_at(paths, packaged, epoch=1)
+    kept = paths.packages_dir / "previous.deb"
+    kept.write_bytes(b"the package the deadline was armed to undo")
+
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.9.9")
+
+    run_reverter(paths, tools, now=0)
+
+    assert "previous.deb" not in log.read_text(encoding="utf-8"), "a swapped archive was installed"
+    assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_UNAVAILABLE
+    assert not manager_verify.deadline_path(paths).exists()
+
+
+def test_the_deadline_records_what_the_kept_archive_held_when_it_armed(paths, packaged):
+    kept = paths.packages_dir / "previous.deb"
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    kept.write_bytes(b"an earlier package")
+
+    deadline, _ = arm(paths, packaged, FakeRunner(), previous=str(kept))
+
+    assert deadline.previous_sha256 == artifact_trust.file_digest(kept)
+    assert manager_verify.read(paths).previous_sha256 == deadline.previous_sha256
+
+
+def test_a_deadline_armed_with_nothing_kept_records_no_digest(paths, packaged):
+    deadline, _ = arm(paths, packaged, FakeRunner(), previous="")
+
+    assert deadline.previous_sha256 == ""

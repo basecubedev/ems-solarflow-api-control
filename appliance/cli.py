@@ -262,7 +262,7 @@ def command_rollback_manager(args):
     a person is at the keyboard here, so there is no unit and no deadline.
     """
 
-    from appliance import manager_install, manager_releases, manager_retention
+    from appliance import manager_install, manager_releases, manager_retention, manager_verify
 
     paths = resolve_paths()
     if os.geteuid() != 0:
@@ -286,9 +286,24 @@ def command_rollback_manager(args):
     result = runner.run("dpkg", ["--force-confold", "--install", archive], timeout=600)
     print(result.stdout or result.stderr)
     if not result.ok:
+        # Left armed on purpose: a rollback dpkg refused is the moment the
+        # deadline is the last way out.
         print(
             "the package could not be installed; "
             f"{retention.previous.path} is what this appliance was running",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    # The deadline was armed for the package this command just removed, and its
+    # expected version can no longer be reached. Left standing, the next tick
+    # judges the rescue unhealthy and reinstalls what the operator came to undo.
+    try:
+        manager_verify.disarm(paths, runner)
+    except manager_verify.ManagerVerifyError as exc:
+        print(
+            f"error: {target.version or 'the retained package'} is installed, but the install "
+            f"deadline could not be retired ({exc.message}); it will undo this rollback",
             file=sys.stderr,
         )
         return EXIT_ERROR

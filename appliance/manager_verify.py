@@ -17,6 +17,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from appliance import artifact_trust
+
 DEADLINE_NAME = "verify-deadline.json"
 VERDICT_NAME = "verify-verdict.json"
 ATTEMPTS_NAME = "verify-revert-attempts"
@@ -70,6 +72,7 @@ class VerifyDeadline:
     expected_version: str = ""
     build_id: str = ""
     previous_path: str = ""
+    previous_sha256: str = ""
     operation_id: str = ""
     armed_at: int = 0
     deadline_epoch: int = 0
@@ -169,6 +172,7 @@ def read(paths):
         expected_version=str(payload.get("expected_version") or ""),
         build_id=str(payload.get("build_id") or ""),
         previous_path=str(payload.get("previous_path") or ""),
+        previous_sha256=str(payload.get("previous_sha256") or ""),
         operation_id=str(payload.get("operation_id") or ""),
         armed_at=int(payload.get("armed_at") or 0),
         deadline_epoch=int(payload.get("deadline_epoch") or 0),
@@ -215,6 +219,17 @@ def _snapshot_reverter(paths, reverter):
     return target
 
 
+def _digest_of(previous):
+    """What is in the kept archive now, or nothing if it cannot be read."""
+
+    if not previous:
+        return ""
+    try:
+        return artifact_trust.file_digest(previous)
+    except OSError:
+        return ""
+
+
 def arm(
     paths,
     runner,
@@ -237,6 +252,12 @@ def arm(
     directory.mkdir(parents=True, exist_ok=True)
     snapshot = _snapshot_reverter(paths, reverter)
 
+    # The archive, not the slot it sits in. ``previous.deb`` is a name that
+    # ``manager_retention.retain`` rewrites on every install, so a deadline that
+    # kept only the path can be made to reinstall a package this appliance has
+    # never run -- including the one it was armed to undo.
+    previous_sha256 = _digest_of(previous)
+
     deadline = int(now) + int(window_seconds)
     _write(
         deadline_path(paths),
@@ -245,6 +266,7 @@ def arm(
             "expected_version": expected_version,
             "build_id": build_id,
             "previous_path": str(previous or ""),
+            "previous_sha256": previous_sha256,
             "operation_id": operation_id,
             "armed_at": int(now),
             "deadline_epoch": deadline,
@@ -282,6 +304,7 @@ def arm(
         expected_version=expected_version,
         build_id=build_id,
         previous_path=str(previous or ""),
+        previous_sha256=previous_sha256,
         operation_id=operation_id,
         armed_at=int(now),
         deadline_epoch=deadline,
