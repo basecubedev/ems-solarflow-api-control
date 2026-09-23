@@ -210,6 +210,32 @@ def home_is_real_directory(path):
     return stat.S_ISDIR(entry.st_mode)
 
 
+def has_no_redirected_ancestor(path):
+    """Whether every component above ``path`` is the directory it appears to be.
+
+    ``backup-account.sh`` walks the whole chain in ``home_is_recorded``, with a
+    note saying the device/inode pair had been quietly carrying that check.
+    ``verify_home`` dropped the same comparison and did not pick the walk up, so
+    the two destructive gates answered differently about one host: this side
+    moved and re-armed ``authorized_keys`` through a redirected ancestor where
+    the shell declined to touch it, while security-model.md promises one rule
+    for both. A component that does not exist yet ends the walk, exactly as the
+    shell's does.
+    """
+
+    target = Path(path)
+    current = Path(target.anchor) if target.anchor else Path(".")
+    for part in target.parts[1:] if target.anchor else target.parts:
+        current = current / part
+        if current.is_symlink():
+            return False
+        if not current.exists():
+            return True
+        if not current.is_dir():
+            return False
+    return True
+
+
 def home_identity(path):
     """``device:inode`` of a real directory, or "" when there is nothing to bind.
 
@@ -329,6 +355,8 @@ def verify_home(record):
     if not record.home_device or not record.home_inode:
         return HOME_MISMATCH
     if not home_is_real_directory(record.home):
+        return HOME_MISMATCH
+    if not has_no_redirected_ancestor(record.home):
         return HOME_MISMATCH
 
     marker = record.marker_path
@@ -450,7 +478,7 @@ def ownership_state(paths, name, *, entry=_LOOKUP):
         return STATE_CONFLICT
     if not record.home_device or not record.home_inode:
         return STATE_CONFLICT
-    if not home_is_real_directory(record.home):
+    if not home_is_real_directory(record.home) or not has_no_redirected_ancestor(record.home):
         return STATE_CONFLICT
     marker = record.marker_path
     if not marker or not os.path.lexists(marker):

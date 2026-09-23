@@ -1493,16 +1493,34 @@ def plan_restore(
 
 
 def _atomic_write(target, data):
+    """Replace ``target`` atomically, reporting a refusal as a restore failure.
+
+    Every caller of restore guards on ``BackupError``. An ``OSError`` let out
+    from here walks past all of them -- the Admin restore, its auto-rollback
+    and the dashboard's -- so a half-applied restore is never rolled back and
+    the rollback archive is never named to the operator. A card with no space
+    left is the state this reaches on its own: nothing prunes the rollback
+    archive each restore creates.
+    """
+
     parent = os.path.dirname(target) or "."
-    os.makedirs(parent, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".restore-")
+    try:
+        os.makedirs(parent, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=parent, prefix=".restore-")
+    except OSError as exc:
+        raise BackupError(f"restore could not write {target}: {exc}") from exc
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
         os.replace(tmp, target)
+    except OSError as exc:
+        raise BackupError(f"restore could not write {target}: {exc}") from exc
     finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 def _dry_run_action(entry):

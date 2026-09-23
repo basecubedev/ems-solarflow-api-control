@@ -31,7 +31,10 @@ case "$1" in
         if [ "$disabled" -eq 0 ]; then
             echo "ems-appliance: the backup account's authentication could not be disabled." >&2
             echo "  Removing the package now would leave a usable key without the chroot that" >&2
-            echo "  confines it. Run 'ems-appliance backup-access disable' and try again." >&2
+            echo "  confines it. The usual cause is an ownership record this build cannot read," >&2
+            echo "  which both paths refuse to act on: adopt it with" >&2
+            echo "  'ems-appliance backup-access migrate-ownership' and try again, or take the" >&2
+            echo "  account's key material away by hand." >&2
             exit 1
         fi
 

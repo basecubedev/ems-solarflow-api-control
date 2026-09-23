@@ -259,3 +259,55 @@ def test_a_record_written_before_the_image_was_packed_still_owns_the_account(hos
     assert healed["home_device"] == "2049"
     assert healed["home_inode"] == "2375248"
     assert healed["home_marker_nonce"] == recorded["home_marker_nonce"]
+
+
+# --- the exit code prerm reads as proof -------------------------------------
+
+
+def test_disable_refuses_rather_than_reporting_success_for_a_foreign_account(host):
+    """prerm reads a zero exit as proof that authentication was withdrawn.
+
+    The CLI returns EXIT_ERROR for exactly this state, which is why prerm falls
+    through to this script -- and this script returned 0 having deliberately
+    done nothing. `apt remove` then reported nothing, removed the package, and
+    left a live key on an unexpired account. Purge goes on to delete the sshd
+    Match block that confines it, so what remains is an unconfined SFTP login.
+
+    The header of prerm promises the opposite: "if neither the CLI nor the
+    direct maintainer fallback can take the authentication away, the package
+    stays installed".
+    """
+
+    home = host.add_account(shell="/bin/bash")
+    (home / ".ssh").mkdir(parents=True, exist_ok=True)
+    host.write_key()
+
+    result = host.run("disable")
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert BACKUP_USER in result.stdout + result.stderr
+
+
+def test_disable_refuses_on_a_record_this_package_cannot_read(host):
+    """A schema this build does not know is not proof of ownership either."""
+
+    import json
+
+    host.run("ensure")
+    host.write_key()
+    record = host.record()
+    record["schema_version"] = 2
+    host.marker.write_text(json.dumps(record), encoding="utf-8")
+
+    result = host.run("disable")
+
+    assert result.returncode != 0, result.stdout + result.stderr
+
+
+def test_disable_still_succeeds_for_the_account_the_package_created(host):
+    host.run("ensure")
+    host.write_key()
+
+    result = host.run("disable")
+
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -115,7 +115,7 @@ class BackupAccessActivation:
         """The keys sshd would accept, and how many this package can attribute."""
 
         from appliance import backup_ownership
-        from appliance.sshkeys import parse_authorized_keys
+        from appliance.sshkeys import foreign_key_lines, parse_authorized_keys
 
         path = self.authorized_keys_path()
         text = ""
@@ -125,7 +125,11 @@ class BackupAccessActivation:
             except OSError:
                 text = ""
         keys = parse_authorized_keys(text)
-        return keys, backup_ownership.unmanaged_keys(self.paths, keys)
+        unattributed = backup_ownership.unmanaged_keys(self.paths, keys)
+        # A line this parser cannot read is key material all the same, and sshd
+        # honours it. Counting only parsed keys let exactly the material this
+        # gate exists to catch pass as "everything attributed".
+        return keys, unattributed + foreign_key_lines(text)
 
     def authorized_keys_path(self):
         home = self.account_home()

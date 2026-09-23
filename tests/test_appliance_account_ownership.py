@@ -866,3 +866,38 @@ def test_purge_refuses_a_corrupt_acl_manifest(host):
     assert host.acl_entry(granted, BACKUP_USER) == "r--", host.acl_state()
     assert host.acl_entry(config, BACKUP_USER) == "r-x", host.acl_state()
     assert "purge did not complete" in result.stderr, result.stdout + result.stderr
+
+
+def test_python_ownership_refuses_a_home_reached_through_a_redirected_ancestor(owned, tmp_path):
+    """One ownership question, two destructive gates, two answers.
+
+    `backup-account.sh` walks the whole parent chain in `home_is_recorded`,
+    with a comment saying the device/inode pair had been quietly carrying that
+    check. `verify_home` dropped the same comparison and did not pick the walk
+    up: `home_is_real_directory` lstats the last component and nothing else. So
+    on a host where `/var/lib` is a symlink to another disk -- an ordinary
+    administrator's move -- `ems-appliance backup-access disable` moves and
+    re-arms `authorized_keys` through the redirected path while
+    `backup-account.sh disable` declines to touch it, and security-model.md
+    promises one rule for both.
+    """
+
+    # A home one level down, so there is an ancestor to redirect: var/ becomes a
+    # symlink to a directory on "another disk", exactly as relocating /var/lib
+    # by hand produces. The home itself is untouched by that move.
+    real = tmp_path / "otherdisk" / "var"
+    real.mkdir(parents=True)
+    home = tmp_path / "var" / "ems-backup"
+    home.mkdir(parents=True)
+    bind_home(owned.state, home)
+    entry = SimpleNamespace(pw_uid=1500, pw_gid=1500, pw_dir=str(home))
+    assert backup_ownership.verify_ownership(owned.paths, BACKUP_USER, entry=entry)["owned"]
+
+    (home).rename(real / "ems-backup")
+    (tmp_path / "var").rmdir()
+    (tmp_path / "var").symlink_to(real)
+
+    verdict = backup_ownership.verify_ownership(owned.paths, BACKUP_USER, entry=entry)
+
+    assert verdict["owned"] is False, verdict
+    assert verdict["reason"] == backup_ownership.HOME_MISMATCH, verdict

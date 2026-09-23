@@ -186,8 +186,37 @@ the transaction would stop being idempotent, which one of its tests refuses.
 Read-only is enforced twice: the bind mount carries `ro`, and POSIX ACLs grant
 the account read-and-traverse only. `/usr/lib/ems-appliance-manager/setup-export-root.sh`
 applies both — a traversal-only ACL entry on the install root and a recursive
-**plus default** read ACL on each export, so files EMS creates later stay
-readable without becoming writable. The `acl` package is a declared dependency.
+read ACL on each export, with the mask set explicitly, because a named-user
+grant on a 0600 file would otherwise be capped to nothing. The `acl` package is
+a declared dependency.
+
+**A file EMS writes later is not automatically readable.** The script sets the
+default ACL for the same reason, but a file's mask is re-derived from its create
+mode, and `ems/backup.py` writes every archive with `tempfile.mkstemp` — 0600.
+Measured on a POSIX-ACL filesystem:
+
+```text
+directory:  default:user:ems-backup:r-x   default:mask::r-x
+file 0600:  user:ems-backup:r-x  #effective:---   mask::---
+file 0640:  user:ems-backup:r-x  #effective:r--   mask::r--
+```
+
+So an archive created after the last export run carries the grant and is not
+readable until the recursive pass runs again — at boot, on a reinstall, or when
+a new top-level EMS directory appears. `ems-appliance-export.path` watches
+`/opt/ems-solarflow` and not its subdirectories, so writing a file under
+`data/backups` does not retrigger it.
+
+The appliance no longer claims otherwise: **Backup access** reports `degraded`
+with *exported files are not readable by ems-backup* when the newest archive
+under `data/backups` has neither a group-read nor an other-read bit. Until the
+export service runs again, fetch that archive through the Admin Console's own
+download instead.
+
+Only the archive path is judged. What else lives under an export is the
+business of whoever writes it — the shared password store sits under `config`
+at 0600 on purpose — and reporting that as a fault would call the appliance
+broken for doing the right thing.
 
 A bind mount that cannot be made read-only is unmounted again rather than left
 as a writable export.

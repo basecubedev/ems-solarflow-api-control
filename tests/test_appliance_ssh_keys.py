@@ -210,3 +210,67 @@ def test_unparsable_lines_are_skipped_not_propagated(tmp_path):
 def test_render_round_trips(tmp_path):
     keys = parse_authorized_keys(f"{ED25519}\n{RSA}\n")
     assert len(parse_authorized_keys(render_authorized_keys(keys))) == 2
+
+
+# --- lines this parser does not understand ----------------------------------
+
+RESTRICTED = (
+    'from="10.0.0.1",no-pty ssh-ed25519 '
+    "AAAAC3NzaC1lZDI1NTE5AAAAIGvQ2wD5p7hHlRWMbnJbQ3H6Pf9y0jN2b8rVXu5mKaLz admin@laptop"
+)
+
+
+def test_a_line_openssh_accepts_and_this_parser_does_not_survives_a_write(tmp_path):
+    """The file is rewritten from the parsed list, so the rest is deleted.
+
+    OpenSSH accepts more than this parser does: an options prefix, a
+    `cert-authority` line, a key type outside SUPPORTED_KEY_TYPES. Adding one
+    key through the console replaced the file with that key alone -- silently,
+    with a success message and `key_count: 1`. On `ems-shell`, the account that
+    reaches root and exists for the case where the console is the thing that is
+    broken, that is an operator locked out by an operation that reported
+    success.
+    """
+
+    store = store_for(tmp_path)
+    store.ssh_dir.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(f"{RESTRICTED}\n", encoding="utf-8")
+
+    store.add(ED25519)
+
+    text = store.path.read_text(encoding="utf-8")
+    assert RESTRICTED in text, "an operator's restricted key was deleted by an add"
+    assert ED25519.split()[1] in text
+
+
+def test_removing_a_key_does_not_remove_what_it_could_not_read(tmp_path):
+    store = store_for(tmp_path)
+    store.ssh_dir.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(f"{RESTRICTED}\n{ED25519}\n", encoding="utf-8")
+
+    store.remove(ED25519_FINGERPRINT)
+
+    assert RESTRICTED in store.path.read_text(encoding="utf-8")
+
+
+def test_comments_survive_a_write(tmp_path):
+    store = store_for(tmp_path)
+    store.ssh_dir.mkdir(parents=True, exist_ok=True)
+    store.path.write_text("# the operator wrote this\n", encoding="utf-8")
+
+    store.add(ED25519)
+
+    assert "# the operator wrote this" in store.path.read_text(encoding="utf-8")
+
+
+def test_revoking_everything_really_removes_everything_and_says_how_much(tmp_path):
+    """Revoke all is the one place where keeping a line would defeat the point."""
+
+    store = store_for(tmp_path)
+    store.ssh_dir.mkdir(parents=True, exist_ok=True)
+    store.path.write_text(f"{RESTRICTED}\n{ED25519}\n", encoding="utf-8")
+
+    removed = store.revoke_all()
+
+    assert store.path.read_text(encoding="utf-8") == ""
+    assert removed == 2, "the unparsed line was removed and not counted"
