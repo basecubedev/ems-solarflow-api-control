@@ -121,6 +121,30 @@ class ManagerUpdateService:
             "that do not name the clock. Wait for time synchronisation and try again",
         )
 
+    def _staging(self, name):
+        """A directory to fetch into, with abandoned ones swept first.
+
+        The ``finally`` that removes a staging directory runs only in the
+        process that made it, so an agent killed mid-download leaves the
+        partial package behind and the free-space check refuses the next
+        attempt. Only one operation is ever blocking, so no other directory
+        under this prefix belongs to a live one -- that invariant is what
+        makes the sweep safe, and it lives in the operation store.
+        """
+
+        directory = self._packages_dir()
+        for entry in directory.glob(f"{STAGING_PREFIX}*"):
+            if entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+        staging = directory / name
+        try:
+            staging.mkdir(mode=0o700, exist_ok=False)
+        except OSError as exc:
+            raise ManagerUpdateError(
+                "release_staging_unavailable", f"{staging} could not be created: {exc}"
+            )
+        return staging
+
     def _packages_dir(self):
         directory = Path(self.paths.packages_dir)
         directory.mkdir(parents=True, exist_ok=True)
@@ -299,9 +323,10 @@ class ManagerUpdateService:
         self._require_clock()
         candidate = self._candidate(release_id)
 
-        staging = self._packages_dir() / f"{STAGING_PREFIX}plan-{operation.operation_id}"
+        # The mkdir is outside the try on purpose: a finally that removed a
+        # directory this call did not create would delete somebody else's.
+        staging = self._staging(f"{STAGING_PREFIX}plan-{operation.operation_id}")
         try:
-            staging.mkdir(mode=0o700, exist_ok=False)
             release = self._verified_manifest(operation, candidate, staging)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
@@ -440,14 +465,7 @@ class ManagerUpdateService:
         self._require_clock()
         candidate = self._candidate(release_id)
 
-        directory = self._packages_dir()
-        staging = directory / f"{STAGING_PREFIX}{operation.operation_id}"
-        try:
-            staging.mkdir(mode=0o700, exist_ok=False)
-        except OSError as exc:
-            raise ManagerUpdateError(
-                "release_staging_unavailable", f"{staging} could not be created: {exc}"
-            )
+        staging = self._staging(f"{STAGING_PREFIX}{operation.operation_id}")
         try:
             release, archive = self._fetch_into(operation, candidate, staging)
             self._require_planned_release(operation, release)

@@ -459,6 +459,30 @@ def test_the_downloaded_archive_leaves_no_staging_directory_behind(tmp_path):
     assert leftovers == []
 
 
+@pytest.mark.parametrize("run", [plan, plan_and_execute])
+def test_a_staging_directory_an_earlier_agent_left_behind_is_swept(tmp_path, run):
+    """The finally that removes a staging directory runs only in the process
+    that made it. An agent killed mid-download -- OOM, a restart, a reboot,
+    an Admin install that restarts it -- left up to MAX_PACKAGE_BYTES of a
+    partial package behind for ever, and the free-space check then refused
+    every later attempt naming the disk rather than the corpse."""
+
+    services, _ = build(tmp_path)
+    abandoned = services.paths.packages_dir / f"{manager_update.STAGING_PREFIX}0123abcd"
+    abandoned.mkdir(parents=True)
+    (abandoned / "partial.deb").write_bytes(b"x" * 4096)
+
+    run(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    assert not abandoned.exists()
+    leftovers = [
+        entry.name
+        for entry in services.paths.packages_dir.iterdir()
+        if entry.name.startswith(manager_update.STAGING_PREFIX)
+    ]
+    assert leftovers == []
+
+
 # --- going back --------------------------------------------------------------
 
 
