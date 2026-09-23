@@ -571,8 +571,14 @@ class _RequestHandler(socketserver.StreamRequestHandler):
             )
             return
 
-        actor = validation.sanitize_actor(payload.pop("actor", ""))
-        source_ip = validation.sanitize_source_ip(payload.pop("source_ip", ""))
+        # Only an object carries an actor; anything else is handed on as it
+        # is, so protocol.validate_request refuses it with its own words
+        # instead of this raising out of handle() and dropping the peer.
+        actor = ""
+        source_ip = ""
+        if isinstance(payload, dict):
+            actor = validation.sanitize_actor(payload.pop("actor", ""))
+            source_ip = validation.sanitize_source_ip(payload.pop("source_ip", ""))
         self._reply(server.handle_request_payload(payload, actor=actor, source_ip=source_ip, peer=peer))
 
     def _reply(self, payload):
