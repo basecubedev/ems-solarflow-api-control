@@ -49,6 +49,15 @@ Details that matter:
   `nmcli` before NetworkManager holds its bus name; the intent survives that and
   is retried at the next start, up to three times, rather than being discarded
   while the console reports the profile restored.
+- The recovery runs **after the agent has bound its socket and reported
+  readiness**, not before. `nmcli connection up` waits up to 90 s by itself, and
+  90 s is also what systemd allows a start by default — so doing it first meant
+  systemd declaring the start failed and killing the whole control group,
+  including the `nmcli` that was restoring the WLAN. `Restart=on-failure` then
+  repeated that every 93 seconds, which is too far apart for `StartLimitBurst`
+  to catch, so the appliance had no agent at all while the web service came up
+  and showed a console that could not execute anything. The unit now states its
+  own `TimeoutStartSec` rather than inheriting one that matches nmcli's wait.
 - The passphrase is handed to `nmcli` on **stdin**, so it never appears in the
   host process table, in an operation record, in the audit log or in any log
   file.

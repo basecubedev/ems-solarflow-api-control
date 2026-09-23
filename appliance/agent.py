@@ -684,7 +684,7 @@ def notify_ready():
     return True
 
 
-def serve_agent(services, socket_path):
+def serve_agent(services, socket_path, *, after_ready=None):
     """Bind the socket, say so, then serve.
 
     The order is the contract. `systemctl restart ems-appliance-agent.service`
@@ -694,11 +694,20 @@ def serve_agent(services, socket_path):
     Type=simple that was a race the agent lost often enough to abort a `dpkg`
     run, so readiness is reported once the socket is bound, chmodded and
     grouped, and never before.
+
+    ``after_ready`` is start-up work that must not delay that report. The WLAN
+    revert recovery waits up to 90 s on ``nmcli``, which is exactly the unit's
+    default start timeout: run before the bind, it made systemd kill the whole
+    cgroup -- including the nmcli restoring the WLAN -- and `Restart=on-failure`
+    turned that into a loop no StartLimitBurst window catches. It still runs
+    before the first request is served, so nothing races it.
     """
 
     server = AgentServer(services, socket_path=socket_path)
     print(f"appliance agent listening on {server.socket_path}")
     notify_ready()
+    if after_ready is not None:
+        after_ready()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
