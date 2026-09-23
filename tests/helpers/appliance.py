@@ -428,6 +428,20 @@ class FakeHost:
                         names.append(name)
         return self._result("docker", args, 0, "".join(f"{name}\n" for name in sorted(set(names))))
 
+    def use_host_network(self, name):
+        """Make ``name`` run the way the appliance's own installer creates it.
+
+        install-admin-console.sh leaves NETWORK at "host", so the compose file
+        gets `network_mode: host` and no `ports:` mapping at all. Such a
+        container publishes nothing, which is exactly why Docker cannot be
+        asked who owns the port.
+        """
+
+        container = self.containers[name]
+        container.setdefault("HostConfig", {})["NetworkMode"] = "host"
+        container.setdefault("NetworkSettings", {})["Ports"] = {}
+        return container
+
     def publish_port(self, name, host_port, *, container_port=None):
         """Make ``name`` publish ``host_port`` the way ``docker inspect`` shows it."""
 
