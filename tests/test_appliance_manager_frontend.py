@@ -139,6 +139,31 @@ def test_a_deadline_whose_window_closed_stops_blocking():
     assert expired["canRevert"] is True
 
 
+def test_an_expired_deadline_is_not_described_as_one_that_will_never_revert():
+    """The next tick of the timer reverts in exactly this state.
+
+    The console said "nothing was reverted and nothing will be" of a deadline
+    whose window had closed -- the state in which verify-manager.sh falls
+    straight through to installing the previous package on its next tick,
+    up to a minute later. The documents were right and the console was wrong.
+    """
+
+    section = APP.split("function renderManagerUpdates(", 1)[1].split("\n  }", 1)[0]
+
+    assert "nothing was reverted and nothing will be" not in section
+    # The lead the browser tests assert on survives.
+    assert "nothing judged it" in section
+    assert "may still" in section and "previous package" in section
+
+
+def test_what_the_console_says_about_an_expired_deadline_agrees_with_the_documents():
+    document = (ROOT / "docs" / "user" / "appliance" / "updates.md").read_text(encoding="utf-8")
+    section = APP.split("function renderManagerUpdates(", 1)[1].split("\n  }", 1)[0]
+
+    assert "The previous package is installed again, by itself" in document
+    assert "nothing will be" not in section
+
+
 @requires_node
 def test_a_clock_it_cannot_read_keeps_the_deadline_shut():
     """Fail closed: a deadline this cannot place in time may still fire."""

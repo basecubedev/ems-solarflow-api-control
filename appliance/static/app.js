@@ -1816,11 +1816,18 @@
     } else if (actions.expiredUnjudged) {
       main.appendChild(el("p", { class: "empty-state", "data-test": "manager-deadline-expired" }, [
         el("strong", { text: "The deadline passed and nothing judged it. " }),
+        /* What the reverter actually does in this state: the next tick of the
+           timer, up to a minute away, installs the previous package if the
+           install has still not proved itself. The old text promised nothing
+           would be reverted, which was false for that minute every time. */
         el("span", {
           text: "This appliance armed a deadline for " + format(verify.expected_version)
-            + " and its window has closed without a verdict, so nothing was reverted and nothing "
-            + "will be. Installing or reverting is available again; the next install replaces "
-            + "this deadline. Check ems-appliance-manager-verify.timer if it keeps happening."
+            + " and the window for proving that install has closed. The next tick of "
+            + "ems-appliance-manager-verify.timer, within about a minute, puts the previous package "
+            + "back if the install has still not proved itself. Installing or reverting is free "
+            + "again because a deadline that has passed can no longer be waited on; an install "
+            + "started now replaces this deadline, and a tick already under way may still put the "
+            + "previous package back. Check the timer if this keeps happening."
         })
       ]));
     } else if (verdict.settled && verdict.verdict !== "confirmed") {
