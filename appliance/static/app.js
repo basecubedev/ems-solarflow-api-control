@@ -582,6 +582,7 @@
     container_unhealthy: "the Docker health check reports unhealthy",
     image_mismatch: "a different image than expected is running",
     api_unreachable: "the Admin web interface did not answer",
+    start_timed_out: "the start command did not return in time; Docker may still be starting",
     version_unreadable: "the Admin version could not be read",
     version_mismatch: "the running Admin reports a different version"
   };

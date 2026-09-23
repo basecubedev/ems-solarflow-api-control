@@ -411,6 +411,10 @@ state the appliance is really in afterwards:
 
 Starting Docker is only reported as repaired when the daemon **API** answers
 afterwards, not when the start command was merely accepted.
+The other direction holds too: a start command that outran its own timeout is
+not reported as a failed start, because the systemd job outlives the client --
+the daemon is asked, and the result is `start_timed_out` when it has not
+answered yet.
 
 A check that could not run is shown as `not checked`, never as a pass. The
 Admin port check is the case that matters: if `ss` is missing or fails, the

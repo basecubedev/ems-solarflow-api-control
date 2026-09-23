@@ -149,6 +149,9 @@ class FakeHost:
         self.calls = []
         self.compose_up_fails = False
         self.start_docker_succeeds = True
+        # systemctl start is a client waiting on a job; killed at its timeout,
+        # the job goes on without it and the daemon comes up, or does not.
+        self.docker_start_times_out = False
         self.docker_api_broken = False
         self.docker_ps_fails = False
         self.container_start_sticks = True
@@ -341,8 +344,8 @@ class FakeHost:
             return CommandResult(tool, tuple(args), 1, "", f"unhandled tool {tool}")
         return handler(list(args))
 
-    def _result(self, tool, args, code=0, stdout="", stderr=""):
-        return CommandResult(tool, tuple(args), code, stdout, stderr)
+    def _result(self, tool, args, code=0, stdout="", stderr="", *, timed_out=False):
+        return CommandResult(tool, tuple(args), code, stdout, stderr, timed_out=timed_out)
 
     # --- docker ----------------------------------------------------------
 
@@ -471,6 +474,12 @@ class FakeHost:
             unit = args[-1]
             self.units.setdefault(unit, {})
             if unit == "docker.service":
+                if self.docker_start_times_out:
+                    self.docker_running = self.start_docker_succeeds
+                    self.units[unit]["active"] = (
+                        "active" if self.start_docker_succeeds else "activating"
+                    )
+                    return self._result("systemctl", args, 124, "", "", timed_out=True)
                 self.docker_running = self.start_docker_succeeds
                 self.units[unit]["active"] = "active" if self.start_docker_succeeds else "failed"
                 if not self.start_docker_succeeds:

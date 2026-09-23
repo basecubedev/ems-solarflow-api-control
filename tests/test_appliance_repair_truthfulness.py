@@ -76,6 +76,42 @@ def test_docker_start_repair_that_does_not_start_docker_is_not_a_success(tmp_pat
     assert "start_docker" in operation.error["message"]
 
 
+def test_a_docker_start_that_outran_its_client_is_judged_by_the_daemon(tmp_path):
+    """`systemctl start` is a client waiting on a job. Killing it at the
+    timeout does not cancel the job -- docker.service is ordered after
+    network-online.target and can wait longer than the client -- and the
+    daemon, not the client's exit code, says whether Docker is up. The repair
+    reported a failure for a start that had already succeeded."""
+
+    services = appliance(tmp_path)
+    services.host.docker_running = False
+    services.host.units["docker.service"] = {"active": "inactive", "enabled": "enabled"}
+    services.host.start_docker_succeeds = True
+    services.host.docker_start_times_out = True
+
+    operation, _ = repair(services)
+
+    applied = {item["action"]: item["result"] for item in operation.result["applied"]}
+    assert applied["start_docker"] == "verified", operation.result
+    assert operation.state == STATE_SUCCEEDED, operation.to_dict()
+
+
+def test_a_docker_start_still_in_flight_is_not_reported_as_a_failed_start(tmp_path):
+    """The honest label when it really is not up yet."""
+
+    services = appliance(tmp_path)
+    services.host.docker_running = False
+    services.host.start_docker_succeeds = False
+    services.host.docker_start_times_out = True
+
+    operation, _ = repair(services)
+
+    applied = {item["action"]: item["result"] for item in operation.result["applied"]}
+    assert applied["start_docker"] == "start_timed_out", operation.result
+    assert operation.state == STATE_FAILED_RECOVERABLE, operation.to_dict()
+    assert "did not return in time" in operation.error["message"], operation.error
+
+
 def test_docker_start_repair_verifies_the_api_not_only_the_unit(tmp_path):
     services = appliance(tmp_path)
     services.host.docker_running = False

@@ -80,6 +80,8 @@ VERIFICATION_MESSAGES = {
     "container_unhealthy": "the Admin container reports an unhealthy health check",
     "image_mismatch": "the Admin container runs a different image than expected",
     "api_unreachable": "the Admin HTTP endpoint did not answer",
+    "start_timed_out": "the start command did not return in time and the Docker daemon "
+    "has not answered yet; the systemd job may still be running",
     "version_unreadable": "the Admin version could not be read",
     "version_mismatch": "the running Admin reports a different version than expected",
 }
@@ -1298,10 +1300,17 @@ class AdminLifecycleService:
 
         if action == "start_docker":
             result = self.systemd.start(UNIT_DOCKER) if self.systemd else None
-            if result is not None and not result.ok:
+            timed_out = bool(result is not None and result.timed_out)
+            if result is not None and not result.ok and not timed_out:
                 return "start_failed"
+            # `systemctl start` is a client waiting on a job. Killing it at the
+            # timeout does not cancel the job -- docker.service is ordered after
+            # network-online.target, so the wait can outlast the client -- and
+            # the daemon, not the client's exit code, says whether Docker is up.
             state = self.docker.daemon_state()
-            return "verified" if state["state"] == DAEMON_RUNNING else "api_unreachable"
+            if state["state"] == DAEMON_RUNNING:
+                return "verified"
+            return "start_timed_out" if timed_out else "api_unreachable"
 
         container = self.config.admin_container
         if action == "start_admin":
