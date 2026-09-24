@@ -4,7 +4,9 @@ The Admin Console (product name **EMS SolarFlow Admin**) is the local browser UI
 for setup and maintenance. It runs next to EMS, not inside the control loop. EMS
 still owns the control logic; the Admin Console is UI and orchestration only.
 
-The Admin Console is a Docker path. Run it only on a trusted local machine.
+The Admin Console is a Docker path: Docker has to be installed on the host
+before the installer is run — see [Before you start](#before-you-start). Run it
+only on a trusted local machine.
 
 ## Use it for
 
@@ -190,6 +192,24 @@ flash the defaults first.
 
 ## Start
 
+### Before you start
+
+The Admin Console runs as a container and orchestrates more of them, so Docker
+has to be there first — the installer brings none of its own. You need **Docker
+Engine with the Compose v2 plugin, v2.24.0 or newer**, and a daemon your user
+can reach; on Windows, Docker Desktop with Linux containers. The installer
+checks this before it writes anything and stops with the reason if something is
+missing, so an install never gets half-way on a host without Docker.
+
+```bash
+docker compose version    # expect v2.24.0 or newer
+docker info               # must succeed as the user who will install
+```
+
+Full host requirements: [hardware-requirements.md](hardware-requirements.md#software).
+
+### Install
+
 Install and start the Admin Console in a local EMS folder:
 
 ```bash
@@ -199,10 +219,21 @@ curl -fsSLO https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-cont
 sh install-admin-console.sh
 ```
 
-Then open:
+### Check that it worked
+
+Open:
 
 ```text
 http://127.0.0.1:8090
+```
+
+From another machine — the usual case when EMS runs on a headless Pi — use the
+host's address instead: `http://<host-ip>:8090`. The sign-in page appearing is
+the confirmation that the install succeeded. If it does not appear:
+
+```bash
+docker compose -f docker-compose.admin.yml ps      # is the container up?
+docker compose -f docker-compose.admin.yml logs -f # why it is not
 ```
 
 ## Login

@@ -17,7 +17,8 @@ installer with Docker commands and `emsctl.py`.
 
 ### How do I start the Admin Console?
 
-Run the installer:
+Docker has to be installed first — see [Do I need Docker?](#do-i-need-docker)
+below. Then run the installer:
 
 ```bash
 mkdir -p ems-solarflow-api-control
@@ -26,8 +27,10 @@ curl -fsSLO https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-cont
 sh install-admin-console.sh
 ```
 
-Then open `http://127.0.0.1:8090`. The default uses host networking for reliable
-LAN device discovery; use `--bridge` if you need Docker bridge networking.
+Then open `http://127.0.0.1:8090`, or `http://<host-ip>:8090` from another
+machine. The sign-in page appearing is how you know it worked. The default uses
+host networking for reliable LAN device discovery; use `--bridge` if you need
+Docker bridge networking.
 
 ### Why does the Admin Console use host networking by default?
 
@@ -69,6 +72,20 @@ image** if you want a Raspberry Pi that does nothing else and manages itself.
 The first two use the same `config/config.json` layout, so you can switch later.
 See the [Docker Bootstrap guide](docker-bootstrap.md) and the
 [appliance guides](appliance/index.md).
+
+### Do I need Docker?
+
+For the Admin Console and Docker Bootstrap, yes — both run EMS in containers and
+neither installer brings a runtime with it. You need Docker Engine with the
+Compose v2 plugin, v2.24.0 or newer, and a daemon your user can reach; on
+Windows, Docker Desktop with Linux containers. `docker compose version` and
+`docker info` answer both questions before you start. The installers check this
+first and stop with the reason, so a host without Docker fails at once rather
+than half-way.
+
+The **appliance image is the exception**: it ships an operating system with
+Docker already set up, so there is nothing to install first. Details:
+[hardware-requirements.md](hardware-requirements.md#software).
 
 ### What is Developer Setup?
 

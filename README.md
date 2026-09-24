@@ -96,6 +96,12 @@ holds the container images the appliance fetches by itself.
 > maintenance, with no shell or config-file editing. It finds your devices and
 > sets up the connection for you.
 
+**Docker is required first.** The script installs no runtime of its own: it
+writes a compose file and starts a container, so the machine needs Docker
+Engine with the Compose v2 plugin (2.24.0 or newer) and a daemon your user can
+reach. Without it the script stops and names what is missing.
+[What the host needs](docs/user/hardware-requirements.md#software)
+
 Install and start it in a local EMS folder:
 
 ```bash
@@ -105,8 +111,12 @@ curl -fsSLO https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-cont
 sh install-admin-console.sh
 ```
 
-Then open `http://127.0.0.1:8090` and create the shared EMS/Admin password in
-the browser. Host networking is the default (best for local discovery); add
+Then open `http://127.0.0.1:8090` — or `http://<host-ip>:8090` from another
+machine, which is the usual case on a headless Pi — and create the
+shared EMS/Admin password in the browser. **That sign-in page is how you know
+the install worked**; if it does not appear,
+`docker compose -f docker-compose.admin.yml ps` says whether the container
+came up. Host networking is the default (best for local discovery); add
 `--bridge` only if you need Docker bridge networking.
 
 ![Admin Console start page](docs/assets/screenshots/admin/admin-landing.png)
