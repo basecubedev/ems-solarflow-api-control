@@ -153,6 +153,45 @@ def test_current_identity_unknown_does_not_crash():
     assert identity.digest is None
 
 
+def test_an_uninspectable_container_is_not_identified_from_its_environment(tmp_path):
+    # This identity is what verification rests on, so it proves or it answers
+    # unknown. The process environment names the build the container was created
+    # from, and an update rewrites the compose environment tag, so an
+    # env-derived identity can carry the target's digest while the old build is
+    # what actually runs -- and it would be indistinguishable from a verified one.
+    from admin.server import _running_admin_identity
+
+    class BlindDocker:
+        def inspect_container(self, name):
+            raise RuntimeError("docker ps timed out")
+
+        def inspect_image(self, ref):
+            # The target was just pulled, so it is present locally and carries
+            # the target's labels. Nothing else can be identified.
+            return _image(TARGET_REF, "sha256:target") if ref == TARGET_REF else None
+
+    import os as _os
+
+    previous = {
+        key: _os.environ.get(key)
+        for key in ("EMS_ADMIN_CONTAINER_NAME", "EMS_ADMIN_IMAGE", "EMS_ADMIN_TAG")
+    }
+    _os.environ["EMS_ADMIN_CONTAINER_NAME"] = "ems-solarflow-admin"
+    _os.environ["EMS_ADMIN_IMAGE"] = ADMIN_IMAGE_REPO
+    _os.environ["EMS_ADMIN_TAG"] = "v0.7.0"
+    try:
+        identity = _running_admin_identity(BlindDocker())
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                _os.environ.pop(key, None)
+            else:
+                _os.environ[key] = value
+
+    assert identity.digest != "sha256:target"
+    assert not identity.digest
+
+
 # --- update decision -----------------------------------------------------
 
 

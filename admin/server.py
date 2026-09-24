@@ -732,7 +732,16 @@ class AdminRuntime:
 
 
 def _running_admin_identity(docker):
-    """Read the running Admin's trusted image identity without browser input."""
+    """Read the running Admin's trusted image identity without browser input.
+
+    Proves it from the container or answers unknown. Never from the environment:
+    those values name the build this container was *created* from, an update
+    rewrites the compose environment tag, and the target image is present locally
+    the moment the updater pulled it -- so an env-derived identity can carry the
+    target's digest while the previous build is what runs. This identity is what
+    the reconnect verification rests on, and an unknown answer is refused there
+    while a wrong one is accepted.
+    """
 
     container_name = os.environ.get("EMS_ADMIN_CONTAINER_NAME", DEFAULT_ADMIN_CONTAINER)
     image_ref = None
@@ -740,18 +749,16 @@ def _running_admin_identity(docker):
         container = docker.inspect_container(container_name)
     except Exception:
         container = None
-    if isinstance(container, dict):
-        exact_image = getattr(docker, "inspect_container_image_id", None)
-        if callable(exact_image):
-            try:
-                image_ref = exact_image(container_name)
-            except Exception:
-                image_ref = None
-            if not image_ref:
-                return identify_image(docker, "")
-        else:
-            image_ref = container.get("image")
-    image_ref = image_ref or admin_image_ref_from_env()
+    if not isinstance(container, dict):
+        return identify_image(docker, "")
+    exact_image = getattr(docker, "inspect_container_image_id", None)
+    if callable(exact_image):
+        try:
+            image_ref = exact_image(container_name)
+        except Exception:
+            image_ref = None
+    else:
+        image_ref = container.get("image")
     return identify_image(docker, image_ref) if image_ref else identify_image(docker, "")
 
 

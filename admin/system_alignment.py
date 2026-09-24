@@ -1732,8 +1732,37 @@ class SystemAlignmentService:
                 now=self._now_value(),
             )
         except TransitionStateError as exc:
+            if getattr(exc, "reason", None) == "admin_identity_mismatch":
+                self._record_reconnect_mismatch(operation_id, exc)
             self._raise_store(exc)
         return self._result(record)
+
+    def _record_reconnect_mismatch(self, operation_id, exc):
+        """Keep the proof that the replacement did not happen.
+
+        The machine is built for this: a recoverable failure at
+        ``admin_reconnect_pending`` resumes at ``admin_update_pending`` and
+        ``retry`` releases the updater claim with it. Nothing wrote it, so a
+        proven mismatch left the record untouched with no error_code -- retry and
+        return-to-running-build both refuse a stage that is not recoverable, and
+        the only way out of a failed replacement was to abandon the operation.
+
+        Only a *proven* mismatch is recorded. An identity Docker could not read is
+        not evidence of anything and must not consume the operation.
+        """
+
+        try:
+            self._transitions.mark_failed(
+                operation_id,
+                error_code=exc.reason,
+                error_message=exc.message,
+                resume_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+                now=self._now_value(),
+            )
+        except TransitionStateError:
+            # The record moved on, or already carries a failure. The mismatch is
+            # still reported to the caller by the raise that follows.
+            pass
 
     def _resource_provider_for(self, build):
         """Return the resource provider for ``build``'s strategy, or fail closed.
