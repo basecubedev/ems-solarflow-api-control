@@ -104,6 +104,30 @@ def test_a_protected_digest_is_never_removed_however_old_it_is():
     assert oldest not in removals
 
 
+def test_an_image_is_protected_by_any_of_its_identities():
+    """A repo digest and a local image ID are not the same string everywhere.
+
+    Under the containerd snapshotter they coincide; under the classic overlay2
+    store they do not. Protection is recorded as the repo digest while removal
+    names the local ID, so matching only one of them would delete a rollback
+    target on exactly the hosts where the two differ.
+    """
+
+    images = [
+        *_series(ADMIN_IMAGE_REPO, 9),
+        {
+            "repository": ADMIN_IMAGE_REPO,
+            "digest": "sha256:localid",
+            "aliases": ["sha256:repodigest"],
+            "created": "2026-01-01T00:00:00Z",
+        },
+    ]
+
+    removals = plan_removals(images, protected_digests=["sha256:repodigest"], keep=5)
+
+    assert "sha256:localid" not in removals
+
+
 def test_a_protected_image_occupies_one_of_the_kept_slots():
     """Protection is not extra headroom.
 

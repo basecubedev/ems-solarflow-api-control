@@ -46,9 +46,10 @@ def plan_removals(images, *, protected_digests=(), keep=DEFAULT_KEEP):
     """Digests that may be removed, per repository, newest kept.
 
     ``images`` are dicts carrying ``repository``, ``digest`` and ``created``
-    (an ISO-8601 string or any sortable value). Ordering is by ``created``
-    descending, with the digest as a tiebreak so a run is reproducible when two
-    images share a timestamp.
+    (an ISO-8601 string or any sortable value), plus an optional ``aliases``
+    list of the other strings that name the same image. Ordering is by
+    ``created`` descending, with the digest as a tiebreak so a run is
+    reproducible when two images share a timestamp.
 
     An image is removable only when its repository is managed, its digest is
     readable, it is not protected, and it falls outside the newest ``keep`` of
@@ -60,6 +61,7 @@ def plan_removals(images, *, protected_digests=(), keep=DEFAULT_KEEP):
     protected = {str(d) for d in protected_digests if d}
 
     by_repository = {}
+    identities = {}
     for image in images or ():
         if not isinstance(image, dict):
             continue
@@ -69,6 +71,13 @@ def plan_removals(images, *, protected_digests=(), keep=DEFAULT_KEEP):
         # cannot be proven to be ours, and a digest is what removal names.
         if not digest or not is_managed(repository):
             continue
+        # One image answers to several strings -- the repo digest a protection
+        # record stores, and the local ID a removal names. Under the containerd
+        # snapshotter they are the same; under overlay2 they are not, so every
+        # identity has to be able to trigger protection.
+        aliases = {digest}
+        aliases.update(str(alias) for alias in image.get("aliases") or () if alias)
+        identities.setdefault(digest, set()).update(aliases)
         by_repository.setdefault(repository, []).append((image.get("created") or "", digest))
 
     removable = []
@@ -80,14 +89,19 @@ def plan_removals(images, *, protected_digests=(), keep=DEFAULT_KEEP):
         # Counting them where they happen to fall in the ordering would let a
         # pinned *old* build raise the real budget above the configured number,
         # because by then the newest ones have already filled it.
-        protected_here = {digest for _created, digest in entries if digest in protected}
+        def _is_protected(digest):
+            return bool(identities.get(digest, {digest}) & protected)
+
+        protected_here = {
+            digest for _created, digest in entries if _is_protected(digest)
+        }
         kept = len(protected_here)
         seen = set()
         for created, digest in entries:
             if digest in seen:
                 continue
             seen.add(digest)
-            if digest in protected:
+            if _is_protected(digest):
                 continue
             if kept < budget:
                 kept += 1
