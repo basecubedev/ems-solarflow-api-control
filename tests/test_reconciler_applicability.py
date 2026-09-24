@@ -146,13 +146,16 @@ def _reconcile(controller, dev, item):
     )
 
 
-def test_ac_mode_is_not_written_to_a_device_that_never_reported_one():
+def test_ac_mode_is_not_written_repeatedly_to_a_device_that_never_reports_one():
+    """One probe settles whether the field is there; after that, silence."""
+
     dev = _device()
     controller = _controller(dev)
 
-    for _ in range(5):
-        written = _reconcile(controller, dev, _state(0, ac_mode=0))
-        assert written == []
+    written = [_reconcile(controller, dev, _state(0, ac_mode=0)) for _ in range(5)]
+
+    assert written[0] == [{"acMode": 2}]
+    assert written[1:] == [[]] * 4
 
 
 def test_ac_mode_zero_is_written_once_a_usable_mode_has_been_seen():
@@ -189,10 +192,11 @@ def test_unreported_ac_mode_is_logged_once_it_is_judged_unobservable(caplog):
     dev = _device()
     controller = _controller(dev)
 
+    _reconcile(controller, dev, _state(0, ac_mode=0))
     with caplog.at_level(logging.WARNING):
         _reconcile(controller, dev, _state(0, ac_mode=0))
 
-    assert any("unknown_ac_mode" in message for message in caplog.messages)
+    assert any("ac_mode_never_reported" in message for message in caplog.messages)
 
 
 # --- the reconcilers keep writing when the state IS applicable ---------------
@@ -233,3 +237,53 @@ def test_an_explicit_operator_intent_writes_even_into_an_unreported_ac_mode():
     )
 
     assert written == [{"acMode": 2}]
+
+
+def test_a_persisted_operator_reason_does_not_defeat_the_guard():
+    """`emsctl device ... ac-mode` writes `runtime_role_reason` into
+    runtime-state.json, and the controller replays it every cycle. Keying the
+    exception on "this looks like an instruction" therefore never expired: the
+    write resumed every loop, which is the very thing the guard exists to stop.
+
+    An instruction is honoured once. What settles it after that is the device:
+    if it still reports nothing, the field is not there to reconcile.
+    """
+
+    dev = _device()
+    controller = _controller(dev)
+    operator_intent = ac_output_intent(dev.name, "emsctl")
+
+    attempts = [
+        _writes(
+            controller,
+            lambda: controller.reconcile_ac_mode_intent(
+                dev, _state(0, ac_mode=0), operator_intent
+            ),
+        )
+        for _ in range(6)
+    ]
+
+    assert attempts[0] == [{"acMode": 2}]
+    assert attempts[1:] == [[]] * 5
+
+
+def test_the_routine_reconcile_also_probes_once_and_then_stops():
+    dev = _device()
+    controller = _controller(dev)
+
+    attempts = [_reconcile(controller, dev, _state(0, ac_mode=0)) for _ in range(6)]
+
+    assert attempts[0] == [{"acMode": 2}]
+    assert attempts[1:] == [[]] * 5
+
+
+def test_a_device_that_accepts_the_probe_is_reconciled_normally_afterwards():
+    """The probe is how observability is decided, not a one-shot surrender."""
+
+    dev = _device()
+    controller = _controller(dev)
+
+    assert _reconcile(controller, dev, _state(0, ac_mode=0)) == [{"acMode": 2}]
+    # The device now reports a real mode, and drifts back later.
+    assert _reconcile(controller, dev, _state(0, ac_mode=2)) == []
+    assert _reconcile(controller, dev, _state(0, ac_mode=1)) == [{"acMode": 2}]

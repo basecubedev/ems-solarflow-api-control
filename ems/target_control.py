@@ -114,11 +114,12 @@ def battery_presence(state):
         return BATTERY_UNKNOWN
 
     try:
-        packs = int(str(raw).strip())
+        # JSON has no integers, so a pack count may well arrive as 2.0.
+        packs = float(str(raw).strip())
     except (TypeError, ValueError):
         return BATTERY_UNKNOWN
 
-    if packs < 0:
+    if not packs.is_integer() or packs < 0:
         return BATTERY_UNKNOWN
 
     return BATTERY_PRESENT if packs > 0 else BATTERY_ABSENT
@@ -391,10 +392,12 @@ def cannot_absorb_pv(state):
 def pv_charge_balance_context(states):
     """Return SOC spread data used for PV-first charge balancing."""
 
+    # A device with no pack reports SoC 0 without being an empty battery, so
+    # counting it would stretch the spread and bias every real battery.
     soc_values = [
         state.soc
         for state in states
-        if state.max_soc > 0
+        if state.max_soc > 0 and battery_presence(state) != BATTERY_ABSENT
     ]
 
     if not soc_values:

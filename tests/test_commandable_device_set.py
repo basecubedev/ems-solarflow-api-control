@@ -1,19 +1,21 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The allocator only shares power out to devices that will be commanded.
+"""Who the EMS commands, and who it still counts on.
 
-Three separate conditions take a device out of the control loop: it is offline,
-the operator disabled it, or something else owns its AC mode. Only the third was
-ever told to the allocator. The first two were applied afterwards, when the
-target was already assigned -- so the share went to a device that could not use
-it and was then set to zero, and the rest of the plant never heard about it.
+Three conditions take a device out of the *write* path: it is offline, the
+operator disabled it, or something else owns its AC mode. Only the third also
+takes it out of the *allocation*, and the difference is not an oversight.
 
-Measured before the change: two devices, 600 W requested, one of them offline.
-The allocator reported 300 W each, `undistributed` stayed 0, and 300 W simply
-did not happen. The loop recovers it over the next cycles through the meter,
-which is why it went unnoticed; the explanation never mentions it at all.
+A reserved device has been commanded into AC input; it is not exporting, so the
+allocator must not count on it. An offline or disabled device was simply never
+written to this cycle -- it keeps the last `outputLimit` it was given and goes
+on delivering roughly that much. Dropping it from the allocation hands its share
+to a device that is still running, and the plant then delivers both until the
+meter feedback catches up. Under-delivering costs an import for a few cycles;
+over-delivering exports, which is the worse half of the trade.
 
-One predicate answers "will this device be commanded", and everything that needs
-the answer asks it.
+So one predicate answers "will this device be commanded" for the write path, the
+night-idle set and the explanation, while the allocator keeps asking the
+narrower question it has always asked.
 """
 
 from unittest.mock import patch
@@ -22,6 +24,7 @@ import pytest
 
 from ems.controller import EMSController
 from ems.models import DeviceState
+from ems.runtime_intents import ac_input_intent, ac_output_intent
 from ems.target_control import calculate_targets, detect_capabilities
 from tests.test_write_gates import RuntimeStateStub, ShellyStub, device
 
@@ -62,7 +65,7 @@ def state(solar=400, soc=50):
     )
 
 
-def controller_with(runtime_devices=None, online=None):
+def controller_with(runtime_devices=None, online=None, reserved=()):
     devices = [device("WR1"), device("WR2")]
     for item in devices:
         item.battery_kwh = 1.0
@@ -77,16 +80,18 @@ def controller_with(runtime_devices=None, online=None):
     )
     controller.device_online = online or {"WR1": True, "WR2": True}
     controller.runtime_intents = {
-        item.name: __import__(
-            "ems.runtime_intents", fromlist=["ac_output_intent"]
-        ).ac_output_intent(item.name)
+        item.name: (
+            ac_input_intent(item.name, "runtime_state")
+            if item.name in reserved
+            else ac_output_intent(item.name)
+        )
         for item in devices
     }
     return controller
 
 
 def allocate(controller, states, requested_total=600):
-    capabilities = controller.commandable_capabilities(
+    capabilities = controller.intent_filtered_capabilities(
         [detect_capabilities(item) for item in states]
     )
     with patch.multiple(
@@ -96,128 +101,102 @@ def allocate(controller, states, requested_total=600):
         BATTERY_KWH_WEIGHTING=True,
         PV_CHARGE_BALANCE_ENABLED=False,
     ):
-        targets, _, _, explanation = calculate_targets(
+        targets, _, _ = calculate_targets(
             load=0,
             devices=states,
             max_power=1600,
             device_configs=controller.devices,
             capabilities=capabilities,
             requested_total=requested_total,
-            explain=True,
-            online_devices=controller.device_online,
         )
     effective = controller.effective_control_targets(list(targets), True, 0)
-    return [round(value) for value in targets], effective, explanation
+    return [round(value) for value in targets], effective
 
 
-# --- the three ways out of the control loop ---------------------------------
-
-
-def test_an_offline_device_receives_no_allocation():
-    controller = controller_with(online={"WR1": True, "WR2": False})
-
-    targets, effective, _ = allocate(controller, [state(), state()])
-
-    assert targets[1] == 0
-    assert effective[1] == 0
-
-
-def test_a_disabled_device_receives_no_allocation():
-    controller = controller_with(runtime_devices={"WR2": {"enabled": False}})
-
-    targets, effective, _ = allocate(controller, [state(), state()])
-
-    assert targets[1] == 0
-    assert effective[1] == 0
+# --- a reserved device is not exporting, so nothing is expected of it -------
 
 
 def test_a_reserved_device_receives_no_allocation():
-    """The one exclusion that was already reaching the allocator."""
+    controller = controller_with(reserved={"WR2"})
 
-    controller = controller_with(
-        runtime_devices={"WR2": {"runtime_role": "ac_input"}}
-    )
-    controller.runtime_intents["WR2"] = __import__(
-        "ems.runtime_intents", fromlist=["ac_input_intent"]
-    ).ac_input_intent("WR2", "runtime_state")
-
-    targets, effective, _ = allocate(controller, [state(), state()])
+    targets, effective = allocate(controller, [state(solar=800), state()])
 
     assert targets[1] == 0
     assert effective[1] == 0
+    assert targets[0] == 600
 
 
-# --- and the power goes to a device that can deliver it ---------------------
+# --- an uncommanded device keeps delivering, so it keeps its share ----------
 
 
-def test_the_excluded_share_is_redistributed_rather_than_lost():
+def test_an_offline_device_keeps_its_share_of_the_allocation():
+    """It is not written to, and it has not stopped either."""
+
     controller = controller_with(online={"WR1": True, "WR2": False})
 
-    targets, effective, _ = allocate(controller, [state(solar=800), state()])
+    targets, effective = allocate(controller, [state(), state()])
 
-    assert targets[0] == 600
-    assert sum(effective) == 600
-
-
-def test_what_is_allocated_is_what_is_commanded():
-    """The invariant behind all of this, for every exclusion reason."""
-
-    for description, kwargs in (
-        ("offline", {"online": {"WR1": True, "WR2": False}}),
-        ("disabled", {"runtime_devices": {"WR2": {"enabled": False}}}),
-    ):
-        controller = controller_with(**kwargs)
-        targets, effective, _ = allocate(
-            controller, [state(solar=800), state()]
-        )
-
-        assert sum(targets) == sum(effective), description
+    assert targets == [300, 300]
+    assert effective[1] == 0
 
 
-def test_an_unservable_request_is_reported_rather_than_silently_dropped():
-    """What the plant cannot deliver has to show up as undistributed.
+def test_a_disabled_device_keeps_its_share_of_the_allocation():
+    controller = controller_with(runtime_devices={"WR2": {"enabled": False}})
 
-    The remaining device sits at its discharge floor, so its 200 W of PV is all
-    there is; the battery top-up has nothing to add. Before the change the
-    missing 400 W were attributed to the offline device and vanished from the
-    explanation entirely.
+    targets, effective = allocate(controller, [state(), state()])
+
+    assert targets == [300, 300]
+    assert effective[1] == 0
+
+
+def test_the_survivor_is_not_pushed_up_to_cover_an_offline_device():
+    """The regression this file exists to prevent.
+
+    Two devices sharing 600 W, one goes offline. If its share were handed to
+    the other, the plant would command 600 W from a device already delivering
+    300 W beside one that never stopped -- 900 W into a 600 W load.
     """
 
     controller = controller_with(online={"WR1": True, "WR2": False})
 
-    targets, effective, explanation = allocate(
-        controller, [state(solar=200, soc=15), state()], requested_total=600
-    )
+    targets, _ = allocate(controller, [state(solar=800), state(solar=800)])
 
-    assert sum(effective) == sum(targets) == 200
-
-    shortfall = [
-        limit
-        for limit in explanation.limits
-        if limit.name == "pv_only_target_limit" and limit.active
-    ]
-    assert shortfall and shortfall[0].value == 400
+    assert targets[0] == 300
 
 
-# --- nothing changes when every device is commandable -----------------------
+# --- the command predicate governs the write path, and agrees with itself ---
 
 
-def test_a_fully_available_plant_is_unchanged():
-    controller = controller_with()
+def test_all_three_conditions_block_the_command():
+    for description, kwargs in (
+        ("offline", {"online": {"WR1": True, "WR2": False}}),
+        ("disabled", {"runtime_devices": {"WR2": {"enabled": False}}}),
+        ("reserved", {"reserved": {"WR2"}}),
+    ):
+        controller = controller_with(**kwargs)
 
-    targets, effective, _ = allocate(controller, [state(), state()])
+        assert controller.device_commandable(controller.devices[0]), description
+        assert not controller.device_commandable(controller.devices[1]), description
 
-    assert targets == [300, 300]
-    assert effective == [300, 300]
+
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        ({"online": {"WR1": True, "WR2": False}}, "offline"),
+        ({"runtime_devices": {"WR2": {"enabled": False}}}, "device_disabled"),
+        ({"reserved": {"WR2"}}, "runtime_role_ac_input"),
+    ],
+)
+def test_the_block_reason_names_the_condition(kwargs, expected):
+    controller = controller_with(**kwargs)
+
+    assert controller.device_command_block_reason(controller.devices[1]) == expected
 
 
 def test_the_predicate_agrees_with_the_index_helpers():
-    """One answer, whoever asks for it."""
+    """Two call sites, one answer. They were byte-identical copies before."""
 
-    controller = controller_with(
-        online={"WR1": True, "WR2": False},
-        runtime_devices={"WR1": {"enabled": True}},
-    )
+    controller = controller_with(online={"WR1": True, "WR2": False})
 
     commandable = [
         index
@@ -227,3 +206,12 @@ def test_the_predicate_agrees_with_the_index_helpers():
 
     assert controller.active_online_device_indexes() == commandable
     assert controller.night_min_soc_controllable_indices() == commandable
+
+
+def test_a_fully_available_plant_is_unchanged():
+    controller = controller_with()
+
+    targets, effective = allocate(controller, [state(), state()])
+
+    assert targets == [300, 300]
+    assert effective == [300, 300]

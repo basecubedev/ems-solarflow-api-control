@@ -352,3 +352,53 @@ def test_winter_reserve_still_applies_to_a_battery():
     target, adjustment = _winter_target(1)
 
     assert target is not None or adjustment
+
+
+# --- a device with no battery is not part of the SoC spread -----------------
+
+
+def test_a_battery_less_device_does_not_distort_the_charge_balance():
+    """Its reported zero is not an empty battery, so it is not a gap either.
+
+    Two batteries five points apart should barely be biased. A battery-less
+    device reporting zero stretched the spread to fifty, drove the balance to
+    full strength and flattened their split.
+    """
+
+    from ems.target_control import pv_charge_balance_context
+
+    batteries = [state(soc=50, solar=400, pack_num=1), state(soc=45, solar=400, pack_num=1)]
+    with_battery_less = batteries + [state(soc=0, solar=400, pack_num=0)]
+
+    assert pv_charge_balance_context(batteries)["soc_gap"] == 5
+    assert pv_charge_balance_context(with_battery_less)["soc_gap"] == 5
+
+
+def test_two_batteries_keep_their_split_when_a_battery_less_device_joins():
+    pair = [state(soc=50, solar=400, pack_num=1), state(soc=45, solar=400, pack_num=1)]
+    alone = allocate(pair, 400)
+
+    trio = pair + [state(soc=0, solar=400, pack_num=0)]
+    joined = allocate(trio, 400 + 400)
+
+    assert joined[:2] == alone
+
+
+def test_a_stale_winter_target_is_dropped_when_the_pack_goes_away():
+    """The early return must not strand the entry the summer reset would clear."""
+
+    from ems.controller import EMSController
+    from tests.test_write_gates import ShellyStub, device as write_device
+
+    dev = write_device("WR1")
+    controller = EMSController(
+        devices=[dev], shelly=ShellyStub(0), sleep_enabled=False, runtime_state=None
+    )
+    controller.winter_min_soc_targets["WR1"] = 40
+
+    with patch("ems.controller.cfg.winter_feature_enabled", return_value=True):
+        controller.winter_reconciliation_target(
+            dev, state(soc=50, solar=0, pack_num=0), True, True
+        )
+
+    assert "WR1" not in controller.winter_min_soc_targets

@@ -125,6 +125,10 @@ def test_unreachable_device_is_unknown_not_battery_less():
         ("nonsense", BATTERY_UNKNOWN),
         ("", BATTERY_UNKNOWN),
         (1.5, BATTERY_UNKNOWN),
+        # JSON has no integers; a pack count may well arrive as 2.0.
+        (2.0, BATTERY_PRESENT),
+        (0.0, BATTERY_ABSENT),
+        ("2.0", BATTERY_PRESENT),
     ],
 )
 def test_presence_values(pack_num, expected):
@@ -163,3 +167,29 @@ def test_battery_presence_does_not_change_the_other_capabilities():
     )
     assert with_battery.can_export == without.can_export
     assert with_battery.can_ac_charge == without.can_ac_charge
+
+
+def test_the_state_store_records_an_unreported_pack_count_as_null(tmp_path):
+    """`packNum: 0` in a support bundle means "confirmed none", so it may not
+    stand in for a device that never reported the field."""
+
+    from datetime import datetime, timezone
+
+    from ems.state_store import BatteryFullChargeStateStore
+
+    store = BatteryFullChargeStateStore(str(tmp_path / "state.sqlite"))
+    now = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+    unknown = store.record_observation(
+        "WR1", state(pack_num=None), False, now, interval_days=28
+    )
+    absent = store.record_observation(
+        "WR2", state(pack_num=0), False, now, interval_days=28
+    )
+    present = store.record_observation(
+        "WR3", state(pack_num=2), True, now, interval_days=28
+    )
+
+    assert unknown["last_seen_pack_num"] is None
+    assert absent["last_seen_pack_num"] == 0
+    assert present["last_seen_pack_num"] == 2

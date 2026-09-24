@@ -14,7 +14,6 @@ from ems.mqtt_control.dispatch import WriteDispatchStatus, dispatch_device_write
 from ems.property_writes import write_device_properties
 from ems.models import BATTERY_ABSENT, BATTERY_PRESENT, DeviceCapabilities
 from ems.runtime_intents import (
-    AC_OUTPUT_DEFAULT_REASON,
     DeviceRuntimeIntent,
     DeviceRuntimeRole,
     ac_input_intent,
@@ -77,9 +76,11 @@ class EMSController:
         self.last_states = {}
         self.last_seen = {}
         self.device_online = {}
-        # Devices seen reporting a usable acMode. Rebuilt from telemetry on
-        # every start, so it records an observation and never becomes authority.
+        # Devices seen reporting a usable acMode, and devices already written
+        # to while reporting none. Both are observations rebuilt from telemetry
+        # on every start; neither is authority.
         self.ac_mode_observed = set()
+        self.ac_mode_probed = set()
         self.battery_power_history = {}
         self.initial_ac_mode_reconciled = {}
         self.last_ha_seen = {}
@@ -395,17 +396,26 @@ class EMSController:
 
         return False
 
-    def commandable_capabilities(self, capabilities):
-        """Return capabilities with uncommanded devices blocked from output.
+    def intent_filtered_capabilities(self, capabilities):
+        """Return capabilities with reserved devices blocked from output control.
 
-        A share handed to a device the write path will skip is not delivered and
-        not redistributed either, so the allocator has to know before it shares.
+        Only the reservation, deliberately. An offline or operator-disabled
+        device is skipped by the write path but keeps the last ``outputLimit``
+        it was given, so it goes on delivering roughly its share. Taking it out
+        of the allocation would hand that share to a device that is still
+        running, and the plant would deliver both until the meter caught up --
+        over-export, where leaving it in merely under-delivers if the device
+        really has stopped.
         """
 
         filtered = []
 
         for dev, capability in zip(self.devices, capabilities):
-            reason = self.device_command_block_reason(dev)
+            reason = (
+                None
+                if self.device_output_control_allowed_by_intent(dev.name)
+                else self.device_command_block_reason(dev)
+            )
 
             if reason is None:
                 filtered.append(capability)
@@ -1172,15 +1182,18 @@ class EMSController:
             return True
 
         # A zero from a device that has shown a real mode before is a blip
-        # worth correcting. A device that has never shown one is not reporting
-        # the field at all, and the routine reconcile would then write into it
-        # every cycle forever -- on hardware where that means a relay. An
-        # operator or startup request is not routine and still goes through.
-        unreported = (
+        # worth correcting. A device that has never shown one may simply not
+        # report the field, and only writing into it settles which it is. After
+        # that one attempt a still-silent device is left alone, because the
+        # reconcile would otherwise repeat every cycle -- on hardware where that
+        # means a relay. Keying this on the intent instead does not work: an
+        # operator's runtime role is persisted and replayed every cycle, so
+        # every cycle would look like a fresh instruction.
+        never_reported = (
             current_ac_mode == 0
             and dev.name not in self.ac_mode_observed
-            and intent.reason == AC_OUTPUT_DEFAULT_REASON
         )
+        unreported = never_reported and dev.name in self.ac_mode_probed
 
         if (
             desired_ac_mode == 2
@@ -1225,6 +1238,9 @@ class EMSController:
                 }
             )
             return False
+
+        if never_reported:
+            self.ac_mode_probed.add(dev.name)
 
         try:
             ok = write_device_properties(
@@ -2268,6 +2284,7 @@ class EMSController:
             return None, False
 
         if battery_presence(state) == BATTERY_ABSENT:
+            self.winter_min_soc_targets.pop(dev.name, None)
             return None, False
 
         summer_min_soc = cfg.winter_config_int("summer_min_soc", 15, minimum=0)
@@ -3386,7 +3403,7 @@ class EMSController:
             )
             self.reconcile_runtime_ac_charge_power(dev, state, intent)
 
-        capabilities = self.commandable_capabilities(capabilities)
+        capabilities = self.intent_filtered_capabilities(capabilities)
         self._dashboard_capabilities = capabilities
         active_indexes = self.active_online_device_indexes()
 
