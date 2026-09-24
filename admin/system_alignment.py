@@ -216,7 +216,7 @@ class SystemAlignmentService:
                  known_good_store, current_identity, persistent_ref, launcher,
                  current_ems_identity=None, release_archive_resources=None,
                  operation_coordinator=None, replacement_activity=None, now=None,
-                 installed_ems_identity=None):
+                 installed_ems_identity=None, image_retention=None):
         self._resolver = resolver
         self._transitions = transition_store
         self._embedded = embedded_resources
@@ -241,6 +241,9 @@ class SystemAlignmentService:
         # Transient launcher-dispatch ownership, distinct from the durable stage
         # ownership B1 holds and from the sidecar's own claim_admin_update().
         self._dispatch = ReplacementDispatchCoordinator()
+        # Bounded local image history. Optional: an Admin without it simply
+        # keeps every image, which is the behaviour that existed before.
+        self._image_retention = image_retention
         self._now = now
 
     # --- helpers ---------------------------------------------------------
@@ -2144,12 +2147,27 @@ class SystemAlignmentService:
         records the real modern Admin, never the historical Admin image.
         """
 
-        return self._known_good.record(
+        recorded = self._known_good.record(
             system_build,
             orchestrator_admin=record.orchestrator_admin,
             compatibility_mode=record.compatibility_mode,
             resource_strategy=record.resource_strategy,
         )
+        # Only now is the new build the known-good one, so only now can
+        # retention see which images are still a way back. Strictly after the
+        # write, and never able to affect its outcome.
+        self._prune_local_images()
+        return recorded
+
+    def _prune_local_images(self) -> None:
+        """Bound the local image history. Never disturbs the install."""
+
+        if self._image_retention is None:
+            return
+        try:
+            self._image_retention.run()
+        except Exception:  # noqa: BLE001 - housekeeping never fails an upgrade
+            pass
 
     def cancel(self, *, operation_id, coordinator=None) -> dict:
         """Abandon the transition once no matching worker can be active.

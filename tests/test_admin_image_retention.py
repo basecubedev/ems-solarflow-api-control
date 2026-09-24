@@ -69,6 +69,20 @@ def test_a_lookalike_repository_is_not_ours():
     assert plan_removals(images, keep=1) == []
 
 
+def test_a_locally_built_image_without_a_registry_is_not_ours():
+    """``ems-solarflow-api-control:ci-smoke`` is built by scripts/, not pulled.
+
+    An unqualified name proves nothing about origin -- anyone's image can carry
+    it -- so it stays. An appliance never has one, because every image there
+    arrives by pull under the full name; a developer's build host keeps its own
+    builds, which is the safe half of the trade.
+    """
+
+    images = _series("ems-solarflow-api-control", 30)
+
+    assert plan_removals(images, keep=1) == []
+
+
 def test_the_newest_five_of_each_repository_are_kept():
     images = [*_series(ADMIN_IMAGE_REPO, 8), *_series(EMS_IMAGE_REPO, 8)]
 
