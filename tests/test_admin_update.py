@@ -1481,6 +1481,28 @@ def test_launcher_builds_docker_run_argv_no_shell():
 # --- Block 1.1 host-safe sidecar permissions -----------------------------
 
 
+def test_the_sidecar_runs_from_the_image_the_container_actually_runs(tmp_path):
+    # A digest-pinned deployment exists because the tag is not the identity, so
+    # choosing the sidecar by repo:$EMS_ADMIN_TAG can pick a different build than
+    # the one that is running -- and that sidecar then reads a pending record it
+    # was not written by. The container's own immutable image id settles it.
+    pinned = f"{ADMIN_IMAGE_REPO}@sha256:" + "b" * 64
+
+    class PinnedDocker:
+        def inspect_container_image_id(self, name):
+            return pinned
+
+    env = dict(_launcher_env(), EMS_ADMIN_TAG="v0.7.0")
+    launcher = AdminUpdateLauncher(
+        store=_FakeStore({}), docker=PinnedDocker(), environ=env
+    )
+
+    argv = launcher.build_sidecar_argv("plan-pinned")
+
+    assert pinned in argv
+    assert f"{ADMIN_IMAGE_REPO}:v0.7.0" not in argv
+
+
 def _adjacent(argv, flag):
     """Return the value that immediately follows ``flag`` in ``argv``."""
 

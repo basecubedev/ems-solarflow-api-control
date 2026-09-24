@@ -2220,16 +2220,31 @@ class AdminUpdateLauncher:
             image_ref = target_admin_image_for_release(pending.get("target_release"))
         return image_ref
 
+    def _running_admin_image_id(self, env):
+        """The container's own immutable image id, when Docker can name it."""
+
+        container = (env.get("EMS_ADMIN_CONTAINER_NAME") or "").strip()
+        exact = getattr(self._docker, "inspect_container_image_id", None)
+        if not (container and callable(exact)):
+            return None
+        try:
+            return (exact(container) or "").strip() or None
+        except Exception:
+            return None
+
     def _current_admin_image(self, env):
         """The running Admin image ref; the sidecar runs from THIS build.
 
         Running the updater from the current Admin build (not the target tag)
         guarantees it understands the pending-state format it was handed, and
         avoids ever executing a stale locally-cached target tag before it is
-        pulled/verified.
+        pulled/verified. A deployment pinned by digest exists precisely because
+        the tag is not the identity, so the container's own immutable image id is
+        asked first; the environment tag is the fallback for when Docker cannot
+        name it.
         """
 
-        ref = admin_image_ref_from_env(env)
+        ref = self._running_admin_image_id(env) or admin_image_ref_from_env(env)
         if not ref:
             raise RuntimeError(
                 "Current Admin image could not be determined for the update sidecar"
