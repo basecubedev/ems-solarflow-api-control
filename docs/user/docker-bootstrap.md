@@ -4,6 +4,22 @@ Best for shell users who want a copy/paste Docker install without the browser
 wizard. For a browser-guided setup instead, use the
 [Admin Console](admin-console.md).
 
+## Requirements
+
+Docker does the running here, and the installer does not bring it: you need
+**Docker Engine with the Compose v2 plugin, v2.24.0 or newer**, and a daemon
+your user can reach. On Windows that is Docker Desktop with Linux containers.
+The installer checks all of it up front and stops with the reason rather than
+leaving a half-made install behind.
+
+```bash
+docker compose version    # expect v2.24.0 or newer
+docker info               # must succeed as the user who will install
+```
+
+Full host requirements, including memory and storage:
+[hardware-requirements.md](hardware-requirements.md#software).
+
 ## Layout
 
 ```text
@@ -57,6 +73,11 @@ with `--analytics` the installer creates it during setup by running
 `config init --analytics`.
 
 ## Configure and verify
+
+The dashboard is the quickest sign that the install took: open
+**`http://127.0.0.1:8080`**, or `http://<host-ip>:8080` from another machine if
+EMS runs on a headless host. If nothing answers, `docker compose ps` says
+whether the container is up and `docker compose logs -f` says why it is not.
 
 ```bash
 docker compose exec ems python3 emsctl.py config init

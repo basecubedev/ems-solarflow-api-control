@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # One ceiling for the root README, asserted from three directions below. Three
 # separate literals had already drifted apart (110, 110, 130), which means the
 # loosest one was the only rule actually in force.
-README_MAX_LINES = 150
+README_MAX_LINES = 160
 
 
 def read(path):
@@ -62,7 +62,11 @@ def test_readme_is_router_sized():
     # until Get started split into the two ways in -- a dedicated Raspberry Pi
     # or a machine you already run. Which of the two you are is the first
     # question, and answering it is routing; at 130 the split only fitted by
-    # compressing prose until it read like a telegram.
+    # compressing prose until it read like a telegram. It became 160 when the
+    # install section started naming Docker and saying how to tell the install
+    # worked: the one prerequisite that makes the script fail, and the one page
+    # that proves it did not, are routing too -- a reader who does not have
+    # Docker is routed to a copy/paste command that cannot work.
     lines = read(ROOT / "README.md").splitlines()
     assert len(lines) <= README_MAX_LINES, len(lines)
 
@@ -241,6 +245,73 @@ def test_the_hardware_page_states_the_pi3_limit_without_overclaiming_the_rest():
     assert "not tested" in section.lower() or "nobody has tested" in section
     assert "not listed as supported" in section
     assert "guaranteed" not in text.lower()
+
+
+# --- Installing needs Docker, and a way to tell it worked ------------------
+
+
+def test_readme_names_docker_before_the_copy_paste_install():
+    """The script starts a container; without Docker it cannot work.
+
+    The README handed out a curl|sh install without ever naming the one thing
+    the machine has to have first, so the first thing a reader without Docker
+    met was the installer's own error.
+    """
+
+    text = read(ROOT / "README.md")
+    section = text.split("## Get started", 1)[1].split("\n## ", 1)[0]
+    assert "Docker is required first" in section
+    assert "Compose v2" in section
+    assert "2.24.0" in section
+    # Stated where the command is, not only in a linked page.
+    assert section.index("Docker is required first") < section.index(
+        "install-admin-console.sh"
+    )
+    assert "docs/user/hardware-requirements.md#software" in section
+
+
+def test_readme_says_how_to_tell_the_install_worked():
+    text = read(ROOT / "README.md")
+    section = text.split("## Get started", 1)[1].split("\n## ", 1)[0]
+    assert "http://127.0.0.1:8090" in section
+    # A headless host is the usual case, and loopback is the wrong address there.
+    assert "<host-ip>:8090" in section
+    assert "install worked" in section
+
+
+def test_the_hardware_page_owns_the_docker_prerequisite():
+    """One canonical statement of what the host needs; the rest link to it."""
+
+    text = read(ROOT / "docs" / "user" / "hardware-requirements.md")
+    section = text.split("## Software", 1)[1].split("\n## ", 1)[0]
+    assert "Compose v2" in section
+    assert "2.24.0" in section
+    assert "docker info" in section
+    # docker-compose v1 is the trap: it exists, it is called something similar,
+    # and the installers do not use it.
+    assert "docker-compose" in section
+    # The appliance image carries its own, and must not be sent shopping for it.
+    assert "appliance image is the exception" in section
+
+
+@pytest.mark.parametrize(
+    "page",
+    ["admin-console.md", "docker-bootstrap.md", "faq.md"],
+)
+def test_user_install_guides_state_the_docker_prerequisite(page):
+    text = read(ROOT / "docs" / "user" / page)
+    assert "2.24.0" in text, page
+    assert "hardware-requirements.md#software" in text, page
+
+
+@pytest.mark.parametrize(
+    ("page", "port"),
+    [("admin-console.md", "8090"), ("docker-bootstrap.md", "8080")],
+)
+def test_user_install_guides_name_the_url_that_proves_the_install(page, port):
+    text = read(ROOT / "docs" / "user" / page)
+    assert f"http://127.0.0.1:{port}" in text, page
+    assert f"<host-ip>:{port}" in text, page
 
 
 # --- Docs are split by audience -------------------------------------------
