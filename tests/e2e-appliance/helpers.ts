@@ -42,14 +42,39 @@ export async function openView(page: Page, view: string) {
 // scroll itself rather than for a clock. The caller has to leave focus
 // somewhere that does not consume End -- a text field would take it as a caret
 // move and the page would not scroll at all, which the poll then reports.
+//
+// The bottom is the page's, not a number this function remembers. A section
+// that is still filling in -- Diagnostics fetches its log sources when it is
+// opened, and the log panel that replaces the line standing in for them is a
+// hundred and fifty pixels taller -- moves its own bottom out from under a
+// measurement taken a moment earlier. Waiting for the page to arrive at the
+// bottom it used to have is waiting for somewhere it will never be, which is a
+// green test on a slow day and a seven-second timeout on a busy one. So the
+// press is repeated against the bottom as it is now, and the position returned
+// is the one the page actually settled on.
 export async function parkAtBottom(page: Page, what = "this page") {
-  const bottom = await page.evaluate(() =>
-    Math.round(document.documentElement.scrollHeight - window.innerHeight),
-  );
+  const measure = () =>
+    page.evaluate(() => ({
+      at: Math.round(window.scrollY),
+      bottom: Math.round(document.documentElement.scrollHeight - window.innerHeight),
+    }));
+
+  const { bottom } = await measure();
   expect(bottom, `${what} does not scroll here, so parking it proves nothing`).toBeGreaterThan(0);
-  await page.keyboard.press("End");
-  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(bottom);
-  return bottom;
+
+  let resting = 0;
+  await expect
+    .poll(
+      async () => {
+        await page.keyboard.press("End");
+        const seen = await measure();
+        resting = seen.at;
+        return seen.bottom - seen.at;
+      },
+      { message: `${what} never came to rest at its bottom; this is how far it still had to go` },
+    )
+    .toBe(0);
+  return resting;
 }
 
 export async function setMode(page: Page, mode: "basic" | "expert") {

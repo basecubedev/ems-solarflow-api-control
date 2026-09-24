@@ -252,6 +252,85 @@ test.describe("the two-second poll", () => {
   });
 });
 
+// Diagnostics is the one section that fetches something of its own when it is
+// opened: until /api/settings answers, a single line stands in for the log
+// panel, and the panel that replaces it is a hundred and fifty pixels taller.
+// Arriving late is allowed. Moving the reader, or moving the floor the tests
+// above measure against, is not.
+test.describe("a section that is still filling in", () => {
+  // The interleaving that breaks a park is a narrow one -- the document grows
+  // after the bottom has been measured and before the key press has scrolled --
+  // so it is arranged rather than waited for. The growth is hung on the End key
+  // itself: once while the key is being handled, which is before the browser
+  // scrolls, and once on the frame after it, which is after. Those are the two
+  // sides of the press and they are the two ways a park can be left behind. The
+  // filler is added to the document rather than to #main because the poll empties
+  // #main every two seconds. A park that trusts the bottom it measured first
+  // waits for a position the page has left, which is the seven-second timeout
+  // this suite hit in CI.
+  test("is parked at the bottom it ends up with, not the one it started at", async ({ page }) => {
+    await page.setViewportSize({ width: 1180, height: 360 });
+    await signIn(page);
+    await openView(page, "diagnostics");
+
+    await page.evaluate(() => {
+      const grow = (height: number) => {
+        const filler = document.createElement("div");
+        filler.style.height = `${height}px`;
+        document.body.appendChild(filler);
+      };
+      let armed = true;
+      window.addEventListener(
+        "keydown",
+        (event) => {
+          if (event.key !== "End" || !armed) return;
+          armed = false;
+          grow(200);
+          window.requestAnimationFrame(() => grow(150));
+        },
+        true,
+      );
+    });
+
+    const parked = await parkAtBottom(page, "a growing Diagnostics");
+
+    expect(parked).toBe(
+      await page.evaluate(() =>
+        Math.round(document.documentElement.scrollHeight - window.innerHeight),
+      ),
+    );
+    expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(parked);
+  });
+
+  // The other half: the section may grow, but not under the reader. The
+  // response is held until the page has been parked, so the panel lands while
+  // somebody is sitting at the bottom of the page rather than before they got
+  // there.
+  test("does not move the reader when its content finally arrives", async ({ page }) => {
+    await page.setViewportSize({ width: 1180, height: 360 });
+
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/settings", async (route) => {
+      await held;
+      await route.continue();
+    });
+
+    await signIn(page);
+    await openView(page, "diagnostics");
+    const parked = await parkAtBottom(page, "Diagnostics while its log sources load");
+    await expect(page.locator('[data-test="log-panel"]')).toHaveCount(0);
+
+    release();
+    await page.waitForResponse((response) => response.url().includes("/api/settings"));
+    await expect(page.locator('[data-test="log-panel"]')).toBeVisible();
+
+    expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(parked);
+  });
+});
+
 test.describe("basic and expert mode", () => {
   test("basic mode hides image digests and raw package details", async ({ page }) => {
     await signIn(page);
