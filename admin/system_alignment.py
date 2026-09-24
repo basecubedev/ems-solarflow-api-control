@@ -667,7 +667,16 @@ class SystemAlignmentService:
             base_cancellable = (
                 (
                     record.stage in CANCELLABLE_TRANSITION_STAGES
-                    and not transition_resource_verification_active(record)
+                    and (
+                        not transition_resource_verification_active(record)
+                        # A claimed import whose worker is proven gone is inert,
+                        # the same way a replacement proven gone is. Nothing
+                        # releases that marker, so on its own it would hold the
+                        # record until the deadline. Stated here rather than left
+                        # to the liveness gate below, so loosening that gate
+                        # cannot quietly take this protection with it.
+                        or (worker_status_available and worker_active is not True)
+                    )
                 )
                 or (expired and record.stage not in TERMINAL_TRANSITION_STAGES)
                 # A replacement proven gone removes the only reason its stage
@@ -2175,6 +2184,9 @@ class SystemAlignmentService:
         # claims in between is the mutation this stage exists to protect, and
         # the store refuses a proof whose claim has moved.
         replacement_claimed_at = record.admin_update_claimed_at
+        # Read for the same reason and used only on the coordinator path, which is
+        # the only place a claimed resource import is provably gone.
+        resources_claimed_at = record.resources_claimed_at
         if coordinator is None:
             return self._commit_cancel(
                 operation_id, replacement_inactive, replacement_claimed_at
@@ -2182,8 +2194,16 @@ class SystemAlignmentService:
         try:
             return coordinator.abandon(
                 operation_id,
+                # Under the coordinator lock no worker for this operation is live
+                # and none can start, so a resource claim left by a process that
+                # is gone is proven inert. The store still refuses a proof whose
+                # claim has moved.
                 lambda: self._commit_cancel(
-                    operation_id, replacement_inactive, replacement_claimed_at
+                    operation_id,
+                    replacement_inactive,
+                    replacement_claimed_at,
+                    resources_inactive=True,
+                    resources_claimed_at=resources_claimed_at,
                 ),
             )
         except OperationWorkerActive as exc:
@@ -2200,7 +2220,12 @@ class SystemAlignmentService:
             ) from exc
 
     def _commit_cancel(
-        self, operation_id, replacement_inactive=False, replacement_claimed_at=None
+        self,
+        operation_id,
+        replacement_inactive=False,
+        replacement_claimed_at=None,
+        resources_inactive=False,
+        resources_claimed_at=None,
     ) -> dict:
         """Durably cancel while the coordinator lock is held: nothing here may
         call back into the coordinator, probe Docker, or build worker-aware
@@ -2212,6 +2237,8 @@ class SystemAlignmentService:
                 now=self._now_value(),
                 replacement_inactive=replacement_inactive,
                 replacement_claimed_at=replacement_claimed_at,
+                resources_inactive=resources_inactive,
+                resources_claimed_at=resources_claimed_at,
             )
         except TransitionStateError as exc:
             self._raise_store(exc)

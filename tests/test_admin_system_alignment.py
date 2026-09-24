@@ -1495,6 +1495,70 @@ def test_an_unverifiable_running_admin_does_not_burn_the_operation(tmp_path):
     assert record.error_code is None
 
 
+def test_a_resource_claim_whose_importer_is_gone_can_still_be_abandoned(tmp_path):
+    # claim_resource_verification writes a durable marker and nothing releases it.
+    # An Admin that stopped between the claim and the advance -- a power cut on the
+    # board, a container restart, an OOM kill -- left the record at admin_aligned
+    # with the claim standing: verify_resources refused
+    # resource_verification_in_progress, retry and return refused a stage that is
+    # not recoverable, and abandon refused a mutation that no longer existed. The
+    # only exit was the hour, after which abandon discards the operation anyway.
+    build = _build(admin_digest="sha256:aligned")
+    service, transitions, _known_good, _launched = _service(
+        tmp_path,
+        build=build,
+        running=_aligned_running(),
+        persistent_ref=build.admin_image,
+    )
+    operation_id = service.start(requested_tag="v0.8.0", mode="guided_upgrade")[
+        "operation_id"
+    ]
+    assert transitions.read().stage == STAGE_ADMIN_ALIGNED
+    assert transitions.claim_resource_verification(operation_id, now=T0) is True
+    assert transitions.read().resources_claimed_at
+
+    # Without a proof the refusal stands: the marker alone says nothing about
+    # whether an importer is still writing the shared cache.
+    with pytest.raises(SystemAlignmentError) as excinfo:
+        service.cancel(operation_id=operation_id)
+    assert excinfo.value.code == "mutation_in_progress"
+    assert transitions.read().stage == STAGE_ADMIN_ALIGNED
+
+    # And what the console shows agrees with what the server will accept.
+    offered = service.status(operation_active=lambda _op: False)["transition"]
+    assert offered["cancel_available"] is True
+
+    # The coordinator proves no worker is live and blocks any new one under its
+    # own lock, which is the same shape of proof the replacement stage accepts.
+    result = service.cancel(operation_id=operation_id, coordinator=OperationCoordinator())
+
+    assert result["status"] == STAGE_CANCELLED
+    assert transitions.read().stage == STAGE_CANCELLED
+
+
+def test_a_live_resource_importer_is_still_not_abandoned(tmp_path):
+    # The door the proof opens must stay shut while a worker really is running.
+    build = _build(admin_digest="sha256:aligned")
+    coordinator = OperationCoordinator()
+    service, transitions, _known_good, _launched = _service(
+        tmp_path,
+        build=build,
+        running=_aligned_running(),
+        persistent_ref=build.admin_image,
+    )
+    operation_id = service.start(requested_tag="v0.8.0", mode="guided_upgrade")[
+        "operation_id"
+    ]
+    assert transitions.claim_resource_verification(operation_id, now=T0) is True
+    coordinator.claim(operation_id)
+
+    with pytest.raises(SystemAlignmentError) as excinfo:
+        service.cancel(operation_id=operation_id, coordinator=coordinator)
+
+    assert excinfo.value.code == "transition_worker_active"
+    assert transitions.read().stage == STAGE_ADMIN_ALIGNED
+
+
 def test_resource_failure_is_recoverable_and_can_retry_from_admin_aligned(tmp_path):
     build = _build()
     embedded = FakeEmbedded(fail=True)

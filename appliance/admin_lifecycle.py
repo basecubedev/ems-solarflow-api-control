@@ -808,6 +808,11 @@ class AdminLifecycleService:
         # while the healthy Admin is still running and nothing was touched.
         self._advance(operation, "verifying_target_image", detail=reference)
         try:
+            # Those minutes are exactly when the Admin can have started replacing
+            # itself: its updater pulls before it touches a file, so every other
+            # binding below still holds while its record is already live. This
+            # comes first, before any time is spent verifying an image.
+            self._require_no_admin_transition()
             self._require_planned_deployment(target)
             self._require_planned_current_admin(target)
             self._require_planned_image(target, reference, require_labels=True)
@@ -1077,6 +1082,7 @@ class AdminLifecycleService:
 
         self._advance(operation, "verifying_target_image", detail=reference)
         try:
+            self._require_no_admin_transition()
             self._require_planned_deployment(target)
             self._require_planned_current_admin(target)
             # A rollback deploys an image this appliance installed and validated

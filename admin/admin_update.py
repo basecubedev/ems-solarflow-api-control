@@ -1581,6 +1581,8 @@ class PendingTransitionStore:
         now=None,
         replacement_inactive=False,
         replacement_claimed_at=None,
+        resources_inactive=False,
+        resources_claimed_at=None,
     ) -> TransitionRecord | None:
         """Mark the current transition cancelled (terminal, not resumable).
 
@@ -1603,6 +1605,13 @@ class PendingTransitionStore:
         ``admin_update_claimed_at`` at that moment. A sidecar that claimed in
         between is exactly the mutation the stage protects, and a proof whose
         claim has moved is refused.
+
+        ``resources_inactive`` is the same kind of proof for a claimed resource
+        import, and it is needed for the same reason: nothing releases
+        ``resources_claimed_at``, so an Admin that stopped between the claim and
+        the advance leaves a marker that outlives the process that wrote it, and
+        every forward route and every escape then refuses until the deadline. It
+        is equally never a default, and it names the claim it was read against.
         """
 
         with self._locked():
@@ -1638,11 +1647,18 @@ class PendingTransitionStore:
                         f"transition cannot be cancelled while {record.stage} is running",
                     )
                 if transition_resource_verification_active(record):
-                    raise TransitionStateError(
-                        "mutation_in_progress",
-                        "transition cannot be cancelled while System Build "
-                        "resources are being prepared",
-                    )
+                    if not resources_inactive:
+                        raise TransitionStateError(
+                            "mutation_in_progress",
+                            "transition cannot be cancelled while System Build "
+                            "resources are being prepared",
+                        )
+                    if record.resources_claimed_at != resources_claimed_at:
+                        raise TransitionStateError(
+                            "mutation_in_progress",
+                            "the resource import claimed the transition after it "
+                            "was observed absent",
+                        )
             cancelled = replace(
                 record,
                 stage=TRANSITION_STAGE_CANCELLED,
