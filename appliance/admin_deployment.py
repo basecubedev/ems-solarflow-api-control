@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from appliance.auth import deployment_owner
 from appliance.paths import atomic_write
 
 COMPOSE_CANDIDATES = ("docker-compose.admin.yml", "docker-compose.yml")
@@ -25,6 +26,7 @@ TAG_SOURCE_ENV = "environment"
 TAG_SOURCE_COMPOSE = "compose"
 
 _SERVICES = re.compile(r"^services:\s*$")
+_ENVIRONMENT = re.compile(r"^(\s*)environment:\s*$")
 _IMAGE_LINE = re.compile(r"^(\s*image:\s*)(\S.*?)\s*$")
 _TAG_VARIABLE = re.compile(r"\$\{" + ENV_TAG_KEY + r"(:?-[^}]*)?\}")
 
@@ -60,6 +62,18 @@ class AdminDeployment:
             "image_reference": self.image_reference,
             "tag_source": self.tag_source,
         }
+
+
+def deployment_file_owner(compose_file):
+    """The identity a deployment's own files belong to, or ``None``.
+
+    The Admin container runs as the owner of the install root and updates itself
+    from inside, so these files stay with that owner rather than becoming the
+    agent's. The agent writes them as root with the shared socket group, and that
+    group is a grant on the socket, not a read grant on the deployment.
+    """
+
+    return deployment_owner(Path(compose_file).parent)
 
 
 def _indent(line):
@@ -123,6 +137,63 @@ def set_service_image(compose_text, service, image_reference):
             lines[index] = f"{match.group(1)}{image_reference}{newline}"
             return "".join(lines)
     raise DeploymentError("admin_image_missing", f"service {service} has no image entry")
+
+
+def set_service_environment(compose_text, service, values):
+    """Set literal ``KEY: "value"`` entries in the service's environment block.
+
+    The block is opened when the service has none. A list-form environment is a
+    different shape and is left alone rather than rewritten into something the
+    operator did not write.
+    """
+
+    lines = compose_text.splitlines(keepends=True)
+    plain = compose_text.splitlines()
+    start, end = _service_block(plain, service)
+    if start is None:
+        raise DeploymentError(
+            "admin_service_missing", f"service {service} is not in the compose file"
+        )
+
+    env_index = None
+    env_indent = 0
+    for index in range(start + 1, end):
+        match = _ENVIRONMENT.match(plain[index])
+        if match:
+            env_index, env_indent = index, len(match.group(1))
+            break
+
+    if env_index is None:
+        keys = [i for i in range(start + 1, end) if plain[i].strip()]
+        indent = _indent(plain[keys[0]]) if keys else _indent(plain[start]) + 2
+        opened = [f"{' ' * indent}environment:\n"]
+        opened += [f'{" " * (indent + 2)}{key}: "{value}"\n' for key, value in values.items()]
+        return "".join(lines[: start + 1] + opened + lines[start + 1 :])
+
+    entries = []
+    for index in range(env_index + 1, end):
+        if not plain[index].strip():
+            continue
+        if _indent(plain[index]) <= env_indent:
+            break
+        entries.append(index)
+    if any(plain[index].lstrip().startswith("- ") for index in entries):
+        return compose_text
+
+    indent = _indent(plain[entries[0]]) if entries else env_indent + 2
+    remaining = dict(values)
+    for index in entries:
+        key = plain[index].lstrip().partition(":")[0].strip()
+        if key in remaining:
+            newline = "\n" if lines[index].endswith("\n") else ""
+            lines[index] = f'{" " * indent}{key}: "{remaining.pop(key)}"{newline}'
+    if remaining:
+        after = entries[-1] if entries else env_index
+        if not lines[after].endswith("\n"):
+            lines[after] += "\n"
+        added = [f'{" " * indent}{key}: "{value}"\n' for key, value in remaining.items()]
+        lines = lines[: after + 1] + added + lines[after + 1 :]
+    return "".join(lines)
 
 
 def read_env(env_text):
@@ -216,10 +287,11 @@ class DeploymentSnapshot:
     def restore(self):
         """Write the saved bytes back unchanged (rollback safety)."""
 
+        owner = deployment_file_owner(self.compose_file)
         if self.compose_text is not None:
-            atomic_write(self.compose_file, self.compose_text)
+            atomic_write(self.compose_file, self.compose_text, owner=owner)
         if self.env_text is not None:
-            atomic_write(self.env_file, self.env_text)
+            atomic_write(self.env_file, self.env_text, owner=owner)
         return True
 
 
@@ -244,6 +316,7 @@ def snapshot(deployment):
 def apply_image(deployment, repository, tag):
     """Point the Admin service at ``repository:tag`` using the file that owns it."""
 
+    owner = deployment_file_owner(deployment.compose_file)
     if deployment.tag_source == TAG_SOURCE_ENV:
         try:
             env_text = deployment.env_file.read_text(encoding="utf-8")
@@ -251,7 +324,7 @@ def apply_image(deployment, repository, tag):
             env_text = ""
         env_text = set_env(env_text, ENV_IMAGE_KEY, repository)
         env_text = set_env(env_text, ENV_TAG_KEY, tag)
-        atomic_write(deployment.env_file, env_text)
+        atomic_write(deployment.env_file, env_text, owner=owner)
         return {"file": str(deployment.env_file), "mode": TAG_SOURCE_ENV}
 
     try:
@@ -259,7 +332,7 @@ def apply_image(deployment, repository, tag):
     except OSError:
         raise DeploymentError("compose_file_missing", "the Admin compose file is unreadable")
     updated = set_service_image(compose_text, deployment.service, f"{repository}:{tag}")
-    atomic_write(deployment.compose_file, updated)
+    atomic_write(deployment.compose_file, updated, owner=owner)
     return {"file": str(deployment.compose_file), "mode": TAG_SOURCE_COMPOSE}
 
 
@@ -273,13 +346,18 @@ def apply_digest(deployment, repository, digest, *, tag=""):
     """
 
     reference = f"{repository}@{digest}"
+    owner = deployment_file_owner(deployment.compose_file)
     try:
         compose_text = deployment.compose_file.read_text(encoding="utf-8")
     except OSError:
         raise DeploymentError("compose_file_missing", "the Admin compose file is unreadable")
 
     updated = set_service_image(compose_text, deployment.service, reference)
-    atomic_write(deployment.compose_file, updated)
+    if tag:
+        # The container reports its own version from here, not from the
+        # environment file, which this install only keeps for reference.
+        updated = set_service_environment(updated, deployment.service, {ENV_TAG_KEY: tag})
+    atomic_write(deployment.compose_file, updated, owner=owner)
 
     if deployment.env_file.is_file():
         try:
@@ -288,7 +366,7 @@ def apply_digest(deployment, repository, digest, *, tag=""):
             if tag:
                 env_text = set_env(env_text, ENV_TAG_KEY, tag)
             env_text = set_env(env_text, ENV_DIGEST_KEY, digest)
-            atomic_write(deployment.env_file, env_text)
+            atomic_write(deployment.env_file, env_text, owner=owner)
         except OSError:
             raise DeploymentError(
                 "environment_write_failed", "the Admin environment file could not be updated"

@@ -427,10 +427,10 @@ hardware covers first boot, reboot persistence and the update paths.
 ```text
 /opt/ems-solarflow/            existing EMS installation, never restructured
   docker-compose.yml
-  docker-compose.admin.yml     Admin service (when the Admin installer created it)
-  .env.admin                   Admin image and tag
+  docker-compose.admin.yml     Admin service (deployment-owned, see below)
+  .env.admin                   Admin image and tag (deployment-owned)
   config/config.json
-  config/dashboard-auth.json   the one shared password (0600, agent-owned)
+  config/dashboard-auth.json   the one shared password (0600, deployment-owned)
   data/
   backups/
   admin/
@@ -467,6 +467,15 @@ hardware covers first boot, reboot persistence and the update paths.
 
 All paths are defined once in `appliance/paths.py` and validated against their
 canonical base. The browser can never submit a filesystem path.
+
+Everything under `/opt/ems-solarflow` belongs to the deployment -- to the
+identity the containers run as, which is the owner of the root itself. That
+includes the two files the appliance rewrites when it installs an Admin version:
+it writes them, but it does not take them. The Admin console runs as that owner
+and updates itself from inside, so a file the agent kept as `root` with its own
+socket group would lock the Admin out of its own compose file. The shared
+password already follows that rule; see
+[security-model.md](security-model.md).
 
 ### Moving the EMS installation or the export root
 
