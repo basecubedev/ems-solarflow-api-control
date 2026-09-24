@@ -1440,7 +1440,59 @@ def test_failed_alignment_blocks_ems_on_wrong_running_admin(tmp_path):
     still_old = {"revision": "old", "build_id": "v0.7.0-old", "digest": "sha256:latest"}
     with pytest.raises(SystemAlignmentError):
         service.resume(operation_id=started["operation_id"], running_admin=still_old)
+    # Still short of admin_aligned, so the EMS step stays blocked -- and now the
+    # failure is recorded rather than left as an untouched reconnect wait.
+    record = transitions.read()
+    assert record.stage == STAGE_FAILED_RECOVERABLE
+    assert record.failed_stage == STAGE_ADMIN_RECONNECT_PENDING
+
+
+def test_a_proven_reconnect_mismatch_is_recorded_as_recoverable(tmp_path):
+    # The verification proved the replacement did not happen, and then the proof
+    # was thrown away: the record kept its reconnect stage with no error_code, so
+    # retry and return-to-running-build both refused a stage that is not
+    # recoverable and the only way out was to abandon the whole operation.
+    build = _build()
+    service, transitions, _known_good, launched = _service(tmp_path, build=build)
+    started = service.start(requested_tag="v0.8.0", mode="guided_upgrade")
+    operation_id = started["operation_id"]
+    assert len(launched) == 1
+    still_old = {"revision": "old", "build_id": "v0.7.0-old", "digest": "sha256:latest"}
+
+    with pytest.raises(SystemAlignmentError) as excinfo:
+        service.resume(operation_id=operation_id, running_admin=still_old)
+
+    assert excinfo.value.code == "admin_identity_mismatch"
+    failed = transitions.read()
+    assert failed.stage == STAGE_FAILED_RECOVERABLE
+    assert failed.failed_stage == STAGE_ADMIN_RECONNECT_PENDING
+    assert failed.resume_stage == STAGE_ADMIN_UPDATE_PENDING
+    assert failed.error_code == "admin_identity_mismatch"
+
+    # The way out the machine always had an edge for, and which a stage that was
+    # never marked recoverable made unreachable: retry reopens the updater stage
+    # and dispatches the replacement again.
+    retried = service.retry(operation_id=operation_id)
+    assert retried["status"] == "admin_alignment_started"
+    assert len(launched) == 2
     assert transitions.read().stage == STAGE_ADMIN_RECONNECT_PENDING
+
+
+def test_an_unverifiable_running_admin_does_not_burn_the_operation(tmp_path):
+    # Docker declining to answer is not proof that the replacement failed. A read
+    # that could not be made must leave the operation where it is; consuming it
+    # on a transient answer would turn a slow board into a failed upgrade.
+    build = _build()
+    service, transitions, _known_good, _launched = _service(tmp_path, build=build)
+    started = service.start(requested_tag="v0.8.0", mode="guided_upgrade")
+
+    with pytest.raises(SystemAlignmentError) as excinfo:
+        service.resume(operation_id=started["operation_id"], running_admin={})
+
+    assert excinfo.value.code == "admin_unverifiable"
+    record = transitions.read()
+    assert record.stage == STAGE_ADMIN_RECONNECT_PENDING
+    assert record.error_code is None
 
 
 def test_resource_failure_is_recoverable_and_can_retry_from_admin_aligned(tmp_path):

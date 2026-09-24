@@ -20,6 +20,7 @@ import pytest
 
 from appliance import admin_transition
 from appliance.agent import AgentHandlers
+from appliance.operations import STATE_SUCCEEDED
 from tests.helpers.appliance import (
     ADMIN_CONTAINER,
     ADMIN_REPOSITORY,
@@ -219,6 +220,42 @@ def test_every_admin_mutating_plan_yields_to_a_live_transition(tmp_path, operati
     write_transition(services, live_transition())
 
     assert refuse_code(services, operation, fields) == "admin_transition_in_flight"
+
+
+def test_a_transition_that_starts_after_the_plan_still_stops_the_execution(tmp_path):
+    """The yield has to hold at confirmation, not only at plan time.
+
+    Execution already re-reads the image and the deployment file because "a plan
+    can be confirmed minutes later" -- and those are exactly the minutes in which
+    the Admin console can start replacing itself. Its own updater pulls before it
+    touches a file, so every other binding still holds while the record is
+    already live, and the two layers would then write the same file with no lock
+    between them. An install is what this drives, because it is the operation this
+    fixture can carry all the way to success; the rollback executor is given the
+    same check.
+    """
+
+    services = healthy_appliance(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch(
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"}
+    )
+    compose = services.paths.install_root / "docker-compose.admin.yml"
+    before = compose.read_bytes()
+
+    write_transition(services, live_transition(stage="admin_reconnect_pending"))
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+
+    record = services.operations.get(planned["operation"]["operation_id"])
+    assert record.state != STATE_SUCCEEDED, record.result
+    assert record.error["code"] == "admin_transition_in_flight"
+    assert compose.read_bytes() == before
 
 
 @pytest.mark.parametrize("operation,fields", MUTATING_PLANS)

@@ -120,6 +120,14 @@ class AuthStore:
         root:root 0600 would lock that container out of the password it is
         supposed to check, so the owner is decided here, on the temporary file,
         before the name exists -- not chowned afterwards as a second authority.
+
+        It may be a callable, and from a long-lived agent it has to be: the root
+        is still root-owned on a freshly flashed appliance, so the owner is
+        ``None`` then, and the first Admin install hands the root to the
+        deployment account inside that same process. A value captured at start
+        stays ``None`` for the rest of its life, and every later password write
+        lands root-owned -- locking the Admin console out of the very file it
+        authenticates against.
         """
 
         self.path = Path(path)
@@ -237,13 +245,23 @@ class AuthStore:
             os.close(handle)
         return True
 
+    def _resolved_owner(self):
+        owner = self.owner
+        if callable(owner):
+            try:
+                owner = owner()
+            except Exception:
+                return None
+        return owner or None
+
     def _own(self, path):
-        if not self.owner:
+        owner = self._resolved_owner()
+        if not owner:
             return False
         try:
             if os.geteuid() != 0:
                 return False
-            os.chown(path, int(self.owner[0]), int(self.owner[1]))
+            os.chown(path, int(owner[0]), int(owner[1]))
         except (AttributeError, OSError, TypeError, ValueError):
             return False
         return True

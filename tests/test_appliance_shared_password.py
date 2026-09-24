@@ -421,3 +421,38 @@ def test_no_page_still_promises_a_separate_appliance_password():
     assert "independent from the EMS Admin password" not in installation
     assert "| Minimum length | none" in security
     assert "| Independence | none" in security
+
+
+def test_the_owner_is_resolved_at_every_write_not_once_at_start(tmp_path):
+    """The agent outlives the moment the deployment root gets its owner.
+
+    A freshly flashed appliance has a root-owned deployment root, so the owner is
+    None when the daemon starts; the first Admin install hands that root to the
+    deployment account inside the same process. An owner captured at start stays
+    None for the rest of its life, and every later password write lands root-owned
+    -- locking the Admin console out of the file it authenticates against.
+    """
+
+    install_root = tmp_path / "ems"
+    (install_root / "config").mkdir(parents=True)
+    store = appliance_auth.AuthStore(
+        install_root / "config" / "dashboard-auth.json",
+        owner=lambda: appliance_auth.deployment_owner(install_root),
+    )
+    store.create(PASSWORD)
+
+    chowned = []
+    monkey = appliance_auth.os
+    real_geteuid, real_chown = monkey.geteuid, monkey.chown
+    monkey.geteuid = lambda: 0
+    monkey.chown = lambda path, uid, gid: chowned.append((uid, gid))
+    try:
+        # Adoption happens now, the way the deployment bootstrap does it.
+        entry = install_root.stat()
+        store.change(PASSWORD, "a-second-shared-secret-2")
+    finally:
+        monkey.geteuid, monkey.chown = real_geteuid, real_chown
+
+    # The root is owned by this test user, so that is the identity a write has to
+    # hand the file to -- read now, not at construction.
+    assert chowned == [(entry.st_uid, entry.st_gid)]

@@ -146,7 +146,7 @@ def command_password_reset(args):
     ensure_directories(paths)
     from appliance.auth import deployment_owner
 
-    store = AuthStore(paths.auth_file, owner=deployment_owner(paths.install_root))
+    store = AuthStore(paths.auth_file, owner=lambda: deployment_owner(paths.install_root))
     # The store lives in the EMS deployment root now. Its parent may not exist
     # yet on a box where nothing has been deployed, so writability of a
     # directory is not the question -- being allowed to write there is.

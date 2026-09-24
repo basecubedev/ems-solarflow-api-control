@@ -153,6 +153,45 @@ def test_current_identity_unknown_does_not_crash():
     assert identity.digest is None
 
 
+def test_an_uninspectable_container_is_not_identified_from_its_environment(tmp_path):
+    # This identity is what verification rests on, so it proves or it answers
+    # unknown. The process environment names the build the container was created
+    # from, and an update rewrites the compose environment tag, so an
+    # env-derived identity can carry the target's digest while the old build is
+    # what actually runs -- and it would be indistinguishable from a verified one.
+    from admin.server import _running_admin_identity
+
+    class BlindDocker:
+        def inspect_container(self, name):
+            raise RuntimeError("docker ps timed out")
+
+        def inspect_image(self, ref):
+            # The target was just pulled, so it is present locally and carries
+            # the target's labels. Nothing else can be identified.
+            return _image(TARGET_REF, "sha256:target") if ref == TARGET_REF else None
+
+    import os as _os
+
+    previous = {
+        key: _os.environ.get(key)
+        for key in ("EMS_ADMIN_CONTAINER_NAME", "EMS_ADMIN_IMAGE", "EMS_ADMIN_TAG")
+    }
+    _os.environ["EMS_ADMIN_CONTAINER_NAME"] = "ems-solarflow-admin"
+    _os.environ["EMS_ADMIN_IMAGE"] = ADMIN_IMAGE_REPO
+    _os.environ["EMS_ADMIN_TAG"] = "v0.7.0"
+    try:
+        identity = _running_admin_identity(BlindDocker())
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                _os.environ.pop(key, None)
+            else:
+                _os.environ[key] = value
+
+    assert identity.digest != "sha256:target"
+    assert not identity.digest
+
+
 # --- update decision -----------------------------------------------------
 
 
@@ -715,6 +754,274 @@ def test_worker_reports_unreadable_snapshot_path(tmp_path):
     assert "FAILED[compose_unreadable]" in log_path.read_text(encoding="utf-8")
 
 
+# --- the updater reports only what it did ----------------------------------
+
+
+def test_recreate_waits_for_the_replacement_instead_of_only_starting_it():
+    # "docker compose up -d" returns as soon as the daemon has started the
+    # container. A replacement that exits a second later is indistinguishable
+    # from a working one, and the Admin service declares no restart policy, so
+    # exit 0 alone was being read as "the swap happened".
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def run(argv, **keywords):
+        calls.append((argv, keywords))
+        return Completed()
+
+    update_apply.AdminComposeRunner(run=run).recreate(
+        "/opt/ems-solarflow/docker-compose.admin.yml", "ems-solarflow-admin"
+    )
+
+    argv, keywords = calls[0]
+    assert "--wait" in argv
+    # Compose bounds its own wait, so it exits on its terms rather than being
+    # killed part-way through a recreate by the subprocess timeout.
+    timeout_flag = argv.index("--wait-timeout")
+    assert int(argv[timeout_flag + 1]) < keywords["timeout"]
+
+
+def test_a_failed_recreate_brings_the_previous_admin_back(tmp_path):
+    # --force-recreate stops and removes the running Admin before starting the
+    # replacement, so a recreate that fails can leave nothing running at all.
+    # Restoring the files is only half of a rollback; the appliance's own
+    # rollback recreates the service afterwards, and so must this one.
+    store, plan_id, compose = _seed_compose(tmp_path)
+    env_file = tmp_path / ".env.admin"
+    env_file.write_text("EMS_ADMIN_TAG=v0.6.2\n", encoding="utf-8")
+    original_compose = compose.read_bytes()
+    seen = []
+
+    def recreate(compose_file, service):
+        seen.append(compose_file.read_bytes())
+        if len(seen) == 1:
+            raise update_apply.AdminUpdateApplyError("recreate_failed", "boom")
+
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=recreate,
+        delay_seconds=0,
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "recreate_failed"
+    # Twice: once for the target, once to put the previous Admin back.
+    assert len(seen) == 2, seen
+    assert seen[1] == original_compose
+    assert result["previous_admin_restarted"] is True
+    assert compose.read_bytes() == original_compose
+
+
+def test_a_failure_that_cannot_be_recorded_is_still_logged(tmp_path):
+    # The durable write can fail for the very reason the update failed — a full
+    # or read-only filesystem — and for a cancelled transition it raises
+    # outright. Losing the failure report as well leaves no trace anywhere: the
+    # sidecar runs with --rm, so its stdout dies with the container.
+    store, plan_id, compose = _seed_compose(tmp_path)
+    log_path = tmp_path / "update.log"
+    real_write = store.write
+
+    def refusing_write(pending):
+        if pending.get("stage") == STAGE_FAILED:
+            raise OSError(28, "No space left on device")
+        return real_write(pending)
+
+    store.write = refusing_write
+
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=lambda cf, svc: (_ for _ in ()).throw(RuntimeError("x")),
+        log=update_apply._FileLogger(log_path),
+        delay_seconds=0,
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "recreate_failed"
+    log = log_path.read_text(encoding="utf-8")
+    assert "FAILED[recreate_failed]" in log
+    # And the loss of the durable record is itself reported, not swallowed.
+    assert result["state_write_failed"]
+    assert "could not be recorded" in log
+
+
+def test_rollback_keeps_the_backup_when_it_could_not_restore(tmp_path, monkeypatch):
+    # The .bak holds the original compose bytes. Removing it in the same pass
+    # that failed to restore them destroys the only copy on disk, exactly when
+    # it is the copy that is needed.
+    store, plan_id, compose = _seed_compose(tmp_path)
+    original = compose.read_bytes()
+    bak = compose.with_name(compose.name + ".bak")
+    real_restore = update_apply._atomic_write_bytes
+
+    def refuse_compose(path, raw):
+        if path == compose:
+            raise OSError(28, "No space left on device")
+        return real_restore(path, raw)
+
+    monkeypatch.setattr(update_apply, "_atomic_write_bytes", refuse_compose)
+
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=lambda cf, svc: (_ for _ in ()).throw(RuntimeError("x")),
+        delay_seconds=0,
+    )
+
+    assert result["ok"] is False
+    assert bak.is_file(), "the only copy of the original compose was removed"
+    assert bak.read_bytes() == original
+    reported = {entry["path"] for entry in result.get("rollback") or []}
+    assert str(compose) in reported
+    assert str(bak) in reported, "a kept backup has to be named, or nobody knows it is there"
+
+
+# --- a digest-pinned deployment -------------------------------------------
+
+
+PINNED_DIGEST = "sha256:" + "a" * 64
+TARGET_DIGEST = "sha256:" + "c" * 64
+
+
+def _seed_started_without_digest(store, target_ref=TARGET_REF):
+    """A plan whose target carries no digest, so only Docker could supply one."""
+
+    plan_id = "plan-nodigest"
+    store.write(
+        {
+            "schema_version": 1,
+            "id": plan_id,
+            "stage": STAGE_STARTED,
+            "target_release": "v0.7.0",
+            "target_admin": {"image_ref": target_ref},
+            "next_step": "resume_ems_upgrade",
+        }
+    )
+    return plan_id
+
+
+def _pinned_compose(tmp_path, digest=PINNED_DIGEST, tag="v0.6.2"):
+    """The shape the appliance writes: an immutable image plus a literal tag."""
+
+    compose = tmp_path / "docker-compose.admin.yml"
+    compose.write_text(
+        "services:\n"
+        "  ems-solarflow-admin:\n"
+        f"    image: {ADMIN_IMAGE_REPO}@{digest}\n"
+        "    container_name: ems-solarflow-admin\n"
+        "    environment:\n"
+        f'      EMS_ADMIN_TAG: "{tag}"\n',
+        encoding="utf-8",
+    )
+    return compose
+
+
+def test_worker_repoints_a_digest_pinned_compose_to_the_target_digest(tmp_path):
+    # The appliance pins the Admin image by digest on purpose, because a tag
+    # variable cannot express one. The updater has to move that pin to the build
+    # it just pulled -- and keep the literal tag, which is what the container
+    # reports as its own version.
+    store = PendingAdminUpdateStore(tmp_path / "state")
+    plan_id = _seed_started(store)
+    compose = _pinned_compose(tmp_path)
+    docker = FakeDocker(images={TARGET_REF: _image(TARGET_REF, TARGET_DIGEST)})
+    recreated = []
+
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=docker,
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=lambda cf, svc: recreated.append(svc),
+        delay_seconds=0,
+    )
+
+    assert result["ok"] is True
+    text = compose.read_text(encoding="utf-8")
+    assert f"image: {ADMIN_IMAGE_REPO}@{TARGET_DIGEST}" in text
+    assert PINNED_DIGEST not in text  # the old pin is gone
+    assert 'EMS_ADMIN_TAG: "v0.7.0"' in text
+    assert recreated == ["ems-solarflow-admin"]
+    assert store.read()["stage"] == STAGE_SUCCEEDED
+
+
+def test_worker_refuses_a_digest_pinned_compose_it_cannot_repoint(tmp_path):
+    # No digest is known for the target: neither the plan nor Docker can supply
+    # one. Rewriting the pin to a tag would silently unpin a deployment that was
+    # pinned deliberately, and recreating without rewriting would restart the
+    # very same image. The only honest outcome is a refusal.
+    store = PendingAdminUpdateStore(tmp_path / "state")
+    plan_id = _seed_started_without_digest(store)
+    compose = _pinned_compose(tmp_path)
+    original = compose.read_bytes()
+
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=lambda cf, svc: pytest.fail("must not recreate"),
+        delay_seconds=0,
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "image_reference_missing"
+    assert compose.read_bytes() == original
+    assert store.read()["stage"] == STAGE_FAILED
+
+
+def test_a_malformed_digest_is_never_written_into_the_compose(tmp_path):
+    # The digest ends up inside a compose file that Docker then acts on, so its
+    # shape is validated rather than trusted. An unusable one leaves the pin
+    # alone and reports nothing located, which the worker turns into a refusal
+    # and rolls back -- proved separately for the whole worker.
+    compose = _pinned_compose(tmp_path)
+    bogus = "sha256:not-a-digest; rm -rf /"
+
+    located = update_apply.update_admin_image_reference(
+        compose, TARGET_REF, target_digest=bogus
+    )
+
+    assert located is False
+    text = compose.read_text(encoding="utf-8")
+    assert f"image: {ADMIN_IMAGE_REPO}@{PINNED_DIGEST}" in text
+    assert "rm -rf" not in text
+
+
+def test_a_compose_environment_tag_is_not_an_image_reference(tmp_path):
+    # The literal in the service environment is what the container reports about
+    # itself; it never decides which image Compose starts. Counting it as a
+    # located reference is what let a rewrite that changed nothing report
+    # success -- observed on an appliance, where the Admin came back as the old
+    # build while its own labels claimed the new one.
+    compose = tmp_path / "docker-compose.admin.yml"
+    compose.write_text(
+        "services:\n"
+        "  ems-solarflow-admin:\n"
+        "    image: some.other.registry/unrelated:v1\n"
+        "    environment:\n"
+        '      EMS_ADMIN_TAG: "v0.6.2"\n',
+        encoding="utf-8",
+    )
+
+    located = update_apply.update_admin_image_reference(compose, TARGET_REF)
+
+    assert located is False
+    # The tag may still be kept in step; it just proves nothing about the image.
+    assert "some.other.registry/unrelated:v1" in compose.read_text(encoding="utf-8")
+
+
 # --- HTTP API: auth, CSRF, and gating ------------------------------------
 
 
@@ -1172,6 +1479,28 @@ def test_launcher_builds_docker_run_argv_no_shell():
 
 
 # --- Block 1.1 host-safe sidecar permissions -----------------------------
+
+
+def test_the_sidecar_runs_from_the_image_the_container_actually_runs(tmp_path):
+    # A digest-pinned deployment exists because the tag is not the identity, so
+    # choosing the sidecar by repo:$EMS_ADMIN_TAG can pick a different build than
+    # the one that is running -- and that sidecar then reads a pending record it
+    # was not written by. The container's own immutable image id settles it.
+    pinned = f"{ADMIN_IMAGE_REPO}@sha256:" + "b" * 64
+
+    class PinnedDocker:
+        def inspect_container_image_id(self, name):
+            return pinned
+
+    env = dict(_launcher_env(), EMS_ADMIN_TAG="v0.7.0")
+    launcher = AdminUpdateLauncher(
+        store=_FakeStore({}), docker=PinnedDocker(), environ=env
+    )
+
+    argv = launcher.build_sidecar_argv("plan-pinned")
+
+    assert pinned in argv
+    assert f"{ADMIN_IMAGE_REPO}:v0.7.0" not in argv
 
 
 def _adjacent(argv, flag):

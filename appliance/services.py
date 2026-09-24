@@ -120,7 +120,7 @@ def build_services(
         revert_intent_dir=paths.recovery_dir,
     )
     timezone = TimezoneService(paths=paths, config=config, operations=operations)
-    auth = AuthStore(paths.auth_file, owner=deployment_owner(paths.install_root))
+    auth = AuthStore(paths.auth_file, owner=lambda: deployment_owner(paths.install_root))
     ssh = SshService(
         runner=runner,
         systemd=systemd,
