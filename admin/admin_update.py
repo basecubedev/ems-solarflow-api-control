@@ -1581,8 +1581,6 @@ class PendingTransitionStore:
         now=None,
         replacement_inactive=False,
         replacement_claimed_at=None,
-        resources_inactive=False,
-        resources_claimed_at=None,
     ) -> TransitionRecord | None:
         """Mark the current transition cancelled (terminal, not resumable).
 
@@ -1606,12 +1604,13 @@ class PendingTransitionStore:
         between is exactly the mutation the stage protects, and a proof whose
         claim has moved is refused.
 
-        ``resources_inactive`` is the same kind of proof for a claimed resource
-        import, and it is needed for the same reason: nothing releases
-        ``resources_claimed_at``, so an Admin that stopped between the claim and
-        the advance leaves a marker that outlives the process that wrote it, and
-        every forward route and every escape then refuses until the deadline. It
-        is equally never a default, and it names the claim it was read against.
+        There is deliberately no such proof for a claimed resource import. The
+        worker probe is an injected answer that legitimately reports no worker
+        while an in-process importer is mutating the shared cache, so the durable
+        ``resources_claimed_at`` marker is the only thing that covers that window
+        and it outranks any liveness answer here. A marker whose process died
+        therefore holds the record until the deadline; closing that needs a
+        liveness source that survives a restart, not a weaker gate.
         """
 
         with self._locked():
@@ -1647,18 +1646,11 @@ class PendingTransitionStore:
                         f"transition cannot be cancelled while {record.stage} is running",
                     )
                 if transition_resource_verification_active(record):
-                    if not resources_inactive:
-                        raise TransitionStateError(
-                            "mutation_in_progress",
-                            "transition cannot be cancelled while System Build "
-                            "resources are being prepared",
-                        )
-                    if record.resources_claimed_at != resources_claimed_at:
-                        raise TransitionStateError(
-                            "mutation_in_progress",
-                            "the resource import claimed the transition after it "
-                            "was observed absent",
-                        )
+                    raise TransitionStateError(
+                        "mutation_in_progress",
+                        "transition cannot be cancelled while System Build "
+                        "resources are being prepared",
+                    )
             cancelled = replace(
                 record,
                 stage=TRANSITION_STAGE_CANCELLED,
