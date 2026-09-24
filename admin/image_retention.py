@@ -80,6 +80,9 @@ def plan_removals(images, *, protected_digests=(), keep=DEFAULT_KEEP):
         identities.setdefault(digest, set()).update(aliases)
         by_repository.setdefault(repository, []).append((image.get("created") or "", digest))
 
+    def _is_protected(digest):
+        return bool(identities.get(digest, {digest}) & protected)
+
     removable = []
     for repository in sorted(by_repository):
         entries = sorted(
@@ -89,9 +92,6 @@ def plan_removals(images, *, protected_digests=(), keep=DEFAULT_KEEP):
         # Counting them where they happen to fall in the ordering would let a
         # pinned *old* build raise the real budget above the configured number,
         # because by then the newest ones have already filled it.
-        def _is_protected(digest):
-            return bool(identities.get(digest, {digest}) & protected)
-
         protected_here = {
             digest for _created, digest in entries if _is_protected(digest)
         }
@@ -110,3 +110,102 @@ def plan_removals(images, *, protected_digests=(), keep=DEFAULT_KEEP):
 
     removable.sort()
     return [digest for _created, digest in removable]
+
+
+class ProtectionUnreadable(Exception):
+    """A store that can name a protected image could not be read."""
+
+
+def _digests_in(payload):
+    """Every ``*_digest`` value reachable in a record, however it is shaped."""
+
+    found = set()
+    if payload is None:
+        return found
+    if isinstance(payload, dict):
+        items = payload.items()
+    else:
+        items = (
+            (name, getattr(payload, name, None))
+            for name in ("admin_digest", "ems_digest", "selected_ems_build")
+        )
+    for name, value in items:
+        if isinstance(value, dict):
+            found |= _digests_in(value)
+        elif str(name).endswith("digest") and value:
+            found.add(str(value))
+    return found
+
+
+class ImageRetentionService:
+    """Keep the local image history bounded without removing a way back.
+
+    Runs at install time rather than on a timer. Only then is it known which
+    build is running, which one the rollback target is, and which one a pending
+    transition still needs; a timer would have to reconstruct all three and
+    could delete an image an upgrade in flight had just pulled.
+
+    Fail-closed: if a store that can name a protected image cannot be read, the
+    run removes nothing. Reclaiming disk is worth less than a way back.
+    """
+
+    def __init__(self, *, docker, known_good_store=None, transition_store=None,
+                 keep=DEFAULT_KEEP, on_event=None):
+        self._docker = docker
+        self._known_good = known_good_store
+        self._transitions = transition_store
+        self._keep = keep
+        self._on_event = on_event
+
+    def protected_digests(self):
+        """Every digest that must survive. Raises if a source is unreadable."""
+
+        protected = set()
+        for source in (self._known_good, self._transitions):
+            if source is None:
+                continue
+            reader = getattr(source, "current", None) or getattr(source, "read", None)
+            if not callable(reader):
+                continue
+            try:
+                protected |= _digests_in(reader())
+            except Exception as exc:  # noqa: BLE001 - any failure is fail-closed
+                raise ProtectionUnreadable(str(exc)) from exc
+        return protected
+
+    def run(self):
+        """Remove superseded images. Never raises; reports what it did."""
+
+        result = {"removed": [], "kept_protected": 0, "skipped": None}
+        try:
+            protected = self.protected_digests()
+        except ProtectionUnreadable as exc:
+            result["skipped"] = f"protection_unreadable: {exc}"
+            self._emit(result)
+            return result
+        result["kept_protected"] = len(protected)
+
+        images = []
+        for repository in MANAGED_REPOSITORIES:
+            try:
+                images.extend(self._docker.list_images(repository) or [])
+            except Exception as exc:  # noqa: BLE001 - listing is best-effort
+                result["skipped"] = f"listing_failed: {exc}"
+                self._emit(result)
+                return result
+
+        for digest in plan_removals(images, protected_digests=protected, keep=self._keep):
+            try:
+                if self._docker.remove_image(digest):
+                    result["removed"].append(digest)
+            except Exception:  # noqa: BLE001 - a cleanup never fails the upgrade
+                break
+        self._emit(result)
+        return result
+
+    def _emit(self, result):
+        if callable(self._on_event):
+            try:
+                self._on_event(result)
+            except Exception:  # noqa: BLE001 - reporting never fails the upgrade
+                pass

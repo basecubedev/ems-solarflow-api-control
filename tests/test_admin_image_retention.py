@@ -7,6 +7,7 @@ from admin.admin_update import ADMIN_IMAGE_REPO, EMS_IMAGE_REPO
 from admin.image_retention import (
     DEFAULT_KEEP,
     MANAGED_REPOSITORIES,
+    ImageRetentionService,
     is_managed,
     plan_removals,
 )
@@ -183,3 +184,108 @@ def test_malformed_entries_do_not_break_the_plan():
     removals = plan_removals(images, keep=5)
 
     assert len(removals) == 2
+
+
+class _FakeDocker:
+    """Records what retention asked the daemon to do."""
+
+    def __init__(self, images=None, *, removable=True, list_error=None):
+        self._images = images or {}
+        self._removable = removable
+        self._list_error = list_error
+        self.listed = []
+        self.removed = []
+
+    def list_images(self, repository):
+        self.listed.append(repository)
+        if self._list_error:
+            raise self._list_error
+        return list(self._images.get(repository, ()))
+
+    def remove_image(self, reference):
+        self.removed.append(reference)
+        return self._removable
+
+
+class _Store:
+    def __init__(self, payload=None, *, error=None):
+        self._payload = payload
+        self._error = error
+
+    def current(self):
+        if self._error:
+            raise self._error
+        return self._payload
+
+
+def test_retention_only_ever_asks_about_the_two_managed_repositories():
+    docker = _FakeDocker()
+
+    ImageRetentionService(docker=docker).run()
+
+    assert docker.listed == list(MANAGED_REPOSITORIES)
+
+
+def test_an_unreadable_protection_source_removes_nothing():
+    """Fail-closed: reclaiming disk is worth less than keeping a way back."""
+
+    docker = _FakeDocker({ADMIN_IMAGE_REPO: _series(ADMIN_IMAGE_REPO, 20)})
+    service = ImageRetentionService(
+        docker=docker, known_good_store=_Store(error=OSError("state unreadable"))
+    )
+
+    result = service.run()
+
+    assert docker.removed == []
+    assert result["removed"] == []
+    assert "protection_unreadable" in result["skipped"]
+
+
+def test_a_failed_listing_removes_nothing():
+    docker = _FakeDocker(list_error=RuntimeError("daemon gone"))
+
+    result = ImageRetentionService(docker=docker).run()
+
+    assert docker.removed == []
+    assert "listing_failed" in result["skipped"]
+
+
+def test_digests_named_by_known_good_and_a_transition_are_protected():
+    known_good = _Store({"admin_digest": "sha256:kg-admin", "ems_digest": "sha256:kg-ems"})
+    transition = _Store(
+        {
+            "admin_digest": "sha256:tr-admin",
+            "selected_ems_build": {"digest": "sha256:tr-ems"},
+        }
+    )
+
+    protected = ImageRetentionService(
+        docker=_FakeDocker(), known_good_store=known_good, transition_store=transition
+    ).protected_digests()
+
+    assert protected == {
+        "sha256:kg-admin",
+        "sha256:kg-ems",
+        "sha256:tr-admin",
+        "sha256:tr-ems",
+    }
+
+
+def test_the_run_reports_what_it_removed():
+    images = _series(ADMIN_IMAGE_REPO, 7)
+    docker = _FakeDocker({ADMIN_IMAGE_REPO: images})
+
+    result = ImageRetentionService(docker=docker, keep=5).run()
+
+    assert result["removed"] == [images[0]["digest"], images[1]["digest"]]
+    assert docker.removed == result["removed"]
+
+
+def test_a_refused_removal_is_not_reported_as_removed():
+    """Docker refuses an image a container still uses; that is the safety net."""
+
+    docker = _FakeDocker({ADMIN_IMAGE_REPO: _series(ADMIN_IMAGE_REPO, 7)}, removable=False)
+
+    result = ImageRetentionService(docker=docker, keep=5).run()
+
+    assert result["removed"] == []
