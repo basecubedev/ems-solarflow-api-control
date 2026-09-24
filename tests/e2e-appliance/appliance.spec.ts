@@ -255,8 +255,8 @@ test.describe("the two-second poll", () => {
 // Diagnostics is the one section that fetches something of its own when it is
 // opened: until /api/settings answers, a single line stands in for the log
 // panel, and the panel that replaces it is a hundred and fifty pixels taller.
-// Arriving late is allowed. Moving the floor the tests above measure against
-// is not.
+// Arriving late is allowed. Moving the reader, or moving the floor the tests
+// above measure against, is not.
 test.describe("a section that is still filling in", () => {
   // The interleaving that breaks a park is a narrow one -- the document grows
   // after the bottom has been measured and before the key press has scrolled --
@@ -299,6 +299,34 @@ test.describe("a section that is still filling in", () => {
         Math.round(document.documentElement.scrollHeight - window.innerHeight),
       ),
     );
+    expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(parked);
+  });
+
+  // The other half: the section may grow, but not under the reader. The
+  // response is held until the page has been parked, so the panel lands while
+  // somebody is sitting at the bottom of the page rather than before they got
+  // there.
+  test("does not move the reader when its content finally arrives", async ({ page }) => {
+    await page.setViewportSize({ width: 1180, height: 360 });
+
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/settings", async (route) => {
+      await held;
+      await route.continue();
+    });
+
+    await signIn(page);
+    await openView(page, "diagnostics");
+    const parked = await parkAtBottom(page, "Diagnostics while its log sources load");
+    await expect(page.locator('[data-test="log-panel"]')).toHaveCount(0);
+
+    release();
+    await page.waitForResponse((response) => response.url().includes("/api/settings"));
+    await expect(page.locator('[data-test="log-panel"]')).toBeVisible();
+
     expect(await page.evaluate(() => Math.round(window.scrollY))).toBe(parked);
   });
 });
