@@ -104,6 +104,61 @@ def planned_buckets(influx_config):
     return {key: retention_seconds_for_bucket(influx_config, key) for key in keys}
 
 
+def planned_bucket_names(influx_config):
+    """The planned buckets by name, in pipeline order.
+
+    One source for everyone who asks whether the schema is complete: the
+    provider diagnosing a failed query and the writer reporting the gap at
+    startup must not disagree about which buckets were supposed to exist.
+    """
+
+    prefix = influx_config["bucket_prefix"]
+
+    return [bucket_name(prefix, key) for key in planned_buckets(influx_config)]
+
+
+def query_profile_bucket_names(influx_config):
+    """The buckets the query profiles read, in profile order.
+
+    Not the same set as the planned buckets, and nothing cross-checks the two
+    halves of the config: a profile naming a bucket that no downsampling entry
+    produces names one that no schema sync will ever create.
+    """
+
+    prefix = influx_config["bucket_prefix"]
+    names = []
+    for profile in influx_config.get("query_profiles", []):
+        key = profile.get("bucket")
+        if not key:
+            continue
+        name = bucket_name(prefix, key)
+        if name not in names:
+            names.append(name)
+
+    return names
+
+
+def planned_task_names(influx_config):
+    """The downsampling tasks by name, in pipeline order.
+
+    Buckets alone do not say the schema is complete. ``sync`` creates them
+    first, so a run that stops in between leaves every bucket in place with
+    nothing filling them -- an empty chart that reads as healthy everywhere.
+    """
+
+    prefix = influx_config["bucket_prefix"]
+    names = []
+    for entry in influx_config.get("downsampling", []):
+        target = entry.get("target")
+        if not target:
+            continue
+        name = task_name(prefix, target)
+        if name not in names:
+            names.append(name)
+
+    return names
+
+
 def build_downsample_flux(influx_config, entry):
     """Render the Flux body (with ``option task``) for one downsampling entry."""
     prefix = influx_config["bucket_prefix"]

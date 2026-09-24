@@ -8,6 +8,46 @@ from collections import OrderedDict
 
 from ems.paths import BASE_DIR
 
+# How long a schema operation waits for InfluxDB to answer /health.
+#
+# Set from the slowest hardware this project supports, not the fastest. On a
+# Raspberry Pi 3B+ with an SD card, InfluxDB 2.7 took 35 seconds from container
+# start to listening on 8086, and a first start additionally runs the setup
+# wrapper that creates the org, bucket, user and token. A 15-second budget was
+# enough on every developer PC and silently skipped the schema on the
+# appliance, which then served analytics from a bucket that was never created.
+INFLUX_READY_TIMEOUT_SECONDS = 90
+
+# What a caller that has not just started a container waits. A status read is a
+# diagnostic: it runs inside the Admin checks and the guided-upgrade health
+# probe, where a patient wait against a stopped InfluxDB is a hang, not care.
+INFLUX_PROBE_READY_TIMEOUT_SECONDS = 15
+
+# Per-phase budget for a status read: requests spend it once on connect and once
+# on read, so one request's worst case is twice this. `schema.status` makes one
+# request per planned bucket plus the task list, and it sits inside the Admin
+# diagnostics and the guided-upgrade health gate, which run their checks one
+# after another -- leaving those requests on the client default makes the whole
+# read's worst case a multiple of the wait it follows.
+INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS = 5
+
+# What a schema sync gives each phase of each request. Creating a bucket or a
+# Flux task is real work, not a lookup, and a remote or loaded InfluxDB can take
+# seconds to answer -- a diagnostic budget there aborts the sync halfway, which
+# is the half-created schema this whole path exists to prevent.
+#
+# Deliberately the client's own default rather than something the Admin ceiling
+# could be derived from: the two cannot both be satisfied, and of the two
+# failures, aborting a create that was merely slow is the worse one. A sync that
+# fails is a sync that has to be run again, and what it leaves behind is the
+# state this whole change exists to make visible. The ceiling around it is sized
+# for a slow sync rather than a stuck one, and says so.
+#
+# Written out rather than imported from the client: this module is one of the
+# few `ems` files the Admin image carries, and the client pulls in `requests`,
+# which that image has no reason to hold. A test walks the pair instead.
+INFLUX_SYNC_REQUEST_TIMEOUT_SECONDS = 15
+
 INFLUX_SERVICE = "influxdb"
 INFLUX_CONTAINER_NAME = "ems-influxdb"
 INFLUX_BACKUP_METHOD = "influx backup"

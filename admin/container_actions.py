@@ -21,10 +21,44 @@ from pathlib import Path
 from admin.deployment import DockerCompose
 from admin.install_context import detect_install_context
 from admin.maintenance import run_maintenance_overview
+from ems.influx_setup import INFLUX_READY_TIMEOUT_SECONDS
 
 ANALYTICS_PROFILE = "with-analytics"
 EMS_SERVICE = "ems"
 INFLUX_SERVICE = "influxdb"
+
+# The schema sync waits for InfluxDB inside this call, so the call has to
+# outlive the wait and still leave room for its own requests. The count comes
+# from the operator's `influxdb.downsampling`: nineteen on a fresh install of
+# the shipped chain, five more per level. The allowance covers one level beyond
+# what we ship; a longer chain needs this raised, and a test says so by counting.
+#
+# Sized for a sync that is slow, not for one where every request runs into its
+# own timeout. That worst case is roughly twenty minutes, which cannot be held
+# inside a synchronous Admin request, and covering it would buy nothing: a sync
+# whose every request times out has failed, and waiting it out does not change
+# the outcome. The measurement this is built on is the live Pi 3B+ appliance,
+# where all nineteen requests of a full sync answered in well under a second.
+#
+# The gap between this figure and the per-request tolerance is deliberate and
+# not free: a sync whose requests all land between the two -- slow enough to
+# take ten seconds each, quick enough to succeed -- is killed although it was
+# working. That band is the price of a ceiling an operator can sit in front of,
+# and it is paid knowingly because the outcome is detected and the sync can
+# simply be run again. Closing it means making the sync asynchronous, not
+# raising this number.
+#
+# Being killed here is not silent -- the call says it timed out, the step is an
+# error, EMS is not recreated against a half-built schema, and the EMS itself
+# then logs `influx_schema_incomplete`. The sync is idempotent, so the way out
+# is to run it again.
+INFLUX_SYNC_REQUEST_ALLOWANCE = 24
+INFLUX_SYNC_SLOW_REQUEST_SECONDS = 10
+INFLUX_SYNC_TIMEOUT_SECONDS = (
+    INFLUX_READY_TIMEOUT_SECONDS
+    + INFLUX_SYNC_REQUEST_ALLOWANCE * INFLUX_SYNC_SLOW_REQUEST_SECONDS
+    + 30
+)
 
 DESIRED_RUNNING = "running"
 DESIRED_STOPPED = "stopped"
@@ -512,7 +546,7 @@ def _default_run_influx_sync(compose, workspace):
         workspace,
         EMS_SERVICE,
         ["python3", "emsctl.py", "influx", "sync", "--json"],
-        timeout=120,
+        timeout=INFLUX_SYNC_TIMEOUT_SECONDS,
     )
 
 

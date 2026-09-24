@@ -931,6 +931,16 @@ class DockerCompose:
             raise DockerError(
                 "docker_cli_missing", _DOCKER_MESSAGES["client_missing"]
             ) from exc
+        except subprocess.TimeoutExpired as exc:
+            # Distinguished from the generic failure because the two want
+            # different things from the operator: a broken Docker is a setup
+            # problem, a command killed by its ceiling usually only needs to be
+            # run again once whatever made it slow has passed.
+            raise DockerError(
+                "docker_compose_run_timeout",
+                "The one-off container command did not finish within "
+                f"{timeout} seconds.",
+            ) from exc
         except (OSError, subprocess.SubprocessError) as exc:
             raise DockerError(
                 "docker_compose_run_failed",

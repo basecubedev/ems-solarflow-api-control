@@ -75,12 +75,12 @@ class HistoryInfluxClient(InfluxHTTPClient):
 
     # -- tasks -------------------------------------------------------------
 
-    def list_tasks(self, limit=500):
+    def list_tasks(self, limit=500, timeout=None):
         response = self.session.get(
             f"{self.base_url}/api/v2/tasks",
             params={"org": self.org, "limit": limit},
             headers=self._json_headers(),
-            timeout=self.timeout,
+            timeout=self.timeout if timeout is None else timeout,
         )
         response.raise_for_status()
         return response.json().get("tasks", [])

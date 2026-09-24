@@ -13,16 +13,24 @@ without a live InfluxDB.
 Import-side-effect-free.
 """
 
+import logging
+import threading
+import time
 from datetime import datetime, timezone
 
 from ems.config import influx_duration_seconds
-from ems.influx_setup import runtime_influx_token, runtime_influx_url
+from ems.influx_setup import (
+    INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS,
+    runtime_influx_token,
+    runtime_influx_url,
+)
+from ems.logging_utils import log_event
 from ems.history.provider import (
     HistoryProvider,
     HistoryResult,
     normalize_series,
 )
-from ems.history.schema import bucket_name
+from ems.history.schema import bucket_name, planned_bucket_names
 
 # Maps catalog series ids to their InfluxDB source. ``collapse`` is how values
 # from multiple devices/sources combine within a window: power sums, SoC
@@ -160,12 +168,50 @@ def parse_series_csv(csv_text):
     return out
 
 
+# How long a missing-bucket answer is reused. It only changes when someone
+# runs a schema sync, and the dashboard asks once per failed request.
+MISSING_BUCKETS_CACHE_SECONDS = 60
+
+# How long the whole probe may take. It runs on a request thread, after a query
+# that already failed, and an InfluxDB that drops packets would otherwise hold
+# that thread for one client timeout per planned bucket.
+MISSING_BUCKETS_PROBE_SECONDS = 10
+# How many probes one hold may spend. A slow InfluxDB settles as little as one
+# bucket per probe -- the one the asking range reads, which goes first -- and
+# the next request picks up the rest; without a cap that is one probe per poll
+# against an InfluxDB that never answers.
+MISSING_BUCKETS_PROBE_ROUNDS = 4
+
+
+class _SchemaHold:
+    """What one cache window knows, and how much probing it has paid for."""
+
+    __slots__ = ("expires_at", "settled", "rounds")
+
+    def __init__(self, expires_at):
+        self.expires_at = expires_at
+        self.settled = {}
+        self.rounds = 0
+
+
+def _now():
+    """Seam for the probe clock, so a test never patches the stdlib module."""
+
+    return time.monotonic()
+
+
 class InfluxHistoryProvider(HistoryProvider):
     name = "influxdb"
 
     def __init__(self, influx_config, client=None):
         self.config = influx_config
         self._client = client
+        self._missing_buckets_cache = None
+        self._missing_buckets_lock = threading.Lock()
+        # Single flight belongs to the provider, not to one hold: a probe still
+        # running when its hold expires would otherwise release a guard that a
+        # freshly installed hold no longer holds.
+        self._probe_in_flight = False
 
     def client(self):
         if self._client is None:
@@ -177,6 +223,142 @@ class InfluxHistoryProvider(HistoryProvider):
                 runtime_influx_token(self.config),
             )
         return self._client
+
+    def bucket_for_range(self, start, end):
+        """The bucket a query over this range reads, by the config's profiles."""
+
+        range_seconds = max(0, int((end - start).total_seconds()))
+        bucket_key, _window = resolve_query_bucket(self.config, range_seconds)
+
+        return bucket_name(self.config["bucket_prefix"], bucket_key)
+
+    def is_planned_bucket(self, name):
+        """Whether a schema sync would create this bucket.
+
+        A query profile can name one that no downsampling entry produces, and
+        that bucket is exactly the one that will never exist -- so "run influx
+        sync" is not the answer for it.
+        """
+
+        return name in planned_bucket_names(self.config)
+
+    def missing_buckets(self, first=None):
+        """Planned buckets known not to exist, in pipeline order.
+
+        Returns ``None`` when the schema could not be read, which is not the
+        same answer as an empty list and must not be confused with it.
+
+        Worth asking only after a query failed: InfluxDB answers a query against
+        a bucket that is not there with the same 404 it uses for an unknown org,
+        so the cause cannot be read off the failure itself.
+
+        ``first`` names the bucket the caller's answer hinges on. It is looked
+        up before the rest, and an answer that does not cover it is ``None``
+        rather than a list it is absent from -- "could not check" would
+        otherwise read as "exists".
+
+        The answer is held briefly because it only changes when someone runs a
+        schema sync, while the question is asked once per failed request.
+        """
+
+        planned = planned_bucket_names(self.config)
+        if first is not None and first not in planned:
+            # A query profile may name a bucket the downsampling plan never
+            # creates. It is still the bucket this range reads, and the only one
+            # that can explain its failure, so it is probed and reported.
+            planned = [first] + planned
+
+        with self._missing_buckets_lock:
+            hold = self._missing_buckets_cache
+            if hold is None or _now() >= hold.expires_at:
+                hold = _SchemaHold(_now() + MISSING_BUCKETS_CACHE_SECONDS)
+                self._missing_buckets_cache = hold
+            todo = [name for name in planned if name not in hold.settled]
+            # Only when the asking range has no answer yet. The rest of the
+            # list is context, and a probe round costs this request thread ten
+            # seconds; paying that to fill in context for a payload that is
+            # already decided is the wrong trade on the hardware this is for.
+            if first is not None and first in hold.settled:
+                todo = []
+            # Rounds are counted rather than names claimed up front: a probe
+            # that runs out of budget leaves the rest for a later request, so a
+            # range whose bucket was never reached is not answered with silence
+            # for the whole hold. The cap bounds that against an InfluxDB that
+            # never answers, and one probe at a time keeps a request that
+            # arrives mid-probe from starting a second.
+            probe = (
+                bool(todo)
+                and not self._probe_in_flight
+                and hold.rounds < MISSING_BUCKETS_PROBE_ROUNDS
+            )
+            if probe:
+                self._probe_in_flight = True
+                hold.rounds += 1
+
+        # Outside the lock: a second request must degrade to the plain failure,
+        # not queue behind a ten-second probe on a request thread.
+        if probe:
+            try:
+                self._probe_buckets(todo, first, hold)
+            finally:
+                with self._missing_buckets_lock:
+                    self._probe_in_flight = False
+
+        # Copied under the lock: another thread's probe may still be writing
+        # into it, and an answer assembled from a dict mid-fill lists fewer
+        # missing buckets than the same question would a moment later.
+        with self._missing_buckets_lock:
+            settled = dict(hold.settled)
+
+        if not settled or (first is not None and first not in settled):
+            return None
+
+        return [name for name in planned if settled.get(name) is False]
+
+    def _probe_buckets(self, todo, first, hold):
+        """Look buckets up into the hold, as far as the budget allows.
+
+        What a lookup settled is kept when a later one fails or the budget runs
+        out, so a probe that gives up halfway can still answer for the bucket it
+        was asked about.
+        """
+
+        order = list(todo)
+        if first in order:
+            order.remove(first)
+            order.insert(0, first)
+
+        deadline = _now() + MISSING_BUCKETS_PROBE_SECONDS
+
+        try:
+            client = self.client()
+            for name in order:
+                remaining = deadline - _now()
+                if remaining <= 0:
+                    return
+                # The same per-phase tolerance the rest of the project gives
+                # these lookups, bounded by what is left. Halving the remainder
+                # each round instead would make every lookup after the first
+                # stricter than the one before it, on the hardware where that
+                # matters -- and the budget here is the request thread's, not
+                # the schema's.
+                phase = max(
+                    0.1,
+                    min(INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS, remaining / 2),
+                )
+                found = client.find_bucket(name, timeout=(phase, phase)) is not None
+                # Under the lock, so the answer another thread assembles from
+                # this dict is one state of it rather than a mid-fill snapshot.
+                # Never held across the lookup above.
+                with self._missing_buckets_lock:
+                    hold.settled[name] = found
+        except Exception as exc:
+            log_event(
+                logging.WARNING,
+                "analytics_schema_probe_failed",
+                error=type(exc).__name__,
+                settled=len(hold.settled),
+            )
 
     def available(self):
         if not self.config.get("enabled"):

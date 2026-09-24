@@ -1076,3 +1076,40 @@ console.log(JSON.stringify({{ zoomed, afterReload }}));
     assert out["afterReload"]["zoom"] == {"start": 16200, "end": 70200}
     assert out["afterReload"]["window"] == {"min": 16200, "max": 70200}
     assert out["afterReload"]["buttonHidden"] is False
+
+
+def test_an_incomplete_schema_shows_its_own_hint():
+    """A cause with a fix must reach the operator, not the generic copy.
+
+    The info state only rendered a hint for `reason: "unreachable"`, so a
+    missing analytics bucket -- the one cause an operator can act on -- would
+    have fallen back to "not configured" and hidden the command that fixes it.
+    """
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const made = [];
+function node(tag) {{
+  const element = {{ tag, textContent: "", style: {{}}, hidden: false }};
+  element.querySelector = (selector) => made.find((item) => item.tag === selector) || null;
+  return element;
+}}
+const heading = node("h3");
+const detail = node("p");
+made.push(heading, detail);
+const unavailable = node("div");
+const nodes = {{ analyticsUnavailable: unavailable, analyticsBody: {{ hidden: false }} }};
+global.document = {{ hidden: false, getElementById: (id) => nodes[id] || null }};
+
+app.setAnalyticsAvailable(false, {{
+  available: false,
+  reason: "schema_incomplete",
+  missing_buckets: ["ems_1m"],
+  hint: "Analytics history is enabled, but its downsampled buckets are missing.\\nRun: python3 emsctl.py influx sync",
+}});
+console.log(JSON.stringify({{ heading: heading.textContent, detail: detail.textContent }}));
+"""
+    out = run_node(script)
+
+    assert "schema" in out["heading"].lower()
+    assert "influx sync" in out["detail"]

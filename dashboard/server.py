@@ -43,6 +43,21 @@ ANALYTICS_UNREACHABLE_HINT = (
     "Analytics history is enabled, but InfluxDB is not reachable.\n"
     "Run: python3 emsctl.py influx init"
 )
+# Shown when a bucket the selected range reads was never created. Each range
+# reads the bucket its query profile names, so a partial schema leaves the short
+# ranges working and only empties the longer ones -- which is how it goes
+# unnoticed on an installation whose schema sync never completed.
+ANALYTICS_SCHEMA_HINT = (
+    "Analytics history is enabled, but a bucket this range reads is missing.\n"
+    "Run: python3 emsctl.py influx sync"
+)
+# Same symptom, opposite fix: no sync creates this bucket, because the two
+# halves of the influxdb config disagree about which buckets exist.
+ANALYTICS_SCHEMA_UNPLANNED_HINT = (
+    "Analytics history is enabled, but this range reads a bucket that no "
+    "downsampling entry creates.\n"
+    "Check influxdb.query_profiles against influxdb.downsampling in config.json."
+)
 MAX_JSON_BODY_BYTES = 16 * 1024
 MAX_SSE_CONNECTIONS = 8
 MAX_SSE_CONNECTIONS_PER_IP = 2
@@ -73,6 +88,59 @@ _EXTERNAL_NAMED_ROUTE_CONTAINERS = frozenset(
 )
 _EXTERNAL_CONTEXT_HISTORY_LIMIT = 4
 _EXTERNAL_ALIAS_CACHE_LIMIT = 512
+
+
+def analytics_schema_gap_payload(provider, start, end):
+    """Turn a failed analytics query into something the operator can act on.
+
+    Only the bucket *this* range reads can explain *this* failure. A partial
+    schema would otherwise blame every outage on itself -- a 1h query failing on
+    an auth error while the downsampling buckets happen to be missing would send
+    the operator to ``influx sync``, which does not fix it, and swallow the real
+    error on the way.
+
+    Returns ``None`` when that bucket exists, and when the provider cannot be
+    asked at all.
+
+    The hint depends on whether a schema sync would create the bucket at all: a
+    query profile naming one that no downsampling entry produces is a config
+    that disagrees with itself, and no amount of syncing fixes it.
+
+    The provider holds its reading for a minute, so for up to that long after a
+    successful sync a failure with another cause can still be answered with
+    "run influx sync". That is deliberate: the alternative is a bucket probe on
+    every failed request, which is the load this whole path is written to avoid,
+    and the stale hint corrects itself within the minute.
+    """
+
+    try:
+        needed = provider.bucket_for_range(start, end)
+        missing = provider.missing_buckets(needed)
+    except Exception:
+        # Degrading back to the unexplained failure is the whole fault this
+        # exists to remove, so it does not happen without a trace.
+        logging.exception("dashboard_analytics_schema_check_failed")
+        return None
+
+    # ``None`` means the schema could not be read at all, which is not a
+    # statement about any bucket.
+    if missing is None or needed not in missing:
+        return None
+
+    planned = True
+    try:
+        planned = provider.is_planned_bucket(needed)
+    except Exception:
+        logging.exception("dashboard_analytics_schema_plan_check_failed")
+
+    return {
+        "available": False,
+        "reason": "schema_incomplete",
+        "source": "influxdb",
+        "bucket": needed,
+        "missing_buckets": list(missing),
+        "hint": ANALYTICS_SCHEMA_HINT if planned else ANALYTICS_SCHEMA_UNPLANNED_HINT,
+    }
 
 
 def _split_csv(value):
@@ -974,7 +1042,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         )
         return range_name, start, end, series, devices
 
-    def _serve_series(self, provider, query, *, log_label):
+    def _serve_series(self, provider, query, *, log_label, diagnose=None):
         from ems.history.provider import decimate_history_result
 
         parsed = self._resolve_series_query(query)
@@ -986,6 +1054,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             result = provider.query(start, end, devices=devices, series=series)
         except Exception:
             logging.exception("%s series query failed", log_label)
+            # A 503 reaches the browser as an empty chart and no explanation, so
+            # a cause the operator can act on is sent as a 200 info state
+            # instead -- the same shape an unconfigured backend already uses.
+            info = diagnose(start, end) if diagnose else None
+            if info:
+                self._send_json(info)
+                return
             self._send_json({"error": "history_unavailable"}, status=503)
             return
 
@@ -1039,7 +1114,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 }
             )
             return
-        self._serve_series(provider, query, log_label="analytics")
+        self._serve_series(
+            provider,
+            query,
+            log_label="analytics",
+            diagnose=lambda start, end: analytics_schema_gap_payload(
+                provider, start, end
+            ),
+        )
 
     def _diagnose_args(self):
         # The browser never supplies paths or sampling: paths come from the

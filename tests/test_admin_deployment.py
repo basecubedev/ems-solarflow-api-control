@@ -1546,6 +1546,29 @@ def test_bootstrap_installer_maps_failure_to_clean_error(tmp_path):
     assert exc.value.code == "docker_cli_missing"
 
 
+def test_a_one_off_command_killed_by_its_ceiling_says_it_timed_out(tmp_path):
+    """The ceilings that contain these commands rest on the kill being legible.
+
+    A schema sync stopped by its ceiling leaves buckets without downsampling
+    tasks, and the trade is only defensible because the operator is told. A
+    message that reads the same as a broken Docker installation sends them
+    looking in the wrong place.
+    """
+
+    import subprocess
+
+    def _timing_out(argv, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+
+    compose = DockerCompose(run=_timing_out)
+
+    with pytest.raises(DockerError) as exc:
+        compose.run_oneoff(tmp_path, "ems", ["python3", "emsctl.py", "influx", "sync"], timeout=240)
+
+    assert exc.value.code == "docker_compose_run_timeout"
+    assert "240 seconds" in exc.value.message
+
+
 def test_docker_compose_start_uses_prepared_workspace_and_no_pull(tmp_path):
     recorder = []
     compose = DockerCompose(popen=_make_popen(recorder, lines=["Container ems Started"]))

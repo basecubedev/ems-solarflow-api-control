@@ -34,8 +34,103 @@ import threading
 import time
 
 from ems.history.influx_client import build_line_protocol
-from ems.history.schema import bucket_name
+from ems.history.schema import (
+    bucket_name,
+    planned_bucket_names,
+    planned_task_names,
+    query_profile_bucket_names,
+)
+from ems.influx_setup import INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS
 from ems.logging_utils import log_event
+
+# Shown once when telemetry is being written but the downsampling half of the
+# schema was never created. The dashboard says the same thing for a range it
+# cannot serve; a test holds the two remediation commands together.
+SCHEMA_SYNC_HINT = (
+    "Analytics ranges that read a downsampled bucket stay empty until the "
+    "schema is created. Run: python3 emsctl.py influx sync"
+)
+# Same symptom, opposite fix, so it is said separately: no sync creates this
+# bucket, because the two halves of the influxdb config disagree about which
+# buckets exist. The dashboard says the same thing for a range it cannot serve.
+# The check reads bucket and task metadata, which the writer itself never
+# needed. A token scoped to writes answers every lookup the same way forever, so
+# it is said once and the check stops rather than repeating on the ladder.
+SCHEMA_READ_HINT = (
+    "The InfluxDB token cannot read bucket and task metadata, so the analytics "
+    "schema cannot be checked. Writing telemetry is unaffected."
+)
+UNPLANNED_BUCKET_HINT = (
+    "A query profile reads a bucket that no downsampling entry creates, so no "
+    "schema sync will make it exist. Check influxdb.query_profiles against "
+    "influxdb.downsampling in config.json."
+)
+
+# How often an incomplete schema is named before the writer stops saying it.
+# Nobody is going to act on the eleventh line, and a sync taking a while is a
+# state the next check settles anyway.
+SCHEMA_CHECK_REPORTS = 3
+# How often a check that could not run at all is retried. A separate, longer
+# allowance on purpose: a lookup can fail for a reason that passes -- InfluxDB
+# still settling while the first writes already land -- and spending the
+# reporting allowance on those failures is how the signal goes silent for the
+# life of the process, which is the thing the event exists to prevent.
+SCHEMA_CHECK_FAILURES = 10
+# Spaced, not consecutive: three probes on three successive batches are gone in
+# fifteen seconds.
+SCHEMA_CHECK_RETRY_SECONDS = 60.0
+# What one phase of one request may take. The same tolerance the Admin status
+# check gives these very lookups, because they run against the same InfluxDB on
+# the same board: a budget derived by dividing a flat total made this path the
+# stricter of the two, and a lookup timing out here reports nothing at all.
+SCHEMA_CHECK_REQUEST_TIMEOUT_SECONDS = INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS
+
+
+def _now():
+    return time.monotonic()
+
+
+class _WriterStopping(Exception):
+    """Raised inside the schema check when the writer has been asked to stop."""
+
+
+def _is_permission_error(exc):
+    """Whether InfluxDB refused the request rather than failed to answer it.
+
+    A refusal does not become an acceptance by being retried, so it ends the
+    check instead of spending its allowance on the same answer ten times.
+    """
+
+    response = getattr(exc, "response", None)
+
+    return getattr(response, "status_code", None) in (401, 403)
+
+
+def schema_check_budget_seconds(influx_config):
+    """How long the whole schema check may take, for this config.
+
+    One request per planned bucket plus the task list, each able to spend its
+    budget on connect and again on read. Derived rather than fixed so a longer
+    downsampling chain gets a longer check instead of a stricter one.
+    """
+
+    requests = len(checked_bucket_names(influx_config)) + 1
+
+    return requests * 2 * SCHEMA_CHECK_REQUEST_TIMEOUT_SECONDS
+
+
+def checked_bucket_names(influx_config):
+    """Every bucket the check looks up: the planned ones, then any extra that a
+    query profile reads. The second set is what a sync can never create."""
+
+    planned = planned_bucket_names(influx_config)
+    extra = [
+        name
+        for name in query_profile_bucket_names(influx_config)
+        if name not in planned
+    ]
+
+    return planned + extra
 
 # Numeric/boolean device telemetry fields written per cycle. The first five
 # (solar/output/soc/pack_in/pack_out) back every Analytics series; the rest are
@@ -174,6 +269,11 @@ class InfluxTelemetryWriter:
         self._client = None
         self._dropped = 0
         self._last_error_log = 0.0
+        self._schema_checked = False
+        self._schema_reports = 0
+        self._schema_failures = 0
+        self._schema_check_retry_at = 0.0
+        self._schema_check_deadline = 0.0
 
     # -- lifecycle ---------------------------------------------------------
     def start(self):
@@ -269,7 +369,6 @@ class InfluxTelemetryWriter:
 
             try:
                 client.write_lines(self.bucket, batch)
-                backoff = 1.0
             except Exception as exc:
                 # Drop the cached client so the next attempt reconnects, and
                 # never let the failure escape to the control loop.
@@ -282,6 +381,164 @@ class InfluxTelemetryWriter:
                 )
                 self._sleep_backoff(backoff)
                 backoff = min(backoff * 2, self._max_backoff)
+            else:
+                backoff = 1.0
+                try:
+                    self._report_schema_gap_once(client)
+                except Exception as exc:
+                    # Outside the write's own handler, so nothing here may reach
+                    # the loop: this is a diagnostic, and it does not get to
+                    # stop telemetry. An unexpected failure ends the diagnostic,
+                    # not the writer.
+                    self._schema_failures = SCHEMA_CHECK_FAILURES
+                    log_event(
+                        logging.WARNING,
+                        "influx_schema_check_failed",
+                        error=type(exc).__name__,
+                        attempts_left=0,
+                    )
+
+    def _report_schema_gap_once(self, client):
+        """Say once that the analytics half of the schema was never created.
+
+        A write proves only that the raw bucket exists, so a schema sync that
+        never completed stays invisible: telemetry keeps arriving while every
+        Analytics range that reads a downsampled bucket is empty. Reported from
+        here rather than at startup because a check that runs before InfluxDB
+        is listening cannot tell the two apart -- which is the fault itself.
+
+        Tasks are checked beside the buckets because ``sync`` creates buckets
+        first: a run that stops in between leaves the buckets in place, and a
+        query against an empty bucket succeeds. Nothing else would ever notice.
+
+        A bucket that only a query profile names is checked too and reported
+        separately, because running a sync is the answer for the planned ones
+        and no answer at all for that one.
+        """
+
+        if self._schema_checked:
+            return
+        if self._schema_reports >= SCHEMA_CHECK_REPORTS:
+            return
+        if self._schema_failures >= SCHEMA_CHECK_FAILURES:
+            return
+        now = _now()
+        if now < self._schema_check_retry_at:
+            return
+
+        planned = planned_bucket_names(self.config)
+        # The deadline follows from the requests rather than capping them: it
+        # has to let every checked bucket and the task list be asked, because
+        # the task list is the only signal for a schema whose buckets all exist
+        # and whose tasks were never created.
+        self._schema_check_deadline = now + schema_check_budget_seconds(self.config)
+        buckets = []
+        unplanned = []
+        tasks = []
+        whole = False
+        try:
+            for name in checked_bucket_names(self.config):
+                if client.find_bucket(name, timeout=self._probe_timeout()) is None:
+                    (buckets if name in planned else unplanned).append(name)
+            live = {
+                task.get("name")
+                for task in client.list_tasks(timeout=self._probe_timeout())
+                if task.get("status") == "active"
+            }
+            tasks = [
+                name for name in planned_task_names(self.config) if name not in live
+            ]
+            whole = True
+        except _WriterStopping:
+            # An ordinary shutdown, not a fault: nothing to report and nothing
+            # to hold against the check's allowance.
+            return
+        except Exception as exc:
+            if _is_permission_error(exc):
+                self._schema_checked = True
+                log_event(
+                    logging.WARNING,
+                    "influx_schema_check_not_permitted",
+                    hint=SCHEMA_READ_HINT,
+                )
+                return
+
+            # What the lookups already settled is kept. A budget spent before
+            # the task list still names buckets the operator has to create, and
+            # the alternative is the silence this event exists to break.
+            self._schema_failures += 1
+            log_event(
+                logging.WARNING,
+                "influx_schema_check_failed",
+                error=type(exc).__name__,
+                attempts_left=SCHEMA_CHECK_FAILURES - self._schema_failures,
+            )
+
+        missing = {}
+        if buckets:
+            missing["missing_buckets"] = ",".join(buckets)
+        if tasks:
+            missing["missing_tasks"] = ",".join(tasks)
+
+        # Measured from the end, so a check that spent its whole budget is not
+        # retried ten seconds later: the writer thread has telemetry queued
+        # behind it, and the gap is what keeps the diagnostic out of its way.
+        self._schema_check_retry_at = _now() + SCHEMA_CHECK_RETRY_SECONDS
+
+        if unplanned:
+            log_event(
+                logging.WARNING,
+                "influx_schema_bucket_not_planned",
+                buckets=",".join(unplanned),
+                hint=UNPLANNED_BUCKET_HINT,
+            )
+
+        if missing:
+            # Deliberately not latched. A read taken while `influx sync` is
+            # midway through is a true snapshot of a state that is about to be
+            # fine, and latching it would leave a false warning standing for the
+            # life of the process. The ladder settles it either way.
+            log_event(
+                logging.WARNING,
+                "influx_schema_incomplete",
+                hint=SCHEMA_SYNC_HINT,
+                **missing,
+            )
+
+        # One report per completed check, whatever it found: the allowance
+        # counts how often the operator is told the whole story. A check that
+        # gave up mid-scan already cost a failure slot, and spending a report
+        # slot on its partial reading is how three flaky checks end the warnings
+        # without ever having named the tasks.
+        if not whole:
+            return
+        if missing or unplanned:
+            self._schema_reports += 1
+        else:
+            self._schema_checked = True
+
+    def _probe_timeout(self):
+        """What one phase of the next request may take.
+
+        Bounded by what is left of the check, so a request that overran cannot
+        push the sequence past the deadline. Raising once the budget is gone
+        ends the check as a failed attempt, to be retried later rather than run
+        to completion at any cost.
+        """
+
+        if self._stop.is_set():
+            # The check makes several requests and the shutdown join is two
+            # seconds; a diagnostic does not get to outlive the writer it runs
+            # on, nor to keep talking to InfluxDB through shutdown.
+            raise _WriterStopping()
+        remaining = self._schema_check_deadline - _now()
+        if remaining <= 0:
+            raise TimeoutError("schema check budget exhausted")
+        phase = max(
+            0.1, min(SCHEMA_CHECK_REQUEST_TIMEOUT_SECONDS, remaining / 2)
+        )
+
+        return (phase, phase)
 
     def _sleep_backoff(self, seconds):
         # Wait, but wake immediately on stop().

@@ -465,6 +465,40 @@ def test_failed_influx_sync_aborts_before_ems_recreate(tmp_path):
     }
 
 
+def test_a_sync_killed_by_its_own_ceiling_is_a_visible_failure(tmp_path):
+    """Why the ceiling is sized for a slow sync rather than a stuck one.
+
+    A stuck sync is killed, and what it leaves behind is a schema with buckets
+    and no downsampling tasks. That trade is only acceptable because it is not
+    silent: the step is an error, EMS is not recreated against a half-built
+    schema, and the EMS itself logs the gap if nobody reads the Admin message.
+    """
+
+    import subprocess
+
+    class Hanging(FakeCompose):
+        def run_oneoff(self, workspace, service, command, timeout=180):
+            if "sync" in command:
+                raise subprocess.TimeoutExpired(cmd=list(command), timeout=timeout)
+            return super().run_oneoff(workspace, service, command, timeout=timeout)
+
+    compose = Hanging()
+    actions = make_actions(tmp_path, influx_config(), make_overview(), compose)
+    result = actions.sync()
+
+    assert result["ok"] is False
+    assert result["message"] == "Could not sync InfluxDB analytics schema."
+    assert ("up", (), ("ems",), True) not in compose.calls
+
+    step = result["steps"][-1]
+    assert step["service"] == "influxdb"
+    assert step["action"] == "sync"
+    assert step["status"] == "error"
+    # What the real ComposeCli raises on a kill is pinned next to it, in
+    # tests/test_admin_deployment.py; here it only has to reach the operator.
+    assert step["detail"]
+
+
 def test_sync_stops_influx_when_disabled(tmp_path):
     influx = {"found": True, "running": True, "status": "running", "name": "ems-influxdb"}
     compose = FakeCompose()

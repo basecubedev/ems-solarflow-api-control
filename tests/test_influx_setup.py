@@ -320,7 +320,7 @@ def fake_schema_op(report=None):
     """A drop-in for execute_influx_schema_op returning (code, result)."""
     report = report if report is not None else {"buckets": [], "tasks": []}
 
-    def _op(influx_config, action):
+    def _op(influx_config, action, **kwargs):
         return 0, {"action": action, "ok": True, "url": "", "report": report}
 
     return _op
@@ -416,7 +416,7 @@ def test_influx_init_external_validates_and_syncs(patch_base, monkeypatch):
         lambda *a, **k: calls.__setitem__("docker", calls["docker"] + 1) or 0,
     )
 
-    def fake_execute(influx_config, action):
+    def fake_execute(influx_config, action, **kwargs):
         calls["action"] = action
         return 0, {"action": action, "ok": True, "url": "", "report": {}}
 
@@ -589,7 +589,7 @@ def test_influx_init_auto_sync_false_starts_without_sync(patch_base, monkeypatch
     def fake_docker(command, cwd, dry_run=False, stdout_to_stderr=False):
         return 0
 
-    def fake_execute(influx_config, action):
+    def fake_execute(influx_config, action, **kwargs):
         actions.append(action)
         return 0, {"action": action, "ok": True, "url": "", "report": {}}
 
@@ -626,7 +626,7 @@ def test_influx_init_uses_host_url_for_sync(patch_base, monkeypatch):
     def fake_docker(command, cwd, dry_run=False, stdout_to_stderr=False):
         return 0
 
-    def fake_execute(influx_config, action):
+    def fake_execute(influx_config, action, **kwargs):
         captured["url"] = influx_setup.host_cli_url(influx_config)
         return 0, {"action": action, "ok": True, "url": "", "report": {}}
 
