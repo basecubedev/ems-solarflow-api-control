@@ -243,6 +243,24 @@ def test_the_hardware_page_states_the_pi3_limit_without_overclaiming_the_rest():
     assert "guaranteed" not in text.lower()
 
 
+# --- Installing needs Docker, and a way to tell it worked ------------------
+
+
+def test_the_hardware_page_owns_the_docker_prerequisite():
+    """One canonical statement of what the host needs; the rest link to it."""
+
+    text = read(ROOT / "docs" / "user" / "hardware-requirements.md")
+    section = text.split("## Software", 1)[1].split("\n## ", 1)[0]
+    assert "Compose v2" in section
+    assert "2.24.0" in section
+    assert "docker info" in section
+    # docker-compose v1 is the trap: it exists, it is called something similar,
+    # and the installers do not use it.
+    assert "docker-compose" in section
+    # The appliance image carries its own, and must not be sent shopping for it.
+    assert "appliance image is the exception" in section
+
+
 # --- Docs are split by audience -------------------------------------------
 
 

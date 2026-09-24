@@ -1,8 +1,9 @@
 # Hardware Requirements
 
 Use this page to check whether the machine you have is a good host for EMS. It
-covers the computer EMS runs *on*. For the inverters and grid meters EMS talks
-*to*, see [supported-setups.md](supported-setups.md).
+covers the computer EMS runs *on*, and the one piece of software that computer
+needs first. For the inverters and grid meters EMS talks *to*, see
+[supported-setups.md](supported-setups.md).
 
 EMS is small. The usual limit is memory, and the thing that decides how much you
 need is whether you want the InfluxDB history database.
@@ -31,6 +32,37 @@ No. It stores long-range energy history for the dashboard's analytics. Control
 does not depend on it: EMS reads your meter, calculates a target and writes it
 to your inverter whether InfluxDB is running or not. On a memory-constrained
 machine, leaving it out is a reasonable choice rather than a degraded one.
+
+## Software
+
+Every install path except the Raspberry Pi appliance image runs EMS in
+containers, so the host needs **Docker Engine with the Compose v2 plugin**
+before any installer is run:
+
+| Needs | Why |
+|---|---|
+| `docker` | the installers write a compose file and start containers |
+| `docker compose` v2.24.0 or newer | the EMS compose file uses `env_file` with `required: false`, and the Admin installer holds the same line so one Docker serves both |
+| a running daemon your user can reach | the installer starts the container itself |
+
+`docker-compose` v1 — the separate Python command with a hyphen — is not
+enough; the plugin invoked as `docker compose` is what the installers call. On
+Windows this means Docker Desktop with Linux containers.
+
+Check before you install:
+
+```bash
+docker compose version    # expect v2.24.0 or newer
+docker info               # must succeed as the user who will install
+```
+
+The installers refuse to continue and name what is missing rather than failing
+half-way, so a host without Docker stops at the first step instead of leaving a
+partial install behind.
+
+The **Raspberry Pi appliance image is the exception**: it ships its own
+operating system with Docker already set up, so there is nothing to install
+first. See [appliance installation](../appliance/installation.md).
 
 ## Architecture
 
