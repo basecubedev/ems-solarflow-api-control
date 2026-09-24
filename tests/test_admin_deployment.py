@@ -882,6 +882,42 @@ def test_permission_repair_uses_only_prepared_config_and_data_mounts(tmp_path):
     assert all("docker rm" not in value for value in command)
 
 
+def test_container_lifecycle_timeouts_survive_a_slow_disk(tmp_path):
+    """Container steps are bounded by host fsync latency, not by their own work.
+
+    containerd and dockerd fsync their state at every lifecycle step, so the
+    cost is the host's synchronous write latency rather than anything the
+    container does. Measured on a Pi 3B+ with a pre-A1 SD card (53 ms per
+    fsync): one create+start+delete cycle takes 45-55 s for a trivial
+    ``sh -c id`` container, and a 1.5 kB image is no faster than a 363 MB one.
+
+    The previous 30 s bound on the permission check could therefore never pass
+    on that hardware, and it surfaced as ``workspace_permission_denied`` -- a
+    permission verdict for what was only a slow disk.
+    """
+
+    timeouts = []
+
+    def _run(_command, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    workspace = tmp_path / "deployment"
+    (workspace / "config").mkdir(parents=True)
+    (workspace / "data").mkdir()
+    docker = DockerCli(run=_run)
+
+    docker.check_workspace_permissions(workspace, "ems:test", 1000, 1000)
+    docker.repair_workspace_permissions(workspace, "ems:test", 1000, 1000)
+    docker.stop_container("ems-solarflow")
+    docker.remove_container("ems-solarflow")
+
+    # Three times the 55 s worst case measured on the slowest supported host.
+    # These bounds catch a hung daemon; they do not pace a healthy slow one.
+    assert timeouts, "no docker invocation was recorded"
+    assert all(value >= 180 for value in timeouts), timeouts
+
+
 def test_workspace_permission_detail_lists_resolved_paths_and_runtime_identity(
     tmp_path,
 ):

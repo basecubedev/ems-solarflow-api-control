@@ -49,6 +49,13 @@ _CONTAINER_CONFLICT_RE = re.compile(
     re.IGNORECASE,
 )
 SAFE_STOPPED_CONTAINER_STATES = frozenset({"created", "exited", "dead", "stopped"})
+
+# A container lifecycle step costs the host's synchronous write latency, not the
+# work inside the container: containerd and dockerd fsync their state at every
+# step. A Pi 3B+ on a pre-A1 SD card needs 45-55 s for one create+start cycle
+# where a fast host needs two, so a bound tuned to the fast host reports a slow
+# disk as a failure. This still catches a hung daemon.
+CONTAINER_LIFECYCLE_TIMEOUT_SECONDS = 240
 WORKSPACE_PERMISSION_MESSAGE = (
     "Deployment workspace is not writable by EMS. The prepared config/ or data/ "
     "folder cannot be written by the EMS runtime user. Repair permissions and try again."
@@ -553,7 +560,7 @@ class DockerCli:
                 ["docker", "rm", container_name],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=CONTAINER_LIFECYCLE_TIMEOUT_SECONDS,
             )
         except FileNotFoundError as exc:
             raise DockerError(
@@ -579,7 +586,7 @@ class DockerCli:
                 ["docker", "stop", "--time", "20", container_name],
                 capture_output=True,
                 text=True,
-                timeout=45,
+                timeout=CONTAINER_LIFECYCLE_TIMEOUT_SECONDS,
             )
         except FileNotFoundError as exc:
             raise DockerError(
@@ -612,7 +619,12 @@ class DockerCli:
                 "touch \"$probe\"; rm -f \"$probe\""
             ),
         )
-        result = self._run(command, capture_output=True, text=True, timeout=30)
+        result = self._run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=CONTAINER_LIFECYCLE_TIMEOUT_SECONDS,
+        )
         if result.returncode != 0:
             failing_path = _workspace_failure_path(result.stderr or result.stdout)
             raise DockerError(
@@ -632,7 +644,12 @@ class DockerCli:
                 "chmod -R u+rwX /workspace/config /workspace/data"
             ),
         )
-        result = self._run(command, capture_output=True, text=True, timeout=60)
+        result = self._run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=CONTAINER_LIFECYCLE_TIMEOUT_SECONDS,
+        )
         if result.returncode != 0:
             raise DockerError(
                 "workspace_permission_repair_failed",

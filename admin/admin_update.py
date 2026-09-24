@@ -490,6 +490,11 @@ VALID_TRANSITION_STAGES = frozenset(
         TRANSITION_STAGE_CANCELLED,
     }
 )
+# Starting the updater sidecar is itself a container create+start, so it costs
+# the host's fsync latency: 33 s measured on a Pi 3B+ with a pre-A1 SD card,
+# against a 60 s bound. This keeps the launch from failing on a slow disk.
+SIDECAR_LAUNCH_TIMEOUT_SECONDS = 240
+
 TERMINAL_TRANSITION_STAGES = frozenset(
     {TRANSITION_STAGE_COMPLETED, TRANSITION_STAGE_CANCELLED}
 )
@@ -2317,7 +2322,9 @@ class AdminUpdateLauncher:
         self._pending_target_ref(plan_id)  # raises if target missing
         argv = self.build_sidecar_argv(plan_id)
         try:
-            result = self._run(argv, capture_output=True, text=True, timeout=60)
+            result = self._run(
+                argv, capture_output=True, text=True, timeout=SIDECAR_LAUNCH_TIMEOUT_SECONDS
+            )
         except FileNotFoundError as exc:
             raise RuntimeError("the docker CLI is not available") from exc
         if getattr(result, "returncode", 0) != 0:
@@ -2385,7 +2392,9 @@ class SystemTransitionLauncher(AdminUpdateLauncher):
     def _launch_transition_sidecar(self, record):
         argv = self.build_transition_sidecar_argv(record)
         try:
-            result = self._run(argv, capture_output=True, text=True, timeout=60)
+            result = self._run(
+                argv, capture_output=True, text=True, timeout=SIDECAR_LAUNCH_TIMEOUT_SECONDS
+            )
         except FileNotFoundError as exc:
             raise RuntimeError("the docker CLI is not available") from exc
         if getattr(result, "returncode", 0) != 0:
