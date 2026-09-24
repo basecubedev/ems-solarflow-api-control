@@ -552,6 +552,85 @@ class DockerCli:
             return None
         return _sanitize_image_inspect(entry, ref)
 
+    def list_images(self, repository):
+        """Local images of one repository, or ``[]``.
+
+        Read-only and degrading like :meth:`inspect_image`: a missing CLI, an
+        unreachable daemon or an unreadable line yields no candidates, which
+        makes retention skip rather than guess. ``repository`` is passed as a
+        separate argv element, never a shell string.
+
+        Each entry carries ``repository``, ``digest`` (what a removal names),
+        ``aliases`` (the other strings naming the same image) and ``created``.
+        """
+
+        repo = str(repository or "").strip()
+        if not repo:
+            return []
+        try:
+            result = self._run(
+                ["docker", "images", "--digests", "--no-trunc", "--format", "{{json .}}", repo],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (FileNotFoundError, OSError, subprocess.SubprocessError):
+            return []
+        if result.returncode != 0:
+            return []
+        images = []
+        for line in (result.stdout or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            # The local ID is what `docker rmi` accepts; the repo digest is what
+            # a protection record stores. Keep both so either can protect.
+            image_id = str(entry.get("ID") or "").strip()
+            digest = str(entry.get("Digest") or "").strip()
+            identity = image_id or digest
+            if not identity or entry.get("Repository") != repo:
+                continue
+            aliases = {value for value in (image_id, digest) if value}
+            images.append(
+                {
+                    "repository": repo,
+                    "digest": identity,
+                    "aliases": sorted(aliases),
+                    "created": str(entry.get("CreatedAt") or ""),
+                    "tag": str(entry.get("Tag") or ""),
+                }
+            )
+        return images
+
+    def remove_image(self, reference):
+        """Remove one local image, returning whether it went away.
+
+        Deliberately without ``--force``: an image a container still uses must
+        stay, and Docker refusing is the check that makes that true rather than
+        something retention has to get right on its own. Never raises, because
+        a cleanup that cannot run must not fail the upgrade it follows.
+        """
+
+        ref = str(reference or "").strip()
+        if not ref:
+            return False
+        try:
+            result = self._run(
+                ["docker", "rmi", ref],
+                capture_output=True,
+                text=True,
+                timeout=CONTAINER_LIFECYCLE_TIMEOUT_SECONDS,
+            )
+        except (FileNotFoundError, OSError, subprocess.SubprocessError):
+            return False
+        return result.returncode == 0
+
     def remove_container(self, container_name):
         """Remove one container without deleting its volumes."""
 
