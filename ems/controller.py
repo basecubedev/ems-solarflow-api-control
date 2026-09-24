@@ -12,8 +12,9 @@ from ems.clients import (
 from ems.logging_utils import log_event
 from ems.mqtt_control.dispatch import WriteDispatchStatus, dispatch_device_write
 from ems.property_writes import write_device_properties
-from ems.models import BATTERY_PRESENT, DeviceCapabilities
+from ems.models import BATTERY_ABSENT, BATTERY_PRESENT, DeviceCapabilities
 from ems.runtime_intents import (
+    AC_OUTPUT_DEFAULT_REASON,
     DeviceRuntimeIntent,
     DeviceRuntimeRole,
     ac_input_intent,
@@ -76,6 +77,9 @@ class EMSController:
         self.last_states = {}
         self.last_seen = {}
         self.device_online = {}
+        # Devices seen reporting a usable acMode. Rebuilt from telemetry on
+        # every start, so it records an observation and never becomes authority.
+        self.ac_mode_observed = set()
         self.battery_power_history = {}
         self.initial_ac_mode_reconciled = {}
         self.last_ha_seen = {}
@@ -1150,6 +1154,9 @@ class EMSController:
         desired_ac_mode = int(intent.desired_ac_mode)
         startup_reconcile = self.is_startup_ac_mode_reconcile_intent(intent)
 
+        if current_ac_mode in (1, 2):
+            self.ac_mode_observed.add(dev.name)
+
         if current_ac_mode == desired_ac_mode:
             log_event(
                 logging.DEBUG,
@@ -1158,15 +1165,33 @@ class EMSController:
             )
             return True
 
+        # A zero from a device that has shown a real mode before is a blip
+        # worth correcting. A device that has never shown one is not reporting
+        # the field at all, and the routine reconcile would then write into it
+        # every cycle forever -- on hardware where that means a relay. An
+        # operator or startup request is not routine and still goes through.
+        unreported = (
+            current_ac_mode == 0
+            and dev.name not in self.ac_mode_observed
+            and intent.reason == AC_OUTPUT_DEFAULT_REASON
+        )
+
         if (
             desired_ac_mode == 2
             and current_ac_mode not in (1, 2)
-            and (current_ac_mode != 0 or startup_reconcile)
+            and (current_ac_mode != 0 or startup_reconcile or unreported)
         ):
             log_event(
                 logging.WARNING,
                 "unknown_ac_mode",
-                **fields
+                **{
+                    **fields,
+                    "reason": (
+                        "ac_mode_never_reported"
+                        if unreported
+                        else "unsupported_ac_mode"
+                    ),
+                }
             )
             return False
 
@@ -2122,6 +2147,15 @@ class EMSController:
         """Apply configured SOC limits if required."""
 
         if not self.state_reconciliation_supported(dev, "soc_limits"):
+            return True
+
+        if battery_presence(state) == BATTERY_ABSENT:
+            log_event(
+                logging.DEBUG,
+                "soc_limits_not_applicable",
+                device=dev.name,
+                reason="no_battery"
+            )
             return True
 
         effective_min_soc = (
