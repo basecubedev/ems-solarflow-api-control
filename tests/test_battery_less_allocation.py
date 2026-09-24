@@ -264,3 +264,91 @@ def test_pv_still_keeps_a_battery_less_device_out_of_idle():
     """Idle is about having nothing to give, not about lacking a battery."""
 
     assert _strict_idle(state(soc=0, solar=300, pack_num=0)) is False
+
+
+# --- a battery-less device is not a discharge source ------------------------
+
+
+def test_a_battery_less_device_is_never_given_discharge_weight():
+    """It cannot deliver from a pack it does not have, whatever SoC it reports.
+
+    The exclusion used to rest on ``electricLevel 0`` falling below ``minSoc``.
+    A device reporting anything above that floor was handed a share of the
+    battery top-up, which it then failed to deliver.
+    """
+
+    from ems.target_control import usable_battery_weight
+
+    config = device("WR1", battery_kwh=2.0)
+
+    for reported_soc in (0, 60, 100):
+        item = state(soc=reported_soc, solar=0, pack_num=0)
+        weight = usable_battery_weight(item, config, detect_capabilities(item))
+
+        assert weight == 0
+
+
+def test_a_real_battery_keeps_its_discharge_weight():
+    from ems.target_control import usable_battery_weight
+
+    config = device("WR1", battery_kwh=2.0)
+    item = state(soc=60, solar=0, pack_num=1)
+
+    assert usable_battery_weight(item, config, detect_capabilities(item)) > 0
+
+
+def test_unknown_presence_keeps_its_discharge_weight():
+    from ems.target_control import usable_battery_weight
+
+    config = device("WR1", battery_kwh=2.0)
+    item = state(soc=60, solar=0, pack_num=None)
+
+    assert usable_battery_weight(item, config, detect_capabilities(item)) > 0
+
+
+def test_a_battery_less_device_gets_no_battery_top_up_in_a_mixed_plant():
+    """End to end: the top-up stage must not promise what cannot arrive."""
+
+    plant = [
+        state(soc=50, solar=100, pack_num=1),
+        state(soc=100, solar=100, pack_num=0),
+    ]
+
+    targets = allocate(plant, 800)
+
+    assert targets[1] <= 100
+
+
+# --- a winter reserve needs a battery to hold it ----------------------------
+
+
+def _winter_target(pack_num):
+    from ems.controller import EMSController
+    from tests.test_write_gates import ShellyStub, device as write_device
+
+    dev = write_device("WR1")
+    controller = EMSController(
+        devices=[dev], shelly=ShellyStub(0), sleep_enabled=False, runtime_state=None
+    )
+    with patch("ems.controller.cfg.winter_feature_enabled", return_value=True), patch(
+        "ems.controller.cfg.winter_config_int", return_value=40
+    ):
+        return controller.winter_reconciliation_target(
+            dev, state(soc=50, solar=0, pack_num=pack_num), True, True
+        )
+
+
+def test_winter_reserve_is_not_applied_without_a_battery():
+    """Raising a minimum SoC on a device with no pack commands nothing.
+
+    It also pulled a winter AC charge input limit along behind it, which is a
+    charge setting for a battery that is not there.
+    """
+
+    assert _winter_target(0) == (None, False)
+
+
+def test_winter_reserve_still_applies_to_a_battery():
+    target, adjustment = _winter_target(1)
+
+    assert target is not None or adjustment

@@ -119,8 +119,12 @@ def test_unreachable_device_is_unknown_not_battery_less():
         (8, BATTERY_PRESENT),
         ("2", BATTERY_PRESENT),
         ("0", BATTERY_ABSENT),
-        (-1, BATTERY_ABSENT),
-        ("nonsense", BATTERY_ABSENT),
+        # Neither of these is an observation of zero packs, so neither may
+        # unlock behaviour that only a confirmed absence is allowed to unlock.
+        (-1, BATTERY_UNKNOWN),
+        ("nonsense", BATTERY_UNKNOWN),
+        ("", BATTERY_UNKNOWN),
+        (1.5, BATTERY_UNKNOWN),
     ],
 )
 def test_presence_values(pack_num, expected):

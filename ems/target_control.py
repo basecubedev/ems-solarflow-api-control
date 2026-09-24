@@ -110,14 +110,18 @@ def battery_presence(state):
 
     raw = getattr(state, "pack_num", None)
 
-    if raw is None:
+    if raw is None or isinstance(raw, bool):
         return BATTERY_UNKNOWN
 
-    return (
-        BATTERY_PRESENT
-        if cfg.safe_int(raw, 0, minimum=0) > 0
-        else BATTERY_ABSENT
-    )
+    try:
+        packs = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return BATTERY_UNKNOWN
+
+    if packs < 0:
+        return BATTERY_UNKNOWN
+
+    return BATTERY_PRESENT if packs > 0 else BATTERY_ABSENT
 
 
 def detect_capabilities(state):
@@ -317,9 +321,17 @@ def calculate_remaining_time_hours(state, device_config, avg_battery_power_w):
 
 
 def usable_battery_weight(state, device_config, capability):
-    """Return usable discharge energy in weighted units."""
+    """Return usable discharge energy in weighted units.
+
+    A device without a pack has none, whatever SoC it reports. Leaving that to
+    ``soc <= min_soc`` worked only because a battery-less device happens to
+    report zero.
+    """
 
     if capability and not capability.can_discharge:
+        return 0
+
+    if battery_presence(state) == BATTERY_ABSENT:
         return 0
 
     if state.max_soc <= 0:

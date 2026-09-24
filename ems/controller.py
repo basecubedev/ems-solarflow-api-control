@@ -2267,6 +2267,9 @@ class EMSController:
         if not cfg.winter_feature_enabled(self.runtime_state):
             return None, False
 
+        if battery_presence(state) == BATTERY_ABSENT:
+            return None, False
+
         summer_min_soc = cfg.winter_config_int("summer_min_soc", 15, minimum=0)
 
         if not winter_active:
@@ -3644,28 +3647,18 @@ class EMSController:
                         effective_targets[i] - device_explanation.raw_target_w
                     )
 
+                block_reason = (
+                    self.device_command_block_reason(dev) if enabled else None
+                )
+
                 if not enabled:
                     device_explanation.write_decision = "blocked"
                     device_explanation.write_reason = "control_disabled"
-                elif not self.device_online.get(dev.name, True):
+                elif block_reason:
                     device_explanation.write_decision = "blocked"
-                    device_explanation.write_reason = "offline"
-                elif not self.runtime_device_bool(dev.name, "enabled", True):
-                    device_explanation.write_decision = "blocked"
-                    device_explanation.write_reason = "device_disabled"
-                elif not self.device_output_control_allowed_by_intent(dev.name):
-                    intent = self.runtime_intents.get(dev.name)
-                    device_explanation.write_decision = "blocked"
-                    device_explanation.write_reason = (
-                        f"runtime_role_{intent.role.value}"
-                        if intent
-                        else "runtime_role_blocked"
-                    )
-                    device_explanation.limiting_reason = (
-                        f"runtime_role_{intent.role.value}"
-                        if intent
-                        else "runtime_role_blocked"
-                    )
+                    device_explanation.write_reason = block_reason
+                    if not self.device_output_control_allowed_by_intent(dev.name):
+                        device_explanation.limiting_reason = block_reason
                 else:
                     state = states[i]
                     reference = (
