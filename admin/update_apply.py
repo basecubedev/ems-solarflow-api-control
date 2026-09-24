@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from admin.admin_update import (
+    ADMIN_IMAGE_REPO,
     DEFAULT_ADMIN_COMPOSE_FILE,
     DEFAULT_ADMIN_COMPOSE_SERVICE,
     NEXT_STEP_RESUME_EMS,
@@ -40,6 +41,13 @@ DEFAULT_DELAY_SECONDS = 2.0
 # One published Admin image ref in a compose file. The variable form
 # (``${EMS_ADMIN_TAG...}``) is handled separately via the env file.
 ADMIN_IMAGE_RE = re.compile(r"ghcr\.io/basecubedev/ems-solarflow-admin:[^\s\"'{}$]+")
+
+# The immutable form the appliance writes, because a tag variable cannot express
+# a digest. It carries no ``admin:`` substring, so ADMIN_IMAGE_RE never sees it.
+ADMIN_DIGEST_RE = re.compile(
+    r"ghcr\.io/basecubedev/ems-solarflow-admin@sha256:[0-9a-f]{64}"
+)
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 # Cap the per-plan updater log so a stuck/retried updater cannot grow unbounded.
 _MAX_LOG_BYTES = 64 * 1024
@@ -82,12 +90,14 @@ class ComposeEnvTransaction:
     """Byte-for-byte snapshot/rollback for the files an Admin update rewrites.
 
     Snapshots each path's raw bytes and whether it existed *before* any change.
-    ``rollback`` restores existed files to their exact original bytes and removes
-    files that did not exist before, so a failed pull/recreate/verify can never
-    leave the persistent Admin compose/env pointing at a target that is not
-    actually running. Rollback never raises: each failure is collected as a
-    ``{"path", "error"}`` record (paths and OS error text only — no file
-    contents, so no secret env values leak).
+    ``rollback`` restores existed files to their exact original bytes, and removes
+    files that did not exist before only once every restore succeeded — while one
+    failed, the ``.bak`` is the only copy of the original left on disk, so it is
+    kept and reported as kept. Rollback never raises: each failure is collected as
+    a ``{"path", "error"}`` record (paths and OS error text only — no file
+    contents, so no secret env values leak). Restoring the files is only half of
+    a rollback, because ``--force-recreate`` removed the running container: the
+    caller restarts the service from the restored files.
     """
 
     def __init__(self, paths):
@@ -108,22 +118,51 @@ class ComposeEnvTransaction:
     def rollback(self):
         failures = []
         for path, existed, data in self._entries:
+            if not existed:
+                continue
             try:
-                if existed:
-                    _atomic_write_bytes(path, data)
-                elif path.exists():
+                _atomic_write_bytes(path, data)
+            except OSError as exc:
+                failures.append({"path": str(path), "error": str(exc)})
+        if failures:
+            # A file that did not exist before is litter once the restore worked.
+            # While a restore has failed, the ``.bak`` is the only copy of the
+            # original bytes left on disk -- the transaction's own copy dies with
+            # the ``--rm`` sidecar -- so it is kept, and said to be kept.
+            for path, existed, _data in self._entries:
+                if not existed and path.exists():
+                    failures.append(
+                        {"path": str(path), "error": "kept: the restore did not complete"}
+                    )
+            return failures
+        for path, existed, _data in self._entries:
+            if existed:
+                continue
+            try:
+                if path.exists():
                     path.unlink()
             except OSError as exc:
                 failures.append({"path": str(path), "error": str(exc)})
         return failures
 
 
-class AdminComposeRunner:
-    """Recreate only the Admin service from its own compose file.
+# ``up -d`` returns as soon as the daemon has started the container, which says
+# nothing about it staying up; the Admin service declares no restart policy, so a
+# replacement that exits immediately looked exactly like a working one. ``--wait``
+# holds until the container is running -- healthy, where the image declares a
+# check -- and exits non-zero when it is not. Compose bounds that wait itself, so
+# the decision is Compose's rather than a signal killing it part-way through a
+# recreate; the outer timeout stays above it as a backstop.
+RECREATE_WAIT_SECONDS = 120
+RECREATE_TIMEOUT_SECONDS = 180
 
-    Uses ``docker compose -f <file> up -d --no-deps --force-recreate <service>``
-    so bundled/EMS services referenced by the same project are never touched.
-    Injectable ``run`` keeps it testable without a daemon.
+
+class AdminComposeRunner:
+    """Recreate only the Admin service from its own compose file, and wait for it.
+
+    Uses ``docker compose -f <file> up -d --no-deps --force-recreate --wait
+    <service>`` so bundled/EMS services referenced by the same project are never
+    touched. Injectable ``run`` keeps it testable without a daemon.
     """
 
     def __init__(self, run=None):
@@ -140,6 +179,9 @@ class AdminComposeRunner:
             "-d",
             "--no-deps",
             "--force-recreate",
+            "--wait",
+            "--wait-timeout",
+            str(RECREATE_WAIT_SECONDS),
             str(service),
         ]
         try:
@@ -148,7 +190,7 @@ class AdminComposeRunner:
                 cwd=str(compose_file.parent),
                 capture_output=True,
                 text=True,
-                timeout=180,
+                timeout=RECREATE_TIMEOUT_SECONDS,
             )
         except FileNotFoundError as exc:
             raise AdminUpdateApplyError(
@@ -223,14 +265,21 @@ def _sync_compose_env_tag(text, target_tag):
     return updated, updated != text
 
 
-def update_admin_image_reference(compose_file, target_ref, *, env_file=None):
-    """Repoint the Admin image to ``target_ref`` and keep tag metadata in sync.
+def update_admin_image_reference(
+    compose_file, target_ref, *, env_file=None, target_digest=None
+):
+    """Repoint the Admin image to the target and keep tag metadata in sync.
 
-    Updates, where present: a literal ``image:`` ref, a literal compose
-    ``EMS_ADMIN_TAG`` value, and the ``EMS_ADMIN_TAG`` line in the env file
-    (``.env.admin``). A variable-driven image (``${EMS_ADMIN_TAG...}``) is
-    repointed via the env file. Compose edits are backed up (``.bak``). Returns
-    ``True`` when at least one reference was located, ``False`` otherwise.
+    Returns ``True`` only when the image the recreate will start was actually
+    repointed: a literal ``image:`` ref rewritten, a digest pin moved to
+    ``target_digest``, or a variable-driven ref (``${EMS_ADMIN_TAG...}``)
+    resolved through the env file. The compose ``EMS_ADMIN_TAG`` literal and the
+    env file are kept in step because the container reports its own version from
+    them, but neither is an image reference and neither makes this return
+    ``True`` on its own -- a rewrite that changed no image must not be reported
+    as an applied update. A digest pin with no known target digest is left
+    exactly as it is rather than unpinned. Compose edits are backed up
+    (``.bak``).
     """
 
     compose_file = Path(compose_file)
@@ -238,6 +287,7 @@ def update_admin_image_reference(compose_file, target_ref, *, env_file=None):
     default_env = compose_file.parent / ".env.admin"
     located = False
     variable_driven = False
+    pinned = target_digest if target_digest and DIGEST_RE.match(target_digest) else None
 
     try:
         original = compose_file.read_text(encoding="utf-8")
@@ -249,8 +299,11 @@ def update_admin_image_reference(compose_file, target_ref, *, env_file=None):
         if ADMIN_IMAGE_RE.search(text):
             located = True
             text = ADMIN_IMAGE_RE.sub(lambda _m: target_ref, text)
-        text, tag_synced = _sync_compose_env_tag(text, target_tag)
-        located = located or tag_synced
+        elif ADMIN_DIGEST_RE.search(text) and pinned:
+            located = True
+            replacement = f"{ADMIN_IMAGE_REPO}@{pinned}"
+            text = ADMIN_DIGEST_RE.sub(lambda _m: replacement, text)
+        text, _tag_synced = _sync_compose_env_tag(text, target_tag)
         if "${EMS_ADMIN_TAG" in original:
             # Variable-driven image tag: resolved from the env file below.
             located = True
@@ -269,7 +322,6 @@ def update_admin_image_reference(compose_file, target_ref, *, env_file=None):
         target_env = default_env
     if target_env is not None:
         _write_env_tag(target_env, target_tag)
-        located = True
 
     return located
 
@@ -330,6 +382,14 @@ def _compose_access_problem(compose_file, env_file):
 def _log_path(store, plan_id):
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(plan_id))[:64] or "unknown"
     return Path(store.state_dir).parent / "logs" / f"admin-update-{safe}.log"
+
+
+def _plan_target_digest(pending):
+    """The target digest a plan recorded, if it recorded one."""
+
+    target = pending.get("target_admin") or {}
+    digest = str(target.get("digest") or "").strip()
+    return digest or None
 
 
 def _derive_target_ref(pending):
@@ -404,10 +464,12 @@ def apply_admin_update(
 
     The target image is pulled *before* any persistent file changes, so a pull
     failure leaves compose/env untouched. The compose/env rewrite, recreate and
-    optional ``verify`` then run inside a byte-for-byte transaction: any failure
-    restores the original compose/env exactly (removing files that did not exist
-    before), leaving the old Admin usable and reporting rollback failures
-    explicitly in the result (paths only — no secret env contents). The recreate
+    optional ``verify`` then run inside a byte-for-byte transaction: a failure
+    after the recreate was attempted restores the original compose/env exactly and
+    starts the previous Admin again from them, reporting both the rollback failures
+    and whether the previous Admin came back (paths only — no secret env contents).
+    Every failure is logged before the durable state is written, and a state write
+    that itself fails is reported rather than losing the failure. The recreate
     replaces this process in a real deployment; the new Admin resumes from the
     pending state.
     """
@@ -443,11 +505,11 @@ def apply_admin_update(
     env_file = _resolve_env_file(environ, compose_file)
 
     def fail(code, message, *, rollback=None):
-        pending["stage"] = STAGE_FAILED
-        pending["updated_at"] = utc_now_iso()
-        pending["error_code"] = code
-        pending["message"] = message
-        store.write(pending)
+        # The log first. The durable write can fail for the very reason the update
+        # did -- a full or read-only filesystem -- and a v2 record that went
+        # terminal meanwhile refuses the write outright. A failure recorded nowhere
+        # is the one outcome this updater must never produce: it runs as a --rm
+        # sidecar, so its stdout dies with the container.
         logger.write(f"FAILED[{code}]: {message}")
         result = {"ok": False, "error": code, "message": message}
         if rollback:
@@ -457,6 +519,15 @@ def apply_admin_update(
                 "ROLLBACK incomplete for: "
                 + ", ".join(entry["path"] for entry in rollback)
             )
+        pending["stage"] = STAGE_FAILED
+        pending["updated_at"] = utc_now_iso()
+        pending["error_code"] = code
+        pending["message"] = message
+        try:
+            store.write(pending)
+        except Exception as exc:
+            result["state_write_failed"] = str(exc)
+            logger.write(f"FAILED[{code}] could not be recorded: {exc}")
         return result
 
     access_problem = _compose_access_problem(compose_file, env_file)
@@ -473,13 +544,17 @@ def apply_admin_update(
         docker.pull(target_ref)
     except Exception as exc:
         return fail("pull_failed", f"Could not pull the target Admin image: {exc}")
-    if expected_target_digest:
-        pulled = identify_image(docker, target_ref)
-        if pulled.digest != expected_target_digest:
-            return fail(
-                "target_digest_mismatch",
-                "The pulled Admin image no longer matches the resolved System Build.",
-            )
+    pulled = identify_image(docker, target_ref)
+    if expected_target_digest and pulled.digest != expected_target_digest:
+        return fail(
+            "target_digest_mismatch",
+            "The pulled Admin image no longer matches the resolved System Build.",
+        )
+    # What the recreate will actually start. An immutable deployment is repointed
+    # to the digest now on this host, never to one only a plan remembers.
+    target_digest = (
+        pulled.digest or expected_target_digest or _plan_target_digest(pending)
+    )
     logger.write("pull complete; updating compose/env tag")
 
     # Everything that mutates persistent files runs inside a byte-for-byte
@@ -496,13 +571,28 @@ def apply_admin_update(
             f"Could not read the Admin deployment files: {exc}. {COMPOSE_ACCESS_HINT}",
         )
 
-    def rollback_fail(code, message):
+    def rollback_fail(code, message, *, restart_previous=False):
         rollback_failures = txn.rollback()
-        return fail(code, message, rollback=rollback_failures or None)
+        restarted = None
+        if restart_previous and not rollback_failures:
+            # --force-recreate removed the running Admin before it started the
+            # replacement, so restored files alone leave nothing running. The
+            # appliance's own rollback of these files recreates the service after
+            # restoring them; so does this one.
+            try:
+                compose_recreate(compose_file, service)
+                restarted = True
+            except Exception as exc:
+                restarted = False
+                logger.write(f"the previous Admin Console did not come back: {exc}")
+        result = fail(code, message, rollback=rollback_failures or None)
+        if restarted is not None:
+            result["previous_admin_restarted"] = restarted
+        return result
 
     try:
         located = update_admin_image_reference(
-            compose_file, target_ref, env_file=env_file
+            compose_file, target_ref, env_file=env_file, target_digest=target_digest
         )
     except OSError as exc:
         return rollback_fail(
@@ -518,9 +608,13 @@ def apply_admin_update(
     try:
         compose_recreate(compose_file, service)
     except AdminUpdateApplyError as exc:
-        return rollback_fail(exc.code, exc.message)
+        return rollback_fail(exc.code, exc.message, restart_previous=True)
     except Exception as exc:  # never leak a traceback into the pending state
-        return rollback_fail("recreate_failed", f"Could not recreate the Admin Console: {exc}")
+        return rollback_fail(
+            "recreate_failed",
+            f"Could not recreate the Admin Console: {exc}",
+            restart_previous=True,
+        )
 
     # Optionally verify the replacement Admin (the sidecar survives the recreate
     # and can confirm the new build is actually running). A failed verification
@@ -530,10 +624,14 @@ def apply_admin_update(
         try:
             verified = verify()
         except Exception as exc:
-            return rollback_fail("verify_failed", f"Admin verification failed: {exc}")
+            return rollback_fail(
+                "verify_failed", f"Admin verification failed: {exc}", restart_previous=True
+            )
         if verified is False:
             return rollback_fail(
-                "verify_failed", "The replacement Admin Console failed verification."
+                "verify_failed",
+                "The replacement Admin Console failed verification.",
+                restart_previous=True,
             )
 
     # In production the recreate already replaced this process; reaching here
