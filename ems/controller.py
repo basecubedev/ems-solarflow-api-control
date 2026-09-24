@@ -323,24 +323,43 @@ class EMSController:
 
         return stale
 
+    def device_command_block_reason(self, dev):
+        """Why the EMS will not command ``dev`` this cycle, or None.
+
+        Three independent conditions, asked once. Only the reservation used to
+        reach the allocator, so an offline or disabled device was still handed a
+        share that the write path then dropped on the floor.
+        """
+
+        if not self.device_online.get(dev.name, True):
+            return "offline"
+
+        if not self.runtime_device_bool(dev.name, "enabled", True):
+            return "device_disabled"
+
+        if not self.device_output_control_allowed_by_intent(dev.name):
+            intent = self.runtime_intents.get(dev.name)
+            return (
+                f"runtime_role_{intent.role.value}"
+                if intent
+                else "runtime_role_blocked"
+            )
+
+        return None
+
+    def device_commandable(self, dev):
+        """Whether the EMS will command ``dev`` at all this cycle."""
+
+        return self.device_command_block_reason(dev) is None
+
     def active_online_device_indexes(self):
         """Return indexes for devices currently eligible for EMS control."""
 
-        indexes = []
-
-        for i, dev in enumerate(self.devices):
-            if not self.device_online.get(dev.name, True):
-                continue
-
-            if not self.runtime_device_bool(dev.name, "enabled", True):
-                continue
-
-            if not self.device_output_control_allowed_by_intent(dev.name):
-                continue
-
-            indexes.append(i)
-
-        return indexes
+        return [
+            index
+            for index, dev in enumerate(self.devices)
+            if self.device_commandable(dev)
+        ]
 
     def state_has_positive_pv(self, state):
         """Return true when any PV telemetry field is positive."""
@@ -376,13 +395,19 @@ class EMSController:
 
         return False
 
-    def intent_filtered_capabilities(self, capabilities):
-        """Return capabilities with reserved devices blocked from output control."""
+    def commandable_capabilities(self, capabilities):
+        """Return capabilities with uncommanded devices blocked from output.
+
+        A share handed to a device the write path will skip is not delivered and
+        not redistributed either, so the allocator has to know before it shares.
+        """
 
         filtered = []
 
         for dev, capability in zip(self.devices, capabilities):
-            if self.device_output_control_allowed_by_intent(dev.name):
+            reason = self.device_command_block_reason(dev)
+
+            if reason is None:
                 filtered.append(capability)
                 continue
 
@@ -391,7 +416,7 @@ class EMSController:
                 can_discharge=False,
                 can_export=False,
                 can_ac_charge=capability.can_ac_charge,
-                reason=f"runtime_role_{self.runtime_intents[dev.name].role.value}",
+                reason=reason,
                 battery_presence=capability.battery_presence
             ))
 
@@ -638,21 +663,11 @@ class EMSController:
     def night_min_soc_controllable_indices(self):
         """Return device indexes controlled by EMS in the current cycle."""
 
-        indexes = []
-
-        for i, dev in enumerate(self.devices):
-            if not self.device_online.get(dev.name, True):
-                continue
-
-            if not self.runtime_device_bool(dev.name, "enabled", True):
-                continue
-
-            if not self.device_output_control_allowed_by_intent(dev.name):
-                continue
-
-            indexes.append(i)
-
-        return indexes
+        return [
+            index
+            for index, dev in enumerate(self.devices)
+            if self.device_commandable(dev)
+        ]
 
     def state_is_strict_night_min_soc_idle(self, state):
         """Detect the exact no-PV, no-flow, min-SOC blocked idle state."""
@@ -940,19 +955,7 @@ class EMSController:
         effective_targets = []
 
         for dev, target in zip(self.devices, targets):
-            if not enabled:
-                effective_targets.append(0)
-                continue
-
-            if not self.device_online.get(dev.name, True):
-                effective_targets.append(0)
-                continue
-
-            if not self.runtime_device_bool(dev.name, "enabled", True):
-                effective_targets.append(0)
-                continue
-
-            if not self.device_output_control_allowed_by_intent(dev.name):
+            if not enabled or not self.device_commandable(dev):
                 effective_targets.append(0)
                 continue
 
@@ -3380,7 +3383,7 @@ class EMSController:
             )
             self.reconcile_runtime_ac_charge_power(dev, state, intent)
 
-        capabilities = self.intent_filtered_capabilities(capabilities)
+        capabilities = self.commandable_capabilities(capabilities)
         self._dashboard_capabilities = capabilities
         active_indexes = self.active_online_device_indexes()
 
