@@ -365,6 +365,17 @@ def is_full_soc_device(state):
     )
 
 
+def cannot_absorb_pv(state):
+    """True when PV this device does not export is lost rather than stored.
+
+    A battery at its ceiling is in that position for now; a device without a
+    battery is in it permanently. Both have the same claim on PV-first export,
+    and for the same reason.
+    """
+
+    return battery_presence(state) == BATTERY_ABSENT or is_full_soc_device(state)
+
+
 def pv_charge_balance_context(states):
     """Return SOC spread data used for PV-first charge balancing."""
 
@@ -415,7 +426,12 @@ def pv_charge_balance_context(states):
 
 
 def pv_charge_balance_multiplier(state, pv_only, balance_context):
-    """Bias PV-first output toward fuller batteries."""
+    """Bias PV-first output toward fuller batteries.
+
+    The bias answers "which device should keep its PV and charge instead". A
+    device with no battery has no stake in that question, and its reported SoC
+    of zero would otherwise make it permanently the answer.
+    """
 
     strength = balance_context["balance_strength"]
 
@@ -424,6 +440,7 @@ def pv_charge_balance_multiplier(state, pv_only, balance_context):
         or strength <= 0
         or state.max_soc <= 0
         or balance_context["soc_gap"] <= 0
+        or battery_presence(state) == BATTERY_ABSENT
     ):
         return 1.0
 
@@ -511,7 +528,7 @@ def allocate_full_soc_pv_first(
         max_power = get_device_max_power(dev_config)
         full_candidate = (
             can_export
-            and is_full_soc_device(state)
+            and cannot_absorb_pv(state)
             and pv_only_limits[i] > 0
         )
 

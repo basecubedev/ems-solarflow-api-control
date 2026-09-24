@@ -669,8 +669,11 @@ class EMSController:
             and state.pack_out == 0
             and state.output == 0
         )
+        # Without a battery there is nothing that could still deliver, so the
+        # device never holds the plant out of idle on a SoC it does not have.
         battery_blocked = (
-            state.soc <= state.min_soc
+            battery_presence(state) == BATTERY_ABSENT
+            or state.soc <= state.min_soc
             or state.soc_limit == 2
         )
 
