@@ -140,7 +140,7 @@ def state_from_trace_device(data):
     state.grid_off_mode = value_from_trace(data, "grid_off_mode", "gridOffMode")
     state.ac_mode = value_from_trace(data, "ac_mode", "acMode")
     state.input_limit_w = value_from_trace(data, "input_limit_w", "inputLimit")
-    state.pack_num = value_from_trace(data, "pack_num", "packNum")
+    state.pack_num = value_from_trace(data, "pack_num", "packNum", default=None)
     state.soc_status = value_from_trace(data, "soc_status", "socStatus")
     state.battery_calibration_time = data.get(
         "battery_calibration_time",

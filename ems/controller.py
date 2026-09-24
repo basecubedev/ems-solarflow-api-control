@@ -12,7 +12,7 @@ from ems.clients import (
 from ems.logging_utils import log_event
 from ems.mqtt_control.dispatch import WriteDispatchStatus, dispatch_device_write
 from ems.property_writes import write_device_properties
-from ems.models import DeviceCapabilities
+from ems.models import BATTERY_PRESENT, DeviceCapabilities
 from ems.runtime_intents import (
     DeviceRuntimeIntent,
     DeviceRuntimeRole,
@@ -26,6 +26,7 @@ from ems.target_control import (
     ControlLimitExplanation,
     DeviceControlExplanation,
     apply_min_output_limit,
+    battery_presence,
     calculate_remaining_time_hours,
     calculate_targets,
     detect_capabilities,
@@ -386,7 +387,8 @@ class EMSController:
                 can_discharge=False,
                 can_export=False,
                 can_ac_charge=capability.can_ac_charge,
-                reason=f"runtime_role_{self.runtime_intents[dev.name].role.value}"
+                reason=f"runtime_role_{self.runtime_intents[dev.name].role.value}",
+                battery_presence=capability.battery_presence
             ))
 
         return filtered
@@ -1370,7 +1372,7 @@ class EMSController:
     def full_charge_assist_has_battery(self, dev, state):
         """Return True only for telemetry-confirmed battery-backed devices."""
 
-        return cfg.safe_int(getattr(state, "pack_num", 0), 0, minimum=0) > 0
+        return battery_presence(state) == BATTERY_PRESENT
 
     def parse_assist_timestamp(self, value):
         if not value:

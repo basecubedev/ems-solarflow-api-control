@@ -5,7 +5,12 @@ from dataclasses import asdict, dataclass, field
 
 from ems import config as cfg
 from ems.logging_utils import log_event
-from ems.models import DeviceCapabilities
+from ems.models import (
+    BATTERY_ABSENT,
+    BATTERY_PRESENT,
+    BATTERY_UNKNOWN,
+    DeviceCapabilities,
+)
 
 
 @dataclass
@@ -95,6 +100,26 @@ def _set_limiting_reason(explanation, reason):
         explanation.limiting_reason = reason
 
 
+def battery_presence(state):
+    """Classify battery presence from telemetry.
+
+    Only an observed ``packNum`` decides. A field the device never reported
+    stays ``unknown`` and must keep behaving exactly as an unclassified device
+    always has, because no caller may turn silence into a licence.
+    """
+
+    raw = getattr(state, "pack_num", None)
+
+    if raw is None:
+        return BATTERY_UNKNOWN
+
+    return (
+        BATTERY_PRESENT
+        if cfg.safe_int(raw, 0, minimum=0) > 0
+        else BATTERY_ABSENT
+    )
+
+
 def detect_capabilities(state):
     """Derive runtime capabilities from firmware telemetry."""
 
@@ -167,7 +192,8 @@ def detect_capabilities(state):
         can_discharge=can_discharge,
         can_export=can_export,
         can_ac_charge=can_ac_charge,
-        reason=",".join(reasons) if reasons else "normal"
+        reason=",".join(reasons) if reasons else "normal",
+        battery_presence=battery_presence(state)
     )
 
 

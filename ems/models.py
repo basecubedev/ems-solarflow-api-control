@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 from dataclasses import dataclass
 
+# Battery presence is three-valued because absence cannot be inferred from
+# silence: `packNum` missing means nobody said, not that there is no pack.
+BATTERY_PRESENT = "yes"
+BATTERY_ABSENT = "no"
+BATTERY_UNKNOWN = "unknown"
+
 
 @dataclass
 class DeviceState:
@@ -39,7 +45,8 @@ class DeviceState:
     dc_status: int
     grid_state: int
     input_limit_w: int = 0
-    pack_num: int = 0
+    # None when the device never reported the field; 0 is an observed "no pack".
+    pack_num: int | None = None
     soc_status: int = 0
     battery_calibration_time: int | None = None
 
@@ -51,6 +58,7 @@ class DeviceCapabilities:
     can_export: bool
     can_ac_charge: bool
     reason: str
+    battery_presence: str = BATTERY_UNKNOWN
 
 # =====================
 # DEVICE PARSING

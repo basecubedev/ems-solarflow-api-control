@@ -257,7 +257,7 @@ class BatteryFullChargeStateStore:
             "last_seen_soc_limit": int(state.soc_limit),
             "last_seen_ac_mode": int(state.ac_mode),
             "last_seen_ac_status": int(state.ac_status),
-            "last_seen_pack_num": int(getattr(state, "pack_num", 0)),
+            "last_seen_pack_num": int(getattr(state, "pack_num", 0) or 0),
             "last_seen_soc_status": int(getattr(state, "soc_status", 0)),
             "last_seen_battery_calibration_time": getattr(
                 state,
