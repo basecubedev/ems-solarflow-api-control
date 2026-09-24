@@ -153,8 +153,10 @@ class ComposeEnvTransaction:
 # check -- and exits non-zero when it is not. Compose bounds that wait itself, so
 # the decision is Compose's rather than a signal killing it part-way through a
 # recreate; the outer timeout stays above it as a backstop.
-RECREATE_WAIT_SECONDS = 120
-RECREATE_TIMEOUT_SECONDS = 180
+# The wait is sized for the slowest supported host: a stop plus a recreate plus
+# a health check measured 94 s on a Pi 3B+ with a pre-A1 SD card.
+RECREATE_WAIT_SECONDS = 300
+RECREATE_TIMEOUT_SECONDS = 360
 
 
 class AdminComposeRunner:

@@ -785,6 +785,71 @@ def test_recreate_waits_for_the_replacement_instead_of_only_starting_it():
     assert int(argv[timeout_flag + 1]) < keywords["timeout"]
 
 
+def test_the_recreate_wait_survives_a_slow_disk():
+    """The recreate is paced by the host's disk, not by the Admin image.
+
+    containerd and dockerd fsync their state at every lifecycle step, so a stop
+    plus a recreate plus a health check measured 94 s on a Pi 3B+ with a pre-A1
+    SD card (53 ms per fsync). A wait tuned to a fast host kills the recreate
+    part-way through and leaves no Admin running at all.
+    """
+
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def run(argv, **keywords):
+        calls.append((argv, keywords))
+        return Completed()
+
+    update_apply.AdminComposeRunner(run=run).recreate(
+        "/opt/ems-solarflow/docker-compose.admin.yml", "ems-solarflow-admin"
+    )
+
+    argv, keywords = calls[0]
+    wait = int(argv[argv.index("--wait-timeout") + 1])
+    # Three times the 94 s measured on the slowest supported host.
+    assert wait >= 280, wait
+    assert keywords["timeout"] > wait
+
+
+def test_the_sidecar_launch_survives_a_slow_disk():
+    """Starting the sidecar is itself a container create+start.
+
+    It costs the host's fsync latency rather than the updater's own work: 33 s
+    measured on a Pi 3B+ with a pre-A1 SD card, against a 60 s bound. A launch
+    that times out leaves the transition with no worker and no way forward.
+    """
+
+    pending = {
+        "id": "abc123",
+        "target_release": "v0.7.0",
+        "target_admin": {"image_ref": TARGET_REF},
+    }
+    calls = []
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def run(_argv, **keywords):
+        calls.append(keywords)
+        return Completed()
+
+    launcher = AdminUpdateLauncher(
+        store=_FakeStore(pending), environ=_launcher_env(), run=run
+    )
+
+    launcher._launch_sidecar("abc123")
+
+    # Three times the 33 s measured on the slowest supported host.
+    assert calls[0]["timeout"] >= 100, calls[0]["timeout"]
+
+
 def test_a_failed_recreate_brings_the_previous_admin_back(tmp_path):
     # --force-recreate stops and removes the running Admin before starting the
     # replacement, so a recreate that fails can leave nothing running at all.
