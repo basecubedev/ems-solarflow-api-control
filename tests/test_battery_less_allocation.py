@@ -349,9 +349,9 @@ def test_winter_reserve_is_not_applied_without_a_battery():
 
 
 def test_winter_reserve_still_applies_to_a_battery():
-    target, adjustment = _winter_target(1)
+    """The exact values, because `x is not None or y` accepted `(None, True)`."""
 
-    assert target is not None or adjustment
+    assert _winter_target(1) == (40, True)
 
 
 # --- a device with no battery is not part of the SoC spread -----------------

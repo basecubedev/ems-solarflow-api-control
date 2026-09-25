@@ -103,6 +103,11 @@ def observed_pack_count_from_trace(data):
     path weighs. One that does not cannot assert an absence at all: traces
     written before presence was three-valued stored an unreported field as 0,
     and believing those would make a replay diverge from the run it reproduces.
+
+    The cost is the other direction -- a trace from a genuinely battery-less
+    device replays as unknown unless it records an empty pack list -- and it
+    falls on frames that do not exist yet, where the first choice falls on every
+    trace already captured.
     """
 
     packs = value_from_trace(data, "pack_num", "packNum", default=None)

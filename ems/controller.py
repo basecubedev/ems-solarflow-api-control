@@ -2809,15 +2809,15 @@ class EMSController:
             # leaves the last value standing in Home Assistant, reading as live
             # -- but they report the device's own minimum and say it is not in
             # winter, rather than a target for a ramp that will never run.
-            device_in_winter = (
-                active and battery_presence(state) != BATTERY_ABSENT
-            )
+            # Whether it is winter at all is a separate question, and the normal
+            # summer answer still comes from the reconciler below.
+            has_reserve = battery_presence(state) != BATTERY_ABSENT
 
             base = p + dev.name.lower() + "_winter_"
             own_min_soc = state.min_soc if state.min_soc > 0 else dev.min_soc
             effective_min_soc = (
                 self.winter_min_soc_targets.get(dev.name, own_min_soc)
-                if device_in_winter
+                if has_reserve
                 else own_min_soc
             )
             target = (
@@ -2826,8 +2826,8 @@ class EMSController:
                     effective_min_soc,
                     active
                 )
-                if device_in_winter
-                else effective_min_soc
+                if has_reserve
+                else own_min_soc
             )
 
             self.publish_sensor(
@@ -2840,14 +2840,14 @@ class EMSController:
                     {
                         "effective_min_soc": effective_min_soc,
                         "current_soc": state.soc,
-                        "winter_active": device_in_winter
+                        "winter_active": active and has_reserve
                     }
                 )
             )
 
             self.publish_sensor(
                 base + "estimated_ramp_days",
-                cfg.estimate_winter_ramp_days(target) if device_in_winter else 0,
+                cfg.estimate_winter_ramp_days(target) if has_reserve else 0,
                 "d",
                 None,
                 icon="mdi:calendar-range",
