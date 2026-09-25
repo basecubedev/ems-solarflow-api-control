@@ -27,6 +27,10 @@ from admin.ems_tool import (
     resolve_running_ems_container,
 )
 from admin.install_context import detect_install_context
+from ems.influx_setup import (
+    INFLUX_PROBE_READY_TIMEOUT_SECONDS,
+    INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS,
+)
 
 # Output caps keep a misbehaving/old EMS build from returning unbounded text.
 STDOUT_CAP = 64 * 1024
@@ -52,6 +56,26 @@ INFLUX_DISABLED_HINT = (
 # the frontend can never influence the command. ``warn_on_fail`` marks checks
 # (InfluxDB) that legitimately fail when an *enabled* subsystem is not reachable —
 # a normal warning, not an Admin error.
+
+# The readiness wait this check runs, plus the requests that follow it: one per
+# planned bucket and one for the task list, each able to spend its budget twice
+# (connect, then read), and a docker exec and interpreter start around all of
+# it. The checks run one after another, so every second here is a second the
+# Admin diagnostics and the guided-upgrade health gate can spend.
+#
+# The request count comes from the operator's `influxdb.downsampling`, not from
+# this file: one lookup per planned bucket plus the task list, so a chain of L
+# levels costs L+2. Eight covers six levels, twice what the template ships. A
+# test counts the template's and asserts the room on top, because a check killed
+# by its own ceiling is reported as a hard failure -- the opposite of the
+# warning this check is marked for.
+INFLUX_STATUS_CHECK_REQUEST_ALLOWANCE = 8
+INFLUX_STATUS_CHECK_TIMEOUT_SECONDS = (
+    INFLUX_PROBE_READY_TIMEOUT_SECONDS
+    + INFLUX_STATUS_CHECK_REQUEST_ALLOWANCE * 2 * INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS
+    + 25
+)
+
 CHECKS = {
     "quick_diagnose": {
         "label": "EMS diagnose",
@@ -70,7 +94,9 @@ CHECKS = {
     "influx_status": {
         "label": "InfluxDB status",
         "args": ("influx", "status", "--json"),
-        "timeout": 20,
+        # A ceiling, not a delay. Too tight and a slow-but-alive InfluxDB is
+        # killed and reported as a failure, where this check exists to warn.
+        "timeout": INFLUX_STATUS_CHECK_TIMEOUT_SECONDS,
         "parse_json": True,
         "warn_on_fail": True,
     },
@@ -204,8 +230,14 @@ class EmsCliDiagnostics:
                 cwd=cwd,
             )
         except subprocess.TimeoutExpired:
+            # A check that warns when the subsystem is unreachable warns when it
+            # is too slow to answer as well. Reporting a hard failure there
+            # fails the guided-upgrade gate closed over a slow InfluxDB, which
+            # is what `warn_on_fail` exists to prevent -- and the raised ceiling
+            # only makes the kill rarer, not friendlier.
+            status = "warning" if spec["warn_on_fail"] else "timeout"
             return _check_result(
-                check_id, spec, "timeout", None,
+                check_id, spec, status, None,
                 "", "Check timed out.", _elapsed_ms(started), False,
             )
         except FileNotFoundError:

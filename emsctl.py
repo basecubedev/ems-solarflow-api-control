@@ -1815,7 +1815,9 @@ def run_influx_cli(argv, env, *, json_output=False):
     return completed.returncode
 
 
-def execute_influx_schema_op(influx_config, action):
+def execute_influx_schema_op(
+    influx_config, action, ready_timeout_s=None, request_timeout_s=None
+):
     """Run a schema 'sync'/'status' op without printing. Returns (code, result).
 
     ``result`` is a single dict — ``{"action", "ok", "url", "report"|"error"}`` —
@@ -1828,6 +1830,21 @@ def execute_influx_schema_op(influx_config, action):
     ``influxdb.url`` does not resolve on the host; inside the EMS container
     (``EMS_IN_CONTAINER=1``) they use that service name. This lets the
     Docker-first flow run ``docker compose exec ems ... influx sync`` directly.
+
+    ``ready_timeout_s`` is how long to wait for InfluxDB to answer. It defaults
+    by action rather than by caller, for one reason: the caller that must be
+    patient -- the Admin maintenance apply, which starts the container and syncs
+    straight after -- reaches this as a ``emsctl.py influx sync`` subprocess and
+    has no way to pass a parameter. So ``sync``, which only setup runs, waits
+    out a container start; a status read keeps the diagnostic budget, because it
+    also serves health probes where waiting is a hang.
+
+    ``request_timeout_s`` is the separate question of how long each phase of each
+    request may take once InfluxDB is answering. A sync creates buckets and Flux
+    tasks and keeps the generous budget; a status read is lookups only, and it
+    runs inside check sequences whose ceiling is the sum of them. The two are
+    independent: a caller can fail fast on an unreachable URL and still let the
+    work that follows take its time. Both are overridable.
     """
     from ems.history import schema
     from ems.history.influx_client import HistoryInfluxClient, wait_for_influx_ready
@@ -1847,10 +1864,30 @@ def execute_influx_schema_op(influx_config, action):
             ),
         }
 
-    client = HistoryInfluxClient(url, influx_config["org"], token)
+    if ready_timeout_s is None:
+        ready_timeout_s = (
+            influx_setup.INFLUX_READY_TIMEOUT_SECONDS
+            if action == "sync"
+            else influx_setup.INFLUX_PROBE_READY_TIMEOUT_SECONDS
+        )
+
+    if request_timeout_s is None:
+        request_timeout_s = (
+            influx_setup.INFLUX_SYNC_REQUEST_TIMEOUT_SECONDS
+            if action == "sync"
+            else influx_setup.INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS
+        )
+
+    # Passed as a scalar deliberately: requests applies it to connect and to
+    # read separately, so it is the tolerance per phase. Halving it to cap the
+    # sum would instead make every individual phase less tolerant, and a lookup
+    # that takes three seconds on a loaded board is slow, not broken.
+    client = HistoryInfluxClient(
+        url, influx_config["org"], token, timeout=request_timeout_s
+    )
 
     try:
-        wait_for_influx_ready(client, timeout_s=15)
+        wait_for_influx_ready(client, timeout_s=ready_timeout_s)
     except TimeoutError as exc:
         return 1, {"action": action, "ok": False, "url": url, "error": str(exc)}
 
@@ -2109,7 +2146,12 @@ def handle_influx_init_bundled(args, influx_config):
         # Final readiness check without changing the schema (auto_sync off or
         # --no-sync). A failed probe is not fatal: the container may still be
         # coming up and the operator is told to run 'influx sync' next.
-        rc, _ = execute_influx_schema_op(influx_config, "status")
+        rc, _ = execute_influx_schema_op(
+            influx_config,
+            "status",
+            ready_timeout_s=influx_setup.INFLUX_READY_TIMEOUT_SECONDS,
+            request_timeout_s=influx_setup.INFLUX_SYNC_REQUEST_TIMEOUT_SECONDS,
+        )
         ready = rc == 0
 
     ok = not errors
@@ -2178,9 +2220,16 @@ def handle_influx_init_external(args, influx_config):
         )
     else:
         # 'sync' reconciles the schema; 'status' is a connectivity check only.
-        # Both wait for readiness first, so either confirms reachability.
+        # Both wait for readiness first, so either confirms reachability. Both
+        # get the diagnostic budget: external InfluxDB is user-managed and
+        # nothing here started it, so a wrong URL is an error to report rather
+        # than a container to sit out.
         action = "sync" if do_sync else "status"
-        rc, result = execute_influx_schema_op(influx_config, action)
+        rc, result = execute_influx_schema_op(
+            influx_config,
+            action,
+            ready_timeout_s=influx_setup.INFLUX_PROBE_READY_TIMEOUT_SECONDS,
+        )
         if rc == 0:
             ready = True
             sync_result = result

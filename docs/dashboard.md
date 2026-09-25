@@ -523,6 +523,16 @@ respond with HTTP 200 and `{"available": false, "reason": "not_configured"}`
 "InfluxDB analytics is not configured" info panel. The series response shares the
 same columnar shape as `/api/history/series`, with `source` set to `influxdb`.
 
+A query whose bucket was never created answers the same way, with
+`{"available": false, "reason": "schema_incomplete", "bucket": ..., "missing_buckets": [...]}`
+and a hint naming `emsctl influx sync`. The hint changes when no sync would
+create that bucket — a `query_profiles` entry naming a bucket that no
+`downsampling` entry produces — because there the config disagrees with itself
+and the command would change nothing. Each range reads the bucket its query
+profile names, so a partial schema leaves the short ranges working and empties
+only the longer ones — see
+[technical/influxdb.md](technical/influxdb.md#analytics-is-empty-although-influxdb-is-reachable).
+
 The **Analytics** tab is a dedicated, larger analysis workspace (the primary
 chart is ~560px tall on desktop) reusing the existing PV/Output/Battery/Grid
 colors, with a period selector, a device filter, custom date ranges,

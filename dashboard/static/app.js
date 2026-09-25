@@ -5453,10 +5453,19 @@ function setAnalyticsAvailable(available, info) {
     // "not configured" copy so the operator knows how to fix it.
     const heading = unavailable.querySelector ? unavailable.querySelector("h3") : null;
     const detail = unavailable.querySelector ? unavailable.querySelector("p") : null;
-    const hint = info && info.reason === "unreachable" ? info.hint : null;
-    if (heading) heading.textContent = hint
-      ? "InfluxDB analytics is not reachable"
-      : "InfluxDB analytics is not configured";
+    // Any reason that carries a hint renders it: a missing analytics bucket is
+    // the one cause an operator can act on, and falling back to the generic
+    // "not configured" copy would hide the command that fixes it.
+    const hint = info && info.hint ? info.hint : null;
+    if (heading) {
+      if (info && info.reason === "schema_incomplete") {
+        heading.textContent = "InfluxDB analytics schema is incomplete";
+      } else if (hint) {
+        heading.textContent = "InfluxDB analytics is not reachable";
+      } else {
+        heading.textContent = "InfluxDB analytics is not configured";
+      }
+    }
     if (detail && hint) {
       // The hint carries an explicit newline before the setup command so the
       // whole command always stays on its own line; preserve it on render.

@@ -105,6 +105,39 @@ def _service(base_dir, docker=None, run=None):
 # --- allowlist ------------------------------------------------------------
 
 
+def test_a_check_marked_to_warn_warns_when_it_is_killed_too():
+    """`warn_on_fail` has to survive the timeout path.
+
+    A subsystem that is merely unreachable warns; one that is too slow to answer
+    is the same situation seen through a stopwatch. Reporting a hard failure
+    there fails the guided-upgrade health gate closed over a slow InfluxDB,
+    which is what the flag exists to prevent.
+    """
+
+    import subprocess
+
+    from admin.ems_cli import CHECKS, EmsCliDiagnostics
+
+    def _timing_out(argv, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+
+    diagnostics = EmsCliDiagnostics(run=_timing_out)
+    result = diagnostics.run(check_ids=("influx_status", "runtime_status"))
+
+    by_id = {check["id"]: check for check in result["checks"]}
+
+    assert CHECKS["influx_status"]["warn_on_fail"] is True
+    assert by_id["influx_status"]["status"] == "warning"
+    assert CHECKS["runtime_status"]["warn_on_fail"] is False
+    assert by_id["runtime_status"]["status"] == "timeout"
+
+    # On its own the InfluxDB check no longer fails the run, which is what the
+    # guided-upgrade gate reads (it accepts "ok" and "warning", nothing else).
+    influx_only = diagnostics.run(check_ids=("influx_status",))
+
+    assert influx_only["summary"]["status"] == "warning"
+
+
 def test_allowlist_maps_named_checks_to_exact_argv(tmp_path):
     _standard_install(tmp_path)
     run = FakeRun(default=_completed(0, "{}"))

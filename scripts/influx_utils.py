@@ -141,8 +141,16 @@ def build_line_protocol(measurement, tags, fields, timestamp_ns):
     )
 
 
+# Per-request budget for every call that does not pass its own. Named because
+# callers that bound a sequence of requests have to add it up.
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 15
+
+
 class InfluxHTTPClient:
-    def __init__(self, base_url, org, token, session=None, timeout=15):
+    def __init__(
+        self, base_url, org, token, session=None,
+        timeout=DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    ):
         self.base_url = base_url.rstrip("/")
         self.org = org
         self.token = token
@@ -224,7 +232,14 @@ class InfluxHTTPClient:
 
         raise ValueError(f"InfluxDB org not found: {self.org}")
 
-    def find_bucket(self, bucket_name):
+    def find_bucket(self, bucket_name, timeout=None):
+        """Look up one bucket by name. ``timeout`` overrides the client's own.
+
+        A caller working to a deadline of its own needs the request to share it:
+        the default is generous enough that four lookups outlive any budget a
+        request thread can afford.
+        """
+
         response = self.session.get(
             f"{self.base_url}/api/v2/buckets",
             params={"name": bucket_name},
@@ -232,7 +247,7 @@ class InfluxHTTPClient:
                 "Authorization": f"Token {self.token}",
                 "Accept": "application/json"
             },
-            timeout=self.timeout
+            timeout=self.timeout if timeout is None else timeout
         )
         response.raise_for_status()
         payload = response.json()
@@ -274,6 +289,20 @@ class InfluxHTTPClient:
         return response.json(), True
 
 
+def timeout_seconds(timeout):
+    """A single budget from a requests timeout, which may be (connect, read).
+
+    Callers that do arithmetic on a client's timeout cannot assume a scalar:
+    a client bounding a sequence of requests splits its budget across the two
+    phases, because a scalar is spent once on each.
+    """
+
+    if isinstance(timeout, (tuple, list)):
+        return sum(timeout)
+
+    return timeout
+
+
 def wait_for_influx_ready(client, timeout_s=60, interval_s=2):
     """Wait until the InfluxDB /health endpoint reports readiness."""
 
@@ -288,7 +317,9 @@ def wait_for_influx_ready(client, timeout_s=60, interval_s=2):
             response = client.session.get(
                 f"{client.base_url}/health",
                 headers={"Accept": "application/json"},
-                timeout=min(client.timeout, max(interval_s, 0.1))
+                timeout=min(
+                    timeout_seconds(client.timeout), max(interval_s, 0.1)
+                ),
             )
 
             if 200 <= response.status_code < 300:

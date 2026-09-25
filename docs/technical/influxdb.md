@@ -419,6 +419,55 @@ Run: python3 emsctl.py influx init
 If you see these, run `python3 emsctl.py influx init` (bundled) or check the
 `url`/`token` and reachability of your external InfluxDB.
 
+### Analytics is empty although InfluxDB is reachable
+
+A different fault with a different fix. Each range reads the bucket its query
+profile names: 1h and 6h read `<prefix>_raw`, 24h reads `<prefix>_1m`, and the
+longer ranges read `<prefix>_5m` and `<prefix>_1h`. A schema that was never
+created leaves every range empty; a partial one leaves the short ranges working
+and empties the rest, which is easy to miss because the tab opens on 24h. Either
+way the Analytics tab says so:
+
+```text
+Analytics history is enabled, but a bucket this range reads is missing.
+Run: python3 emsctl.py influx sync
+```
+
+The EMS also says so without anyone opening the tab. Once the telemetry writer
+has completed its first write — which proves InfluxDB is reachable and the token
+works, and is the earliest point at which a missing bucket can be told apart
+from an unreachable server — it checks the planned buckets *and* the
+downsampling tasks and logs:
+
+```text
+event=influx_schema_incomplete hint=... missing_buckets=ems_1m,ems_5m,ems_1h
+```
+
+The tasks are checked beside the buckets because `sync` creates buckets first. A
+run that stops in between leaves every bucket in place with nothing filling
+them: the query succeeds, the chart is empty, and `influx status` reports no
+missing buckets. That case shows up as `missing_tasks=…` in the same event and
+is the only signal for it. A task that exists but is `inactive` counts as
+missing there, because it fills nothing either.
+
+A bucket that only a `query_profiles` entry names — one that no `downsampling`
+entry produces, so no sync will ever create it — is reported separately as
+`event=influx_schema_bucket_not_planned`, because there the two halves of the
+config disagree and running a sync changes nothing.
+
+The check stops as soon as it reads a complete schema, so a successful
+`influx sync` ends it silently. Until then it repeats at most a few times, a
+minute apart: a reading taken while a sync is midway through is true at that
+instant and wrong a moment later, and treating the first one as final would
+leave a false warning standing for as long as the EMS runs.
+
+`python3 emsctl.py influx status` lists them under `missing_buckets` alongside
+an empty `tasks`. The usual cause is a schema sync that ran while InfluxDB was
+still starting; the sync waits for readiness, and a second run against a
+container that is already up succeeds. Note that the downsampling tasks
+aggregate forward from the moment they are created — the raw data is kept, but
+the longer ranges fill in over the following hours rather than at once.
+
 For a native EMS against bundled Docker InfluxDB, `influx init` is normally
 enough: the runtime then resolves `host_url` plus the secret-file token on its
 own, with no manual `export INFLUXDB_TOKEN`. If the hint persists after a
