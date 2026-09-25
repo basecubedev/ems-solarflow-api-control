@@ -103,6 +103,24 @@ def _concrete_ref_tag(image_ref):
     return _concrete_tag(ref.rsplit(":", 1)[1]) if ":" in last else None
 
 
+def _pins_one_image(image_ref):
+    """True when a reference names one image without Docker resolving a tag.
+
+    ``docker ps`` reports a container created from a digest-pinned reference as
+    the bare repository, and Docker resolves a bare repository to ``:latest`` --
+    a different image whose labels would then be read as the running build. The
+    ``latest`` label itself is refused later for not being concrete, but a local
+    ``:latest`` carrying a concrete release tag would pass as a good answer.
+    """
+
+    ref = str(image_ref or "").strip()
+    if not ref:
+        return False
+    if "@sha256:" in ref:
+        return True
+    return ":" in ref.rsplit("/", 1)[-1]
+
+
 def _running_image_ref(docker, container, container_name):
     get_id = getattr(docker, "inspect_container_image_id", None)
     if callable(get_id):
@@ -112,7 +130,8 @@ def _running_image_ref(docker, container, container_name):
             image_id = None
         if image_id:
             return str(image_id).strip() or None
-    return str(container.get("image") or "").strip() or None
+    fallback = str(container.get("image") or "").strip()
+    return fallback if _pins_one_image(fallback) else None
 
 
 def running_image_ref(docker, container_name=DEFAULT_EMS_CONTAINER):

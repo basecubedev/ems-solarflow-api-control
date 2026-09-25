@@ -216,6 +216,8 @@ def _inspect_containers(docker, specs):
     inspect = getattr(docker, "inspect_container", None)
     inspect_image = getattr(docker, "inspect_image", None)
     inspect_started_at = getattr(docker, "inspect_container_started_at", None)
+    inspect_image_ref = getattr(docker, "inspect_container_image_ref", None)
+    inspect_image_id = getattr(docker, "inspect_container_image_id", None)
 
     state = None
     if callable(probe):
@@ -240,6 +242,8 @@ def _inspect_containers(docker, specs):
             spec["name"],
             spec["declared_image"],
             inspect_started_at,
+            inspect_image_ref,
+            inspect_image_id,
         )
         for role, spec in specs.items()
     }
@@ -247,7 +251,8 @@ def _inspect_containers(docker, specs):
 
 
 def _container_status(
-    available, inspect, inspect_image, name, declared_image, inspect_started_at=None
+    available, inspect, inspect_image, name, declared_image, inspect_started_at=None,
+    inspect_image_ref=None, inspect_image_id=None,
 ):
     if not available or not callable(inspect):
         return _container_view(False, False, name, declared_image, "unknown",
@@ -263,14 +268,47 @@ def _container_status(
     status = str(existing.get("status") or "unknown").lower() or "unknown"
     resolved_name = existing.get("container_name") or name
     running = status == "running"
+    image, image_id = _pinned_reference(
+        existing.get("image") or declared_image,
+        resolved_name,
+        inspect_image_ref,
+        inspect_image_id,
+    )
     return _container_view(
         True,
         running,
         resolved_name,
-        existing.get("image") or declared_image,
+        image,
         status,
         inspect_image,
         _container_started_at(inspect_started_at, resolved_name) if running else None,
+        image_id,
+    )
+
+
+def _probe_container(probe, name):
+    if not callable(probe):
+        return None
+    try:
+        return probe(name)
+    except Exception:  # an unreadable probe reads as unknown, never a 500
+        return None
+
+
+def _pinned_reference(image, name, inspect_image_ref, inspect_image_id):
+    """Recover the reference and image id that ``docker ps`` dropped.
+
+    Guided Upgrade pins the EMS image by digest, and ``docker ps`` reports such
+    a container as the bare repository -- so an upgraded install is the ordinary
+    case here, not an edge one. A reference that already carries a tag is
+    complete and costs no further Docker call.
+    """
+
+    if _image_tag(image) is not None:
+        return image, None
+    return (
+        _probe_container(inspect_image_ref, name) or image,
+        _probe_container(inspect_image_id, name),
     )
 
 
@@ -284,14 +322,15 @@ def _container_started_at(inspect_started_at, name):
 
 
 def _container_view(
-    found, running, name, image, status, inspect_image=None, started_at=None
+    found, running, name, image, status, inspect_image=None, started_at=None,
+    image_id=None,
 ):
     return {
         "found": found,
         "running": running,
         "name": name,
         "image": image,
-        "tag": _image_version_tag(image, inspect_image),
+        "tag": _image_version_tag(image, inspect_image, image_id),
         "status": status,
         "started_at": started_at,
     }
@@ -306,13 +345,25 @@ def _image_tag(image):
     return last.rsplit(":", 1)[1] if ":" in last else None
 
 
-def _image_version_tag(image, inspect_image=None):
+def _pins_one_image(image):
+    """True when a reference names exactly one image without resolving a tag."""
+
+    return "@sha256:" in str(image or "")
+
+
+def _image_version_tag(image, inspect_image=None, image_id=None):
     """Return a readable version for an image ref.
 
     A ``:tag`` ref yields its tag directly. A digest-pinned ref carries no tag,
     so the readable release is recovered from the image's OCI build labels via the
     shared helper (release_tag, then version) — the same recovery ReleaseManager
     uses, so the two never disagree — rather than shown as a bare digest.
+
+    What is looked up has to name one image. Docker resolves a bare repository to
+    ``:latest``, and reporting that image's labels would name a build other than
+    the one running — silently, and as confidently as a correct answer. So the
+    container's immutable image id is preferred, and a reference that pins
+    nothing is left unanswered instead of guessed.
     """
 
     from admin.installed_release import release_tag_from_labels
@@ -320,10 +371,13 @@ def _image_version_tag(image, inspect_image=None):
     tag = _image_tag(image)
     if tag is not None:
         return tag
-    if not image or not callable(inspect_image):
+    if not callable(inspect_image):
+        return None
+    ref = image_id or (image if _pins_one_image(image) else None)
+    if not ref:
         return None
     try:
-        info = inspect_image(image)
+        info = inspect_image(ref)
     except Exception:
         return None
     labels = (info or {}).get("labels") if isinstance(info, dict) else None

@@ -306,3 +306,78 @@ def test_container_name_from_compose_when_env_absent(monkeypatch):
 def test_container_name_falls_back_to_canonical(monkeypatch):
     monkeypatch.delenv("EMS_CONTAINER_NAME", raising=False)
     assert resolve_ems_container_name(compose_text="") == DEFAULT_EMS_CONTAINER
+
+
+# --- a bare repository is never resolved -----------------------------------
+#
+# `docker ps` reports a container created from a digest-pinned reference as the
+# bare repository (measured on Docker 26.1.5). Looking a bare repository up
+# resolves it to `:latest`, whose labels then name a build other than the one
+# running -- silently, and as confidently as a correct answer.
+
+
+def test_a_bare_repository_is_not_taken_as_the_running_reference():
+    docker = _Docker(container=_running(_EMS), image_id=None)
+
+    assert running_image_ref(docker) is None
+
+
+def test_a_bare_repository_never_reports_the_rolling_tag_as_installed():
+    docker = _Docker(
+        container=_running(_EMS),
+        image_id=None,
+        images={_EMS: _labeled(_DIGEST_C, release_tag="latest", version="latest")},
+    )
+
+    probe = probe_running_release(docker)
+
+    assert probe.running is True
+    assert probe.identity is None
+    assert probe.status == PROBE_RUNNING_UNIDENTIFIED
+
+
+def test_the_immutable_id_still_identifies_a_digest_pinned_container():
+    """The bare repository is what docker ps gives; the id is what identifies it."""
+
+    image_id = "sha256:" + "1" * 64
+    docker = _Docker(
+        container=_running(_EMS),
+        image_id=image_id,
+        images={
+            image_id: _labeled(_DIGEST_A, release_tag="v0.8.0", version="v0.8.0"),
+            _EMS: _labeled(_DIGEST_C, release_tag="latest", version="latest"),
+        },
+    )
+
+    probe = probe_running_release(docker)
+
+    assert probe.status == PROBE_RUNNING_IDENTIFIED
+    assert probe.identity.tag == "v0.8.0"
+
+
+def test_a_tagged_reference_is_still_accepted_without_an_id():
+    tagged = f"{_EMS}:v0.7.0"
+    docker = _Docker(container=_running(tagged), image_id=None)
+
+    assert running_image_ref(docker) == tagged
+
+
+def test_a_bare_repository_never_reports_a_foreign_build_as_installed():
+    """The `latest` label is already refused for not being concrete.
+
+    A local `:latest` that carries a concrete release tag is the case that slips
+    through: it reads as a perfectly good answer while naming a build the
+    container is not running.
+    """
+
+    docker = _Docker(
+        container=_running(_EMS),
+        image_id=None,
+        images={_EMS: _labeled(_DIGEST_C, release_tag="v0.9.0", version="v0.9.0")},
+    )
+
+    probe = probe_running_release(docker)
+
+    assert probe.running is True
+    assert probe.identity is None
+    assert probe.status == PROBE_RUNNING_UNIDENTIFIED

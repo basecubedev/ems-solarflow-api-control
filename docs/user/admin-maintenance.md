@@ -161,6 +161,14 @@ Docker unavailable). A mutable tag that was moved after the container started
 cannot change the perceived running release, because the immutable image identity
 is preferred over the tag.
 
+A reference that names no particular image is treated as unreadable rather than
+resolved. `docker ps` reports a container created from a digest-pinned reference
+as the bare repository, and asking Docker about a bare repository answers for
+`:latest` — a different image whose build labels would otherwise be reported as
+the running release, as confidently as a correct answer. Admin therefore reads
+the reference and the immutable id from the container itself, and shows the
+release as **unknown** rather than naming a build that is not running.
+
 Because verification already downloaded the exact EMS image, Guided upgrade
 **reuses that local image and makes no registry request** when the verified
 digest is already present; it contacts the registry only when the exact digest is
