@@ -345,8 +345,13 @@ def _image_tag(image):
     return last.rsplit(":", 1)[1] if ":" in last else None
 
 
-def _pins_one_image(image):
-    """True when a reference names exactly one image without resolving a tag."""
+def _is_digest_pinned(image):
+    """True when a reference carries a digest, so it names its image outright.
+
+    Deliberately narrower than ``installed_release._names_one_image``, which
+    also accepts a tag: this one is only ever reached once ``_image_tag`` has
+    found no tag, so a tag is not an answer here.
+    """
 
     return "@sha256:" in str(image or "")
 
@@ -359,11 +364,13 @@ def _image_version_tag(image, inspect_image=None, image_id=None):
     shared helper (release_tag, then version) — the same recovery ReleaseManager
     uses, so the two never disagree — rather than shown as a bare digest.
 
-    What is looked up has to name one image. Docker resolves a bare repository to
-    ``:latest``, and reporting that image's labels would name a build other than
-    the one running — silently, and as confidently as a correct answer. So the
-    container's immutable image id is preferred, and a reference that pins
-    nothing is left unanswered instead of guessed.
+    A reference that carries a tag answers on its own and costs no lookup. Past
+    that point, what is looked up has to name one image: Docker resolves a bare
+    repository to ``:latest``, and reporting that image's labels would name a
+    build other than the one running — silently, and as confidently as a correct
+    answer. The container's immutable image id is used first because it cannot be
+    re-pointed, and a reference that pins nothing is left unanswered rather than
+    guessed.
     """
 
     from admin.installed_release import release_tag_from_labels
@@ -373,7 +380,7 @@ def _image_version_tag(image, inspect_image=None, image_id=None):
         return tag
     if not callable(inspect_image):
         return None
-    ref = image_id or (image if _pins_one_image(image) else None)
+    ref = image_id or (image if _is_digest_pinned(image) else None)
     if not ref:
         return None
     try:

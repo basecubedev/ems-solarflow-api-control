@@ -11519,8 +11519,10 @@ function renderUpgradeValidation(items, prepared) {
 function renderUpgradeCurrent() {
   const cur = upgradeState.current;
   if (upgradeEls.currentVersion) {
+    // The readable release first: a digest-pinned install reports its image as
+    // repo@sha256:<64 hex>, which is not a version and does not fit the line.
     upgradeEls.currentVersion.textContent =
-      cur.image || cur.tag || "Current version unknown";
+      cur.tag || cur.image || "Current version unknown";
   }
   if (upgradeEls.currentDetail) {
     upgradeEls.currentDetail.textContent = cur.state || "—";
@@ -11557,7 +11559,7 @@ function renderUpgradePlan() {
   const release = upgradeSelectedRelease();
   const cur = upgradeState.current;
   if (upgradeEls.factCurrent) {
-    upgradeEls.factCurrent.textContent = cur.image || cur.tag || "Current version unknown";
+    upgradeEls.factCurrent.textContent = cur.tag || cur.image || "Current version unknown";
   }
   if (upgradeEls.factTarget) {
     upgradeEls.factTarget.textContent = release

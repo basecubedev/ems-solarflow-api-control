@@ -381,3 +381,39 @@ def test_a_bare_repository_never_reports_a_foreign_build_as_installed():
     assert probe.running is True
     assert probe.identity is None
     assert probe.status == PROBE_RUNNING_UNIDENTIFIED
+
+
+def test_the_created_from_reference_recovers_what_docker_ps_dropped():
+    """Without it the probe gives up where the Maintenance overview succeeds."""
+
+    pinned = _compose_ref(_DIGEST_A)
+
+    class _RefDocker(_Docker):
+        def inspect_container_image_ref(self, _name):
+            return pinned
+
+    docker = _RefDocker(
+        container=_running(_EMS),
+        image_id=None,
+        images={
+            pinned: _labeled(_DIGEST_A, release_tag="v0.8.0", version="v0.8.0"),
+            _EMS: _labeled(_DIGEST_C, release_tag="v0.9.0", version="v0.9.0"),
+        },
+    )
+
+    assert running_image_ref(docker) == pinned
+    assert probe_running_release(docker).identity.tag == "v0.8.0"
+
+
+def test_a_recovered_reference_that_still_pins_nothing_is_refused():
+    class _BareRefDocker(_Docker):
+        def inspect_container_image_ref(self, _name):
+            return _EMS
+
+    docker = _BareRefDocker(
+        container=_running(_EMS),
+        image_id=None,
+        images={_EMS: _labeled(_DIGEST_C, release_tag="v0.9.0", version="v0.9.0")},
+    )
+
+    assert running_image_ref(docker) is None

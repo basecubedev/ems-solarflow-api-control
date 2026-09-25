@@ -12300,3 +12300,18 @@ console.log(JSON.stringify({ running: render(true), gone: render(false) }));
     assert out["gone"]["recoveryPanelShown"] is True
     assert out["gone"]["abandonAvailable"] is True
     assert "no longer running" in out["gone"]["message"]
+
+
+def test_the_current_version_prefers_the_release_over_the_image_reference():
+    """A digest-pinned install reports repo@sha256:<64 hex> as its image.
+
+    That is not a version and does not fit the line, and the Maintenance docs
+    promise the digest is never shown as the version. Both places that render
+    the running build therefore read the tag first.
+    """
+
+    script = _read("admin.js")
+
+    # One in the panel header, one in the plan facts.
+    assert script.count("cur.tag || cur.image") == 2
+    assert "cur.image || cur.tag" not in script

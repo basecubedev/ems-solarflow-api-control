@@ -103,7 +103,7 @@ def _concrete_ref_tag(image_ref):
     return _concrete_tag(ref.rsplit(":", 1)[1]) if ":" in last else None
 
 
-def _pins_one_image(image_ref):
+def _names_one_image(image_ref):
     """True when a reference names one image without Docker resolving a tag.
 
     ``docker ps`` reports a container created from a digest-pinned reference as
@@ -131,15 +131,28 @@ def _running_image_ref(docker, container, container_name):
         if image_id:
             return str(image_id).strip() or None
     fallback = str(container.get("image") or "").strip()
-    return fallback if _pins_one_image(fallback) else None
+    if _names_one_image(fallback):
+        return fallback
+    # ``docker ps`` dropped the digest, but the container still knows what it
+    # was created from -- the same seam the Maintenance overview reads.
+    get_ref = getattr(docker, "inspect_container_image_ref", None)
+    if callable(get_ref):
+        try:
+            declared = str(get_ref(container_name) or "").strip()
+        except Exception:
+            declared = ""
+        if _names_one_image(declared):
+            return declared
+    return None
 
 
 def running_image_ref(docker, container_name=DEFAULT_EMS_CONTAINER):
     """Immutable image ref of the RUNNING EMS container, or ``None``.
 
     Prefers ``inspect_container_image_id`` so a tag moved after the container
-    started cannot change the perceived running image; falls back to the mutable
-    ``docker ps`` image string only when no immutable id is available.
+    started cannot change the perceived running image. Without one it takes the
+    ``docker ps`` image string, and only if that names an image at all -- a bare
+    repository does not -- then the reference the container was created from.
     """
 
     if docker is None:

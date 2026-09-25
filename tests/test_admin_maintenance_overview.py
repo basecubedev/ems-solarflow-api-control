@@ -598,24 +598,59 @@ def test_a_bare_repository_is_never_looked_up(tmp_path):
     assert ("inspect_image", EMS_REPO) not in docker.calls
 
 
+class TaggedDocker(PinnedDocker):
+    """Every probe present and recording, but the container names a tag.
+
+    The point of the test below is that the extra probes are NOT called, so the
+    double has to be able to record them -- a fake that simply lacks the methods
+    proves nothing, because ``getattr`` then returns ``None`` either way.
+    """
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._containers[DEFAULT_EMS_CONTAINER]["image"] = f"{EMS_REPO}:v0.6.1"
+
+
 def test_a_tagged_container_still_reports_its_tag_without_an_inspect(tmp_path):
     """The ordinary case must not gain a Docker call it never needed."""
 
     _standard_install(tmp_path)
-    docker = FakeDocker(
-        containers={
-            DEFAULT_EMS_CONTAINER: {
-                "container_name": DEFAULT_EMS_CONTAINER,
-                "image": f"{EMS_REPO}:v0.6.1",
-                "status": "running",
-            },
-        }
-    )
+    docker = TaggedDocker()
 
     overview = run_maintenance_overview(base_dir=str(tmp_path), docker=docker)
 
     assert overview["containers"]["ems"]["tag"] == "v0.6.1"
-    assert not [call for call in docker.calls if call[0] == "inspect_image"]
+    probed = [call[0] for call in docker.calls]
+    assert "inspect_image" not in probed
+    assert "inspect_container_image_ref" not in probed
+    assert "inspect_container_image_id" not in probed
+
+
+def test_the_immutable_id_is_asked_before_the_reference(tmp_path):
+    """A reference can be re-pointed between the two reads; an id cannot.
+
+    Both name the right image today, so only the order of preference decides
+    which one is trusted when they disagree.
+    """
+
+    _pinned_install(tmp_path)
+
+    class DisagreeingDocker(PinnedDocker):
+        def inspect_image(self, ref):
+            self.calls.append(("inspect_image", ref))
+            if ref == PINNED_IMAGE_ID:
+                return {"image_ref": ref, "digest": PINNED_DIGEST,
+                        "labels": PINNED_LABELS}
+            if ref == PINNED_REF:
+                return {"image_ref": ref, "digest": PINNED_DIGEST,
+                        "labels": ROLLING_LABELS}
+            return None
+
+    overview = run_maintenance_overview(
+        base_dir=str(tmp_path), docker=DisagreeingDocker()
+    )
+
+    assert overview["containers"]["ems"]["tag"] == "v0.8.9"
 
 
 def test_overview_and_release_manager_agree_for_the_real_docker_ps_shape(tmp_path):
