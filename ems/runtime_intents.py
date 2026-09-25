@@ -5,11 +5,6 @@ from dataclasses import dataclass
 from enum import Enum
 
 
-# The reason an ``ac_output`` intent carries when nobody asked for it: the
-# controller's standing default, as opposed to an operator or startup request.
-AC_OUTPUT_DEFAULT_REASON = "ac_output"
-
-
 class DeviceRuntimeRole(str, Enum):
     AC_OUTPUT = "ac_output"
     AC_INPUT = "ac_input"
@@ -25,7 +20,7 @@ class DeviceRuntimeIntent:
     priority: int = 0
 
 
-def ac_output_intent(device_name: str, reason: str = AC_OUTPUT_DEFAULT_REASON):
+def ac_output_intent(device_name: str, reason: str = "ac_output"):
     return DeviceRuntimeIntent(
         device=device_name,
         role=DeviceRuntimeRole.AC_OUTPUT,
@@ -50,7 +45,7 @@ def ac_input_intent(device_name: str, reason: str):
 def runtime_intent_from_role(device_name: str, role: str, reason: str | None = None):
     normalized = str(role or DeviceRuntimeRole.AC_OUTPUT.value).strip().lower()
     if normalized in ("normal_output", DeviceRuntimeRole.AC_OUTPUT.value):
-        return ac_output_intent(device_name, reason or AC_OUTPUT_DEFAULT_REASON)
+        return ac_output_intent(device_name, reason or "ac_output")
     if normalized in (
         "ac_input_charge",
         "reserved",

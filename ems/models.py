@@ -8,6 +8,28 @@ BATTERY_ABSENT = "no"
 BATTERY_UNKNOWN = "unknown"
 
 
+def parse_pack_count(value):
+    """Return an observed pack count, or None when the value is not one.
+
+    Shared so the state store never records a count the controller refuses to
+    believe: a stored 0 means a confirmed zero, and a support bundle prints it
+    as one. JSON has no integers, so 2.0 is a count and 2.9 is not.
+    """
+
+    if value is None or isinstance(value, bool):
+        return None
+
+    try:
+        packs = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+    if not packs.is_integer() or packs < 0:
+        return None
+
+    return int(packs)
+
+
 @dataclass
 class DeviceState:
     soc: float

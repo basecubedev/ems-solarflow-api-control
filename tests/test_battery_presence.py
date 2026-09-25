@@ -193,3 +193,22 @@ def test_the_state_store_records_an_unreported_pack_count_as_null(tmp_path):
     assert unknown["last_seen_pack_num"] is None
     assert absent["last_seen_pack_num"] == 0
     assert present["last_seen_pack_num"] == 2
+
+
+@pytest.mark.parametrize("pack_num", [2.9, -1, True, "nonsense", ""])
+def test_the_store_does_not_record_a_count_the_controller_rejects(pack_num, tmp_path):
+    """A support bundle must not print a pack count the EMS does not believe."""
+
+    from datetime import datetime, timezone
+
+    from ems.state_store import BatteryFullChargeStateStore
+
+    store = BatteryFullChargeStateStore(str(tmp_path / "state.sqlite"))
+    item = state(pack_num=pack_num)
+
+    record = store.record_observation(
+        "WR1", item, False, datetime(2026, 6, 1, tzinfo=timezone.utc), interval_days=28
+    )
+
+    assert battery_presence(item) == BATTERY_UNKNOWN
+    assert record["last_seen_pack_num"] is None

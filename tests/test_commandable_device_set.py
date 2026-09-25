@@ -215,3 +215,22 @@ def test_a_fully_available_plant_is_unchanged():
 
     assert targets == [300, 300]
     assert effective == [300, 300]
+
+
+def test_a_reservation_stays_visible_on_a_device_that_is_also_offline():
+    """Offline is the louder condition for the write path, not for the reason.
+
+    The dashboard and `diagnose --control` read the capability reason to explain
+    why a device is not exporting. A reserved device that also drops offline
+    must not lose the reservation from that explanation -- it is the reason it
+    would not be exporting either way.
+    """
+
+    controller = controller_with(online={"WR1": True, "WR2": False}, reserved={"WR2"})
+
+    filtered = controller.intent_filtered_capabilities(
+        [detect_capabilities(state()), detect_capabilities(state())]
+    )
+
+    assert filtered[1].reason == "runtime_role_ac_input"
+    assert filtered[1].can_export is False

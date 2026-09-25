@@ -88,7 +88,8 @@ values exactly:
 - `packInputPower == 0`
 - `outputPackPower == 0`
 - `outputHomePower == 0`
-- `electricLevel <= minSoc` or `socLimit == 2`
+- `electricLevel <= minSoc`, or `socLimit == 2`, or the device reports no
+  battery (`packNum == 0`) — it has none that could still deliver
 
 In this state the existing runtime `min_output_limit` is used as the
 standby/wakeup `outputLimit`. If a device is already at that value, no write is
@@ -143,6 +144,30 @@ on devices that:
 When battery top-up is used, the final constraint pass keeps the normal device
 and capability limits but does not clamp the intentional top-up back to the
 PV-only limits.
+
+## Devices Without A Battery
+
+Battery presence comes from telemetry `packNum`, and it has three values:
+present (`> 0`), absent (an observed `0`), and unknown. A device that never
+reports the field stays unknown and is treated exactly as every device was
+before this distinction existed. Absence is never inferred from silence, and a
+device the EMS has not reached is unknown rather than battery-less.
+
+A device that reports no battery differs in four places:
+
+- **Charge balance.** The PV-first bias asks which device should keep its PV and
+  charge instead. A device that cannot charge has no stake in that question, so
+  its weight is not biased. Without this it reports SOC 0, reads as the emptiest
+  device in the plant, and collects the full penalty permanently.
+- **PV-first priority.** It shares the priority a full battery gets, for the same
+  reason: PV it is not allowed to export is lost rather than stored.
+- **Battery top-up and battery balancing.** It receives no discharge share,
+  whatever SOC it reports.
+- **State reconciliation.** `minSoc`/`socSet` and the winter reserve are not
+  applied to it, because there is no battery window to manage.
+
+Its own `max_power`, the system `max_total_power`, ramps, `min_output_limit`,
+the write deadband and every write gate apply unchanged.
 
 ## Battery Balancing
 

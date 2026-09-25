@@ -76,11 +76,6 @@ class EMSController:
         self.last_states = {}
         self.last_seen = {}
         self.device_online = {}
-        # Devices seen reporting a usable acMode, and devices already written
-        # to while reporting none. Both are observations rebuilt from telemetry
-        # on every start; neither is authority.
-        self.ac_mode_observed = set()
-        self.ac_mode_probed = set()
         self.battery_power_history = {}
         self.initial_ac_mode_reconciled = {}
         self.last_ha_seen = {}
@@ -324,6 +319,17 @@ class EMSController:
 
         return stale
 
+    def runtime_role_block_reason(self, dev_name):
+        """Name the reservation that blocks output control on ``dev_name``."""
+
+        intent = self.runtime_intents.get(dev_name)
+
+        return (
+            f"runtime_role_{intent.role.value}"
+            if intent
+            else "runtime_role_blocked"
+        )
+
     def device_command_block_reason(self, dev):
         """Why the EMS will not command ``dev`` this cycle, or None.
 
@@ -339,12 +345,7 @@ class EMSController:
             return "device_disabled"
 
         if not self.device_output_control_allowed_by_intent(dev.name):
-            intent = self.runtime_intents.get(dev.name)
-            return (
-                f"runtime_role_{intent.role.value}"
-                if intent
-                else "runtime_role_blocked"
-            )
+            return self.runtime_role_block_reason(dev.name)
 
         return None
 
@@ -411,15 +412,11 @@ class EMSController:
         filtered = []
 
         for dev, capability in zip(self.devices, capabilities):
-            reason = (
-                None
-                if self.device_output_control_allowed_by_intent(dev.name)
-                else self.device_command_block_reason(dev)
-            )
-
-            if reason is None:
+            if self.device_output_control_allowed_by_intent(dev.name):
                 filtered.append(capability)
                 continue
+
+            reason = self.runtime_role_block_reason(dev.name)
 
             filtered.append(DeviceCapabilities(
                 can_charge=capability.can_charge,
@@ -1170,9 +1167,6 @@ class EMSController:
         desired_ac_mode = int(intent.desired_ac_mode)
         startup_reconcile = self.is_startup_ac_mode_reconcile_intent(intent)
 
-        if current_ac_mode in (1, 2):
-            self.ac_mode_observed.add(dev.name)
-
         if current_ac_mode == desired_ac_mode:
             log_event(
                 logging.DEBUG,
@@ -1181,36 +1175,15 @@ class EMSController:
             )
             return True
 
-        # A zero from a device that has shown a real mode before is a blip
-        # worth correcting. A device that has never shown one may simply not
-        # report the field, and only writing into it settles which it is. After
-        # that one attempt a still-silent device is left alone, because the
-        # reconcile would otherwise repeat every cycle -- on hardware where that
-        # means a relay. Keying this on the intent instead does not work: an
-        # operator's runtime role is persisted and replayed every cycle, so
-        # every cycle would look like a fresh instruction.
-        never_reported = (
-            current_ac_mode == 0
-            and dev.name not in self.ac_mode_observed
-        )
-        unreported = never_reported and dev.name in self.ac_mode_probed
-
         if (
             desired_ac_mode == 2
             and current_ac_mode not in (1, 2)
-            and (current_ac_mode != 0 or startup_reconcile or unreported)
+            and (current_ac_mode != 0 or startup_reconcile)
         ):
             log_event(
                 logging.WARNING,
                 "unknown_ac_mode",
-                **{
-                    **fields,
-                    "reason": (
-                        "ac_mode_never_reported"
-                        if unreported
-                        else "unsupported_ac_mode"
-                    ),
-                }
+                **fields
             )
             return False
 
@@ -1238,9 +1211,6 @@ class EMSController:
                 }
             )
             return False
-
-        if never_reported:
-            self.ac_mode_probed.add(dev.name)
 
         try:
             ok = write_device_properties(
@@ -3675,7 +3645,9 @@ class EMSController:
                     device_explanation.write_decision = "blocked"
                     device_explanation.write_reason = block_reason
                     if not self.device_output_control_allowed_by_intent(dev.name):
-                        device_explanation.limiting_reason = block_reason
+                        device_explanation.limiting_reason = (
+                            self.runtime_role_block_reason(dev.name)
+                        )
                 else:
                     state = states[i]
                     reference = (

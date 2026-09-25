@@ -1,27 +1,26 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A state is reconciled when the device actually has it.
 
-Every state reconciler writes only when telemetry disagrees with the intended
-value. That is not enough on its own: if the device never adopts the value, the
-disagreement is permanent and the write repeats for as long as the EMS runs.
-Measured on a battery-less device over one night at a five-second loop, that is
-7200 `acMode` writes -- and `acMode` moves a relay.
+A reconciler writes only when telemetry disagrees with the intended value, which
+is not enough on its own: if the device never adopts the value, the disagreement
+is permanent and the write repeats for as long as the EMS runs.
 
-The answer is not to give up after a while, which would leave the device in a
-state nobody has described. It is to ask whether the state exists on this device
-at all. A device without a battery has no SoC window to manage, and a device
-that never reports an AC mode offers nothing to reconcile against. Both are
-fully describable situations, unlike "we tried and stopped".
+Giving up after a while would leave the device in a state nobody has described.
+Asking whether the state exists on this device at all does not, and a device
+with no battery is the clear case -- it has no SoC window to manage, so the
+window is not reconciled rather than reconciled and ignored.
 
 An *applicable* state that disagrees is still written, every time. That case is
 a real fault and looking away from it would be the dangerous choice.
-"""
 
-import logging
+The same question for `acMode` is open and deliberately not answered here: see
+`docs/develop/control-architecture-plan.md`. Two designs were tried and both
+stranded a device that reports no AC mode -- the field has to be reconcilable in
+both directions, and nothing has yet observed hardware that reports none.
+"""
 
 import pytest
 
-from ems.runtime_intents import ac_output_intent
 from tests.test_write_gates import device, state as base_state
 
 pytestmark = [
@@ -134,71 +133,6 @@ def test_skipping_the_soc_window_reports_success():
     assert controller.apply_soc_limits(dev, _state(0)) is True
 
 
-# --- AC mode: a device that never reports one offers nothing to reconcile ----
-
-
-def _reconcile(controller, dev, item):
-    return _writes(
-        controller,
-        lambda: controller.reconcile_ac_mode_intent(
-            dev, item, ac_output_intent(dev.name)
-        ),
-    )
-
-
-def test_ac_mode_is_not_written_repeatedly_to_a_device_that_never_reports_one():
-    """One probe settles whether the field is there; after that, silence."""
-
-    dev = _device()
-    controller = _controller(dev)
-
-    written = [_reconcile(controller, dev, _state(0, ac_mode=0)) for _ in range(5)]
-
-    assert written[0] == [{"acMode": 2}]
-    assert written[1:] == [[]] * 4
-
-
-def test_ac_mode_zero_is_written_once_a_usable_mode_has_been_seen():
-    """A blip is not the same as a device that has no such field.
-
-    Once the device has shown a real AC mode, a later zero is a transient and
-    the reconciler behaves as it always did.
-    """
-
-    dev = _device()
-    controller = _controller(dev)
-
-    assert _reconcile(controller, dev, _state(2, ac_mode=1)) == [{"acMode": 2}]
-    assert _reconcile(controller, dev, _state(2, ac_mode=0)) == [{"acMode": 2}]
-
-
-def test_a_matching_ac_mode_is_silent():
-    dev = _device()
-    controller = _controller(dev)
-
-    assert _reconcile(controller, dev, _state(2, ac_mode=2)) == []
-
-
-def test_an_unusable_ac_mode_is_still_refused():
-    """Values outside the known set were already refused; that does not change."""
-
-    dev = _device()
-    controller = _controller(dev)
-
-    assert _reconcile(controller, dev, _state(2, ac_mode=7)) == []
-
-
-def test_unreported_ac_mode_is_logged_once_it_is_judged_unobservable(caplog):
-    dev = _device()
-    controller = _controller(dev)
-
-    _reconcile(controller, dev, _state(0, ac_mode=0))
-    with caplog.at_level(logging.WARNING):
-        _reconcile(controller, dev, _state(0, ac_mode=0))
-
-    assert any("ac_mode_never_reported" in message for message in caplog.messages)
-
-
 # --- the reconcilers keep writing when the state IS applicable ---------------
 
 
@@ -213,77 +147,3 @@ def test_an_applicable_state_that_disagrees_is_written_every_time():
         assert _writes(
             controller, lambda: controller.apply_soc_limits(dev, item)
         ) == [{"minSoc": 150, "socSet": 1000}]
-
-
-def test_an_explicit_operator_intent_writes_even_into_an_unreported_ac_mode():
-    """Silence suppresses the routine reconcile, never an instruction.
-
-    The rule exists to stop an unprompted loop. An operator who sets the runtime
-    role has said what they want, and the device may well accept it -- refusing
-    would turn a safety measure for relays into a refusal to follow orders.
-    """
-
-    from ems.runtime_intents import ac_output_intent as intent_for
-
-    dev = _device()
-    controller = _controller(dev)
-    operator_intent = intent_for(dev.name, "emsctl")
-
-    written = _writes(
-        controller,
-        lambda: controller.reconcile_ac_mode_intent(
-            dev, _state(0, ac_mode=0), operator_intent
-        ),
-    )
-
-    assert written == [{"acMode": 2}]
-
-
-def test_a_persisted_operator_reason_does_not_defeat_the_guard():
-    """`emsctl device ... ac-mode` writes `runtime_role_reason` into
-    runtime-state.json, and the controller replays it every cycle. Keying the
-    exception on "this looks like an instruction" therefore never expired: the
-    write resumed every loop, which is the very thing the guard exists to stop.
-
-    An instruction is honoured once. What settles it after that is the device:
-    if it still reports nothing, the field is not there to reconcile.
-    """
-
-    dev = _device()
-    controller = _controller(dev)
-    operator_intent = ac_output_intent(dev.name, "emsctl")
-
-    attempts = [
-        _writes(
-            controller,
-            lambda: controller.reconcile_ac_mode_intent(
-                dev, _state(0, ac_mode=0), operator_intent
-            ),
-        )
-        for _ in range(6)
-    ]
-
-    assert attempts[0] == [{"acMode": 2}]
-    assert attempts[1:] == [[]] * 5
-
-
-def test_the_routine_reconcile_also_probes_once_and_then_stops():
-    dev = _device()
-    controller = _controller(dev)
-
-    attempts = [_reconcile(controller, dev, _state(0, ac_mode=0)) for _ in range(6)]
-
-    assert attempts[0] == [{"acMode": 2}]
-    assert attempts[1:] == [[]] * 5
-
-
-def test_a_device_that_accepts_the_probe_is_reconciled_normally_afterwards():
-    """The probe is how observability is decided, not a one-shot surrender."""
-
-    dev = _device()
-    controller = _controller(dev)
-
-    assert _reconcile(controller, dev, _state(0, ac_mode=0)) == [{"acMode": 2}]
-    # The device now reports a real mode, and drifts back later.
-    assert _reconcile(controller, dev, _state(0, ac_mode=2)) == []
-    assert _reconcile(controller, dev, _state(0, ac_mode=1)) == [{"acMode": 2}]

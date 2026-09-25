@@ -9,6 +9,8 @@ import os
 import sqlite3
 from datetime import datetime, timedelta
 
+from ems.models import parse_pack_count
+
 
 BATTERY_FULL_CHARGE_STATE_COLUMNS = (
     "device",
@@ -33,18 +35,6 @@ BATTERY_FULL_CHARGE_STATE_COLUMNS = (
     "ac_input_request_pending",
     "updated_at",
 )
-
-
-def _optional_int(value):
-    """Keep "never reported" as NULL: a stored 0 means a confirmed zero."""
-
-    if value is None:
-        return None
-
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 class BatteryFullChargeStateStore:
@@ -269,7 +259,9 @@ class BatteryFullChargeStateStore:
             "last_seen_soc_limit": int(state.soc_limit),
             "last_seen_ac_mode": int(state.ac_mode),
             "last_seen_ac_status": int(state.ac_status),
-            "last_seen_pack_num": _optional_int(getattr(state, "pack_num", None)),
+            "last_seen_pack_num": parse_pack_count(
+                getattr(state, "pack_num", None)
+            ),
             "last_seen_soc_status": int(getattr(state, "soc_status", 0)),
             "last_seen_battery_calibration_time": getattr(
                 state,

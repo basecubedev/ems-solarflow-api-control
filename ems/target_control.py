@@ -10,6 +10,7 @@ from ems.models import (
     BATTERY_PRESENT,
     BATTERY_UNKNOWN,
     DeviceCapabilities,
+    parse_pack_count,
 )
 
 
@@ -108,18 +109,9 @@ def battery_presence(state):
     always has, because no caller may turn silence into a licence.
     """
 
-    raw = getattr(state, "pack_num", None)
+    packs = parse_pack_count(getattr(state, "pack_num", None))
 
-    if raw is None or isinstance(raw, bool):
-        return BATTERY_UNKNOWN
-
-    try:
-        # JSON has no integers, so a pack count may well arrive as 2.0.
-        packs = float(str(raw).strip())
-    except (TypeError, ValueError):
-        return BATTERY_UNKNOWN
-
-    if not packs.is_integer() or packs < 0:
+    if packs is None:
         return BATTERY_UNKNOWN
 
     return BATTERY_PRESENT if packs > 0 else BATTERY_ABSENT
