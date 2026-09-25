@@ -1248,3 +1248,54 @@ def test_runtime_token_bundled_missing_secret_file_returns_empty(tmp_path):
         influx_setup.runtime_influx_token(cfg, environ={}, base_dir=str(tmp_path))
         == ""
     )
+
+
+def test_a_disabled_duplicate_is_told_apart_from_the_task_it_duplicates(capsys):
+    """The same name appears in both lists, saying opposite things.
+
+    On the first sync after the race it reads `unchanged` and `disabled`; on
+    every sync after that both say `unchanged`, and without the reason the two
+    lines are identical. The operator cannot then tell whether 1m downsampling
+    still runs.
+    """
+
+    emsctl.print_influx_sync(
+        {
+            "buckets": [],
+            "tasks": [{"name": "ems-downsample-1m", "action": "unchanged"}],
+            "disabled_tasks": [
+                {
+                    "name": "ems-downsample-1m",
+                    "action": "unchanged",
+                    "reason": "duplicate",
+                }
+            ],
+        }
+    )
+
+    lines = [line for line in capsys.readouterr().out.splitlines() if "task " in line]
+    assert len(lines) == 2
+    assert len(set(lines)) == 2
+    assert "duplicate" in lines[1]
+
+
+def test_a_task_dropped_from_the_config_says_that_instead(capsys):
+    """Both kinds land in the same list, so the reason has to separate them."""
+
+    emsctl.print_influx_sync(
+        {
+            "buckets": [],
+            "tasks": [],
+            "disabled_tasks": [
+                {
+                    "name": "ems-downsample-1h",
+                    "action": "disabled",
+                    "reason": "not_configured",
+                }
+            ],
+        }
+    )
+
+    out = capsys.readouterr().out
+    assert "ems-downsample-1h: disabled (not_configured)" in out
+    assert "duplicate" not in out

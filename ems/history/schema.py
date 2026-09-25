@@ -202,6 +202,21 @@ def _normalize_flux(text):
     return "\n".join(line.rstrip() for line in str(text or "").strip().splitlines())
 
 
+def _survivor_rank(task):
+    """Order duplicates of one name so the same task survives every sync.
+
+    A task the API returned without a usable id comes last whatever its status,
+    because the only thing that could be done with it is a write it cannot
+    receive. Among the rest an active task outranks a disabled copy: InfluxDB
+    resumes an activated task from its last completion, so keeping the stale one
+    would make it backfill every window it slept through.
+    """
+
+    task_id = task.get("id")
+
+    return (not task_id, task.get("status") != "active", str(task_id or ""))
+
+
 def sync(client, influx_config):
     """Reconcile InfluxDB to the config. Returns a structured report dict."""
     prefix = influx_config["bucket_prefix"]
@@ -218,18 +233,44 @@ def sync(client, influx_config):
         )
 
     # 2) Downsampling tasks (create/update).
-    existing_tasks = {task.get("name"): task for task in client.list_tasks()}
-    desired_names = set()
+    # InfluxDB does not make task names unique: two syncs running at once can
+    # both find a task missing and both create it. A name-keyed lookup sees only
+    # one of the two and leaves the other writing the same window.
+    tasks_by_name = {}
+    for task in client.list_tasks():
+        tasks_by_name.setdefault(task.get("name"), []).append(task)
+    for group in tasks_by_name.values():
+        group.sort(key=_survivor_rank)
+    # A name whose every task lacks an id counts as missing, so the sync creates
+    # one that can be written to instead of reconciling one that cannot.
+    existing_tasks = {
+        name: group[0]
+        for name, group in tasks_by_name.items()
+        if group[0].get("id")
+    }
+
+    # The config is a list, so it can name one target twice. Both entries want
+    # the same task, and the operator has to be told that rather than being
+    # shown a duplicate that looks like the outcome of a race.
+    configured = [
+        task_name(prefix, entry["target"])
+        for entry in influx_config.get("downsampling", [])
+    ]
+    desired_names = set(configured)
+    repeated_in_config = {name for name in desired_names if configured.count(name) > 1}
 
     for entry in influx_config.get("downsampling", []):
         name = task_name(prefix, entry["target"])
-        desired_names.add(name)
         flux = build_downsample_flux(influx_config, entry)
         existing = existing_tasks.get(name)
 
         if existing is None:
-            client.create_task(flux, status="active", org_id=org_id)
+            created = client.create_task(flux, status="active", org_id=org_id)
             report["tasks"].append({"name": name, "action": "created"})
+            # A target the config names twice must not become two tasks: the
+            # second entry reconciles the one just created instead.
+            if isinstance(created, dict) and created.get("id"):
+                existing_tasks[name] = created
             continue
 
         needs_flux = _normalize_flux(existing.get("flux")) != _normalize_flux(flux)
@@ -245,18 +286,33 @@ def sync(client, influx_config):
         else:
             report["tasks"].append({"name": name, "action": "unchanged"})
 
-    # 3) Disable obsolete downsampling tasks owned by this prefix.
+    # 3) Disable obsolete downsampling tasks owned by this prefix, plus any
+    #    duplicate of one that is still wanted. The reason travels with the
+    #    entry because a duplicate's name is also in ``tasks``, and without it
+    #    the two report the same name saying opposite things.
     owned_prefix = f"{prefix}{TASK_NAME_INFIX}"
-    for name, task in existing_tasks.items():
+    for name, group in tasks_by_name.items():
         if not name or not name.startswith(owned_prefix):
             continue
-        if name in desired_names:
-            continue
-        if task.get("status") == "inactive":
-            report["disabled_tasks"].append({"name": name, "action": "unchanged"})
-            continue
-        client.update_task(task.get("id"), status="inactive")
-        report["disabled_tasks"].append({"name": name, "action": "disabled"})
+        wanted = name in desired_names
+        if not wanted:
+            reason = "not_configured"
+        elif name in repeated_in_config:
+            reason = "duplicate_target"
+        else:
+            reason = "duplicate"
+        for task in (group[1:] if wanted else group):
+            if not task.get("id"):
+                continue
+            if task.get("status") == "inactive":
+                report["disabled_tasks"].append(
+                    {"name": name, "action": "unchanged", "reason": reason}
+                )
+                continue
+            client.update_task(task.get("id"), status="inactive")
+            report["disabled_tasks"].append(
+                {"name": name, "action": "disabled", "reason": reason}
+            )
 
     return report
 

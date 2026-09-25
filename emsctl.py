@@ -2443,7 +2443,7 @@ def print_influx_sync(report):
     for task in report["tasks"]:
         print(f"  task {task['name']}: {task['action']}")
     for task in report["disabled_tasks"]:
-        print(f"  task {task['name']}: {task['action']}")
+        print(f"  task {task['name']}: {task['action']} ({task['reason']})")
     if not report["tasks"] and not report["disabled_tasks"]:
         print("  no downsampling tasks configured")
 
