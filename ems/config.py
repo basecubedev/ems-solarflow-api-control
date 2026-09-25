@@ -1137,7 +1137,7 @@ def template_placeholder_paths(config):
         return []
 
     paths = []
-    from ems.zendure_mqtt.config_entries import is_zendure_mqtt_device_config
+    from ems.zendure_mqtt.config_entries import is_mqtt_telemetry_device_config
 
     devices = config.get("devices")
     configured_devices = []
@@ -1147,8 +1147,9 @@ def template_placeholder_paths(config):
             if isinstance(device, dict)
         ]
         for index, device in enumerate(configured_devices):
-            # Telemetry-only Zendure MQTT entries have no ip/sn by design.
-            if is_zendure_mqtt_device_config(device):
+            # An entry read over MQTT has no ip/sn by design, so asking for
+            # them would make a complete config look unfinished forever.
+            if is_mqtt_telemetry_device_config(device):
                 continue
             if _missing_or_placeholder(device.get("ip")):
                 paths.append(f"devices[{index}].ip")
@@ -1920,16 +1921,18 @@ def initialize(args, base_dir):
 def http_control_device_configs(devices=None):
     """Return devices[] entries that build an HTTP-controllable ZendureClient.
 
-    Telemetry-only Zendure MQTT entries carry no ip/sn and are not controlled;
-    they are excluded so startup never passes them to ZendureClient. A disabled
-    entry is excluded for the same reason it is on the MQTT control path:
-    ``enabled`` means the same thing for every transport, so an operator who
-    disables a device really removes it from the control loop.
+    Every entry read over MQTT is excluded, whether it is a telemetry-only
+    Zendure device or an external inverter: they carry no ip/sn, they are not
+    controlled, and an entry that fell through here would be handed a client
+    with a write path. A disabled entry is excluded for the same reason it is on
+    the MQTT control path: ``enabled`` means the same thing for every transport,
+    so an operator who disables a device really removes it from the control
+    loop.
     """
 
     from ems.zendure_mqtt.config_entries import (
         config_entry_enabled,
-        is_zendure_mqtt_device_config,
+        is_mqtt_telemetry_device_config,
     )
 
     if devices is None:
@@ -1940,7 +1943,7 @@ def http_control_device_configs(devices=None):
         item
         for item in devices
         if isinstance(item, dict)
-        and not is_zendure_mqtt_device_config(item)
+        and not is_mqtt_telemetry_device_config(item)
         and config_entry_enabled(item)
     ]
 

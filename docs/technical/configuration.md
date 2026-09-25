@@ -607,6 +607,11 @@ Static device metadata stays in `config.json`, not in runtime-state.
 `pv_priority_factor` is an exception: the config value remains the installation
 default, while runtime-state can override the active weighting.
 
+An inverter this project cannot control -- no local API, its reading
+republished on MQTT by something else -- is not a `devices[]` entry of the kind
+described above but one of type `external_mqtt`; see
+[External Inverters over MQTT](#external-inverters-over-mqtt-external_mqtt).
+
 ## Grid Meter Settings
 
 `grid_meter.type` selects the local household/grid power meter implementation.
@@ -942,6 +947,91 @@ Legacy configs with only `shelly.ip` still work. New configs should use
 If your meter returns a different JSON structure, please open a GitHub issue
 and include the meter type, relevant config, logs, and an anonymized example
 payload if possible.
+
+## External Inverters over MQTT (`external_mqtt`)
+
+A `devices[]` entry for an inverter this project does not control: hardware with
+no local API, where something else — a home-automation system scraping its web
+page, for instance — republishes the reading on MQTT.
+
+It is the MQTT telemetry path, not a second one. The entry names a broker
+profile like any other MQTT device, reaches the same runtime, and appears in the
+dashboard as the same read-only tile a Zendure MQTT device without a write
+method gets. It differs in exactly one respect: its topics follow no convention,
+so the entry says which topic carries which metric.
+
+```json
+{
+  "devices": [
+    {
+      "name": "Kostal Piko",
+      "type": "external_mqtt",
+      "mqtt": {
+        "broker_ref": "local_mqtt",
+        "device_id": "EXAMPLE0000001",
+        "topics": {
+          "outputHomePower": "KostalPiko/EXAMPLE0000001/solarPower"
+        }
+      }
+    }
+  ]
+}
+```
+
+`device_id` is the device's own identity, usually its serial number; it is
+required so two inverters can never collapse into one tile. `EXAMPLE0000001`
+stands in for it here, and — like the Zendure serials elsewhere in this file —
+the real one does not belong in anything you commit or share.
+
+**The topic is copied, not composed.** Both the name above and its shape are an
+illustration: whatever the publishing system sends is what belongs in `topics`,
+character for character, including a spelling nobody would have chosen. MQTT
+topics are case-sensitive and are not normalised anywhere in this project, so a
+topic that differs from the published one by a single letter simply never
+matches and the tile stays offline. Read the exact string off the broker (an
+MQTT client that subscribes to `#` shows it) rather than retyping it from
+memory.
+
+| Metric | Meaning |
+|---|---|
+| `outputHomePower` | AC output in watts, the one most installations have |
+| `solarInputPower` | DC/PV input in watts; with it the flow picture is complete |
+| `packInputPower`, `outputPackPower` | Battery charge / discharge in watts |
+| `electricLevel` | State of charge in percent |
+
+Any other name is refused rather than stored, so a typo cannot become a metric
+nobody reads. Payloads are plain numbers, which is what a republished
+web-interface value normally looks like; a value that cannot be read leaves the
+previous one in place, because a stale number is honest where a zero would look
+like a real measurement of nothing.
+
+**It is never written to.** The type has no control path: an entry carrying
+`capabilities.write_output_limit` is refused, and such an entry reaches neither
+the HTTP control list nor the MQTT one. Reading an inverter does not make it
+controllable, and an installation whose only devices are of this type has
+nothing for the control loop to do.
+
+**What is refused, and why.** Each of these fails quietly if it is allowed
+through, so each is an error rather than a warning:
+
+| Refused | Because |
+|---|---|
+| A wildcard (`#`, `+`) in a topic | The subscription would match, but readings are attributed by exact topic, so the entry would record nothing and say nothing |
+| A topic this project already recognises (`Zendure/…`, `iot/…`) | A mistyped entry would take that device's readings and leave it dark |
+| The same topic on two entries | One of them would receive nothing, for no visible reason |
+| A metric name outside the table above | It would be stored as something nothing reads |
+| A `broker_ref` naming no configured profile | The device would end up on no broker at all |
+| A missing `name` or identity | Both are required: the name is the runtime identity key, the identity keeps two inverters apart |
+
+`python3 emsctl.py diagnose` reports all of them by these codes.
+
+**The Admin leaves it alone.** There is no editor for this type, so the
+maintenance page carries the entry through unchanged rather than treating it as
+the nearest kind it knows, and a broker profile used only by such a device is
+never pruned. Everything else on that page stays editable beside it.
+
+Staleness, broker profiles, credentials and TLS work exactly as they do for
+every other MQTT device; see the section below.
 
 ## Zendure MQTT Telemetry and Control
 
