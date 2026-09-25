@@ -1894,18 +1894,62 @@ def diagnose_hardware(checks, config_data):
         diagnose_add(checks, "hardware", "ok", "zendure_device_config_complete", f"Zendure device {name} has required read config", device=name, serial_configured=True)
         url = f"http://{device['ip']}/properties/report"
         start = time.monotonic()
+        reported = None
         try:
             status, payload = diagnose_http_json(url)
             from ems.clients import parse_device
             parse_device(payload)
+            reported = diagnose_reported_property_names(payload)
             _diagnose_record_probe(read_tracker, start)
             diagnose_add(checks, "hardware", "ok", "zendure_read_ok", f"Zendure device {name} read-only report endpoint returned parseable payload", device=name, status_code=status)
+            if reported["unmapped"]:
+                diagnose_add(checks, "hardware", "info", "zendure_unmapped_properties", f"Zendure device {name} reports {len(reported['unmapped'])} propert{'y' if len(reported['unmapped']) == 1 else 'ies'} the EMS does not read", device=name, unmapped=reported["unmapped"])
         except Exception as exc:
             _diagnose_record_probe(read_tracker, start, exc)
             diagnose_add(checks, "hardware", "warning", "zendure_read_failed", f"Zendure device {name} read-only probe failed: {exc.__class__.__name__}", device=name)
-        health["devices"].append({"name": name, "read": read_tracker.snapshot(), "write": None})
+        health["devices"].append({"name": name, "read": read_tracker.snapshot(), "write": None, "reported_properties": reported})
 
     return health
+
+
+def diagnose_reported_property_names(payload):
+    """Which property names a device reports, and which of them nothing reads.
+
+    Names only -- never values, so this carries no serial, token or reading and
+    stays safe in a support bundle. It exists because the EMS cannot notice a
+    field it was never taught: ``gridInputPower`` sat in a hardware capture for a
+    day while four surfaces showed a charging device as idle. An inventory from
+    an unfamiliar model is the cheapest way to find the next one, and it is what
+    ``tests/test_declared_config_reaches_the_device.py`` grows from.
+    """
+
+    properties = payload.get("properties") if isinstance(payload, dict) else None
+    if not isinstance(properties, dict):
+        return {"reported": [], "unmapped": []}
+
+    from ems.clients import parse_device
+
+    names = sorted(str(key) for key in properties)
+    # A name is "read" when *changing* it changes what parse_device produces.
+    #
+    # Removing it instead looks equivalent and is not: every reader here is
+    # written ``props.get(name) or 0``, so dropping a field that currently reads
+    # zero produces the identical state and the field looks unread. On a device
+    # sitting idle that is most of them -- a real report listed gridInputPower,
+    # acStatus and solarInputPower as unread purely because they were zero,
+    # which is precisely the advice this is meant to give an operator.
+    baseline = parse_device(payload)
+    unmapped = []
+    for name in names:
+        current = properties[name]
+        probe = 987654 if isinstance(current, (int, float)) and not isinstance(current, bool) else "?"
+        if probe == current:
+            probe = 123456
+        perturbed = dict(properties)
+        perturbed[name] = probe
+        if parse_device({"properties": perturbed}) == baseline:
+            unmapped.append(name)
+    return {"reported": names, "unmapped": unmapped}
 
 
 def diagnose_redact_key(key):
@@ -2010,6 +2054,19 @@ def diagnose_format_watts(value):
     elif rounded < 0:
         suffix = " export"
     return f"{rounded} W{suffix}"
+
+
+def diagnose_format_threshold_watts(value):
+    """A configured limit, without the import/export suffix a reading carries.
+
+    ``diagnose_format_watts`` labels the sign because a meter value means a
+    direction. A threshold has no direction of its own -- calling a 150 W
+    surplus threshold "150 W import" says the opposite of what it gates.
+    """
+
+    if value is None:
+        return "unknown"
+    return f"{int(round(value))} W"
 
 
 def diagnose_control_load_runtime(runtime_path):
@@ -2170,10 +2227,73 @@ def diagnose_control_snapshot(config_data, runtime_data, runtime_path):
         "control_enabled": bool(system_runtime.get("enabled", system_config.get("enabled", True))),
         "dry_run": bool(system_config.get("dry_run", False)),
         "winter_mode": bool(winter_runtime.get("enabled", winter_config.get("enabled", False))),
+        **diagnose_ac_charging_snapshot(config_data, runtime_data, devices),
         "system_limit_w": diagnose_float(system_runtime.get("max_total_power", system_config.get("max_total_power"))),
         "min_output_limit_w": diagnose_float(system_runtime.get("min_output_limit", system_config.get("min_output_limit"))),
         "loop_interval_s": diagnose_float(system_runtime.get("loop_interval", system_config.get("loop_interval"))),
         "runtime_state_path": runtime_path,
+    }
+
+
+def diagnose_ac_charging_snapshot(config_data, runtime_data, runtime_devices):
+    """What AC charging is configured to do, for the tool an operator reaches for.
+
+    The *live* direction is deliberately not here: the regulator never writes it
+    to runtime-state, because a decision rebuilt every loop must not become
+    indistinguishable from something a person chose. Everything else is
+    readable, and without it `diagnose --control` said nothing at all about the
+    one feature that can spend energy -- so "why is my system drawing from the
+    grid?" was not answerable from the operator's own diagnostic tool.
+
+    Runtime state wins over config, mirroring what the control loop resolves, or
+    this would report a feature as on that an operator switched off an hour ago.
+    """
+
+    section = runtime_data.get("ac_charge_control")
+    section = section if isinstance(section, dict) else {}
+    configured = config_data.get("ac_charge_control")
+    configured = configured if isinstance(configured, dict) else {}
+
+    if "enabled" in section:
+        enabled = bool(section.get("enabled"))
+    else:
+        enabled = bool(configured.get("enabled", False))
+
+    start = diagnose_float(section.get("charge_start_w", configured.get("charge_start_w")))
+    hysteresis = diagnose_float(
+        section.get("charge_hysteresis_w", configured.get("charge_hysteresis_w"))
+    )
+    stop = None
+    if start is not None and hysteresis is not None:
+        stop = max(0.0, start - hysteresis)
+
+    permitted = []
+    for item in config_data.get("devices") or []:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not name:
+            continue
+        runtime_device = runtime_devices.get(name)
+        runtime_device = runtime_device if isinstance(runtime_device, dict) else {}
+        if "ac_charge_enabled" in runtime_device:
+            allowed = bool(runtime_device.get("ac_charge_enabled"))
+        else:
+            allowed = bool(item.get("ac_charge_enabled", True))
+        if allowed:
+            permitted.append(name)
+
+    return {
+        "ac_charging_enabled": enabled,
+        "ac_charge_start_w": start,
+        "ac_charge_stop_w": stop,
+        "ac_charge_system_limit_w": diagnose_float(
+            section.get(
+                "max_total_charge_power_w",
+                configured.get("max_total_charge_power_w"),
+            )
+        ),
+        "ac_charge_permitted_devices": permitted,
     }
 
 
@@ -2525,6 +2645,32 @@ def diagnose_control_add_checks(checks, control):
         )
 
 
+def diagnose_ac_charging_text(snapshot):
+    """Render the AC charging block, saying plainly when it is off."""
+
+    if not snapshot.get("ac_charging_enabled"):
+        return ["AC Charging:          disabled", ""]
+
+    devices = snapshot.get("ac_charge_permitted_devices") or []
+    band = "unknown"
+    start = snapshot.get("ac_charge_start_w")
+    stop = snapshot.get("ac_charge_stop_w")
+    if start is not None and stop is not None:
+        band = (
+            f"enters above {diagnose_format_threshold_watts(start)} of surplus, "
+            f"leaves below {diagnose_format_threshold_watts(stop)}"
+        )
+
+    return [
+        "AC Charging:          enabled",
+        f"  Band:               {band}",
+        f"  Installation limit: {diagnose_format_threshold_watts(snapshot.get('ac_charge_system_limit_w'))}",
+        f"  Permitted devices:  {', '.join(devices) if devices else 'none'}",
+        "  Direction now:      see event=ac_charge_direction; not in runtime state",
+        "",
+    ]
+
+
 def diagnose_control_text(control):
     snapshot = control["snapshot"]
     lines = [
@@ -2540,6 +2686,7 @@ def diagnose_control_text(control):
         f"Control:              {'enabled' if snapshot.get('control_enabled') else 'disabled'}",
         f"Dry Run:              {'enabled' if snapshot.get('dry_run') else 'disabled'}",
         "",
+        *diagnose_ac_charging_text(snapshot),
         "Decision Explanation",
         "",
     ]
@@ -3522,6 +3669,18 @@ def diagnose_service_args(args, **overrides):
     }
     values.update(vars(args))
     values.update(overrides)
+
+    # A support bundle collects everything, so it collects these too. Its file
+    # list is documented and fixed, which reads as a promise of content: without
+    # this, `--support-bundle` alone wrote `control-diagnostics.json` and
+    # `control-quality.json` as empty objects, and the operator who followed the
+    # documentation sent a bundle with nothing about the control behaviour in
+    # it. Both are read-only, local, and cost nothing extra -- the quality
+    # report reads embedded samples when no sampling window is asked for.
+    if values.get("support_bundle"):
+        values["control"] = True
+        values["control_quality"] = True
+
     return argparse.Namespace(**values)
 
 

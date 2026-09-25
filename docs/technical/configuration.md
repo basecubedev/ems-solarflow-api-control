@@ -525,6 +525,100 @@ still reacting to an earlier command.
 
 `stale_telemetry_ramp_factor` reduces ramp speed when telemetry is stale.
 
+## AC Charging
+
+On by default, like the other features. It draws from the grid only against
+your own export, so an installation that never exports never charges — but a
+config upgrade does enable it for an installation that predates the feature, and
+`docs/user/safety.md` says what to set beforehand if that is not wanted.
+
+```json
+"ac_charge_control": {
+  "enabled": true,
+  "charge_start_w": 150,
+  "charge_hysteresis_w": 50,
+  "entry_confirm_cycles": 5,
+  "entry_window_cycles": 7,
+  "max_charge_entries_per_hour": 12,
+  "max_total_charge_power_w": 1200
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `enabled` | Whether the EMS may charge from surplus at all. Also runtime-toggleable. |
+| `charge_start_w` | Surplus needed before charging starts |
+| `charge_hysteresis_w` | How far below the start threshold charging continues |
+| `entry_confirm_cycles` | Observations that must show surplus before charging starts |
+| `entry_window_cycles` | How many recent loops those observations are counted within |
+| `max_charge_entries_per_hour` | Safety limit on how often a device may enter charging |
+| `max_total_charge_power_w` | Highest combined charging power across all devices |
+
+The lower edge of the charge band is **derived**, not configured:
+
+```text
+stop = max(0, charge_start_w - charge_hysteresis_w)
+```
+
+Deriving it this way makes an *inverted* pair impossible; it cannot prevent a
+*collapsed* one. A `charge_hysteresis_w` of 0, or a `charge_start_w` of 0, puts
+entry and exit at the same threshold, and charging then starts and stops
+repeatedly until the hourly entry cap holds it back — measured at 24 direction
+changes in 200 loops against a steady surplus, against one for the shipped band.
+The values are never rewritten, but `ac_charge_band_collapsed` says so once at
+startup.
+
+so a configuration whose stop threshold sits above its start threshold cannot be
+expressed. The confirmation window is likewise never shorter than the count it
+must hold.
+
+Entry counts five of the last seven observations by default, rather than five in
+a row or an average. Each observation is judged against the threshold on its
+own, so a single deep spike cannot stand in for a sustained surplus; counting
+within a window means one brief dip does not discard the confirmation. Leaving
+charge is always immediate and is never gated by any of these values.
+
+See [control-logic.md](control-logic.md) for the direction rules and
+[../user/safety.md](../user/safety.md) before enabling it.
+
+### Per-device keys
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ac_discharge_enabled` | `true` | Whether the EMS may command this device to supply the house. Today's behaviour, written down. |
+| `ac_charge_enabled` | `true` | Whether this device may be charged from surplus. Whether the *model* can is decided separately by the hardware catalogue. Also runtime-toggleable. |
+| `max_charge_power_w` | `0` | Highest charging power for this device. `0` uses the ceiling the device reports for itself. |
+
+### Why the charge limit is not the output limit
+
+The two describe different paths with different ratings, and the difference is
+physical, not bookkeeping.
+
+Feeding out, an inverter's current **adds** to the house current on a circuit
+whose breaker sits upstream of the injection point — the breaker never sees the
+inverter's contribution, which is why a balcony plant is limited at the source.
+Charging, the current is drawn through that breaker and protected by it.
+
+So the EMS never borrows one as the other. A SolarFlow 800 Pro 2 reports an
+800 W output limit and a 1000 W charge ceiling, and both numbers are correct.
+
+| Precedence | Source |
+|---|---|
+| 1 | `devices[].max_charge_power_w`, when set — capped by the device's ceiling, because the device has to accept the command |
+| 2 | The ceiling the device reports (`chargeMaxLimit`) |
+| — | A device that reports no ceiling charges nothing, and setting the key explicitly unblocks it |
+
+`ac_charge_control.max_total_charge_power_w` is a different question again: it is
+the **installation's** limit — your circuit and your fuse — not the devices'.
+Nothing in the EMS can measure that, so it stays a number you set.
+
+Charging additionally requires the device's resolved hardware model to carry an
+AC charge path in the hardware catalogue. That is a property of the model, not
+of the installation — see
+[../user/supported-setups.md](../user/supported-setups.md). Each model records
+what its permission rests on (`charge_evidence`): `measured` for the one model
+put on a probe here, `vendor_catalogue` for the rest.
+
 ## Winter Settings
 
 Winter mode is optional but enabled by default for new configs; set
@@ -565,6 +659,9 @@ Each Zendure device entry defines static installation data:
   "pv_kwp": 1.0,
   "pv_priority_factor": 1.0,
   "battery_kwh": 1.0,
+  "ac_discharge_enabled": true,
+  "ac_charge_enabled": true,
+  "max_charge_power_w": 0,
   "min_soc": 15,
   "max_soc": 100
 }
@@ -1128,7 +1225,7 @@ before it can publish. The pinned `hardware_profile` selects it
 
 | Hardware profile | Write method | Notes |
 | --- | --- | --- |
-| SolarFlow 800 / 800 Plus / 800 Pro / 800 Pro 2 / 1600 AC+ / 2400 AC / 2400 AC+ / 2400 Pro / 4000 AC+ | `zensdk_properties_write` | Publishes `{deviceId, messageId, timestamp, properties:{outputLimit}}` to `iot/<productKey>/<deviceId>/properties/write`. Needs `mqtt.product_key`. |
+| SolarFlow 800 / 800 Plus / 800 Pro / 800 Pro 2 / 1600 AC+ / 2400 AC / 2400 AC+ / 2400 Pro / 3000 Mix AC+ / 4000 Mix AC+ | `zensdk_properties_write` | Publishes `{deviceId, messageId, timestamp, properties:{outputLimit}}` to `iot/<productKey>/<deviceId>/properties/write`. Needs `mqtt.product_key`. |
 | Hyper 2000 / AIO 2400 | `legacy_object_device_automation` | Publishes a `deviceAutomation` `function/invoke` command to `iot/<productKey>/<deviceId>/function/invoke`; acknowledged on `function/invoke/reply`. Needs `mqtt.product_key`. |
 | Hub 1200 / Hub 2000 | `legacy_hub_device_automation` | Same `function/invoke` topic with a scalar watt value; acknowledged on `function/invoke/reply`. Needs `mqtt.product_key`. |
 | ACE 1500 / SuperBase V4600 / SuperBase V6400 | `telemetry_only` — **read-only** | Never publishes. |

@@ -115,6 +115,16 @@
       "pv_priority_factor": 1.0,
       "battery_kwh": 1.0,
 
+      "_comment_ac_directions": [
+        "Which AC directions EMS may command on this device.",
+        "Both directions are on by default.",
+        "Charging also needs a model the hardware catalogue lists as AC chargeable.",
+        "max_charge_power_w 0 uses the limit the device reports for itself."
+      ],
+      "ac_discharge_enabled": true,
+      "ac_charge_enabled": true,
+      "max_charge_power_w": 0,
+
       "_comment_soc": [
         "Battery SOC limits in percent.",
         "Use 0 to leave a value unmanaged."
@@ -136,6 +146,16 @@
       "pv_kwp": 1.0,
       "pv_priority_factor": 1.0,
       "battery_kwh": 1.0,
+
+      "_comment_ac_directions": [
+        "Which AC directions EMS may command on this device.",
+        "Both directions are on by default.",
+        "Charging also needs a model the hardware catalogue lists as AC chargeable.",
+        "max_charge_power_w 0 uses the limit the device reports for itself."
+      ],
+      "ac_discharge_enabled": true,
+      "ac_charge_enabled": true,
+      "max_charge_power_w": 0,
 
       "_comment_soc": [
         "Battery SOC limits in percent.",
@@ -199,6 +219,21 @@
     "ac_charge_power": 600,
     "enable_ac_charge_mode": true,
     "state_database_path": "data/ems_state.sqlite"
+  },
+
+  "ac_charge_control": {
+    "_comment": [
+      "Optional AC charging from grid surplus.",
+      "A device charges only when its model and its device entry both allow it.",
+      "On by default; it only acts while the installation is exporting surplus."
+    ],
+    "enabled": true,
+    "charge_start_w": 150,
+    "charge_hysteresis_w": 50,
+    "entry_confirm_cycles": 5,
+    "entry_window_cycles": 7,
+    "max_charge_entries_per_hour": 12,
+    "max_total_charge_power_w": 1200
   },
 
   "energy_savings": {

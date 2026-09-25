@@ -283,6 +283,9 @@ def parse_device(data):
         dc_status=props.get("dcStatus") or 0,
         grid_state=props.get("gridState") or 0,
         input_limit_w=props.get("inputLimit") or 0,
+        charge_max_limit_w=props.get("chargeMaxLimit") or 0,
+        grid_input=props.get("gridInputPower") or 0,
+        grid_reverse=props.get("gridReverse") or 0,
         pack_num=_observed_pack_count(data, props),
         soc_status=props.get("socStatus") or 0,
         battery_calibration_time=props.get("batCalTime"),
@@ -319,6 +322,9 @@ def zero_device_state():
         dc_status=0,
         grid_state=0,
         input_limit_w=0,
+        charge_max_limit_w=0,
+        grid_input=0,
+        grid_reverse=0,
         pack_num=None,
         soc_status=0,
         battery_calibration_time=None,
@@ -342,7 +348,12 @@ class ZendureClient:
         max_power=None,
         pv_kwp=1.0,
         battery_kwh=1.0,
-        pv_priority_factor=1.0
+        pv_priority_factor=1.0,
+        *,
+        hardware_profile=None,
+        ac_discharge_enabled=True,
+        ac_charge_enabled=True,
+        max_charge_power_w=0
     ):
         self.name = name
         self.ip = ip
@@ -356,6 +367,11 @@ class ZendureClient:
         self.pv_kwp = pv_kwp or 1.0
         self.battery_kwh = battery_kwh or 1.0
         self.pv_priority_factor = pv_priority_factor or 1.0
+        self.hardware_profile = hardware_profile or None
+        self.ac_discharge_enabled = bool(ac_discharge_enabled)
+        self.ac_charge_enabled = bool(ac_charge_enabled)
+        self.max_charge_power_w = max_charge_power_w or 0
+        self.observed_product = None
         self.read_health = CommHealth(name, kind="read")
         self.write_health = CommHealth(name, kind="write")
 
@@ -369,7 +385,10 @@ class ZendureClient:
                 timeout=2
             )
 
-            state = parse_device(r.json())
+            payload = r.json()
+            if isinstance(payload, dict) and payload.get("product"):
+                self.observed_product = str(payload["product"])
+            state = parse_device(payload)
             self.read_health.record_success((time.monotonic() - start) * 1000.0)
             return state
 
@@ -390,6 +409,90 @@ class ZendureClient:
             {"outputLimit": int(value)},
             "write_output_limit_error",
             target_w=value,
+        )
+
+    def resolved_hardware_profile(self):
+        """Resolve this device's model id, or None.
+
+        A config-pinned value is decisive and the device's own ``product`` field
+        corroborates it — the same evidence precedence discovery already uses, so
+        a local HTTP device needs no separate identification rule.
+        """
+
+        from ems.mqtt_control.zendure_profiles import (
+            EVIDENCE_EXISTING_CONFIG,
+            EVIDENCE_FULL_REPORT,
+            make_hardware_profile_evidence,
+            resolve_hardware_profile_evidence,
+        )
+
+        return resolve_hardware_profile_evidence(
+            [
+                make_hardware_profile_evidence(
+                    EVIDENCE_EXISTING_CONFIG, self.hardware_profile
+                ),
+                make_hardware_profile_evidence(
+                    EVIDENCE_FULL_REPORT, self.observed_product
+                ),
+            ]
+        ).profile_id
+
+    def dispatch_output_limit(self, value):
+        """Dispatch a signed power target over the local HTTP API.
+
+        A non-negative target keeps the historic single-property write: the
+        atomic set would also carry ``smartMode`` on every loop, and that is a
+        flash-persistent operating mode nothing measured says is free to rewrite
+        at five-second cadence.
+
+        A charge needs the atomic set, and it needs a model whose AC charge path
+        is established — the command shape is shared across the ZenSDK family,
+        the capability is not.
+        """
+
+        from ems.mqtt_control import dispatch
+        from ems.mqtt_control.power_capability import (
+            BLOCK_TRANSPORT_WRITE_NOT_IMPLEMENTED,
+            WRITE_PROFILE_ZENSDK_PROPERTIES,
+        )
+        from ems.mqtt_control.zendure_profiles import (
+            OPERATION_CHARGE,
+            hardware_profile_by_name,
+        )
+        from ems.power_command import build_zensdk_power_operation
+
+        target = int(value)
+        if target >= 0:
+            ok = self.write_output_limit(target)
+            return (
+                dispatch.published(target)
+                if ok
+                else dispatch.failed(target, reason="http_write_failed")
+            )
+
+        profile_id = self.resolved_hardware_profile()
+        profile = hardware_profile_by_name(profile_id) if profile_id else None
+        if profile is None:
+            return dispatch.rejected(target, reason="unknown_hardware_profile")
+        if not profile.supports_operation(OPERATION_CHARGE):
+            return dispatch.rejected(target, reason="charge_target_unsupported")
+        if profile.power_write_profile != WRITE_PROFILE_ZENSDK_PROPERTIES:
+            return dispatch.rejected(
+                target, reason=BLOCK_TRANSPORT_WRITE_NOT_IMPLEMENTED
+            )
+
+        operation = build_zensdk_power_operation(target)
+        ok = zendure_write(
+            self,
+            "inputLimit",
+            operation.properties,
+            "write_charge_limit_error",
+            target_w=target,
+        )
+        return (
+            dispatch.published(target)
+            if ok
+            else dispatch.failed(target, reason="http_write_failed")
         )
 
     def write_properties(

@@ -14,6 +14,8 @@ from collections.abc import Mapping
 import math
 from dataclasses import dataclass
 
+from ems.power_direction import OPERATION_CHARGE
+
 STATE_QUEUED = "queued"
 STATE_PUBLISHED = "published"
 STATE_ACKNOWLEDGED = "acknowledged"
@@ -307,6 +309,20 @@ WATT_PROPERTY_KEYS = frozenset({"outputLimit", "inputLimit"})
 # acMode and outputLimit are required; optional fields are checked when reported.
 OPTIONAL_EXPECTED_KEYS = frozenset({"smartMode", "inputLimit"})
 
+# A charge inverts which value carries the proof. Its commanded outputLimit is
+# zero, and zero is also what an idle device reports, so it cannot show that
+# anything happened; inputLimit is the value that does. Leaving the discharge
+# split in place here would confirm a charge from telemetry that never saw one.
+CHARGE_OPTIONAL_EXPECTED_KEYS = frozenset({"smartMode", "outputLimit"})
+
+
+def optional_expected_keys(operation):
+    """Expected properties that are verified only when telemetry reports them."""
+
+    if operation == OPERATION_CHARGE:
+        return CHARGE_OPTIONAL_EXPECTED_KEYS
+    return OPTIONAL_EXPECTED_KEYS
+
 FRESHNESS_FRESH = "fresh"
 FRESHNESS_STALE = "stale"
 FRESHNESS_MISSING_COMMAND_TIME = "missing_command_time"
@@ -474,9 +490,10 @@ def evaluate_expected_properties_confirmation(
         if isinstance(snapshot_observed_keys, (set, frozenset, list, tuple))
         else set()
     )
+    optional_keys = optional_expected_keys(getattr(record, "operation", None))
     evidence = []
     for key, target in expected.items():
-        required = key not in OPTIONAL_EXPECTED_KEYS
+        required = key not in optional_keys
         observed = metrics.get(key)
         numeric_observed = _observed_number(metrics, key)
         if numeric_observed is None:

@@ -10,6 +10,7 @@ import stat
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from ems.logging_utils import log_event
 from ems.paths import resolve_config_path, resolve_template_path
 
 LATEST_CONFIG_SCHEMA_VERSION = 3
@@ -92,6 +93,31 @@ BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
     "ac_charge_power": 200,
     "enable_ac_charge_mode": True,
     "state_database_path": "data/ems_state.sqlite"
+}
+
+AC_CHARGE_CONTROL_DEFAULTS = {
+    # On by default like the other features. What keeps it from acting is the
+    # surplus itself: entry needs a sustained export, so an installation that
+    # never exports never charges. Entry is deliberate and exit is immediate, so
+    # the two thresholds are never equal — the lower edge is derived from the
+    # hysteresis rather than configured, which makes an inverted pair impossible
+    # to express.
+    "enabled": True,
+    "charge_start_w": 150,
+    "charge_hysteresis_w": 50,
+    # k of the last n observations, not k in a row and not a mean: each sample
+    # is judged against the threshold on its own, so a single deep spike can
+    # never stand in for a sustained surplus, while one brief dip no longer
+    # discards the evidence gathered so far.
+    "entry_confirm_cycles": 5,
+    "entry_window_cycles": 7,
+    "max_charge_entries_per_hour": 12,
+    # No charge-specific ramp: the existing output-control ramp already acts on
+    # the signed total, and a second one would be a second mechanism deciding
+    # the same thing. Keys for it were drafted and deliberately not built, so
+    # they are not shipped either -- a setting that changes nothing is worse
+    # than an absent one.
+    "max_total_charge_power_w": 1200
 }
 
 CONFIG_UPGRADE_DEFAULTS = {
@@ -623,6 +649,7 @@ def default_safe_config():
         "battery_full_charge_assist": copy.deepcopy(
             BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
         ),
+        "ac_charge_control": copy.deepcopy(AC_CHARGE_CONTROL_DEFAULTS),
         "config_upgrade": copy.deepcopy(CONFIG_UPGRADE_DEFAULTS),
         "influxdb": copy.deepcopy(INFLUXDB_DEFAULTS),
         "devices": [],
@@ -1670,6 +1697,7 @@ DASHBOARD_CONFIG = DASHBOARD_DEFAULTS.copy()
 INFLUXDB_CONFIG = None
 ENERGY_SAVINGS_CONFIG = ENERGY_SAVINGS_DEFAULTS.copy()
 BATTERY_FULL_CHARGE_ASSIST_CONFIG = BATTERY_FULL_CHARGE_ASSIST_DEFAULTS.copy()
+AC_CHARGE_CONTROL_CONFIG = AC_CHARGE_CONTROL_DEFAULTS.copy()
 OFFGRID_SOCKET_MODES = {
     "standard": 0,
     "eco": 1,
@@ -1722,6 +1750,7 @@ def initialize(args, base_dir):
     global SOC_RECONCILE_INTERVAL, WINTER_CONFIG, DASHBOARD_CONFIG
     global INFLUXDB_CONFIG
     global ENERGY_SAVINGS_CONFIG, BATTERY_FULL_CHARGE_ASSIST_CONFIG
+    global AC_CHARGE_CONTROL_CONFIG
     global ZENDURE_CONFIG, ZENDURE_MQTT_CONFIG, SHELLY_IP, GRID_METER_CONFIG
 
     ARGS = args
@@ -1841,6 +1870,9 @@ def initialize(args, base_dir):
     }
     BATTERY_FULL_CHARGE_ASSIST_CONFIG = normalize_battery_full_charge_assist_config(
         CONFIG.get("battery_full_charge_assist", {})
+    )
+    AC_CHARGE_CONTROL_CONFIG = normalize_ac_charge_control_config(
+        CONFIG.get("ac_charge_control")
     )
     ZENDURE_CONFIG = CONFIG["devices"]
     zendure_mqtt_config = CONFIG.get("zendure_mqtt", {})
@@ -2678,6 +2710,53 @@ def sanitize_bucket_prefix(value, default="ems"):
 INFLUXDB_MODES = ("bundled", "external")
 
 
+def normalize_ac_charge_control_config(config, *, emit_warning=None):
+    """Merge the AC charging settings and say so when the band has collapsed.
+
+    ``charge_start_w`` and ``charge_hysteresis_w`` describe two edges, and the
+    lower one is derived so it can never sit *above* the upper one. It can still
+    be made to sit *on* it: a hysteresis of zero, or a start of zero, puts entry
+    and exit at the same threshold.
+
+    That is not a harmless setting. Measured on the closed loop against a steady
+    200 W surplus: the shipped band produces one direction change in 200 cycles,
+    a collapsed one produces 24 and pins the hourly entry cap. Relays move on
+    every one of them, which is the wear the whole asymmetric entry/exit design
+    exists to prevent.
+
+    The operator's numbers are kept — clamping them silently would be a second
+    authority for a value they set — but the warning is emitted once here at load
+    rather than every cycle from the control loop.
+    """
+
+    if not isinstance(config, dict):
+        config = {}
+
+    merged = {**AC_CHARGE_CONTROL_DEFAULTS, **config}
+    warn = emit_warning or (
+        lambda message: log_event(logging.WARNING, "ac_charge_band_collapsed", message=message)
+    )
+
+    start = safe_int(merged.get("charge_start_w"), AC_CHARGE_CONTROL_DEFAULTS["charge_start_w"], minimum=0)
+    hysteresis = safe_int(merged.get("charge_hysteresis_w"), AC_CHARGE_CONTROL_DEFAULTS["charge_hysteresis_w"], minimum=0)
+
+    # The same derivation ac_charge_stop_w uses. Rebuilding it slightly
+    # differently here is how this check first missed charge_start_w = 0.
+    stop = max(0, start - hysteresis)
+
+    if safe_bool(merged.get("enabled"), False) and stop >= start:
+        warn(
+            "ac_charge_control: charge_start_w "
+            f"{start} and charge_hysteresis_w {hysteresis} derive a stop "
+            f"threshold of {stop}, so entry and exit sit at the same point and "
+            "charging will start and stop repeatedly until the hourly entry cap "
+            "holds it back. Set charge_start_w above zero and charge_hysteresis_w "
+            "below it."
+        )
+
+    return merged
+
+
 def normalize_influxdb_mode(value):
     """Return a valid influxdb mode, falling back to 'bundled' with a warning."""
     text = str(value or "").strip().lower()
@@ -2899,6 +2978,42 @@ def resolve_influx_token(influxdb_config, environ=None):
         return str(environ.get(env_name, "")).strip()
 
     return ""
+
+
+def ac_charge_control_int(key, default=0, minimum=None):
+    return safe_int(
+        AC_CHARGE_CONTROL_CONFIG.get(key, default), default, minimum=minimum
+    )
+
+
+def ac_charge_control_enabled(runtime_state=None):
+    """Whether AC charging from surplus is switched on.
+
+    Runtime state wins so an operator can stop the EMS drawing from the grid
+    without a restart; config is the fallback.
+    """
+
+    # Read defensively: this runs every control cycle against whatever runtime
+    # state the controller was handed, which may be absent or a partial object.
+    data = getattr(runtime_state, "data", None)
+    if isinstance(data, dict):
+        section = data.get("ac_charge_control")
+        if isinstance(section, dict) and "enabled" in section:
+            return safe_bool(section.get("enabled"), False)
+
+    return safe_bool(AC_CHARGE_CONTROL_CONFIG.get("enabled", False), False)
+
+
+def ac_charge_stop_w():
+    """Lower edge of the charge band, derived so it can never sit above the start.
+
+    Configuring both edges would allow an inverted pair; configuring the start
+    and the hysteresis cannot.
+    """
+
+    start = ac_charge_control_int("charge_start_w", 150, minimum=0)
+    hysteresis = ac_charge_control_int("charge_hysteresis_w", 50, minimum=0)
+    return max(0, start - hysteresis)
 
 
 def winter_config_bool(key, default=False):
