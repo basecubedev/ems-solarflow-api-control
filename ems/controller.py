@@ -356,27 +356,34 @@ class EMSController:
 
         return self.device_command_block_reason(dev) is None
 
-    def device_claim_eligible(self, dev):
-        """Whether ``dev`` may hold the exclusive PV-first claim.
+    def claim_eligible_devices(self):
+        """Which devices may hold the exclusive PV-first claim.
 
-        Commandable and on a transport whose write gate is open. The gate is
-        read without the dry-run and simulation terms on purpose: those suppress
-        every write equally, so an allocation computed under them should still
-        show what a live run would do. A single transport switched off does not
-        -- the devices behind it never receive anything, and unlike an offline
-        device that state does not clear by itself.
+        Commandable, and on a transport whose write gate is open -- but a closed
+        gate only means something while another device's gate is open. When every
+        write is suppressed, by a dry run, a simulation, a replay, or an
+        all-gates-off preview posture, nothing is being written anywhere and the
+        gate says nothing about who should hold the claim; reading it then would
+        collapse the allocation the preview exists to show.
         """
 
-        if not self.device_commandable(dev):
-            return False
+        commandable = [self.device_commandable(dev) for dev in self.devices]
 
         if cfg.SIMULATION_MODE or getattr(cfg.ARGS, "replay", False):
-            # The simulation/replay safe config forces every gate off, so
-            # reading one here would make a replay allocate differently from
-            # the run it reproduces.
-            return True
+            return commandable
 
-        return cfg.resolve_device_write_gate(dev).gate_enabled
+        gated = [
+            cfg.resolve_device_write_gate(dev).gate_enabled
+            for dev in self.devices
+        ]
+
+        if not any(gated):
+            return commandable
+
+        return [
+            allowed and open_gate
+            for allowed, open_gate in zip(commandable, gated)
+        ]
 
     def active_online_device_indexes(self):
         """Return indexes for devices currently eligible for EMS control."""
@@ -3690,9 +3697,7 @@ class EMSController:
             requested_total=stabilized_total,
             explain=True,
             online_devices=self.device_online,
-            commandable=[
-                self.device_claim_eligible(dev) for dev in self.devices
-            ]
+            commandable=self.claim_eligible_devices()
         )
 
         self.log_pv_priority_change(control_explanation)

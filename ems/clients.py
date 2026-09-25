@@ -230,8 +230,8 @@ def _observed_pack_count(data, props):
 
     A zero beside a populated ``packData`` is one bad poll, not a device that
     lost its battery, and absence unlocks behaviour that only a confirmed
-    absence may unlock. ``packData`` is absent on the MQTT path, where the count
-    stands alone.
+    absence may unlock. Both placements the report uses are weighed, and the
+    MQTT callers pass the aggregator's pack list under the same key.
     """
 
     packs = parse_pack_count(props.get("packNum"))

@@ -332,27 +332,38 @@ def test_a_gated_off_transport_does_not_take_the_claim_either():
             gate_enabled=dev.name != "WR2"
         ),
     ):
-        commandable = [
-            controller.device_claim_eligible(dev) for dev in controller.devices
-        ]
-
-    assert commandable == [True, False]
+        assert controller.claim_eligible_devices() == [True, False]
 
 
-def test_a_replay_is_not_disqualified_by_the_safe_config():
-    """Simulation and replay force every write gate off by design.
+def test_every_gate_closed_is_a_preview_and_not_a_disqualification():
+    """A closed gate only means something while another one is open.
 
-    Reading one here would make a replay allocate differently from the live run
-    it reproduces -- the point of a replay being that it does not.
+    The conservative startup profile turns every write gate off to preview what
+    a live run would do. Reading a gate then disqualifies the whole fleet, the
+    battery top-up finds nobody to weigh, and the allocation the preview exists
+    to show collapses to zero -- with a warning every loop.
     """
 
+    controller = controller_with()
+
+    with patch(
+        "ems.controller.cfg.resolve_device_write_gate",
+        side_effect=lambda dev: SimpleNamespace(gate_enabled=False),
+    ):
+        assert controller.claim_eligible_devices() == [True, True]
+
+
+def test_a_replay_is_not_disqualified_by_a_single_open_gate_either():
     controller = controller_with()
 
     with patch("ems.controller.cfg.SIMULATION_MODE", True), patch(
         "ems.controller.cfg.resolve_device_write_gate",
         side_effect=AssertionError("the gate must not be read in simulation"),
     ):
-        assert controller.device_claim_eligible(controller.devices[0])
+        assert controller.claim_eligible_devices() == [True, True]
+
+
+
 
 
 def test_the_cap_uses_the_limit_the_device_is_holding():
