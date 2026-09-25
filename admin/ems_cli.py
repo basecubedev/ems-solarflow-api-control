@@ -24,6 +24,10 @@ from pathlib import Path
 
 from admin.ems_tool import (
     CONTAINER_EMSCTL_PATH,
+    EXEC_CLIENT_GRACE_SECONDS,
+    EXEC_GUARD_TIMED_OUT_CODES,
+    guard_not_invocable,
+    guarded_container_command,
     resolve_running_ems_container,
 )
 from admin.install_context import detect_install_context
@@ -198,16 +202,14 @@ class EmsCliDiagnostics:
 
     # --- command execution ----------------------------------------------
 
-    def _argv(self, spec, mode):
+    def _argv(self, spec, mode, bounded=True):
         if mode["mode"] == "container":
-            return [
-                "docker",
-                "exec",
-                mode["container"],
-                "python3",
-                CONTAINER_EMSCTL_PATH,
-                *spec["args"],
-            ]
+            command = ["python3", CONTAINER_EMSCTL_PATH, *spec["args"]]
+            if bounded:
+                # Same orphan as the EMS tool runner: killing the client here
+                # leaves the check running inside the container.
+                command = guarded_container_command(command, spec["timeout"])
+            return ["docker", "exec", mode["container"], *command]
         return [
             "python3",
             str(mode["emsctl_path"]),
@@ -218,17 +220,29 @@ class EmsCliDiagnostics:
 
     def _run_check(self, check_id, mode):
         spec = CHECKS[check_id]
+        in_container = mode["mode"] == "container"
         argv = self._argv(spec, mode)
         cwd = str(mode["cwd"]) if mode["mode"] == "local" else None
+        # A local check is this process's own child, so its ceiling already ends
+        # it; only the container run needs the client to wait past the guard.
+        ceiling = spec["timeout"] + (EXEC_CLIENT_GRACE_SECONDS if in_container else 0)
         started = time.monotonic()
         try:
             result = self._run(
                 argv,
                 capture_output=True,
                 text=True,
-                timeout=spec["timeout"],
+                timeout=ceiling,
                 cwd=cwd,
             )
+            if in_container and guard_not_invocable(result):
+                result = self._run(
+                    self._argv(spec, mode, bounded=False),
+                    capture_output=True,
+                    text=True,
+                    timeout=spec["timeout"],
+                    cwd=cwd,
+                )
         except subprocess.TimeoutExpired:
             # A check that warns when the subsystem is unreachable warns when it
             # is too slow to answer as well. Reporting a hard failure there
@@ -251,6 +265,15 @@ class EmsCliDiagnostics:
                 check_id, spec, "failed", None,
                 "", f"Could not run the check: {exc}",
                 _elapsed_ms(started), False,
+            )
+
+        if in_container and result.returncode in EXEC_GUARD_TIMED_OUT_CODES:
+            # The guard stopped it, which is the same outcome the client's own
+            # ceiling reports -- including for a check marked to warn.
+            status = "warning" if spec["warn_on_fail"] else "timeout"
+            return _check_result(
+                check_id, spec, status, None,
+                "", "Check timed out.", _elapsed_ms(started), False,
             )
 
         exit_code = int(result.returncode)

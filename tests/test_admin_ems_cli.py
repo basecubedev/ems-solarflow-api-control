@@ -145,17 +145,17 @@ def test_allowlist_maps_named_checks_to_exact_argv(tmp_path):
 
     service.run()
 
+    from admin.ems_tool import EXEC_GUARD
+
     argvs = [call["argv"] for call in run.calls]
-    # Container mode always goes through `docker exec <name> python3 /app/emsctl.py`.
+    # Container mode always goes through
+    # `docker exec <name> timeout ... python3 /app/emsctl.py`, and the guard is
+    # the only thing standing between the container and the interpreter.
     for argv in argvs:
-        assert argv[:5] == [
-            "docker",
-            "exec",
-            "ems-solarflow-api-control",
-            "python3",
-            "/app/emsctl.py",
-        ]
-    suffixes = {tuple(argv[5:]) for argv in argvs}
+        assert argv[:3] == ["docker", "exec", "ems-solarflow-api-control"]
+        assert argv[3] == EXEC_GUARD
+        assert argv[7:9] == ["python3", "/app/emsctl.py"]
+    suffixes = {tuple(argv[9:]) for argv in argvs}
     assert ("diagnose", "--json") in suffixes
     assert ("config", "upgrade", "--dry-run") in suffixes
     assert ("influx", "status", "--json") in suffixes
@@ -478,3 +478,88 @@ def test_duration_is_reported_per_check(tmp_path):
 
     assert isinstance(result["checks"][0]["duration_ms"], int)
     assert result["checks"][0]["duration_ms"] >= 0
+
+
+# --- a check is bounded where it runs -------------------------------------
+
+_GUARD_MISSING = (
+    'OCI runtime exec failed: exec failed: unable to start container process: '
+    'exec: "timeout": executable file not found in $PATH: unknown'
+)
+
+
+def _container_service(tmp_path, run):
+    _standard_install(tmp_path)
+    return _service(tmp_path, docker=FakeDocker(container=_running_ems()), run=run)
+
+
+def test_a_container_check_carries_its_deadline_inside(tmp_path):
+    from admin.ems_cli import CHECKS
+    from admin.ems_tool import EXEC_GUARD
+
+    run = FakeRun(default=_completed(stdout="{}"))
+    _container_service(tmp_path, run).run(check_ids=("runtime_status",))
+
+    argv = run.calls[0]["argv"]
+    assert EXEC_GUARD in argv
+    assert str(CHECKS["runtime_status"]["timeout"]) in argv
+
+
+def test_the_client_waits_past_a_container_checks_inner_deadline(tmp_path):
+    from admin.ems_cli import CHECKS
+
+    run = FakeRun(default=_completed(stdout="{}"))
+    _container_service(tmp_path, run).run(check_ids=("runtime_status",))
+
+    assert run.calls[0]["kwargs"]["timeout"] > CHECKS["runtime_status"]["timeout"]
+
+
+def test_a_check_stopped_inside_the_container_reads_as_a_timeout(tmp_path):
+    run = FakeRun(default=_completed(returncode=124))
+    result = _container_service(tmp_path, run).run(
+        check_ids=("runtime_status", "influx_status")
+    )
+
+    by_id = {check["id"]: check for check in result["checks"]}
+    assert by_id["runtime_status"]["status"] == "timeout"
+    # `warn_on_fail` survives this path exactly as it does the client's own.
+    assert by_id["influx_status"]["status"] == "warning"
+
+
+def test_a_check_killed_after_refusing_to_stop_reads_as_a_timeout(tmp_path):
+    run = FakeRun(default=_completed(returncode=137))
+    result = _container_service(tmp_path, run).run(check_ids=("runtime_status",))
+
+    assert result["checks"][0]["status"] == "timeout"
+
+
+def test_a_local_check_is_never_wrapped(tmp_path):
+    """Nothing survives here: the process is this process's own child."""
+
+    from admin.ems_tool import EXEC_GUARD
+
+    _standard_install(tmp_path, with_compose=False, with_emsctl=True)
+    run = FakeRun(default=_completed(stdout="{}"))
+    service = _service(tmp_path, docker=FakeDocker(container=None), run=run)
+
+    service.run(check_ids=("runtime_status",))
+
+    assert EXEC_GUARD not in run.calls[0]["argv"]
+
+
+def test_an_image_without_the_guard_still_answers_the_check(tmp_path):
+    from admin.ems_tool import EXEC_GUARD
+
+    class _GuardMissingOnce(FakeRun):
+        def __call__(self, argv, **kwargs):
+            self.calls.append({"argv": list(argv), "kwargs": kwargs})
+            if EXEC_GUARD in argv:
+                return _completed(returncode=126, stdout=_GUARD_MISSING)
+            return _completed(returncode=0, stdout="ok")
+
+    run = _GuardMissingOnce()
+    result = _container_service(tmp_path, run).run(check_ids=("runtime_status",))
+
+    assert result["checks"][0]["status"] == "ok"
+    assert len(run.calls) == 2
+    assert EXEC_GUARD not in run.calls[1]["argv"]
