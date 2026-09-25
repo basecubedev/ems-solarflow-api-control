@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from admin.deployment import DockerError
+from admin.deployment import ONEOFF_TIMEOUT_SECONDS, DockerError
 from admin.ems_tool import EmsToolRunner
 from admin.guided_upgrade import (
     GuidedUpgradeExecutor,
@@ -111,7 +111,10 @@ class FakeCompose:
              "force_recreate": force_recreate}
         )
 
-    def run_oneoff(self, workspace, service, command, timeout=180):
+    def run_oneoff(
+        self, workspace, service, command,
+        timeout=ONEOFF_TIMEOUT_SECONDS, input_text=None,
+    ):
         self.oneoff_calls.append(
             {"workspace": str(workspace), "service": service, "command": list(command)}
         )

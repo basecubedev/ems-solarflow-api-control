@@ -550,6 +550,21 @@ def _default_run_influx_sync(compose, workspace):
     )
 
 
+def _with_leftover(message, exc):
+    """Carry a container the failure could not clean up into the summary.
+
+    The step detail is not rendered on the failure path -- the page shows only
+    this summary -- and a leftover container is the one part of the failure the
+    operator has to act on: retrying beside it is what puts two schema syncs
+    into InfluxDB at once.
+    """
+
+    if not getattr(exc, "leftover", None):
+        return message
+
+    return f"{message} {exc.message}"
+
+
 def _ensure_influx_data_dir(workspace):
     # Admin starts the bundled InfluxDB directly (not via ``influx init``), so the
     # host-side bind-mount target must exist first. Idempotent; never deletes.
@@ -632,7 +647,9 @@ class MaintenanceContainerActions:
                 returncode, detail = self.run_influx_init(self.compose, workspace)
             except Exception as exc:  # never leak a traceback to the UI
                 return self._failure(
-                    "Could not initialise bundled InfluxDB secrets.",
+                    _with_leftover(
+                        "Could not initialise bundled InfluxDB secrets.", exc
+                    ),
                     steps,
                     plan,
                     step={"service": INFLUX_SERVICE, "action": "init", "status": "error"},
@@ -682,7 +699,7 @@ class MaintenanceContainerActions:
                 returncode, detail = self.run_influx_sync(self.compose, workspace)
             except Exception as exc:  # never leak a traceback to the UI
                 return self._failure(
-                    "Could not sync InfluxDB analytics schema.",
+                    _with_leftover("Could not sync InfluxDB analytics schema.", exc),
                     steps,
                     plan,
                     step={"service": INFLUX_SERVICE, "action": "sync", "status": "error"},

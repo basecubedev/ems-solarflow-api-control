@@ -14,7 +14,7 @@ from admin.container_actions import (
     build_ems_display_state,
     build_influx_display_state,
 )
-from admin.deployment import DockerError
+from admin.deployment import ONEOFF_TIMEOUT_SECONDS, DockerError
 
 pytestmark = [
     pytest.mark.admin,
@@ -334,7 +334,10 @@ class FakeCompose:
         if "stop" in self.fail:
             raise DockerError("docker_compose_stop_failed", "boom")
 
-    def run_oneoff(self, workspace, service, command, timeout=180):
+    def run_oneoff(
+        self, workspace, service, command,
+        timeout=ONEOFF_TIMEOUT_SECONDS, input_text=None,
+    ):
         self.calls.append(("run_oneoff", service, tuple(command)))
         returncode = self.sync_returncode if "sync" in command else self.init_returncode
         return returncode, None
@@ -465,6 +468,66 @@ def test_failed_influx_sync_aborts_before_ems_recreate(tmp_path):
     }
 
 
+def test_a_container_left_behind_is_named_in_the_summary_not_only_the_step(tmp_path):
+    """The page renders this summary and not the step detail on a failure.
+
+    A leftover container is the one part of the failure the operator has to act
+    on: the advice after a timeout is to try again, and doing that beside a sync
+    still running puts two of them into InfluxDB at once. Hiding it in a field
+    nothing shows is the same as not reporting it.
+    """
+
+    from admin.deployment import DockerError
+
+    class LeavesAContainer(FakeCompose):
+        def run_oneoff(
+            self, workspace, service, command,
+            timeout=ONEOFF_TIMEOUT_SECONDS, input_text=None,
+        ):
+            if "sync" in command:
+                raise DockerError(
+                    "docker_compose_run_timeout",
+                    "The one-off container command did not finish within 330 "
+                    "seconds. Its container ems-oneoff-abc123456789 could not "
+                    "be removed and may still be running; remove it before "
+                    "trying again.",
+                    leftover="ems-oneoff-abc123456789",
+                )
+            return super().run_oneoff(workspace, service, command, timeout=timeout)
+
+    actions = make_actions(
+        tmp_path, influx_config(), make_overview(), LeavesAContainer()
+    )
+    result = actions.sync()
+
+    assert result["ok"] is False
+    assert "ems-oneoff-abc123456789" in result["message"]
+    assert "Could not sync InfluxDB analytics schema." in result["message"]
+
+
+def test_a_failure_with_nothing_left_behind_keeps_the_plain_summary(tmp_path):
+    """Widening every failure message would bury the one that needs acting on."""
+
+    from admin.deployment import DockerError
+
+    class PlainFailure(FakeCompose):
+        def run_oneoff(
+            self, workspace, service, command,
+            timeout=ONEOFF_TIMEOUT_SECONDS, input_text=None,
+        ):
+            if "sync" in command:
+                raise DockerError(
+                    "docker_compose_run_failed",
+                    "Could not run the one-off container command.",
+                )
+            return super().run_oneoff(workspace, service, command, timeout=timeout)
+
+    actions = make_actions(tmp_path, influx_config(), make_overview(), PlainFailure())
+    result = actions.sync()
+
+    assert result["message"] == "Could not sync InfluxDB analytics schema."
+
+
 def test_a_sync_killed_by_its_own_ceiling_is_a_visible_failure(tmp_path):
     """Why the ceiling is sized for a slow sync rather than a stuck one.
 
@@ -477,7 +540,10 @@ def test_a_sync_killed_by_its_own_ceiling_is_a_visible_failure(tmp_path):
     import subprocess
 
     class Hanging(FakeCompose):
-        def run_oneoff(self, workspace, service, command, timeout=180):
+        def run_oneoff(
+            self, workspace, service, command,
+            timeout=ONEOFF_TIMEOUT_SECONDS, input_text=None,
+        ):
             if "sync" in command:
                 raise subprocess.TimeoutExpired(cmd=list(command), timeout=timeout)
             return super().run_oneoff(workspace, service, command, timeout=timeout)

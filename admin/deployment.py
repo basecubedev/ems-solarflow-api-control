@@ -56,6 +56,18 @@ SAFE_STOPPED_CONTAINER_STATES = frozenset({"created", "exited", "dead", "stopped
 # where a fast host needs two, so a bound tuned to the fast host reports a slow
 # disk as a failure. This still catches a hung daemon.
 CONTAINER_LIFECYCLE_TIMEOUT_SECONDS = 240
+
+# A one-off command killed by its ceiling leaves its container running: ``--rm``
+# is the compose client's job, and the client is what was killed. The name is
+# the only handle on that container which outlives the client, and a fresh one
+# per run means a leftover can never block the next attempt.
+ONEOFF_CONTAINER_PREFIX = "ems-oneoff-"
+ONEOFF_TIMEOUT_SECONDS = 180
+# Removing a container costs the same synchronous write latency per step as
+# creating one, so this follows the 45-55 s that the note above measures on the
+# slow reference hardware rather than being a round number.
+ONEOFF_REMOVE_TIMEOUT_SECONDS = 60
+
 WORKSPACE_PERMISSION_MESSAGE = (
     "Deployment workspace is not writable by EMS. The prepared config/ or data/ "
     "folder cannot be written by the EMS runtime user. Repair permissions and try again."
@@ -135,12 +147,16 @@ def is_registry_rate_limit_text(text):
 class DockerError(Exception):
     """A user-facing Docker/bootstrap failure with a stable ``code``."""
 
-    def __init__(self, code, message, detail=None, conflict=None):
+    def __init__(self, code, message, detail=None, conflict=None, leftover=None):
         super().__init__(message)
         self.code = code
         self.message = message
         self.detail = detail
         self.conflict = conflict
+        # A container this failure could not clean up. Callers that only show
+        # their own summary still have to pass this on: it is the one part of
+        # the failure the operator has to act on before retrying.
+        self.leftover = leftover
 
 
 def _container_rows(stdout):
@@ -904,7 +920,14 @@ class DockerCompose:
                 _safe_command_detail("\n".join(tail)),
             )
 
-    def run_oneoff(self, workspace, service, command, timeout=180, input_text=None):
+    def run_oneoff(
+        self,
+        workspace,
+        service,
+        command,
+        timeout=ONEOFF_TIMEOUT_SECONDS,
+        input_text=None,
+    ):
         """Run a one-off ``docker compose run --rm`` command.
 
         Returns ``(returncode, detail)`` where ``detail`` is a redacted output
@@ -913,7 +936,8 @@ class DockerCompose:
         so the command reads it non-interactively); it is never placed in argv.
         """
 
-        argv = ["docker", "compose", "run", "--rm"]
+        container = f"{ONEOFF_CONTAINER_PREFIX}{uuid.uuid4().hex[:12]}"
+        argv = ["docker", "compose", "run", "--rm", "--name", container]
         if input_text is not None:
             argv.append("-T")
         argv.append(str(service))
@@ -932,14 +956,24 @@ class DockerCompose:
                 "docker_cli_missing", _DOCKER_MESSAGES["client_missing"]
             ) from exc
         except subprocess.TimeoutExpired as exc:
-            # Distinguished from the generic failure because the two want
-            # different things from the operator: a broken Docker is a setup
-            # problem, a command killed by its ceiling usually only needs to be
-            # run again once whatever made it slow has passed.
-            raise DockerError(
-                "docker_compose_run_timeout",
+            # A command killed by its ceiling usually only needs running again
+            # once whatever made it slow has passed -- but it is still running
+            # in its container, and `influx sync` is idempotent alone and not
+            # against a second copy of itself. Whether that container is gone
+            # decides whether running it again is safe, so the operator is told.
+            message = (
                 "The one-off container command did not finish within "
-                f"{timeout} seconds.",
+                f"{timeout} seconds."
+            )
+            leftover = None
+            if not self._remove_oneoff(container):
+                leftover = container
+                message += (
+                    f" Its container {container} could not be removed and may "
+                    "still be running; remove it before trying again."
+                )
+            raise DockerError(
+                "docker_compose_run_timeout", message, leftover=leftover
             ) from exc
         except (OSError, subprocess.SubprocessError) as exc:
             raise DockerError(
@@ -950,6 +984,28 @@ class DockerCompose:
             "\n".join(part for part in (result.stdout, result.stderr) if part)
         )
         return result.returncode, detail
+
+    def _remove_oneoff(self, container):
+        """Remove the container of a killed one-off. False when it may survive.
+
+        ``--volumes`` matches what ``--rm`` would have discarded. No cwd: this
+        is an Engine call, not a compose subcommand, and it is the unique name
+        rather than the project directory that keeps it from reaching anything
+        else. Removing a container that was never created exits 0.
+        """
+
+        try:
+            result = self._run(
+                ["docker", "rm", "--force", "--volumes", str(container)],
+                capture_output=True,
+                text=True,
+                timeout=ONEOFF_REMOVE_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        # Compared, not coerced: this runs inside the timeout handler, so
+        # raising here would replace the diagnosis with its own error.
+        return result.returncode == 0
 
     def ps(self, workspace):
         try:

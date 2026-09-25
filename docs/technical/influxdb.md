@@ -381,7 +381,8 @@ reconciled from `config.json` by `emsctl.py influx`:
 #  - create missing buckets ({bucket_prefix}_raw, _1m, _5m, _1h)
 #  - align bucket retention with influxdb.retention.*_days
 #  - create/update downsampling tasks for each influxdb.downsampling entry
-#  - disable tasks that are no longer configured
+#  - disable tasks that are no longer configured, and any duplicate of one
+#    that is still configured
 python3 emsctl.py influx sync
 
 # Report live buckets, tasks and task health:
@@ -394,6 +395,23 @@ mode the token is read automatically from the generated secret file, so no
 manual `export` is needed; in external mode provide it via `influxdb.token` or
 the `token_env` variable. Running `sync` twice with unchanged config performs no
 writes the second time.
+
+Rerunning a `sync` is always safe; running two **at the same time** is not.
+InfluxDB does not make task names unique, so two syncs that both find a task
+missing both create it, and the extra keeps writing the same window. A later
+`sync` switches the duplicate to `inactive` and reports it as
+`disabled (duplicate)`; it is not deleted, so it stays visible in
+`influx status` as an inactive task until it is removed by hand.
+
+A second `downsampling` entry with the same `target` asks for the same task, so
+it is reported as `disabled (duplicate_target)` instead — that one is a
+configuration mistake rather than a race, and the fix is to remove the extra
+entry.
+
+Admin removes the container of a one-off run it killed, so a retry does not
+normally meet the first run still working. When that removal fails — a wedged
+Docker daemon can defeat it — the error names the container it left behind, and
+that container has to go before the action is tried again.
 
 ## Runtime behavior and troubleshooting
 
