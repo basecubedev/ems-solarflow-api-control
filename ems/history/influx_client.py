@@ -85,12 +85,6 @@ class HistoryInfluxClient(InfluxHTTPClient):
         response.raise_for_status()
         return response.json().get("tasks", [])
 
-    def find_task(self, name):
-        for task in self.list_tasks():
-            if task.get("name") == name:
-                return task
-        return None
-
     def create_task(self, flux, status="active", org_id=None):
         response = self.session.post(
             f"{self.base_url}/api/v2/tasks",

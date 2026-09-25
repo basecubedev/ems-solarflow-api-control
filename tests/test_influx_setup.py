@@ -1299,3 +1299,121 @@ def test_a_task_dropped_from_the_config_says_that_instead(capsys):
     out = capsys.readouterr().out
     assert "ems-downsample-1h: disabled (not_configured)" in out
     assert "duplicate" not in out
+
+
+# --- influx prune: removing what sync retired ---------------------------
+
+
+def test_the_parser_accepts_prune_and_its_dry_run():
+    args = emsctl.parse_args(["influx", "prune", "--dry-run"])
+
+    assert args.command == "influx"
+    assert args.action == "prune"
+    assert args.dry_run is True
+
+
+def test_prune_does_not_dry_run_unless_asked():
+    assert emsctl.parse_args(["influx", "prune"]).dry_run is False
+
+
+def test_the_existing_actions_keep_working():
+    for action in ("init", "status", "sync"):
+        assert emsctl.parse_args(["influx", action]).action == action
+
+
+def test_prune_output_names_each_task_and_why(capsys):
+    emsctl.print_influx_prune(
+        {
+            "tasks": [
+                {
+                    "name": "ems-downsample-1h",
+                    "action": "deleted",
+                    "reason": "not_configured",
+                }
+            ]
+        }
+    )
+
+    out = capsys.readouterr().out
+    assert "ems-downsample-1h: deleted (not_configured)" in out
+
+
+def test_a_kept_task_tells_the_operator_what_to_do_first(capsys):
+    """Prune removes only what sync stopped, so 'kept' needs a next step."""
+
+    emsctl.print_influx_prune(
+        {
+            "tasks": [
+                {
+                    "name": "ems-downsample-1h",
+                    "action": "kept",
+                    "reason": "still_active",
+                }
+            ]
+        }
+    )
+
+    out = capsys.readouterr().out
+    assert "still_active" in out
+    assert "sync" in out
+
+
+def test_a_dry_run_makes_clear_nothing_was_removed(capsys):
+    emsctl.print_influx_prune(
+        {
+            "tasks": [
+                {
+                    "name": "ems-downsample-1h",
+                    "action": "would_delete",
+                    "reason": "not_configured",
+                }
+            ]
+        }
+    )
+
+    out = capsys.readouterr().out
+    assert "would_delete" in out
+    assert "nothing was removed" in out.lower()
+
+
+def test_prune_with_an_empty_report_says_so(capsys):
+    emsctl.print_influx_prune({"tasks": []})
+
+    assert "nothing to remove" in capsys.readouterr().out.lower()
+
+
+def test_prune_is_refused_while_influxdb_is_disabled(capsys):
+    disabled = normalize_influxdb_config({"enabled": False})
+
+    code = emsctl.handle_influx_command(
+        SimpleNamespace(action="prune", json=False, dry_run=False),
+        {"influxdb": dict(disabled, enabled=False)},
+    )
+
+    assert code == 2
+
+
+def test_prune_reaches_the_schema_layer_with_its_dry_run(monkeypatch):
+    seen = {}
+
+    def fake_prune(client, influx_config, dry_run=False):
+        seen["dry_run"] = dry_run
+        return {"tasks": []}
+
+    from ems.history import schema
+
+    monkeypatch.setattr(schema, "prune", fake_prune)
+    monkeypatch.setattr(
+        emsctl, "resolve_influx_token_with_secret_file", lambda cfg: "token"
+    )
+    monkeypatch.setattr(
+        "ems.history.influx_client.wait_for_influx_ready", lambda *a, **k: None
+    )
+
+    code, result = emsctl.execute_influx_schema_op(
+        normalize_influxdb_config({"enabled": True}), "prune", dry_run=True
+    )
+
+    assert code == 0
+    assert result["ok"] is True
+    assert seen["dry_run"] is True

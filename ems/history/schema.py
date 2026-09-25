@@ -217,6 +217,100 @@ def _survivor_rank(task):
     return (not task_id, task.get("status") != "active", str(task_id or ""))
 
 
+def _task_groups_by_name(client):
+    """Live tasks grouped by name, each group best-survivor first.
+
+    InfluxDB does not make task names unique: two syncs running at once can both
+    find a task missing and both create it. A name-keyed lookup sees only one of
+    the two and leaves the other writing the same window.
+    """
+
+    groups = {}
+    for task in client.list_tasks():
+        groups.setdefault(task.get("name"), []).append(task)
+    for group in groups.values():
+        group.sort(key=_survivor_rank)
+    return groups
+
+
+def _configured_task_names(influx_config):
+    """``(desired, repeated)`` task names the config asks for.
+
+    The config is a list, so it can name one target twice. Both entries want the
+    same task, and the operator has to be told that rather than being shown a
+    duplicate that looks like the outcome of a race.
+    """
+
+    prefix = influx_config["bucket_prefix"]
+    configured = [
+        task_name(prefix, entry["target"])
+        for entry in influx_config.get("downsampling", [])
+    ]
+    desired = set(configured)
+    return desired, {name for name in desired if configured.count(name) > 1}
+
+
+def _retired_tasks(groups, influx_config):
+    """Yield ``(name, task, reason)`` for each owned task a sync retires.
+
+    Obsolete tasks owned by this prefix, plus any duplicate of one that is still
+    wanted. Sync disables exactly this set and prune deletes from exactly this
+    set, so the rule lives here instead of in both: anything sync keeps can then
+    never become a delete candidate. A task the API returned without a usable id
+    is skipped, because nothing can be addressed to it.
+    """
+
+    prefix = influx_config["bucket_prefix"]
+    owned_prefix = f"{prefix}{TASK_NAME_INFIX}"
+    desired_names, repeated_in_config = _configured_task_names(influx_config)
+
+    for name, group in groups.items():
+        if not name or not name.startswith(owned_prefix):
+            continue
+        wanted = name in desired_names
+        if not wanted:
+            reason = "not_configured"
+        elif name in repeated_in_config:
+            reason = "duplicate_target"
+        else:
+            reason = "duplicate"
+        for task in (group[1:] if wanted else group):
+            if not task.get("id"):
+                continue
+            yield name, task, reason
+
+
+def prune(client, influx_config, dry_run=False):
+    """Delete the downsampling tasks a sync retired. Returns a report dict.
+
+    Sync disables an obsolete task rather than deleting it, which is right --
+    disabling is reversible and a delete is not -- but nothing ever removed the
+    disabled ones, so every later sync reported the same growing list. Prune is
+    that missing step, and it removes only what sync already stopped: an
+    obsolete task still running is reported and left alone, so stopping a task
+    and removing it stay two separate decisions.
+    """
+
+    report = {"tasks": []}
+    groups = _task_groups_by_name(client)
+    for name, task, reason in _retired_tasks(groups, influx_config):
+        if task.get("status") != "inactive":
+            report["tasks"].append(
+                {"name": name, "action": "kept", "reason": "still_active"}
+            )
+            continue
+        if dry_run:
+            report["tasks"].append(
+                {"name": name, "action": "would_delete", "reason": reason}
+            )
+            continue
+        client.delete_task(task.get("id"))
+        report["tasks"].append(
+            {"name": name, "action": "deleted", "reason": reason}
+        )
+    return report
+
+
 def sync(client, influx_config):
     """Reconcile InfluxDB to the config. Returns a structured report dict."""
     prefix = influx_config["bucket_prefix"]
@@ -233,14 +327,7 @@ def sync(client, influx_config):
         )
 
     # 2) Downsampling tasks (create/update).
-    # InfluxDB does not make task names unique: two syncs running at once can
-    # both find a task missing and both create it. A name-keyed lookup sees only
-    # one of the two and leaves the other writing the same window.
-    tasks_by_name = {}
-    for task in client.list_tasks():
-        tasks_by_name.setdefault(task.get("name"), []).append(task)
-    for group in tasks_by_name.values():
-        group.sort(key=_survivor_rank)
+    tasks_by_name = _task_groups_by_name(client)
     # A name whose every task lacks an id counts as missing, so the sync creates
     # one that can be written to instead of reconciling one that cannot.
     existing_tasks = {
@@ -248,16 +335,6 @@ def sync(client, influx_config):
         for name, group in tasks_by_name.items()
         if group[0].get("id")
     }
-
-    # The config is a list, so it can name one target twice. Both entries want
-    # the same task, and the operator has to be told that rather than being
-    # shown a duplicate that looks like the outcome of a race.
-    configured = [
-        task_name(prefix, entry["target"])
-        for entry in influx_config.get("downsampling", [])
-    ]
-    desired_names = set(configured)
-    repeated_in_config = {name for name in desired_names if configured.count(name) > 1}
 
     for entry in influx_config.get("downsampling", []):
         name = task_name(prefix, entry["target"])
@@ -286,33 +363,19 @@ def sync(client, influx_config):
         else:
             report["tasks"].append({"name": name, "action": "unchanged"})
 
-    # 3) Disable obsolete downsampling tasks owned by this prefix, plus any
-    #    duplicate of one that is still wanted. The reason travels with the
+    # 3) Retire what the config no longer wants. The reason travels with the
     #    entry because a duplicate's name is also in ``tasks``, and without it
     #    the two report the same name saying opposite things.
-    owned_prefix = f"{prefix}{TASK_NAME_INFIX}"
-    for name, group in tasks_by_name.items():
-        if not name or not name.startswith(owned_prefix):
-            continue
-        wanted = name in desired_names
-        if not wanted:
-            reason = "not_configured"
-        elif name in repeated_in_config:
-            reason = "duplicate_target"
-        else:
-            reason = "duplicate"
-        for task in (group[1:] if wanted else group):
-            if not task.get("id"):
-                continue
-            if task.get("status") == "inactive":
-                report["disabled_tasks"].append(
-                    {"name": name, "action": "unchanged", "reason": reason}
-                )
-                continue
-            client.update_task(task.get("id"), status="inactive")
+    for name, task, reason in _retired_tasks(tasks_by_name, influx_config):
+        if task.get("status") == "inactive":
             report["disabled_tasks"].append(
-                {"name": name, "action": "disabled", "reason": reason}
+                {"name": name, "action": "unchanged", "reason": reason}
             )
+            continue
+        client.update_task(task.get("id"), status="inactive")
+        report["disabled_tasks"].append(
+            {"name": name, "action": "disabled", "reason": reason}
+        )
 
     return report
 
