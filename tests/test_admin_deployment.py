@@ -1569,6 +1569,273 @@ def test_a_one_off_command_killed_by_its_ceiling_says_it_timed_out(tmp_path):
     assert "240 seconds" in exc.value.message
 
 
+def _oneoff_run_recorder(on_run=None, rm_returncode=0):
+    """Record argv *and* kwargs: the ceilings live in the kwargs."""
+
+    calls = []
+
+    def _run(argv, **kwargs):
+        calls.append((list(argv), dict(kwargs)))
+        if on_run is not None and argv[:3] == ["docker", "compose", "run"]:
+            on_run(argv, kwargs)
+        if argv[:2] == ["docker", "rm"]:
+            return SimpleNamespace(returncode=rm_returncode, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    return calls, _run
+
+
+def _oneoff_container_name(call):
+    argv, _kwargs = call
+    return argv[argv.index("--name") + 1]
+
+
+def test_a_one_off_container_is_named_so_it_can_be_found_again(tmp_path):
+    """``--rm`` runs in the client, so a killed client cannot clean up after itself.
+
+    The name is the only handle on the container that outlives the client, and
+    it has to be on the command before the command can be killed.
+    """
+
+    calls, run = _oneoff_run_recorder()
+    compose = DockerCompose(run=run)
+
+    compose.run_oneoff(tmp_path, "ems", ["python3", "emsctl.py", "influx", "sync"])
+
+    argv = calls[0][0]
+    assert argv[:5] == ["docker", "compose", "run", "--rm", "--name"]
+    assert argv[5].startswith(deployment.ONEOFF_CONTAINER_PREFIX)
+
+
+def test_the_name_stays_an_option_when_stdin_is_piped(tmp_path):
+    """``-T`` joins the same option list, and every option precedes the service.
+
+    A name that slipped past the service name would be read as part of the
+    command, and the cleanup would then have nothing to remove. This path has
+    its own caller (the restore that pipes a password), so it has its own test.
+    """
+
+    calls, run = _oneoff_run_recorder()
+
+    DockerCompose(run=run).run_oneoff(
+        tmp_path, "ems", ["python3", "emsctl.py", "restore"], input_text="secret\n"
+    )
+
+    argv = calls[0][0]
+    assert argv[:4] == ["docker", "compose", "run", "--rm"]
+    assert argv.index("--name") < argv.index("ems")
+    assert argv.index("-T") < argv.index("ems")
+    assert argv[argv.index("--name") + 1].startswith(
+        deployment.ONEOFF_CONTAINER_PREFIX
+    )
+    assert calls[0][1]["input"] == "secret\n"
+
+
+def test_two_one_off_runs_never_share_a_container_name(tmp_path):
+    """A fixed name would turn one leftover into a permanent block.
+
+    Every later run would fail on the name conflict rather than on whatever
+    the operator was actually trying to do.
+    """
+
+    calls, run = _oneoff_run_recorder()
+    compose = DockerCompose(run=run)
+
+    compose.run_oneoff(tmp_path, "ems", ["python3", "emsctl.py", "status"])
+    compose.run_oneoff(tmp_path, "ems", ["python3", "emsctl.py", "status"])
+
+    assert _oneoff_container_name(calls[0]) != _oneoff_container_name(calls[1])
+
+
+def test_a_one_off_killed_by_its_ceiling_takes_its_container_with_it(tmp_path):
+    """The container outlives the client that was killed, and keeps working.
+
+    An operator told to retry a timed-out `influx sync` would then be running
+    two of them at once, and `schema.sync` is not safe against a second copy of
+    itself: both can create the same downsampling task.
+    """
+
+    import subprocess
+
+    def _timeout(argv, kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+
+    calls, run = _oneoff_run_recorder(on_run=_timeout)
+    compose = DockerCompose(run=run)
+
+    with pytest.raises(DockerError) as exc:
+        compose.run_oneoff(
+            tmp_path, "ems", ["python3", "emsctl.py", "influx", "sync"], timeout=240
+        )
+
+    assert exc.value.code == "docker_compose_run_timeout"
+    name = _oneoff_container_name(calls[0])
+    assert calls[1][0] == ["docker", "rm", "--force", "--volumes", name]
+    # Unbounded, it would hang the Admin worker on exactly the wedged daemon
+    # that caused the timeout -- the same failure one layer down.
+    assert calls[1][1]["timeout"] == deployment.ONEOFF_REMOVE_TIMEOUT_SECONDS
+
+
+def test_a_removed_container_is_not_mentioned_to_the_operator(tmp_path):
+    """Nothing survived, so there is nothing to act on.
+
+    `docker rm --force` on a container that was never created exits 0 too, so a
+    run killed before the container existed stays quiet as well.
+    """
+
+    import subprocess
+
+    def _timeout(argv, kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+
+    _calls, run = _oneoff_run_recorder(on_run=_timeout)
+
+    with pytest.raises(DockerError) as exc:
+        DockerCompose(run=run).run_oneoff(tmp_path, "ems", ["python3", "-V"])
+
+    assert deployment.ONEOFF_CONTAINER_PREFIX not in exc.value.message
+    assert "still be running" not in exc.value.message
+
+
+def test_a_cleanup_that_failed_names_the_container_it_left_behind(tmp_path):
+    """Silence here sends the operator into the collision the change prevents.
+
+    The advice after a timeout is to run it again; if the removal failed, doing
+    so puts a second `influx sync` beside the first, which is how two active
+    downsampling tasks of one name appear. The container is named so it can be
+    removed by hand.
+    """
+
+    import subprocess
+
+    def _timeout(argv, kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+
+    calls, run = _oneoff_run_recorder(on_run=_timeout, rm_returncode=1)
+
+    with pytest.raises(DockerError) as exc:
+        DockerCompose(run=run).run_oneoff(
+            tmp_path, "ems", ["python3", "emsctl.py", "influx", "sync"]
+        )
+
+    assert exc.value.code == "docker_compose_run_timeout"
+    assert _oneoff_container_name(calls[0]) in exc.value.message
+    assert "still be running" in exc.value.message
+    # Callers that render only their own summary still have to pass it on, so
+    # the container is on the error as a value rather than only in prose.
+    assert exc.value.leftover == _oneoff_container_name(calls[0])
+
+
+def test_a_removed_container_leaves_nothing_for_a_caller_to_pass_on(tmp_path):
+    """`leftover` is what makes a caller widen its summary, so it must be unset
+    whenever there is nothing for the operator to do."""
+
+    import subprocess
+
+    def _timeout(argv, kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+
+    _calls, run = _oneoff_run_recorder(on_run=_timeout)
+
+    with pytest.raises(DockerError) as exc:
+        DockerCompose(run=run).run_oneoff(tmp_path, "ems", ["python3", "-V"])
+
+    assert exc.value.leftover is None
+
+
+def test_a_cleanup_that_raises_still_reports_the_timeout(tmp_path):
+    """The timeout is the diagnosis; a broken `docker rm` must not replace it.
+
+    Reporting the cleanup instead would point the operator at Docker when what
+    happened was a slow InfluxDB.
+    """
+
+    import subprocess
+
+    def _run(argv, **kwargs):
+        if argv[:3] == ["docker", "compose", "run"]:
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+        raise OSError("docker went away")
+
+    with pytest.raises(DockerError) as exc:
+        DockerCompose(run=_run).run_oneoff(
+            tmp_path, "ems", ["python3", "emsctl.py", "influx", "sync"]
+        )
+
+    assert exc.value.code == "docker_compose_run_timeout"
+    assert "still be running" in exc.value.message
+
+
+def test_an_unreadable_removal_result_does_not_replace_the_diagnosis(tmp_path):
+    """The removal is judged inside the handler that reports the timeout.
+
+    Anything raising there loses the timeout entirely and hands the caller an
+    exception about the cleanup instead of the failure it was cleaning up after.
+    """
+
+    import subprocess
+
+    def _run(argv, **kwargs):
+        if argv[:3] == ["docker", "compose", "run"]:
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+        return SimpleNamespace(returncode=None, stdout="", stderr="")
+
+    with pytest.raises(DockerError) as exc:
+        DockerCompose(run=_run).run_oneoff(tmp_path, "ems", ["python3", "-V"])
+
+    assert exc.value.code == "docker_compose_run_timeout"
+    assert exc.value.leftover is not None
+
+
+def test_the_one_off_ceiling_is_the_number_that_was_chosen(tmp_path):
+    """Both halves matter: that it is named, and which number it is.
+
+    Asserting only that the default equals the constant compares the value with
+    itself and would hold at 18 seconds as readily as at 180.
+    """
+
+    recorded = {}
+
+    def _run(argv, **kwargs):
+        recorded["timeout"] = kwargs.get("timeout")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    DockerCompose(run=_run).run_oneoff(tmp_path, "ems", ["python3", "-V"])
+
+    assert recorded["timeout"] == deployment.ONEOFF_TIMEOUT_SECONDS
+    assert deployment.ONEOFF_TIMEOUT_SECONDS == 180
+    # One create+start cycle costs 45-55 s on the slow reference hardware, and
+    # a removal is the same kind of step.
+    assert deployment.ONEOFF_REMOVE_TIMEOUT_SECONDS >= 55
+
+
+def test_every_compose_double_matches_the_real_run_oneoff_signature():
+    """A double is a copy of a signature, so something has to compare them.
+
+    What this enforces is the defaults' values and the parameter list, not how
+    a default is spelled: a double left at the literal 180 passes while the
+    constant is 180 and fails the moment it moves, which is the drift that
+    matters. None of them carried `input_text` at all, so the restore path was
+    modelled by a double that could not have taken the password it pipes.
+
+    Doubles defined inside a test function cannot be reached from here; they
+    are covered only by the tests that use them.
+    """
+
+    import inspect
+
+    from tests.test_admin_container_actions import FakeCompose as ActionsCompose
+    from tests.test_admin_guided_upgrade import FakeCompose as UpgradeCompose
+
+    real = inspect.signature(DockerCompose.run_oneoff)
+
+    for double in (ActionsCompose, UpgradeCompose):
+        assert inspect.signature(double.run_oneoff) == real, (
+            f"{double.__module__}.{double.__qualname__} no longer models "
+            "DockerCompose.run_oneoff"
+        )
+
+
 def test_docker_compose_start_uses_prepared_workspace_and_no_pull(tmp_path):
     recorder = []
     compose = DockerCompose(popen=_make_popen(recorder, lines=["Container ems Started"]))
