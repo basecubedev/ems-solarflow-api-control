@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import json
 import logging
 import time
 from collections import deque
@@ -12,7 +13,7 @@ from ems.clients import (
 from ems.logging_utils import log_event
 from ems.mqtt_control.dispatch import WriteDispatchStatus, dispatch_device_write
 from ems.property_writes import write_device_properties
-from ems.models import DeviceCapabilities
+from ems.models import BATTERY_ABSENT, BATTERY_PRESENT, DeviceCapabilities
 from ems.runtime_intents import (
     DeviceRuntimeIntent,
     DeviceRuntimeRole,
@@ -26,6 +27,7 @@ from ems.target_control import (
     ControlLimitExplanation,
     DeviceControlExplanation,
     apply_min_output_limit,
+    battery_presence,
     calculate_remaining_time_hours,
     calculate_targets,
     detect_capabilities,
@@ -75,6 +77,7 @@ class EMSController:
         self.last_states = {}
         self.last_seen = {}
         self.device_online = {}
+        self.pv_priority_devices = None
         self.battery_power_history = {}
         self.initial_ac_mode_reconciled = {}
         self.last_ha_seen = {}
@@ -318,24 +321,82 @@ class EMSController:
 
         return stale
 
+    def runtime_role_block_reason(self, dev_name):
+        """Name the reservation that blocks output control on ``dev_name``."""
+
+        intent = self.runtime_intents.get(dev_name)
+
+        return (
+            f"runtime_role_{intent.role.value}"
+            if intent
+            else "runtime_role_blocked"
+        )
+
+    def device_command_block_reason(self, dev):
+        """Why the EMS will not command ``dev`` this cycle, or None.
+
+        Three independent conditions, asked once, for everything that decides
+        whether a write happens. What the *allocator* asks is narrower and
+        deliberately so -- see :meth:`intent_filtered_capabilities`.
+        """
+
+        if not self.device_online.get(dev.name, True):
+            return "offline"
+
+        if not self.runtime_device_bool(dev.name, "enabled", True):
+            return "device_disabled"
+
+        if not self.device_output_control_allowed_by_intent(dev.name):
+            return self.runtime_role_block_reason(dev.name)
+
+        return None
+
+    def device_commandable(self, dev):
+        """Whether the EMS will command ``dev`` at all this cycle."""
+
+        return self.device_command_block_reason(dev) is None
+
+    def claim_eligible_devices(self):
+        """Which devices may hold the exclusive PV-first claim.
+
+        Commandable, and on a transport whose write gate is open -- but a closed
+        gate only means something while another device's gate is open. When every
+        write is suppressed, by a dry run, a simulation, a replay, or an
+        all-gates-off preview posture, nothing is being written anywhere and the
+        gate says nothing about who should hold the claim; reading it then would
+        collapse the allocation the preview exists to show.
+        """
+
+        commandable = [self.device_commandable(dev) for dev in self.devices]
+
+        if (
+            cfg.DRY_RUN
+            or cfg.SIMULATION_MODE
+            or getattr(cfg.ARGS, "replay", False)
+        ):
+            return commandable
+
+        gated = [
+            cfg.resolve_device_write_gate(dev).gate_enabled
+            for dev in self.devices
+        ]
+
+        if not any(gated):
+            return commandable
+
+        return [
+            allowed and open_gate
+            for allowed, open_gate in zip(commandable, gated)
+        ]
+
     def active_online_device_indexes(self):
         """Return indexes for devices currently eligible for EMS control."""
 
-        indexes = []
-
-        for i, dev in enumerate(self.devices):
-            if not self.device_online.get(dev.name, True):
-                continue
-
-            if not self.runtime_device_bool(dev.name, "enabled", True):
-                continue
-
-            if not self.device_output_control_allowed_by_intent(dev.name):
-                continue
-
-            indexes.append(i)
-
-        return indexes
+        return [
+            index
+            for index, dev in enumerate(self.devices)
+            if self.device_commandable(dev)
+        ]
 
     def state_has_positive_pv(self, state):
         """Return true when any PV telemetry field is positive."""
@@ -372,7 +433,16 @@ class EMSController:
         return False
 
     def intent_filtered_capabilities(self, capabilities):
-        """Return capabilities with reserved devices blocked from output control."""
+        """Return capabilities with reserved devices blocked from output control.
+
+        Only the reservation, deliberately. An offline or operator-disabled
+        device is skipped by the write path but keeps the last ``outputLimit``
+        it was given, so it goes on delivering roughly its share. Taking it out
+        of the allocation would hand that share to a device that is still
+        running, and the plant would deliver both until the meter caught up --
+        over-export, where leaving it in merely under-delivers if the device
+        really has stopped.
+        """
 
         filtered = []
 
@@ -381,12 +451,14 @@ class EMSController:
                 filtered.append(capability)
                 continue
 
+            reason = self.runtime_role_block_reason(dev.name)
+
             filtered.append(DeviceCapabilities(
                 can_charge=capability.can_charge,
                 can_discharge=False,
                 can_export=False,
                 can_ac_charge=capability.can_ac_charge,
-                reason=f"runtime_role_{self.runtime_intents[dev.name].role.value}"
+                reason=reason
             ))
 
         return filtered
@@ -621,6 +693,59 @@ class EMSController:
 
         return ramped_targets
 
+    def log_pv_priority_change(self, explanation):
+        """Record at INFO when the exclusive PV-first claim moves.
+
+        The claim decides which devices export the whole requested total, so a
+        change is worth an operator seeing. Who holds it is steady for as long
+        as a battery stays full or a device stays battery-less, which is why
+        the per-cycle detail stays at debug.
+        """
+
+        if explanation.mode != "pv_first":
+            # The claim is only decided in the PV-first regime. Reading its
+            # absence as "nobody holds it" would announce a change every time
+            # a cloud pushes the plant across that boundary and back.
+            return
+
+        claimed = next(
+            (
+                limit.value
+                for limit in explanation.limits
+                if limit.name == "full_soc_pv_priority" and limit.active
+            ),
+            None,
+        )
+
+        try:
+            indexes = json.loads(claimed) if claimed else []
+        except (TypeError, ValueError):
+            indexes = []
+
+        holders = tuple(
+            sorted(
+                self.devices[index].name
+                for index in indexes
+                if 0 <= index < len(self.devices)
+            )
+        )
+
+        if holders == self.pv_priority_devices:
+            return
+
+        previous = self.pv_priority_devices
+        self.pv_priority_devices = holders
+
+        if previous is None and not holders:
+            return
+
+        log_event(
+            logging.INFO,
+            "pv_first_priority_changed",
+            devices=",".join(holders) if holders else "none",
+            previous=",".join(previous) if previous else "none"
+        )
+
     def reset_output_control_state(self):
         """Reset output-control memory after a blocked operating state."""
 
@@ -632,21 +757,11 @@ class EMSController:
     def night_min_soc_controllable_indices(self):
         """Return device indexes controlled by EMS in the current cycle."""
 
-        indexes = []
-
-        for i, dev in enumerate(self.devices):
-            if not self.device_online.get(dev.name, True):
-                continue
-
-            if not self.runtime_device_bool(dev.name, "enabled", True):
-                continue
-
-            if not self.device_output_control_allowed_by_intent(dev.name):
-                continue
-
-            indexes.append(i)
-
-        return indexes
+        return [
+            index
+            for index, dev in enumerate(self.devices)
+            if self.device_commandable(dev)
+        ]
 
     def state_is_strict_night_min_soc_idle(self, state):
         """Detect the exact no-PV, no-flow, min-SOC blocked idle state."""
@@ -663,8 +778,11 @@ class EMSController:
             and state.pack_out == 0
             and state.output == 0
         )
+        # Without a battery there is nothing that could still deliver, so the
+        # device never holds the plant out of idle on a SoC it does not have.
         battery_blocked = (
-            state.soc <= state.min_soc
+            battery_presence(state) == BATTERY_ABSENT
+            or state.soc <= state.min_soc
             or state.soc_limit == 2
         )
 
@@ -820,7 +938,6 @@ class EMSController:
         for i, dev in enumerate(self.devices):
             state = states[i]
             online = self.device_online.get(dev.name, True)
-            runtime_enabled = self.runtime_device_bool(dev.name, "enabled", True)
             target = targets[i] if i < len(targets) else 0
             effective = (
                 effective_targets[i]
@@ -828,23 +945,16 @@ class EMSController:
                 else target
             )
 
+            block_reason = (
+                self.device_command_block_reason(dev) if enabled else None
+            )
+
             if not enabled:
                 write_decision = "blocked"
                 write_reason = "control_disabled"
-            elif not online:
+            elif block_reason:
                 write_decision = "blocked"
-                write_reason = "offline"
-            elif not runtime_enabled:
-                write_decision = "blocked"
-                write_reason = "device_disabled"
-            elif not self.device_output_control_allowed_by_intent(dev.name):
-                intent = self.runtime_intents.get(dev.name)
-                write_decision = "blocked"
-                write_reason = (
-                    f"runtime_role_{intent.role.value}"
-                    if intent
-                    else "runtime_role_blocked"
-                )
+                write_reason = block_reason
             elif i not in controllable:
                 write_decision = "blocked"
                 write_reason = "not_controllable"
@@ -858,11 +968,12 @@ class EMSController:
                 write_decision = "send"
                 write_reason = "park_at_min_output_limit"
 
-            limiting_reason = (
-                "below_min_soc"
-                if state.soc <= state.min_soc
-                else "soc_protection"
-            )
+            if battery_presence(state) == BATTERY_ABSENT:
+                limiting_reason = "no_battery"
+            elif state.soc <= state.min_soc:
+                limiting_reason = "below_min_soc"
+            else:
+                limiting_reason = "soc_protection"
 
             devices[dev.name] = DeviceControlExplanation(
                 device=dev.name,
@@ -931,19 +1042,7 @@ class EMSController:
         effective_targets = []
 
         for dev, target in zip(self.devices, targets):
-            if not enabled:
-                effective_targets.append(0)
-                continue
-
-            if not self.device_online.get(dev.name, True):
-                effective_targets.append(0)
-                continue
-
-            if not self.runtime_device_bool(dev.name, "enabled", True):
-                effective_targets.append(0)
-                continue
-
-            if not self.device_output_control_allowed_by_intent(dev.name):
+            if not enabled or not self.device_commandable(dev):
                 effective_targets.append(0)
                 continue
 
@@ -1370,7 +1469,7 @@ class EMSController:
     def full_charge_assist_has_battery(self, dev, state):
         """Return True only for telemetry-confirmed battery-backed devices."""
 
-        return cfg.safe_int(getattr(state, "pack_num", 0), 0, minimum=0) > 0
+        return battery_presence(state) == BATTERY_PRESENT
 
     def parse_assist_timestamp(self, value):
         if not value:
@@ -2122,6 +2221,15 @@ class EMSController:
         if not self.state_reconciliation_supported(dev, "soc_limits"):
             return True
 
+        if battery_presence(state) == BATTERY_ABSENT:
+            log_event(
+                logging.DEBUG,
+                "soc_limits_not_applicable",
+                device=dev.name,
+                reason="no_battery"
+            )
+            return True
+
         effective_min_soc = (
             cfg.safe_int(desired_min_soc, dev.min_soc, minimum=0)
             if desired_min_soc is not None
@@ -2223,6 +2331,12 @@ class EMSController:
         """Return desired winter/summer minSoc target and adjustment context."""
 
         if not cfg.winter_feature_enabled(self.runtime_state):
+            return None, False
+
+        # Left in place deliberately: a single transient `packNum: 0` would
+        # otherwise drop the ramp target, and the next cycle would write the
+        # configured minimum over it.
+        if battery_presence(state) == BATTERY_ABSENT:
             return None, False
 
         summer_min_soc = cfg.winter_config_int("summer_min_soc", 15, minimum=0)
@@ -2701,15 +2815,30 @@ class EMSController:
         )
 
         for dev, state in zip(self.devices, states):
+            # A device with no battery holds no winter reserve and is not in
+            # winter reconciliation. Its sensors stay published -- dropping them
+            # leaves the last value standing in Home Assistant, reading as live
+            # -- but they report the device's own minimum and say it is not in
+            # winter, rather than a target for a ramp that will never run.
+            # Whether it is winter at all is a separate question, and the normal
+            # summer answer still comes from the reconciler below.
+            has_reserve = battery_presence(state) != BATTERY_ABSENT
+
             base = p + dev.name.lower() + "_winter_"
-            effective_min_soc = self.winter_min_soc_targets.get(
-                dev.name,
-                state.min_soc if state.min_soc > 0 else dev.min_soc
+            own_min_soc = state.min_soc if state.min_soc > 0 else dev.min_soc
+            effective_min_soc = (
+                self.winter_min_soc_targets.get(dev.name, own_min_soc)
+                if has_reserve
+                else own_min_soc
             )
-            target = cfg.calculate_winter_min_soc_target(
-                state.soc,
-                effective_min_soc,
-                active
+            target = (
+                cfg.calculate_winter_min_soc_target(
+                    state.soc,
+                    effective_min_soc,
+                    active
+                )
+                if has_reserve
+                else own_min_soc
             )
 
             self.publish_sensor(
@@ -2722,14 +2851,14 @@ class EMSController:
                     {
                         "effective_min_soc": effective_min_soc,
                         "current_soc": state.soc,
-                        "winter_active": active
+                        "winter_active": active and has_reserve
                     }
                 )
             )
 
             self.publish_sensor(
                 base + "estimated_ramp_days",
-                cfg.estimate_winter_ramp_days(target),
+                cfg.estimate_winter_ramp_days(target) if has_reserve else 0,
                 "d",
                 None,
                 icon="mdi:calendar-range",
@@ -3571,8 +3700,11 @@ class EMSController:
             capabilities=capabilities,
             requested_total=stabilized_total,
             explain=True,
-            online_devices=self.device_online
+            online_devices=self.device_online,
+            commandable=self.claim_eligible_devices()
         )
+
+        self.log_pv_priority_change(control_explanation)
 
         targets = self.apply_device_ramp(
             targets,
@@ -3602,28 +3734,20 @@ class EMSController:
                         effective_targets[i] - device_explanation.raw_target_w
                     )
 
+                block_reason = (
+                    self.device_command_block_reason(dev) if enabled else None
+                )
+
                 if not enabled:
                     device_explanation.write_decision = "blocked"
                     device_explanation.write_reason = "control_disabled"
-                elif not self.device_online.get(dev.name, True):
+                elif block_reason:
                     device_explanation.write_decision = "blocked"
-                    device_explanation.write_reason = "offline"
-                elif not self.runtime_device_bool(dev.name, "enabled", True):
-                    device_explanation.write_decision = "blocked"
-                    device_explanation.write_reason = "device_disabled"
-                elif not self.device_output_control_allowed_by_intent(dev.name):
-                    intent = self.runtime_intents.get(dev.name)
-                    device_explanation.write_decision = "blocked"
-                    device_explanation.write_reason = (
-                        f"runtime_role_{intent.role.value}"
-                        if intent
-                        else "runtime_role_blocked"
-                    )
-                    device_explanation.limiting_reason = (
-                        f"runtime_role_{intent.role.value}"
-                        if intent
-                        else "runtime_role_blocked"
-                    )
+                    device_explanation.write_reason = block_reason
+                    if not self.device_output_control_allowed_by_intent(dev.name):
+                        device_explanation.limiting_reason = (
+                            self.runtime_role_block_reason(dev.name)
+                        )
                 else:
                     state = states[i]
                     reference = (

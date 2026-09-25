@@ -8,6 +8,7 @@ from ems import config as cfg
 from ems.clients import fetch_all_devices, zero_device_state
 from ems.controller import EMSController
 from ems.logging_utils import log_event
+from ems.models import parse_pack_count
 from ems.runtime_state import RuntimeState, build_runtime_defaults
 from ems.target_control import detect_capabilities
 
@@ -95,6 +96,35 @@ class SimulatedHAClient:
 # PARALLEL FETCH
 # =====================
 
+def observed_pack_count_from_trace(data):
+    """Classify a replayed frame's pack count the way the live run did.
+
+    A frame that records the pack list gets the same second witness the live
+    path weighs. One that does not cannot assert an absence at all: traces
+    written before presence was three-valued stored an unreported field as 0,
+    and believing those would make a replay diverge from the run it reproduces.
+
+    The cost is the other direction -- a trace from a genuinely battery-less
+    device replays as unknown unless it records an empty pack list -- and it
+    falls on frames that do not exist yet, where the first choice falls on every
+    trace already captured.
+    """
+
+    packs = value_from_trace(data, "pack_num", "packNum", default=None)
+
+    if parse_pack_count(packs) != 0:
+        return packs
+
+    # A zero only asserts absence when the frame also records the pack list.
+    # Traces written before presence was three-valued stored an unreported
+    # field as 0, and replaying those as a confirmed absence would allocate
+    # differently from the run being reproduced.
+    if "pack_data" not in data and "packData" not in data:
+        return None
+
+    return None if value_from_trace(data, "pack_data", "packData") else packs
+
+
 def value_from_trace(data, *keys, default=0):
     for key in keys:
         if key in data:
@@ -140,7 +170,7 @@ def state_from_trace_device(data):
     state.grid_off_mode = value_from_trace(data, "grid_off_mode", "gridOffMode")
     state.ac_mode = value_from_trace(data, "ac_mode", "acMode")
     state.input_limit_w = value_from_trace(data, "input_limit_w", "inputLimit")
-    state.pack_num = value_from_trace(data, "pack_num", "packNum")
+    state.pack_num = observed_pack_count_from_trace(data)
     state.soc_status = value_from_trace(data, "soc_status", "socStatus")
     state.battery_calibration_time = data.get(
         "battery_calibration_time",

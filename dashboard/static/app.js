@@ -2857,6 +2857,7 @@ const CONTROL_REASON_LABELS = {
   pack_standby: "Battery pack is in standby",
   fault_observed: "Firmware reports a fault signal",
   pv_evidence: "PV input detected",
+  no_battery: "Device reports no battery pack",
 };
 
 function controlReason(value) {

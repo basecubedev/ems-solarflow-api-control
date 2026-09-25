@@ -296,7 +296,12 @@ class ZendureMqttDeviceClient:
         status = self._service.snapshot_status(self._device_id)
         state = None
         if status.is_fresh:
-            state = parse_device({"properties": status.snapshot.metrics})
+            state = parse_device({
+                "properties": status.snapshot.metrics,
+                # The aggregator holds the pack list separately; without it a
+                # spurious ``packNum: 0`` would latch in the merged metrics.
+                "packData": getattr(status.snapshot, "battery_packs", None),
+            })
             # Attempt telemetry confirmation from this fresh snapshot BEFORE
             # settling timeouts, so confirming telemetry in the same fetch wins
             # over a confirmation deadline that has just elapsed.

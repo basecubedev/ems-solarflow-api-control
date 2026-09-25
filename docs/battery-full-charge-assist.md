@@ -16,7 +16,11 @@ This core database is independent of the dashboard database, so the feature can
 work when the dashboard is disabled.
 
 Only devices with telemetry `packNum > 0` participate. Devices reporting
-`packNum == 0` are ignored and never receive assist writes.
+`packNum == 0`, and devices that never report the field at all, are ignored and
+never receive assist writes. The EMS keeps those two cases apart elsewhere — see
+"Devices Without A Battery" in
+[technical/control-logic.md](technical/control-logic.md) — but for this feature
+both mean the same thing: no confirmed battery, no assist.
 
 On first enable with an empty EMS state database, EMS assumes the battery was
 recently full and seeds `last_full_charge_at` from the current time. The first

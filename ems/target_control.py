@@ -5,7 +5,13 @@ from dataclasses import asdict, dataclass, field
 
 from ems import config as cfg
 from ems.logging_utils import log_event
-from ems.models import DeviceCapabilities
+from ems.models import (
+    BATTERY_ABSENT,
+    BATTERY_PRESENT,
+    BATTERY_UNKNOWN,
+    DeviceCapabilities,
+    parse_pack_count,
+)
 
 
 @dataclass
@@ -93,6 +99,22 @@ def _device_online(online_devices, index, device_name):
 def _set_limiting_reason(explanation, reason):
     if explanation and not explanation.limiting_reason:
         explanation.limiting_reason = reason
+
+
+def battery_presence(state):
+    """Classify battery presence from telemetry.
+
+    Only an observed ``packNum`` decides. A field the device never reported
+    stays ``unknown`` and must keep behaving exactly as an unclassified device
+    always has, because no caller may turn silence into a licence.
+    """
+
+    packs = parse_pack_count(getattr(state, "pack_num", None))
+
+    if packs is None:
+        return BATTERY_UNKNOWN
+
+    return BATTERY_PRESENT if packs > 0 else BATTERY_ABSENT
 
 
 def detect_capabilities(state):
@@ -291,9 +313,17 @@ def calculate_remaining_time_hours(state, device_config, avg_battery_power_w):
 
 
 def usable_battery_weight(state, device_config, capability):
-    """Return usable discharge energy in weighted units."""
+    """Return usable discharge energy in weighted units.
+
+    A device without a pack has none, whatever SoC it reports. Leaving that to
+    ``soc <= min_soc`` worked only because a battery-less device happens to
+    report zero.
+    """
 
     if capability and not capability.can_discharge:
+        return 0
+
+    if battery_presence(state) == BATTERY_ABSENT:
         return 0
 
     if state.max_soc <= 0:
@@ -339,13 +369,38 @@ def is_full_soc_device(state):
     )
 
 
+def uncommanded_delivery_ceiling(state):
+    """What a device the EMS cannot write to this cycle will keep delivering.
+
+    The limit it was last given, with the measured output as the fallback the
+    write deadband already uses when no limit is reported.
+    """
+
+    holding = state.output_limit if state.output_limit > 0 else state.output
+
+    return max(0, holding)
+
+
+def cannot_absorb_pv(state):
+    """True when PV this device does not export is lost rather than stored.
+
+    A battery at its ceiling is in that position for now; a device without a
+    battery is in it permanently. Both have the same claim on PV-first export,
+    and for the same reason.
+    """
+
+    return battery_presence(state) == BATTERY_ABSENT or is_full_soc_device(state)
+
+
 def pv_charge_balance_context(states):
     """Return SOC spread data used for PV-first charge balancing."""
 
+    # A device with no pack reports SoC 0 without being an empty battery, so
+    # counting it would stretch the spread and bias every real battery.
     soc_values = [
         state.soc
         for state in states
-        if state.max_soc > 0
+        if state.max_soc > 0 and battery_presence(state) != BATTERY_ABSENT
     ]
 
     if not soc_values:
@@ -389,7 +444,12 @@ def pv_charge_balance_context(states):
 
 
 def pv_charge_balance_multiplier(state, pv_only, balance_context):
-    """Bias PV-first output toward fuller batteries."""
+    """Bias PV-first output toward fuller batteries.
+
+    The bias answers "which device should keep its PV and charge instead". A
+    device with no battery has no stake in that question, and its reported SoC
+    of zero would otherwise make it permanently the answer.
+    """
 
     strength = balance_context["balance_strength"]
 
@@ -398,6 +458,7 @@ def pv_charge_balance_multiplier(state, pv_only, balance_context):
         or strength <= 0
         or state.max_soc <= 0
         or balance_context["soc_gap"] <= 0
+        or battery_presence(state) == BATTERY_ABSENT
     ):
         return 1.0
 
@@ -468,9 +529,19 @@ def allocate_full_soc_pv_first(
     pv_weights,
     pv_only_limits,
     device_configs=None,
-    capabilities=None
+    capabilities=None,
+    commandable=None
 ):
-    """Prioritize PV export from full batteries before normal PV balancing."""
+    """Prioritize PV export from devices that cannot absorb their own PV.
+
+    The claim is exclusive: candidates are served first and the rest share what
+    is left, so whoever holds it is expected to deliver it. A device the EMS
+    cannot write to this cycle will not follow a claim that moves it -- it goes
+    on delivering what it was last given -- so its claim is capped there. That
+    is the whole difference between a battery that filled up while being
+    commanded and one that was never commanded at all, and it is measured from
+    the device rather than assumed from why it is uncommanded.
+    """
 
     full_limits = []
     full_weights = []
@@ -485,13 +556,17 @@ def allocate_full_soc_pv_first(
         max_power = get_device_max_power(dev_config)
         full_candidate = (
             can_export
-            and is_full_soc_device(state)
+            and cannot_absorb_pv(state)
             and pv_only_limits[i] > 0
         )
+        claim_limit = min(pv_only_limits[i], max_power)
+
+        if commandable is not None and not commandable[i]:
+            claim_limit = min(claim_limit, uncommanded_delivery_ceiling(state))
 
         if full_candidate:
             full_indices.append(i)
-            full_limits.append(min(pv_only_limits[i], max_power))
+            full_limits.append(claim_limit)
             full_weights.append(pv_weights[i])
             normal_limits.append(0)
             normal_weights.append(0)
@@ -529,9 +604,16 @@ def apply_battery_topup_after_pv_first(
     states,
     device_configs,
     capabilities,
-    requested_total
+    requested_total,
+    commandable=None
 ):
     """Top up PV-first targets with battery power where safely available.
+
+    A device the EMS cannot write to is topped up only as far as it is already
+    delivering. Excluding it outright would hand its share to the devices that
+    can be written to, on top of what it goes on delivering; letting it take the
+    ordinary headroom would give back exactly what the PV-first claim cap just
+    removed.
 
     Returns the updated targets and whether any battery top-up was applied.
     """
@@ -565,6 +647,12 @@ def apply_battery_topup_after_pv_first(
         device_name = dev_config.name if dev_config else i
         max_power = get_device_max_power(dev_config)
         headroom = max(0, max_power - targets[i])
+
+        if commandable is not None and not commandable[i]:
+            headroom = max(
+                0,
+                min(headroom, uncommanded_delivery_ceiling(state) - targets[i])
+            )
 
         if cap and not cap.can_export:
             weights.append(0)
@@ -742,7 +830,8 @@ def calculate_targets(
     capabilities=None,
     requested_total=None,
     explain=False,
-    online_devices=None
+    online_devices=None,
+    commandable=None
 ):
     """
     Intelligent EMS target calculation.
@@ -993,7 +1082,8 @@ def calculate_targets(
                 pv_weights,
                 pv_only_limits,
                 device_configs=device_configs,
-                capabilities=capabilities
+                capabilities=capabilities,
+                commandable=commandable
             )
 
             if targets is not None:
@@ -1002,14 +1092,14 @@ def calculate_targets(
                         "full_soc_pv_priority",
                         True,
                         json.dumps(full_soc_indices),
-                        "full SOC devices receive PV-first export priority"
+                        "devices that cannot store their own PV export first"
                     )
                     for index in full_soc_indices:
                         explanation_devices[
                             index
                         ].decision_reason = "full_soc_pv_priority"
                 log_event(
-                    logging.INFO,
+                    logging.DEBUG,
                     "pv_first_full_soc_priority",
                     requested_total=new_total,
                     devices=json.dumps(full_soc_indices),
@@ -1056,7 +1146,8 @@ def calculate_targets(
                 devices,
                 device_configs,
                 capabilities,
-                new_total
+                new_total,
+                commandable=commandable
             )
             if explain:
                 topup_w = sum(targets) - sum(before_topup_targets)
@@ -1113,7 +1204,8 @@ def calculate_targets(
                     devices,
                     device_configs,
                     capabilities,
-                    new_total
+                    new_total,
+                    commandable=commandable
                 )
                 if explain:
                     topup_w = sum(targets) - sum(before_topup_targets)

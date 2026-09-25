@@ -12,7 +12,7 @@ from urllib3.util.retry import Retry
 from ems import config as cfg
 from ems.health import CommHealth
 from ems.logging_utils import log_event
-from ems.models import DeviceState
+from ems.models import DeviceState, parse_pack_count
 
 
 def zendure_write_succeeded(error_event, dev, response, **fields):
@@ -225,6 +225,23 @@ class HAClient:
         except:
             return default
 
+def _observed_pack_count(data, props):
+    """Return the reported pack count, unless the report contradicts itself.
+
+    A zero beside a populated ``packData`` is one bad poll, not a device that
+    lost its battery, and absence unlocks behaviour that only a confirmed
+    absence may unlock. Both placements the report uses are weighed, and the
+    MQTT callers pass the aggregator's pack list under the same key.
+    """
+
+    packs = parse_pack_count(props.get("packNum"))
+
+    if packs == 0 and (data.get("packData") or props.get("packData")):
+        return None
+
+    return packs
+
+
 def parse_device(data):
     """Extract relevant values from Zendure API response."""
 
@@ -266,7 +283,7 @@ def parse_device(data):
         dc_status=props.get("dcStatus") or 0,
         grid_state=props.get("gridState") or 0,
         input_limit_w=props.get("inputLimit") or 0,
-        pack_num=props.get("packNum") or 0,
+        pack_num=_observed_pack_count(data, props),
         soc_status=props.get("socStatus") or 0,
         battery_calibration_time=props.get("batCalTime"),
     )
@@ -302,7 +319,7 @@ def zero_device_state():
         dc_status=0,
         grid_state=0,
         input_limit_w=0,
-        pack_num=0,
+        pack_num=None,
         soc_status=0,
         battery_calibration_time=None,
     )
