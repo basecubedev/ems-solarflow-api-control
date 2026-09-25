@@ -18,6 +18,7 @@ night-idle set and the explanation, while the allocator keeps asking the
 narrower question it has always asked.
 """
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -290,3 +291,30 @@ def test_a_commandable_battery_less_device_still_takes_the_claim():
     targets, _ = allocate(controller, [state(solar=400), battery_less])
 
     assert targets == [0, 600]
+
+
+def test_a_gated_off_transport_does_not_take_the_claim_either():
+    """Being reachable is not the same as being writable.
+
+    With one transport's write gate off and another's on -- a read-only
+    validation of the API side beside live MQTT control, say -- an API
+    battery-less device is online, enabled and unreserved, and still nothing
+    will be written to it. Giving it the exclusive claim leaves the writable
+    devices with nothing, and unlike an offline device this never clears.
+    """
+
+    controller = controller_with()
+    battery_less = state(soc=0, solar=800)
+    battery_less.pack_num = 0
+
+    with patch(
+        "ems.controller.cfg.resolve_device_write_gate",
+        side_effect=lambda dev: SimpleNamespace(
+            gate_enabled=dev.name != "WR2"
+        ),
+    ):
+        commandable = [
+            controller.device_claim_eligible(dev) for dev in controller.devices
+        ]
+
+    assert commandable == [True, False]

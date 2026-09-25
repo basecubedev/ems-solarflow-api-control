@@ -354,6 +354,22 @@ class EMSController:
 
         return self.device_command_block_reason(dev) is None
 
+    def device_claim_eligible(self, dev):
+        """Whether ``dev`` may hold the exclusive PV-first claim.
+
+        Commandable and on a transport whose write gate is open. The gate is
+        read without the dry-run and simulation terms on purpose: those suppress
+        every write equally, so an allocation computed under them should still
+        show what a live run would do. A single transport switched off does not
+        -- the devices behind it never receive anything, and unlike an offline
+        device that state does not clear by itself.
+        """
+
+        if not self.device_commandable(dev):
+            return False
+
+        return cfg.resolve_device_write_gate(dev).gate_enabled
+
     def active_online_device_indexes(self):
         """Return indexes for devices currently eligible for EMS control."""
 
@@ -888,11 +904,12 @@ class EMSController:
                 write_decision = "send"
                 write_reason = "park_at_min_output_limit"
 
-            limiting_reason = (
-                "below_min_soc"
-                if state.soc <= state.min_soc
-                else "soc_protection"
-            )
+            if battery_presence(state) == BATTERY_ABSENT:
+                limiting_reason = "no_pv_available"
+            elif state.soc <= state.min_soc:
+                limiting_reason = "below_min_soc"
+            else:
+                limiting_reason = "soc_protection"
 
             devices[dev.name] = DeviceControlExplanation(
                 device=dev.name,
@@ -2739,10 +2756,12 @@ class EMSController:
                 dev.name,
                 state.min_soc if state.min_soc > 0 else dev.min_soc
             )
+            # A device with no battery holds no winter reserve, so it is not
+            # in winter reconciliation and must not be shown ramping toward one.
             target = cfg.calculate_winter_min_soc_target(
                 state.soc,
                 effective_min_soc,
-                active
+                active and battery_presence(state) != BATTERY_ABSENT
             )
 
             self.publish_sensor(
@@ -3606,7 +3625,7 @@ class EMSController:
             explain=True,
             online_devices=self.device_online,
             commandable=[
-                self.device_commandable(dev) for dev in self.devices
+                self.device_claim_eligible(dev) for dev in self.devices
             ]
         )
 

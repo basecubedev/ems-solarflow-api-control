@@ -1070,18 +1070,18 @@ def calculate_targets(
             if targets is not None:
                 if explain:
                     add_limit(
-                        "full_soc_pv_priority",
+                        "cannot_absorb_pv_priority",
                         True,
                         json.dumps(full_soc_indices),
-                        "full SOC devices receive PV-first export priority"
+                        "devices that cannot store their own PV export first"
                     )
                     for index in full_soc_indices:
                         explanation_devices[
                             index
-                        ].decision_reason = "full_soc_pv_priority"
+                        ].decision_reason = "cannot_absorb_pv_priority"
                 log_event(
                     logging.DEBUG,
-                    "pv_first_full_soc_priority",
+                    "pv_first_cannot_absorb_priority",
                     requested_total=new_total,
                     devices=json.dumps(full_soc_indices),
                     full_soc_target_w=round(

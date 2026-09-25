@@ -162,7 +162,8 @@ A device that reports no battery differs in four places:
 - **PV-first priority.** It shares the priority a full battery gets, for the same
   reason: PV it is not allowed to export is lost rather than stored. The
   priority is exclusive — those devices are served first and the rest share the
-  remainder — so it is granted only while the EMS can still write to the device.
+  remainder — so it is granted only while the EMS can still write to the device,
+  which includes its transport's write gate being open.
   A full battery keeps the claim when it goes offline, because it fills up while
   being commanded and goes on delivering roughly what it was given; a
   battery-less device holds the claim from the moment it appears, so an
