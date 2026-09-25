@@ -3602,10 +3602,7 @@ class EMSController:
             capabilities=capabilities,
             requested_total=stabilized_total,
             explain=True,
-            online_devices=self.device_online,
-            commandable=[
-                self.device_commandable(dev) for dev in self.devices
-            ]
+            online_devices=self.device_online
         )
 
         targets = self.apply_device_ramp(

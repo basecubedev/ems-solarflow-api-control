@@ -955,6 +955,7 @@ Relevant events:
 dry_run_soc_limits
 write_soc_limits
 soc_limits_unchanged
+soc_limits_not_applicable
 dry_run_device_modes
 write_device_modes
 device_modes_unchanged
@@ -965,6 +966,10 @@ write_runtime_device_state
 The `*_unchanged` events (`soc_limits_unchanged`, `device_modes_unchanged`,
 `runtime_device_state_unchanged`) are healthy idle behavior and are emitted at
 `debug`. Actual writes (`write_*`) and dry-run skips stay visible at `info`.
+
+`soc_limits_not_applicable` (also `debug`) means the device reports no battery,
+so there is no SoC window to reconcile. It is not a skipped write: nothing was
+due. See "Devices Without A Battery" in [control-logic.md](control-logic.md).
 
 Set `allow_state_reconciliation_writes=false` while validating normal output
 control only if you deliberately want a conservative troubleshooting variant.

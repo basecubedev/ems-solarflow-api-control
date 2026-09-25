@@ -160,7 +160,11 @@ A device that reports no battery differs in four places:
   its weight is not biased. Without this it reports SOC 0, reads as the emptiest
   device in the plant, and collects the full penalty permanently.
 - **PV-first priority.** It shares the priority a full battery gets, for the same
-  reason: PV it is not allowed to export is lost rather than stored.
+  reason: PV it is not allowed to export is lost rather than stored. The
+  priority is exclusive — those devices are served first and the rest share the
+  remainder — and membership is decided from telemetry, including for a device
+  the EMS currently cannot write to. See "Offline Devices" below for why an
+  uncommanded device stays in the allocation at all.
 - **Battery top-up and battery balancing.** It receives no discharge share,
   whatever SOC it reports.
 - **State reconciliation.** `minSoc`/`socSet` and the winter reserve are not

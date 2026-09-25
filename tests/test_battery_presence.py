@@ -204,3 +204,21 @@ def test_the_store_does_not_record_a_count_the_controller_rejects(pack_num, tmp_
 
     assert battery_presence(item) == BATTERY_UNKNOWN
     assert record["last_seen_pack_num"] is None
+
+
+@pytest.mark.parametrize(
+    "pack_num,published",
+    [(None, None), (0, 0), (2, 2), ("nonsense", None)],
+)
+def test_the_api_publishes_unknown_as_null_rather_than_zero(pack_num, published):
+    """`pack_num: 0` in the API means a confirmed absence.
+
+    An operator reading it for a device the EMS treats as unknown would
+    misdiagnose why SoC reconciliation is still happening. The payload shape is
+    also what ``--replay`` reads back, so a collapsed zero would replay as a
+    confirmed absence that was never observed.
+    """
+
+    from dashboard.telemetry import _state_telemetry_fields
+
+    assert _state_telemetry_fields(state(pack_num=pack_num))["pack_num"] == published

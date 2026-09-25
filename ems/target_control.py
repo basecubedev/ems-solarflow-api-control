@@ -517,15 +517,14 @@ def allocate_full_soc_pv_first(
     pv_weights,
     pv_only_limits,
     device_configs=None,
-    capabilities=None,
-    commandable=None
+    capabilities=None
 ):
     """Prioritize PV export from devices that cannot absorb their own PV.
 
     The claim is exclusive: candidates are served first and the rest share what
-    is left. That is only worth granting to a device the EMS can still write to
-    -- an uncommanded one keeps roughly the share it already had, but will not
-    follow a claim that moves it, and everybody else is starved meanwhile.
+    is left. Membership is decided from telemetry alone, including for a device
+    the EMS cannot currently write to -- see the note on uncommanded devices in
+    :meth:`EMSController.intent_filtered_capabilities`.
     """
 
     full_limits = []
@@ -541,7 +540,6 @@ def allocate_full_soc_pv_first(
         max_power = get_device_max_power(dev_config)
         full_candidate = (
             can_export
-            and (commandable[i] if commandable else True)
             and cannot_absorb_pv(state)
             and pv_only_limits[i] > 0
         )
@@ -799,8 +797,7 @@ def calculate_targets(
     capabilities=None,
     requested_total=None,
     explain=False,
-    online_devices=None,
-    commandable=None
+    online_devices=None
 ):
     """
     Intelligent EMS target calculation.
@@ -1051,8 +1048,7 @@ def calculate_targets(
                 pv_weights,
                 pv_only_limits,
                 device_configs=device_configs,
-                capabilities=capabilities,
-                commandable=commandable
+                capabilities=capabilities
             )
 
             if targets is not None:

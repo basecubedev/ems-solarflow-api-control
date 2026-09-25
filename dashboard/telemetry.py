@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timezone
 from dataclasses import asdict, is_dataclass
 
+from ems.models import parse_pack_count
 from ems.state_store import describe_full_charge_assist_status
 
 
@@ -108,7 +109,7 @@ def _state_telemetry_fields(state):
         "dc_status": int(getattr(state, "dc_status", 0) or 0),
         "grid_state": int(getattr(state, "grid_state", 0) or 0),
         "soc_status": int(getattr(state, "soc_status", 0) or 0),
-        "pack_num": int(getattr(state, "pack_num", 0) or 0),
+        "pack_num": parse_pack_count(getattr(state, "pack_num", None)),
         "input_limit_w": _rounded(getattr(state, "input_limit_w", 0)),
     }
 
