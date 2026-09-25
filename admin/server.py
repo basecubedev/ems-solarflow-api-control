@@ -176,6 +176,7 @@ from admin.development_catalogue import development_catalogue_source
 from admin.release_catalogue import release_catalogue_source
 from admin.device_identity import IdentityTokenKeyStore
 from admin.releases import ReleaseError, ReleaseManager, default_admin_data_dir
+from admin.image_retention import ImageRetentionService
 from admin.known_good import KnownGoodStore
 from admin.setup_config import build_setup_catalog
 from admin.guided_setup_workflow import (
@@ -837,6 +838,16 @@ def _build_system_alignment(
             return ReplacementActivity.UNKNOWN
         return admin_replacement_activity(docker, operation_id)
 
+    known_good_store = KnownGoodStore(state_dir)
+
+    def _retention_event(result):
+        # The only trace a removal leaves. Without it an operator looking at a
+        # smaller image list has no way to tell housekeeping from a fault.
+        if result.get("skipped"):
+            print(f"image retention skipped: {result['skipped']}", flush=True)
+        elif result.get("removed"):
+            print(f"image retention removed {len(result['removed'])} image(s)", flush=True)
+
     return SystemAlignmentService(
         # One verified resolution is reused across validate → Continue / Update
         # Admin Server / re-render, so the explicit verification pulls each image
@@ -852,7 +863,7 @@ def _build_system_alignment(
         release_archive_resources=ReleaseArchiveResources(
             release_manager=release_manager
         ),
-        known_good_store=KnownGoodStore(state_dir),
+        known_good_store=known_good_store,
         current_identity=lambda: _running_admin_identity(docker),
         current_ems_identity=lambda: _running_ems_identity(docker),
         installed_ems_identity=lambda: _installed_ems_identity(docker),
@@ -860,6 +871,12 @@ def _build_system_alignment(
         launcher=launcher,
         operation_coordinator=operation_coordinator,
         replacement_activity=replacement_activity,
+        image_retention=ImageRetentionService(
+            docker=docker,
+            known_good_store=known_good_store,
+            transition_store=transition_store,
+            on_event=_retention_event,
+        ),
     )
 
 

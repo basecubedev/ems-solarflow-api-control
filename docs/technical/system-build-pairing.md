@@ -214,6 +214,7 @@ re-implement it:
 05 Verify resources             EmbeddedReleaseResources (embedded, hash-verified)
 06 Install or upgrade EMS       only after Admin is aligned
 07 Verify system                health checks -> known-good
+08 Bound the image history     remove superseded images, never a way back
 ```
 
 No config write, Compose deployment or EMS start happens before Admin alignment
@@ -371,6 +372,36 @@ selected -> resolved -> Admin aligned -> EMS deployed -> health checked -> known
 
 Known-good ([`admin/known_good.py`](../../admin/known_good.py) `KnownGoodStore`) is
 written only after Admin and EMS are verified and health checks pass.
+
+### Bounded local image history
+
+Docker keeps every image it ever pulled. One upgrade adds roughly 180 MB of
+unique layers per image, so an appliance on a 16 GB card fills up in about two
+years of monthly releases — and a full card stops InfluxDB and the EMS from
+writing, whose documented recovery is re-flashing.
+
+[`admin/image_retention.py`](../../admin/image_retention.py) keeps the newest
+**five per repository**, development and release builds sharing one budget. It
+runs at install time rather than on a timer, immediately **after** the
+known-good write: only then is it visible which build is running, which is the
+rollback target, and which a pending transition still needs. A timer would have
+to reconstruct all three and could delete an image an upgrade in flight had
+just pulled.
+
+Two bounds make it safe to run unattended:
+
+- **Only the two product repositories.** `MANAGED_REPOSITORIES` is the whole of
+  what may be removed. An image that cannot be proven to come from one of them
+  — a foreign image such as InfluxDB, or a locally built one named without a
+  registry — is never a candidate. Missing an image costs disk space; removing
+  somebody else's costs their data.
+- **Never the way back.** Protected digests come from known-good and the pending
+  transition, and are counted against the budget first. Ordering alone would not
+  do: a downgrade makes the rollback target an *old* image. `docker rmi` also
+  runs without `--force`, so Docker itself refuses an image still in use.
+
+A retention run never fails an upgrade: an unreadable protection source or a
+failed listing removes nothing, and no path out of it raises.
 
 ### Installed release authority
 

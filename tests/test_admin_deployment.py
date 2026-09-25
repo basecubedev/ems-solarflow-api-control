@@ -882,6 +882,86 @@ def test_permission_repair_uses_only_prepared_config_and_data_mounts(tmp_path):
     assert all("docker rm" not in value for value in command)
 
 
+def test_listing_images_keeps_both_identities_of_each_image(tmp_path):
+    """A removal names the local ID; a protection record stores the digest."""
+
+    rows = [
+        {"ID": "sha256:localid", "Digest": "sha256:repodigest", "Repository": "ems/admin",
+         "Tag": "v1", "CreatedAt": "2026-01-02 00:00:00 +0000 UTC"},
+        {"ID": "sha256:only", "Digest": "<none>", "Repository": "ems/admin",
+         "Tag": "<none>", "CreatedAt": "2026-01-01 00:00:00 +0000 UTC"},
+    ]
+
+    def _run(command, **_kwargs):
+        assert "--force" not in command
+        return SimpleNamespace(
+            returncode=0, stdout="\n".join(json.dumps(r) for r in rows), stderr=""
+        )
+
+    images = DockerCli(run=_run).list_images("ems/admin")
+
+    assert [image["digest"] for image in images] == ["sha256:localid", "sha256:only"]
+    assert images[0]["aliases"] == ["sha256:localid", "sha256:repodigest"]
+    assert images[0]["created"] == "2026-01-02 00:00:00 +0000 UTC"
+
+
+def test_listing_images_of_another_repository_is_discarded(tmp_path):
+    """The daemon is asked for one repository; anything else is not ours."""
+
+    row = {"ID": "sha256:x", "Digest": "sha256:x", "Repository": "influxdb",
+           "Tag": "2.7", "CreatedAt": "2026-01-01 00:00:00 +0000 UTC"}
+
+    def _run(_command, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout=json.dumps(row), stderr="")
+
+    assert DockerCli(run=_run).list_images("ems/admin") == []
+
+
+def test_listing_images_degrades_instead_of_raising(tmp_path):
+    """No candidates is a safe answer; an exception would fail the upgrade."""
+
+    def _missing(*_a, **_k):
+        raise FileNotFoundError("docker")
+
+    assert DockerCli(run=_missing).list_images("ems/admin") == []
+
+    def _broken(*_a, **_k):
+        return SimpleNamespace(returncode=0, stdout="not json\n{", stderr="")
+
+    assert DockerCli(run=_broken).list_images("ems/admin") == []
+
+
+def test_removing_an_image_never_forces_and_never_raises(tmp_path):
+    """Docker refusing to remove an in-use image is the safety check.
+
+    Forcing would delete the image a running container still needs, which is
+    precisely the state retention exists to avoid creating.
+    """
+
+    seen = {}
+
+    def _run(command, **kwargs):
+        seen["command"] = command
+        seen["timeout"] = kwargs.get("timeout")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    assert DockerCli(run=_run).remove_image("sha256:abc") is True
+    assert seen["command"] == ["docker", "rmi", "sha256:abc"]
+    assert "--force" not in seen["command"] and "-f" not in seen["command"]
+    # Removing layers is disk work like any other container step.
+    assert seen["timeout"] >= 180
+
+    def _refuses(*_a, **_k):
+        return SimpleNamespace(returncode=1, stdout="", stderr="image is being used")
+
+    assert DockerCli(run=_refuses).remove_image("sha256:abc") is False
+
+    def _missing(*_a, **_k):
+        raise FileNotFoundError("docker")
+
+    assert DockerCli(run=_missing).remove_image("sha256:abc") is False
+
+
 def test_container_lifecycle_timeouts_survive_a_slow_disk(tmp_path):
     """Container steps are bounded by host fsync latency, not by their own work.
 

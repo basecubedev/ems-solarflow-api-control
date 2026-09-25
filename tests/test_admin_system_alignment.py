@@ -136,7 +136,7 @@ def _service(tmp_path, *, build=None, resolver_error=None, running=None,
              persistent_ref=None, embedded=None, launched=None, known_good=None,
              running_ems=None, release_archive=None, launcher=None,
              replacement_activity=None, current_ems_identity=None, now=None,
-             installed_ems_identity=None):
+             installed_ems_identity=None, image_retention=None):
     running = running or ImageIdentity(
         image_ref=f"{ADMIN_IMAGE_REPO}:latest", digest="sha256:latest", revision="old",
         build_id="v0.7.0-old",
@@ -166,6 +166,7 @@ def _service(tmp_path, *, build=None, resolver_error=None, running=None,
             persistent_ref=lambda: persistent_ref or f"{ADMIN_IMAGE_REPO}:latest",
             launcher=launcher or (lambda record: launched.append(record)),
             replacement_activity=replacement_activity,
+            image_retention=image_retention,
             now=now or (lambda: T0),
         ),
         transitions,
@@ -1641,7 +1642,7 @@ def test_status_polling_is_read_only_and_keeps_target_and_known_good_visible(tmp
     assert transitions.path.read_bytes() == before
 
 
-def _resources_verified_service(tmp_path):
+def _resources_verified_service(tmp_path, *, image_retention=None):
     build = _build(admin_digest="sha256:aligned")
     running = ImageIdentity(
         image_ref=f"{ADMIN_IMAGE_REPO}:v0.8.0",
@@ -1654,6 +1655,7 @@ def _resources_verified_service(tmp_path):
         build=build,
         running=running,
         persistent_ref=f"{ADMIN_IMAGE_REPO}:v0.8.0",
+        image_retention=image_retention,
     )
     started = service.start(requested_tag="v0.8.0", mode="guided_upgrade")
     operation_id = started["operation_id"]
@@ -1661,8 +1663,10 @@ def _resources_verified_service(tmp_path):
     return service, transitions, known_good, build, operation_id
 
 
-def _healthcheck_pending_service(tmp_path):
-    service, transitions, known_good, build, operation_id = _resources_verified_service(tmp_path)
+def _healthcheck_pending_service(tmp_path, *, image_retention=None):
+    service, transitions, known_good, build, operation_id = _resources_verified_service(
+        tmp_path, image_retention=image_retention
+    )
     pending = service.begin_ems_operation(operation_id=operation_id)
     assert pending["status"] == STAGE_EMS_OPERATION_PENDING
     assert service.claim_ems_operation(operation_id=operation_id) is True
@@ -1709,6 +1713,56 @@ def test_ems_deployment_failure_remains_recoverable(tmp_path):
 
 
 # --- healthcheck is the only gateway to known-good and completion ---------
+
+
+def test_retention_runs_only_after_known_good_is_written(tmp_path):
+    """Retention must see the new build as known-good, not as a candidate.
+
+    It protects whatever known-good names. Running it before the write would
+    show it the *previous* build as protected and the just-installed one as an
+    ordinary old image -- free to remove the very thing that was installed.
+    """
+
+    seen = {}
+
+    class _Retention:
+        def __init__(self, store):
+            self._store = store
+
+        def run(self):
+            seen["known_good"] = self._store.current()
+
+    store = KnownGoodStore(tmp_path / "state")
+    service, _, known_good, build, operation_id = _healthcheck_pending_service(
+        tmp_path, image_retention=_Retention(store)
+    )
+    assert known_good.current() is None
+
+    service.finish_healthcheck(
+        operation_id=operation_id, system_build=build, passed=True
+    )
+
+    assert seen["known_good"] is not None, "retention ran before the write"
+    assert seen["known_good"]["build_id"] == known_good.current()["build_id"]
+
+
+def test_a_failing_retention_never_fails_the_install(tmp_path):
+    """Housekeeping is not allowed to undo a verified installation."""
+
+    class _Exploding:
+        def run(self):
+            raise RuntimeError("docker went away")
+
+    service, _, known_good, build, operation_id = _healthcheck_pending_service(
+        tmp_path, image_retention=_Exploding()
+    )
+
+    result = service.finish_healthcheck(
+        operation_id=operation_id, system_build=build, passed=True
+    )
+
+    assert result is not None
+    assert known_good.current() is not None
 
 
 def test_healthcheck_failure_does_not_write_known_good(tmp_path):
