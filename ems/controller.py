@@ -691,6 +691,12 @@ class EMSController:
         the per-cycle detail stays at debug.
         """
 
+        if explanation.mode != "pv_first":
+            # The claim is only decided in the PV-first regime. Reading its
+            # absence as "nobody holds it" would announce a change every time
+            # a cloud pushes the plant across that boundary and back.
+            return
+
         claimed = next(
             (
                 limit.value
@@ -2806,17 +2812,21 @@ class EMSController:
         )
 
         for dev, state in zip(self.devices, states):
+            # A device with no battery holds no winter reserve and is not in
+            # winter reconciliation, so it has no target to publish -- a summer
+            # number under a winter label would be worse than none.
+            if battery_presence(state) == BATTERY_ABSENT:
+                continue
+
             base = p + dev.name.lower() + "_winter_"
             effective_min_soc = self.winter_min_soc_targets.get(
                 dev.name,
                 state.min_soc if state.min_soc > 0 else dev.min_soc
             )
-            # A device with no battery holds no winter reserve, so it is not
-            # in winter reconciliation and must not be shown ramping toward one.
             target = cfg.calculate_winter_min_soc_target(
                 state.soc,
                 effective_min_soc,
-                active and battery_presence(state) != BATTERY_ABSENT
+                active
             )
 
             self.publish_sensor(

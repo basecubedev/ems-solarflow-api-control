@@ -152,7 +152,12 @@ def _telemetry_only_tiles(controller):
             {
                 "name": name,
                 "online": status == "online",
-                "state": parse_device({"properties": metrics}),
+                "state": parse_device({
+                    "properties": metrics,
+                    # The same second witness the control path weighs, so two
+                    # readers of one aggregator cannot disagree about packs.
+                    "packData": getattr(snapshot, "battery_packs", None),
+                }),
             }
         )
     return tiles

@@ -424,7 +424,7 @@ def _controller_for_priority_logging():
     )
 
 
-def _explanation_claiming(indexes):
+def _explanation_claiming(indexes, mode="pv_first"):
     """A control explanation whose priority limit names ``indexes``.
 
     The claim is read from the limit entry rather than from each device's
@@ -436,13 +436,14 @@ def _explanation_claiming(indexes):
     import json as _json
 
     return SimpleNamespace(
+        mode=mode,
         limits=[
             SimpleNamespace(
                 name="full_soc_pv_priority",
                 active=bool(indexes),
                 value=_json.dumps(indexes),
             )
-        ]
+        ],
     )
 
 
@@ -473,3 +474,30 @@ def test_a_plant_that_never_uses_the_claim_says_nothing(caplog):
             controller.log_pv_priority_change(quiet)
 
     assert not [m for m in caplog.messages if "pv_first_priority_changed" in m]
+
+
+def test_leaving_the_pv_first_regime_is_not_a_change_of_claim(caplog):
+    """A cloud crossing the PV/demand boundary is not the claim moving.
+
+    The claim is only decided while PV can cover the requested total. Reading
+    its absence in the other regime as "nobody holds it" announced a change
+    every few seconds on a cloudy day -- the noise the per-cycle event was
+    moved to debug to avoid.
+    """
+
+    import logging as log
+
+    controller = _controller_for_priority_logging()
+    held = _explanation_claiming([0])
+
+    with caplog.at_level(log.INFO):
+        controller.log_pv_priority_change(held)
+        for _ in range(4):
+            controller.log_pv_priority_change(
+                _explanation_claiming([], mode="battery_discharge")
+            )
+            controller.log_pv_priority_change(held)
+
+    announcements = [m for m in caplog.messages if "pv_first_priority_changed" in m]
+
+    assert len(announcements) == 1

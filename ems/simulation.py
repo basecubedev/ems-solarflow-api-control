@@ -95,6 +95,23 @@ class SimulatedHAClient:
 # PARALLEL FETCH
 # =====================
 
+def observed_pack_count_from_trace(data):
+    """Apply the live contradiction rule to a replayed frame.
+
+    A trace that carries the pack list gets the same second witness the live
+    path uses, so a replay classifies presence the way the run it reproduces
+    did. A trace without one leaves the count to stand alone, as on the MQTT
+    path.
+    """
+
+    packs = value_from_trace(data, "pack_num", "packNum", default=None)
+
+    if packs == 0 and value_from_trace(data, "pack_data", "packData", default=None):
+        return None
+
+    return packs
+
+
 def value_from_trace(data, *keys, default=0):
     for key in keys:
         if key in data:
@@ -140,7 +157,7 @@ def state_from_trace_device(data):
     state.grid_off_mode = value_from_trace(data, "grid_off_mode", "gridOffMode")
     state.ac_mode = value_from_trace(data, "ac_mode", "acMode")
     state.input_limit_w = value_from_trace(data, "input_limit_w", "inputLimit")
-    state.pack_num = value_from_trace(data, "pack_num", "packNum", default=None)
+    state.pack_num = observed_pack_count_from_trace(data)
     state.soc_status = value_from_trace(data, "soc_status", "socStatus")
     state.battery_calibration_time = data.get(
         "battery_calibration_time",
