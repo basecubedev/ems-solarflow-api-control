@@ -263,24 +263,43 @@ def test_an_uncommanded_full_battery_keeps_its_exclusive_claim():
     assert effective == [0, 0]
 
 
-def test_an_uncommanded_battery_less_device_does_not_take_the_claim():
-    """The same rule starves the plant here, because the premise is different.
+def test_an_uncommanded_device_claims_only_what_it_is_delivering():
+    """One rule for both, measured from the device rather than assumed.
 
-    A device with no battery holds the claim from the moment it appears, not
-    after a stretch of being commanded into it. One that was never written to
-    is delivering nothing, so an exclusive claim leaves the whole plant
-    commanded nothing. Measured: effective [0, 0] where its ordinary weighted
-    share leaves the other device running.
+    A device the EMS cannot write to will not follow a claim that moves it --
+    it goes on delivering what it was last given -- so its claim is capped
+    there. A battery-less device that was never written to is delivering
+    nothing, so it claims nothing and the plant is served by the device that
+    can hear it.
     """
 
     controller = controller_with(runtime_devices={"WR2": {"enabled": False}})
     battery_less = state(soc=0, solar=800)
     battery_less.pack_num = 0
+    battery_less.output = 0
 
     targets, effective = allocate(controller, [state(solar=400), battery_less])
 
-    assert effective[0] > 0
-    assert targets[1] == 400
+    assert targets == [600, 0]
+    assert effective == [600, 0]
+
+
+def test_an_uncommanded_device_keeps_the_claim_it_is_already_serving():
+    """The mirror case, and the reason the cap is measured and not assumed.
+
+    Taking the claim away from a device that is delivering 600 W hands that
+    share to a device the EMS does write to, and the plant then delivers both.
+    """
+
+    controller = controller_with(online={"WR1": True, "WR2": False})
+    battery_less = state(soc=0, solar=800)
+    battery_less.pack_num = 0
+    battery_less.output = 600
+
+    targets, effective = allocate(controller, [state(solar=400), battery_less])
+
+    assert targets == [0, 600]
+    assert effective == [0, 0]
 
 
 def test_a_commandable_battery_less_device_still_takes_the_claim():

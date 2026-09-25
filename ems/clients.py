@@ -236,7 +236,7 @@ def _observed_pack_count(data, props):
 
     packs = props.get("packNum")
 
-    if packs == 0 and data.get("packData"):
+    if packs == 0 and (data.get("packData") or props.get("packData")):
         return None
 
     return packs

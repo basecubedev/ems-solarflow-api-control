@@ -162,13 +162,12 @@ A device that reports no battery differs in four places:
 - **PV-first priority.** It shares the priority a full battery gets, for the same
   reason: PV it is not allowed to export is lost rather than stored. The
   priority is exclusive — those devices are served first and the rest share the
-  remainder — so it is granted only while the EMS can still write to the device,
-  which includes its transport's write gate being open.
-  A full battery keeps the claim when it goes offline, because it fills up while
-  being commanded and goes on delivering roughly what it was given; a
-  battery-less device holds the claim from the moment it appears, so an
-  uncommanded one would hold it while delivering nothing. See "Offline Devices"
-  below.
+  remainder, so whoever holds it is expected to deliver it. A device the EMS
+  cannot write to this cycle — offline, disabled, or on a transport whose write
+  gate is closed — will not follow a claim that moves it, so its claim is capped
+  at what it is currently delivering. A battery that filled up while being
+  commanded keeps its claim; one that was never commanded claims nothing. See
+  "Offline Devices" below.
 - **Battery top-up and battery balancing.** It receives no discharge share,
   whatever SOC it reports.
 - **State reconciliation.** `minSoc`/`socSet` and the winter reserve are not

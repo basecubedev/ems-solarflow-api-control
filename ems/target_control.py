@@ -369,26 +369,15 @@ def is_full_soc_device(state):
     )
 
 
-def cannot_absorb_pv(state, commandable=True):
+def cannot_absorb_pv(state):
     """True when PV this device does not export is lost rather than stored.
 
     A battery at its ceiling is in that position for now; a device without a
     battery is in it permanently. Both have the same claim on PV-first export,
     and for the same reason.
-
-    ``commandable`` guards only the second case, and the asymmetry is measured
-    rather than tidy. The claim is exclusive, so whoever holds it is expected to
-    deliver the whole requested total. A battery that filled up while the EMS
-    was writing to it goes on delivering roughly that, which is why an offline
-    one keeps the claim. A device with no battery holds the claim from the
-    moment it appears, so one that was never commanded holds it while delivering
-    nothing -- and the rest of the plant is commanded nothing in its place.
     """
 
-    if is_full_soc_device(state):
-        return True
-
-    return commandable and battery_presence(state) == BATTERY_ABSENT
+    return battery_presence(state) == BATTERY_ABSENT or is_full_soc_device(state)
 
 
 def pv_charge_balance_context(states):
@@ -534,8 +523,12 @@ def allocate_full_soc_pv_first(
     """Prioritize PV export from devices that cannot absorb their own PV.
 
     The claim is exclusive: candidates are served first and the rest share what
-    is left. See :func:`cannot_absorb_pv` for which devices qualify and why an
-    uncommanded one qualifies in one case but not the other.
+    is left, so whoever holds it is expected to deliver it. A device the EMS
+    cannot write to this cycle will not follow a claim that moves it -- it goes
+    on delivering what it was last given -- so its claim is capped there. That
+    is the whole difference between a battery that filled up while being
+    commanded and one that was never commanded at all, and it is measured from
+    the device rather than assumed from why it is uncommanded.
     """
 
     full_limits = []
@@ -551,16 +544,17 @@ def allocate_full_soc_pv_first(
         max_power = get_device_max_power(dev_config)
         full_candidate = (
             can_export
-            and cannot_absorb_pv(
-                state,
-                commandable=commandable[i] if commandable else True
-            )
+            and cannot_absorb_pv(state)
             and pv_only_limits[i] > 0
         )
+        claim_limit = min(pv_only_limits[i], max_power)
+
+        if commandable is not None and not commandable[i]:
+            claim_limit = min(claim_limit, max(0, state.output))
 
         if full_candidate:
             full_indices.append(i)
-            full_limits.append(min(pv_only_limits[i], max_power))
+            full_limits.append(claim_limit)
             full_weights.append(pv_weights[i])
             normal_limits.append(0)
             normal_weights.append(0)

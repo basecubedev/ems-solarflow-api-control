@@ -424,14 +424,25 @@ def _controller_for_priority_logging():
     )
 
 
-def _explanation_with(holders):
+def _explanation_claiming(indexes):
+    """A control explanation whose priority limit names ``indexes``.
+
+    The claim is read from the limit entry rather than from each device's
+    decision reason, because the battery top-up stage overwrites that field and
+    the holder set would then appear to flip every time the top-up engaged.
+    """
+
     from types import SimpleNamespace
+    import json as _json
 
     return SimpleNamespace(
-        devices={
-            name: SimpleNamespace(decision_reason=reason)
-            for name, reason in holders.items()
-        }
+        limits=[
+            SimpleNamespace(
+                name="full_soc_pv_priority",
+                active=bool(indexes),
+                value=_json.dumps(indexes),
+            )
+        ]
     )
 
 
@@ -439,12 +450,12 @@ def test_the_priority_claim_is_logged_when_it_moves(caplog):
     import logging as log
 
     controller = _controller_for_priority_logging()
-    held = _explanation_with({"WR1": "full_soc_pv_priority"})
+    held = _explanation_claiming([0])
 
     with caplog.at_level(log.INFO):
         controller.log_pv_priority_change(held)
         controller.log_pv_priority_change(held)
-        controller.log_pv_priority_change(_explanation_with({"WR1": "pv_first_allocation"}))
+        controller.log_pv_priority_change(_explanation_claiming([]))
 
     announcements = [m for m in caplog.messages if "pv_first_priority_changed" in m]
 
@@ -455,7 +466,7 @@ def test_a_plant_that_never_uses_the_claim_says_nothing(caplog):
     import logging as log
 
     controller = _controller_for_priority_logging()
-    quiet = _explanation_with({"WR1": "pv_first_allocation"})
+    quiet = _explanation_claiming([])
 
     with caplog.at_level(log.INFO):
         for _ in range(5):

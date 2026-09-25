@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import json
 import logging
 import time
 from collections import deque
@@ -690,11 +691,25 @@ class EMSController:
         the per-cycle detail stays at debug.
         """
 
+        claimed = next(
+            (
+                limit.value
+                for limit in explanation.limits
+                if limit.name == "full_soc_pv_priority" and limit.active
+            ),
+            None,
+        )
+
+        try:
+            indexes = json.loads(claimed) if claimed else []
+        except (TypeError, ValueError):
+            indexes = []
+
         holders = tuple(
             sorted(
-                name
-                for name, entry in explanation.devices.items()
-                if entry.decision_reason == "full_soc_pv_priority"
+                self.devices[index].name
+                for index in indexes
+                if 0 <= index < len(self.devices)
             )
         )
 
