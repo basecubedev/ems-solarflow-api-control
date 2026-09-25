@@ -56,7 +56,12 @@ def _truthy(value):
 
 
 def infer_capabilities(metrics, battery_packs):
-    """Infer device capabilities from observed keys, not from model names."""
+    """Infer device capabilities from observed keys, not from model names.
+
+    Key presence, for discovery display only. ``packNum: 0`` still counts as
+    battery evidence here; the control side asks ``battery_presence`` for the
+    value instead, and the two are not interchangeable.
+    """
 
     caps = set()
     if battery_packs or "packNum" in metrics or "electricLevel" in metrics:

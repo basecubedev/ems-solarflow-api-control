@@ -108,6 +108,9 @@ def allocate(controller, states, requested_total=600):
             device_configs=controller.devices,
             capabilities=capabilities,
             requested_total=requested_total,
+            commandable=[
+                controller.device_commandable(dev) for dev in controller.devices
+            ],
         )
     effective = controller.effective_control_targets(list(targets), True, 0)
     return [round(value) for value in targets], effective
@@ -236,27 +239,54 @@ def test_a_reservation_stays_visible_on_a_device_that_is_also_offline():
     assert filtered[1].can_export is False
 
 
-def test_an_uncommanded_device_keeps_its_exclusive_pv_first_claim():
-    """Pinned as it is, because two attempts to "fix" it both made it worse.
+# --- the exclusive PV-first claim, and who may still hold it ----------------
 
-    A device that cannot absorb its own PV is served first and the rest share
-    the remainder. An offline device keeps that claim, which looks wrong until
-    the alternative is measured: taking the claim away moves its share onto
-    devices the EMS does write to, while it goes on delivering its last
-    `outputLimit`. That is the plant delivering both -- an export, where leaving
-    the claim in place merely under-delivers if the device really has stopped.
 
-    Neither is right. The allocator has no term for "this device contributes
-    something I do not command", and adding one is the open Phase 4 item in
-    docs/develop/control-architecture-plan.md. Until then the safer failure is
-    the one kept here.
+def test_an_uncommanded_full_battery_keeps_its_exclusive_claim():
+    """Pinned as it is: taking it away was tried twice and was worse both times.
+
+    A battery fills up while the EMS is writing to it, so the claim it holds is
+    roughly what it is already delivering. If it then drops offline it goes on
+    delivering that, and moving the claim onto a device the EMS does write to
+    makes the plant deliver both.
     """
 
     controller = controller_with(online={"WR1": True, "WR2": False})
-    plant = [state(solar=400), state(soc=0, solar=800)]
-    plant[1].pack_num = 0
+    full = state(soc=100, solar=800)
+    full.soc_limit = 1
+    full.output = 600
 
-    targets, effective = allocate(controller, plant)
+    targets, effective = allocate(controller, [state(solar=400), full])
 
     assert targets == [0, 600]
     assert effective == [0, 0]
+
+
+def test_an_uncommanded_battery_less_device_does_not_take_the_claim():
+    """The same rule starves the plant here, because the premise is different.
+
+    A device with no battery holds the claim from the moment it appears, not
+    after a stretch of being commanded into it. One that was never written to
+    is delivering nothing, so an exclusive claim leaves the whole plant
+    commanded nothing. Measured: effective [0, 0] where its ordinary weighted
+    share leaves the other device running.
+    """
+
+    controller = controller_with(runtime_devices={"WR2": {"enabled": False}})
+    battery_less = state(soc=0, solar=800)
+    battery_less.pack_num = 0
+
+    targets, effective = allocate(controller, [state(solar=400), battery_less])
+
+    assert effective[0] > 0
+    assert targets[1] == 400
+
+
+def test_a_commandable_battery_less_device_still_takes_the_claim():
+    controller = controller_with()
+    battery_less = state(soc=0, solar=800)
+    battery_less.pack_num = 0
+
+    targets, _ = allocate(controller, [state(solar=400), battery_less])
+
+    assert targets == [0, 600]

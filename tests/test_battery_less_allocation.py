@@ -384,8 +384,13 @@ def test_two_batteries_keep_their_split_when_a_battery_less_device_joins():
     assert joined[:2] == alone
 
 
-def test_a_stale_winter_target_is_dropped_when_the_pack_goes_away():
-    """The early return must not strand the entry the summer reset would clear."""
+def test_a_transient_missing_pack_does_not_destroy_the_winter_ramp():
+    """The winter target is the only record of how far the ramp has come.
+
+    A single poll reporting `packNum: 0` used to drop it, and the next cycle
+    then wrote the configured minimum over the ramped value -- cancelling the
+    reserve because of one bad read.
+    """
 
     from ems.controller import EMSController
     from tests.test_write_gates import ShellyStub, device as write_device
@@ -401,4 +406,4 @@ def test_a_stale_winter_target_is_dropped_when_the_pack_goes_away():
             dev, state(soc=50, solar=0, pack_num=0), True, True
         )
 
-    assert "WR1" not in controller.winter_min_soc_targets
+    assert controller.winter_min_soc_targets["WR1"] == 40

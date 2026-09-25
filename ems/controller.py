@@ -2252,8 +2252,10 @@ class EMSController:
         if not cfg.winter_feature_enabled(self.runtime_state):
             return None, False
 
+        # Left in place deliberately: a single transient `packNum: 0` would
+        # otherwise drop the ramp target, and the next cycle would write the
+        # configured minimum over it.
         if battery_presence(state) == BATTERY_ABSENT:
-            self.winter_min_soc_targets.pop(dev.name, None)
             return None, False
 
         summer_min_soc = cfg.winter_config_int("summer_min_soc", 15, minimum=0)
@@ -3602,7 +3604,10 @@ class EMSController:
             capabilities=capabilities,
             requested_total=stabilized_total,
             explain=True,
-            online_devices=self.device_online
+            online_devices=self.device_online,
+            commandable=[
+                self.device_commandable(dev) for dev in self.devices
+            ]
         )
 
         targets = self.apply_device_ramp(

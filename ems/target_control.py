@@ -369,15 +369,26 @@ def is_full_soc_device(state):
     )
 
 
-def cannot_absorb_pv(state):
+def cannot_absorb_pv(state, commandable=True):
     """True when PV this device does not export is lost rather than stored.
 
     A battery at its ceiling is in that position for now; a device without a
     battery is in it permanently. Both have the same claim on PV-first export,
     and for the same reason.
+
+    ``commandable`` guards only the second case, and the asymmetry is measured
+    rather than tidy. The claim is exclusive, so whoever holds it is expected to
+    deliver the whole requested total. A battery that filled up while the EMS
+    was writing to it goes on delivering roughly that, which is why an offline
+    one keeps the claim. A device with no battery holds the claim from the
+    moment it appears, so one that was never commanded holds it while delivering
+    nothing -- and the rest of the plant is commanded nothing in its place.
     """
 
-    return battery_presence(state) == BATTERY_ABSENT or is_full_soc_device(state)
+    if is_full_soc_device(state):
+        return True
+
+    return commandable and battery_presence(state) == BATTERY_ABSENT
 
 
 def pv_charge_balance_context(states):
@@ -517,14 +528,14 @@ def allocate_full_soc_pv_first(
     pv_weights,
     pv_only_limits,
     device_configs=None,
-    capabilities=None
+    capabilities=None,
+    commandable=None
 ):
     """Prioritize PV export from devices that cannot absorb their own PV.
 
     The claim is exclusive: candidates are served first and the rest share what
-    is left. Membership is decided from telemetry alone, including for a device
-    the EMS cannot currently write to -- see the note on uncommanded devices in
-    :meth:`EMSController.intent_filtered_capabilities`.
+    is left. See :func:`cannot_absorb_pv` for which devices qualify and why an
+    uncommanded one qualifies in one case but not the other.
     """
 
     full_limits = []
@@ -540,7 +551,10 @@ def allocate_full_soc_pv_first(
         max_power = get_device_max_power(dev_config)
         full_candidate = (
             can_export
-            and cannot_absorb_pv(state)
+            and cannot_absorb_pv(
+                state,
+                commandable=commandable[i] if commandable else True
+            )
             and pv_only_limits[i] > 0
         )
 
@@ -797,7 +811,8 @@ def calculate_targets(
     capabilities=None,
     requested_total=None,
     explain=False,
-    online_devices=None
+    online_devices=None,
+    commandable=None
 ):
     """
     Intelligent EMS target calculation.
@@ -1048,7 +1063,8 @@ def calculate_targets(
                 pv_weights,
                 pv_only_limits,
                 device_configs=device_configs,
-                capabilities=capabilities
+                capabilities=capabilities,
+                commandable=commandable
             )
 
             if targets is not None:
