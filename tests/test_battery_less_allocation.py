@@ -407,3 +407,58 @@ def test_a_transient_missing_pack_does_not_destroy_the_winter_ramp():
         )
 
     assert controller.winter_min_soc_targets["WR1"] == 40
+
+
+# --- the claim is announced when it moves, not every cycle ------------------
+
+
+def _controller_for_priority_logging():
+    from ems.controller import EMSController
+    from tests.test_write_gates import ShellyStub, device as write_device
+
+    return EMSController(
+        devices=[write_device("WR1")],
+        shelly=ShellyStub(0),
+        sleep_enabled=False,
+        runtime_state=None,
+    )
+
+
+def _explanation_with(holders):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        devices={
+            name: SimpleNamespace(decision_reason=reason)
+            for name, reason in holders.items()
+        }
+    )
+
+
+def test_the_priority_claim_is_logged_when_it_moves(caplog):
+    import logging as log
+
+    controller = _controller_for_priority_logging()
+    held = _explanation_with({"WR1": "full_soc_pv_priority"})
+
+    with caplog.at_level(log.INFO):
+        controller.log_pv_priority_change(held)
+        controller.log_pv_priority_change(held)
+        controller.log_pv_priority_change(_explanation_with({"WR1": "pv_first_allocation"}))
+
+    announcements = [m for m in caplog.messages if "pv_first_priority_changed" in m]
+
+    assert len(announcements) == 2
+
+
+def test_a_plant_that_never_uses_the_claim_says_nothing(caplog):
+    import logging as log
+
+    controller = _controller_for_priority_logging()
+    quiet = _explanation_with({"WR1": "pv_first_allocation"})
+
+    with caplog.at_level(log.INFO):
+        for _ in range(5):
+            controller.log_pv_priority_change(quiet)
+
+    assert not [m for m in caplog.messages if "pv_first_priority_changed" in m]

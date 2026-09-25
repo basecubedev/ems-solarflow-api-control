@@ -222,3 +222,45 @@ def test_the_api_publishes_unknown_as_null_rather_than_zero(pack_num, published)
     from dashboard.telemetry import _state_telemetry_fields
 
     assert _state_telemetry_fields(state(pack_num=pack_num))["pack_num"] == published
+
+
+# --- a contradictory report is not an observation ---------------------------
+
+
+def test_a_zero_count_beside_reported_packs_is_unknown():
+    """One bad poll must not reclassify a battery device.
+
+    `packNum: 0` arriving in the same report as a populated `packData` is the
+    report contradicting itself, and absence never comes free: the cycle falls
+    back to unknown, which is how every unclassified device has always behaved.
+    """
+
+    parsed = parse_device({
+        "properties": {"packNum": 0, "electricLevel": 74},
+        "packData": [{"sn": "PACK1", "socLevel": 74}],
+    })
+
+    assert battery_presence(parsed) == BATTERY_UNKNOWN
+
+
+def test_a_zero_count_beside_an_empty_pack_list_is_absent():
+    parsed = parse_device({
+        "properties": {"packNum": 0},
+        "packData": [],
+    })
+
+    assert battery_presence(parsed) == BATTERY_ABSENT
+
+
+def test_a_zero_count_without_pack_data_is_absent():
+    """The MQTT path carries no `packData`, so the count stands alone there."""
+
+    parsed = parse_device({"properties": {"packNum": 0}})
+
+    assert battery_presence(parsed) == BATTERY_ABSENT
+
+
+def test_reported_packs_do_not_invent_a_count_on_their_own():
+    parsed = parse_device({"packData": [{"sn": "PACK1"}]})
+
+    assert battery_presence(parsed) == BATTERY_UNKNOWN

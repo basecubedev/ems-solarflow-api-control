@@ -318,3 +318,19 @@ def test_a_gated_off_transport_does_not_take_the_claim_either():
         ]
 
     assert commandable == [True, False]
+
+
+def test_a_replay_is_not_disqualified_by_the_safe_config():
+    """Simulation and replay force every write gate off by design.
+
+    Reading one here would make a replay allocate differently from the live run
+    it reproduces -- the point of a replay being that it does not.
+    """
+
+    controller = controller_with()
+
+    with patch("ems.controller.cfg.SIMULATION_MODE", True), patch(
+        "ems.controller.cfg.resolve_device_write_gate",
+        side_effect=AssertionError("the gate must not be read in simulation"),
+    ):
+        assert controller.device_claim_eligible(controller.devices[0])

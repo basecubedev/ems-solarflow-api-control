@@ -956,6 +956,7 @@ dry_run_soc_limits
 write_soc_limits
 soc_limits_unchanged
 soc_limits_not_applicable
+pv_first_priority_changed
 dry_run_device_modes
 write_device_modes
 device_modes_unchanged
@@ -970,6 +971,11 @@ The `*_unchanged` events (`soc_limits_unchanged`, `device_modes_unchanged`,
 `soc_limits_not_applicable` (also `debug`) means the device reports no battery,
 so there is no SoC window to reconcile. It is not a skipped write: nothing was
 due. See "Devices Without A Battery" in [control-logic.md](control-logic.md).
+
+`pv_first_priority_changed` (`info`) records which devices hold the exclusive
+PV-first claim whenever that set moves. It is steady for as long as a battery
+stays full or a device stays battery-less, so it should be rare; the per-cycle
+detail is `pv_first_full_soc_priority` at `debug`.
 
 Set `allow_state_reconciliation_writes=false` while validating normal output
 control only if you deliberately want a conservative troubleshooting variant.

@@ -225,6 +225,23 @@ class HAClient:
         except:
             return default
 
+def _observed_pack_count(data, props):
+    """Return the reported pack count, unless the report contradicts itself.
+
+    A zero beside a populated ``packData`` is one bad poll, not a device that
+    lost its battery, and absence unlocks behaviour that only a confirmed
+    absence may unlock. ``packData`` is absent on the MQTT path, where the count
+    stands alone.
+    """
+
+    packs = props.get("packNum")
+
+    if packs == 0 and data.get("packData"):
+        return None
+
+    return packs
+
+
 def parse_device(data):
     """Extract relevant values from Zendure API response."""
 
@@ -266,7 +283,7 @@ def parse_device(data):
         dc_status=props.get("dcStatus") or 0,
         grid_state=props.get("gridState") or 0,
         input_limit_w=props.get("inputLimit") or 0,
-        pack_num=props.get("packNum"),
+        pack_num=_observed_pack_count(data, props),
         soc_status=props.get("socStatus") or 0,
         battery_calibration_time=props.get("batCalTime"),
     )

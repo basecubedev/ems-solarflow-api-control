@@ -76,6 +76,7 @@ class EMSController:
         self.last_states = {}
         self.last_seen = {}
         self.device_online = {}
+        self.pv_priority_devices = None
         self.battery_power_history = {}
         self.initial_ac_mode_reconciled = {}
         self.last_ha_seen = {}
@@ -367,6 +368,12 @@ class EMSController:
 
         if not self.device_commandable(dev):
             return False
+
+        if cfg.SIMULATION_MODE or getattr(cfg.ARGS, "replay", False):
+            # The simulation/replay safe config forces every gate off, so
+            # reading one here would make a replay allocate differently from
+            # the run it reproduces.
+            return True
 
         return cfg.resolve_device_write_gate(dev).gate_enabled
 
@@ -674,6 +681,39 @@ class EMSController:
 
         return ramped_targets
 
+    def log_pv_priority_change(self, explanation):
+        """Record at INFO when the exclusive PV-first claim moves.
+
+        The claim decides which devices export the whole requested total, so a
+        change is worth an operator seeing. Who holds it is steady for as long
+        as a battery stays full or a device stays battery-less, which is why
+        the per-cycle detail stays at debug.
+        """
+
+        holders = tuple(
+            sorted(
+                name
+                for name, entry in explanation.devices.items()
+                if entry.decision_reason == "full_soc_pv_priority"
+            )
+        )
+
+        if holders == self.pv_priority_devices:
+            return
+
+        previous = self.pv_priority_devices
+        self.pv_priority_devices = holders
+
+        if previous is None and not holders:
+            return
+
+        log_event(
+            logging.INFO,
+            "pv_first_priority_changed",
+            devices=",".join(holders) if holders else "none",
+            previous=",".join(previous) if previous else "none"
+        )
+
     def reset_output_control_state(self):
         """Reset output-control memory after a blocked operating state."""
 
@@ -905,7 +945,7 @@ class EMSController:
                 write_reason = "park_at_min_output_limit"
 
             if battery_presence(state) == BATTERY_ABSENT:
-                limiting_reason = "no_pv_available"
+                limiting_reason = "no_battery"
             elif state.soc <= state.min_soc:
                 limiting_reason = "below_min_soc"
             else:
@@ -3628,6 +3668,8 @@ class EMSController:
                 self.device_claim_eligible(dev) for dev in self.devices
             ]
         )
+
+        self.log_pv_priority_change(control_explanation)
 
         targets = self.apply_device_ramp(
             targets,
