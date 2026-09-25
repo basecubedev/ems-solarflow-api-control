@@ -333,9 +333,9 @@ class EMSController:
     def device_command_block_reason(self, dev):
         """Why the EMS will not command ``dev`` this cycle, or None.
 
-        Three independent conditions, asked once. Only the reservation used to
-        reach the allocator, so an offline or disabled device was still handed a
-        share that the write path then dropped on the floor.
+        Three independent conditions, asked once, for everything that decides
+        whether a write happens. What the *allocator* asks is narrower and
+        deliberately so -- see :meth:`intent_filtered_capabilities`.
         """
 
         if not self.device_online.get(dev.name, True):
@@ -423,8 +423,7 @@ class EMSController:
                 can_discharge=False,
                 can_export=False,
                 can_ac_charge=capability.can_ac_charge,
-                reason=reason,
-                battery_presence=capability.battery_presence
+                reason=reason
             ))
 
         return filtered
@@ -3603,7 +3602,10 @@ class EMSController:
             capabilities=capabilities,
             requested_total=stabilized_total,
             explain=True,
-            online_devices=self.device_online
+            online_devices=self.device_online,
+            commandable=[
+                self.device_commandable(dev) for dev in self.devices
+            ]
         )
 
         targets = self.apply_device_ramp(

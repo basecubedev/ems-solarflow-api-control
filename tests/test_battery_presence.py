@@ -144,15 +144,7 @@ def test_presence_of_a_state_without_the_field_is_unknown():
     assert battery_presence(Legacy()) == BATTERY_UNKNOWN
 
 
-# --- the capability carries it ----------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "pack_num,expected",
-    [(None, BATTERY_UNKNOWN), (0, BATTERY_ABSENT), (3, BATTERY_PRESENT)],
-)
-def test_capability_detection_carries_battery_presence(pack_num, expected):
-    assert detect_capabilities(state(pack_num=pack_num)).battery_presence == expected
+# --- presence is new information, not a new gate ----------------------------
 
 
 def test_battery_presence_does_not_change_the_other_capabilities():

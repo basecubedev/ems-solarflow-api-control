@@ -189,8 +189,7 @@ def detect_capabilities(state):
         can_discharge=can_discharge,
         can_export=can_export,
         can_ac_charge=can_ac_charge,
-        reason=",".join(reasons) if reasons else "normal",
-        battery_presence=battery_presence(state)
+        reason=",".join(reasons) if reasons else "normal"
     )
 
 
@@ -518,9 +517,16 @@ def allocate_full_soc_pv_first(
     pv_weights,
     pv_only_limits,
     device_configs=None,
-    capabilities=None
+    capabilities=None,
+    commandable=None
 ):
-    """Prioritize PV export from full batteries before normal PV balancing."""
+    """Prioritize PV export from devices that cannot absorb their own PV.
+
+    The claim is exclusive: candidates are served first and the rest share what
+    is left. That is only worth granting to a device the EMS can still write to
+    -- an uncommanded one keeps roughly the share it already had, but will not
+    follow a claim that moves it, and everybody else is starved meanwhile.
+    """
 
     full_limits = []
     full_weights = []
@@ -535,6 +541,7 @@ def allocate_full_soc_pv_first(
         max_power = get_device_max_power(dev_config)
         full_candidate = (
             can_export
+            and (commandable[i] if commandable else True)
             and cannot_absorb_pv(state)
             and pv_only_limits[i] > 0
         )
@@ -792,7 +799,8 @@ def calculate_targets(
     capabilities=None,
     requested_total=None,
     explain=False,
-    online_devices=None
+    online_devices=None,
+    commandable=None
 ):
     """
     Intelligent EMS target calculation.
@@ -1043,7 +1051,8 @@ def calculate_targets(
                 pv_weights,
                 pv_only_limits,
                 device_configs=device_configs,
-                capabilities=capabilities
+                capabilities=capabilities,
+                commandable=commandable
             )
 
             if targets is not None:
@@ -1059,7 +1068,7 @@ def calculate_targets(
                             index
                         ].decision_reason = "full_soc_pv_priority"
                 log_event(
-                    logging.INFO,
+                    logging.DEBUG,
                     "pv_first_full_soc_priority",
                     requested_total=new_total,
                     devices=json.dumps(full_soc_indices),

@@ -80,7 +80,6 @@ class DeviceCapabilities:
     can_export: bool
     can_ac_charge: bool
     reason: str
-    battery_presence: str = BATTERY_UNKNOWN
 
 # =====================
 # DEVICE PARSING

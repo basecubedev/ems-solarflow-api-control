@@ -108,6 +108,9 @@ def allocate(controller, states, requested_total=600):
             device_configs=controller.devices,
             capabilities=capabilities,
             requested_total=requested_total,
+            commandable=[
+                controller.device_commandable(dev) for dev in controller.devices
+            ],
         )
     effective = controller.effective_control_targets(list(targets), True, 0)
     return [round(value) for value in targets], effective
@@ -234,3 +237,38 @@ def test_a_reservation_stays_visible_on_a_device_that_is_also_offline():
 
     assert filtered[1].reason == "runtime_role_ac_input"
     assert filtered[1].can_export is False
+
+
+def test_an_uncommanded_device_does_not_take_the_exclusive_pv_first_claim():
+    """A priority claim is only worth granting to a device that will hear it.
+
+    The PV-first bucket for devices that cannot absorb their own PV is
+    exclusive: its members are served first and the rest share what is left. A
+    device the EMS cannot write to may keep delivering roughly the share it
+    already had, but it will not follow a claim that moves it -- so granting it
+    one starves everybody else and the plant commands nothing.
+
+    The mechanism predates this branch: a full battery that drops offline takes
+    the same claim. A device with no battery sits in that bucket permanently,
+    which is what turns a rare case into the normal one.
+    """
+
+    controller = controller_with(online={"WR1": True, "WR2": False})
+    plant = [state(solar=400), state(soc=0, solar=800)]
+    plant[1].pack_num = 0
+
+    targets, effective = allocate(controller, plant)
+
+    # The normal PV-weighted split, which is near the share WR2 already had.
+    assert targets == [200, 400]
+    assert effective == [200, 0]
+
+
+def test_a_commandable_device_still_gets_the_claim():
+    controller = controller_with()
+    plant = [state(solar=400), state(soc=0, solar=800)]
+    plant[1].pack_num = 0
+
+    targets, _ = allocate(controller, plant)
+
+    assert targets == [0, 600]
