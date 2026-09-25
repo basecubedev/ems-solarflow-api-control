@@ -326,7 +326,7 @@ def test_a_gated_off_transport_does_not_take_the_claim_either():
     battery_less = state(soc=0, solar=800)
     battery_less.pack_num = 0
 
-    with patch(
+    with patch("ems.controller.cfg.DRY_RUN", False), patch(
         "ems.controller.cfg.resolve_device_write_gate",
         side_effect=lambda dev: SimpleNamespace(
             gate_enabled=dev.name != "WR2"
@@ -346,7 +346,7 @@ def test_every_gate_closed_is_a_preview_and_not_a_disqualification():
 
     controller = controller_with()
 
-    with patch(
+    with patch("ems.controller.cfg.DRY_RUN", False), patch(
         "ems.controller.cfg.resolve_device_write_gate",
         side_effect=lambda dev: SimpleNamespace(gate_enabled=False),
     ):
@@ -404,3 +404,40 @@ def test_the_battery_top_up_does_not_undo_the_cap():
     targets, _ = allocate(controller, [state(solar=400), full])
 
     assert targets == [500, 100]
+
+
+def test_a_dry_run_does_not_read_the_gate_either():
+    """Nothing is written in a dry run, so no gate can say who should hold what.
+
+    The posture is the same as a simulation: show what a live run would do.
+    """
+
+    controller = controller_with()
+
+    with patch("ems.controller.cfg.DRY_RUN", True), patch(
+        "ems.controller.cfg.resolve_device_write_gate",
+        side_effect=AssertionError("the gate must not be read in a dry run"),
+    ):
+        assert controller.claim_eligible_devices() == [True, True]
+
+
+def test_an_uncommanded_device_is_topped_up_only_to_what_it_delivers():
+    """Excluding it outright handed its share to devices that can be written.
+
+    Two devices with 500 W of PV and 300 W of pack discharge each, 600 W
+    requested: with WR2 uncommandable but holding 300 W, the split has to stay
+    [300, 300]. Dropping it from the top-up made it [400, 200], so the plant
+    delivered 700 W against a 600 W request.
+    """
+
+    controller = controller_with(online={"WR1": True, "WR2": False})
+    first = state(solar=500)
+    first.pack_in = 300
+    second = state(solar=500)
+    second.pack_in = 300
+    second.output = 300
+    second.output_limit = 300
+
+    targets, _ = allocate(controller, [first, second])
+
+    assert targets == [300, 300]

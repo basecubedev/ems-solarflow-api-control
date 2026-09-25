@@ -369,6 +369,18 @@ def is_full_soc_device(state):
     )
 
 
+def uncommanded_delivery_ceiling(state):
+    """What a device the EMS cannot write to this cycle will keep delivering.
+
+    The limit it was last given, with the measured output as the fallback the
+    write deadband already uses when no limit is reported.
+    """
+
+    holding = state.output_limit if state.output_limit > 0 else state.output
+
+    return max(0, holding)
+
+
 def cannot_absorb_pv(state):
     """True when PV this device does not export is lost rather than stored.
 
@@ -550,14 +562,7 @@ def allocate_full_soc_pv_first(
         claim_limit = min(pv_only_limits[i], max_power)
 
         if commandable is not None and not commandable[i]:
-            # What it was last given, which is the limit it still holds; the
-            # measured output is the fallback the write deadband uses too.
-            holding = (
-                state.output_limit
-                if state.output_limit > 0
-                else state.output
-            )
-            claim_limit = min(claim_limit, max(0, holding))
+            claim_limit = min(claim_limit, uncommanded_delivery_ceiling(state))
 
         if full_candidate:
             full_indices.append(i)
@@ -604,9 +609,11 @@ def apply_battery_topup_after_pv_first(
 ):
     """Top up PV-first targets with battery power where safely available.
 
-    A device the EMS cannot write to has no headroom to offer: the top-up is
-    discharge it would have to be commanded into, and it will not be. Without
-    that it would take back the share the PV-first claim was just capped at.
+    A device the EMS cannot write to is topped up only as far as it is already
+    delivering. Excluding it outright would hand its share to the devices that
+    can be written to, on top of what it goes on delivering; letting it take the
+    ordinary headroom would give back exactly what the PV-first claim cap just
+    removed.
 
     Returns the updated targets and whether any battery top-up was applied.
     """
@@ -642,10 +649,10 @@ def apply_battery_topup_after_pv_first(
         headroom = max(0, max_power - targets[i])
 
         if commandable is not None and not commandable[i]:
-            weights.append(0)
-            limits.append(0)
-            reasons.append(f"{device_name}:uncommanded")
-            continue
+            headroom = max(
+                0,
+                min(headroom, uncommanded_delivery_ceiling(state) - targets[i])
+            )
 
         if cap and not cap.can_export:
             weights.append(0)

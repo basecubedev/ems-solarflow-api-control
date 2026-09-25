@@ -369,7 +369,11 @@ class EMSController:
 
         commandable = [self.device_commandable(dev) for dev in self.devices]
 
-        if cfg.SIMULATION_MODE or getattr(cfg.ARGS, "replay", False):
+        if (
+            cfg.DRY_RUN
+            or cfg.SIMULATION_MODE
+            or getattr(cfg.ARGS, "replay", False)
+        ):
             return commandable
 
         gated = [
