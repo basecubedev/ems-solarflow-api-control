@@ -8,6 +8,7 @@ from ems import config as cfg
 from ems.clients import fetch_all_devices, zero_device_state
 from ems.controller import EMSController
 from ems.logging_utils import log_event
+from ems.models import parse_pack_count
 from ems.runtime_state import RuntimeState, build_runtime_defaults
 from ems.target_control import detect_capabilities
 
@@ -96,20 +97,27 @@ class SimulatedHAClient:
 # =====================
 
 def observed_pack_count_from_trace(data):
-    """Apply the live contradiction rule to a replayed frame.
+    """Classify a replayed frame's pack count the way the live run did.
 
-    A trace that carries the pack list gets the same second witness the live
-    path uses, so a replay classifies presence the way the run it reproduces
-    did. A trace without one leaves the count to stand alone, as on the MQTT
-    path.
+    A frame that records the pack list gets the same second witness the live
+    path weighs. One that does not cannot assert an absence at all: traces
+    written before presence was three-valued stored an unreported field as 0,
+    and believing those would make a replay diverge from the run it reproduces.
     """
 
     packs = value_from_trace(data, "pack_num", "packNum", default=None)
 
-    if packs == 0 and value_from_trace(data, "pack_data", "packData", default=None):
+    if parse_pack_count(packs) != 0:
+        return packs
+
+    # A zero only asserts absence when the frame also records the pack list.
+    # Traces written before presence was three-valued stored an unreported
+    # field as 0, and replaying those as a confirmed absence would allocate
+    # differently from the run being reproduced.
+    if "pack_data" not in data and "packData" not in data:
         return None
 
-    return packs
+    return None if value_from_trace(data, "pack_data", "packData") else packs
 
 
 def value_from_trace(data, *keys, default=0):

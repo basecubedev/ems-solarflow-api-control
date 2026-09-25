@@ -12,7 +12,7 @@ from urllib3.util.retry import Retry
 from ems import config as cfg
 from ems.health import CommHealth
 from ems.logging_utils import log_event
-from ems.models import DeviceState
+from ems.models import DeviceState, parse_pack_count
 
 
 def zendure_write_succeeded(error_event, dev, response, **fields):
@@ -236,7 +236,9 @@ def _observed_pack_count(data, props):
 
     packs = props.get("packNum")
 
-    if packs == 0 and (data.get("packData") or props.get("packData")):
+    if parse_pack_count(packs) == 0 and (
+        data.get("packData") or props.get("packData")
+    ):
         return None
 
     return packs

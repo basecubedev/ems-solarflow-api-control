@@ -353,3 +353,23 @@ def test_a_replay_is_not_disqualified_by_the_safe_config():
         side_effect=AssertionError("the gate must not be read in simulation"),
     ):
         assert controller.device_claim_eligible(controller.devices[0])
+
+
+def test_the_cap_uses_the_limit_the_device_is_holding():
+    """A momentary dip in output is not a smaller claim.
+
+    An offline device commanded to 600 W but last polled at 150 W is still
+    holding a 600 W limit. Capping at the measured output would re-command the
+    other 450 W to a live device while this one goes on exporting up to its
+    limit -- an export, and the failure the cap exists to prevent.
+    """
+
+    controller = controller_with(online={"WR1": True, "WR2": False})
+    dipped = state(soc=0, solar=800)
+    dipped.pack_num = 0
+    dipped.output = 150
+    dipped.output_limit = 600
+
+    targets, _ = allocate(controller, [state(solar=400), dipped])
+
+    assert targets == [0, 600]

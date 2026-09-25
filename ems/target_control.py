@@ -550,7 +550,14 @@ def allocate_full_soc_pv_first(
         claim_limit = min(pv_only_limits[i], max_power)
 
         if commandable is not None and not commandable[i]:
-            claim_limit = min(claim_limit, max(0, state.output))
+            # What it was last given, which is the limit it still holds; the
+            # measured output is the fallback the write deadband uses too.
+            holding = (
+                state.output_limit
+                if state.output_limit > 0
+                else state.output
+            )
+            claim_limit = min(claim_limit, max(0, holding))
 
         if full_candidate:
             full_indices.append(i)

@@ -264,3 +264,47 @@ def test_reported_packs_do_not_invent_a_count_on_their_own():
     parsed = parse_device({"packData": [{"sn": "PACK1"}]})
 
     assert battery_presence(parsed) == BATTERY_UNKNOWN
+
+
+# --- a string count is still a count ----------------------------------------
+
+
+def test_a_string_zero_beside_reported_packs_is_also_unknown():
+    """The guard has to compare what the classifier reads, not the raw value.
+
+    MQTT scalars arrive as text, so `"0"` is the same observation as `0` and
+    the same contradiction when the pack list is populated.
+    """
+
+    parsed = parse_device({
+        "properties": {"packNum": "0"},
+        "packData": [{"sn": "PACK1"}],
+    })
+
+    assert battery_presence(parsed) == BATTERY_UNKNOWN
+
+
+# --- replay classifies the way the run it reproduces did --------------------
+
+
+def test_a_trace_without_pack_evidence_cannot_assert_an_absence():
+    """Traces predating three-valued presence stored unreported as 0.
+
+    Believing those would make a replay allocate differently from the run it
+    reproduces, which is the one thing a replay must not do.
+    """
+
+    from ems.simulation import observed_pack_count_from_trace
+
+    assert observed_pack_count_from_trace({"pack_num": 0}) is None
+    assert observed_pack_count_from_trace({"packNum": "0"}) is None
+
+
+def test_a_trace_that_records_packs_classifies_from_them():
+    from ems.simulation import observed_pack_count_from_trace
+
+    assert observed_pack_count_from_trace({"pack_num": 0, "pack_data": []}) == 0
+    assert observed_pack_count_from_trace(
+        {"pack_num": 0, "pack_data": [{"sn": "PACK1"}]}
+    ) is None
+    assert observed_pack_count_from_trace({"pack_num": 2}) == 2

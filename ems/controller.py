@@ -2813,20 +2813,27 @@ class EMSController:
 
         for dev, state in zip(self.devices, states):
             # A device with no battery holds no winter reserve and is not in
-            # winter reconciliation, so it has no target to publish -- a summer
-            # number under a winter label would be worse than none.
-            if battery_presence(state) == BATTERY_ABSENT:
-                continue
+            # winter reconciliation. Its sensors stay published -- dropping them
+            # leaves the last value standing in Home Assistant, reading as live
+            # -- but they report the device's own minimum and say it is not in
+            # winter, rather than a target for a ramp that will never run.
+            device_in_winter = (
+                active and battery_presence(state) != BATTERY_ABSENT
+            )
 
             base = p + dev.name.lower() + "_winter_"
             effective_min_soc = self.winter_min_soc_targets.get(
                 dev.name,
                 state.min_soc if state.min_soc > 0 else dev.min_soc
             )
-            target = cfg.calculate_winter_min_soc_target(
-                state.soc,
-                effective_min_soc,
-                active
+            target = (
+                cfg.calculate_winter_min_soc_target(
+                    state.soc,
+                    effective_min_soc,
+                    active
+                )
+                if device_in_winter
+                else effective_min_soc
             )
 
             self.publish_sensor(
@@ -2839,14 +2846,14 @@ class EMSController:
                     {
                         "effective_min_soc": effective_min_soc,
                         "current_soc": state.soc,
-                        "winter_active": active
+                        "winter_active": device_in_winter
                     }
                 )
             )
 
             self.publish_sensor(
                 base + "estimated_ramp_days",
-                cfg.estimate_winter_ramp_days(target),
+                cfg.estimate_winter_ramp_days(target) if device_in_winter else 0,
                 "d",
                 None,
                 icon="mdi:calendar-range",
