@@ -599,9 +599,14 @@ def apply_battery_topup_after_pv_first(
     states,
     device_configs,
     capabilities,
-    requested_total
+    requested_total,
+    commandable=None
 ):
     """Top up PV-first targets with battery power where safely available.
+
+    A device the EMS cannot write to has no headroom to offer: the top-up is
+    discharge it would have to be commanded into, and it will not be. Without
+    that it would take back the share the PV-first claim was just capped at.
 
     Returns the updated targets and whether any battery top-up was applied.
     """
@@ -635,6 +640,12 @@ def apply_battery_topup_after_pv_first(
         device_name = dev_config.name if dev_config else i
         max_power = get_device_max_power(dev_config)
         headroom = max(0, max_power - targets[i])
+
+        if commandable is not None and not commandable[i]:
+            weights.append(0)
+            limits.append(0)
+            reasons.append(f"{device_name}:uncommanded")
+            continue
 
         if cap and not cap.can_export:
             weights.append(0)
@@ -1128,7 +1139,8 @@ def calculate_targets(
                 devices,
                 device_configs,
                 capabilities,
-                new_total
+                new_total,
+                commandable=commandable
             )
             if explain:
                 topup_w = sum(targets) - sum(before_topup_targets)
@@ -1185,7 +1197,8 @@ def calculate_targets(
                     devices,
                     device_configs,
                     capabilities,
-                    new_total
+                    new_total,
+                    commandable=commandable
                 )
                 if explain:
                     topup_w = sum(targets) - sum(before_topup_targets)

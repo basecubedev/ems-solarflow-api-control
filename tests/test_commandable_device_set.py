@@ -373,3 +373,23 @@ def test_the_cap_uses_the_limit_the_device_is_holding():
     targets, _ = allocate(controller, [state(solar=400), dipped])
 
     assert targets == [0, 600]
+
+
+def test_the_battery_top_up_does_not_undo_the_cap():
+    """The top-up is discharge the EMS commands, and it cannot command this one.
+
+    A full battery whose claim was just capped at the 100 W limit it holds took
+    part of the top-up anyway, because that stage weighed its headroom to
+    `max_power`. Measured [429, 171] where the cap intends [500, 100], and the
+    71 W is never delivered because the device is never written to.
+    """
+
+    controller = controller_with(online={"WR1": True, "WR2": False})
+    full = state(soc=100, solar=800)
+    full.soc_limit = 1
+    full.output = 100
+    full.output_limit = 100
+
+    targets, _ = allocate(controller, [state(solar=400), full])
+
+    assert targets == [500, 100]

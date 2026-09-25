@@ -234,11 +234,9 @@ def _observed_pack_count(data, props):
     stands alone.
     """
 
-    packs = props.get("packNum")
+    packs = parse_pack_count(props.get("packNum"))
 
-    if parse_pack_count(packs) == 0 and (
-        data.get("packData") or props.get("packData")
-    ):
+    if packs == 0 and (data.get("packData") or props.get("packData")):
         return None
 
     return packs

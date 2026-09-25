@@ -927,7 +927,6 @@ class EMSController:
         for i, dev in enumerate(self.devices):
             state = states[i]
             online = self.device_online.get(dev.name, True)
-            runtime_enabled = self.runtime_device_bool(dev.name, "enabled", True)
             target = targets[i] if i < len(targets) else 0
             effective = (
                 effective_targets[i]
@@ -935,23 +934,16 @@ class EMSController:
                 else target
             )
 
+            block_reason = (
+                self.device_command_block_reason(dev) if enabled else None
+            )
+
             if not enabled:
                 write_decision = "blocked"
                 write_reason = "control_disabled"
-            elif not online:
+            elif block_reason:
                 write_decision = "blocked"
-                write_reason = "offline"
-            elif not runtime_enabled:
-                write_decision = "blocked"
-                write_reason = "device_disabled"
-            elif not self.device_output_control_allowed_by_intent(dev.name):
-                intent = self.runtime_intents.get(dev.name)
-                write_decision = "blocked"
-                write_reason = (
-                    f"runtime_role_{intent.role.value}"
-                    if intent
-                    else "runtime_role_blocked"
-                )
+                write_reason = block_reason
             elif i not in controllable:
                 write_decision = "blocked"
                 write_reason = "not_controllable"
@@ -2822,9 +2814,11 @@ class EMSController:
             )
 
             base = p + dev.name.lower() + "_winter_"
-            effective_min_soc = self.winter_min_soc_targets.get(
-                dev.name,
-                state.min_soc if state.min_soc > 0 else dev.min_soc
+            own_min_soc = state.min_soc if state.min_soc > 0 else dev.min_soc
+            effective_min_soc = (
+                self.winter_min_soc_targets.get(dev.name, own_min_soc)
+                if device_in_winter
+                else own_min_soc
             )
             target = (
                 cfg.calculate_winter_min_soc_target(
