@@ -1,6 +1,22 @@
 {
   "builds": [
     {
+      "admin_digest": "sha256:6fff16cd1a6b952adbe3130f9ecf7ab6863722f7cbcddd98d0ea2a7cdd426387",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-ac-charge-control-e8bce2d1c7-016d626-36190162185-1",
+      "admin_test_contract": 1,
+      "build_id": "dev-feat-ac-charge-control-e8bce2d1c7-016d626-36190162185-1",
+      "channel": "development",
+      "created_at": "2026-09-25T21:21:27Z",
+      "display_name": "Feature feat-ac-charge-control",
+      "ems_digest": "sha256:edef4021d33487fa6ad152bc342558742ad9728db4c9ab8ec0663524cb5df0f3",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-ac-charge-control-e8bce2d1c7-016d626-36190162185-1",
+      "installable": true,
+      "revision": "016d626c08af4fa0c0888c122c67f37d02709bab",
+      "run_attempt": 1,
+      "run_id": "36190162185",
+      "tag": "dev-feat-ac-charge-control-e8bce2d1c7-016d626-36190162185-1"
+    },
+    {
       "admin_digest": "sha256:46872e45adccb8debf1520550b5f052cd70c3ef3c940ab6291453697a5333c30",
       "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-external-inverter-over-mqtt-3e477fd136-fd16024-36047126688-1",
       "admin_test_contract": 1,
@@ -47,22 +63,6 @@
       "run_attempt": 1,
       "run_id": "36031972792",
       "tag": "dev-feat-external-inverter-over-mqtt-3e477fd136-9d9be37-36031972792-1"
-    },
-    {
-      "admin_digest": "sha256:c00722496bdbd6e529fc0d1db97e1b988a0398fa622ca5d0cc8b35cf15e4c51b",
-      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-ac-charge-control-e8bce2d1c7-944d3da-36031930057-1",
-      "admin_test_contract": 1,
-      "build_id": "dev-feat-ac-charge-control-e8bce2d1c7-944d3da-36031930057-1",
-      "channel": "development",
-      "created_at": "2026-09-24T17:13:33Z",
-      "display_name": "Feature feat-ac-charge-control",
-      "ems_digest": "sha256:344716ead838cf15d7f79fbb297f9be6b9f4969b522642db2988b2aea75dcb1c",
-      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-ac-charge-control-e8bce2d1c7-944d3da-36031930057-1",
-      "installable": true,
-      "revision": "944d3da1ed66f21ceb40fcf19ae1d3fd44d66cb7",
-      "run_attempt": 1,
-      "run_id": "36031930057",
-      "tag": "dev-feat-ac-charge-control-e8bce2d1c7-944d3da-36031930057-1"
     }
   ]
 }
