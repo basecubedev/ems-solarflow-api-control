@@ -467,6 +467,17 @@ class DockerCli:
             )
         return containers
 
+    def inspect_container_image_ref(self, container_name):
+        """Return the image reference a container was created from.
+
+        ``docker ps`` reports a container created from a digest-pinned reference
+        as the bare repository -- measured on 26.1.5, ``repo@sha256:...`` comes
+        back as ``repo`` -- and a bare repository names no particular image.
+        ``.Config.Image`` still carries what was asked for, digest included.
+        """
+
+        return self._inspect_container_format(container_name, "{{.Config.Image}}")
+
     def inspect_container_image_id(self, container_name):
         """Return the immutable image ID used by an exact running container.
 
@@ -474,6 +485,12 @@ class DockerCli:
         inspect ``docker container inspect .Image`` so a tag moved after the
         container started cannot make old or different content look current.
         """
+
+        image_id = self._inspect_container_format(container_name, "{{.Image}}")
+        return image_id if (image_id or "").startswith("sha256:") else None
+
+    def _inspect_container_format(self, container_name, template):
+        """One ``docker container inspect --format`` field, or ``None``."""
 
         name = str(container_name or "").strip()
         if not name:
@@ -485,7 +502,7 @@ class DockerCli:
                     "container",
                     "inspect",
                     "--format",
-                    "{{.Image}}",
+                    template,
                     name,
                 ],
                 capture_output=True,
@@ -496,8 +513,7 @@ class DockerCli:
             return None
         if result.returncode != 0:
             return None
-        image_id = str(result.stdout or "").strip()
-        return image_id if image_id.startswith("sha256:") else None
+        return str(result.stdout or "").strip() or None
 
     def inspect_container_started_at(self, container_name):
         """Return when an exact container last started, or ``None``.

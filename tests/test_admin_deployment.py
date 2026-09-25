@@ -2392,3 +2392,69 @@ def test_a_stalled_installer_is_killed_with_the_children_holding_its_pipe(tmp_pa
     while _process_state(child) not in (None, "Z", "X") and time.monotonic() < deadline:
         time.sleep(0.01)
     assert _process_state(child) in (None, "Z", "X"), "the child was never killed"
+
+
+# --- what each container probe asks Docker for ---------------------------
+#
+# Both probes are one `docker container inspect --format` call and differ only
+# in the field. A wrong template returns nothing rather than failing, and every
+# caller then degrades to "unknown" without a sign that anything broke.
+
+
+def _inspect_recorder(stdout="", returncode=0):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(list(argv))
+        return SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+
+    return run, calls
+
+
+def test_the_image_reference_probe_asks_for_the_reference_it_was_created_from():
+    run, calls = _inspect_recorder("ghcr.io/org/ems@sha256:" + "a" * 64)
+
+    ref = DockerCli(run=run).inspect_container_image_ref("ems")
+
+    assert calls[0][:4] == ["docker", "container", "inspect", "--format"]
+    assert calls[0][4] == "{{.Config.Image}}"
+    assert calls[0][5] == "ems"
+    assert ref == "ghcr.io/org/ems@sha256:" + "a" * 64
+
+
+def test_the_image_id_probe_asks_for_the_immutable_id():
+    run, calls = _inspect_recorder("sha256:" + "b" * 64)
+
+    image_id = DockerCli(run=run).inspect_container_image_id("ems")
+
+    assert calls[0][4] == "{{.Image}}"
+    assert image_id == "sha256:" + "b" * 64
+
+
+def test_the_image_id_probe_still_refuses_anything_that_is_not_an_id():
+    run, _calls = _inspect_recorder("ghcr.io/org/ems:v1")
+
+    assert DockerCli(run=run).inspect_container_image_id("ems") is None
+
+
+def test_the_reference_probe_keeps_a_reference_that_is_not_an_id():
+    """It is the reference, not the id -- the id filter must not leak into it."""
+
+    run, _calls = _inspect_recorder("ghcr.io/org/ems:v1")
+
+    assert DockerCli(run=run).inspect_container_image_ref("ems") == "ghcr.io/org/ems:v1"
+
+
+def test_a_failed_container_inspect_reads_as_unknown_for_both_probes():
+    run, _calls = _inspect_recorder("", returncode=1)
+    docker = DockerCli(run=run)
+
+    assert docker.inspect_container_image_ref("ems") is None
+    assert docker.inspect_container_image_id("ems") is None
+
+
+def test_an_empty_container_name_never_reaches_docker():
+    run, calls = _inspect_recorder("whatever")
+
+    assert DockerCli(run=run).inspect_container_image_ref("  ") is None
+    assert calls == []

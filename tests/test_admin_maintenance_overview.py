@@ -476,3 +476,199 @@ def test_a_docker_without_the_start_time_seam_still_answers(tmp_path):
     )
 
     assert overview["containers"]["ems"]["started_at"] is None
+
+
+# --- a digest-pinned container keeps its version -------------------------
+#
+# Measured on Docker 26.1.5: for a container created from a digest-pinned
+# reference, `docker ps --format '{{json .}}'` reports `.Image` as the bare
+# repository -- the digest is gone -- while `docker container inspect` keeps the
+# full reference. Guided Upgrade pins by digest, so this is the ordinary shape
+# of an upgraded install, not an edge case.
+
+EMS_REPO = "ghcr.io/basecubedev/ems-solarflow-api-control"
+PINNED_DIGEST = "sha256:" + "5" * 64
+PINNED_REF = f"{EMS_REPO}@{PINNED_DIGEST}"
+PINNED_IMAGE_ID = "sha256:" + "1" * 64
+
+PINNED_LABELS = {
+    "de.basecubedev.ems.release_tag": "v0.8.9",
+    "org.opencontainers.image.version": "v0.8.9",
+    "de.basecubedev.ems.build_id": "v0.8.9-2d382788b3d4-1",
+    "org.opencontainers.image.revision": "2" * 40,
+}
+# A different image that happens to be present locally under the same
+# repository. Resolving the bare repository lands here.
+ROLLING_LABELS = {
+    "de.basecubedev.ems.release_tag": "latest",
+    "org.opencontainers.image.version": "latest",
+    "de.basecubedev.ems.build_id": "latest-2d382788b3d4-1",
+}
+
+
+class PinnedDocker(FakeDocker):
+    """Docker as it really answers for a digest-pinned EMS container."""
+
+    def __init__(self, *, image_id=PINNED_IMAGE_ID, config_image=PINNED_REF, **kw):
+        super().__init__(
+            containers={
+                DEFAULT_EMS_CONTAINER: {
+                    "container_name": DEFAULT_EMS_CONTAINER,
+                    # docker ps drops the digest and leaves the bare repository
+                    "image": EMS_REPO,
+                    "status": "running",
+                },
+            },
+            **kw,
+        )
+        self._image_id = image_id
+        self._config_image = config_image
+
+    def inspect_container_image_id(self, name):
+        self.calls.append(("inspect_container_image_id", name))
+        return self._image_id
+
+    def inspect_container_image_ref(self, name):
+        self.calls.append(("inspect_container_image_ref", name))
+        return self._config_image
+
+    def inspect_image(self, ref):
+        self.calls.append(("inspect_image", ref))
+        if ref in (PINNED_IMAGE_ID, PINNED_REF):
+            return {"image_ref": ref, "digest": PINNED_DIGEST, "labels": PINNED_LABELS}
+        if ref == EMS_REPO:
+            # What Docker does with a bare repository: it resolves :latest.
+            return {"image_ref": ref, "digest": None, "labels": ROLLING_LABELS}
+        return None
+
+
+def _pinned_install(tmp_path):
+    _standard_install(tmp_path)
+    (tmp_path / "docker-compose.yml").write_text(
+        "services:\n  ems:\n"
+        f"    image: {PINNED_REF}\n"
+        f"    container_name: {DEFAULT_EMS_CONTAINER}\n"
+        "  influxdb:\n    image: influxdb:2.7\n"
+        f"    container_name: {DEFAULT_INFLUX_CONTAINER}\n",
+        encoding="utf-8",
+    )
+
+
+def test_a_digest_pinned_container_reports_the_version_it_runs(tmp_path):
+    _pinned_install(tmp_path)
+    docker = PinnedDocker()
+
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=docker)
+
+    assert overview["containers"]["ems"]["tag"] == "v0.8.9"
+    assert overview["components"]["ems"]["tag"] == "v0.8.9"
+
+
+def test_a_digest_pinned_container_is_never_read_as_the_rolling_tag(tmp_path):
+    """The failure this guards is silent and reports foreign content as current."""
+
+    _pinned_install(tmp_path)
+
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=PinnedDocker())
+
+    assert overview["containers"]["ems"]["tag"] != "latest"
+
+
+def test_the_reported_image_keeps_the_digest_docker_ps_dropped(tmp_path):
+    _pinned_install(tmp_path)
+
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=PinnedDocker())
+
+    assert overview["containers"]["ems"]["image"] == PINNED_REF
+
+
+def test_a_bare_repository_is_never_looked_up(tmp_path):
+    """Without an id there is nothing that names one image, so nothing is claimed.
+
+    Reporting the local ``:latest`` here would be worse than reporting nothing:
+    it is a different build, and it reads as the one that is running.
+    """
+
+    _pinned_install(tmp_path)
+    docker = PinnedDocker(image_id=None, config_image=None)
+
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=docker)
+
+    assert overview["containers"]["ems"]["tag"] is None
+    assert ("inspect_image", EMS_REPO) not in docker.calls
+
+
+class TaggedDocker(PinnedDocker):
+    """Every probe present and recording, but the container names a tag.
+
+    The point of the test below is that the extra probes are NOT called, so the
+    double has to be able to record them -- a fake that simply lacks the methods
+    proves nothing, because ``getattr`` then returns ``None`` either way.
+    """
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._containers[DEFAULT_EMS_CONTAINER]["image"] = f"{EMS_REPO}:v0.6.1"
+
+
+def test_a_tagged_container_still_reports_its_tag_without_an_inspect(tmp_path):
+    """The ordinary case must not gain a Docker call it never needed."""
+
+    _standard_install(tmp_path)
+    docker = TaggedDocker()
+
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=docker)
+
+    assert overview["containers"]["ems"]["tag"] == "v0.6.1"
+    probed = [call[0] for call in docker.calls]
+    assert "inspect_image" not in probed
+    assert "inspect_container_image_ref" not in probed
+    assert "inspect_container_image_id" not in probed
+
+
+def test_the_immutable_id_is_asked_before_the_reference(tmp_path):
+    """A reference can be re-pointed between the two reads; an id cannot.
+
+    Both name the right image today, so only the order of preference decides
+    which one is trusted when they disagree.
+    """
+
+    _pinned_install(tmp_path)
+
+    class DisagreeingDocker(PinnedDocker):
+        def inspect_image(self, ref):
+            self.calls.append(("inspect_image", ref))
+            if ref == PINNED_IMAGE_ID:
+                return {"image_ref": ref, "digest": PINNED_DIGEST,
+                        "labels": PINNED_LABELS}
+            if ref == PINNED_REF:
+                return {"image_ref": ref, "digest": PINNED_DIGEST,
+                        "labels": ROLLING_LABELS}
+            return None
+
+    overview = run_maintenance_overview(
+        base_dir=str(tmp_path), docker=DisagreeingDocker()
+    )
+
+    assert overview["containers"]["ems"]["tag"] == "v0.8.9"
+
+
+def test_overview_and_release_manager_agree_for_the_real_docker_ps_shape(tmp_path):
+    """The existing agreement test feeds a shape docker ps never produces.
+
+    It hands the fake a full ``repo@sha256:`` reference as the container image;
+    the real client reports a bare repository there, which is exactly the input
+    that used to diverge.
+    """
+
+    from admin.releases import ReleaseManager
+
+    _pinned_install(tmp_path)
+    docker = PinnedDocker()
+
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=docker)
+    manager = ReleaseManager(
+        data_dir=tmp_path / "admin-data", project_dir=tmp_path, docker=docker
+    )
+
+    assert overview["components"]["ems"]["tag"] == manager.detect_active_release()
