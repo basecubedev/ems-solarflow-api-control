@@ -128,7 +128,7 @@ def test_stdin_stays_open_before_the_container_name(tmp_path):
 def test_a_command_stopped_by_its_inner_deadline_reads_as_a_timeout(tmp_path):
     runner, _calls = _runner([_completed(returncode=124)])
 
-    result = runner.run(_context(tmp_path), ["status"], timeout=30)
+    result = runner.run(_context(tmp_path), ["status"], timeout=0)
 
     assert result.returncode is None
     assert "timed out" in result.detail.lower()
@@ -137,7 +137,7 @@ def test_a_command_stopped_by_its_inner_deadline_reads_as_a_timeout(tmp_path):
 def test_a_command_killed_after_refusing_to_stop_reads_as_a_timeout(tmp_path):
     runner, _calls = _runner([_completed(returncode=137)])
 
-    result = runner.run(_context(tmp_path), ["status"], timeout=30)
+    result = runner.run(_context(tmp_path), ["status"], timeout=0)
 
     assert result.returncode is None
     assert "timed out" in result.detail.lower()
@@ -146,7 +146,7 @@ def test_a_command_killed_after_refusing_to_stop_reads_as_a_timeout(tmp_path):
 def test_a_timeout_stopped_inside_does_not_warn_about_a_survivor(tmp_path):
     runner, _calls = _runner([_completed(returncode=124)])
 
-    result = runner.run(_context(tmp_path), ["status"], timeout=30)
+    result = runner.run(_context(tmp_path), ["status"], timeout=0)
 
     assert "still" not in result.detail.lower()
 
@@ -273,3 +273,56 @@ def test_a_spawn_failure_is_still_reported(tmp_path):
 
     assert result.returncode is None
     assert "boom" in result.detail
+
+
+# --- a killed command is not automatically a timed-out one ---------------
+
+
+def test_a_command_killed_long_before_its_deadline_is_not_a_timeout(tmp_path):
+    """137 is what docker reports for any SIGKILL, the OOM killer included.
+
+    Calling that a timeout on a budget it never reached sends the operator to
+    raise a ceiling that was never the problem.
+    """
+
+    runner, _calls = _runner([_completed(returncode=137, stdout="killed")])
+
+    result = runner.run(_context(tmp_path), ["backup", "create"], timeout=1800)
+
+    assert result.returncode == 137
+    assert "killed" in result.detail
+
+
+def test_the_unguarded_retry_never_claims_the_guard_stopped_it(tmp_path):
+    runner, _calls = _runner([
+        _completed(returncode=126, stdout=_GUARD_MISSING),
+        _completed(returncode=137),
+    ])
+
+    result = runner.run(_context(tmp_path), ["status"], timeout=0)
+
+    assert result.returncode == 137
+
+
+def test_the_client_waits_past_the_guards_own_kill(tmp_path):
+    """If the client fires first the orphan is back, and every test still passes.
+
+    These two constants are the whole fix, so their relationship is pinned here
+    rather than left to whoever next tunes one of them.
+    """
+
+    assert ems_tool.EXEC_CLIENT_GRACE_SECONDS > ems_tool.EXEC_GUARD_KILL_AFTER_SECONDS
+
+
+def test_the_guard_always_gets_a_kill_deadline_that_can_fire(tmp_path):
+    """GNU timeout reads a zero duration as no timeout at all."""
+
+    assert ems_tool.EXEC_GUARD_KILL_AFTER_SECONDS >= 1
+
+
+def test_a_ceiling_that_rounds_to_nothing_still_arms_the_guard(tmp_path):
+    runner, calls = _runner([_completed()])
+
+    runner.run(_context(tmp_path), ["status"], timeout=0)
+
+    assert "0" not in _guard_slice(calls[0][0])

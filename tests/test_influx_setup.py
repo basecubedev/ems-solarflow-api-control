@@ -1417,3 +1417,34 @@ def test_prune_reaches_the_schema_layer_with_its_dry_run(monkeypatch):
     assert code == 0
     assert result["ok"] is True
     assert seen["dry_run"] is True
+
+
+def test_dry_run_is_refused_by_the_actions_that_write(capsys):
+    """Accepting it and ignoring it would turn a preview into the real thing."""
+
+    cfg = normalize_influxdb_config({"enabled": True})
+    for action in ("sync", "status", "init"):
+        code = emsctl.handle_influx_command(
+            SimpleNamespace(action=action, json=False, dry_run=True),
+            {"influxdb": dict(cfg)},
+        )
+        assert code == 2, action
+        assert "--dry-run" in capsys.readouterr().err
+
+
+def test_prune_still_accepts_its_dry_run(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        emsctl, "run_influx_schema_command",
+        lambda cfg, action, js, dry_run=False: seen.update(
+            action=action, dry_run=dry_run
+        ) or 0,
+    )
+
+    code = emsctl.handle_influx_command(
+        SimpleNamespace(action="prune", json=False, dry_run=True),
+        {"influxdb": dict(normalize_influxdb_config({"enabled": True}))},
+    )
+
+    assert code == 0
+    assert seen == {"action": "prune", "dry_run": True}

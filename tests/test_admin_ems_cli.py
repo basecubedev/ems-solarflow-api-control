@@ -514,7 +514,19 @@ def test_the_client_waits_past_a_container_checks_inner_deadline(tmp_path):
     assert run.calls[0]["kwargs"]["timeout"] > CHECKS["runtime_status"]["timeout"]
 
 
-def test_a_check_stopped_inside_the_container_reads_as_a_timeout(tmp_path):
+def _elapsed_clock(monkeypatch, seconds):
+    """Make every check appear to have run for ``seconds``."""
+
+    from admin import ems_cli
+
+    ticks = iter(range(0, 10_000, max(1, int(seconds))))
+    monkeypatch.setattr(ems_cli.time, "monotonic", lambda: next(ticks))
+
+
+def test_a_check_stopped_inside_the_container_reads_as_a_timeout(
+    tmp_path, monkeypatch
+):
+    _elapsed_clock(monkeypatch, 600)
     run = FakeRun(default=_completed(returncode=124))
     result = _container_service(tmp_path, run).run(
         check_ids=("runtime_status", "influx_status")
@@ -526,11 +538,25 @@ def test_a_check_stopped_inside_the_container_reads_as_a_timeout(tmp_path):
     assert by_id["influx_status"]["status"] == "warning"
 
 
-def test_a_check_killed_after_refusing_to_stop_reads_as_a_timeout(tmp_path):
+def test_a_check_killed_after_refusing_to_stop_reads_as_a_timeout(
+    tmp_path, monkeypatch
+):
+    _elapsed_clock(monkeypatch, 600)
     run = FakeRun(default=_completed(returncode=137))
     result = _container_service(tmp_path, run).run(check_ids=("runtime_status",))
 
     assert result["checks"][0]["status"] == "timeout"
+
+
+def test_a_check_killed_long_before_its_deadline_is_not_a_timeout(tmp_path):
+    """Anything may SIGKILL a check; only the guard means the ceiling was hit."""
+
+    run = FakeRun(default=_completed(returncode=137, stderr="out of memory"))
+    result = _container_service(tmp_path, run).run(check_ids=("runtime_status",))
+
+    check = result["checks"][0]
+    assert check["status"] != "timeout"
+    assert check["exit_code"] == 137
 
 
 def test_a_local_check_is_never_wrapped(tmp_path):

@@ -25,8 +25,8 @@ from pathlib import Path
 from admin.ems_tool import (
     CONTAINER_EMSCTL_PATH,
     EXEC_CLIENT_GRACE_SECONDS,
-    EXEC_GUARD_TIMED_OUT_CODES,
     guard_not_invocable,
+    guard_stopped_command,
     guarded_container_command,
     resolve_running_ems_container,
 )
@@ -236,6 +236,7 @@ class EmsCliDiagnostics:
                 cwd=cwd,
             )
             if in_container and guard_not_invocable(result):
+                in_container = False  # nothing guarded the retry
                 result = self._run(
                     self._argv(spec, mode, bounded=False),
                     capture_output=True,
@@ -267,7 +268,9 @@ class EmsCliDiagnostics:
                 _elapsed_ms(started), False,
             )
 
-        if in_container and result.returncode in EXEC_GUARD_TIMED_OUT_CODES:
+        if in_container and guard_stopped_command(
+            result.returncode, time.monotonic() - started, spec["timeout"]
+        ):
             # The guard stopped it, which is the same outcome the client's own
             # ceiling reports -- including for a check marked to warn.
             status = "warning" if spec["warn_on_fail"] else "timeout"

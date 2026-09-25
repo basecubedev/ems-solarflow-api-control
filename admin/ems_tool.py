@@ -10,6 +10,7 @@ neither exists. Args are always an internal allowlisted argv suffix; never
 
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -92,13 +93,28 @@ def guarded_container_command(command, timeout):
     ``docker exec`` and inherits the same orphan otherwise.
     """
 
+    # GNU timeout reads a zero duration as "no timeout at all", so a ceiling
+    # that rounds down to nothing would silently disarm the guard.
     return [
         EXEC_GUARD,
         f"--kill-after={EXEC_GUARD_KILL_AFTER_SECONDS}",
         "--signal=TERM",
-        str(int(timeout)),
+        str(max(1, int(timeout or 0))),
         *command,
     ]
+
+
+def guard_stopped_command(returncode, elapsed, timeout):
+    """True when the guard's exit code can only mean it ended the command.
+
+    ``docker exec`` returns 137 whenever anything kills the command -- the OOM
+    killer, an operator, the container going away -- so the code alone would
+    report a backup killed after forty seconds as a timeout on a thirty-minute
+    budget, and send the operator to raise a ceiling that was never reached. A
+    command the guard stopped has necessarily run for its whole deadline.
+    """
+
+    return returncode in EXEC_GUARD_TIMED_OUT_CODES and elapsed >= (timeout or 0)
 
 
 def guard_not_invocable(result):
@@ -242,6 +258,8 @@ class EmsToolRunner:
     def _exec_in_container(self, container, args, timeout, input_text=None):
         command = ["python3", CONTAINER_EMSCTL_PATH, *[str(part) for part in args]]
         guarded = guarded_container_command(command, timeout)
+        started = time.monotonic()
+        bounded = True
         try:
             result = self._exec(
                 container, guarded, timeout + EXEC_CLIENT_GRACE_SECONDS, input_text
@@ -249,6 +267,7 @@ class EmsToolRunner:
             if guard_not_invocable(result):
                 # An image without the guard would otherwise lose backup and
                 # restore outright, which is the worse of the two failures.
+                bounded = False
                 result = self._exec(container, command, timeout, input_text)
         except subprocess.TimeoutExpired:
             return EmsToolResult(
@@ -262,7 +281,9 @@ class EmsToolRunner:
             return EmsToolResult(
                 "container", False, None, f"Could not run the EMS command: {exc}", None
             )
-        if result.returncode in EXEC_GUARD_TIMED_OUT_CODES:
+        if bounded and guard_stopped_command(
+            result.returncode, time.monotonic() - started, timeout
+        ):
             return EmsToolResult(
                 "container", False, None, EXEC_GUARD_TIMEOUT_DETAIL, None
             )

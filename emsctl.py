@@ -2009,6 +2009,14 @@ def handle_influx_command(args, config):
 
     influx_config = normalize_influxdb_config(config.get("influxdb"))
 
+    # Only prune reads it, and the other actions write. Accepting it there and
+    # ignoring it would turn "show me first" into the real thing.
+    if getattr(args, "dry_run", False) and args.action != "prune":
+        return fail(
+            f"--dry-run applies to 'influx prune' only, not '{args.action}'",
+            code=2,
+        )
+
     if args.action == "init":
         return handle_influx_init(args, influx_config)
 
