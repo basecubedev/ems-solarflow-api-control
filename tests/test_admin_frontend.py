@@ -12306,12 +12306,15 @@ def test_the_current_version_prefers_the_release_over_the_image_reference():
     """A digest-pinned install reports repo@sha256:<64 hex> as its image.
 
     That is not a version and does not fit the line, and the Maintenance docs
-    promise the digest is never shown as the version. Both places that render
-    the running build therefore read the tag first.
+    promise the digest is never shown as the version.
+
+    The panel header and the plan fact both name the running build and now share
+    one writer, so the preference is expressed once. It used to be written twice,
+    which is how the header followed a finished upgrade while the fact beside it
+    went on naming the release that had been replaced.
     """
 
     script = _read("admin.js")
 
-    # One in the panel header, one in the plan facts.
-    assert script.count("cur.tag || cur.image") == 2
+    assert script.count("cur.tag || cur.image") == 1
     assert "cur.image || cur.tag" not in script

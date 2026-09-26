@@ -149,7 +149,9 @@ docker compose -f docker-compose.admin.yml up -d
 
 **What you see:** every step green, and the health check and diagnostics results.
 
-**Expected result:** EMS runs the new build; the Known-Good state is marked.
+**Expected result:** EMS runs the new build; the Known-Good state is marked. The
+panel's own **Current** version is re-read when the run ends, so it names the
+release now installed without reloading the page.
 
 **Verify for yourself:** the Maintenance overview shows the installed release, and
 the [EMS Dashboard](../dashboard/index.md) should show live telemetry again.
