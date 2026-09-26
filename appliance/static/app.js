@@ -24,6 +24,12 @@
      executors poll, not a state flip. */
   var CANCELLABLE_STATES = ["planned", "awaiting_confirmation", "failed_recoverable"];
 
+  /* Fetched on the first render that needs them and then held: a tick may not
+     re-read them, because the package index is a round trip to a remote host and
+     the backup state is a statvfs per exported path. The wifi scan and the log
+     are held too but stay out of this list -- both are per-click reads. */
+  var DERIVED_VIEWS = ["releases", "managerSources", "backup", "settings"];
+
   var state = {
     authenticated: false,
     passwordConfigured: false,
@@ -37,7 +43,11 @@
     pollTicks: 0,
     busy: false,
     securityAudit: null,
-    lastVerdict: undefined
+    lastVerdict: undefined,
+    unacknowledgedCount: 0,
+    lastSettledAt: 0,
+    viewGeneration: 0,
+    hostStateRead: null
   };
 
   /* ---------------------------------------------------------------- DOM */
@@ -700,8 +710,54 @@
       var active = payload.active;
       var unacked = (payload.unacknowledged || [])[0] || null;
       state.operation = active || unacked;
+      noteSettledOperations(payload);
       return payload;
     }).catch(function () { return null; });
+  }
+
+  /* Dropped rather than emptied: the lazy guard in each render fires on an
+     absent key, while null is this console's own "still loading" and would stay
+     on the page for good. The generation retires whatever is in flight. */
+  function invalidateDerivedViews() {
+    state.viewGeneration += 1;
+    DERIVED_VIEWS.forEach(function (key) { delete state.data[key]; });
+  }
+
+  /* One more settled record, or one that finished later than the last seen, is
+     the signal that the appliance changed. Both are needed: the list does not
+     only grow, because a recoverable failure leaves it while it is retried. Read
+     from the list rather than from the operation on the banner, which shows only
+     the newest and may have moved on to one started after the settle. */
+  function noteSettledOperations(payload) {
+    var records = ((payload || {}).unacknowledged || []);
+    var finishedAt = records.reduce(function (latest, record) {
+      return Math.max(latest, Number(record.finished_at) || 0);
+    }, 0);
+    var settled = records.length > state.unacknowledgedCount
+      || finishedAt > state.lastSettledAt;
+    state.unacknowledgedCount = records.length;
+    state.lastSettledAt = Math.max(state.lastSettledAt, finishedAt);
+    if (!settled) return;
+    invalidateDerivedViews();
+    /* Not left to the next fifth tick: the version card would name the replaced
+       package while the index beside it already named the new one. */
+    readHostState().then(renderPolled);
+  }
+
+  /* One owner for the two live payloads, wanted by the periodic tick, by an
+     explicit refresh and by a settled operation. Coalesced, so a settle that
+     lands during a refresh does not order the same docker inspect twice. */
+  function readHostState() {
+    if (state.hostStateRead) return state.hostStateRead;
+    state.hostStateRead = Promise.all([
+      api("/api/status").catch(function (exc) { return { error: exc.code }; }),
+      api("/api/manager").catch(function (exc) { return { error: exc.code }; })
+    ]).then(function (results) {
+      state.hostStateRead = null;
+      state.data.status = results[0];
+      state.data.manager = results[1];
+    });
+    return state.hostStateRead;
   }
 
   /* The poll keeps an operation's progress live. Rebuilding the whole view for
@@ -737,17 +793,9 @@
         pollOperations().then(renderPolled);
         return;
       }
-      Promise.all([
-        api("/api/status").catch(function (exc) { return { error: exc.code }; }),
-        api("/api/manager").catch(function (exc) { return { error: exc.code }; }),
-        pollOperations()
-      ]).then(function (results) {
-        state.data.status = results[0];
-        state.data.manager = results[1];
-        // Through renderPolled, not render: a tick must not rebuild a field
-        // the operator has the cursor in.
-        renderPolled();
-      });
+      // Through renderPolled, not render: a tick must not rebuild a field the
+      // operator has the cursor in.
+      Promise.all([readHostState(), pollOperations()]).then(renderPolled);
     }, POLL_INTERVAL);
   }
 
@@ -1049,30 +1097,40 @@
 
   /* ----------------------------------------------------------- refresh */
 
+  /* The manager state is read with the host state, here and on the periodic
+     tick. Its verdict arrives *after* the operation that started the install
+     finished, so a card fetched once would still report "nothing in flight" on
+     an appliance that had already reverted. */
   function refresh() {
     if (!state.authenticated) return Promise.resolve();
-    /* The manager state is read with the host state, here and on the periodic
-       tick. Its verdict arrives *after* the operation that started the install
-       finished, so a card fetched once would still report "nothing in flight"
-       on an appliance that had already reverted. */
-    return Promise.all([
-      api("/api/status").catch(function (exc) { return { error: exc.code }; }),
-      api("/api/manager").catch(function (exc) { return { error: exc.code }; }),
-      pollOperations()
-    ]).then(function (results) {
-      state.data.status = results[0];
-      state.data.manager = results[1];
+    return Promise.all([readHostState(), pollOperations()]).then(function () {
       render();
       startPolling();
     });
   }
 
+  /* The only caller of refresh() that means "re-read what is held too". The
+     others -- sign-in, boot, acknowledging a banner, cancelling a plan, a
+     refused plan -- changed nothing on the host, and dropping the held views
+     there would fetch the remote index after every refusal. */
+  function refreshEverything() {
+    invalidateDerivedViews();
+    return refresh();
+  }
+
+  /* A read of a held view outlives the state it was started for. Storing an
+     answer from before the last invalidation would pin the pre-operation index
+     back under a key nothing re-reads -- the bug, restored by a fetch that was
+     already on its way. */
   function loadInto(key, path) {
+    var generation = state.viewGeneration;
     return api(path).then(function (payload) {
+      if (generation !== state.viewGeneration) return undefined;
       state.data[key] = payload;
       render();
       return payload;
     }).catch(function (exc) {
+      if (generation !== state.viewGeneration) return;
       state.data[key] = { error: exc.code, message: exc.message };
       render();
     });
@@ -2919,7 +2977,7 @@
 
     document.getElementById("gate-form").addEventListener("submit", submitGate);
     document.getElementById("logout-button").addEventListener("click", logout);
-    document.getElementById("refresh-button").addEventListener("click", function () { refresh(); });
+    document.getElementById("refresh-button").addEventListener("click", function () { refreshEverything(); });
     document.getElementById("mode-basic").addEventListener("click", function () { setMode("basic"); });
     document.getElementById("mode-expert").addEventListener("click", function () { setMode("expert"); });
     document.getElementById("dialog-cancel").addEventListener("click", closeDialog);

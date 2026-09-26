@@ -11516,16 +11516,22 @@ function renderUpgradeValidation(items, prepared) {
     .join("");
 }
 
+// The one writer for both places the panel names the installed version. They
+// were written from two, which is how the card followed a finished upgrade while
+// the plan fact beside it went on naming the release that had been replaced.
 function renderUpgradeCurrent() {
   const cur = upgradeState.current;
+  // The readable release first: a digest-pinned install reports its image as
+  // repo@sha256:<64 hex>, which is not a version and does not fit the line.
+  const label = cur.tag || cur.image || "Current version unknown";
   if (upgradeEls.currentVersion) {
-    // The readable release first: a digest-pinned install reports its image as
-    // repo@sha256:<64 hex>, which is not a version and does not fit the line.
-    upgradeEls.currentVersion.textContent =
-      cur.tag || cur.image || "Current version unknown";
+    upgradeEls.currentVersion.textContent = label;
   }
   if (upgradeEls.currentDetail) {
     upgradeEls.currentDetail.textContent = cur.state || "—";
+  }
+  if (upgradeEls.factCurrent) {
+    upgradeEls.factCurrent.textContent = label;
   }
 }
 
@@ -11558,9 +11564,7 @@ function summarizeMqttMigration(review) {
 function renderUpgradePlan() {
   const release = upgradeSelectedRelease();
   const cur = upgradeState.current;
-  if (upgradeEls.factCurrent) {
-    upgradeEls.factCurrent.textContent = cur.tag || cur.image || "Current version unknown";
-  }
+  renderUpgradeCurrent();
   if (upgradeEls.factTarget) {
     upgradeEls.factTarget.textContent = release
       ? release.name || release.tag
@@ -11761,6 +11765,11 @@ async function pollUpgradeJob(jobId) {
       const result = data.result || { ok: data.status === "succeeded", steps: data.steps };
       renderUpgradeResult(result);
       setUpgradeRunning(false);
+      // Read once when the panel opened, and the operator who pressed "Upgrade
+      // system" stays on it, so nothing else re-reads it; a failed run may have
+      // replaced the container and rolled back. After the result, which must not
+      // wait on a docker inspect per compose service that has no timeout.
+      await loadUpgradeCurrentVersion();
       return;
     }
     upgradePollTimer = setTimeout(() => pollUpgradeJob(jobId), UPGRADE_POLL_INTERVAL_MS);
@@ -11968,10 +11977,17 @@ async function loadUpgradeCurrentVersion() {
       image: admin.image || null,
     };
   } catch (err) {
-    upgradeState.current = { tag: null, image: null, state: null };
-    upgradeState.runningAdmin = { tag: null, image: null };
+    // Keep what the panel already knew: the upgrade this follows may have
+    // replaced the Admin, so a 502 here is ordinary, and no later load corrects
+    // it because the operator stays on the panel.
+    if (!upgradeState.current || (!upgradeState.current.tag && !upgradeState.current.image)) {
+      upgradeState.current = { tag: null, image: null, state: null };
+      upgradeState.runningAdmin = { tag: null, image: null };
+    }
   }
   renderUpgradeCurrent();
+  // runningAdmin was just re-read as well, and this is its only reader.
+  renderUpgradeAdminAlignment();
 }
 
 function applyUpgradeMigrationReview(data) {
