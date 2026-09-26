@@ -119,7 +119,9 @@ def test_diagnostics_endpoint_runs_allowlisted_checks(tmp_path):
     ids = [check["id"] for check in payload["checks"]]
     assert ids == ["quick_diagnose", "config_upgrade_dry_run", "influx_status", "runtime_status"]
     # Only the allowlisted suffixes were executed; nothing mutating.
-    suffixes = {tuple(argv[5:]) for argv in calls}
+    # The in-container ceiling sits between the container and the interpreter,
+    # so the allowlisted suffix is found from `python3`, not a fixed offset.
+    suffixes = {tuple(argv[argv.index("python3") + 2:]) for argv in calls}
     assert ("config", "upgrade", "--dry-run") in suffixes
     assert not any("--yes" in argv for argv in calls)
     assert not any("backup" in argv for argv in calls)
