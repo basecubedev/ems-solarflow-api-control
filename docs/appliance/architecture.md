@@ -203,6 +203,18 @@ cannot be reported as a success.
   additionally requires the confirmation token issued with that plan.
 - Settled results — terminal ones and recoverable failures — stay visible until
   they are acknowledged.
+- A settled operation changed this appliance, so the console drops every view it
+  had fetched once and held: the release catalogue, the manager package index,
+  the backup account and the settings. Each is read again by the next render,
+  a read still in flight from before is discarded rather than stored, and the
+  host state is read from the settle itself rather than waiting for its own
+  cadence, so the version card and the index cannot disagree. Without this, the
+  index went on reporting the version an install had just replaced — offering
+  the release now running as the newer one — and only reloading the page in the
+  browser corrected it.
+- One more record in that list, or one that finished later than the last seen, is
+  what the console reads as a change. The list is not only growing: a recoverable
+  failure leaves it while it is retried and returns when the retry settles.
 
 Every mutation follows: **plan → preview → confirmation → execution →
 verification → result**.

@@ -290,9 +290,16 @@ def test_the_manager_state_is_refreshed_and_not_read_once():
     flight" when the appliance had already put the previous package back.
     """
 
-    body = extract("refresh")
+    body = extract("readHostState")
 
-    assert '"/api/manager"' in body, "the live half belongs in the periodic refresh"
+    assert '"/api/manager"' in body, "the live half belongs with the host read"
+    # One owner for that read, reached by the periodic tick, by the refresh and by
+    # an operation settling -- not a copy of the pair per caller.
+    assert APP.count('api("/api/manager")') == 1
+    for caller in ("refresh", "startPolling", "noteSettledOperations"):
+        assert "readHostState()" in extract(caller), (
+            caller + " does not read the host state"
+        )
 
 
 def test_only_the_index_is_fetched_lazily():
@@ -331,7 +338,7 @@ def test_the_periodic_tick_reads_the_host_state_and_not_only_the_operations():
         + APP.split("var STATUS_EVERY_TICKS = ", 1)[1].split(";", 1)[0]
         + ";\n"
         "var asked = [];\n"
-        "var state = { pollTimer: null, pollTicks: 0, data: {} };\n"
+        "var state = { pollTimer: null, pollTicks: 0, data: {}, hostStateRead: null };\n"
         "var ticker = null;\n"
         "var window = { setInterval: function (fn) { ticker = fn; return 1; },"
         " clearInterval: function () { ticker = null; } };\n"
@@ -339,19 +346,28 @@ def test_the_periodic_tick_reads_the_host_state_and_not_only_the_operations():
         "function pollOperations() { asked.push('/api/operations'); return Promise.resolve({}); }\n"
         "function renderPolled() {}\n"
         "function render() {}\n"
+        + extract("readHostState")
+        + "\n"
         + extract("stopPolling")
         + "\n"
         + extract("startPolling")
         + "\n"
-        "startPolling();\n"
-        "for (var i = 0; i < STATUS_EVERY_TICKS * 2; i += 1) { ticker(); }\n"
-        "setTimeout(function () {\n"
+        # Each tick is let settle before the next, two seconds apart in the
+        # browser. Firing them in one synchronous loop instead would have the
+        # host read coalesce with itself and count once.
+        "var drain = function () { return new Promise(function (go) { setImmediate(go); }); };\n"
+        "(async function () {\n"
+        "  startPolling();\n"
+        "  for (var i = 0; i < STATUS_EVERY_TICKS * 2; i += 1) {\n"
+        "    ticker();\n"
+        "    await drain(); await drain();\n"
+        "  }\n"
         "  console.log(JSON.stringify({\n"
         "    status: asked.filter(function (p) { return p === '/api/status'; }).length,\n"
         "    manager: asked.filter(function (p) { return p === '/api/manager'; }).length,\n"
         "    operations: asked.filter(function (p) { return p === '/api/operations'; }).length\n"
         "  }));\n"
-        "}, 0);\n"
+        "})();\n"
     )
     result = subprocess.run(
         [node, "-"], input=script, capture_output=True, text=True, timeout=120
