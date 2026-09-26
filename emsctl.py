@@ -595,7 +595,8 @@ Examples:
             "InfluxDB zero-config (generate local secrets, start it, sync "
             "schema); 'sync' reconciles buckets, retention and downsampling "
             "tasks to match config.json; 'status' reports the live buckets, "
-            "tasks and task health."
+            "tasks and task health; 'prune' deletes the downsampling tasks "
+            "'sync' retired."
         ),
         epilog="""\
 Examples:
@@ -606,16 +607,19 @@ Examples:
   python3 emsctl.py influx status --json
   python3 emsctl.py influx sync
   python3 emsctl.py influx sync --json
+  python3 emsctl.py influx prune --dry-run
+  python3 emsctl.py influx prune
 """,
         formatter_class=EMSHelpFormatter,
     )
     influx.add_argument(
         "action",
-        choices=("init", "status", "sync"),
+        choices=("init", "status", "sync", "prune"),
         help=(
             "init: complete Analytics setup (bundled: secrets, start, wait, "
             "sync; external: validate, check connectivity, sync). "
-            "status: read live schema. sync: reconcile schema to config."
+            "status: read live schema. sync: reconcile schema to config. "
+            "prune: delete the downsampling tasks sync disabled."
         ),
     )
     influx.add_argument(
@@ -637,6 +641,11 @@ Examples:
         "--force-disabled",
         action="store_true",
         help="init: proceed even when influxdb.enabled is false in config.",
+    )
+    influx.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="prune: list what would be deleted without deleting anything.",
     )
 
     stack = subparsers.add_parser(
@@ -1816,9 +1825,10 @@ def run_influx_cli(argv, env, *, json_output=False):
 
 
 def execute_influx_schema_op(
-    influx_config, action, ready_timeout_s=None, request_timeout_s=None
+    influx_config, action, ready_timeout_s=None, request_timeout_s=None,
+    dry_run=False,
 ):
-    """Run a schema 'sync'/'status' op without printing. Returns (code, result).
+    """Run a schema 'sync'/'status'/'prune' op, no printing. Returns (code, result).
 
     ``result`` is a single dict — ``{"action", "ok", "url", "report"|"error"}`` —
     so callers (the standalone command, ``influx init``, ``stack up``) embed the
@@ -1865,6 +1875,9 @@ def execute_influx_schema_op(
         }
 
     if ready_timeout_s is None:
+        # Only setup runs a sync, and it may have just started the container.
+        # Prune is something an operator runs afterwards, so it keeps the
+        # diagnostic budget: waiting out a start there would be a hang.
         ready_timeout_s = (
             influx_setup.INFLUX_READY_TIMEOUT_SECONDS
             if action == "sync"
@@ -1872,9 +1885,10 @@ def execute_influx_schema_op(
         )
 
     if request_timeout_s is None:
+        # Prune writes, like sync does, so it gets the same per-request budget.
         request_timeout_s = (
             influx_setup.INFLUX_SYNC_REQUEST_TIMEOUT_SECONDS
-            if action == "sync"
+            if action in ("sync", "prune")
             else influx_setup.INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS
         )
 
@@ -1894,6 +1908,8 @@ def execute_influx_schema_op(
     try:
         if action == "sync":
             report = schema.sync(client, influx_config)
+        elif action == "prune":
+            report = schema.prune(client, influx_config, dry_run=dry_run)
         else:
             report = schema.status(client, influx_config)
     except Exception as exc:  # network/HTTP errors surface as a clean failure
@@ -1907,11 +1923,11 @@ def execute_influx_schema_op(
     return 0, {"action": action, "ok": True, "url": url, "report": report}
 
 
-def run_influx_schema_command(influx_config, action, json_output):
-    """Standalone 'influx sync'/'influx status' handler (owns its own output)."""
+def run_influx_schema_command(influx_config, action, json_output, dry_run=False):
+    """Standalone 'influx sync'/'status'/'prune' handler (owns its own output)."""
     from ems import influx_setup
 
-    code, result = execute_influx_schema_op(influx_config, action)
+    code, result = execute_influx_schema_op(influx_config, action, dry_run=dry_run)
 
     # Surface the local data directory for the bundled backend so operators know
     # where history is persisted on disk (and what to include in backups).
@@ -1928,6 +1944,8 @@ def run_influx_schema_command(influx_config, action, json_output):
 
     if action == "sync":
         print_influx_sync(result["report"])
+    elif action == "prune":
+        print_influx_prune(result["report"])
     else:
         print_influx_status(result["report"])
         if bundled:
@@ -1991,6 +2009,14 @@ def handle_influx_command(args, config):
 
     influx_config = normalize_influxdb_config(config.get("influxdb"))
 
+    # Only prune reads it, and the other actions write. Accepting it there and
+    # ignoring it would turn "show me first" into the real thing.
+    if getattr(args, "dry_run", False) and args.action != "prune":
+        return fail(
+            f"--dry-run applies to 'influx prune' only, not '{args.action}'",
+            code=2,
+        )
+
     if args.action == "init":
         return handle_influx_init(args, influx_config)
 
@@ -2000,7 +2026,10 @@ def handle_influx_command(args, config):
             code=2,
         )
 
-    return run_influx_schema_command(influx_config, args.action, args.json)
+    return run_influx_schema_command(
+        influx_config, args.action, args.json,
+        dry_run=bool(getattr(args, "dry_run", False)),
+    )
 
 
 # Shown when 'influx init' runs against a disabled config. Matches the dashboard
@@ -2446,6 +2475,20 @@ def print_influx_sync(report):
         print(f"  task {task['name']}: {task['action']} ({task['reason']})")
     if not report["tasks"] and not report["disabled_tasks"]:
         print("  no downsampling tasks configured")
+
+
+def print_influx_prune(report):
+    print("InfluxDB downsampling task cleanup")
+    tasks = report["tasks"]
+    if not tasks:
+        print("  nothing to remove")
+        return
+    for task in tasks:
+        print(f"  task {task['name']}: {task['action']} ({task['reason']})")
+    if any(task["action"] == "kept" for task in tasks):
+        print("  a task still running is not removed; run 'influx sync' first")
+    if any(task["action"] == "would_delete" for task in tasks):
+        print("  dry run: nothing was removed")
 
 
 def print_influx_status(report):

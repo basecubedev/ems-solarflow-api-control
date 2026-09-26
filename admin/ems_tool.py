@@ -10,6 +10,7 @@ neither exists. Args are always an internal allowlisted argv suffix; never
 
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,6 +30,37 @@ DEFAULT_TIMEOUT = 180
 
 # Long-running backup/restore jobs may stream large InfluxDB archives.
 BACKUP_RESTORE_TIMEOUT = 1800
+
+# Docker's ``exec`` cleanup lives in the client, so a command killed by its
+# ceiling here keeps running inside the container. Measured on Docker 26.1.5: a
+# killed ``docker exec`` left its process alive, and the next attempt ran beside
+# the first. A restore is not idempotent against a second copy of itself, and
+# there is no name to address an exec by afterwards the way a one-off container
+# has one, so the ceiling travels into the container with the command.
+EXEC_GUARD = "timeout"
+
+# The guard gets the ceiling the caller asked for; this process waits past it,
+# so the guard is what ends a slow command and the client only steps in when the
+# guard itself could not.
+EXEC_CLIENT_GRACE_SECONDS = 15
+
+# A command that ignores the stop signal still has to end.
+EXEC_GUARD_KILL_AFTER_SECONDS = 10
+
+# GNU timeout reports its own kill instead of the command's status: 124 after
+# the signal, 137 when the kill had to follow.
+EXEC_GUARD_TIMED_OUT_CODES = (124, 137)
+
+# Docker's exit code for "the command could not be invoked at all".
+EXEC_NOT_INVOCABLE_CODE = 126
+
+EXEC_GUARD_TIMEOUT_DETAIL = (
+    "The EMS command timed out and was stopped inside the container."
+)
+EXEC_CLIENT_TIMEOUT_DETAIL = (
+    "The EMS command timed out and may still be running inside the container; "
+    "check the container before trying again."
+)
 
 BLOCKED_MESSAGE = (
     "No running EMS container and no Docker Compose context were found, so the "
@@ -52,6 +84,53 @@ def mode_detail(mode):
     """Friendly, UI-safe description of an EMS tool mode, or ``None``."""
 
     return MODE_DETAILS.get(mode)
+
+
+def guarded_container_command(command, timeout):
+    """``command`` wrapped so the container enforces ``timeout`` itself.
+
+    Shared with :mod:`admin.ems_cli`, which runs its checks through the same
+    ``docker exec`` and inherits the same orphan otherwise.
+    """
+
+    # GNU timeout reads a zero duration as "no timeout at all", so a ceiling
+    # that rounds down to nothing would silently disarm the guard.
+    return [
+        EXEC_GUARD,
+        f"--kill-after={EXEC_GUARD_KILL_AFTER_SECONDS}",
+        "--signal=TERM",
+        str(max(1, int(timeout or 0))),
+        *command,
+    ]
+
+
+def guard_stopped_command(returncode, elapsed, timeout):
+    """True when the guard's exit code can only mean it ended the command.
+
+    ``docker exec`` returns 137 whenever anything kills the command -- the OOM
+    killer, an operator, the container going away -- so the code alone would
+    report a backup killed after forty seconds as a timeout on a thirty-minute
+    budget, and send the operator to raise a ceiling that was never reached. A
+    command the guard stopped has necessarily run for its whole deadline.
+    """
+
+    return returncode in EXEC_GUARD_TIMED_OUT_CODES and elapsed >= (timeout or 0)
+
+
+def guard_not_invocable(result):
+    """True when Docker could not invoke the guard itself.
+
+    The message names the binary Docker could not find, which is what keeps a
+    missing interpreter from being read as a missing guard. Docker writes it to
+    stdout on some versions and stderr on others, so both are searched.
+    """
+
+    if result.returncode != EXEC_NOT_INVOCABLE_CODE:
+        return False
+    streams = " ".join(
+        part for part in (result.stdout, result.stderr) if part
+    )
+    return f'"{EXEC_GUARD}"' in streams and "not found" in streams
 
 
 @dataclass(frozen=True)
@@ -177,22 +256,23 @@ class EmsToolRunner:
     # --- execution -------------------------------------------------------
 
     def _exec_in_container(self, container, args, timeout, input_text=None):
-        argv = ["docker", "exec"]
-        if input_text is not None:
-            argv.append("-i")  # keep stdin open so a password can be piped in
-        argv += [
-            container,
-            "python3",
-            CONTAINER_EMSCTL_PATH,
-            *[str(part) for part in args],
-        ]
+        command = ["python3", CONTAINER_EMSCTL_PATH, *[str(part) for part in args]]
+        guarded = guarded_container_command(command, timeout)
+        started = time.monotonic()
+        bounded = True
         try:
-            result = self._run(
-                argv, capture_output=True, text=True, timeout=timeout,
-                input=input_text,
+            result = self._exec(
+                container, guarded, timeout + EXEC_CLIENT_GRACE_SECONDS, input_text
             )
+            if guard_not_invocable(result):
+                # An image without the guard would otherwise lose backup and
+                # restore outright, which is the worse of the two failures.
+                bounded = False
+                result = self._exec(container, command, timeout, input_text)
         except subprocess.TimeoutExpired:
-            return EmsToolResult("container", False, None, "The EMS command timed out.", None)
+            return EmsToolResult(
+                "container", False, None, EXEC_CLIENT_TIMEOUT_DETAIL, None
+            )
         except FileNotFoundError:
             return EmsToolResult(
                 "container", False, None, "The docker command is not available.", None
@@ -201,10 +281,26 @@ class EmsToolRunner:
             return EmsToolResult(
                 "container", False, None, f"Could not run the EMS command: {exc}", None
             )
+        if bounded and guard_stopped_command(
+            result.returncode, time.monotonic() - started, timeout
+        ):
+            return EmsToolResult(
+                "container", False, None, EXEC_GUARD_TIMEOUT_DETAIL, None
+            )
         detail = _safe_command_detail(
             "\n".join(part for part in (result.stdout, result.stderr) if part)
         )
         return EmsToolResult("container", False, int(result.returncode), detail, None)
+
+    def _exec(self, container, command, timeout, input_text):
+        argv = ["docker", "exec"]
+        if input_text is not None:
+            argv.append("-i")  # keep stdin open so a password can be piped in
+        argv.append(container)
+        argv += command
+        return self._run(
+            argv, capture_output=True, text=True, timeout=timeout, input=input_text,
+        )
 
     def _run_via_compose(self, workspace, args, timeout, input_text=None):
         command = ["python3", "emsctl.py", *[str(part) for part in args]]

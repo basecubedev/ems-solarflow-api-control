@@ -388,6 +388,10 @@ python3 emsctl.py influx sync
 # Report live buckets, tasks and task health:
 python3 emsctl.py influx status
 python3 emsctl.py influx status --json
+
+# Delete the tasks sync disabled (list them first):
+python3 emsctl.py influx prune --dry-run
+python3 emsctl.py influx prune
 ```
 
 `sync` requires `influxdb.enabled = true` and a resolvable token. In bundled
@@ -400,13 +404,31 @@ Rerunning a `sync` is always safe; running two **at the same time** is not.
 InfluxDB does not make task names unique, so two syncs that both find a task
 missing both create it, and the extra keeps writing the same window. A later
 `sync` switches the duplicate to `inactive` and reports it as
-`disabled (duplicate)`; it is not deleted, so it stays visible in
-`influx status` as an inactive task until it is removed by hand.
+`disabled (duplicate)`; it is not deleted, because disabling is reversible and
+deleting is not. `influx prune` is the separate second step that removes it.
 
 A second `downsampling` entry with the same `target` asks for the same task, so
 it is reported as `disabled (duplicate_target)` instead — that one is a
 configuration mistake rather than a race, and the fix is to remove the extra
 entry.
+
+### Removing what `sync` retired
+
+`sync` never deletes a task, so disabled ones accumulate and every later `sync`
+repeats them. `influx prune` clears them, and it removes **only** what `sync`
+already stopped:
+
+- a task owned by this `bucket_prefix` that the config no longer names, or a
+  duplicate of one it still names, and that is already `inactive` — deleted,
+  with the same reason `sync` gave it;
+- the same task while it is still `active` — reported as `kept (still_active)`
+  and left alone. Stopping a task and removing it stay two decisions, so a
+  `prune` on its own can never take a running task out from under the
+  dashboard. Run `sync` first;
+- anything not owned by this prefix — never touched, whatever its state.
+
+`--dry-run` lists what would go without deleting anything. A task the API
+returns without a usable id is skipped, because nothing can be addressed to it.
 
 Admin removes the container of a one-off run it killed, so a retry does not
 normally meet the first run still working. When that removal fails — a wedged

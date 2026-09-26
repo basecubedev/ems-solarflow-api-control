@@ -71,6 +71,10 @@ class FakeInfluxClient:
         self.calls.append(("update_task", task["name"], status))
         return task
 
+    def delete_task(self, task_id):
+        task = self.tasks.pop(task_id)
+        self.calls.append(("delete_task", task["name"]))
+
 
 def _task_name_from_flux(flux):
     # extract name: "..." from option task = {name: "...", every: ...}
@@ -549,3 +553,234 @@ class StatusTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PruneTest(unittest.TestCase):
+    """``influx prune`` removes what ``influx sync`` retired, and nothing else."""
+
+    def setUp(self):
+        self.config = normalize_influxdb_config(
+            {"enabled": True, "bucket_prefix": "ems"}
+        )
+        self.reduced = normalize_influxdb_config(
+            {
+                "enabled": True,
+                "bucket_prefix": "ems",
+                "downsampling": [
+                    {"source": "raw", "target": "1m", "window": "1m"},
+                    {"source": "1m", "target": "5m", "window": "5m"},
+                ],
+            }
+        )
+
+    def _retired(self, client):
+        """A task the config no longer names, disabled by a sync."""
+
+        schema.sync(client, self.config)
+        schema.sync(client, self.reduced)
+        return next(
+            t for t in client.tasks.values() if t["name"] == "ems-downsample-1h"
+        )
+
+    def test_prune_removes_a_task_that_sync_retired(self):
+        client = FakeInfluxClient()
+        retired = self._retired(client)
+
+        report = schema.prune(client, self.reduced)
+
+        self.assertNotIn(retired["id"], client.tasks)
+        self.assertIn(
+            {
+                "name": "ems-downsample-1h",
+                "action": "deleted",
+                "reason": "not_configured",
+            },
+            report["tasks"],
+        )
+
+    def test_prune_leaves_every_configured_task_in_place(self):
+        client = FakeInfluxClient()
+        self._retired(client)
+
+        schema.prune(client, self.reduced)
+
+        self.assertEqual(
+            sorted(t["name"] for t in client.tasks.values()),
+            ["ems-downsample-1m", "ems-downsample-5m"],
+        )
+
+    def test_a_task_the_config_still_wants_survives_being_disabled_by_hand(self):
+        """Disabling one by hand is how an operator pauses it, not retires it."""
+
+        client = FakeInfluxClient()
+        schema.sync(client, self.config)
+        paused = next(
+            t for t in client.tasks.values() if t["name"] == "ems-downsample-5m"
+        )
+        paused["status"] = "inactive"
+
+        report = schema.prune(client, self.config)
+
+        self.assertIn(paused["id"], client.tasks)
+        self.assertEqual(report["tasks"], [])
+
+    def test_an_obsolete_task_that_is_still_running_is_kept(self):
+        """Deleting one mid-write would make prune the destructive step.
+
+        Sync is what stops a task; prune only clears what sync already stopped.
+        """
+
+        client = FakeInfluxClient()
+        schema.sync(client, self.config)
+
+        report = schema.prune(client, self.reduced)
+
+        self.assertEqual(
+            [t for t in report["tasks"] if t["action"] != "kept"], []
+        )
+        self.assertIn(
+            {
+                "name": "ems-downsample-1h",
+                "action": "kept",
+                "reason": "still_active",
+            },
+            report["tasks"],
+        )
+        self.assertEqual(
+            [c for c in client.calls if c[0] == "delete_task"], []
+        )
+
+    def test_a_disabled_duplicate_goes_and_the_survivor_stays(self):
+        client = FakeInfluxClient()
+        schema.sync(client, self.config)
+        original = next(
+            t for t in client.tasks.values() if t["name"] == "ems-downsample-1m"
+        )
+        client.tasks["t-99"] = dict(original, id="t-99")
+        schema.sync(client, self.config)
+
+        report = schema.prune(client, self.config)
+
+        self.assertNotIn("t-99", client.tasks)
+        self.assertIn(original["id"], client.tasks)
+        self.assertIn(
+            {
+                "name": "ems-downsample-1m",
+                "action": "deleted",
+                "reason": "duplicate",
+            },
+            report["tasks"],
+        )
+
+    def test_prune_never_touches_a_task_it_does_not_own(self):
+        client = FakeInfluxClient()
+        schema.sync(client, self.config)
+        client.tasks["foreign"] = {
+            "id": "foreign",
+            "name": "other-downsample-1h",
+            "flux": "",
+            "status": "inactive",
+        }
+
+        schema.prune(client, self.reduced)
+
+        self.assertIn("foreign", client.tasks)
+
+    def test_a_task_without_an_id_is_left_alone(self):
+        """There is nothing to address a delete to, and guessing is worse."""
+
+        client = FakeInfluxClient()
+        retired = self._retired(client)
+        client.tasks["ghost"] = {
+            "id": None,
+            "name": "ems-downsample-1h",
+            "flux": "",
+            "status": "inactive",
+        }
+
+        report = schema.prune(client, self.reduced)
+
+        # The addressable copy goes; the one that cannot be addressed stays.
+        self.assertNotIn(retired["id"], client.tasks)
+        self.assertIn("ghost", client.tasks)
+        self.assertEqual(
+            [t["action"] for t in report["tasks"]], ["deleted"]
+        )
+
+    def test_a_second_prune_has_nothing_left_to_do(self):
+        client = FakeInfluxClient()
+        self._retired(client)
+        schema.prune(client, self.reduced)
+        client.calls.clear()
+
+        report = schema.prune(client, self.reduced)
+
+        self.assertEqual(report["tasks"], [])
+        self.assertEqual(client.calls, [])
+
+    def test_a_dry_run_deletes_nothing(self):
+        client = FakeInfluxClient()
+        retired = self._retired(client)
+
+        schema.prune(client, self.reduced, dry_run=True)
+
+        self.assertIn(retired["id"], client.tasks)
+        self.assertEqual([c for c in client.calls if c[0] == "delete_task"], [])
+
+    def test_a_dry_run_names_what_it_would_delete(self):
+        client = FakeInfluxClient()
+        self._retired(client)
+
+        report = schema.prune(client, self.reduced, dry_run=True)
+
+        self.assertIn(
+            {
+                "name": "ems-downsample-1h",
+                "action": "would_delete",
+                "reason": "not_configured",
+            },
+            report["tasks"],
+        )
+
+    def test_a_config_caused_duplicate_keeps_its_own_reason(self):
+        """The same reason vocabulary as sync, so the two reports agree."""
+
+        client = FakeInfluxClient()
+        repeated = normalize_influxdb_config(
+            {
+                "enabled": True,
+                "bucket_prefix": "ems",
+                "downsampling": [
+                    {"source": "raw", "target": "1m", "window": "1m"},
+                    {"source": "raw", "target": "1m", "window": "1m"},
+                ],
+            }
+        )
+        schema.sync(client, self.config)
+        original = next(
+            t for t in client.tasks.values() if t["name"] == "ems-downsample-1m"
+        )
+        client.tasks["t-99"] = dict(original, id="t-99")
+        schema.sync(client, repeated)
+
+        report = schema.prune(client, repeated)
+
+        self.assertIn(
+            {
+                "name": "ems-downsample-1m",
+                "action": "deleted",
+                "reason": "duplicate_target",
+            },
+            report["tasks"],
+        )
+
+    def test_sync_then_prune_leaves_the_graveyard_empty(self):
+        """The whole point: a retired task stops being reported forever."""
+
+        client = FakeInfluxClient()
+        self._retired(client)
+
+        schema.prune(client, self.reduced)
+        report = schema.sync(client, self.reduced)
+
+        self.assertEqual(report["disabled_tasks"], [])

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from admin.deployment import ONEOFF_TIMEOUT_SECONDS, DockerError
-from admin.ems_tool import EmsToolRunner
+from admin.ems_tool import EXEC_GUARD, EmsToolRunner
 from admin.guided_upgrade import (
     GuidedUpgradeExecutor,
     UpgradeJob,
@@ -487,12 +487,14 @@ def test_backup_uses_docker_exec_when_ems_container_running(tmp_path):
 
     assert result["ok"] is True
     exec_calls = [c["argv"] for c in fake_run.calls if c["argv"][:2] == ["docker", "exec"]]
-    assert exec_calls == [
-        [
-            "docker", "exec", "ems-solarflow-api-control",
-            "python3", "/app/emsctl.py", "backup", "create", "--verify",
-        ]
+    assert len(exec_calls) == 1
+    argv = exec_calls[0]
+    assert argv[:3] == ["docker", "exec", "ems-solarflow-api-control"]
+    assert argv[-5:] == [
+        "python3", "/app/emsctl.py", "backup", "create", "--verify",
     ]
+    # The backup is bounded where it runs, not only in this process.
+    assert EXEC_GUARD in argv
     assert compose.oneoff_calls == []
     backup = next(s for s in result["steps"] if s["id"] == "backup")
     assert backup["status"] == "ok"
