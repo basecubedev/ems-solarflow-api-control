@@ -88,6 +88,11 @@ core
 core.*
 *.core
 
+# Local Python virtualenv. Never tracked: a worktree carries its own, and a
+# checkout of one somewhere else resolves it to a symlink pointing at itself.
+/.venv/
+/.venv
+
 # Python cache artifacts
 __pycache__/
 .pytest_cache/
