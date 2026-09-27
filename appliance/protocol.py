@@ -190,7 +190,13 @@ MUTATING_OPERATIONS = (
         summary="Plan an Admin rollback",
         timeout_seconds=IMAGE_OPERATION_TIMEOUT,
     ),
-    _spec("admin.plan_repair", mutating=True, takes_lock=True, summary="Plan an Admin repair"),
+    _spec(
+        "admin.plan_repair",
+        mutating=True,
+        takes_lock=True,
+        fields=(Field("restart_policy_only", KIND_BOOL, required=False, default=False),),
+        summary="Plan an Admin repair",
+    ),
     _spec(
         "admin.plan_lifecycle",
         mutating=True,

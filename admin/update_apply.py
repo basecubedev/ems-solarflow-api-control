@@ -147,12 +147,15 @@ class ComposeEnvTransaction:
 
 
 # ``up -d`` returns as soon as the daemon has started the container, which says
-# nothing about it staying up; the Admin service declares no restart policy, so a
-# replacement that exits immediately looked exactly like a working one. ``--wait``
-# holds until the container is running -- healthy, where the image declares a
-# check -- and exits non-zero when it is not. Compose bounds that wait itself, so
-# the decision is Compose's rather than a signal killing it part-way through a
-# recreate; the outer timeout stays above it as a backstop.
+# nothing about it staying up: a replacement that exits immediately looked
+# exactly like a working one, and under the service's restart policy a
+# crash-looping one is "running" between its restarts. ``--wait`` holds until the
+# container is healthy and exits non-zero when it is not. That rests on the
+# image's health check: it shipped in v0.8.0 together with this self-update,
+# and Guided Upgrade only moves forward, so every image reachable here has one.
+# Compose bounds that wait itself, so the decision is Compose's rather than a
+# signal killing it part-way through a recreate; the outer timeout stays above
+# it as a backstop.
 # The wait is sized for the slowest supported host: a stop plus a recreate plus
 # a health check measured 94 s on a Pi 3B+ with a pre-A1 SD card.
 RECREATE_WAIT_SECONDS = 300

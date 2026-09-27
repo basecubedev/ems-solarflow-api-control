@@ -236,6 +236,15 @@ docker compose -f docker-compose.admin.yml ps      # is the container up?
 docker compose -f docker-compose.admin.yml logs -f # why it is not
 ```
 
+An Admin Console installed this way comes back by itself after a reboot or a
+Docker restart (`restart: unless-stopped`). If you stopped it yourself, it
+stays stopped until you start it again. A `docker-compose.admin.yml` written by
+an older installer says `restart: "no"` instead, and the installer keeps an
+existing file. Change that one line to `restart: unless-stopped`, then run
+`docker compose -f docker-compose.admin.yml up -d`. The Raspberry Pi appliance
+makes this change itself (see
+[Admin recovery](../appliance/admin-recovery.md#restart-start-stop)).
+
 ## Login
 
 The Admin Console uses the same password as the EMS Dashboard.

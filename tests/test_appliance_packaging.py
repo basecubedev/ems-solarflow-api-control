@@ -1291,6 +1291,32 @@ def test_the_automatic_update_timer_is_shipped_and_enabled():
     assert timer["Timer"]["Persistent"] == "true"
 
 
+def test_the_admin_restart_policy_unit_is_shipped_enabled_and_ordered_after_docker():
+    """An older Admin installation is moved to the policy at boot, not by hand.
+
+    After docker.service so the container can be read, and after the agent,
+    because the unit is one of its callers rather than a writer of its own.
+    """
+
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+    postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
+    prerm = (PACKAGING / "debian" / "prerm").read_text(encoding="utf-8")
+    name = "ems-appliance-admin-restart-policy.service"
+    service = unit(PACKAGING / "systemd" / name)
+
+    assert name in build
+    assert name in re.search(r'^UNITS="([^"]+)"', postinst, re.MULTILINE).group(1).split()
+    assert f"systemctl start {name}" in postinst
+    assert name in prerm
+    assert service["Service"]["ExecStart"] == "/usr/bin/ems-appliance admin-restart-policy"
+    assert service["Service"]["Type"] == "oneshot"
+    assert {"docker.service", "ems-appliance-agent.service"} <= set(
+        service["Unit"]["After"].split()
+    )
+    assert "Requires" not in service["Unit"]
+    assert service["Install"]["WantedBy"] == "multi-user.target"
+
+
 def test_the_appliance_ships_no_second_unattended_upgrader():
     """apt has one owner here, and the gates that make it safe are around it.
 

@@ -375,7 +375,7 @@ EOF
       - ALL
     security_opt:
       - no-new-privileges:true
-    restart: "no"
+    restart: unless-stopped
 EOF
 }
 

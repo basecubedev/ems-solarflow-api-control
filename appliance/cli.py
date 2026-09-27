@@ -558,6 +558,35 @@ def command_auto_update(args):
     return EXIT_OK
 
 
+def command_admin_restart_policy(args):
+    """Give an older Admin installation the policy that brings it back after a reboot.
+
+    Run by ems-appliance-admin-restart-policy.service after Docker and the
+    agent. Exit 0 when the policy is in place, when there was nothing to do,
+    when the appliance was busy -- the unit runs again at the next boot -- and
+    when the repair was handed over but its end was not seen: the operation
+    record has the outcome then, not this command. A repair that failed, or an
+    agent that could not be reached at all, fails the unit.
+    """
+
+    from appliance.admin_lifecycle import run_restart_policy_repair
+
+    # Only the running agent: an in-process stack would execute the repair on
+    # a thread this short-lived command does not outlive.
+    result = run_restart_policy_repair(AgentClient(resolve_paths().agent_socket))
+    if getattr(args, "json", False):
+        _print(result, True)
+    elif result["ran"]:
+        print(f"set the Admin restart policy (operation {result['operation_id']})")
+    else:
+        detail = result.get("detail") or ""
+        print(f"Admin restart policy unchanged: {result['reason']}" + (f" ({detail})" if detail else ""))
+    settled_elsewhere = ("nothing_to_do", "busy", "deferred", "outcome_unknown", "still_running")
+    if result["ran"] or result["reason"] in settled_elsewhere:
+        return EXIT_OK
+    return EXIT_ERROR
+
+
 def command_backup_access(args):
     """Activate or disable the confined backup account, fail-closed."""
 
@@ -894,6 +923,13 @@ def build_parser():
         help="install waiting security updates, if automatic_security_updates is on",
     )
     auto_update.set_defaults(handler=command_auto_update)
+
+    restart_policy = subparsers.add_parser(
+        "admin-restart-policy",
+        parents=[shared],
+        help="let Docker bring an older Admin installation back after a reboot",
+    )
+    restart_policy.set_defaults(handler=command_admin_restart_policy)
 
     backup_access = subparsers.add_parser(
         "backup-access",

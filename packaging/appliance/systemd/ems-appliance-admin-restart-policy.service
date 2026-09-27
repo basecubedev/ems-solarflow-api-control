@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow Admin restart policy
+Documentation=file:///usr/share/doc/ems-appliance-manager/admin-recovery.md
+# An Admin installed while the installer wrote `restart: "no"` is not started
+# by Docker at boot. This asks the agent for that one repair -- the same plan,
+# lock and audit entry the console produces -- and never starts or stops the
+# Admin. Ordered after Docker so the container can be read; ordering only, so a
+# Docker that does not come up holds nothing else back.
+After=docker.service ems-appliance-agent.service
+Wants=ems-appliance-agent.service
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=-/etc/ems-appliance-manager/host-paths.env
+# Exits 0 whenever it declines, "busy" included: it runs again at the next
+# boot, and what happened is in the journal and in the operation record.
+ExecStart=/usr/bin/ems-appliance admin-restart-policy
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

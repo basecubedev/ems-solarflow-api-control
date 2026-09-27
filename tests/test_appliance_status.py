@@ -509,6 +509,7 @@ APPLIANCE_UNIT_SOURCES = {
     "grow_root": "ems-appliance-grow-root.service",
     "sshd_keys": "ems-appliance-sshd-keys.service",
     "backup_access": "ems-appliance-backup-access-disable.service",
+    "admin_restart_policy": "ems-appliance-admin-restart-policy.service",
 }
 
 
