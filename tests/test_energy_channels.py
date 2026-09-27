@@ -13,7 +13,7 @@ from ems.energy_channels import (
     channel_power_w,
     channel_sample_wh,
     find_channel,
-    self_consumption,
+    measured_channel_ids,
     self_sufficiency,
 )
 
@@ -90,12 +90,6 @@ def test_self_sufficiency_never_reports_below_zero():
     assert self_sufficiency(100.0, 250.0) == 0.0
 
 
-def test_self_consumption_needs_delivered_energy():
-    assert self_consumption(10_000.0, 1_000.0) == pytest.approx(0.9)
-    assert self_consumption(0.0, 0.0) is None
-    assert self_consumption(100.0, 250.0) == 0.0
-
-
 def test_channel_columns_are_plain_sql_identifiers():
     """The column names are interpolated into DDL, so they may never be free text."""
 
@@ -121,3 +115,63 @@ def test_channel_ids_are_unique_and_stable():
 def test_unknown_channel_is_refused():
     with pytest.raises(KeyError):
         find_channel("nuclear_reactor")
+
+
+def test_grid_channels_need_a_valid_grid_reading():
+    """A meter that never answered reads as 0 W, which is not a measurement.
+
+    Integrating it would report zero import and a perfect autarky for an
+    installation whose grid meter is simply unreachable.
+    """
+
+    snapshot = {
+        "grid_power_w": 0.0,
+        "home_load_w": 500.0,
+        "pv_total_w": 900.0,
+        "battery_power_w": 300.0,
+        "grid_power_valid": False,
+    }
+
+    measured = set(measured_channel_ids(snapshot))
+    assert measured == {"battery_charge", "battery_discharge", "pv_yield"}
+
+    sample = channel_sample_wh(snapshot, 1.0)
+    assert sample["grid_import"] == 0.0
+    assert sample["home_consumption"] == 0.0
+    assert sample["pv_yield"] == 900.0
+
+
+def test_a_snapshot_without_the_validity_flag_counts_as_measured():
+    """Older writers and test stubs do not carry the flag; they still measure."""
+
+    snapshot = {"grid_power_w": 240.0, "home_load_w": 500.0}
+
+    assert "grid_import" in measured_channel_ids(snapshot)
+    assert channel_sample_wh(snapshot, 1.0)["grid_import"] == 240.0
+
+
+def test_house_load_needs_both_the_meter_and_the_devices():
+    """House load is inverter output plus grid import, so it rests on both.
+
+    With a device offline the controller replays its cached output, and that
+    phantom output would otherwise be integrated as house consumption and feed
+    the autarky.
+    """
+
+    device_gone = {
+        "home_load_w": 500.0,
+        "grid_power_w": 100.0,
+        "grid_power_valid": True,
+        "device_power_valid": False,
+    }
+    meter_gone = {
+        "home_load_w": 500.0,
+        "grid_power_w": 0.0,
+        "grid_power_valid": False,
+        "device_power_valid": True,
+    }
+
+    assert "home_consumption" not in measured_channel_ids(device_gone)
+    assert "home_consumption" not in measured_channel_ids(meter_gone)
+    assert "grid_import" in measured_channel_ids(device_gone)
+    assert "battery_charge" in measured_channel_ids(meter_gone)

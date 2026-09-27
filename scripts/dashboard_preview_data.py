@@ -129,7 +129,6 @@ def _energy_entry(
     channels=None,
     coverage=None,
     self_sufficiency=None,
-    self_consumption=None,
     **extra,
 ):
     entry = {
@@ -138,10 +137,7 @@ def _energy_entry(
         "savings_value": savings,
         "channels": channels if channels is not None else _channels(),
         "coverage": coverage if coverage is not None else {},
-        "ratios": {
-            "self_sufficiency": self_sufficiency,
-            "self_consumption": self_consumption,
-        },
+        "ratios": {"self_sufficiency": self_sufficiency},
     }
     entry.update(extra)
     return entry
@@ -174,7 +170,6 @@ def _energy_stats():
                 home_consumption=5.7,
             ),
             self_sufficiency=0.544,
-            self_consumption=0.969,
             peak_output_w=742,
         ),
         "yesterday": _energy_entry(
@@ -189,7 +184,6 @@ def _energy_stats():
                 home_consumption=6.1,
             ),
             self_sufficiency=0.656,
-            self_consumption=0.952,
             peak_output_w=780,
         ),
         "last_7_days": _energy_entry(
@@ -204,7 +198,6 @@ def _energy_stats():
                 home_consumption=32.3,
             ),
             self_sufficiency=0.542,
-            self_consumption=0.951,
         ),
         "last_4_weeks": _energy_entry(
             72.1,

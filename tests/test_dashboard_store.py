@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
+import shutil
 import sqlite3
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -72,6 +74,15 @@ def daily_row(path, date_key):
         ).fetchone()
 
 
+def _local_date(store, timestamp):
+    return (
+        datetime.fromisoformat(timestamp)
+        .astimezone(store.energy_timezone)
+        .date()
+        .isoformat()
+    )
+
+
 def daily_channels(path, date_key):
     columns = ", ".join(channel.column for channel in ENERGY_CHANNELS)
     with sqlite3.connect(path) as con:
@@ -84,6 +95,15 @@ def daily_channels(path, date_key):
         return None
 
     return dict(zip((channel.id for channel in ENERGY_CHANNELS), row))
+
+
+def channel_gaps(path):
+    with sqlite3.connect(path) as con:
+        rows = con.execute(
+            "SELECT channel, date, missed_samples FROM energy_channel_gap"
+        ).fetchall()
+
+    return {(row[0], row[1]): row[2] for row in rows}
 
 
 def channel_coverage(path):
@@ -477,7 +497,34 @@ def test_energy_channel_columns_are_added_to_an_existing_database(tmp_path):
     assert daily_row(path, "2026-05-30")[0] == 4000
 
 
-def test_energy_channel_coverage_records_the_first_and_last_measured_day(tmp_path):
+def test_energy_channel_coverage_follows_the_integrated_samples(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(
+        path,
+        energy_savings={"enabled": True, "timezone": "UTC"},
+    )
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    later = first + timedelta(days=2)
+
+    store.record(snapshot(first.isoformat()))
+    store.record(snapshot((first + timedelta(seconds=6)).isoformat()))
+    # The gap to the third day is longer than the sample window, so that
+    # sample integrates nothing; the one after it does.
+    store.record(snapshot(later.isoformat()))
+    store.record(snapshot((later + timedelta(seconds=6)).isoformat()))
+
+    coverage = channel_coverage(path)
+    assert set(coverage) == {channel.id for channel in ENERGY_CHANNELS}
+    assert coverage["grid_import"] == ("2026-06-01", "2026-06-03")
+
+
+def test_a_skipped_interval_does_not_claim_the_day_as_measured(tmp_path):
+    """A day whose samples were all skipped measured nothing.
+
+    Claiming it anyway would make a period look covered while its sums stayed
+    at zero, which is the one thing coverage exists to prevent.
+    """
+
     path = tmp_path / "dashboard.sqlite"
     store = DashboardStore(
         path,
@@ -486,11 +533,37 @@ def test_energy_channel_coverage_records_the_first_and_last_measured_day(tmp_pat
     first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
 
     store.record(snapshot(first.isoformat()))
-    store.record(snapshot((first + timedelta(days=2)).isoformat()))
+    store.record(snapshot((first + timedelta(hours=3)).isoformat()))
+
+    assert channel_coverage(path) == {}
+
+
+def test_an_invalid_grid_reading_is_neither_integrated_nor_covered(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(
+        path,
+        energy_savings={"enabled": True, "timezone": "UTC"},
+    )
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    for seconds in (0, 6, 12):
+        sample = snapshot(
+            (first + timedelta(seconds=seconds)).isoformat(),
+            grid=600,
+            battery=900,
+        )
+        sample["grid_power_valid"] = False
+        store.record(sample)
+
+    channels = daily_channels(path, "2026-06-01")
+    assert channels["grid_import"] == 0
+    assert channels["home_consumption"] == 0
+    assert channels["battery_charge"] > 0
 
     coverage = channel_coverage(path)
-    assert set(coverage) == {channel.id for channel in ENERGY_CHANNELS}
-    assert coverage["grid_import"] == ("2026-06-01", "2026-06-03")
+    assert "grid_import" not in coverage
+    assert "home_consumption" not in coverage
+    assert "battery_charge" in coverage
 
 
 def test_energy_disabled_store_records_no_channel_coverage(tmp_path):
@@ -767,7 +840,6 @@ def test_energy_summary_reports_channel_totals_per_period(tmp_path):
     assert today["ratios"]["self_sufficiency"] == pytest.approx(
         (6350 - 2500) / 6350
     )
-    assert today["ratios"]["self_consumption"] == pytest.approx((4000 - 150) / 4000)
 
 
 def test_energy_summary_marks_a_period_that_starts_before_the_measurement(tmp_path):
@@ -863,9 +935,9 @@ def test_energy_summary_month_and_year_entries_carry_channels(tmp_path):
         4000,
         channels={"grid_import": 2500, "battery_charge": 1800},
     )
-    insert_coverage(path, "2026-06-01", "2026-06-30")
+    insert_coverage(path, "2026-06-01", "2026-06-01")
 
-    summary = store.energy_summary(now="2026-06-30T23:00:00+00:00")
+    summary = store.energy_summary(now="2026-06-01T23:00:00+00:00")
 
     june = summary["monthly_current_year"][5]
     assert june["label"] == "Jun"
@@ -876,3 +948,230 @@ def test_energy_summary_month_and_year_entries_carry_channels(tmp_path):
     assert year["year"] == 2026
     assert year["channels"]["grid_import"]["wh"] == 2500.0
     assert summary["lifetime"]["channels"]["grid_import"]["wh"] == 2500.0
+
+
+def test_a_restored_database_is_brought_forward_before_the_next_write(tmp_path):
+    """The Admin restore swaps the file under a live store.
+
+    A backup written by an older version has no channel columns, and the store
+    survives the swap: without a schema pass on the way out, every later
+    record() raises on a missing column until someone restarts the EMS.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True})
+    legacy = tmp_path / "legacy.sqlite"
+    with sqlite3.connect(legacy) as con:
+        con.execute("""
+            CREATE TABLE snapshots (
+                timestamp TEXT PRIMARY KEY,
+                payload TEXT NOT NULL
+            )
+        """)
+        con.execute("""
+            CREATE TABLE daily_energy_stats (
+                date TEXT PRIMARY KEY,
+                inverter_output_wh REAL NOT NULL DEFAULT 0,
+                savings_value REAL NOT NULL DEFAULT 0,
+                price_per_kwh REAL NOT NULL DEFAULT 0,
+                currency TEXT NOT NULL DEFAULT 'EUR',
+                peak_output_w REAL NOT NULL DEFAULT 0,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
+    with store.maintenance_pause():
+        for suffix in ("", "-wal", "-shm"):
+            sidecar = Path(f"{path}{suffix}")
+            if sidecar.exists():
+                sidecar.unlink()
+        shutil.copyfile(legacy, path)
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    store.record(snapshot(timestamp, output=400))
+
+    assert daily_channels(path, _local_date(store, timestamp)) is not None
+    assert store.latest()["energy_stats"]["enabled"] is True
+
+
+def test_the_current_month_and_year_are_covered_up_to_today(tmp_path):
+    """A period in progress is not partly measured -- it is just not over.
+
+    Comparing coverage against the calendar end of the month left the current
+    month and year marked as partly measured for their whole duration, which
+    withheld the ratios every day of the year.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    for day in range(1, 16):
+        insert_daily(
+            path,
+            f"2026-06-{day:02d}",
+            4000 / 15,
+            channels={"grid_import": 1000 / 15, "home_consumption": 5000 / 15},
+        )
+    insert_coverage(path, "2026-06-01", "2026-06-15")
+
+    summary = store.energy_summary(now="2026-06-15T18:00:00+00:00")
+
+    june = summary["monthly_current_year"][5]
+    assert june["coverage"] == {}
+    assert june["ratios"]["self_sufficiency"] == pytest.approx(0.8)
+
+    # The year is still partial, and for the right reason: it began five months
+    # before the channels did. Only the end of a range is clamped to today.
+    assert summary["yearly"][0]["coverage"]["grid_import"] == "partial"
+
+    # A month that has not started yet stays outside the measurement.
+    july = summary["monthly_current_year"][6]
+    assert july["coverage"]["grid_import"] == "none"
+
+
+def test_a_year_measured_from_its_start_is_covered_up_to_today(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    for day in (1, 2, 3):
+        insert_daily(
+            path,
+            f"2026-01-{day:02d}",
+            1000,
+            channels={"grid_import": 200, "home_consumption": 1200},
+        )
+    insert_coverage(path, "2025-12-01", "2026-01-03")
+
+    summary = store.energy_summary(now="2026-01-03T18:00:00+00:00")
+
+    assert summary["yearly"][0]["year"] == 2026
+    assert summary["yearly"][0]["coverage"] == {}
+
+
+def _record_day(store, start, samples, overrides=None):
+    """Record evenly spaced samples six seconds apart.
+
+    ``overrides`` patches single samples by index, which is how a test puts one
+    unreadable sample inside an otherwise measured day.
+    """
+
+    patches = overrides or {}
+    for index in range(samples):
+        sample = snapshot((start + timedelta(seconds=index * 6)).isoformat())
+        sample.update(patches.get(index, {}))
+        store.record(sample)
+
+
+def test_the_first_measured_day_is_not_claimed_as_complete(tmp_path):
+    """A channel that started at noon did not measure the morning.
+
+    Day-granular coverage would otherwise report the upgrade day as fully
+    measured, which is exactly the claim this feature exists to avoid.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    _record_day(store, first, 3)
+
+    summary = store.energy_summary(now="2026-06-01T23:00:00+00:00")
+    assert summary["today"]["coverage"]["grid_import"] == "partial"
+    assert summary["today"]["ratios"]["self_sufficiency"] is None
+
+
+def test_a_sample_the_meter_could_not_read_is_counted_as_missed(tmp_path):
+    """A meter outage inside an otherwise measured day is a hole in the day.
+
+    Without it, a ten-minute outage would leave the day complete, withhold
+    nothing, and report a grid export of zero as a measured figure.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    day = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    _record_day(store, day, 4, {2: {"grid_power_valid": False}})
+
+    missed = channel_gaps(path)
+    # Every channel carries the day's opening hole; only the grid channels
+    # counted a sample they could not read on top of it.
+    assert (
+        missed[("grid_import", "2026-06-01")]
+        > missed[("battery_charge", "2026-06-01")]
+    )
+    assert missed[("home_consumption", "2026-06-01")] > 0
+
+    summary = store.energy_summary(now="2026-06-01T23:00:00+00:00")
+    assert summary["today"]["coverage"]["grid_import"] == "partial"
+    assert summary["today"]["ratios"]["self_sufficiency"] is None
+
+
+def test_downtime_marks_the_day_it_started_and_the_day_it_ended(tmp_path):
+    """A gap over midnight belongs to both days, not only to the later one.
+
+    The evening the samples stopped is as unmeasured as the morning they came
+    back, and whole days in between have no row at all -- a range that contains
+    one is already incomplete by its day count.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+
+    _record_day(store, datetime(2026, 6, 1, 20, 0, tzinfo=timezone.utc), 3)
+    _record_day(store, datetime(2026, 6, 3, 8, 0, tzinfo=timezone.utc), 3)
+
+    dates = {date_key for _, date_key in channel_gaps(path)}
+    assert "2026-06-01" in dates
+    assert "2026-06-03" in dates
+
+
+def test_offline_device_telemetry_is_not_integrated(tmp_path):
+    """An offline device keeps its last reading; that is not a measurement."""
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    for index in range(3):
+        sample = snapshot(
+            (first + timedelta(seconds=index * 6)).isoformat(),
+            pv=900,
+            battery=600,
+        )
+        sample["device_power_valid"] = False
+        store.record(sample)
+
+    channels = daily_channels(path, "2026-06-01")
+    assert channels["pv_yield"] == 0
+    assert channels["battery_charge"] == 0
+    assert channels["grid_import"] > 0
+
+    coverage = channel_coverage(path)
+    assert "pv_yield" not in coverage
+    assert "grid_import" in coverage
+
+
+def test_a_day_the_ems_never_sampled_keeps_a_period_from_being_complete(tmp_path):
+    """A total visibly shrinks when a day is missing; a ratio does not.
+
+    Self-sufficiency over a week with a day of downtime would read as the
+    week's figure while being the figure of six days, so a range is only
+    complete when every one of its days carries samples.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    for day in (1, 2, 4):  # the third is the outage
+        insert_daily(
+            path,
+            f"2026-06-{day:02d}",
+            1000,
+            channels={"grid_import": 200, "home_consumption": 1200},
+        )
+    insert_coverage(path, "2026-06-01", "2026-06-04")
+
+    summary = store.energy_summary(now="2026-06-04T18:00:00+00:00")
+
+    assert summary["today"]["coverage"] == {}
+    assert summary["last_7_days"]["coverage"]["grid_import"] == "partial"
+    assert summary["last_7_days"]["ratios"]["self_sufficiency"] is None

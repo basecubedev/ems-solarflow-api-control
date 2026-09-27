@@ -69,6 +69,24 @@ def _unknown_assist_payload(message="Full-charge assist state unavailable"):
     }
 
 
+def _grid_reading_is_valid(controller):
+    """Whether the grid power in this snapshot came from an answered read.
+
+    A meter that never answered keeps publishing its initial 0 W, and the
+    energy statistics must not integrate that as a measured zero: it would
+    report no grid import and a perfect autarky for an unreachable meter. A
+    client without health data (simulation, replay) counts as valid.
+    """
+
+    health = getattr(getattr(controller, "shelly", None), "health", None)
+    if health is None:
+        return True
+
+    return bool(getattr(health, "success_count", 0)) and not getattr(
+        health, "stale_used", False
+    )
+
+
 def _state_telemetry_fields(state):
     """Map a DeviceState to the shared telemetry fields of a device tile.
 
@@ -308,6 +326,7 @@ def build_dashboard_snapshot(
         }
 
     grid_power_w = _rounded(load_w)
+    grid_power_valid = _grid_reading_is_valid(controller)
     home_load_w = _rounded(max(0, inverter_total_w + grid_power_w))
     average_soc = _rounded(sum(soc_values) / len(soc_values)) if soc_values else 0
 
@@ -377,6 +396,10 @@ def build_dashboard_snapshot(
         "timestamp": now,
         "devices": devices,
         "grid_power_w": grid_power_w,
+        "grid_power_valid": grid_power_valid,
+        # An offline device keeps its last telemetry, so the aggregates below
+        # are only a measurement while every device is reporting.
+        "device_power_valid": not offline_devices,
         "home_load_w": home_load_w,
         "pv_total_w": _rounded(pv_total_w),
         "inverter_output_w": _rounded(inverter_total_w),

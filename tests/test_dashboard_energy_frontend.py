@@ -66,7 +66,7 @@ def payload(channels=None, coverage=None, ratios=None, **overrides):
             channel.id: {"wh": 0.0, "kwh": 0.0} for channel in ENERGY_CHANNELS
         },
         "coverage": coverage or {},
-        "ratios": ratios or {"self_sufficiency": None, "self_consumption": None},
+        "ratios": ratios or {"self_sufficiency": None},
     }
     if channels:
         for channel_id, kwh in channels.items():
@@ -178,7 +178,7 @@ def test_a_partly_measured_channel_carries_the_mark():
 
 def test_self_sufficiency_is_absent_in_basic_and_explicit_in_expert():
     unknown = payload()
-    known = payload(ratios={"self_sufficiency": 0.54, "self_consumption": 0.97})
+    known = payload(ratios={"self_sufficiency": 0.54})
 
     assert "Self-Sufficiency" not in render_period("basic", unknown, meta_for())
     assert "Self-Sufficiency" in render_period("expert", unknown, meta_for())
@@ -224,3 +224,36 @@ console.log(JSON.stringify({{ afterExpert, afterNonsense }}));
     # An unknown level falls back instead of leaving the board in limbo.
     assert out["afterNonsense"]["detail"] == "basic"
     assert out["afterNonsense"]["subtitle"] == "Based on measured inverter output."
+
+
+def test_demo_mode_carries_the_same_channels_as_the_backend():
+    """Demo mode stands in for the store, so it has to show what the store shows.
+
+    The preview server's payload and this one are two fixtures of the same
+    contract; the first version of this feature extended only one of them.
+    """
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const stats = app.demoEnergyStats();
+console.log(JSON.stringify({{
+  metaIds: stats.channel_meta.map((entry) => entry.id),
+  todayIds: Object.keys(stats.today.channels),
+  todayGridImport: stats.today.channels.grid_import.kwh,
+  todayCoverage: stats.today.coverage,
+  bestDayCoverage: stats.best_day.coverage,
+  rollingCoverage: stats.last_4_weeks.coverage,
+  since: stats.channel_meta[0].since,
+}}));
+"""
+    out = run_node(script)
+    backend_ids = [channel.id for channel in ENERGY_CHANNELS]
+
+    assert out["metaIds"] == backend_ids
+    assert out["todayIds"] == backend_ids
+    assert out["todayGridImport"] > 0
+    # A fully measured period, one measured in part, and one not at all.
+    assert out["todayCoverage"] == {}
+    assert set(out["rollingCoverage"].values()) == {"partial"}
+    assert set(out["bestDayCoverage"].values()) == {"none"}
+    assert out["since"] == "2026-09-12"

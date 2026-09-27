@@ -73,9 +73,19 @@ into it. **Charged** and **discharged** are the two directions of the battery.
 They are measured separately, so a day with both reports both — a single netted
 figure would hide half of what happened.
 
+**Home** is what the house drew at the grid connection point. If the EMS
+charges the battery from the grid — winter mode, full-charge assist — that
+charging is part of this figure, because the meter cannot tell it apart from a
+washing machine.
+
 **Self-sufficiency** is the share of house consumption that did not come from
-the grid. It only appears for a period every channel it needs measured
-completely; otherwise it would divide a half-measured number by a whole one.
+the grid. It only appears for a period that was measured from beginning to end;
+otherwise it would divide a half-measured number by a whole one. For the same
+reason, a sample whose grid meter did not answer counts for nothing: an
+unreachable meter reads as 0 W, and taking that at face value would report a
+perfect autarky for a system that simply lost sight of the grid. A day on which
+the EMS was not running for a while is marked the same way — the hole is in the
+day, even if the EMS came back.
 
 ### Since when a figure exists
 

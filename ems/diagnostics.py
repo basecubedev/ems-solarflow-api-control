@@ -1604,6 +1604,8 @@ def diagnose_database_deep(checks, database_path):
                 "rule_state",
                 "daily_energy_stats",
                 "energy_integration_state",
+                "energy_channel_coverage",
+                "energy_channel_gap",
             }
             for table in sorted(expected):
                 level = "ok" if table in tables else "warning"

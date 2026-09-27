@@ -280,8 +280,11 @@ last day each channel was measured, so a period from before a channel existed
 reads as unknown rather than as zero.
 
 The stored snapshot rows do **not** carry `energy_stats`: the rollup is derived
-from the daily table and attached to every read instead, which keeps a 2 KB
-aggregate out of each row written per dashboard write interval.
+from the daily table and attached by `/api/live`, `/api/events` and
+`/api/energy-stats` instead, which keeps a 2 KB aggregate out of each row
+written per dashboard write interval. The legacy `/api/history` list returns the
+stored rows as they are, so its items no longer carry the field; read it from
+one of the three endpoints above.
 
 Energy statistics integrate measured inverter AC output over real elapsed time.
 Intervals above `energy_savings.max_sample_delta_seconds` are skipped and the
@@ -414,7 +417,6 @@ inverter output:
 <entry>.channels.<channel>.kwh
 <entry>.coverage.<channel>     only when it is not "full"
 <entry>.ratios.self_sufficiency
-<entry>.ratios.self_consumption
 ```
 
 The channels are `grid_import`, `grid_export`, `battery_charge`,
@@ -423,17 +425,34 @@ directions of the snapshot's signed grid and battery power plus PV and house
 load; `ems/energy_channels.py` owns that split and is the only place that
 states the sign convention.
 
+Two properties of `home_consumption` are worth knowing. It is the load at the
+grid connection point (`inverter output + grid import`), so energy the EMS
+charges the battery with from AC — winter mode, full-charge assist, an
+`ac_input` device — is part of it: the grid meter cannot tell that apart from a
+household load. And it is only a measurement while the grid reading is one, so
+it shares the grid channels' validity gate: a sample whose meter did not answer
+is integrated for none of the three, and does not extend their coverage.
+
 `coverage` reports only the channels that did **not** measure the whole entry:
 a channel missing from the map measured all of it. The states are `partial`
-(the channel started or stopped inside the range) and `none` (the range lies
-entirely outside what the channel measured). Coverage answers *since when*, not
-*without gaps* — a day the EMS did not run sits inside a covered range and is a
-gap in the sums, exactly as it is for the inverter output.
+(the channel started or stopped inside the range, or a day inside it has a
+hole) and `none` (the range lies entirely outside what the channel measured).
 
-`ratios` are derived at read time and are `null` unless the channels they need
-measured the whole entry. `self_sufficiency` is the share of house consumption
-that did not come from the grid; `self_consumption` is the share of delivered
-AC energy the house used instead of exporting it.
+A day is recorded as holed in `energy_channel_gap` when a sample could not be
+read — an unreachable grid meter, a device that went offline — and for the
+first day of a channel, which started somewhere inside it. Time the EMS did not
+sample at all is **not** recorded: that gap is missing from every figure on the
+board, the inverter output included, and always has been.
+
+Both `coverage` and `lifetime.since_date` are built from the sample timestamps,
+so a system whose clock was wrong before it reached NTP can backdate them by
+the length of that error.
+
+`self_sufficiency` is the share of house consumption that did not come from the
+grid. It is derived at read time and is `null` unless **every** channel measured
+the whole entry: the inverter output shown beside it is integrated whether or
+not the devices were reporting, so a weaker rule would publish a ratio built on
+frozen telemetry.
 
 `channel_meta` lists each channel once with `id`, `label`, `unit` and the
 `since` / `until` dates it has been measured, so a client renders the channels

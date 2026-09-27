@@ -20,6 +20,12 @@ class EnergyChannel:
 
     ``column`` is the SQLite column that carries the channel's daily total. It
     is interpolated into DDL, which is why it is validated below.
+
+    ``validity`` names the snapshot flags that say whether the source carried a
+    real reading; the channel is measured only while all of them hold. A meter
+    that never answered publishes its initial 0 W, and integrating that would
+    report zero grid import and a perfect autarky for an installation whose
+    meter is simply unreachable.
     """
 
     id: str
@@ -27,17 +33,36 @@ class EnergyChannel:
     source: str
     direction: str
     column: str
+    validity: tuple = ()
 
+
+GRID_VALIDITY = "grid_power_valid"
+DEVICE_VALIDITY = "device_power_valid"
 
 ENERGY_CHANNELS = (
     EnergyChannel(
-        "grid_import", "Grid Import", "grid_power_w", POSITIVE, "grid_import_wh"
+        "grid_import",
+        "Grid Import",
+        "grid_power_w",
+        POSITIVE,
+        "grid_import_wh",
+        (GRID_VALIDITY,),
     ),
     EnergyChannel(
-        "grid_export", "Grid Export", "grid_power_w", NEGATIVE, "grid_export_wh"
+        "grid_export",
+        "Grid Export",
+        "grid_power_w",
+        NEGATIVE,
+        "grid_export_wh",
+        (GRID_VALIDITY,),
     ),
     EnergyChannel(
-        "battery_charge", "Charged", "battery_power_w", POSITIVE, "battery_charge_wh"
+        "battery_charge",
+        "Charged",
+        "battery_power_w",
+        POSITIVE,
+        "battery_charge_wh",
+        (DEVICE_VALIDITY,),
     ),
     EnergyChannel(
         "battery_discharge",
@@ -45,10 +70,27 @@ ENERGY_CHANNELS = (
         "battery_power_w",
         NEGATIVE,
         "battery_discharge_wh",
+        (DEVICE_VALIDITY,),
     ),
-    EnergyChannel("pv_yield", "PV Yield", "pv_total_w", POSITIVE, "pv_yield_wh"),
     EnergyChannel(
-        "home_consumption", "Home", "home_load_w", POSITIVE, "home_consumption_wh"
+        "pv_yield",
+        "PV Yield",
+        "pv_total_w",
+        POSITIVE,
+        "pv_yield_wh",
+        (DEVICE_VALIDITY,),
+    ),
+    # House load is derived from the inverter output and the grid reading, so
+    # it is only a measurement while both of those are. It is the load at the
+    # grid connection point: energy the EMS charges the battery with from AC is
+    # part of it, because the meter cannot tell the two apart.
+    EnergyChannel(
+        "home_consumption",
+        "Home",
+        "home_load_w",
+        POSITIVE,
+        "home_consumption_wh",
+        (GRID_VALIDITY, DEVICE_VALIDITY),
     ),
 )
 
@@ -86,50 +128,63 @@ def channel_power_w(channel, snapshot):
     return max(0.0, -value)
 
 
+def channel_is_measured(channel, snapshot):
+    """Whether this channel's source carried a real reading in this sample.
+
+    A snapshot without the flag counts as measured: older writers and test
+    stubs do not carry it, and treating their samples as unmeasured would drop
+    data that was fine.
+    """
+
+    return all(bool(snapshot.get(flag, True)) for flag in channel.validity)
+
+
+def measured_channel_ids(snapshot):
+    """Ids of the channels whose source carried a reading in this sample."""
+
+    return tuple(
+        channel.id
+        for channel in ENERGY_CHANNELS
+        if channel_is_measured(channel, snapshot)
+    )
+
+
 def channel_sample_wh(snapshot, elapsed_hours):
     """Integrate every channel over one sampling interval.
 
     A non-positive interval yields zero for every channel, which is how a
-    skipped or restarted sample is recorded.
+    skipped or restarted sample is recorded. So does a channel whose source
+    reading is not valid.
     """
 
     if not elapsed_hours or elapsed_hours <= 0:
         return {channel.id: 0.0 for channel in ENERGY_CHANNELS}
 
     return {
-        channel.id: channel_power_w(channel, snapshot) * elapsed_hours
+        channel.id: (
+            channel_power_w(channel, snapshot) * elapsed_hours
+            if channel_is_measured(channel, snapshot)
+            else 0.0
+        )
         for channel in ENERGY_CHANNELS
     }
 
 
-def _ratio(numerator, denominator):
+def self_sufficiency(home_consumption_wh, grid_import_wh):
+    """Share of house consumption that did not come from the grid.
+
+    ``None`` when there was no consumption to divide. The share is floored at
+    zero: two independently integrated sums can cross over a short window, and
+    a negative share would read as a defect rather than as measurement noise.
+    """
+
     try:
-        denominator = float(denominator)
-        numerator = float(numerator)
+        home = float(home_consumption_wh or 0)
+        grid = float(grid_import_wh or 0)
     except (TypeError, ValueError):
         return None
 
-    if denominator <= 0:
+    if home <= 0:
         return None
 
-    # Two independently integrated sums can cross over a short window; a
-    # negative share would read as a defect rather than as measurement noise.
-    return max(0.0, numerator / denominator)
-
-
-def self_sufficiency(home_consumption_wh, grid_import_wh):
-    """Share of house consumption that did not come from the grid."""
-
-    return _ratio(
-        _as_float(home_consumption_wh) - _as_float(grid_import_wh),
-        home_consumption_wh,
-    )
-
-
-def self_consumption(inverter_output_wh, grid_export_wh):
-    """Share of delivered AC energy the house used instead of exporting."""
-
-    return _ratio(
-        _as_float(inverter_output_wh) - _as_float(grid_export_wh),
-        inverter_output_wh,
-    )
+    return max(0.0, (home - grid) / home)

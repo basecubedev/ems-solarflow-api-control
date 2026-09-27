@@ -1700,11 +1700,11 @@ function energyCoverageFact(values, meta) {
   const states = Object.values(values?.coverage || {});
   if (!states.length) return "";
 
-  const since = (meta || [])
-    .map((channel) => channel?.since)
-    .filter(Boolean)
-    .sort()[0];
-  if (!since || states.every((coverage) => coverage === "none")) {
+  const since = energyChannelsSinceDate(meta);
+  // "not measured" is a statement about the whole card, so it needs every
+  // channel to be unmeasured -- not just every channel that is listed here,
+  // which holds the exceptions only.
+  if (!since || energyChannelsAllUnmeasured(values)) {
     return energyFact("Channels", "not measured", "history", "neutral");
   }
 
@@ -3645,11 +3645,16 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+// The latest start among the channels, not the earliest: a channel added later
+// than the others must not advertise the oldest one's date. Understating the
+// coverage of an older channel is safe; overstating a younger one is not.
+function energyChannelsSinceDate(meta) {
+  const dates = (meta || []).map((channel) => channel?.since).filter(Boolean).sort();
+  return dates.length ? dates[dates.length - 1] : null;
+}
+
 function energyChannelsSince(meta) {
-  const since = (meta || [])
-    .map((channel) => channel?.since)
-    .filter(Boolean)
-    .sort()[0];
+  const since = energyChannelsSinceDate(meta);
   return since ? formatEnergyDate(since) : "not measured";
 }
 
@@ -5281,6 +5286,146 @@ async function applyAnimationMode() {
   }
 }
 
+// Demo-mode energy payload. It stands in for the backend, so it carries the
+// same shape the store publishes -- including the unmeasured cases, which are
+// the ones a reader needs to see at least once.
+const DEMO_CHANNEL_SINCE = "2026-09-12";
+const DEMO_CHANNEL_UNTIL = "2026-09-26";
+const DEMO_CHANNEL_LABELS = {
+  grid_import: "Grid Import",
+  grid_export: "Grid Export",
+  battery_charge: "Charged",
+  battery_discharge: "Discharged",
+  pv_yield: "PV Yield",
+  home_consumption: "Home",
+};
+const DEMO_CHANNEL_WINDOW = {
+  grid_import: 28.9,
+  grid_export: 1.7,
+  battery_charge: 20.9,
+  battery_discharge: 17.6,
+  pv_yield: 48.6,
+  home_consumption: 70.2,
+};
+
+function demoChannels(values = {}) {
+  const channels = {};
+  Object.keys(DEMO_CHANNEL_LABELS).forEach((id) => {
+    const kwh = Number(values[id] || 0);
+    channels[id] = { wh: Math.round(kwh * 1000), kwh };
+  });
+  return channels;
+}
+
+function demoCoverage(state) {
+  const coverage = {};
+  Object.keys(DEMO_CHANNEL_LABELS).forEach((id) => {
+    coverage[id] = state;
+  });
+  return coverage;
+}
+
+function demoEnergyEntry(kwh, savings, options = {}) {
+  return {
+    inverter_output_kwh: kwh,
+    inverter_output_wh: Math.round(kwh * 1000),
+    savings_value: savings,
+    channels: demoChannels(options.channels),
+    coverage: options.coverage || {},
+    ratios: { self_sufficiency: options.selfSufficiency ?? null },
+    ...(options.extra || {}),
+  };
+}
+
+function demoEnergyStats() {
+  const partial = demoCoverage("partial");
+  return {
+    enabled: true,
+    currency: "EUR",
+    price_per_kwh: 0.35,
+    channel_meta: Object.entries(DEMO_CHANNEL_LABELS).map(([id, label]) => ({
+      id,
+      label,
+      unit: "Wh",
+      since: DEMO_CHANNEL_SINCE,
+      until: DEMO_CHANNEL_UNTIL,
+    })),
+    today: demoEnergyEntry(3.2, 1.12, {
+      channels: {
+        grid_import: 2.6,
+        grid_export: 0.1,
+        battery_charge: 2.1,
+        battery_discharge: 1.2,
+        pv_yield: 4.4,
+        home_consumption: 5.7,
+      },
+      selfSufficiency: 0.544,
+      extra: { peak_output_w: 742 },
+    }),
+    yesterday: demoEnergyEntry(4.2, 1.47, {
+      channels: {
+        grid_import: 2.1,
+        grid_export: 0.2,
+        battery_charge: 2.4,
+        battery_discharge: 1.4,
+        pv_yield: 5.6,
+        home_consumption: 6.1,
+      },
+      selfSufficiency: 0.656,
+      extra: { peak_output_w: 780 },
+    }),
+    last_7_days: demoEnergyEntry(18.4, 6.44, {
+      channels: {
+        grid_import: 14.8,
+        grid_export: 0.9,
+        battery_charge: 10.8,
+        battery_discharge: 9.1,
+        pv_yield: 25.1,
+        home_consumption: 32.3,
+      },
+      selfSufficiency: 0.542,
+    }),
+    last_4_weeks: demoEnergyEntry(72.1, 25.24, {
+      channels: DEMO_CHANNEL_WINDOW,
+      coverage: partial,
+    }),
+    last_12_months: demoEnergyEntry(520.0, 182.0, {
+      channels: DEMO_CHANNEL_WINDOW,
+      coverage: partial,
+    }),
+    best_day: demoEnergyEntry(8.4, 2.94, {
+      coverage: demoCoverage("none"),
+      extra: { date: "2026-06-14" },
+    }),
+    monthly_current_year: [
+      [1, "Jan", 22.4], [2, "Feb", 31.2], [3, "Mar", 43.8], [4, "Apr", 58.5],
+      [5, "May", 76.6], [6, "Jun", 84.2], [7, "Jul", 91.8], [8, "Aug", 88.4],
+      [9, "Sep", 66.9], [10, "Oct", 44.5], [11, "Nov", 18.6], [12, "Dec", 11.2],
+    ].map(([month, label, kwh]) => ({
+      month,
+      label,
+      ...demoEnergyEntry(kwh, Math.round(kwh * 0.35 * 100) / 100, {
+        channels: month === 9 ? DEMO_CHANNEL_WINDOW : undefined,
+        coverage: month === 9 ? partial : demoCoverage("none"),
+      }),
+    })),
+    yearly: [
+      { year: 2025, ...demoEnergyEntry(320.0, 112.0, { coverage: demoCoverage("none") }) },
+      {
+        year: 2026,
+        ...demoEnergyEntry(840.0, 294.0, {
+          channels: DEMO_CHANNEL_WINDOW,
+          coverage: partial,
+        }),
+      },
+    ],
+    lifetime: demoEnergyEntry(2070.0, 724.5, {
+      channels: DEMO_CHANNEL_WINDOW,
+      coverage: partial,
+    }),
+  };
+}
+
 function demoSnapshot() {
   const timestamp = new Date().toISOString();
   return {
@@ -5305,60 +5450,7 @@ function demoSnapshot() {
       pv_priority_balancing: { active: true, reason: "WR1 keeps more PV available for charging" },
       battery_balancing: { active: true, reason: "two devices share an 800 W system limit" },
     },
-    energy_stats: {
-      enabled: true,
-      currency: "EUR",
-      price_per_kwh: 0.35,
-      today: {
-        inverter_output_kwh: 3.2,
-        savings_value: 1.12,
-      },
-      yesterday: {
-        inverter_output_kwh: 4.2,
-        savings_value: 1.47,
-        peak_output_w: 780,
-      },
-      last_7_days: {
-        inverter_output_kwh: 18.4,
-        savings_value: 6.44,
-      },
-      last_4_weeks: {
-        inverter_output_kwh: 72.1,
-        savings_value: 25.24,
-      },
-      last_12_months: {
-        inverter_output_kwh: 520.0,
-        savings_value: 182.0,
-      },
-      best_day: {
-        date: "2026-06-14",
-        inverter_output_kwh: 8.4,
-        savings_value: 2.94,
-      },
-      monthly_current_year: [
-        { month: 1, label: "Jan", inverter_output_kwh: 22.4, savings_value: 7.84 },
-        { month: 2, label: "Feb", inverter_output_kwh: 31.2, savings_value: 10.92 },
-        { month: 3, label: "Mar", inverter_output_kwh: 43.8, savings_value: 15.33 },
-        { month: 4, label: "Apr", inverter_output_kwh: 58.5, savings_value: 20.48 },
-        { month: 5, label: "May", inverter_output_kwh: 76.6, savings_value: 26.81 },
-        { month: 6, label: "Jun", inverter_output_kwh: 84.2, savings_value: 29.47 },
-        { month: 7, label: "Jul", inverter_output_kwh: 91.8, savings_value: 32.13 },
-        { month: 8, label: "Aug", inverter_output_kwh: 88.4, savings_value: 30.94 },
-        { month: 9, label: "Sep", inverter_output_kwh: 66.9, savings_value: 23.42 },
-        { month: 10, label: "Oct", inverter_output_kwh: 44.5, savings_value: 15.58 },
-        { month: 11, label: "Nov", inverter_output_kwh: 18.6, savings_value: 6.51 },
-        { month: 12, label: "Dec", inverter_output_kwh: 11.2, savings_value: 3.92 },
-      ],
-      yearly: [
-        { year: 2025, inverter_output_kwh: 320.0, savings_value: 112.0 },
-        { year: 2026, inverter_output_kwh: 840.0, savings_value: 294.0 },
-        { year: 2027, inverter_output_kwh: 910.0, savings_value: 318.5 },
-      ],
-      lifetime: {
-        inverter_output_kwh: 2070.0,
-        savings_value: 724.5,
-      },
-    },
+    energy_stats: demoEnergyStats(),
     devices: {
       WR1: {
         online: true,
@@ -7154,6 +7246,7 @@ if (typeof module !== "undefined") {
     energyChannelValue,
     ENERGY_CHANNEL_PRESENTATION,
     ENERGY_PARTIAL_MARK,
+    demoEnergyStats,
     renderDeviceFlow,
     updateSnapshot,
     renderSnapshot,

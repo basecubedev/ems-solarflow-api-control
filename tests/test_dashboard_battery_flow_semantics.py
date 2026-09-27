@@ -1259,3 +1259,116 @@ def test_device_flow_mobile_layout_does_not_force_horizontal_scroll():
     assert "grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));" in styles
     assert ".control-device-decision-flow {\n  grid-template-columns: repeat(5, minmax(142px, 1fr));" in styles
     assert ".control-stage:not(:last-child)::after" in styles
+
+
+def _grid_controller(health):
+    return SimpleNamespace(
+        devices=[SimpleNamespace(name="WR1")],
+        runtime_state=None,
+        device_online={"WR1": True},
+        commanded_total_w=0,
+        filtered_load_w=0,
+        _dashboard_capabilities=[],
+        shelly=SimpleNamespace(health=health),
+    )
+
+
+def _snapshot_for(controller):
+    return build_dashboard_snapshot(
+        controller,
+        load_w=240,
+        states=[SimpleNamespace(solar=0, output=0, pack_out=0, pack_in=0, soc=50)],
+        targets=[0],
+        effective_targets=[0],
+        allocated_total_w=0,
+        effective_total_w=0,
+        enabled=True,
+        max_total_power=800,
+        min_output_limit=35,
+    )
+
+
+def test_grid_power_is_marked_valid_after_a_successful_read():
+    controller = _grid_controller(
+        SimpleNamespace(success_count=3, stale_used=False)
+    )
+
+    assert _snapshot_for(controller)["grid_power_valid"] is True
+
+
+def test_grid_power_is_marked_invalid_while_a_stale_value_is_used():
+    """An unreachable meter keeps publishing its last value, or its initial 0.
+
+    Reported as valid, the statistics would integrate it and claim no grid
+    import for an installation whose meter is simply down.
+    """
+
+    never_answered = _grid_controller(
+        SimpleNamespace(success_count=0, stale_used=False)
+    )
+    stale = _grid_controller(SimpleNamespace(success_count=5, stale_used=True))
+
+    assert _snapshot_for(never_answered)["grid_power_valid"] is False
+    assert _snapshot_for(stale)["grid_power_valid"] is False
+
+
+def test_grid_power_counts_as_valid_without_health_data():
+    """Simulation and replay clients have no health; their readings are real."""
+
+    controller = SimpleNamespace(
+        devices=[SimpleNamespace(name="WR1")],
+        runtime_state=None,
+        device_online={"WR1": True},
+        commanded_total_w=0,
+        filtered_load_w=0,
+        _dashboard_capabilities=[],
+    )
+
+    assert _snapshot_for(controller)["grid_power_valid"] is True
+
+
+def test_device_power_is_invalid_while_a_device_is_offline():
+    """An offline device keeps its last telemetry in the aggregates.
+
+    Integrating that as measured would let a device that dropped off the
+    network keep contributing PV and battery energy for as long as it is gone.
+    """
+
+    controller = SimpleNamespace(
+        devices=[SimpleNamespace(name="WR1"), SimpleNamespace(name="WR2")],
+        runtime_state=None,
+        device_online={"WR1": True, "WR2": False},
+        commanded_total_w=0,
+        filtered_load_w=0,
+        _dashboard_capabilities=[],
+    )
+    state = SimpleNamespace(solar=500, output=300, pack_out=0, pack_in=0, soc=50)
+
+    snapshot = build_dashboard_snapshot(
+        controller,
+        load_w=100,
+        states=[state, state],
+        targets=[300, 300],
+        effective_targets=[300, 300],
+        allocated_total_w=600,
+        effective_total_w=600,
+        enabled=True,
+        max_total_power=800,
+        min_output_limit=35,
+    )
+
+    assert snapshot["device_power_valid"] is False
+    assert snapshot["grid_power_valid"] is True
+
+
+def test_device_power_is_valid_while_every_device_reports():
+    controller = SimpleNamespace(
+        devices=[SimpleNamespace(name="WR1")],
+        runtime_state=None,
+        device_online={"WR1": True},
+        commanded_total_w=0,
+        filtered_load_w=0,
+        _dashboard_capabilities=[],
+    )
+
+    assert _snapshot_for(controller)["device_power_valid"] is True
