@@ -129,6 +129,13 @@ NEAR_ZERO_BAND_W = 30
 SOC_SPREAD_WARNING_PERCENT = 15
 SOC_SPREAD_ERROR_PERCENT = 30
 LOW_SOC_PROTECTION_MARGIN_PERCENT = 3
+# Past this a cached reading is no longer the value the control loop calculates
+# with, it is history, and the energy statistics would keep integrating a device
+# that has already gone quiet. Whichever of the two is more generous applies: the
+# allowance scales with the loop, and the floor keeps a one-second loop from
+# being nagged about an ordinary window.
+ENERGY_TELEMETRY_WINDOW_MAX_PLAUSIBLE_INTERVALS = 12
+ENERGY_TELEMETRY_WINDOW_MAX_PLAUSIBLE_SECONDS = 60
 
 
 def diagnose_add(checks, section, level, code, message, hint=None, docs=None, **details):
@@ -713,6 +720,22 @@ def diagnose_git_info(checks):
         diagnose_add(checks, "project", "ok", "git_clean", "Git working tree is clean")
 
 
+def diagnose_truthy(value, default=True):
+    """Read a config flag the way the runtime does.
+
+    ``diagnose_bool`` answers whether a value *is* a boolean, which is a
+    different question: used as a truth test it reads ``1`` as "not enabled".
+    """
+
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
 def diagnose_config_plausibility(checks, args, config_data):
     if not isinstance(config_data, dict):
         return
@@ -758,6 +781,119 @@ def diagnose_config_plausibility(checks, args, config_data):
         diagnose_add(checks, "config", "ok", "runtime_state_path_valid", "system.runtime_state_path resolves cleanly")
     else:
         diagnose_add(checks, "config", "error", "runtime_state_path_invalid", "system.runtime_state_path must be a non-empty clean path")
+
+    energy_savings = config_data.get("energy_savings", {})
+    dashboard_config = config_data.get("dashboard", {})
+    if not isinstance(energy_savings, dict):
+        diagnose_add(checks, "config", "error", "energy_savings_not_object", "energy_savings must be an object")
+    elif not isinstance(dashboard_config, dict):
+        diagnose_add(checks, "config", "error", "dashboard_not_object", "dashboard must be an object")
+    elif diagnose_truthy(energy_savings.get("enabled", True)):
+        write_interval = diagnose_float(dashboard_config.get("write_interval_seconds", 5))
+        max_sample_delta = diagnose_float(
+            energy_savings.get("max_sample_delta_seconds", 20)
+        )
+        # The controller can only write on a loop tick, so a 16 s write
+        # interval on a 5 s loop stores a sample every 20 s, not every 16.
+        loop_tick = diagnose_float(system.get("loop_interval"))
+        if write_interval is not None and loop_tick and loop_tick > 0:
+            # Zero or anything below one tick means "every loop", which is a
+            # tick apart, not nothing apart.
+            write_interval = max(
+                math.ceil(write_interval / loop_tick) * loop_tick,
+                loop_tick,
+            )
+        if write_interval is None or max_sample_delta is None:
+            diagnose_add(
+                checks,
+                "config",
+                "error",
+                "energy_sample_window_invalid",
+                "dashboard.write_interval_seconds and "
+                "energy_savings.max_sample_delta_seconds must be numeric",
+            )
+        elif write_interval >= max_sample_delta:
+            # Every interval between two stored samples is then at or beyond
+            # the window the statistics accept, so nothing is integrated and
+            # every energy figure stays at zero without saying why. Equality is
+            # included because loop jitter decides each sample at that point.
+            diagnose_add(
+                checks,
+                "config",
+                "warning",
+                "energy_sample_window_below_write_interval",
+                "energy_savings.max_sample_delta_seconds does not exceed the "
+                "effective dashboard write interval; little or no energy is recorded",
+                write_interval_seconds=write_interval,
+                max_sample_delta_seconds=max_sample_delta,
+            )
+        else:
+            diagnose_add(
+                checks,
+                "config",
+                "ok",
+                "energy_sample_window_valid",
+                "energy_savings.max_sample_delta_seconds covers the dashboard write interval",
+            )
+
+        # The same constant decides whether a device reading counts as measured
+        # at all, so its degenerate settings zero -- or inflate -- the statistics
+        # as quietly as the sample window does. Read it the way the controller
+        # does: unparsable falls back to the default, negative clamps to zero.
+        output_control = system.get("output_control")
+        output_control = output_control if isinstance(output_control, dict) else {}
+        telemetry_window = diagnose_float(
+            output_control.get("telemetry_max_age_seconds", 10)
+        )
+        telemetry_window = max(
+            0.0, 10.0 if telemetry_window is None else telemetry_window
+        )
+        plausible_window = max(
+            ENERGY_TELEMETRY_WINDOW_MAX_PLAUSIBLE_SECONDS,
+            (loop_tick or 0) * ENERGY_TELEMETRY_WINDOW_MAX_PLAUSIBLE_INTERVALS,
+        )
+        if telemetry_window <= 0:
+            diagnose_add(
+                checks,
+                "config",
+                "warning",
+                "energy_telemetry_window_disabled",
+                "system.output_control.telemetry_max_age_seconds is not positive; "
+                "every device reading counts as stale and no energy is recorded",
+                telemetry_max_age_seconds=telemetry_window,
+            )
+        elif loop_tick and loop_tick > 0 and telemetry_window < loop_tick:
+            diagnose_add(
+                checks,
+                "config",
+                "warning",
+                "energy_telemetry_window_below_loop_interval",
+                "system.output_control.telemetry_max_age_seconds is shorter than one "
+                "loop interval; a single missed read already interrupts the statistics",
+                telemetry_max_age_seconds=telemetry_window,
+                loop_interval=loop_tick,
+            )
+        elif telemetry_window > plausible_window:
+            diagnose_add(
+                checks,
+                "config",
+                "warning",
+                "energy_telemetry_window_far_above_loop_interval",
+                "system.output_control.telemetry_max_age_seconds is far above the loop "
+                "interval; a silent device keeps contributing its last reading for that "
+                "long, so the statistics count energy it did not deliver",
+                telemetry_max_age_seconds=telemetry_window,
+                plausible_maximum_seconds=plausible_window,
+                loop_interval=loop_tick,
+            )
+        else:
+            diagnose_add(
+                checks,
+                "config",
+                "ok",
+                "energy_telemetry_window_valid",
+                "system.output_control.telemetry_max_age_seconds covers the loop interval",
+            )
 
     assist = config_data.get("battery_full_charge_assist", {})
     if not isinstance(assist, dict):
@@ -1604,6 +1740,8 @@ def diagnose_database_deep(checks, database_path):
                 "rule_state",
                 "daily_energy_stats",
                 "energy_integration_state",
+                "energy_channel_coverage",
+                "energy_channel_gap",
             }
             for table in sorted(expected):
                 level = "ok" if table in tables else "warning"

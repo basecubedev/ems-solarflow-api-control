@@ -1,0 +1,487 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Contracts for the energy board's detail switch and channel rows.
+
+The board renders channel labels from the payload's ``channel_meta``; the only
+thing the browser owns is the icon and tone per channel. That pairing is walked
+here, because two lists that must agree and are never compared are how this
+project has shipped six defects of the same shape.
+"""
+import json
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from dashboard.sqlite_store import RATIO_CHANNELS
+from ems.energy_channels import ENERGY_CHANNELS
+
+pytestmark = [
+    pytest.mark.contract,
+]
+
+
+ROOT = Path(__file__).resolve().parents[1]
+APP_JS = ROOT / "dashboard" / "static" / "app.js"
+INDEX_HTML = ROOT / "dashboard" / "static" / "index.html"
+
+
+def run_node(script):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the executable energy frontend test")
+    result = subprocess.run(
+        [node, "-e", script],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def render_period(detail, values, meta=None):
+    """Render one period card at the given detail level and return its HTML."""
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+app.state.energyDetail = {json.dumps(detail)};
+const html = app.energyPeriodStage(
+  "Today",
+  {json.dumps(values)},
+  "EUR",
+  {{ kind: "today", subtitle: "Current day output", meta: {json.dumps(meta or [])} }},
+);
+console.log(JSON.stringify({{ html }}));
+"""
+    return run_node(script)["html"]
+
+
+def payload(channels=None, coverage=None, ratios=None, **overrides):
+    values = {
+        "inverter_output_wh": 4000.0,
+        "inverter_output_kwh": 4.0,
+        "savings_value": 1.4,
+        "channels": {
+            channel.id: {"wh": 0.0, "kwh": 0.0} for channel in ENERGY_CHANNELS
+        },
+        "coverage": coverage or {},
+        "ratios": ratios or {"self_sufficiency": None},
+    }
+    if channels:
+        for channel_id, kwh in channels.items():
+            values["channels"][channel_id] = {"wh": kwh * 1000, "kwh": kwh}
+    values.update(overrides)
+    return values
+
+
+def meta_for(*channel_ids, since="2026-09-12", until="2026-09-26"):
+    ids = channel_ids or [channel.id for channel in ENERGY_CHANNELS]
+    labels = {channel.id: channel.label for channel in ENERGY_CHANNELS}
+    return [
+        {
+            "id": channel_id,
+            "label": labels[channel_id],
+            "unit": "Wh",
+            "since": since,
+            "until": until,
+        }
+        for channel_id in ids
+    ]
+
+
+def test_detail_switch_is_in_the_energy_heading():
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'data-energy-detail="basic"' in html
+    assert 'data-energy-detail="expert"' in html
+    # Its own hook, so the Analytics view's global button query cannot reach
+    # it -- that query also wires a click handler, which fired setAnalyticsTab
+    # with an undefined tab on every Basic/Expert click.
+    assert (
+        'class="energy-detail-tabs" role="tablist" aria-label="Energy detail level"'
+        in html
+    )
+    assert "analytics-tabs" not in html.split('aria-label="Energy detail level"')[0][-200:]
+    assert 'id="energyStatsSubtitle"' in html
+
+
+def test_channel_presentation_covers_every_backend_channel():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify({{ ids: Object.keys(app.ENERGY_CHANNEL_PRESENTATION) }}));
+"""
+    ids = run_node(script)["ids"]
+
+    assert ids == [channel.id for channel in ENERGY_CHANNELS]
+
+
+def test_basic_card_keeps_the_board_as_it_was():
+    html = render_period("basic", payload(), meta_for())
+
+    assert "Energy" in html
+    assert "Savings" in html
+    for channel in ENERGY_CHANNELS:
+        assert channel.label not in html
+
+
+def test_expert_card_lists_every_channel_from_the_payload():
+    html = render_period(
+        "expert",
+        payload(channels={"grid_import": 2.5, "battery_charge": 1.8}),
+        meta_for(),
+    )
+
+    for channel in ENERGY_CHANNELS:
+        assert channel.label in html
+    assert "2.5 kWh" in html
+    assert "1.8 kWh" in html
+
+
+def test_a_period_nobody_measured_says_so_once():
+    html = render_period(
+        "expert",
+        payload(coverage={channel.id: "none" for channel in ENERGY_CHANNELS}),
+        meta_for(),
+    )
+
+    assert "0.0 kWh" not in html
+    assert "not measured" in html
+    # Six identical blanks read as a broken card, so the channel rows collapse
+    # into the single statement above.
+    for channel in ENERGY_CHANNELS:
+        assert channel.label not in html
+
+
+def test_a_partly_measured_period_still_lists_every_channel():
+    html = render_period(
+        "expert",
+        payload(
+            channels={"grid_import": 28.9},
+            coverage={channel.id: "partial" for channel in ENERGY_CHANNELS},
+        ),
+        meta_for(),
+    )
+
+    for channel in ENERGY_CHANNELS:
+        assert channel.label in html
+    assert "0 Wh \u25e6" in html
+
+
+def test_a_partly_measured_channel_carries_the_mark():
+    html = render_period(
+        "expert",
+        payload(
+            channels={"grid_import": 28.9},
+            coverage={"grid_import": "partial"},
+        ),
+        meta_for(),
+    )
+
+    assert "28.9 kWh ◦" in html
+    assert "Measured since" in html
+    assert "2026-09-12" in html
+
+
+def test_self_sufficiency_is_absent_in_basic_and_explicit_in_expert():
+    unknown = payload()
+    known = payload(ratios={"self_sufficiency": 0.54})
+
+    assert "Self-Sufficiency" not in render_period("basic", unknown, meta_for())
+    assert "Self-Sufficiency" in render_period("expert", unknown, meta_for())
+    assert "54%" in render_period("basic", known, meta_for())
+
+
+def test_peak_output_is_an_expert_row_only():
+    values = payload(peak_output_w=742.0)
+
+    assert "Peak Output" not in render_period("basic", values, meta_for())
+    assert "742 W" in render_period("expert", values, meta_for())
+
+
+def test_detail_switch_stores_and_restores_the_choice():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const stored = {{}};
+const buttons = [
+  {{ dataset: {{ energyDetail: "basic" }}, classList: {{ toggle() {{}} }}, setAttribute() {{}} }},
+  {{ dataset: {{ energyDetail: "expert" }}, classList: {{ toggle() {{}} }}, setAttribute() {{}} }},
+];
+const subtitle = {{ textContent: "" }};
+global.window = {{ localStorage: {{
+  getItem: (key) => (key in stored ? stored[key] : null),
+  setItem: (key, value) => {{ stored[key] = value; }},
+}} }};
+global.document = {{
+  querySelectorAll: () => buttons,
+  getElementById: (id) => (id === "energyStatsSubtitle" ? subtitle : null),
+}};
+
+app.setEnergyDetail("expert");
+const afterExpert = {{ detail: app.state.energyDetail, stored: stored["dashboard.energyDetail"] }};
+app.setEnergyDetail("nonsense");
+const afterNonsense = {{ detail: app.state.energyDetail }};
+console.log(JSON.stringify({{ afterExpert, afterNonsense }}));
+"""
+    out = run_node(script)
+
+    assert out["afterExpert"]["detail"] == "expert"
+    assert out["afterExpert"]["stored"] == "expert"
+    # An unknown level falls back instead of leaving the board in limbo.
+    assert out["afterNonsense"]["detail"] == "basic"
+
+
+def test_demo_mode_carries_the_same_channels_as_the_backend():
+    """Demo mode stands in for the store, so it has to show what the store shows.
+
+    The preview server's payload and this one are two fixtures of the same
+    contract; the first version of this feature extended only one of them.
+    """
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const stats = app.demoEnergyStats();
+console.log(JSON.stringify({{
+  metaIds: stats.channel_meta.map((entry) => entry.id),
+  todayIds: Object.keys(stats.today.channels),
+  todayGridImport: stats.today.channels.grid_import.kwh,
+  todayCoverage: stats.today.coverage,
+  bestDayCoverage: stats.best_day.coverage,
+  rollingCoverage: stats.last_4_weeks.coverage,
+  since: stats.channel_meta[0].since,
+}}));
+"""
+    out = run_node(script)
+    backend_ids = [channel.id for channel in ENERGY_CHANNELS]
+
+    assert out["metaIds"] == backend_ids
+    assert out["todayIds"] == backend_ids
+    assert out["todayGridImport"] > 0
+    # A fully measured period, one measured in part, and one not at all.
+    assert out["todayCoverage"] == {}
+    assert set(out["rollingCoverage"].values()) == {"partial"}
+    assert set(out["bestDayCoverage"].values()) == {"none"}
+    assert out["since"] == "2026-09-12"
+
+
+def test_the_detail_switch_shares_the_tab_styling_without_the_tab_hook():
+    """One rule, two hooks: the look is shared, the query surface is not."""
+
+    css = (ROOT / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    assert ".analytics-tabs,\n.energy-detail-tabs {" in css
+    assert ".analytics-tabs button,\n.energy-detail-tabs button {" in css
+    assert ".analytics-tabs button.active,\n.energy-detail-tabs button.active {" in css
+
+
+def test_a_marked_period_marks_its_ratio_too():
+    """The most quotable number needs the mark most."""
+
+    marked = render_period(
+        "expert",
+        payload(
+            channels={"grid_import": 28.9},
+            coverage={"grid_import": "partial"},
+            ratios={"self_sufficiency": 0.54},
+        ),
+        meta_for(),
+    )
+    clean = render_period(
+        "basic",
+        payload(ratios={"self_sufficiency": 0.54}),
+        meta_for(),
+    )
+
+    assert "54% ◦" in marked
+    assert "54%" in clean
+    assert "◦" not in clean
+
+
+def test_the_legend_follows_the_mark_not_the_detail_level():
+    """Basic shows the mark on the ratio, so it needs the sentence too."""
+
+    def subtitle_for(stats):
+        script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const subtitle = {{ textContent: "" }};
+global.document = {{ getElementById: () => subtitle }};
+app.state.energyDetail = "basic";
+app.renderEnergySubtitle({json.dumps(stats)});
+console.log(JSON.stringify({{ subtitle: subtitle.textContent }}));
+"""
+        return run_node(script)["subtitle"]
+
+    clean = {"today": payload(channels={"grid_import": 2.5})}
+    marked = {"today": payload(coverage={"grid_import": "partial"})}
+
+    assert "\u25e6" in subtitle_for(marked)
+    assert subtitle_for(clean) == "Based on measured inverter output."
+
+
+def test_the_ratio_channels_match_the_backend():
+    """Two lists that must agree: the mark on the percentage follows them."""
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify({{ ids: app.ENERGY_RATIO_CHANNELS }}));
+"""
+    assert run_node(script)["ids"] == list(RATIO_CHANNELS)
+
+
+def test_a_figure_below_a_kilowatt_hour_is_shown_in_watt_hours():
+    """One decimal of a kWh is a 100 Wh step, which reads as frozen.
+
+    On a live installation the channels start measuring the moment the build
+    lands, so a real 78 Wh of PV showed as "0.1 kWh" and a growing figure
+    looked like no figure at all. Under a kilowatt-hour the unit is the watt
+    hour; above it, nothing changes.
+    """
+
+    html = render_period(
+        "expert",
+        payload(
+            channels={"pv_yield": 0.077968, "grid_import": 0.000642},
+            inverter_output_kwh=0.412,
+            inverter_output_wh=412.0,
+        ),
+        meta_for(),
+    )
+
+    assert "78 Wh" in html
+    assert "1 Wh" in html
+    assert "412 Wh" in html
+    assert "0.1 kWh" not in html
+    assert "0.0 kWh" not in html
+
+
+def test_a_figure_above_a_kilowatt_hour_keeps_its_kilowatt_hours():
+    html = render_period(
+        "expert",
+        payload(
+            channels={"pv_yield": 48.6},
+            inverter_output_kwh=1032.17,
+            inverter_output_wh=1032170.0,
+        ),
+        meta_for(),
+    )
+
+    assert "48.6 kWh" in html
+    assert "1,032 kWh" in html
+
+
+def test_one_rule_formats_an_energy_amount_everywhere():
+    """The Energy tab and the Analytics KPIs show the same quantities.
+
+    Grid import, home consumption and the battery directions appear on both, so
+    two rounding rules for one question would let the same figure read as
+    "2070.0 kWh" on one tab and "2,070 kWh" on the other.
+    """
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const cases = [0.642, 78, 999, 1000, 1500, 520000, 2070000];
+console.log(JSON.stringify({{
+  label: cases.map((wh) => app.energyLabel(wh)),
+  amount: cases.map((wh) => app.formatEnergyAmount(wh / 1000)),
+}}));
+"""
+    result = run_node(script)
+
+    assert result["label"] == result["amount"]
+    assert result["amount"] == [
+        "1 Wh",
+        "78 Wh",
+        "999 Wh",
+        "1.0 kWh",
+        "1.5 kWh",
+        "520.0 kWh",
+        "2,070 kWh",
+    ]
+
+
+def test_an_unknown_energy_amount_is_not_a_zero():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify({{
+  none: app.energyLabel(null),
+  nan: app.formatEnergyAmount(Number.NaN),
+  zero: app.formatEnergyAmount(0),
+}}));
+"""
+    result = run_node(script)
+
+    assert result["none"] == "--"
+    assert result["nan"] == "--"
+    assert result["zero"] == "0 Wh"
+
+
+def test_the_unit_changes_where_the_rounded_figure_does():
+    """999.5 Wh rounds to a thousand, so it is already a kilowatt-hour.
+
+    Choosing the unit before rounding put a "1,000 Wh" rung between "999 Wh"
+    and "1.0 kWh".
+    """
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify(
+  [0.9989, 0.9995, 0.9999, 1].map((kwh) => app.formatEnergyAmount(kwh)),
+));
+"""
+
+    assert run_node(script) == ["999 Wh", "1.0 kWh", "1.0 kWh", "1.0 kWh"]
+
+
+def test_one_rule_formats_a_power_reading_everywhere():
+    """``watts`` and ``powerLabel`` answered the same question twice."""
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const cases = [0, 500, 999.6, 1000, 1599, 12000];
+console.log(JSON.stringify({{
+  watts: cases.map((w) => app.watts(w)),
+  label: cases.map((w) => app.powerLabel(w)),
+  none: app.powerLabel(null),
+}}));
+"""
+    result = run_node(script)
+
+    assert result["watts"] == result["label"]
+    assert result["watts"] == ["0 W", "500 W", "1.00 kW", "1.00 kW", "1.60 kW", "12.00 kW"]
+    assert result["none"] == "--"
+
+
+def test_an_unknown_reading_is_never_shown_as_a_zero_or_as_nan():
+    """A claimed zero is worse than an admitted gap.
+
+    ``powerLabel`` promises "--" for a missing reading, and delegating to
+    ``watts`` quietly turned NaN into "0 W" -- the same trap as a self
+    sufficiency of "0%" for an unknown ratio. Text that cannot be a number must
+    not reach a tile as "NaN W" either.
+    """
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify({{
+  label_nan: app.powerLabel(Number.NaN),
+  label_text: app.powerLabel("x"),
+  label_null: app.powerLabel(null),
+  label_zero: app.powerLabel(0),
+  watts_text: app.watts("x"),
+  watts_missing: app.watts(undefined),
+  negative_zero: app.formatEnergyAmount(-0.0004),
+}}));
+"""
+    result = run_node(script)
+
+    assert result["label_nan"] == "--"
+    assert result["label_text"] == "--"
+    assert result["label_null"] == "--"
+    assert result["label_zero"] == "0 W"
+    # The tiles keep their own contract: a field that is not there reads as zero
+    # power, because the cockpit shows a number in every tile. It may not read
+    # as "NaN W".
+    assert result["watts_text"] == "0 W"
+    assert result["watts_missing"] == "0 W"
+    assert result["negative_zero"] == "0 Wh"

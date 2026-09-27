@@ -34,6 +34,9 @@ from serve_dashboard_preview import (  # noqa: E402
 )
 
 DESKTOP = "1440,2600"
+# The expert energy board carries six more rows per card and outgrows the
+# standard window; a cut-off frame would document a board that ends mid-card.
+DESKTOP_TALL = "1440,3800"
 NARROW = "390,1800"
 
 # screen id -> (flow view, scenario, output PNG basename, min trimmed height,
@@ -65,7 +68,16 @@ SCREENS = {
         700,
         DESKTOP,
     ),
-    "energy": ("energy", "normal", "dashboard-energy.png", 700, DESKTOP),
+    "energy": ("energy?detail=basic", "normal", "dashboard-energy.png", 700, DESKTOP),
+    # The basic/expert choice lives in localStorage, so the preview server
+    # seeds it rather than the payload carrying it.
+    "energy-expert": (
+        "energy?detail=expert",
+        "normal",
+        "dashboard-energy-expert.png",
+        900,
+        DESKTOP_TALL,
+    ),
     "analytics": ("analytics", "normal", "dashboard-analytics.png", 700, DESKTOP),
     "control": ("control", "write-mode", "dashboard-control.png", 1400, DESKTOP),
     "control-readonly": (

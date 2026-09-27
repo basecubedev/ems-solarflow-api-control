@@ -106,6 +106,19 @@ What the two charts do with a zoom is the difference between them:
 The Energy tab shows historical inverter output totals and savings estimates
 from the local SQLite aggregates.
 
+A **Basic / Expert** switch in the panel heading decides how many rows each card
+carries; it is a per-browser display choice (`dashboard.energyDetail` in
+`localStorage`), not configuration, and it changes nothing on the server.
+
+- **Basic** is the board as it was, plus self-sufficiency wherever the period is
+  fully measured.
+- **Expert** adds grid import/export, battery charge/discharge, PV yield and
+  house consumption to the same cards — periods, months, years and the lifetime
+  total alike — together with peak output and the date the channels started.
+
+A value whose period was only partly measured carries a `◦`; a period the
+channels never covered says "not measured" instead of listing zeros.
+
 ![Energy statistics demo screenshot](assets/preview-energy.jpg)
 
 ## Diagnose View
@@ -262,7 +275,16 @@ writes every EMS loop (see the InfluxDB ingestion section below).
 
 Daily energy statistics are stored in `daily_energy_stats` in the same database.
 They are persistent daily aggregates and are not removed by the short-term
-snapshot/telemetry cleanup.
+snapshot/telemetry cleanup. `energy_channel_coverage` records the first and
+last day each channel was measured, so a period from before a channel existed
+reads as unknown rather than as zero.
+
+The stored snapshot rows do **not** carry `energy_stats`: the rollup is derived
+from the daily table and attached by `/api/live`, `/api/events` and
+`/api/energy-stats` instead, which keeps a 2 KB aggregate out of each row
+written per dashboard write interval. The legacy `/api/history` list returns the
+stored rows as they are, so its items no longer carry the field; read it from
+one of the three endpoints above.
 
 Energy statistics integrate measured inverter AC output over real elapsed time.
 Intervals above `energy_savings.max_sample_delta_seconds` are skipped and the
@@ -368,6 +390,7 @@ The live snapshot includes `energy_stats` with:
 energy_stats.enabled
 energy_stats.currency
 energy_stats.price_per_kwh
+energy_stats.channel_meta
 energy_stats.today
 energy_stats.yesterday
 energy_stats.last_7_days
@@ -383,6 +406,112 @@ energy_stats.lifetime.since_date
 `lifetime.since_date` is the first date in `daily_energy_stats` with
 `sample_count > 0`. It is day-accurate and uses the stored local statistics
 date, not the current runtime timestamp.
+
+### Energy channels
+
+Every period, month and year entry carries the measured channels beside the
+inverter output:
+
+```text
+<entry>.channels.<channel>.wh
+<entry>.channels.<channel>.kwh
+<entry>.coverage.<channel>     only when it is not "full"
+<entry>.ratios.self_sufficiency
+```
+
+The channels are `grid_import`, `grid_export`, `battery_charge`,
+`battery_discharge`, `pv_yield` and `home_consumption`. They are the two
+directions of the snapshot's signed grid and battery power plus PV and house
+load; `ems/energy_channels.py` owns that split and is the only place that
+states the sign convention.
+
+`home_consumption` is the load at the grid connection point (`inverter output +
+grid import`), so energy the EMS charges the battery with from AC — winter
+mode, full-charge assist, an `ac_input` device — is part of it: the grid meter
+cannot tell that apart from a household load.
+
+Whether a sample may be integrated is decided for the sample as a whole:
+`grid_power_valid` and `device_power_valid` both have to hold, or the sample
+counts for no channel and writes no daily row at all. `device_power_valid` is
+false once an **enabled** device's telemetry is older than
+`system.output_control.telemetry_max_age_seconds` — the window the control loop
+itself keeps *calculating* inside, so a single failed read is not a hole — or when
+that device has never answered at all. (The loop stops *writing* to a silent
+device after a single failed read; that is a different question, because a command
+is not a measurement.) A device disabled in the runtime state
+does not hold the statistics — and pays for that exemption by dropping out of
+the aggregate totals while its telemetry is stale, so a unit switched off for the
+season cannot have its last reading integrated until the EMS restarts. An
+**enabled** device that went quiet stays in the totals instead, because its whole
+sample is dropped anyway and the Overview should keep showing what the control
+loop still calculates with. A telemetry-only MQTT device is judged by its own
+`stale_after_seconds`. A per-channel gate would let the two sides of the ratio
+be measured over different samples — house load rests on the meter *and* the
+devices, grid import on the meter alone — which turned a 50 % day into 25 %.
+The price is that a valid meter reading taken while a device was away is
+dropped with the rest of its sample; that keeps every channel on one basis and
+makes the hole visible in all of them.
+
+`energy_savings.max_sample_delta_seconds` has to **exceed**
+`dashboard.write_interval_seconds`, or the interval between two stored samples
+reaches the window the statistics accept and little or nothing is integrated —
+at equality, loop jitter decides each sample. `emsctl diagnose` reports that
+pair as `energy_sample_window_below_write_interval`.
+
+`system.output_control.telemetry_max_age_seconds` is the second setting that can
+silence the statistics, because it decides whether a device reading counts as
+measured. `emsctl diagnose` reports `energy_telemetry_window_disabled` when it is
+not positive (the control loop reads that as "always stale", so nothing is ever
+integrated) and `energy_telemetry_window_below_loop_interval` when it is shorter
+than one loop interval, where a single missed read already ages out before the
+next one arrives, and `energy_telemetry_window_far_above_loop_interval` when it is
+far above the loop interval (12 intervals, or 60 seconds, whichever is more
+generous), where the opposite happens: a device that has gone quiet keeps
+contributing its last reading for that long, so the statistics count energy it
+did not deliver.
+
+
+`coverage` reports only the channels that did **not** measure the whole entry:
+a channel missing from the map measured all of it. The states are `partial`
+(the channel started or stopped inside the range, or a day inside it has a
+hole) and `none` (the range lies entirely outside what the channel measured).
+
+A day is recorded as holed in `energy_channel_gap` when a sample could not be
+read — an unreachable grid meter, a device whose telemetry aged out — and when an
+interval was skipped because too much time had passed: a restart or an outage
+marks the day the samples stopped and the day they came back. Whole days in
+between carry no row at all, and a range that contains one is incomplete by its
+day count.
+
+The very first sample of all is the **start** of the measurement rather than a
+hole in it, even though the channel began somewhere inside that day. Marking it
+would leave every range that contains the start — the lifetime, the first
+month, the first calendar year — incomplete for good, and those are the ranges
+whose ratio a reader keeps. The price is one partly measured day inside them;
+`channel_meta[].since` and the board's `Measured since` row say when the
+measuring began.
+
+Both `coverage` and `lifetime.since_date` are built from the sample timestamps,
+so a system whose clock was wrong before it reached NTP can backdate them by
+the length of that error.
+
+`self_sufficiency` is the share of house consumption that did not come from the
+grid. It is derived at read time from `home_consumption` and `grid_import`, and
+is `null` unless those two were being measured across the whole entry — from a
+first day at or before its start to a last day at or after its end.
+
+Time inside the entry that nobody measured — a hole in a day, a day the EMS
+never ran — marks the figures instead of hiding the number. A sample is
+integrated for every channel or for none, so both sides of the division lose
+exactly the same samples, and what is left is the ratio of the measured part.
+The price is that after an outage the figure describes the part of the period
+that was measured, and carries the mark; the alternative is that no
+installation ever reads a ratio for a month, a year or its lifetime, because
+every one of them restarts eventually.
+
+`channel_meta` lists each channel once with `id`, `label`, `unit` and the
+`since` / `until` dates it has been measured, so a client renders the channels
+from the payload instead of keeping its own copy of the list.
 
 Energy statistics only:
 

@@ -48,6 +48,9 @@ const state = {
     kpiCache: { dataKey: null, values: {} },
   },
   flowView: "aggregated",
+  // Presentation only: how many rows an energy card carries. Basic is the
+  // board as it was, plus the one ratio the new channels produce.
+  energyDetail: "basic",
   demoMode: isDemoMode(),
   liveTransport: "sse",
   deviceSocValues: new Map(),
@@ -155,6 +158,29 @@ const ANALYTICS_KPIS = {
   role: { label: () => "Runtime Role", tone: "output", live: true, compute: (_d, s) => runtimeRoleLabel(s) },
 };
 
+// Icon and tone per energy channel. The labels, ids and coverage all come
+// from the payload's channel_meta; only the presentation lives here, and
+// tests/test_dashboard_energy_frontend.py walks both lists so they cannot
+// drift apart.
+const ENERGY_CHANNEL_PRESENTATION = {
+  grid_import: { icon: "grid", tone: "grid" },
+  grid_export: { icon: "grid", tone: "grid" },
+  battery_charge: { icon: "charge", tone: "battery" },
+  battery_discharge: { icon: "battery", tone: "battery" },
+  pv_yield: { icon: "solar", tone: "solar" },
+  home_consumption: { icon: "home", tone: "output" },
+};
+
+const ENERGY_DETAIL_LEVELS = ["basic", "expert"];
+
+// The two channels the backend divides for self-sufficiency. The mark on the
+// percentage follows their coverage, not the board's: a channel added later
+// must not mark a figure that does not read it.
+const ENERGY_RATIO_CHANNELS = ["home_consumption", "grid_import"];
+
+// Marks a value whose period was only partly measured.
+const ENERGY_PARTIAL_MARK = "\u25e6";
+
 const FLOW_ACTIVATE_THRESHOLD_W = 8;
 const FLOW_DEACTIVATE_THRESHOLD_W = 3;
 const FLOW_THRESHOLD_W = FLOW_ACTIVATE_THRESHOLD_W;
@@ -234,11 +260,16 @@ function $(id) {
 }
 
 function watts(value) {
-  const number = Number(value || 0);
-  if (Math.abs(number) >= 1000) {
+  // The unit follows the rounded figure, so "1000 W" is never a rung between
+  // "999 W" and "1.00 kW". A tile always shows a number, so a missing field
+  // reads as zero power -- but never as "NaN W".
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0 W";
+  const rounded = Math.round(number);
+  if (Math.abs(rounded) >= 1000) {
     return `${(number / 1000).toFixed(2)} kW`;
   }
-  return `${Math.round(number)} W`;
+  return `${rounded} W`;
 }
 
 function signedWatts(value) {
@@ -1492,10 +1523,15 @@ function renderEnergyStats(stats) {
   }
 
   const currency = stats.currency || "EUR";
+  const meta = Array.isArray(stats.channel_meta) ? stats.channel_meta : [];
+  renderEnergySubtitle(stats);
   const monthly = normalizeMonthlyEnergy(stats.monthly_current_year);
   const yearly = normalizeYearlyEnergy(stats.yearly);
   const lifetime = stats.lifetime || {};
-  const hasCollectedStats = Boolean(lifetime.since_date) || [
+  const hasChannelEnergy = [stats.today, stats.yesterday, lifetime].some((entry) =>
+    Object.values(entry?.channels || {}).some((channel) => Number(channel?.wh) > 0),
+  );
+  const hasCollectedStats = Boolean(lifetime.since_date) || hasChannelEnergy || [
     stats.today,
     stats.yesterday,
     stats.last_7_days,
@@ -1516,28 +1552,34 @@ function renderEnergyStats(stats) {
     energyPeriodStage("Today", stats.today, currency, {
       kind: "today",
       subtitle: "Current day output",
+      meta,
     }),
     energyPeriodStage("Yesterday", stats.yesterday, currency, {
       kind: "yesterday",
       subtitle: "Previous day output",
+      meta,
     }),
     energyPeriodStage("Last 7 Days", stats.last_7_days, currency, {
       kind: "week",
       subtitle: "Rolling week total",
+      meta,
     }),
     energyPeriodStage("Last 4 Weeks", stats.last_4_weeks, currency, {
       kind: "month",
       subtitle: "Rolling 28-day output",
+      meta,
     }),
     energyPeriodStage("Last 12 Months", stats.last_12_months, currency, {
       kind: "year",
       subtitle: "Rolling annual total",
+      meta,
     }),
     energyPeriodStage("Best Day", stats.best_day, currency, {
       kind: "best",
       subtitle: "Highest measured day",
       detailLabel: "Date",
       detailValue: stats.best_day?.date ? formatEnergyDate(stats.best_day.date) : null,
+      meta,
     }),
   ].join("");
 
@@ -1546,19 +1588,19 @@ function renderEnergyStats(stats) {
       <section class="energy-stage-row energy-kpi-row" aria-label="Energy period overview">
         <div class="energy-period-pipeline energy-kpi-grid">${periods}</div>
       </section>
-      ${energyContextRail(stats, monthly, yearly, lifetime, currency)}
+      ${energyContextRail(stats, monthly, yearly, lifetime, currency, meta)}
       ${energyReportSection("Monthly Summary", "Current calendar year delivered output", `
       <div class="energy-month-grid">
-        ${monthly.map((month) => energyMonthCard(month, currency)).join("")}
+        ${monthly.map((month) => energyMonthCard(month, currency, meta)).join("")}
       </div>
       `)}
       ${energyReportSection("Yearly Summary", "Calendar-year totals from daily aggregates", `
       <div class="energy-year-grid">
-        ${yearly.map((year, index) => energyYearCard(year, currency, { latest: index === yearly.length - 1 })).join("")}
+        ${yearly.map((year, index) => energyYearCard(year, currency, meta, { latest: index === yearly.length - 1 })).join("")}
       </div>
       `)}
       <section class="energy-report-section energy-lifetime-section">
-        ${energyLifetimeCard(lifetime, currency)}
+        ${energyLifetimeCard(lifetime, currency, meta)}
       </section>
     </div>
   `);
@@ -1584,13 +1626,136 @@ function energyPeriodStage(label, values, currency, options = {}) {
       <div class="energy-stage-values">
         ${energyFact("Energy", formatEnergyKwh(values), "inverter", "output")}
         ${energyFact("Savings", formatSavings(values, currency), "charge", "savings")}
+        ${energySufficiencyFact(values)}
+        ${energyChannelFacts(values, options.meta)}
+        ${energyPeakFact(values)}
+        ${energyCoverageFact(values, options.meta)}
         ${detail}
       </div>
     </article>
   `;
 }
 
-function energyMonthCard(month, currency) {
+// The legend follows the mark rather than the detail level: Basic shows the
+// mark on the ratio, so it needs the sentence just as much.
+function renderEnergySubtitle(stats) {
+  const subtitle = $("energyStatsSubtitle");
+  if (!subtitle) return;
+
+  const entries = [
+    stats?.today,
+    stats?.yesterday,
+    stats?.last_7_days,
+    stats?.last_4_weeks,
+    stats?.last_12_months,
+    stats?.best_day,
+    stats?.lifetime,
+    ...(Array.isArray(stats?.monthly_current_year) ? stats.monthly_current_year : []),
+    ...(Array.isArray(stats?.yearly) ? stats.yearly : []),
+  ];
+  const anyPartial = entries.some((entry) =>
+    Object.values(entry?.coverage || {}).some((state) => state === "partial"),
+  );
+
+  subtitle.textContent = anyPartial
+    ? `Based on measured inverter output. ${ENERGY_PARTIAL_MARK} marks a partly measured period.`
+    : "Based on measured inverter output.";
+}
+
+function energyDetailIsExpert() {
+  return state.energyDetail === "expert";
+}
+
+function energyChannelsAllUnmeasured(values) {
+  const states = Object.values(values?.coverage || {});
+  const channelCount = Object.keys(values?.channels || {}).length;
+  return (
+    channelCount > 0
+    && states.length === channelCount
+    && states.every((coverage) => coverage === "none")
+  );
+}
+
+// Basic leaves out a ratio the period cannot carry; Expert states it as
+// unknown, because a gap an expert cannot see is worse than a dash.
+function energySufficiencyFact(values) {
+  // null is "not measured", and Number(null) is 0: reading it as a number here
+  // would claim a period was zero percent self-sufficient.
+  const ratio = values?.ratios?.self_sufficiency;
+  if (typeof ratio === "number" && Number.isFinite(ratio)) {
+    // The most quotable number on the card is the one that most needs the
+    // mark: it is derived from figures that carry it.
+    const coverage = values?.coverage || {};
+    const partly = ENERGY_RATIO_CHANNELS.some((channelId) => channelId in coverage);
+    const text = `${Math.round(ratio * 100)}%${partly ? ` ${ENERGY_PARTIAL_MARK}` : ""}`;
+    return energyFact("Self-Sufficiency", text, "gauge", "battery");
+  }
+  if (!energyDetailIsExpert()) return "";
+  return energyFact("Self-Sufficiency", "--", "gauge", "battery");
+}
+
+function energyChannelFacts(values, meta) {
+  if (!energyDetailIsExpert()) return "";
+  // A card where nothing was measured says so once instead of repeating a
+  // dash per channel: six identical blanks read as a broken card.
+  if (energyChannelsAllUnmeasured(values)) return "";
+  return (meta || [])
+    .map((channel) => {
+      const presentation = ENERGY_CHANNEL_PRESENTATION[channel?.id] || {
+        icon: "rule",
+        tone: "neutral",
+      };
+      return energyFact(
+        channel?.label || channel?.id || "Channel",
+        energyChannelValue(values, channel?.id),
+        presentation.icon,
+        presentation.tone,
+      );
+    })
+    .join("");
+}
+
+// A channel that did not measure the whole period reports it: "--" when the
+// period lies outside what it measured at all, and a trailing mark when only
+// part of it was measured. Neither may read as a zero.
+function energyChannelValue(values, channelId) {
+  const coverage = values?.coverage?.[channelId] || "full";
+  if (coverage === "none") return "--";
+
+  const kwh = values?.channels?.[channelId]?.kwh;
+  if (typeof kwh !== "number" || !Number.isFinite(kwh)) return "--";
+
+  const text = formatEnergyAmount(kwh);
+  return coverage === "partial" ? `${text} ${ENERGY_PARTIAL_MARK}` : text;
+}
+
+function energyPeakFact(values) {
+  if (!energyDetailIsExpert()) return "";
+  const peak = Number(values?.peak_output_w);
+  if (!Number.isFinite(peak) || peak <= 0) return "";
+  return energyFact("Peak Output", watts(peak), "gauge", "output");
+}
+
+function energyCoverageFact(values, meta) {
+  if (!energyDetailIsExpert()) return "";
+
+  // The row says since when the channels have been measured, which a card with
+  // complete coverage needs just as much as one without: the reader is looking
+  // at figures that start later than the output beside them.
+  const since = energyChannelsSinceDate(meta);
+  // "not measured" is a statement about the whole card, so it needs every
+  // channel to be unmeasured -- not just every channel that is listed here,
+  // which holds the exceptions only.
+  if (!since || energyChannelsAllUnmeasured(values)) {
+    return energyFact("Measured since", "not measured", "history", "neutral");
+  }
+
+  // "Measured since", not "Channels since": a channel that never measured
+  // anything shows "--" above and is not covered by this date.
+  return energyFact("Measured since", formatEnergyDate(since), "history", "neutral");
+}
+
+function energyMonthCard(month, currency, meta) {
   const isZero = energyKwh(month) <= 0;
   const isCurrent = Number(month.month) === new Date().getMonth() + 1;
 
@@ -1599,12 +1764,13 @@ function energyMonthCard(month, currency) {
     subtitle: isCurrent ? "Current month" : "Month total",
     values: month,
     currency,
+    meta,
     className: `energy-month-card ${isZero ? "energy-zero" : ""}`,
     current: isCurrent,
   });
 }
 
-function energyYearCard(year, currency, options = {}) {
+function energyYearCard(year, currency, meta, options = {}) {
   const currentYear = new Date().getFullYear();
   const isCurrent = Number(year.year) === currentYear;
   const isLatest = Boolean(options.latest);
@@ -1614,17 +1780,19 @@ function energyYearCard(year, currency, options = {}) {
     subtitle: isCurrent ? "Current year" : isLatest ? "Latest year" : "Calendar year",
     values: year,
     currency,
+    meta,
     className: "energy-year-card",
     current: isCurrent || isLatest,
   });
 }
 
-function energyLifetimeCard(values, currency) {
+function energyLifetimeCard(values, currency, meta) {
   return energySummaryCard({
     title: "Result / Lifetime",
     subtitle: "All stored daily totals",
     values,
     currency,
+    meta,
     className: "energy-lifetime-card",
     details: values?.since_date
       ? [{ label: "Date", value: formatEnergyDate(values.since_date) }]
@@ -1632,7 +1800,7 @@ function energyLifetimeCard(values, currency) {
   });
 }
 
-function energySummaryCard({ title, subtitle, values, currency, className = "", current = false, details = [] }) {
+function energySummaryCard({ title, subtitle, values, currency, meta, className = "", current = false, details = [] }) {
   const detailFacts = details
     .filter((detail) => detail?.value)
     .map((detail) => energyFact(detail.label || "Detail", detail.value, detail.iconName || "history", detail.tone || "neutral"))
@@ -1647,6 +1815,10 @@ function energySummaryCard({ title, subtitle, values, currency, className = "", 
       <div class="energy-summary-values">
         ${energyFact("Energy", formatEnergyKwh(values), "inverter", "output")}
         ${energyFact("Savings", formatSavings(values, currency), "charge", "savings")}
+        ${energySufficiencyFact(values)}
+        ${energyChannelFacts(values, meta)}
+        ${energyPeakFact(values)}
+        ${energyCoverageFact(values, meta)}
         ${detailFacts}
       </div>
     </article>
@@ -1663,7 +1835,7 @@ function energyFact(label, value, iconName = "rule", tone = "") {
   `;
 }
 
-function energyContextRail(stats, monthly, yearly, lifetime, currency) {
+function energyContextRail(stats, monthly, yearly, lifetime, currency, meta) {
   return `
     <aside class="energy-context-rail" aria-label="Energy statistics context">
       <div class="energy-context-title">Context</div>
@@ -1674,6 +1846,7 @@ function energyContextRail(stats, monthly, yearly, lifetime, currency) {
         ${energyContextItem("Years", energyYearRange(yearly), "history")}
         ${stats.best_day?.date ? energyContextItem("Best Day", formatEnergyDate(stats.best_day.date), "charge") : ""}
         ${energyContextItem("Lifetime", formatEnergyKwh(lifetime), "inverter")}
+        ${energyDetailIsExpert() ? energyContextItem("Channels measured since", energyChannelsSince(meta), "grid") : ""}
       </div>
     </aside>
   `;
@@ -1740,13 +1913,25 @@ function energyKwh(values) {
   return 0;
 }
 
-function formatEnergyKwh(values) {
-  const value = energyKwh(values);
-  const digits = Math.abs(value) >= 1000 ? 0 : 1;
-  return `${value.toLocaleString("en-US", {
+// The one place an energy amount is turned into text. One decimal of a
+// kilowatt-hour is a 100 Wh step, so a real measurement of 78 Wh reads as
+// "0.1 kWh" and a growing figure looks frozen; under a kilowatt-hour the watt
+// hour is the honest unit. The unit follows the *rounded* figure, or 999.5 Wh
+// would sit as "1,000 Wh" between "999 Wh" and "1.0 kWh".
+function formatEnergyAmount(kwh) {
+  if (!Number.isFinite(kwh)) return "--";
+  const rounded = Math.round(kwh * 1000);
+  const wh = rounded === 0 ? 0 : rounded;  // -0 would print as "-0 Wh"
+  if (Math.abs(wh) < 1000) return `${wh.toLocaleString("en-US")} Wh`;
+  const digits = Math.abs(kwh) >= 1000 ? 0 : 1;
+  return `${kwh.toLocaleString("en-US", {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   })} kWh`;
+}
+
+function formatEnergyKwh(values) {
+  return formatEnergyAmount(energyKwh(values));
 }
 
 function formatSavings(values, currency) {
@@ -3516,6 +3701,60 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+// The latest start among the channels, not the earliest: a channel added later
+// than the others must not advertise the oldest one's date. Understating the
+// coverage of an older channel is safe; overstating a younger one is not.
+function energyChannelsSinceDate(meta) {
+  const dates = (meta || []).map((channel) => channel?.since).filter(Boolean).sort();
+  return dates.length ? dates[dates.length - 1] : null;
+}
+
+function energyChannelsSince(meta) {
+  const since = energyChannelsSinceDate(meta);
+  return since ? formatEnergyDate(since) : "not measured";
+}
+
+function setEnergyDetail(detail, persist = true) {
+  const next = ENERGY_DETAIL_LEVELS.includes(detail) ? detail : "basic";
+  state.energyDetail = next;
+
+  document.querySelectorAll("[data-energy-detail]").forEach((button) => {
+    const active = button.dataset.energyDetail === next;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+
+  if (persist && window.localStorage) {
+    try {
+      window.localStorage.setItem("dashboard.energyDetail", next);
+    } catch {
+      // Ignore unavailable storage; the choice holds for this page.
+    }
+  }
+
+  // Before the first snapshot there is nothing to draw, and drawing anyway
+  // would paint the "not available yet" state over an empty board on load.
+  if (state.snapshot) {
+    renderEnergyStats(state.snapshot.energy_stats);
+  }
+}
+
+function initEnergyDetailSwitch() {
+  let initialDetail = "basic";
+  if (window.localStorage) {
+    try {
+      initialDetail = window.localStorage.getItem("dashboard.energyDetail") || initialDetail;
+    } catch {
+      initialDetail = "basic";
+    }
+  }
+
+  setEnergyDetail(initialDetail, false);
+  document.querySelectorAll("[data-energy-detail]").forEach((button) => {
+    button.addEventListener("click", () => setEnergyDetail(button.dataset.energyDetail));
+  });
+}
+
 function initFlowViewSwitch() {
   let initialView = "aggregated";
   if (window.localStorage) {
@@ -5100,6 +5339,146 @@ async function applyAnimationMode() {
   }
 }
 
+// Demo-mode energy payload. It stands in for the backend, so it carries the
+// same shape the store publishes -- including the unmeasured cases, which are
+// the ones a reader needs to see at least once.
+const DEMO_CHANNEL_SINCE = "2026-09-12";
+const DEMO_CHANNEL_UNTIL = "2026-09-26";
+const DEMO_CHANNEL_LABELS = {
+  grid_import: "Grid Import",
+  grid_export: "Grid Export",
+  battery_charge: "Charged",
+  battery_discharge: "Discharged",
+  pv_yield: "PV Yield",
+  home_consumption: "Home",
+};
+const DEMO_CHANNEL_WINDOW = {
+  grid_import: 28.9,
+  grid_export: 1.7,
+  battery_charge: 20.9,
+  battery_discharge: 17.6,
+  pv_yield: 48.6,
+  home_consumption: 70.2,
+};
+
+function demoChannels(values = {}) {
+  const channels = {};
+  Object.keys(DEMO_CHANNEL_LABELS).forEach((id) => {
+    const kwh = Number(values[id] || 0);
+    channels[id] = { wh: Math.round(kwh * 1000), kwh };
+  });
+  return channels;
+}
+
+function demoCoverage(state) {
+  const coverage = {};
+  Object.keys(DEMO_CHANNEL_LABELS).forEach((id) => {
+    coverage[id] = state;
+  });
+  return coverage;
+}
+
+function demoEnergyEntry(kwh, savings, options = {}) {
+  return {
+    inverter_output_kwh: kwh,
+    inverter_output_wh: Math.round(kwh * 1000),
+    savings_value: savings,
+    channels: demoChannels(options.channels),
+    coverage: options.coverage || {},
+    ratios: { self_sufficiency: options.selfSufficiency ?? null },
+    ...(options.extra || {}),
+  };
+}
+
+function demoEnergyStats() {
+  const partial = demoCoverage("partial");
+  return {
+    enabled: true,
+    currency: "EUR",
+    price_per_kwh: 0.35,
+    channel_meta: Object.entries(DEMO_CHANNEL_LABELS).map(([id, label]) => ({
+      id,
+      label,
+      unit: "Wh",
+      since: DEMO_CHANNEL_SINCE,
+      until: DEMO_CHANNEL_UNTIL,
+    })),
+    today: demoEnergyEntry(3.2, 1.12, {
+      channels: {
+        grid_import: 2.6,
+        grid_export: 0.1,
+        battery_charge: 2.1,
+        battery_discharge: 1.2,
+        pv_yield: 4.4,
+        home_consumption: 5.7,
+      },
+      selfSufficiency: 0.544,
+      extra: { peak_output_w: 742 },
+    }),
+    yesterday: demoEnergyEntry(4.2, 1.47, {
+      channels: {
+        grid_import: 2.1,
+        grid_export: 0.2,
+        battery_charge: 2.4,
+        battery_discharge: 1.4,
+        pv_yield: 5.6,
+        home_consumption: 6.1,
+      },
+      selfSufficiency: 0.656,
+      extra: { peak_output_w: 780 },
+    }),
+    last_7_days: demoEnergyEntry(18.4, 6.44, {
+      channels: {
+        grid_import: 14.8,
+        grid_export: 0.9,
+        battery_charge: 10.8,
+        battery_discharge: 9.1,
+        pv_yield: 25.1,
+        home_consumption: 32.3,
+      },
+      selfSufficiency: 0.542,
+    }),
+    last_4_weeks: demoEnergyEntry(72.1, 25.24, {
+      channels: DEMO_CHANNEL_WINDOW,
+      coverage: partial,
+    }),
+    last_12_months: demoEnergyEntry(520.0, 182.0, {
+      channels: DEMO_CHANNEL_WINDOW,
+      coverage: partial,
+    }),
+    best_day: demoEnergyEntry(8.4, 2.94, {
+      coverage: demoCoverage("none"),
+      extra: { date: "2026-06-14" },
+    }),
+    monthly_current_year: [
+      [1, "Jan", 22.4], [2, "Feb", 31.2], [3, "Mar", 43.8], [4, "Apr", 58.5],
+      [5, "May", 76.6], [6, "Jun", 84.2], [7, "Jul", 91.8], [8, "Aug", 88.4],
+      [9, "Sep", 66.9], [10, "Oct", 44.5], [11, "Nov", 18.6], [12, "Dec", 11.2],
+    ].map(([month, label, kwh]) => ({
+      month,
+      label,
+      ...demoEnergyEntry(kwh, Math.round(kwh * 0.35 * 100) / 100, {
+        channels: month === 9 ? DEMO_CHANNEL_WINDOW : undefined,
+        coverage: month === 9 ? partial : demoCoverage("none"),
+      }),
+    })),
+    yearly: [
+      { year: 2025, ...demoEnergyEntry(320.0, 112.0, { coverage: demoCoverage("none") }) },
+      {
+        year: 2026,
+        ...demoEnergyEntry(840.0, 294.0, {
+          channels: DEMO_CHANNEL_WINDOW,
+          coverage: partial,
+        }),
+      },
+    ],
+    lifetime: demoEnergyEntry(2070.0, 724.5, {
+      channels: DEMO_CHANNEL_WINDOW,
+      coverage: partial,
+    }),
+  };
+}
+
 function demoSnapshot() {
   const timestamp = new Date().toISOString();
   return {
@@ -5124,60 +5503,7 @@ function demoSnapshot() {
       pv_priority_balancing: { active: true, reason: "WR1 keeps more PV available for charging" },
       battery_balancing: { active: true, reason: "two devices share an 800 W system limit" },
     },
-    energy_stats: {
-      enabled: true,
-      currency: "EUR",
-      price_per_kwh: 0.35,
-      today: {
-        inverter_output_kwh: 3.2,
-        savings_value: 1.12,
-      },
-      yesterday: {
-        inverter_output_kwh: 4.2,
-        savings_value: 1.47,
-        peak_output_w: 780,
-      },
-      last_7_days: {
-        inverter_output_kwh: 18.4,
-        savings_value: 6.44,
-      },
-      last_4_weeks: {
-        inverter_output_kwh: 72.1,
-        savings_value: 25.24,
-      },
-      last_12_months: {
-        inverter_output_kwh: 520.0,
-        savings_value: 182.0,
-      },
-      best_day: {
-        date: "2026-06-14",
-        inverter_output_kwh: 8.4,
-        savings_value: 2.94,
-      },
-      monthly_current_year: [
-        { month: 1, label: "Jan", inverter_output_kwh: 22.4, savings_value: 7.84 },
-        { month: 2, label: "Feb", inverter_output_kwh: 31.2, savings_value: 10.92 },
-        { month: 3, label: "Mar", inverter_output_kwh: 43.8, savings_value: 15.33 },
-        { month: 4, label: "Apr", inverter_output_kwh: 58.5, savings_value: 20.48 },
-        { month: 5, label: "May", inverter_output_kwh: 76.6, savings_value: 26.81 },
-        { month: 6, label: "Jun", inverter_output_kwh: 84.2, savings_value: 29.47 },
-        { month: 7, label: "Jul", inverter_output_kwh: 91.8, savings_value: 32.13 },
-        { month: 8, label: "Aug", inverter_output_kwh: 88.4, savings_value: 30.94 },
-        { month: 9, label: "Sep", inverter_output_kwh: 66.9, savings_value: 23.42 },
-        { month: 10, label: "Oct", inverter_output_kwh: 44.5, savings_value: 15.58 },
-        { month: 11, label: "Nov", inverter_output_kwh: 18.6, savings_value: 6.51 },
-        { month: 12, label: "Dec", inverter_output_kwh: 11.2, savings_value: 3.92 },
-      ],
-      yearly: [
-        { year: 2025, inverter_output_kwh: 320.0, savings_value: 112.0 },
-        { year: 2026, inverter_output_kwh: 840.0, savings_value: 294.0 },
-        { year: 2027, inverter_output_kwh: 910.0, savings_value: 318.5 },
-      ],
-      lifetime: {
-        inverter_output_kwh: 2070.0,
-        savings_value: 724.5,
-      },
-    },
+    energy_stats: demoEnergyStats(),
     devices: {
       WR1: {
         online: true,
@@ -6099,15 +6425,18 @@ function integrateSeries(data, id, transform) {
 }
 
 function energyLabel(wh) {
+  // The Analytics KPIs show the same quantities as the Energy board -- grid
+  // import, home, the battery directions -- so they round by the same rule.
   if (wh == null) return "--";
-  if (Math.abs(wh) >= 1000) return `${(wh / 1000).toFixed(1)} kWh`;
-  return `${Math.round(wh)} Wh`;
+  return formatEnergyAmount(wh / 1000);
 }
 
 function powerLabel(w) {
-  if (w == null) return "--";
-  if (Math.abs(w) >= 1000) return `${(w / 1000).toFixed(2)} kW`;
-  return `${Math.round(w)} W`;
+  // The rule the tiles use, because a reading may not round differently for
+  // being on the Analytics tab. Unlike a tile this one admits a gap: a claimed
+  // zero for a reading nobody took is a trap this dashboard has fallen into.
+  if (w == null || !Number.isFinite(Number(w))) return "--";
+  return watts(w);
 }
 
 function seriesPeak(data, id) {
@@ -6909,6 +7238,7 @@ function initDashboardApp() {
   initStyleSwitcher();
   initDensitySwitcher();
   initFlowViewSwitch();
+  initEnergyDetailSwitch();
   initFlowTiles();
   initMotionBudget();
   initAuthControls();
@@ -6966,6 +7296,15 @@ if (typeof module !== "undefined") {
     renderDevices,
     renderControlExplain,
     renderEnergyStats,
+    setEnergyDetail,
+    renderEnergySubtitle,
+    energyPeriodStage,
+    energyChannelFacts,
+    energyChannelValue,
+    ENERGY_CHANNEL_PRESENTATION,
+    ENERGY_PARTIAL_MARK,
+    ENERGY_RATIO_CHANNELS,
+    demoEnergyStats,
     renderDeviceFlow,
     updateSnapshot,
     renderSnapshot,
@@ -7033,7 +7372,9 @@ if (typeof module !== "undefined") {
     integrateSeries,
     seriesPeak,
     energyLabel,
+    formatEnergyAmount,
     powerLabel,
+    watts,
     runtimeRoleLabel,
     renderDiagnoseReport,
     renderDiagnoseView,

@@ -12,6 +12,8 @@ access, no secrets, no SQLite history, and no runtime-state files are touched.
 import math
 import time
 
+from ems.energy_channels import ENERGY_CHANNELS
+
 SCENARIOS = (
     "normal",
     "firmware-status",
@@ -90,44 +92,180 @@ def _device(name, **over):
     return base
 
 
+# The measured window of the synthetic installation: the channels started on
+# 2026-09-12, so everything longer than a week is only partly covered and the
+# best day lies before them entirely. That is what the preview is for -- the
+# unknown cases have to be visible somewhere.
+_PREVIEW_CHANNEL_SINCE = "2026-09-12"
+_PREVIEW_CHANNEL_UNTIL = "2026-09-26"
+_PREVIEW_WINDOW_KWH = {
+    "grid_import": 28.9,
+    "grid_export": 1.7,
+    "battery_charge": 20.9,
+    "battery_discharge": 17.6,
+    "pv_yield": 48.6,
+    "home_consumption": 70.2,
+}
+
+
+def _channels(**kwh_by_id):
+    return {
+        channel.id: {
+            "wh": round(float(kwh_by_id.get(channel.id, 0.0)) * 1000, 3),
+            "kwh": float(kwh_by_id.get(channel.id, 0.0)),
+        }
+        for channel in ENERGY_CHANNELS
+    }
+
+
+def _uncovered(state="none"):
+    return {channel.id: state for channel in ENERGY_CHANNELS}
+
+
+def _energy_entry(
+    kwh,
+    savings,
+    *,
+    channels=None,
+    coverage=None,
+    self_sufficiency=None,
+    **extra,
+):
+    entry = {
+        "inverter_output_kwh": kwh,
+        "inverter_output_wh": round(kwh * 1000, 3),
+        "savings_value": savings,
+        "channels": channels if channels is not None else _channels(),
+        "coverage": coverage if coverage is not None else {},
+        "ratios": {"self_sufficiency": self_sufficiency},
+    }
+    entry.update(extra)
+    return entry
+
+
 def _energy_stats():
     return {
         "enabled": True,
         "currency": "EUR",
         "price_per_kwh": 0.35,
-        "today": {"inverter_output_kwh": 3.2, "savings_value": 1.12},
-        "yesterday": {
-            "inverter_output_kwh": 4.2,
-            "savings_value": 1.47,
-            "peak_output_w": 780,
-        },
-        "last_7_days": {"inverter_output_kwh": 18.4, "savings_value": 6.44},
-        "last_4_weeks": {"inverter_output_kwh": 72.1, "savings_value": 25.24},
-        "last_12_months": {"inverter_output_kwh": 520.0, "savings_value": 182.0},
-        "best_day": {
-            "date": "2026-06-14",
-            "inverter_output_kwh": 8.4,
-            "savings_value": 2.94,
-        },
+        "channel_meta": [
+            {
+                "id": channel.id,
+                "label": channel.label,
+                "unit": "Wh",
+                "since": _PREVIEW_CHANNEL_SINCE,
+                "until": _PREVIEW_CHANNEL_UNTIL,
+            }
+            for channel in ENERGY_CHANNELS
+        ],
+        "today": _energy_entry(
+            3.2,
+            1.12,
+            channels=_channels(
+                grid_import=2.6,
+                grid_export=0.1,
+                battery_charge=2.1,
+                battery_discharge=1.2,
+                pv_yield=4.4,
+                home_consumption=5.7,
+            ),
+            self_sufficiency=0.544,
+            peak_output_w=742,
+        ),
+        "yesterday": _energy_entry(
+            4.2,
+            1.47,
+            channels=_channels(
+                grid_import=2.1,
+                grid_export=0.2,
+                battery_charge=2.4,
+                battery_discharge=1.4,
+                pv_yield=5.6,
+                home_consumption=6.1,
+            ),
+            self_sufficiency=0.656,
+            peak_output_w=780,
+        ),
+        "last_7_days": _energy_entry(
+            18.4,
+            6.44,
+            channels=_channels(
+                grid_import=14.8,
+                grid_export=0.9,
+                battery_charge=10.8,
+                battery_discharge=9.1,
+                pv_yield=25.1,
+                home_consumption=32.3,
+            ),
+            self_sufficiency=0.542,
+        ),
+        "last_4_weeks": _energy_entry(
+            72.1,
+            25.24,
+            channels=_channels(**_PREVIEW_WINDOW_KWH),
+            coverage=_uncovered("partial"),
+        ),
+        "last_12_months": _energy_entry(
+            520.0,
+            182.0,
+            channels=_channels(**_PREVIEW_WINDOW_KWH),
+            coverage=_uncovered("partial"),
+        ),
+        "best_day": _energy_entry(
+            8.4,
+            2.94,
+            coverage=_uncovered(),
+            date="2026-06-14",
+        ),
         "monthly_current_year": [
-            {"month": 1, "label": "Jan", "inverter_output_kwh": 22.4, "savings_value": 7.84},
-            {"month": 2, "label": "Feb", "inverter_output_kwh": 31.2, "savings_value": 10.92},
-            {"month": 3, "label": "Mar", "inverter_output_kwh": 43.8, "savings_value": 15.33},
-            {"month": 4, "label": "Apr", "inverter_output_kwh": 58.5, "savings_value": 20.48},
-            {"month": 5, "label": "May", "inverter_output_kwh": 76.6, "savings_value": 26.81},
-            {"month": 6, "label": "Jun", "inverter_output_kwh": 84.2, "savings_value": 29.47},
-            {"month": 7, "label": "Jul", "inverter_output_kwh": 91.8, "savings_value": 32.13},
-            {"month": 8, "label": "Aug", "inverter_output_kwh": 88.4, "savings_value": 30.94},
-            {"month": 9, "label": "Sep", "inverter_output_kwh": 66.9, "savings_value": 23.42},
-            {"month": 10, "label": "Oct", "inverter_output_kwh": 44.5, "savings_value": 15.58},
-            {"month": 11, "label": "Nov", "inverter_output_kwh": 18.6, "savings_value": 6.51},
-            {"month": 12, "label": "Dec", "inverter_output_kwh": 11.2, "savings_value": 3.92},
+            {
+                "month": month,
+                "label": label,
+                **_energy_entry(
+                    kwh,
+                    round(kwh * 0.35, 2),
+                    channels=(
+                        _channels(**_PREVIEW_WINDOW_KWH) if month == 9 else None
+                    ),
+                    coverage=_uncovered("partial" if month == 9 else "none"),
+                ),
+            }
+            for month, label, kwh in (
+                (1, "Jan", 22.4),
+                (2, "Feb", 31.2),
+                (3, "Mar", 43.8),
+                (4, "Apr", 58.5),
+                (5, "May", 76.6),
+                (6, "Jun", 84.2),
+                (7, "Jul", 91.8),
+                (8, "Aug", 88.4),
+                (9, "Sep", 66.9),
+                (10, "Oct", 44.5),
+                (11, "Nov", 18.6),
+                (12, "Dec", 11.2),
+            )
         ],
         "yearly": [
-            {"year": 2025, "inverter_output_kwh": 320.0, "savings_value": 112.0},
-            {"year": 2026, "inverter_output_kwh": 840.0, "savings_value": 294.0},
+            {
+                "year": 2025,
+                **_energy_entry(320.0, 112.0, coverage=_uncovered()),
+            },
+            {
+                "year": 2026,
+                **_energy_entry(
+                    840.0,
+                    294.0,
+                    channels=_channels(**_PREVIEW_WINDOW_KWH),
+                    coverage=_uncovered("partial"),
+                ),
+            },
         ],
-        "lifetime": {"inverter_output_kwh": 2070.0, "savings_value": 724.5},
+        "lifetime": _energy_entry(
+            2070.0,
+            724.5,
+            channels=_channels(**_PREVIEW_WINDOW_KWH),
+            coverage=_uncovered("partial"),
+        ),
     }
 
 

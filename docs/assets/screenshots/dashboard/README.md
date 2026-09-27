@@ -22,7 +22,8 @@ by `scripts/capture_dashboard_previews.py`.
 | `dashboard-devices.png` | Devices — per-inverter cards | `normal` |
 | `dashboard-devices-offline.png` | Devices — one inverter offline | `offline-device` |
 | `dashboard-devices-readonly.png` | Devices — unauthenticated read-only | `auth-readonly` |
-| `dashboard-energy.png` | Energy Delivered | `normal` |
+| `dashboard-energy.png` | Energy Delivered — Basic | `normal` |
+| `dashboard-energy-expert.png` | Energy Delivered — Expert, with the channel rows | `normal` |
 | `dashboard-analytics.png` | Analytics | `normal` |
 | `dashboard-control.png` | Control pipeline + runtime settings | `write-mode` |
 | `dashboard-control-readonly.png` | Control without a session | `auth-readonly` |

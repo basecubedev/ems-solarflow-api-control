@@ -231,8 +231,16 @@ test.describe("live rendering reuses its DOM @smoke", () => {
 
     await watch(page, "#energyStats");
     await deliverSnapshot(page, (snapshot) => {
+      // New numbers in the same payload: replacing the entry with a different
+      // shape would remove the rows its missing fields render, which is a
+      // content change rather than the rebuild this test guards against.
       const stats = snapshot.energy_stats as Record<string, unknown>;
-      if (stats) stats.today = { output_kwh: 42.5, savings: 7.5 };
+      const today = stats?.today as Record<string, unknown> | undefined;
+      if (today) {
+        today.inverter_output_kwh = 42.5;
+        today.inverter_output_wh = 42500;
+        today.savings_value = 7.5;
+      }
     });
     await waitForSnapshots(page, 3);
 
