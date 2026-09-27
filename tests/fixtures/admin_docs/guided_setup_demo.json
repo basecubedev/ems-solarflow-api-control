@@ -652,7 +652,7 @@
           {
             "path": "system.output_control.telemetry_max_age_seconds",
             "label": "Telemetry max age",
-            "description": "Maximum age of device telemetry before EMS treats it as stale.",
+            "description": "Maximum age of device telemetry before EMS treats it as stale. Readings inside this window are also what the energy statistics count as measured.",
             "type": "number",
             "level": "expert",
             "scope": "both",

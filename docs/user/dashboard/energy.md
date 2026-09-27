@@ -85,16 +85,26 @@ by a whole one. A sample whose grid meter did not answer counts for nothing: an
 unreachable meter reads as 0 W, and taking that at face value would report a
 perfect autarky for a system that simply lost sight of the grid.
 
-If the grid meter does not answer, or a device is offline, every figure on the
-tab stops for as long as that lasts — the delivered energy and the savings
-estimate with them. A meter that never answered reads as 0 W and an offline
-device keeps reporting its last value, and counting either would be inventing
-energy. They stop together on purpose: taking the meter's reading while
-ignoring the device's would divide two numbers measured at different moments.
+A single failed read is not a gap. The EMS keeps calculating with a device's
+last reading for as long as it is current, and the statistics count it over
+exactly the same window (`telemetry_max_age_seconds`), so one network hiccup does
+not mark the day — let alone the month and the year that contain it. Commanding
+that device stops immediately, on the first failed read; that is a separate
+decision, because sending a value and measuring one are not the same risk.
+
+If the grid meter does not answer, or a device has been silent past that window,
+every figure on the tab stops for as long as that lasts — the delivered energy
+and the savings estimate with them. A meter that never answered reads as 0 W and
+a silent device keeps reporting its last value, and counting either would be
+inventing energy. They stop together on purpose: taking the meter's reading
+while ignoring the device's would divide two numbers measured at different
+moments.
 The Overview names an offline device under **Offline devices**; repairing it,
 removing it, or **disabling** it is what starts the figures again — a device you
 have switched off for the season is a decision, not a gap, so a disabled one
-does not hold the statistics.
+does not hold the statistics. While it stays silent it also drops out of the
+totals, because a device that is off delivers nothing: counting its last reading
+would keep adding energy it never produced.
 
 
 Time inside a period that was not measured — a restart, an outage, a day the
@@ -168,7 +178,7 @@ lost data.
 | Cause | What you see | Is it a bug? |
 | --- | --- | --- |
 | EMS was stopped | A gap | No |
-| Device offline for a period | That device contributes nothing for it | No |
+| Device silent past `telemetry_max_age_seconds` | Every figure pauses, the period is marked `◦` | No |
 | Analytics not configured | Analytics tab shows its empty state | No |
 | InfluxDB configured but unreachable | The source badge reflects it | Check the InfluxDB service |
 | History retention passed | Old operational data is gone | No — use analytics for long ranges |

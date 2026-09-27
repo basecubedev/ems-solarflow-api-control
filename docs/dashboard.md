@@ -433,8 +433,19 @@ cannot tell that apart from a household load.
 Whether a sample may be integrated is decided for the sample as a whole:
 `grid_power_valid` and `device_power_valid` both have to hold, or the sample
 counts for no channel and writes no daily row at all. `device_power_valid` is
-false while an **enabled** device is offline; a device disabled in the runtime
-state does not hold the statistics. A per-channel gate would let the two sides of the ratio
+false once an **enabled** device's telemetry is older than
+`system.output_control.telemetry_max_age_seconds` — the window the control loop
+itself keeps *calculating* inside, so a single failed read is not a hole — or when
+that device has never answered at all. (The loop stops *writing* to a silent
+device after a single failed read; that is a different question, because a command
+is not a measurement.) A device disabled in the runtime state
+does not hold the statistics — and pays for that exemption by dropping out of
+the aggregate totals while its telemetry is stale, so a unit switched off for the
+season cannot have its last reading integrated until the EMS restarts. An
+**enabled** device that went quiet stays in the totals instead, because its whole
+sample is dropped anyway and the Overview should keep showing what the control
+loop still calculates with. A telemetry-only MQTT device is judged by its own
+`stale_after_seconds`. A per-channel gate would let the two sides of the ratio
 be measured over different samples — house load rests on the meter *and* the
 devices, grid import on the meter alone — which turned a 50 % day into 25 %.
 The price is that a valid meter reading taken while a device was away is
@@ -447,6 +458,18 @@ reaches the window the statistics accept and little or nothing is integrated —
 at equality, loop jitter decides each sample. `emsctl diagnose` reports that
 pair as `energy_sample_window_below_write_interval`.
 
+`system.output_control.telemetry_max_age_seconds` is the second setting that can
+silence the statistics, because it decides whether a device reading counts as
+measured. `emsctl diagnose` reports `energy_telemetry_window_disabled` when it is
+not positive (the control loop reads that as "always stale", so nothing is ever
+integrated) and `energy_telemetry_window_below_loop_interval` when it is shorter
+than one loop interval, where a single missed read already ages out before the
+next one arrives, and `energy_telemetry_window_far_above_loop_interval` when it is
+far above the loop interval (12 intervals, or 60 seconds, whichever is more
+generous), where the opposite happens: a device that has gone quiet keeps
+contributing its last reading for that long, so the statistics count energy it
+did not deliver.
+
 
 `coverage` reports only the channels that did **not** measure the whole entry:
 a channel missing from the map measured all of it. The states are `partial`
@@ -454,7 +477,7 @@ a channel missing from the map measured all of it. The states are `partial`
 hole) and `none` (the range lies entirely outside what the channel measured).
 
 A day is recorded as holed in `energy_channel_gap` when a sample could not be
-read — an unreachable grid meter, a device that went offline — and when an
+read — an unreachable grid meter, a device whose telemetry aged out — and when an
 interval was skipped because too much time had passed: a restart or an outage
 marks the day the samples stopped and the day they came back. Whole days in
 between carry no row at all, and a range that contains one is incomplete by its

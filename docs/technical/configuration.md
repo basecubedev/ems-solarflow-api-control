@@ -521,7 +521,10 @@ still reacting to an earlier command.
 
 `bypass_ramp_multiplier` increases ramp speed during bypass situations.
 
-`telemetry_max_age_seconds` marks device telemetry as stale after this age.
+`telemetry_max_age_seconds` marks device telemetry as stale after this age. It
+is also what the energy statistics treat as measured: a reading inside this
+window is integrated, so a single failed read leaves no hole (see
+[../dashboard.md](../dashboard.md)).
 
 `stale_telemetry_ramp_factor` reduces ramp speed when telemetry is stale.
 

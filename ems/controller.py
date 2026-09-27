@@ -76,6 +76,7 @@ class EMSController:
 
         self.last_states = {}
         self.last_seen = {}
+        self.last_fetch_at = None
         self.device_online = {}
         self.pv_priority_devices = None
         self.battery_power_history = {}
@@ -282,12 +283,75 @@ class EMSController:
             ramped_total_w=round(self.commanded_total_w, 1)
         )
 
-    def telemetry_stale(self):
-        max_age = self.output_control_float(
+    def telemetry_max_age_seconds(self):
+        """The window a device reading stays current in.
+
+        Read here once, because two callers depend on it: the control loop slows
+        its ramp outside it, and the energy statistics stop integrating outside
+        it. They ask from different reference points on purpose -- see
+        :meth:`telemetry_reference_time` -- but never from different numbers.
+        """
+
+        return self.output_control_float(
             "telemetry_max_age_seconds",
             10,
             minimum=0
         )
+
+    def telemetry_reference_time(self):
+        """When the last fetch cycle returned, or now if none has yet.
+
+        The default reference for an age, because the dashboard snapshot is
+        built at the end of the cycle, after the device writes. On a slow
+        network those writes can outlast the staleness window, and a reading
+        every device answered would then be dropped as stale. The control loop
+        passes its own ``now`` instead: it asks how old a value is at the moment
+        it decides a ramp, which is a different question about the same window.
+        """
+
+        return self.last_fetch_at if self.last_fetch_at else time.time()
+
+    def telemetry_age_seconds(self, dev_name, *, now=None):
+        """How long before ``now`` this device last answered, or None if never.
+
+        ``now`` defaults to :meth:`telemetry_reference_time`, so the age is
+        counted from the fetch rather than from the wall clock.
+        """
+
+        seen = self.last_seen.get(dev_name)
+
+        if not seen:
+            return None
+
+        return (self.telemetry_reference_time() if now is None else now) - seen
+
+    def telemetry_fresh(self, dev_name, *, now=None):
+        """Whether this device's published power is still a measurement.
+
+        A failed read does not empty the aggregates: the controller keeps
+        publishing the cached state, and the control loop keeps *calculating*
+        with it, for as long as it is younger than the staleness window. (It
+        stops *writing* to that device at once, after a single failed read --
+        a command is not a measurement.) So the statistics integrate the cached
+        reading over exactly that window, and one network hiccup is not a hole.
+        Past the window the value is no longer a reading, and a device that has
+        never answered has no reading to cache at all.
+        """
+
+        max_age = self.telemetry_max_age_seconds()
+
+        if max_age <= 0:
+            return False
+
+        age = self.telemetry_age_seconds(dev_name, now=now)
+
+        if age is None:
+            return False
+
+        return age <= max_age
+
+    def telemetry_stale(self):
+        max_age = self.telemetry_max_age_seconds()
 
         if max_age <= 0:
             log_event(
@@ -303,11 +367,13 @@ class EMSController:
         stale = False
 
         for dev in self.devices:
-            seen = self.last_seen.get(dev.name)
-            if not seen:
-                continue
+            age = self.telemetry_age_seconds(dev.name, now=now)
 
-            age = now - seen
+            # A device that never answered is no ramp decision: there is
+            # nothing to regulate from. telemetry_fresh judges it differently
+            # on purpose.
+            if age is None:
+                continue
 
             if age > max_age:
                 stale = True
@@ -3363,6 +3429,7 @@ class EMSController:
         # =====================
 
         raw_states = fetch_all_devices(self.devices)
+        self.last_fetch_at = time.time()
 
         states = []
 
@@ -3375,7 +3442,7 @@ class EMSController:
             if state:
 
                 self.last_states[dev.name] = state
-                self.last_seen[dev.name] = time.time()
+                self.last_seen[dev.name] = self.last_fetch_at
                 self.device_online[dev.name] = True
 
                 states.append(state)

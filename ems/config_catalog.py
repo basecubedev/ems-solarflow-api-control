@@ -809,7 +809,7 @@ _SECTIONS = [
             _field(
                 "system.output_control.telemetry_max_age_seconds",
                 "Telemetry max age",
-                "Maximum age of device telemetry before EMS treats it as stale.",
+                "Maximum age of device telemetry before EMS treats it as stale. Readings inside this window are also what the energy statistics count as measured.",
                 "number",
                 unit="s",
                 minimum=0,

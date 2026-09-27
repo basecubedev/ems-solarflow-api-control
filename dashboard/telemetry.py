@@ -87,6 +87,28 @@ def _grid_reading_is_valid(controller):
     )
 
 
+def _device_telemetry_is_measured(controller, name):
+    """Whether this device's published power may be integrated as measured.
+
+    Asked of the controller, which owns both the last-read timestamps and the
+    staleness window the control loop calculates inside. One failed read leaves
+    a cached state the loop still calculates with, so it is a measurement here
+    too; only telemetry that aged out of that window is not. A controller that
+    cannot date its telemetry -- simulation, replay, a test double -- is taken
+    at its word, like a grid client without health data.
+    """
+
+    fresh = getattr(controller, "telemetry_fresh", None)
+    if not callable(fresh):
+        return True
+
+    try:
+        return bool(fresh(name))
+    except Exception:
+        logging.debug("event=dashboard_telemetry_age_unavailable", exc_info=True)
+        return True
+
+
 def _state_telemetry_fields(state):
     """Map a DeviceState to the shared telemetry fields of a device tile.
 
@@ -256,8 +278,9 @@ def build_dashboard_snapshot(
     offline_devices = []
     # Only a device the operator is actually running can stop the statistics:
     # a unit switched off for the season is disabled, and a disabled device is
-    # not expected to report.
-    offline_enabled_devices = []
+    # not expected to report. A failed read is not a gap either -- see
+    # _device_telemetry_is_measured.
+    unmeasured_devices = []
 
     capabilities = getattr(controller, "_dashboard_capabilities", None) or []
 
@@ -269,13 +292,23 @@ def build_dashboard_snapshot(
 
         if not online:
             offline_devices.append(name)
-            if device_enabled:
-                offline_enabled_devices.append(name)
 
-        pv_total_w += fields["pv_input_w"]
-        inverter_total_w += fields["output_w"]
-        battery_total_w += fields["battery_power_w"]
-        soc_values.append(fields["soc"])
+        measured = _device_telemetry_is_measured(controller, name)
+
+        if device_enabled and not measured:
+            unmeasured_devices.append(name)
+
+        # An enabled device that went quiet stays in the totals: its whole
+        # sample is dropped, so nothing it carries is ever integrated, and the
+        # Overview keeps showing what the control loop still calculates with. A
+        # disabled one is exempt from dropping the sample, and pays for that by
+        # not contributing -- otherwise a unit switched off for the season would
+        # have its last reading integrated until the EMS restarts.
+        if measured or device_enabled:
+            pv_total_w += fields["pv_input_w"]
+            inverter_total_w += fields["output_w"]
+            battery_total_w += fields["battery_power_w"]
+            soc_values.append(fields["soc"])
 
         capability = capabilities[index] if index < len(capabilities) else None
         target_w = effective_targets[index] if index < len(effective_targets) else 0
@@ -314,8 +347,10 @@ def build_dashboard_snapshot(
         if not online:
             offline_devices.append(name)
             # A telemetry-only device has no enabled switch of its own and it
-            # contributes to the aggregates, so it counts.
-            offline_enabled_devices.append(name)
+            # contributes to the aggregates, so it counts. Its status is
+            # already time-based: the MQTT runtime calls a snapshot stale only
+            # past its own stale_after_seconds.
+            unmeasured_devices.append(name)
 
         pv_total_w += fields["pv_input_w"]
         inverter_total_w += fields["output_w"]
@@ -407,11 +442,12 @@ def build_dashboard_snapshot(
         "devices": devices,
         "grid_power_w": grid_power_w,
         "grid_power_valid": grid_power_valid,
-        # An offline device keeps its last telemetry, so the aggregates below
-        # are only a measurement while every device that is meant to run is
-        # reporting. A disabled device does not block them: switching a unit off
-        # for the season is an operator decision, not a gap.
-        "device_power_valid": not offline_enabled_devices,
+        # A silent device keeps its last telemetry, so the aggregates below are
+        # a measurement only while every device that is meant to run has
+        # answered inside the staleness window. A disabled device does not block
+        # them: switching a unit off for the season is an operator decision,
+        # not a gap.
+        "device_power_valid": not unmeasured_devices,
         "home_load_w": home_load_w,
         "pv_total_w": _rounded(pv_total_w),
         "inverter_output_w": _rounded(inverter_total_w),

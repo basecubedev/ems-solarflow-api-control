@@ -2384,3 +2384,140 @@ def test_a_write_interval_of_zero_is_read_as_one_loop_tick():
 
     codes = {check["code"] for check in checks}
     assert "energy_sample_window_below_write_interval" in codes
+
+
+def _telemetry_window_codes(output_control, *, loop_interval=5, enabled=True):
+    checks = []
+    diagnose_config_plausibility(
+        checks,
+        None,
+        {
+            "system": {
+                "loop_interval": loop_interval,
+                "output_control": output_control,
+            },
+            "dashboard": {"write_interval_seconds": 5},
+            "energy_savings": {"enabled": enabled, "max_sample_delta_seconds": 20},
+        },
+    )
+    return {check["code"]: check for check in checks}
+
+
+def test_a_telemetry_window_of_zero_is_reported():
+    """The control loop reads zero as 'always stale', so nothing is measured.
+
+    Every energy figure then stays at zero without saying why -- the same class
+    of silent misconfiguration as a sample window below the write interval.
+    """
+
+    codes = _telemetry_window_codes({"telemetry_max_age_seconds": 0})
+
+    assert codes["energy_telemetry_window_disabled"]["level"] == "warning"
+
+
+def test_a_negative_telemetry_window_is_reported_too():
+    """``safe_float`` clamps it to zero, which is the disabling value."""
+
+    codes = _telemetry_window_codes({"telemetry_max_age_seconds": -5})
+
+    assert "energy_telemetry_window_disabled" in codes
+
+
+def test_a_telemetry_window_below_the_loop_interval_is_reported():
+    """A single missed read then ages out before the next one arrives."""
+
+    codes = _telemetry_window_codes({"telemetry_max_age_seconds": 3})
+
+    assert codes["energy_telemetry_window_below_loop_interval"]["level"] == "warning"
+    details = codes["energy_telemetry_window_below_loop_interval"]["details"]
+    assert details["loop_interval"] == 5
+    assert details["telemetry_max_age_seconds"] == 3
+
+
+def test_the_default_telemetry_window_covers_the_loop_interval():
+    codes = _telemetry_window_codes({})
+
+    assert "energy_telemetry_window_valid" in codes
+    assert "energy_telemetry_window_disabled" not in codes
+
+
+def test_an_unreadable_telemetry_window_falls_back_like_the_controller_does():
+    """``safe_float`` returns the default for text, so diagnose must not warn."""
+
+    codes = _telemetry_window_codes({"telemetry_max_age_seconds": "ten"})
+
+    assert "energy_telemetry_window_valid" in codes
+
+
+def test_disabled_statistics_cannot_be_misconfigured_into_silence():
+    codes = _telemetry_window_codes(
+        {"telemetry_max_age_seconds": 0}, enabled=False
+    )
+
+    assert "energy_telemetry_window_disabled" not in codes
+    assert "energy_telemetry_window_valid" not in codes
+
+
+def test_a_telemetry_window_far_above_the_loop_interval_is_reported():
+    """Too large invents energy, the way too small interrupts it.
+
+    Inside the window a silent device keeps contributing its last reading. At
+    ten seconds that is noise; at an hour it is a device that has been gone for
+    an hour and still counted.
+    """
+
+    codes = _telemetry_window_codes({"telemetry_max_age_seconds": 3600})
+
+    check = codes["energy_telemetry_window_far_above_loop_interval"]
+    assert check["level"] == "warning"
+    assert check["details"]["telemetry_max_age_seconds"] == 3600
+
+
+def test_a_generous_but_plausible_telemetry_window_is_not_reported():
+    codes = _telemetry_window_codes({"telemetry_max_age_seconds": 60})
+
+    assert "energy_telemetry_window_valid" in codes
+    assert "energy_telemetry_window_far_above_loop_interval" not in codes
+
+
+def test_a_long_loop_interval_earns_a_wider_telemetry_window():
+    """The plausible window is a number of loop intervals, not a fixed second.
+
+    On a two-minute loop a 200 s window is under two intervals -- ordinary. A
+    fixed 60 s ceiling called that implausible and warned about a healthy setup.
+    """
+
+    codes = _telemetry_window_codes(
+        {"telemetry_max_age_seconds": 200}, loop_interval=120
+    )
+
+    assert "energy_telemetry_window_far_above_loop_interval" not in codes
+    assert "energy_telemetry_window_valid" in codes
+
+
+def test_a_long_loop_interval_does_not_excuse_any_window():
+    codes = _telemetry_window_codes(
+        {"telemetry_max_age_seconds": 7200}, loop_interval=120
+    )
+
+    assert "energy_telemetry_window_far_above_loop_interval" in codes
+
+
+def test_a_short_loop_interval_keeps_the_absolute_floor():
+    """A one-second loop must not turn a 30 s window into a warning."""
+
+    codes = _telemetry_window_codes(
+        {"telemetry_max_age_seconds": 30}, loop_interval=1
+    )
+
+    assert "energy_telemetry_window_far_above_loop_interval" not in codes
+
+
+def test_an_invalid_loop_interval_does_not_silence_the_telemetry_check():
+    """One unreadable field may not suppress an unrelated warning."""
+
+    codes = _telemetry_window_codes(
+        {"telemetry_max_age_seconds": 3600}, loop_interval="soon"
+    )
+
+    assert "energy_telemetry_window_far_above_loop_interval" in codes
