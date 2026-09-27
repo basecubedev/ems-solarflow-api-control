@@ -713,6 +713,22 @@ def diagnose_git_info(checks):
         diagnose_add(checks, "project", "ok", "git_clean", "Git working tree is clean")
 
 
+def diagnose_truthy(value, default=True):
+    """Read a config flag the way the runtime does.
+
+    ``diagnose_bool`` answers whether a value *is* a boolean, which is a
+    different question: used as a truth test it reads ``1`` as "not enabled".
+    """
+
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
 def diagnose_config_plausibility(checks, args, config_data):
     if not isinstance(config_data, dict):
         return
@@ -761,27 +777,46 @@ def diagnose_config_plausibility(checks, args, config_data):
 
     energy_savings = config_data.get("energy_savings", {})
     dashboard_config = config_data.get("dashboard", {})
-    if isinstance(energy_savings, dict) and isinstance(dashboard_config, dict):
+    if not isinstance(energy_savings, dict):
+        diagnose_add(checks, "config", "error", "energy_savings_not_object", "energy_savings must be an object")
+    elif not isinstance(dashboard_config, dict):
+        diagnose_add(checks, "config", "error", "dashboard_not_object", "dashboard must be an object")
+    elif diagnose_truthy(energy_savings.get("enabled", True)):
         write_interval = diagnose_float(dashboard_config.get("write_interval_seconds", 5))
         max_sample_delta = diagnose_float(
             energy_savings.get("max_sample_delta_seconds", 20)
         )
-        if (
-            diagnose_bool(energy_savings.get("enabled", True))
-            and write_interval is not None
-            and max_sample_delta is not None
-            and write_interval > max_sample_delta
-        ):
-            # Every interval between two stored samples is then longer than the
-            # window the statistics accept, so nothing is ever integrated and
-            # every energy figure stays at zero without saying why.
+        # The controller can only write on a loop tick, so a 16 s write
+        # interval on a 5 s loop stores a sample every 20 s, not every 16.
+        loop_tick = diagnose_float(system.get("loop_interval"))
+        if write_interval is not None and loop_tick and loop_tick > 0:
+            # Zero or anything below one tick means "every loop", which is a
+            # tick apart, not nothing apart.
+            write_interval = max(
+                math.ceil(write_interval / loop_tick) * loop_tick,
+                loop_tick,
+            )
+        if write_interval is None or max_sample_delta is None:
+            diagnose_add(
+                checks,
+                "config",
+                "error",
+                "energy_sample_window_invalid",
+                "dashboard.write_interval_seconds and "
+                "energy_savings.max_sample_delta_seconds must be numeric",
+            )
+        elif write_interval >= max_sample_delta:
+            # Every interval between two stored samples is then at or beyond
+            # the window the statistics accept, so nothing is integrated and
+            # every energy figure stays at zero without saying why. Equality is
+            # included because loop jitter decides each sample at that point.
             diagnose_add(
                 checks,
                 "config",
                 "warning",
                 "energy_sample_window_below_write_interval",
-                "energy_savings.max_sample_delta_seconds is below "
-                "dashboard.write_interval_seconds; no energy is recorded at all",
+                "energy_savings.max_sample_delta_seconds does not exceed the "
+                "effective dashboard write interval; little or no energy is recorded",
                 write_interval_seconds=write_interval,
                 max_sample_delta_seconds=max_sample_delta,
             )

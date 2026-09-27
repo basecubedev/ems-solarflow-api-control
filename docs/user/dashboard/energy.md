@@ -85,18 +85,21 @@ by a whole one. A sample whose grid meter did not answer counts for nothing: an
 unreachable meter reads as 0 W, and taking that at face value would report a
 perfect autarky for a system that simply lost sight of the grid.
 
-If the grid meter does not answer, or a device is offline, **all** the figures
-stop for as long as that lasts — a meter that never answered reads as 0 W and
-an offline device keeps reporting its last reading, and counting either would
-be inventing energy. It is all of them together on purpose: taking the meter's
-reading while ignoring the device's would divide two numbers measured at
-different moments. The Overview names an offline device under **Offline
-devices**; repairing or removing it is what starts the figures again.
+If the grid meter does not answer, or a device is offline, every figure on the
+tab stops for as long as that lasts — the delivered energy and the savings
+estimate with them. A meter that never answered reads as 0 W and an offline
+device keeps reporting its last value, and counting either would be inventing
+energy. They stop together on purpose: taking the meter's reading while
+ignoring the device's would divide two numbers measured at different moments.
+The Overview names an offline device under **Offline devices**; repairing or
+removing it is what starts the figures again.
 
-A day on which the EMS was down for a while still shows its ratio, and its
-figures carry the `◦`. That is deliberate: a hole is bounded by its day, and
-withholding the ratio for every restart would mean you never see one for a
-month, a year or the lifetime.
+
+Time inside a period that was not measured — a restart, an outage, a day the
+EMS did not run — marks the figures with the `◦` instead of hiding the number.
+Everything stops and resumes together, so the percentage describes the measured
+part of the period. Withholding it for every restart would mean you never see
+one for a month, a year or the lifetime.
 
 ### Since when a figure exists
 
@@ -107,7 +110,7 @@ For periods that begin before that day, the tab does not print a zero:
 | --- | --- |
 | `28.9 kWh ◦` | The period is only partly measured; the figure covers the measured part |
 | `not measured` | The period lies entirely before the channels existed |
-| `Channels since 2026-09-12` | The first day the channels were measured |
+| `Measured since 2026-09-12` | The first day the channels were measured |
 
 The inverter output and the savings estimate are older than the channels, so a
 card can show a full-year output next to channels marked `◦`. That is not a

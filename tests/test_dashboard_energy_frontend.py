@@ -218,19 +218,17 @@ global.document = {{
 }};
 
 app.setEnergyDetail("expert");
-const afterExpert = {{ detail: app.state.energyDetail, stored: stored["dashboard.energyDetail"], subtitle: subtitle.textContent }};
+const afterExpert = {{ detail: app.state.energyDetail, stored: stored["dashboard.energyDetail"] }};
 app.setEnergyDetail("nonsense");
-const afterNonsense = {{ detail: app.state.energyDetail, subtitle: subtitle.textContent }};
+const afterNonsense = {{ detail: app.state.energyDetail }};
 console.log(JSON.stringify({{ afterExpert, afterNonsense }}));
 """
     out = run_node(script)
 
     assert out["afterExpert"]["detail"] == "expert"
     assert out["afterExpert"]["stored"] == "expert"
-    assert "◦" in out["afterExpert"]["subtitle"]
     # An unknown level falls back instead of leaving the board in limbo.
     assert out["afterNonsense"]["detail"] == "basic"
-    assert out["afterNonsense"]["subtitle"] == "Based on measured inverter output."
 
 
 def test_demo_mode_carries_the_same_channels_as_the_backend():
@@ -297,3 +295,24 @@ def test_a_marked_period_marks_its_ratio_too():
     assert "54% ◦" in marked
     assert "54%" in clean
     assert "◦" not in clean
+
+
+def test_the_legend_follows_the_mark_not_the_detail_level():
+    """Basic shows the mark on the ratio, so it needs the sentence too."""
+
+    def subtitle_for(stats):
+        script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const subtitle = {{ textContent: "" }};
+global.document = {{ getElementById: () => subtitle }};
+app.state.energyDetail = "basic";
+app.renderEnergySubtitle({json.dumps(stats)});
+console.log(JSON.stringify({{ subtitle: subtitle.textContent }}));
+"""
+        return run_node(script)["subtitle"]
+
+    clean = {"today": payload(channels={"grid_import": 2.5})}
+    marked = {"today": payload(coverage={"grid_import": "partial"})}
+
+    assert "\u25e6" in subtitle_for(marked)
+    assert subtitle_for(clean) == "Based on measured inverter output."

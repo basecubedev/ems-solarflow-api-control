@@ -2268,6 +2268,67 @@ def test_a_sample_window_below_the_write_interval_is_reported():
     assert codes["energy_sample_window_below_write_interval"]["level"] == "warning"
 
 
+def test_a_sample_window_equal_to_the_write_interval_is_reported():
+    """At equality, loop jitter decides every single sample."""
+
+    checks = []
+    diagnose_config_plausibility(
+        checks,
+        None,
+        {
+            "system": {},
+            "dashboard": {"write_interval_seconds": 20},
+            "energy_savings": {"enabled": True, "max_sample_delta_seconds": 20},
+        },
+    )
+
+    codes = {check["code"] for check in checks}
+    assert "energy_sample_window_below_write_interval" in codes
+
+
+def test_the_sample_window_check_reads_enabled_the_way_the_store_does():
+    """``1`` enables the statistics, and ``false`` disables them."""
+
+    def codes_for(enabled):
+        checks = []
+        diagnose_config_plausibility(
+            checks,
+            None,
+            {
+                "system": {},
+                "dashboard": {"write_interval_seconds": 60},
+                "energy_savings": {
+                    "enabled": enabled,
+                    "max_sample_delta_seconds": 20,
+                },
+            },
+        )
+        return {check["code"] for check in checks}
+
+    assert "energy_sample_window_below_write_interval" in codes_for(1)
+    assert "energy_sample_window_below_write_interval" in codes_for("true")
+    # Disabled statistics cannot be misconfigured into silence.
+    assert "energy_sample_window_below_write_interval" not in codes_for(False)
+    assert "energy_sample_window_valid" not in codes_for(False)
+
+
+def test_an_unreadable_sample_window_is_an_error_not_an_ok():
+    checks = []
+    diagnose_config_plausibility(
+        checks,
+        None,
+        {
+            "system": {},
+            "dashboard": {"write_interval_seconds": "xyz"},
+            "energy_savings": {"enabled": True, "max_sample_delta_seconds": 20},
+        },
+    )
+
+    codes = {check["code"]: check for check in checks}
+    assert codes["energy_sample_window_invalid"]["level"] == "error"
+    assert "energy_sample_window_valid" not in codes
+
+
 def test_a_sample_window_above_the_write_interval_is_fine():
     checks = []
     diagnose_config_plausibility(
@@ -2283,3 +2344,43 @@ def test_a_sample_window_above_the_write_interval_is_fine():
     codes = {check["code"] for check in checks}
     assert "energy_sample_window_valid" in codes
     assert "energy_sample_window_below_write_interval" not in codes
+
+
+def test_the_sample_window_check_counts_the_loop_quantisation():
+    """The controller can only write on a loop tick.
+
+    A 16-second write interval on a 5-second loop stores a sample every 20
+    seconds, which a bare comparison against the 20-second window calls fine.
+    """
+
+    checks = []
+    diagnose_config_plausibility(
+        checks,
+        None,
+        {
+            "system": {"loop_interval": 5},
+            "dashboard": {"write_interval_seconds": 16},
+            "energy_savings": {"enabled": True, "max_sample_delta_seconds": 20},
+        },
+    )
+
+    codes = {check["code"] for check in checks}
+    assert "energy_sample_window_below_write_interval" in codes
+
+
+def test_a_write_interval_of_zero_is_read_as_one_loop_tick():
+    """Zero means "write every loop", which is a tick apart, not nothing."""
+
+    checks = []
+    diagnose_config_plausibility(
+        checks,
+        None,
+        {
+            "system": {"loop_interval": 30},
+            "dashboard": {"write_interval_seconds": 0},
+            "energy_savings": {"enabled": True, "max_sample_delta_seconds": 20},
+        },
+    )
+
+    codes = {check["code"] for check in checks}
+    assert "energy_sample_window_below_write_interval" in codes

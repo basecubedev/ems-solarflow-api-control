@@ -1514,6 +1514,7 @@ function renderEnergyStats(stats) {
 
   const currency = stats.currency || "EUR";
   const meta = Array.isArray(stats.channel_meta) ? stats.channel_meta : [];
+  renderEnergySubtitle(stats);
   const monthly = normalizeMonthlyEnergy(stats.monthly_current_year);
   const yearly = normalizeYearlyEnergy(stats.yearly);
   const lifetime = stats.lifetime || {};
@@ -1623,6 +1624,32 @@ function energyPeriodStage(label, values, currency, options = {}) {
       </div>
     </article>
   `;
+}
+
+// The legend follows the mark rather than the detail level: Basic shows the
+// mark on the ratio, so it needs the sentence just as much.
+function renderEnergySubtitle(stats) {
+  const subtitle = $("energyStatsSubtitle");
+  if (!subtitle) return;
+
+  const entries = [
+    stats?.today,
+    stats?.yesterday,
+    stats?.last_7_days,
+    stats?.last_4_weeks,
+    stats?.last_12_months,
+    stats?.best_day,
+    stats?.lifetime,
+    ...(Array.isArray(stats?.monthly_current_year) ? stats.monthly_current_year : []),
+    ...(Array.isArray(stats?.yearly) ? stats.yearly : []),
+  ];
+  const anyPartial = entries.some((entry) =>
+    Object.values(entry?.coverage || {}).some((state) => state === "partial"),
+  );
+
+  subtitle.textContent = anyPartial
+    ? `Based on measured inverter output. ${ENERGY_PARTIAL_MARK} marks a partly measured period.`
+    : "Based on measured inverter output.";
 }
 
 function energyDetailIsExpert() {
@@ -3677,13 +3704,6 @@ function setEnergyDetail(detail, persist = true) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", active ? "true" : "false");
   });
-
-  const subtitle = $("energyStatsSubtitle");
-  if (subtitle) {
-    subtitle.textContent = next === "expert"
-      ? `Based on measured inverter output. ${ENERGY_PARTIAL_MARK} marks a partly measured period.`
-      : "Based on measured inverter output.";
-  }
 
   if (persist && window.localStorage) {
     try {
@@ -7255,6 +7275,7 @@ if (typeof module !== "undefined") {
     renderControlExplain,
     renderEnergyStats,
     setEnergyDetail,
+    renderEnergySubtitle,
     energyPeriodStage,
     energyChannelFacts,
     energyChannelValue,

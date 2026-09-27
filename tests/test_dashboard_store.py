@@ -1061,7 +1061,7 @@ def test_the_first_measured_day_starts_the_measurement(tmp_path):
     Marking it would leave every range that contains the start -- the lifetime,
     the first month, the first calendar year -- incomplete for good, and those
     are the ranges whose ratio a reader keeps. The price is one partly measured
-    day inside them; the card carries "Channels since" beside it.
+    day inside them; the card carries "Measured since" beside it.
     """
 
     path = tmp_path / "dashboard.sqlite"
@@ -1262,3 +1262,46 @@ def test_an_outage_marks_every_channel_alike_and_keeps_the_ratio(tmp_path):
     summary = store.energy_summary(now="2026-06-01T23:00:00+00:00")
     assert set(summary["today"]["coverage"].values()) == {"partial"}
     assert summary["today"]["ratios"]["self_sufficiency"] is not None
+
+
+def test_delivered_energy_follows_the_same_gate_as_the_channels(tmp_path):
+    """One rule for every figure on the card.
+
+    The delivered energy used to keep integrating through an outage, which put
+    a number built on frozen telemetry next to channels reading "not measured".
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    for index in range(3):
+        sample = snapshot((first + timedelta(seconds=index * 6)).isoformat(), output=800)
+        sample["device_power_valid"] = False
+        store.record(sample)
+
+    assert daily_row(path, "2026-06-01")[0] == 0
+    assert daily_row(path, "2026-06-01")[1] == 0
+
+
+def test_a_missing_day_marks_the_period_and_keeps_its_ratio(tmp_path):
+    """A day nobody measured takes the same samples from both sides.
+
+    It is the same case as a hole inside a day, and the figure says so with the
+    mark rather than disappearing for good.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+
+    # June is measured from its first day; the second is the day nobody saw.
+    _record_day(store, datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc), 3)
+    _record_day(store, datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc), 3)
+
+    summary = store.energy_summary(now="2026-06-03T18:00:00+00:00")
+    june = summary["monthly_current_year"][5]
+
+    assert june["coverage"]["grid_import"] == "partial"
+    assert june["ratios"]["self_sufficiency"] is not None
+    # A range the channels were not measuring across still has no ratio.
+    assert summary["last_12_months"]["ratios"]["self_sufficiency"] is None
