@@ -122,6 +122,7 @@ For periods that begin before that day, the tab does not print a zero:
 
 | What you see | What it means |
 | --- | --- |
+| `78 Wh` | Below a kilowatt-hour the figure is in watt-hours, so a small or freshly started total is readable |
 | `28.9 kWh ◦` | The period is only partly measured; the figure covers the measured part |
 | `not measured` | The period lies entirely before the channels existed |
 | `Measured since 2026-09-12` | The first day the channels were measured |

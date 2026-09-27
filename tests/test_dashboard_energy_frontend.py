@@ -368,3 +368,120 @@ def test_a_figure_above_a_kilowatt_hour_keeps_its_kilowatt_hours():
 
     assert "48.6 kWh" in html
     assert "1,032 kWh" in html
+
+
+def test_one_rule_formats_an_energy_amount_everywhere():
+    """The Energy tab and the Analytics KPIs show the same quantities.
+
+    Grid import, home consumption and the battery directions appear on both, so
+    two rounding rules for one question would let the same figure read as
+    "2070.0 kWh" on one tab and "2,070 kWh" on the other.
+    """
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const cases = [0.642, 78, 999, 1000, 1500, 520000, 2070000];
+console.log(JSON.stringify({{
+  label: cases.map((wh) => app.energyLabel(wh)),
+  amount: cases.map((wh) => app.formatEnergyAmount(wh / 1000)),
+}}));
+"""
+    result = run_node(script)
+
+    assert result["label"] == result["amount"]
+    assert result["amount"] == [
+        "1 Wh",
+        "78 Wh",
+        "999 Wh",
+        "1.0 kWh",
+        "1.5 kWh",
+        "520.0 kWh",
+        "2,070 kWh",
+    ]
+
+
+def test_an_unknown_energy_amount_is_not_a_zero():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify({{
+  none: app.energyLabel(null),
+  nan: app.formatEnergyAmount(Number.NaN),
+  zero: app.formatEnergyAmount(0),
+}}));
+"""
+    result = run_node(script)
+
+    assert result["none"] == "--"
+    assert result["nan"] == "--"
+    assert result["zero"] == "0 Wh"
+
+
+def test_the_unit_changes_where_the_rounded_figure_does():
+    """999.5 Wh rounds to a thousand, so it is already a kilowatt-hour.
+
+    Choosing the unit before rounding put a "1,000 Wh" rung between "999 Wh"
+    and "1.0 kWh".
+    """
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify(
+  [0.9989, 0.9995, 0.9999, 1].map((kwh) => app.formatEnergyAmount(kwh)),
+));
+"""
+
+    assert run_node(script) == ["999 Wh", "1.0 kWh", "1.0 kWh", "1.0 kWh"]
+
+
+def test_one_rule_formats_a_power_reading_everywhere():
+    """``watts`` and ``powerLabel`` answered the same question twice."""
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const cases = [0, 500, 999.6, 1000, 1599, 12000];
+console.log(JSON.stringify({{
+  watts: cases.map((w) => app.watts(w)),
+  label: cases.map((w) => app.powerLabel(w)),
+  none: app.powerLabel(null),
+}}));
+"""
+    result = run_node(script)
+
+    assert result["watts"] == result["label"]
+    assert result["watts"] == ["0 W", "500 W", "1.00 kW", "1.00 kW", "1.60 kW", "12.00 kW"]
+    assert result["none"] == "--"
+
+
+def test_an_unknown_reading_is_never_shown_as_a_zero_or_as_nan():
+    """A claimed zero is worse than an admitted gap.
+
+    ``powerLabel`` promises "--" for a missing reading, and delegating to
+    ``watts`` quietly turned NaN into "0 W" -- the same trap as a self
+    sufficiency of "0%" for an unknown ratio. Text that cannot be a number must
+    not reach a tile as "NaN W" either.
+    """
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify({{
+  label_nan: app.powerLabel(Number.NaN),
+  label_text: app.powerLabel("x"),
+  label_null: app.powerLabel(null),
+  label_zero: app.powerLabel(0),
+  watts_text: app.watts("x"),
+  watts_missing: app.watts(undefined),
+  negative_zero: app.formatEnergyAmount(-0.0004),
+}}));
+"""
+    result = run_node(script)
+
+    assert result["label_nan"] == "--"
+    assert result["label_text"] == "--"
+    assert result["label_null"] == "--"
+    assert result["label_zero"] == "0 W"
+    # The tiles keep their own contract: a field that is not there reads as zero
+    # power, because the cockpit shows a number in every tile. It may not read
+    # as "NaN W".
+    assert result["watts_text"] == "0 W"
+    assert result["watts_missing"] == "0 W"
+    assert result["negative_zero"] == "0 Wh"

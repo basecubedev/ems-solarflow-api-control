@@ -260,11 +260,16 @@ function $(id) {
 }
 
 function watts(value) {
-  const number = Number(value || 0);
-  if (Math.abs(number) >= 1000) {
+  // The unit follows the rounded figure, so "1000 W" is never a rung between
+  // "999 W" and "1.00 kW". A tile always shows a number, so a missing field
+  // reads as zero power -- but never as "NaN W".
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0 W";
+  const rounded = Math.round(number);
+  if (Math.abs(rounded) >= 1000) {
     return `${(number / 1000).toFixed(2)} kW`;
   }
-  return `${Math.round(number)} W`;
+  return `${rounded} W`;
 }
 
 function signedWatts(value) {
@@ -1908,15 +1913,17 @@ function energyKwh(values) {
   return 0;
 }
 
+// The one place an energy amount is turned into text. One decimal of a
+// kilowatt-hour is a 100 Wh step, so a real measurement of 78 Wh reads as
+// "0.1 kWh" and a growing figure looks frozen; under a kilowatt-hour the watt
+// hour is the honest unit. The unit follows the *rounded* figure, or 999.5 Wh
+// would sit as "1,000 Wh" between "999 Wh" and "1.0 kWh".
 function formatEnergyAmount(kwh) {
-  // One decimal of a kilowatt-hour is a 100 Wh step, so a real measurement of
-  // 78 Wh reads as "0.1 kWh" and a figure that is growing looks frozen. Under a
-  // kilowatt-hour the watt hour is the honest unit. The rule lives here alone
-  // because the cards and the channel rows must not round differently.
   if (!Number.isFinite(kwh)) return "--";
-  const magnitude = Math.abs(kwh);
-  if (magnitude < 1) return `${Math.round(kwh * 1000).toLocaleString("en-US")} Wh`;
-  const digits = magnitude >= 1000 ? 0 : 1;
+  const rounded = Math.round(kwh * 1000);
+  const wh = rounded === 0 ? 0 : rounded;  // -0 would print as "-0 Wh"
+  if (Math.abs(wh) < 1000) return `${wh.toLocaleString("en-US")} Wh`;
+  const digits = Math.abs(kwh) >= 1000 ? 0 : 1;
   return `${kwh.toLocaleString("en-US", {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
@@ -6418,15 +6425,18 @@ function integrateSeries(data, id, transform) {
 }
 
 function energyLabel(wh) {
+  // The Analytics KPIs show the same quantities as the Energy board -- grid
+  // import, home, the battery directions -- so they round by the same rule.
   if (wh == null) return "--";
-  if (Math.abs(wh) >= 1000) return `${(wh / 1000).toFixed(1)} kWh`;
-  return `${Math.round(wh)} Wh`;
+  return formatEnergyAmount(wh / 1000);
 }
 
 function powerLabel(w) {
-  if (w == null) return "--";
-  if (Math.abs(w) >= 1000) return `${(w / 1000).toFixed(2)} kW`;
-  return `${Math.round(w)} W`;
+  // The rule the tiles use, because a reading may not round differently for
+  // being on the Analytics tab. Unlike a tile this one admits a gap: a claimed
+  // zero for a reading nobody took is a trap this dashboard has fallen into.
+  if (w == null || !Number.isFinite(Number(w))) return "--";
+  return watts(w);
 }
 
 function seriesPeak(data, id) {
@@ -7362,7 +7372,9 @@ if (typeof module !== "undefined") {
     integrateSeries,
     seriesPeak,
     energyLabel,
+    formatEnergyAmount,
     powerLabel,
+    watts,
     runtimeRoleLabel,
     renderDiagnoseReport,
     renderDiagnoseView,
