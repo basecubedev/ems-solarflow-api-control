@@ -100,3 +100,34 @@ test.describe("energy detail switch @smoke", () => {
     );
   });
 });
+
+test.describe("energy card layout @smoke", () => {
+  test("cards in one row start their facts at the same height", async ({ page }) => {
+    // The month cards used to push their facts to the bottom of the card. That
+    // was invisible while every card carried the same two rows; Expert gives
+    // them different row counts, the grid stretches them all to the tallest,
+    // and a short card then showed a hole under its title.
+    await openEnergy(page);
+    await page.click('[data-energy-detail="expert"]');
+
+    // July and September share a row of the six-column grid, so the grid
+    // stretches July to September's height. Comparing across rows proves
+    // nothing, because rows are sized independently.
+    const short = page.locator(".energy-month-card").nth(6);
+    const tall = page.locator(".energy-month-card").nth(8);
+    await expect(tall).toContainText("Grid Import");
+
+    const [shortCard, shortFact, tallCard, tallFact] = await Promise.all([
+      short.boundingBox(),
+      short.locator(".energy-fact").first().boundingBox(),
+      tall.boundingBox(),
+      tall.locator(".energy-fact").first().boundingBox(),
+    ]);
+
+    expect(tallCard.height).toBeGreaterThan(0);
+    // Same distance from the top of the card, within a rounding pixel.
+    const shortOffset = shortFact.y - shortCard.y;
+    const tallOffset = tallFact.y - tallCard.y;
+    expect(Math.abs(shortOffset - tallOffset)).toBeLessThanOrEqual(1);
+  });
+});

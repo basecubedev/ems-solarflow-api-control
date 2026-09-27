@@ -1406,7 +1406,10 @@ h2 { display: inline-flex; align-items: center; gap: calc(7px * var(--d)); }
 .energy-summary-values {
   display: grid;
   gap: calc(4px * var(--d));
-  margin-top: auto;
+  /* Start, not bottom. The grid stretches every card in a row to the tallest,
+     and in Expert the row counts differ, so pushing the facts down left a hole
+     under the title of the shorter cards. */
+  align-content: start;
 }
 .energy-month-card.energy-zero {
   opacity: .62;
