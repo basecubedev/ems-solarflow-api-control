@@ -52,6 +52,7 @@ class ContainerState:
     # "host" means the container binds the host's ports directly and publishes
     # none, so `docker ps --filter publish=` can never see it.
     network_mode: str = ""
+    restart_policy: str = ""
 
     def to_dict(self):
         return {
@@ -195,6 +196,11 @@ class DockerBackend:
     def restart_container(self, name):
         return self.runner.run("docker", ["restart", name], timeout=self.timeout)
 
+    def set_restart_policy(self, name, policy):
+        return self.runner.run(
+            "docker", ["update", "--restart", policy, name], timeout=self.timeout
+        )
+
     def remove_container(self, name):
         return self.runner.run("docker", ["rm", "-f", name], timeout=self.timeout)
 
@@ -300,7 +306,9 @@ def _container_state(name, payload):
         for binding in bindings or []:
             ports.append(f"{binding.get('HostPort', '')}->{port}")
 
-    network_mode = str((payload.get("HostConfig") or {}).get("NetworkMode") or "")
+    host_config = payload.get("HostConfig") or {}
+    network_mode = str(host_config.get("NetworkMode") or "")
+    restart_policy = str((host_config.get("RestartPolicy") or {}).get("Name") or "")
 
     return ContainerState(
         name=name,
@@ -316,6 +324,7 @@ def _container_state(name, payload):
         health_output=health_output,
         ports=tuple(ports),
         network_mode=network_mode,
+        restart_policy=restart_policy,
     )
 
 

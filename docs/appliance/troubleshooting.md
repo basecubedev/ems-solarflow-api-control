@@ -260,6 +260,7 @@ manifest of everything it contains. Check the manifest before sharing it.
 | `grow_root` | The one-shot root growth on a freshly imaged card |
 | `sshd_keys` | The sshd drop-in and host-key generation |
 | `backup_access` | The unit that disables backup access when the export fails |
+| `admin_restart_policy` | The boot unit that gives an older Admin installation its restart policy |
 
 All log output is bounded and redacted before it reaches the browser. A log the
 appliance could not read says so, because an empty log and an unreadable one

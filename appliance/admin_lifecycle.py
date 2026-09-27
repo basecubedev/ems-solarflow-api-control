@@ -20,12 +20,15 @@ from appliance.admin_bootstrap import (
 )
 from appliance import admin_transition
 from appliance.admin_deployment import (
+    ADMIN_RESTART_POLICY,
     DeploymentError,
     apply_digest,
+    apply_restart_policy,
     environment_hash,
     resolve_deployment,
     snapshot,
 )
+from appliance.commands import CommandError
 from appliance.docker_backend import (
     CONTAINER_RUNNING,
     DAEMON_RUNNING,
@@ -42,9 +45,12 @@ from appliance.operation_schema import (
     validate_operation,
 )
 from appliance.operations import (
+    BUSY_CODES,
+    STATE_AWAITING_CONFIRMATION,
     STATE_FAILED_RECOVERABLE,
     STATE_FAILED_TERMINAL,
     STATE_MANUAL_ACTION_REQUIRED,
+    STATE_PLANNED,
     STATE_ROLLED_BACK,
     STATE_ROLLING_BACK,
     STATE_SUCCEEDED,
@@ -68,6 +74,11 @@ TYPE_INSTALL = "admin.install"
 TYPE_ROLLBACK = "admin.rollback"
 TYPE_REPAIR = "admin.repair"
 TYPE_LIFECYCLE = "admin.lifecycle"
+
+ACTION_SET_RESTART_POLICY = "set_restart_policy"
+REPAIR_SCOPE_RESTART_POLICY = "restart_policy"
+BOOT_ACTOR = "boot"
+BOOT_PLAN_TIMEOUT_SECONDS = 120
 
 LABEL_VERSION = "org.opencontainers.image.version"
 LABEL_REVISION = "org.opencontainers.image.revision"
@@ -117,6 +128,149 @@ def command_failure_detail(result):
     bounded = bounded_redacted_log((result.stderr or "") + (result.stdout or ""))
     lines = [line.strip() for line in bounded["text"].splitlines() if line.strip()]
     return lines[-1] if lines else "no output"
+
+
+def restart_policy_state(deployment, container):
+    """Whether Docker will bring this Admin back after a reboot, and what to change.
+
+    Only the installer's own ``restart: "no"``, or a container that still
+    carries no policy while its file names the Admin policy, is due. The
+    installer's file is the appliance's to manage, so a ``no`` there is always
+    the installer's; an operator keeps the Admin down with Stop, which the
+    policy respects. A policy in a file the installer did not write -- a
+    ``no`` included -- is the operator's.
+    """
+
+    compose = deployment.restart_policy
+    installer_no = compose == "no" and deployment.installer_generated
+    unset = container.exists and container.restart_policy in ("", "no")
+    return {
+        "compose": compose,
+        "container": container.restart_policy if container.exists else None,
+        "update_due": installer_no or (compose == ADMIN_RESTART_POLICY and unset),
+    }
+
+
+def run_restart_policy_repair(client, *, wait_seconds=300, clock=time.monotonic, sleep=time.sleep):
+    """Apply the Admin restart policy through the agent, and nothing else.
+
+    Run by ems-appliance-admin-restart-policy.service at boot, after Docker and
+    the agent. It is one of the agent's callers rather than a second writer:
+    the same repair plan, confirmation, operation lock and audit entry the
+    console produces, scoped to this one action. Starting a stopped Admin is
+    never part of it -- Docker cannot tell a reboot from an operator's Stop.
+    """
+
+    from appliance.agent_client import AgentCallError, AgentUnavailableError
+
+    try:
+        state = client.call("admin.get", actor=BOOT_ACTOR)
+    except AgentUnavailableError as exc:
+        return {"ran": False, "reason": "agent_unavailable", "detail": str(exc)}
+    except AgentCallError as exc:
+        return {"ran": False, "reason": "inspect_failed", "detail": exc.message}
+    if not (state.get("restart_policy") or {}).get("update_due"):
+        return {"ran": False, "reason": "nothing_to_do"}
+
+    try:
+        planned = client.call(
+            "admin.plan_repair",
+            actor=BOOT_ACTOR,
+            restart_policy_only=True,
+            timeout=BOOT_PLAN_TIMEOUT_SECONDS,
+        )
+    except AgentUnavailableError as exc:
+        # The agent may still finish the plan after this caller gave up, and an
+        # unconfirmed plan holds the appliance's one operation lock.
+        _cancel_boot_plans(client)
+        return {"ran": False, "reason": "agent_unavailable", "detail": str(exc)}
+    except AgentCallError as exc:
+        busy = exc.code in BUSY_CODES or exc.code == "admin_transition_in_flight"
+        return {"ran": False, "reason": "busy" if busy else "plan_failed", "detail": exc.message}
+
+    operation_id = planned["operation"]["operation_id"]
+    if planned["plan"].get("actions") != [ACTION_SET_RESTART_POLICY]:
+        _cancel(client, operation_id)
+        # Due a moment ago and not plannable now: Docker stopped answering in
+        # between, or the state moved. Either way it is for the next boot.
+        return {"ran": False, "reason": "deferred"}
+
+    try:
+        client.call(
+            "operations.execute",
+            actor=BOOT_ACTOR,
+            operation_id=operation_id,
+            confirmation_token=planned["confirmation_token"],
+        )
+    except AgentUnavailableError as exc:
+        return {
+            "ran": False,
+            "reason": "outcome_unknown",
+            "detail": str(exc),
+            "operation_id": operation_id,
+        }
+    except AgentCallError as exc:
+        _cancel(client, operation_id)
+        return {
+            "ran": False,
+            "reason": "repair_failed",
+            "detail": exc.message,
+            "operation_id": operation_id,
+        }
+
+    deadline = clock() + wait_seconds
+    while True:
+        try:
+            record = client.call("operations.get", actor=BOOT_ACTOR, operation_id=operation_id)
+        except (AgentCallError, AgentUnavailableError) as exc:
+            return {
+                "ran": False,
+                "reason": "outcome_unknown",
+                "detail": getattr(exc, "message", str(exc)),
+                "operation_id": operation_id,
+            }
+        operation = record["operation"]
+        if operation.get("settled"):
+            break
+        if clock() >= deadline:
+            return {"ran": False, "reason": "still_running", "operation_id": operation_id}
+        sleep(1)
+    if operation.get("state") != STATE_SUCCEEDED:
+        error = operation.get("error") or {}
+        return {
+            "ran": False,
+            "reason": "repair_failed",
+            "detail": error.get("message") or operation.get("state"),
+            "operation_id": operation_id,
+        }
+    return {"ran": True, "reason": "", "operation_id": operation_id}
+
+
+def _cancel(client, operation_id):
+    from appliance.agent_client import AgentCallError, AgentUnavailableError
+
+    try:
+        client.call("operations.cancel", actor=BOOT_ACTOR, operation_id=operation_id)
+    except (AgentCallError, AgentUnavailableError):
+        pass
+
+
+def _cancel_boot_plans(client):
+    """Cancel an unconfirmed restart-policy plan this unit may have left behind."""
+
+    from appliance.agent_client import AgentCallError, AgentUnavailableError
+
+    try:
+        listed = client.call("operations.list", actor=BOOT_ACTOR)
+    except (AgentCallError, AgentUnavailableError):
+        return
+    active = listed.get("active") or {}
+    if (
+        active.get("actor") == BOOT_ACTOR
+        and active.get("type") == TYPE_REPAIR
+        and active.get("state") in (STATE_PLANNED, STATE_AWAITING_CONFIRMATION)
+    ):
+        _cancel(client, active["operation_id"])
 
 
 class AdminLifecycleError(Exception):
@@ -226,6 +380,7 @@ class AdminLifecycleService:
         # names the Admin service, and no container was ever created from one.
         # That is the only state a first installation may create files in.
         record["bootstrap_required"] = not deployment.service_defined and not container.exists
+        record["restart_policy"] = restart_policy_state(deployment, container)
         record["transition"] = admin_transition.read_transition(
             admin_transition.transition_path(self.paths, deployment)
         )
@@ -425,14 +580,22 @@ class AdminLifecycleService:
             "current_state": state["container"]["state"],
         }
 
-    def plan_repair(self, operation):
+    def plan_repair(self, operation, *, restart_policy_only=False):
         self._require_no_admin_transition()
-        findings = self.inspect_repair()
+        findings = self.inspect_restart_policy() if restart_policy_only else self.inspect_repair()
         actions = [item.action for item in findings if item.action]
         manual = [
             item.suggestion or item.detail for item in findings if item.manual and not item.ok
         ]
         values = {"actions": actions, "manual_actions": manual}
+        if restart_policy_only:
+            actions = [action for action in actions if action == ACTION_SET_RESTART_POLICY]
+            manual = []
+            values = {
+                "actions": actions,
+                "manual_actions": manual,
+                "scope": REPAIR_SCOPE_RESTART_POLICY,
+            }
         operation.requested_target.update(values)
         self.operations.update_target(operation.operation_id, values)
         return {
@@ -442,6 +605,22 @@ class AdminLifecycleService:
             "manual_actions": manual,
             "healthy": all(item.ok for item in findings),
         }
+
+    def inspect_restart_policy(self):
+        """The one finding a restart-policy repair plans and verifies against.
+
+        The boot unit holds the operation lock while this runs, so it reads the
+        daemon, the deployment and one container -- not the Admin API, the
+        image identity and the port a full inspection probes.
+        """
+
+        if not self.docker.daemon_running():
+            return []
+        deployment = self.deployment()
+        if not deployment.service_defined:
+            return []
+        container = self.docker.inspect_container(self.config.admin_container)
+        return [self._restart_policy_finding(deployment, container)]
 
     def inspect_repair(self):
         """Read-only repair inspection; the preview a repair confirmation shows."""
@@ -567,6 +746,8 @@ class AdminLifecycleService:
                 identity = self._identity_finding(container)
                 if identity is not None:
                     findings.append(identity)
+            if deployment.service_defined:
+                findings.append(self._restart_policy_finding(deployment, container))
 
         findings.append(self._port_finding())
         return findings
@@ -619,6 +800,31 @@ class AdminLifecycleService:
             f"not the known-good {expected}",
             suggestion="Reinstall the recorded Admin version",
             action="recreate_admin",
+        )
+
+    def _restart_policy_finding(self, deployment, container):
+        state = restart_policy_state(deployment, container)
+        if state["update_due"]:
+            return RepairFinding(
+                check="restart_policy",
+                ok=False,
+                detail=f"The Admin restart policy is {state['compose']!r} in the compose file "
+                f"and {state['container'] or 'unset'!r} on the container, so Docker does "
+                "not start the Admin after a reboot",
+                suggestion="Let Docker bring the Admin back after a reboot",
+                action=ACTION_SET_RESTART_POLICY,
+            )
+        if state["compose"] is None:
+            return RepairFinding(
+                check="restart_policy",
+                ok=True,
+                detail="The Admin compose service names no restart policy, so Docker does "
+                f"not start the Admin after a reboot; restart: {ADMIN_RESTART_POLICY} would",
+            )
+        return RepairFinding(
+            check="restart_policy",
+            ok=True,
+            detail=f"The Admin compose service names the restart policy {state['compose']}",
         )
 
     def _api_finding(self):
@@ -1339,7 +1545,10 @@ class AdminLifecycleService:
             applied.append(entry)
 
         self._advance(operation, "verifying_repair", state=STATE_VERIFYING)
-        findings = self.inspect_repair()
+        if operation.requested_target.get("scope") == REPAIR_SCOPE_RESTART_POLICY:
+            findings = self.inspect_restart_policy()
+        else:
+            findings = self.inspect_repair()
         remaining = [item.to_dict() for item in findings if not item.ok]
         # An action that ran but could not be verified is a failure even when
         # the re-inspection happens to find nothing else wrong.
@@ -1422,6 +1631,9 @@ class AdminLifecycleService:
                 return "recreate_failed"
             return self._verified_or_reason()
 
+        if action == ACTION_SET_RESTART_POLICY:
+            return self._apply_restart_policy()
+
         if action.startswith("create_bind_path:"):
             name = action.split(":", 1)[1]
             target = self.paths.export_paths().get(name)
@@ -1434,6 +1646,27 @@ class AdminLifecycleService:
             return "verified" if target.is_dir() else "create_failed"
 
         return "unsupported"
+
+    def _apply_restart_policy(self):
+        """The compose line, then the running container; never a stop or recreate."""
+
+        try:
+            self._require_no_admin_transition()
+            apply_restart_policy(self.deployment())
+            deployment = self.deployment()
+            if deployment.restart_policy != ADMIN_RESTART_POLICY:
+                return "restart_policy_not_applied"
+            container = self.docker.inspect_container(deployment.container, strict=True)
+            if container.exists and container.restart_policy in ("", "no"):
+                result = self.docker.set_restart_policy(deployment.container, ADMIN_RESTART_POLICY)
+                if not result.ok:
+                    return "restart_policy_not_applied"
+            container = self.docker.inspect_container(deployment.container, strict=True)
+        except (AdminLifecycleError, DeploymentError, DockerError, CommandError) as exc:
+            return exc.code
+        if restart_policy_state(deployment, container)["update_due"]:
+            return "restart_policy_not_applied"
+        return "verified"
 
     def _verified_or_reason(self):
         """A repair action reports the failing fact, never a bare "unhealthy"."""

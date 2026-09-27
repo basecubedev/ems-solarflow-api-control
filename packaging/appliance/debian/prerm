@@ -51,7 +51,8 @@ case "$1" in
                               ems-appliance-export-acl.service ems-appliance-export-acl.path \
                               ems-appliance-config-seed.service \
                               ems-appliance-sshd-keys.service \
-                              ems-appliance-grow-root.service || true
+                              ems-appliance-grow-root.service \
+                              ems-appliance-admin-restart-policy.service || true
         fi
         # The export binds must go before the package does, or the mount points
         # survive as stale read-only views of EMS data.
@@ -74,6 +75,12 @@ case "$1" in
         fi
         ;;
     upgrade|failed-upgrade)
+        # A Manager may be replaced by an older package that does not ship this
+        # unit; its enablement would then dangle. The next postinst enables it
+        # again, and abort-upgrade restores it when this upgrade does not go on.
+        if [ -x /bin/systemctl ] || [ -x /usr/bin/systemctl ]; then
+            systemctl disable ems-appliance-admin-restart-policy.service >/dev/null 2>&1 || true
+        fi
         ;;
 esac
 

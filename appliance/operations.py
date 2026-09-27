@@ -109,6 +109,11 @@ class OperationError(Exception):
         self.message = message
 
 
+# What a caller that is not an operator -- a timer, a boot unit -- reads as
+# "someone else holds the appliance; try again next time".
+BUSY_CODES = ("operation_in_progress", "operation_conflict")
+
+
 class OperationConflictError(OperationError):
     def __init__(self, active_id, active_type):
         super().__init__(

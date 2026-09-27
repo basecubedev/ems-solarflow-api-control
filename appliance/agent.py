@@ -334,7 +334,9 @@ class AgentHandlers:
         if name == "admin.plan_rollback":
             return services.admin.plan_rollback(operation)
         if name == "admin.plan_repair":
-            return services.admin.plan_repair(operation)
+            return services.admin.plan_repair(
+                operation, restart_policy_only=args["restart_policy_only"]
+            )
         if name == "admin.plan_lifecycle":
             return services.admin.plan_lifecycle(operation, args["action"])
         if name == "updates.plan":

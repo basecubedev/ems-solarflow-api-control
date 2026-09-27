@@ -14,7 +14,12 @@ import time
 from dataclasses import dataclass, field
 
 from appliance.hostprobe import DPKG_LOCK_FILE
-from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED, STATE_VERIFYING
+from appliance.operations import (
+    BUSY_CODES,
+    STATE_FAILED_TERMINAL,
+    STATE_SUCCEEDED,
+    STATE_VERIFYING,
+)
 from appliance.redaction import bounded_redacted_log
 from appliance.validation import (
     PACKAGE_REPAIR_CONFIGURE,
@@ -526,7 +531,7 @@ def run_scheduled_security_updates(client, config):
     except AgentCallError as exc:
         # An operator at the console owns the appliance; a timer waits for the
         # next one rather than competing for the lock.
-        if exc.code in ("operation_in_progress", "operation_conflict"):
+        if exc.code in BUSY_CODES:
             return {"ran": False, "reason": "busy", "detail": exc.message}
         # A planner that refuses because there is nothing waiting is the
         # ordinary daily answer, not a failure to report as one.
