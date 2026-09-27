@@ -1372,3 +1372,44 @@ def test_device_power_is_valid_while_every_device_reports():
     )
 
     assert _snapshot_for(controller)["device_power_valid"] is True
+
+
+def test_a_disabled_device_does_not_stop_the_statistics():
+    """Switching a unit off for the season is a decision, not a gap.
+
+    An enabled device that stops answering halts the figures, because its last
+    telemetry would otherwise be integrated as a measurement. A disabled one is
+    not being run at all.
+    """
+
+    controller = SimpleNamespace(
+        devices=[SimpleNamespace(name="WR1"), SimpleNamespace(name="WR2")],
+        runtime_state=SimpleNamespace(
+            get_device=lambda name, key, default: (
+                False if (name, key) == ("WR2", "enabled") else default
+            ),
+        ),
+        device_online={"WR1": True, "WR2": False},
+        commanded_total_w=0,
+        filtered_load_w=0,
+        _dashboard_capabilities=[],
+    )
+    state = SimpleNamespace(solar=500, output=300, pack_out=0, pack_in=0, soc=50)
+
+    snapshot = build_dashboard_snapshot(
+        controller,
+        load_w=100,
+        states=[state, state],
+        targets=[300, 300],
+        effective_targets=[300, 300],
+        allocated_total_w=600,
+        effective_total_w=600,
+        enabled=True,
+        max_total_power=800,
+        min_output_limit=35,
+    )
+
+    assert snapshot["devices"]["WR2"]["enabled"] is False
+    assert snapshot["device_power_valid"] is True
+    # It is still reported as offline, which is what the Overview shows.
+    assert snapshot["rules"]["offline_devices"]["active"] is True

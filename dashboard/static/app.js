@@ -173,6 +173,11 @@ const ENERGY_CHANNEL_PRESENTATION = {
 
 const ENERGY_DETAIL_LEVELS = ["basic", "expert"];
 
+// The two channels the backend divides for self-sufficiency. The mark on the
+// percentage follows their coverage, not the board's: a channel added later
+// must not mark a figure that does not read it.
+const ENERGY_RATIO_CHANNELS = ["home_consumption", "grid_import"];
+
 // Marks a value whose period was only partly measured.
 const ENERGY_PARTIAL_MARK = "\u25e6";
 
@@ -1675,7 +1680,8 @@ function energySufficiencyFact(values) {
   if (typeof ratio === "number" && Number.isFinite(ratio)) {
     // The most quotable number on the card is the one that most needs the
     // mark: it is derived from figures that carry it.
-    const partly = Object.keys(values?.coverage || {}).length > 0;
+    const coverage = values?.coverage || {};
+    const partly = ENERGY_RATIO_CHANNELS.some((channelId) => channelId in coverage);
     const text = `${Math.round(ratio * 100)}%${partly ? ` ${ENERGY_PARTIAL_MARK}` : ""}`;
     return energyFact("Self-Sufficiency", text, "gauge", "battery");
   }
@@ -7281,6 +7287,7 @@ if (typeof module !== "undefined") {
     energyChannelValue,
     ENERGY_CHANNEL_PRESENTATION,
     ENERGY_PARTIAL_MARK,
+    ENERGY_RATIO_CHANNELS,
     demoEnergyStats,
     renderDeviceFlow,
     updateSnapshot,

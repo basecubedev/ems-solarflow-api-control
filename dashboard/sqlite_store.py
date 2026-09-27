@@ -111,6 +111,7 @@ class DashboardStore:
         # map and the finished summary are cached here and dropped on write.
         self._coverage = None
         self._summary = None
+        self._schema_ready = True
 
         parent = os.path.dirname(self.path)
         if parent:
@@ -234,6 +235,10 @@ class DashboardStore:
                 rows.append((timestamp, device_name, field, float(device.get(field, 0) or 0)))
 
         with self._lock, self._connect() as con:
+            if not self._schema_ready:
+                self._init_energy_channels(con)
+                self._schema_ready = True
+
             if self.energy_enabled:
                 self._record_energy_sample(con, snapshot)
                 self._coverage = None
@@ -322,12 +327,8 @@ class DashboardStore:
             self._latest = None
             self._coverage = None
             self._summary = None
-            restore_failed = False
             try:
                 yield
-            except BaseException:
-                restore_failed = True
-                raise
             finally:
                 self._latest = None
                 self._coverage = None
@@ -339,11 +340,12 @@ class DashboardStore:
                 # replacing the file is exactly when that happens.
                 try:
                     self._init_db()
-                except sqlite3.Error:
-                    # A restore that already failed leaves the file in an
-                    # unknown state; its own error is the one worth reporting.
-                    if not restore_failed:
-                        raise
+                except Exception:
+                    # Neither a failed restore nor a successful one may be
+                    # reported through this: the caller's own error is the one
+                    # worth having, and a restore that completed must not come
+                    # back as a server error. The next write retries the pass.
+                    self._schema_ready = False
 
     def history(self, range_name="6h"):
         delta = SUPPORTED_RANGES.get(range_name, SUPPORTED_RANGES["6h"])
@@ -435,20 +437,26 @@ class DashboardStore:
 
         date_key = sample_time.astimezone(self.energy_timezone).date().isoformat()
         updated_at = sample_time.astimezone(timezone.utc).isoformat()
-        self._upsert_daily_energy(
-            con,
-            date_key,
-            inverter_output_w,
-            delta_wh,
-            channel_wh,
-            updated_at,
-        )
-        self._record_channel_coverage(con, date_key, updated_at, measured)
-        if elapsed_hours > 0:
-            missed = [
-                channel.id for channel in _channels() if channel.id not in measured
-            ]
-            self._record_channel_gap(con, [date_key], updated_at, missed)
+        if measured:
+            self._upsert_daily_energy(
+                con,
+                date_key,
+                inverter_output_w,
+                delta_wh,
+                channel_wh,
+                updated_at,
+            )
+            self._record_channel_coverage(con, date_key, updated_at, measured)
+        elif elapsed_hours > 0:
+            # The interval was integrable but the readings were not readings.
+            # The day keeps no row for it: a row would make the day count as
+            # measured, and its peak would come from frozen telemetry.
+            self._record_channel_gap(
+                con,
+                [date_key],
+                updated_at,
+                [channel.id for channel in _channels()],
+            )
         elif last_sample_time is not None:
             # Time passed that nothing integrated -- a restart, an outage. The
             # hole belongs to the day the samples stopped and to the day they
@@ -459,12 +467,11 @@ class DashboardStore:
             # measurement rather than a hole in it. Marking it would leave
             # every range containing the start -- the lifetime, the first
             # month, the first calendar year -- incomplete for good.
-            every_channel = [channel.id for channel in _channels()]
             self._record_channel_gap(
                 con,
                 self._gap_boundary_dates(last_sample_time, sample_time),
                 updated_at,
-                every_channel,
+                [channel.id for channel in _channels()],
             )
         con.execute(
             """

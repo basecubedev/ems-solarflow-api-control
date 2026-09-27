@@ -91,8 +91,10 @@ estimate with them. A meter that never answered reads as 0 W and an offline
 device keeps reporting its last value, and counting either would be inventing
 energy. They stop together on purpose: taking the meter's reading while
 ignoring the device's would divide two numbers measured at different moments.
-The Overview names an offline device under **Offline devices**; repairing or
-removing it is what starts the figures again.
+The Overview names an offline device under **Offline devices**; repairing it,
+removing it, or **disabling** it is what starts the figures again — a device you
+have switched off for the season is a decision, not a gap, so a disabled one
+does not hold the statistics.
 
 
 Time inside a period that was not measured — a restart, an outage, a day the

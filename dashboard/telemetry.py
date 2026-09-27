@@ -254,6 +254,10 @@ def build_dashboard_snapshot(
     battery_total_w = 0
     soc_values = []
     offline_devices = []
+    # Only a device the operator is actually running can stop the statistics:
+    # a unit switched off for the season is disabled, and a disabled device is
+    # not expected to report.
+    offline_enabled_devices = []
 
     capabilities = getattr(controller, "_dashboard_capabilities", None) or []
 
@@ -261,9 +265,12 @@ def build_dashboard_snapshot(
         name = dev.name
         fields = _state_telemetry_fields(state)
         online = bool(controller.device_online.get(name, True))
+        device_enabled = bool(_device_runtime(controller, name, "enabled", True))
 
         if not online:
             offline_devices.append(name)
+            if device_enabled:
+                offline_enabled_devices.append(name)
 
         pv_total_w += fields["pv_input_w"]
         inverter_total_w += fields["output_w"]
@@ -276,7 +283,7 @@ def build_dashboard_snapshot(
 
         devices[name] = {
             "online": online,
-            "enabled": bool(_device_runtime(controller, name, "enabled", True)),
+            "enabled": device_enabled,
             **fields,
             "target_w": _rounded(target_w),
             "allocated_target_w": _rounded(allocated_target_w),
@@ -306,6 +313,9 @@ def build_dashboard_snapshot(
 
         if not online:
             offline_devices.append(name)
+            # A telemetry-only device has no enabled switch of its own and it
+            # contributes to the aggregates, so it counts.
+            offline_enabled_devices.append(name)
 
         pv_total_w += fields["pv_input_w"]
         inverter_total_w += fields["output_w"]
@@ -398,8 +408,10 @@ def build_dashboard_snapshot(
         "grid_power_w": grid_power_w,
         "grid_power_valid": grid_power_valid,
         # An offline device keeps its last telemetry, so the aggregates below
-        # are only a measurement while every device is reporting.
-        "device_power_valid": not offline_devices,
+        # are only a measurement while every device that is meant to run is
+        # reporting. A disabled device does not block them: switching a unit off
+        # for the season is an operator decision, not a gap.
+        "device_power_valid": not offline_enabled_devices,
         "home_load_w": home_load_w,
         "pv_total_w": _rounded(pv_total_w),
         "inverter_output_w": _rounded(inverter_total_w),

@@ -303,13 +303,9 @@ def test_energy_first_sample_stores_timestamp_without_wh(tmp_path):
 
     store.record(snapshot(timestamp, output=400))
 
-    row = daily_row(path, "2026-06-01")
-    assert row[0] == 0
-    assert row[1] == 0
-    assert row[2] == 0.35
-    assert row[3] == "EUR"
-    assert row[4] == 400
-    assert row[5] == 1
+    # The first sample integrates nothing, so it writes no day: a row would
+    # make the day count as measured and carry a peak nothing was measured for.
+    assert daily_row(path, "2026-06-01") is None
 
     with sqlite3.connect(path) as con:
         state = con.execute(
@@ -332,7 +328,7 @@ def test_energy_integration_uses_actual_elapsed_seconds(tmp_path):
 
     row = daily_row(path, "2026-06-01")
     assert row[0] == pytest.approx(400 * 5 / 3600)
-    assert row[5] == 2
+    assert row[5] == 1
 
 
 def test_energy_integration_uses_measured_output_not_control_target(tmp_path):
@@ -389,10 +385,7 @@ def test_energy_large_delta_is_skipped(tmp_path):
     store.record(snapshot(first.isoformat(), output=500))
     store.record(snapshot((first + timedelta(hours=1)).isoformat(), output=500))
 
-    row = daily_row(path, "2026-06-01")
-    assert row[0] == 0
-    assert row[4] == 500
-    assert row[5] == 2
+    assert daily_row(path, "2026-06-01") is None
 
 
 def test_energy_sample_integrates_grid_import_and_export_separately(tmp_path):
@@ -460,7 +453,7 @@ def test_energy_large_delta_skips_every_channel_not_only_the_output(tmp_path):
         )
     )
 
-    assert set(daily_channels(path, "2026-06-01").values()) == {0}
+    assert daily_channels(path, "2026-06-01") is None
 
 
 def test_energy_channel_columns_are_added_to_an_existing_database(tmp_path):
@@ -555,8 +548,9 @@ def test_an_invalid_grid_reading_is_neither_integrated_nor_covered(tmp_path):
         sample["grid_power_valid"] = False
         store.record(sample)
 
-    # The sample is skipped whole, so the battery reading in it goes too.
-    assert set(daily_channels(path, "2026-06-01").values()) == {0}
+    # The sample is skipped whole, so the battery reading in it goes too, and
+    # the day keeps no row at all.
+    assert daily_channels(path, "2026-06-01") is None
     assert channel_coverage(path) == {}
 
 
@@ -586,7 +580,7 @@ def test_energy_same_day_aggregation_updates_peak_and_savings(tmp_path):
     assert row[0] == pytest.approx(expected_wh)
     assert row[1] == pytest.approx((expected_wh / 1000) * 0.50)
     assert row[4] == 800
-    assert row[5] == 3
+    assert row[5] == 2
 
 
 def test_energy_price_change_preserves_historical_daily_savings(tmp_path):
@@ -693,6 +687,7 @@ def test_energy_sample_date_key_uses_configured_timezone(tmp_path):
     )
 
     store.record(snapshot("2026-06-02T22:30:00+00:00", output=400))
+    store.record(snapshot("2026-06-02T22:30:06+00:00", output=400))
 
     assert daily_row(path, "2026-06-03") is not None
     assert daily_row(path, "2026-06-02") is None
@@ -982,10 +977,11 @@ def test_a_restored_database_is_brought_forward_before_the_next_write(tmp_path):
                 sidecar.unlink()
         shutil.copyfile(legacy, path)
 
-    timestamp = datetime.now(timezone.utc).isoformat()
-    store.record(snapshot(timestamp, output=400))
+    now = datetime.now(timezone.utc)
+    store.record(snapshot(now.isoformat(), output=400))
+    store.record(snapshot((now + timedelta(seconds=6)).isoformat(), output=400))
 
-    assert daily_channels(path, _local_date(store, timestamp)) is not None
+    assert daily_channels(path, _local_date(store, now.isoformat())) is not None
     assert store.latest()["energy_stats"]["enabled"] is True
 
 
@@ -1156,7 +1152,7 @@ def test_a_sample_taken_while_a_device_was_away_is_skipped_whole(tmp_path):
         sample["device_power_valid"] = False
         store.record(sample)
 
-    assert set(daily_channels(path, "2026-06-01").values()) == {0}
+    assert daily_channels(path, "2026-06-01") is None
     assert channel_coverage(path) == {}
 
 
@@ -1280,8 +1276,7 @@ def test_delivered_energy_follows_the_same_gate_as_the_channels(tmp_path):
         sample["device_power_valid"] = False
         store.record(sample)
 
-    assert daily_row(path, "2026-06-01")[0] == 0
-    assert daily_row(path, "2026-06-01")[1] == 0
+    assert daily_row(path, "2026-06-01") is None
 
 
 def test_a_missing_day_marks_the_period_and_keeps_its_ratio(tmp_path):

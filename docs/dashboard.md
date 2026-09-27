@@ -432,7 +432,9 @@ cannot tell that apart from a household load.
 
 Whether a sample may be integrated is decided for the sample as a whole:
 `grid_power_valid` and `device_power_valid` both have to hold, or the sample
-counts for no channel. A per-channel gate would let the two sides of the ratio
+counts for no channel and writes no daily row at all. `device_power_valid` is
+false while an **enabled** device is offline; a device disabled in the runtime
+state does not hold the statistics. A per-channel gate would let the two sides of the ratio
 be measured over different samples — house load rests on the meter *and* the
 devices, grid import on the meter alone — which turned a 50 % day into 25 %.
 The price is that a valid meter reading taken while a device was away is

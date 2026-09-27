@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from dashboard.sqlite_store import RATIO_CHANNELS
 from ems.energy_channels import ENERGY_CHANNELS
 
 pytestmark = [
@@ -316,3 +317,13 @@ console.log(JSON.stringify({{ subtitle: subtitle.textContent }}));
 
     assert "\u25e6" in subtitle_for(marked)
     assert subtitle_for(clean) == "Based on measured inverter output."
+
+
+def test_the_ratio_channels_match_the_backend():
+    """Two lists that must agree: the mark on the percentage follows them."""
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify({{ ids: app.ENERGY_RATIO_CHANNELS }}));
+"""
+    assert run_node(script)["ids"] == list(RATIO_CHANNELS)
