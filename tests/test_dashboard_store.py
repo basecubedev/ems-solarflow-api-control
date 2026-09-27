@@ -2,6 +2,7 @@
 import json
 import shutil
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1300,3 +1301,53 @@ def test_a_missing_day_marks_the_period_and_keeps_its_ratio(tmp_path):
     assert june["ratios"]["self_sufficiency"] is not None
     # A range the channels were not measuring across still has no ratio.
     assert summary["last_12_months"]["ratios"]["self_sufficiency"] is None
+
+
+def test_a_read_during_a_restore_waits_instead_of_raising(tmp_path):
+    """The restore clears the cached snapshot while holding the store lock.
+
+    latest() evaluated the summary first and assigned into self._latest
+    afterwards, so a read that arrived during a restore assigned into None and
+    raised for as long as the restore lasted.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True})
+    store.record(snapshot(datetime.now(timezone.utc).isoformat()))
+
+    inside_restore = threading.Event()
+    reader_done = threading.Event()
+    failure = []
+
+    def read():
+        inside_restore.wait(timeout=5)
+        try:
+            store.latest()
+        except Exception as error:  # noqa: BLE001 - the test reports it
+            failure.append(error)
+        finally:
+            reader_done.set()
+
+    reader = threading.Thread(target=read)
+    reader.start()
+    with store.maintenance_pause():
+        inside_restore.set()
+        # The reader is now blocked on the store lock this block holds.
+        assert not reader_done.wait(timeout=0.2)
+    reader.join(timeout=5)
+
+    assert not failure
+
+
+def test_an_unmeasured_interval_over_midnight_marks_both_days(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    before = datetime(2026, 6, 1, 23, 59, 57, tzinfo=timezone.utc)
+
+    store.record(snapshot(before.isoformat()))
+    unreadable = snapshot((before + timedelta(seconds=6)).isoformat())
+    unreadable["grid_power_valid"] = False
+    store.record(unreadable)
+
+    dates = {date_key for _, date_key in channel_gaps(path)}
+    assert dates == {"2026-06-01", "2026-06-02"}

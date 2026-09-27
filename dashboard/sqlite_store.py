@@ -181,6 +181,20 @@ class DashboardStore:
             """)
             self._init_energy_channels(con)
 
+    def _ensure_schema(self, con):
+        """Re-run the schema pass if a restore left it unfinished.
+
+        Both reads and writes go through this: a summary queries the coverage
+        tables, so a failed pass would answer with "no such table" rather than
+        repairing itself.
+        """
+
+        if self._schema_ready:
+            return
+
+        self._init_energy_channels(con)
+        self._schema_ready = True
+
     def _init_energy_channels(self, con):
         """Add the channel columns and the coverage table to any database.
 
@@ -235,9 +249,7 @@ class DashboardStore:
                 rows.append((timestamp, device_name, field, float(device.get(field, 0) or 0)))
 
         with self._lock, self._connect() as con:
-            if not self._schema_ready:
-                self._init_energy_channels(con)
-                self._schema_ready = True
+            self._ensure_schema(con)
 
             if self.energy_enabled:
                 self._record_energy_sample(con, snapshot)
@@ -297,9 +309,14 @@ class DashboardStore:
         self._latest = snapshot
 
     def latest(self):
-        if self._latest is not None:
-            self._latest["energy_stats"] = self.energy_summary()
-            return self._latest
+        # Under the lock: a restore clears the cached snapshot while holding
+        # it, and the assignment below reads self._latest *after* the summary
+        # it waits for -- which used to leave every dashboard read raising for
+        # the length of a restore.
+        with self._lock:
+            if self._latest is not None:
+                self._latest["energy_stats"] = self.energy_summary()
+                return self._latest
 
         with self._lock, self._connect() as con:
             row = con.execute(
@@ -384,6 +401,8 @@ class DashboardStore:
                     return self._summary[1]
 
             with self._connect() as con:
+                self._ensure_schema(con)
+
                 if now is not None:
                     return self._energy_summary(con, now)
 
@@ -450,10 +469,12 @@ class DashboardStore:
         elif elapsed_hours > 0:
             # The interval was integrable but the readings were not readings.
             # The day keeps no row for it: a row would make the day count as
-            # measured, and its peak would come from frozen telemetry.
+            # measured, and its peak would come from frozen telemetry. Like a
+            # skipped interval, it can span midnight and then belongs to both
+            # days.
             self._record_channel_gap(
                 con,
-                [date_key],
+                self._gap_boundary_dates(last_sample_time, sample_time),
                 updated_at,
                 [channel.id for channel in _channels()],
             )
