@@ -206,7 +206,11 @@
               <div class="section-heading energy-stats-heading">
                 <div>
                   <h2>Energy Delivered</h2>
-                  <p>Based on measured inverter output.</p>
+                  <p id="energyStatsSubtitle">Based on measured inverter output.</p>
+                </div>
+                <div class="analytics-tabs" role="tablist" aria-label="Energy detail level">
+                  <button type="button" data-energy-detail="basic" class="active" role="tab" aria-selected="true">Basic</button>
+                  <button type="button" data-energy-detail="expert" role="tab" aria-selected="false">Expert</button>
                 </div>
               </div>
               <div id="energyStats" class="energy-stats-board"></div>

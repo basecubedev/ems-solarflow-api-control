@@ -48,6 +48,9 @@ const state = {
     kpiCache: { dataKey: null, values: {} },
   },
   flowView: "aggregated",
+  // Presentation only: how many rows an energy card carries. Basic is the
+  // board as it was, plus the one ratio the new channels produce.
+  energyDetail: "basic",
   demoMode: isDemoMode(),
   liveTransport: "sse",
   deviceSocValues: new Map(),
@@ -154,6 +157,24 @@ const ANALYTICS_KPIS = {
   soc: { label: () => "Current SoC", tone: "accent", live: true, compute: (_d, s) => (s ? `${Math.round(Number(s.average_soc || 0))}%` : "--") },
   role: { label: () => "Runtime Role", tone: "output", live: true, compute: (_d, s) => runtimeRoleLabel(s) },
 };
+
+// Icon and tone per energy channel. The labels, ids and coverage all come
+// from the payload's channel_meta; only the presentation lives here, and
+// tests/test_dashboard_energy_frontend.py walks both lists so they cannot
+// drift apart.
+const ENERGY_CHANNEL_PRESENTATION = {
+  grid_import: { icon: "grid", tone: "grid" },
+  grid_export: { icon: "grid", tone: "grid" },
+  battery_charge: { icon: "charge", tone: "battery" },
+  battery_discharge: { icon: "battery", tone: "battery" },
+  pv_yield: { icon: "solar", tone: "solar" },
+  home_consumption: { icon: "home", tone: "output" },
+};
+
+const ENERGY_DETAIL_LEVELS = ["basic", "expert"];
+
+// Marks a value whose period was only partly measured.
+const ENERGY_PARTIAL_MARK = "\u25e6";
 
 const FLOW_ACTIVATE_THRESHOLD_W = 8;
 const FLOW_DEACTIVATE_THRESHOLD_W = 3;
@@ -1492,6 +1513,7 @@ function renderEnergyStats(stats) {
   }
 
   const currency = stats.currency || "EUR";
+  const meta = Array.isArray(stats.channel_meta) ? stats.channel_meta : [];
   const monthly = normalizeMonthlyEnergy(stats.monthly_current_year);
   const yearly = normalizeYearlyEnergy(stats.yearly);
   const lifetime = stats.lifetime || {};
@@ -1516,28 +1538,34 @@ function renderEnergyStats(stats) {
     energyPeriodStage("Today", stats.today, currency, {
       kind: "today",
       subtitle: "Current day output",
+      meta,
     }),
     energyPeriodStage("Yesterday", stats.yesterday, currency, {
       kind: "yesterday",
       subtitle: "Previous day output",
+      meta,
     }),
     energyPeriodStage("Last 7 Days", stats.last_7_days, currency, {
       kind: "week",
       subtitle: "Rolling week total",
+      meta,
     }),
     energyPeriodStage("Last 4 Weeks", stats.last_4_weeks, currency, {
       kind: "month",
       subtitle: "Rolling 28-day output",
+      meta,
     }),
     energyPeriodStage("Last 12 Months", stats.last_12_months, currency, {
       kind: "year",
       subtitle: "Rolling annual total",
+      meta,
     }),
     energyPeriodStage("Best Day", stats.best_day, currency, {
       kind: "best",
       subtitle: "Highest measured day",
       detailLabel: "Date",
       detailValue: stats.best_day?.date ? formatEnergyDate(stats.best_day.date) : null,
+      meta,
     }),
   ].join("");
 
@@ -1546,19 +1574,19 @@ function renderEnergyStats(stats) {
       <section class="energy-stage-row energy-kpi-row" aria-label="Energy period overview">
         <div class="energy-period-pipeline energy-kpi-grid">${periods}</div>
       </section>
-      ${energyContextRail(stats, monthly, yearly, lifetime, currency)}
+      ${energyContextRail(stats, monthly, yearly, lifetime, currency, meta)}
       ${energyReportSection("Monthly Summary", "Current calendar year delivered output", `
       <div class="energy-month-grid">
-        ${monthly.map((month) => energyMonthCard(month, currency)).join("")}
+        ${monthly.map((month) => energyMonthCard(month, currency, meta)).join("")}
       </div>
       `)}
       ${energyReportSection("Yearly Summary", "Calendar-year totals from daily aggregates", `
       <div class="energy-year-grid">
-        ${yearly.map((year, index) => energyYearCard(year, currency, { latest: index === yearly.length - 1 })).join("")}
+        ${yearly.map((year, index) => energyYearCard(year, currency, meta, { latest: index === yearly.length - 1 })).join("")}
       </div>
       `)}
       <section class="energy-report-section energy-lifetime-section">
-        ${energyLifetimeCard(lifetime, currency)}
+        ${energyLifetimeCard(lifetime, currency, meta)}
       </section>
     </div>
   `);
@@ -1584,13 +1612,106 @@ function energyPeriodStage(label, values, currency, options = {}) {
       <div class="energy-stage-values">
         ${energyFact("Energy", formatEnergyKwh(values), "inverter", "output")}
         ${energyFact("Savings", formatSavings(values, currency), "charge", "savings")}
+        ${energySufficiencyFact(values)}
+        ${energyChannelFacts(values, options.meta)}
+        ${energyPeakFact(values)}
+        ${energyCoverageFact(values, options.meta)}
         ${detail}
       </div>
     </article>
   `;
 }
 
-function energyMonthCard(month, currency) {
+function energyDetailIsExpert() {
+  return state.energyDetail === "expert";
+}
+
+function energyChannelsAllUnmeasured(values) {
+  const states = Object.values(values?.coverage || {});
+  const channelCount = Object.keys(values?.channels || {}).length;
+  return (
+    channelCount > 0
+    && states.length === channelCount
+    && states.every((coverage) => coverage === "none")
+  );
+}
+
+// Basic leaves out a ratio the period cannot carry; Expert states it as
+// unknown, because a gap an expert cannot see is worse than a dash.
+function energySufficiencyFact(values) {
+  // null is "not measured", and Number(null) is 0: reading it as a number here
+  // would claim a period was zero percent self-sufficient.
+  const ratio = values?.ratios?.self_sufficiency;
+  if (typeof ratio === "number" && Number.isFinite(ratio)) {
+    return energyFact("Self-Sufficiency", `${Math.round(ratio * 100)}%`, "gauge", "battery");
+  }
+  if (!energyDetailIsExpert()) return "";
+  return energyFact("Self-Sufficiency", "--", "gauge", "battery");
+}
+
+function energyChannelFacts(values, meta) {
+  if (!energyDetailIsExpert()) return "";
+  // A card where nothing was measured says so once instead of repeating a
+  // dash per channel: six identical blanks read as a broken card.
+  if (energyChannelsAllUnmeasured(values)) return "";
+  return (meta || [])
+    .map((channel) => {
+      const presentation = ENERGY_CHANNEL_PRESENTATION[channel?.id] || {
+        icon: "rule",
+        tone: "neutral",
+      };
+      return energyFact(
+        channel?.label || channel?.id || "Channel",
+        energyChannelValue(values, channel?.id),
+        presentation.icon,
+        presentation.tone,
+      );
+    })
+    .join("");
+}
+
+// A channel that did not measure the whole period reports it: "--" when the
+// period lies outside what it measured at all, and a trailing mark when only
+// part of it was measured. Neither may read as a zero.
+function energyChannelValue(values, channelId) {
+  const coverage = values?.coverage?.[channelId] || "full";
+  if (coverage === "none") return "--";
+
+  const kwh = values?.channels?.[channelId]?.kwh;
+  if (typeof kwh !== "number" || !Number.isFinite(kwh)) return "--";
+
+  const digits = Math.abs(kwh) >= 1000 ? 0 : 1;
+  const text = `${kwh.toLocaleString("en-US", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })} kWh`;
+  return coverage === "partial" ? `${text} ${ENERGY_PARTIAL_MARK}` : text;
+}
+
+function energyPeakFact(values) {
+  if (!energyDetailIsExpert()) return "";
+  const peak = Number(values?.peak_output_w);
+  if (!Number.isFinite(peak) || peak <= 0) return "";
+  return energyFact("Peak Output", watts(peak), "gauge", "output");
+}
+
+function energyCoverageFact(values, meta) {
+  if (!energyDetailIsExpert()) return "";
+  const states = Object.values(values?.coverage || {});
+  if (!states.length) return "";
+
+  const since = (meta || [])
+    .map((channel) => channel?.since)
+    .filter(Boolean)
+    .sort()[0];
+  if (!since || states.every((coverage) => coverage === "none")) {
+    return energyFact("Channels", "not measured", "history", "neutral");
+  }
+
+  return energyFact("Channels", `since ${formatEnergyDate(since)}`, "history", "neutral");
+}
+
+function energyMonthCard(month, currency, meta) {
   const isZero = energyKwh(month) <= 0;
   const isCurrent = Number(month.month) === new Date().getMonth() + 1;
 
@@ -1599,12 +1720,13 @@ function energyMonthCard(month, currency) {
     subtitle: isCurrent ? "Current month" : "Month total",
     values: month,
     currency,
+    meta,
     className: `energy-month-card ${isZero ? "energy-zero" : ""}`,
     current: isCurrent,
   });
 }
 
-function energyYearCard(year, currency, options = {}) {
+function energyYearCard(year, currency, meta, options = {}) {
   const currentYear = new Date().getFullYear();
   const isCurrent = Number(year.year) === currentYear;
   const isLatest = Boolean(options.latest);
@@ -1614,17 +1736,19 @@ function energyYearCard(year, currency, options = {}) {
     subtitle: isCurrent ? "Current year" : isLatest ? "Latest year" : "Calendar year",
     values: year,
     currency,
+    meta,
     className: "energy-year-card",
     current: isCurrent || isLatest,
   });
 }
 
-function energyLifetimeCard(values, currency) {
+function energyLifetimeCard(values, currency, meta) {
   return energySummaryCard({
     title: "Result / Lifetime",
     subtitle: "All stored daily totals",
     values,
     currency,
+    meta,
     className: "energy-lifetime-card",
     details: values?.since_date
       ? [{ label: "Date", value: formatEnergyDate(values.since_date) }]
@@ -1632,7 +1756,7 @@ function energyLifetimeCard(values, currency) {
   });
 }
 
-function energySummaryCard({ title, subtitle, values, currency, className = "", current = false, details = [] }) {
+function energySummaryCard({ title, subtitle, values, currency, meta, className = "", current = false, details = [] }) {
   const detailFacts = details
     .filter((detail) => detail?.value)
     .map((detail) => energyFact(detail.label || "Detail", detail.value, detail.iconName || "history", detail.tone || "neutral"))
@@ -1647,6 +1771,10 @@ function energySummaryCard({ title, subtitle, values, currency, className = "", 
       <div class="energy-summary-values">
         ${energyFact("Energy", formatEnergyKwh(values), "inverter", "output")}
         ${energyFact("Savings", formatSavings(values, currency), "charge", "savings")}
+        ${energySufficiencyFact(values)}
+        ${energyChannelFacts(values, meta)}
+        ${energyPeakFact(values)}
+        ${energyCoverageFact(values, meta)}
         ${detailFacts}
       </div>
     </article>
@@ -1663,7 +1791,7 @@ function energyFact(label, value, iconName = "rule", tone = "") {
   `;
 }
 
-function energyContextRail(stats, monthly, yearly, lifetime, currency) {
+function energyContextRail(stats, monthly, yearly, lifetime, currency, meta) {
   return `
     <aside class="energy-context-rail" aria-label="Energy statistics context">
       <div class="energy-context-title">Context</div>
@@ -1674,6 +1802,7 @@ function energyContextRail(stats, monthly, yearly, lifetime, currency) {
         ${energyContextItem("Years", energyYearRange(yearly), "history")}
         ${stats.best_day?.date ? energyContextItem("Best Day", formatEnergyDate(stats.best_day.date), "charge") : ""}
         ${energyContextItem("Lifetime", formatEnergyKwh(lifetime), "inverter")}
+        ${energyDetailIsExpert() ? energyContextItem("Channels since", energyChannelsSince(meta), "grid") : ""}
       </div>
     </aside>
   `;
@@ -3514,6 +3643,58 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function energyChannelsSince(meta) {
+  const since = (meta || [])
+    .map((channel) => channel?.since)
+    .filter(Boolean)
+    .sort()[0];
+  return since ? formatEnergyDate(since) : "not measured";
+}
+
+function setEnergyDetail(detail, persist = true) {
+  const next = ENERGY_DETAIL_LEVELS.includes(detail) ? detail : "basic";
+  state.energyDetail = next;
+
+  document.querySelectorAll("[data-energy-detail]").forEach((button) => {
+    const active = button.dataset.energyDetail === next;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+
+  const subtitle = $("energyStatsSubtitle");
+  if (subtitle) {
+    subtitle.textContent = next === "expert"
+      ? `Based on measured inverter output. ${ENERGY_PARTIAL_MARK} marks a partly measured period.`
+      : "Based on measured inverter output.";
+  }
+
+  if (persist && window.localStorage) {
+    try {
+      window.localStorage.setItem("dashboard.energyDetail", next);
+    } catch {
+      // Ignore unavailable storage; the choice holds for this page.
+    }
+  }
+
+  renderEnergyStats(state.snapshot?.energy_stats);
+}
+
+function initEnergyDetailSwitch() {
+  let initialDetail = "basic";
+  if (window.localStorage) {
+    try {
+      initialDetail = window.localStorage.getItem("dashboard.energyDetail") || initialDetail;
+    } catch {
+      initialDetail = "basic";
+    }
+  }
+
+  setEnergyDetail(initialDetail, false);
+  document.querySelectorAll("[data-energy-detail]").forEach((button) => {
+    button.addEventListener("click", () => setEnergyDetail(button.dataset.energyDetail));
+  });
 }
 
 function initFlowViewSwitch() {
@@ -6909,6 +7090,7 @@ function initDashboardApp() {
   initStyleSwitcher();
   initDensitySwitcher();
   initFlowViewSwitch();
+  initEnergyDetailSwitch();
   initFlowTiles();
   initMotionBudget();
   initAuthControls();
@@ -6966,6 +7148,12 @@ if (typeof module !== "undefined") {
     renderDevices,
     renderControlExplain,
     renderEnergyStats,
+    setEnergyDetail,
+    energyPeriodStage,
+    energyChannelFacts,
+    energyChannelValue,
+    ENERGY_CHANNEL_PRESENTATION,
+    ENERGY_PARTIAL_MARK,
     renderDeviceFlow,
     updateSnapshot,
     renderSnapshot,

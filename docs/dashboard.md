@@ -106,6 +106,19 @@ What the two charts do with a zoom is the difference between them:
 The Energy tab shows historical inverter output totals and savings estimates
 from the local SQLite aggregates.
 
+A **Basic / Expert** switch in the panel heading decides how many rows each card
+carries; it is a per-browser display choice (`dashboard.energyDetail` in
+`localStorage`), not configuration, and it changes nothing on the server.
+
+- **Basic** is the board as it was, plus self-sufficiency wherever the period is
+  fully measured.
+- **Expert** adds grid import/export, battery charge/discharge, PV yield and
+  house consumption to the same cards — periods, months, years and the lifetime
+  total alike — together with peak output and the date the channels started.
+
+A value whose period was only partly measured carries a `◦`; a period the
+channels never covered says "not measured" instead of listing zeros.
+
 ![Energy statistics demo screenshot](assets/preview-energy.jpg)
 
 ## Diagnose View
