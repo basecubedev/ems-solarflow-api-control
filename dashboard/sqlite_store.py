@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import calendar
 import contextlib
 import json
 import os
@@ -6,6 +7,13 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from ems.energy_channels import (
+    ENERGY_CHANNELS,
+    channel_sample_wh,
+    self_consumption,
+    self_sufficiency,
+)
 
 
 DEFAULT_ENERGY_SAVINGS = {
@@ -26,6 +34,12 @@ SUPPORTED_RANGES = {
 MONTH_LABELS = (
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
+# Built from the frozen channel registry, never from request input.
+_CHANNEL_COLUMNS = ", ".join(channel.column for channel in ENERGY_CHANNELS)
+_CHANNEL_SUM_COLUMNS = ", ".join(
+    f"COALESCE(SUM({channel.column}), 0)" for channel in ENERGY_CHANNELS
 )
 
 
@@ -137,6 +151,34 @@ class DashboardStore:
                     updated_at TEXT NOT NULL
                 )
             """)
+            self._init_energy_channels(con)
+
+    def _init_energy_channels(self, con):
+        """Add the channel columns and the coverage table to any database.
+
+        A new database takes the same path as an upgraded one, so the migration
+        runs on every start instead of only once on an old file.
+        """
+
+        existing = {
+            row[1] for row in con.execute("PRAGMA table_info(daily_energy_stats)")
+        }
+        for channel in ENERGY_CHANNELS:
+            if channel.column in existing:
+                continue
+            con.execute(
+                f"ALTER TABLE daily_energy_stats "
+                f"ADD COLUMN {channel.column} REAL NOT NULL DEFAULT 0"
+            )
+
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS energy_channel_coverage (
+                channel TEXT PRIMARY KEY,
+                first_date TEXT NOT NULL,
+                last_date TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
 
     def record(self, snapshot):
         timestamp = snapshot["timestamp"]
@@ -270,7 +312,7 @@ class DashboardStore:
             0.0,
             _as_float(snapshot.get("inverter_output_w"), 0.0),
         )
-        delta_wh = 0.0
+        elapsed_hours = 0.0
 
         row = con.execute(
             """
@@ -284,9 +326,12 @@ class DashboardStore:
             if last_sample_time is not None:
                 delta_seconds = (sample_time - last_sample_time).total_seconds()
                 if 0 < delta_seconds <= self.max_energy_sample_delta_seconds:
-                    delta_wh = inverter_output_w * delta_seconds / 3600.0
+                    elapsed_hours = delta_seconds / 3600.0
                 # Larger, zero, or negative intervals are skipped and the
                 # baseline timestamp is advanced to avoid restart/downtime jumps.
+
+        delta_wh = inverter_output_w * elapsed_hours
+        channel_wh = channel_sample_wh(snapshot, elapsed_hours)
 
         date_key = sample_time.astimezone(self.energy_timezone).date().isoformat()
         updated_at = sample_time.astimezone(timezone.utc).isoformat()
@@ -295,8 +340,10 @@ class DashboardStore:
             date_key,
             inverter_output_w,
             delta_wh,
+            channel_wh,
             updated_at,
         )
+        self._record_channel_coverage(con, date_key, updated_at)
         con.execute(
             """
             INSERT INTO energy_integration_state(key, value, updated_at)
@@ -308,7 +355,49 @@ class DashboardStore:
             (sample_time.astimezone(timezone.utc).isoformat(), updated_at),
         )
 
-    def _upsert_daily_energy(self, con, date_key, output_w, delta_wh, updated_at):
+    def _record_channel_coverage(self, con, date_key, updated_at):
+        """Remember the first and last day each channel was measured.
+
+        Coverage answers "since when", not "without gaps": a day the EMS did
+        not run sits inside the range and is a gap in the sums, exactly as it
+        is for the inverter output today.
+        """
+
+        con.executemany(
+            """
+            INSERT INTO energy_channel_coverage(
+                channel,
+                first_date,
+                last_date,
+                updated_at
+            )
+            VALUES(?, ?, ?, ?)
+            ON CONFLICT(channel) DO UPDATE SET
+                first_date = MIN(
+                    energy_channel_coverage.first_date,
+                    excluded.first_date
+                ),
+                last_date = MAX(
+                    energy_channel_coverage.last_date,
+                    excluded.last_date
+                ),
+                updated_at = excluded.updated_at
+            """,
+            [
+                (channel.id, date_key, date_key, updated_at)
+                for channel in ENERGY_CHANNELS
+            ],
+        )
+
+    def _upsert_daily_energy(
+        self,
+        con,
+        date_key,
+        output_w,
+        delta_wh,
+        channel_wh,
+        updated_at,
+    ):
         row = con.execute(
             """
             SELECT price_per_kwh, currency
@@ -326,8 +415,18 @@ class DashboardStore:
             currency = self.energy_currency
 
         savings_value = (delta_wh / 1000.0) * price_per_kwh
+        # The channel columns come from the frozen registry, never from input.
+        channel_columns = "".join(
+            f",\n                {channel.column}" for channel in ENERGY_CHANNELS
+        )
+        channel_placeholders = ", ?" * len(ENERGY_CHANNELS)
+        channel_updates = "".join(
+            f",\n                {channel.column} = daily_energy_stats.{channel.column}"
+            f" + excluded.{channel.column}"
+            for channel in ENERGY_CHANNELS
+        )
         con.execute(
-            """
+            f"""
             INSERT INTO daily_energy_stats(
                 date,
                 inverter_output_wh,
@@ -336,9 +435,9 @@ class DashboardStore:
                 currency,
                 peak_output_w,
                 sample_count,
-                updated_at
+                updated_at{channel_columns}
             )
-            VALUES(?, ?, ?, ?, ?, ?, 1, ?)
+            VALUES(?, ?, ?, ?, ?, ?, 1, ?{channel_placeholders})
             ON CONFLICT(date) DO UPDATE SET
                 inverter_output_wh = daily_energy_stats.inverter_output_wh
                     + excluded.inverter_output_wh,
@@ -349,7 +448,7 @@ class DashboardStore:
                     excluded.peak_output_w
                 ),
                 sample_count = daily_energy_stats.sample_count + 1,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at{channel_updates}
             """,
             (
                 date_key,
@@ -359,52 +458,64 @@ class DashboardStore:
                 currency,
                 float(output_w),
                 updated_at,
+                *(
+                    float(channel_wh.get(channel.id, 0.0))
+                    for channel in ENERGY_CHANNELS
+                ),
             ),
         )
 
     def _energy_summary(self, con, now=None):
         current_time = _parse_timestamp(now) or datetime.now(timezone.utc)
         today = current_time.astimezone(self.energy_timezone).date()
+        coverage = self._channel_coverage(con)
 
         summary = {
             "enabled": bool(self.energy_enabled),
             "currency": self.energy_currency,
             "price_per_kwh": self.energy_price_per_kwh,
+            "channel_meta": _channel_meta(coverage),
             "today": self._range_summary(
                 con,
+                coverage,
                 today.isoformat(),
                 today.isoformat(),
                 include_peak=True,
             ),
             "yesterday": self._range_summary(
                 con,
+                coverage,
                 (today - timedelta(days=1)).isoformat(),
                 (today - timedelta(days=1)).isoformat(),
                 include_peak=True,
             ),
             "last_7_days": self._range_summary(
                 con,
+                coverage,
                 (today - timedelta(days=6)).isoformat(),
                 today.isoformat(),
             ),
             "last_4_weeks": self._range_summary(
                 con,
+                coverage,
                 (today - timedelta(days=27)).isoformat(),
                 today.isoformat(),
             ),
             "last_12_months": self._range_summary(
                 con,
+                coverage,
                 (today - timedelta(days=364)).isoformat(),
                 today.isoformat(),
             ),
-            "best_day": self._best_day(con),
-            "monthly_current_year": self._monthly_summary(con, today.year),
-            "yearly": self._yearly_summary(con),
-            "lifetime": self._lifetime_summary(con),
+            "best_day": self._best_day(con, coverage),
+            "monthly_current_year": self._monthly_summary(con, coverage, today.year),
+            "yearly": self._yearly_summary(con, coverage),
+            "lifetime": self._lifetime_summary(con, coverage),
         }
 
         if not self.energy_enabled:
             summary.update({
+                "channel_meta": _channel_meta({}),
                 "today": _energy_payload(0, 0, peak_output_w=0),
                 "yesterday": _energy_payload(0, 0, peak_output_w=0),
                 "last_7_days": _energy_payload(0, 0),
@@ -428,13 +539,33 @@ class DashboardStore:
 
         return summary
 
-    def _range_summary(self, con, start_date, end_date, include_peak=False):
-        row = con.execute(
+    def _channel_coverage(self, con):
+        """Return ``{channel_id: (first_date, last_date)}`` for measured channels."""
+
+        rows = con.execute(
             """
+            SELECT channel, first_date, last_date
+            FROM energy_channel_coverage
+            """
+        ).fetchall()
+
+        return {row[0]: (row[1], row[2]) for row in rows}
+
+    def _range_summary(
+        self,
+        con,
+        coverage,
+        start_date,
+        end_date,
+        include_peak=False,
+    ):
+        row = con.execute(
+            f"""
             SELECT
                 COALESCE(SUM(inverter_output_wh), 0),
                 COALESCE(SUM(savings_value), 0),
-                COALESCE(MAX(peak_output_w), 0)
+                COALESCE(MAX(peak_output_w), 0),
+                {_CHANNEL_SUM_COLUMNS}
             FROM daily_energy_stats
             WHERE date BETWEEN ? AND ?
             """,
@@ -445,12 +576,21 @@ class DashboardStore:
             row[0],
             row[1],
             peak_output_w=row[2] if include_peak else None,
+            channel_wh=_channel_totals(row[3:]),
+            coverage=coverage,
+            start_date=start_date,
+            end_date=end_date,
         )
 
-    def _best_day(self, con):
+    def _best_day(self, con, coverage):
         row = con.execute(
-            """
-            SELECT date, inverter_output_wh, savings_value, peak_output_w
+            f"""
+            SELECT
+                date,
+                inverter_output_wh,
+                savings_value,
+                peak_output_w,
+                {_CHANNEL_COLUMNS}
             FROM daily_energy_stats
             ORDER BY inverter_output_wh DESC, date ASC
             LIMIT 1
@@ -460,39 +600,60 @@ class DashboardStore:
         if not row:
             return _energy_payload(0, 0, date=None)
 
-        return _energy_payload(row[1], row[2], date=row[0], peak_output_w=row[3])
+        return _energy_payload(
+            row[1],
+            row[2],
+            date=row[0],
+            peak_output_w=row[3],
+            channel_wh=_channel_totals(row[4:]),
+            coverage=coverage,
+            start_date=row[0],
+            end_date=row[0],
+        )
 
-    def _monthly_summary(self, con, year):
+    def _monthly_summary(self, con, coverage, year):
         rows = con.execute(
-            """
+            f"""
             SELECT
                 CAST(substr(date, 6, 2) AS INTEGER) AS month,
                 COALESCE(SUM(inverter_output_wh), 0),
-                COALESCE(SUM(savings_value), 0)
+                COALESCE(SUM(savings_value), 0),
+                {_CHANNEL_SUM_COLUMNS}
             FROM daily_energy_stats
             WHERE substr(date, 1, 4) = ?
             GROUP BY month
             """,
             (f"{year:04d}",),
         ).fetchall()
-        values = {int(row[0]): (row[1], row[2]) for row in rows}
+        values = {int(row[0]): row for row in rows}
 
-        return [
-            {
+        months = []
+        for month in range(1, 13):
+            row = values.get(month)
+            last_day = calendar.monthrange(year, month)[1]
+            months.append({
                 "month": month,
                 "label": MONTH_LABELS[month - 1],
-                **_energy_payload(*values.get(month, (0, 0))),
-            }
-            for month in range(1, 13)
-        ]
+                **_energy_payload(
+                    row[1] if row else 0,
+                    row[2] if row else 0,
+                    channel_wh=_channel_totals(row[3:]) if row else None,
+                    coverage=coverage,
+                    start_date=f"{year:04d}-{month:02d}-01",
+                    end_date=f"{year:04d}-{month:02d}-{last_day:02d}",
+                ),
+            })
 
-    def _yearly_summary(self, con):
+        return months
+
+    def _yearly_summary(self, con, coverage):
         rows = con.execute(
-            """
+            f"""
             SELECT
                 CAST(substr(date, 1, 4) AS INTEGER) AS year,
                 COALESCE(SUM(inverter_output_wh), 0),
-                COALESCE(SUM(savings_value), 0)
+                COALESCE(SUM(savings_value), 0),
+                {_CHANNEL_SUM_COLUMNS}
             FROM daily_energy_stats
             GROUP BY year
             ORDER BY year ASC
@@ -502,24 +663,40 @@ class DashboardStore:
         return [
             {
                 "year": int(row[0]),
-                **_energy_payload(row[1], row[2]),
+                **_energy_payload(
+                    row[1],
+                    row[2],
+                    channel_wh=_channel_totals(row[3:]),
+                    coverage=coverage,
+                    start_date=f"{int(row[0]):04d}-01-01",
+                    end_date=f"{int(row[0]):04d}-12-31",
+                ),
             }
             for row in rows
         ]
 
-    def _lifetime_summary(self, con):
+    def _lifetime_summary(self, con, coverage):
         row = con.execute(
-            """
+            f"""
             SELECT
                 COALESCE(SUM(inverter_output_wh), 0),
                 COALESCE(SUM(savings_value), 0),
-                MIN(date)
+                MIN(date),
+                MAX(date),
+                {_CHANNEL_SUM_COLUMNS}
             FROM daily_energy_stats
             WHERE sample_count > 0
             """
         ).fetchone()
 
-        payload = _energy_payload(row[0], row[1])
+        payload = _energy_payload(
+            row[0],
+            row[1],
+            channel_wh=_channel_totals(row[4:]),
+            coverage=coverage,
+            start_date=row[2],
+            end_date=row[3],
+        )
         payload["since_date"] = row[2]
         return payload
 
@@ -599,7 +776,100 @@ def _as_float(value, default=0.0, minimum=None):
     return parsed
 
 
-def _energy_payload(wh, savings, date=None, peak_output_w=None):
+def _channel_totals(values):
+    """Map a row tail of channel sums back onto the channel ids."""
+
+    return {
+        channel.id: value
+        for channel, value in zip(ENERGY_CHANNELS, values or ())
+    }
+
+
+def _coverage_state(coverage, channel_id, start_date, end_date):
+    """Classify how much of a date range this channel actually measured.
+
+    It answers "since when", not "without gaps": a day the EMS did not run sits
+    inside a covered range and is a gap in the sums, exactly as it is for the
+    inverter output.
+    """
+
+    entry = (coverage or {}).get(channel_id)
+    if not entry or not start_date or not end_date:
+        return "none"
+
+    first_date, last_date = entry
+    if not first_date or not last_date:
+        return "none"
+    if last_date < start_date or first_date > end_date:
+        return "none"
+    if first_date <= start_date and last_date >= end_date:
+        return "full"
+
+    return "partial"
+
+
+def _channel_meta(coverage):
+    return [
+        {
+            "id": channel.id,
+            "label": channel.label,
+            "unit": "Wh",
+            "since": (coverage or {}).get(channel.id, (None, None))[0],
+            "until": (coverage or {}).get(channel.id, (None, None))[1],
+        }
+        for channel in ENERGY_CHANNELS
+    ]
+
+
+def _channel_value(wh):
+    value = float(wh or 0)
+    return {
+        "wh": round(value, 3),
+        "kwh": round(value / 1000.0, 6),
+    }
+
+
+def _ratio_value(value):
+    return None if value is None else round(value, 6)
+
+
+def _energy_ratios(inverter_output_wh, channels, states):
+    """Derive the ratios, but only where the period is fully measured.
+
+    A partly measured period would divide a half-measured numerator by a fully
+    measured denominator, which reads as a real figure and is not one.
+    """
+
+    sufficiency = None
+    if states["home_consumption"] == "full" and states["grid_import"] == "full":
+        sufficiency = self_sufficiency(
+            channels["home_consumption"]["wh"],
+            channels["grid_import"]["wh"],
+        )
+
+    consumption = None
+    if states["grid_export"] == "full":
+        consumption = self_consumption(
+            inverter_output_wh,
+            channels["grid_export"]["wh"],
+        )
+
+    return {
+        "self_sufficiency": _ratio_value(sufficiency),
+        "self_consumption": _ratio_value(consumption),
+    }
+
+
+def _energy_payload(
+    wh,
+    savings,
+    date=None,
+    peak_output_w=None,
+    channel_wh=None,
+    coverage=None,
+    start_date=None,
+    end_date=None,
+):
     payload = {
         "inverter_output_wh": round(float(wh or 0), 9),
         "inverter_output_kwh": round(float(wh or 0) / 1000.0, 9),
@@ -611,5 +881,28 @@ def _energy_payload(wh, savings, date=None, peak_output_w=None):
 
     if peak_output_w is not None:
         payload["peak_output_w"] = round(float(peak_output_w or 0), 9)
+
+    totals = channel_wh or {}
+    payload["channels"] = {
+        channel.id: _channel_value(totals.get(channel.id, 0))
+        for channel in ENERGY_CHANNELS
+    }
+
+    states = {
+        channel.id: _coverage_state(coverage, channel.id, start_date, end_date)
+        for channel in ENERGY_CHANNELS
+    }
+    # Only the exceptions travel: a channel the client does not find here has
+    # measured the whole range.
+    payload["coverage"] = {
+        channel_id: state
+        for channel_id, state in states.items()
+        if state != "full"
+    }
+    payload["ratios"] = _energy_ratios(
+        payload["inverter_output_wh"],
+        payload["channels"],
+        states,
+    )
 
     return payload

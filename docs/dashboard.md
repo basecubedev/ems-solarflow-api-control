@@ -262,7 +262,13 @@ writes every EMS loop (see the InfluxDB ingestion section below).
 
 Daily energy statistics are stored in `daily_energy_stats` in the same database.
 They are persistent daily aggregates and are not removed by the short-term
-snapshot/telemetry cleanup.
+snapshot/telemetry cleanup. `energy_channel_coverage` records the first and
+last day each channel was measured, so a period from before a channel existed
+reads as unknown rather than as zero.
+
+The stored snapshot rows do **not** carry `energy_stats`: the rollup is derived
+from the daily table and attached to every read instead, which keeps a 2 KB
+aggregate out of each row written per dashboard write interval.
 
 Energy statistics integrate measured inverter AC output over real elapsed time.
 Intervals above `energy_savings.max_sample_delta_seconds` are skipped and the
@@ -368,6 +374,7 @@ The live snapshot includes `energy_stats` with:
 energy_stats.enabled
 energy_stats.currency
 energy_stats.price_per_kwh
+energy_stats.channel_meta
 energy_stats.today
 energy_stats.yesterday
 energy_stats.last_7_days
@@ -383,6 +390,41 @@ energy_stats.lifetime.since_date
 `lifetime.since_date` is the first date in `daily_energy_stats` with
 `sample_count > 0`. It is day-accurate and uses the stored local statistics
 date, not the current runtime timestamp.
+
+### Energy channels
+
+Every period, month and year entry carries the measured channels beside the
+inverter output:
+
+```text
+<entry>.channels.<channel>.wh
+<entry>.channels.<channel>.kwh
+<entry>.coverage.<channel>     only when it is not "full"
+<entry>.ratios.self_sufficiency
+<entry>.ratios.self_consumption
+```
+
+The channels are `grid_import`, `grid_export`, `battery_charge`,
+`battery_discharge`, `pv_yield` and `home_consumption`. They are the two
+directions of the snapshot's signed grid and battery power plus PV and house
+load; `ems/energy_channels.py` owns that split and is the only place that
+states the sign convention.
+
+`coverage` reports only the channels that did **not** measure the whole entry:
+a channel missing from the map measured all of it. The states are `partial`
+(the channel started or stopped inside the range) and `none` (the range lies
+entirely outside what the channel measured). Coverage answers *since when*, not
+*without gaps* — a day the EMS did not run sits inside a covered range and is a
+gap in the sums, exactly as it is for the inverter output.
+
+`ratios` are derived at read time and are `null` unless the channels they need
+measured the whole entry. `self_sufficiency` is the share of house consumption
+that did not come from the grid; `self_consumption` is the share of delivered
+AC energy the house used instead of exporting it.
+
+`channel_meta` lists each channel once with `id`, `label`, `unit` and the
+`since` / `until` dates it has been measured, so a client renders the channels
+from the payload instead of keeping its own copy of the list.
 
 Energy statistics only:
 

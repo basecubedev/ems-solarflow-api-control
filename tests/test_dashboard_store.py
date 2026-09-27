@@ -8,13 +8,14 @@ import pytest
 
 from dashboard.telemetry import build_dashboard_snapshot
 from dashboard.sqlite_store import DashboardStore, empty_snapshot
+from ems.energy_channels import ENERGY_CHANNELS
 
 pytestmark = [
     pytest.mark.integration,
 ]
 
 
-def snapshot(timestamp, pv=100, output=80, target=90):
+def snapshot(timestamp, pv=100, output=80, target=90, grid=12, battery=-20):
     return {
         "timestamp": timestamp,
         "devices": {
@@ -22,16 +23,16 @@ def snapshot(timestamp, pv=100, output=80, target=90):
                 "soc": 61,
                 "pv_input_w": pv,
                 "output_w": output,
-                "battery_power_w": -20,
+                "battery_power_w": battery,
                 "target_w": target,
                 "output_limit_w": 100,
             }
         },
-        "grid_power_w": 12,
-        "home_load_w": output + 12,
+        "grid_power_w": grid,
+        "home_load_w": max(0, output + grid),
         "pv_total_w": pv,
         "inverter_output_w": output,
-        "battery_power_w": -20,
+        "battery_power_w": battery,
         "average_soc": 61,
         "controller": {
             "enabled": True,
@@ -71,10 +72,44 @@ def daily_row(path, date_key):
         ).fetchone()
 
 
-def insert_daily(path, date_key, wh, savings=0, peak=0, sample_count=1):
+def daily_channels(path, date_key):
+    columns = ", ".join(channel.column for channel in ENERGY_CHANNELS)
+    with sqlite3.connect(path) as con:
+        row = con.execute(
+            f"SELECT {columns} FROM daily_energy_stats WHERE date = ?",
+            (date_key,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return dict(zip((channel.id for channel in ENERGY_CHANNELS), row))
+
+
+def channel_coverage(path):
+    with sqlite3.connect(path) as con:
+        rows = con.execute(
+            "SELECT channel, first_date, last_date FROM energy_channel_coverage"
+        ).fetchall()
+
+    return {row[0]: (row[1], row[2]) for row in rows}
+
+
+def insert_daily(
+    path,
+    date_key,
+    wh,
+    savings=0,
+    peak=0,
+    sample_count=1,
+    channels=None,
+):
+    channel_wh = channels or {}
+    columns = "".join(f", {channel.column}" for channel in ENERGY_CHANNELS)
+    placeholders = ", ?" * len(ENERGY_CHANNELS)
     with sqlite3.connect(path) as con:
         con.execute(
-            """
+            f"""
             INSERT INTO daily_energy_stats(
                 date,
                 inverter_output_wh,
@@ -83,9 +118,9 @@ def insert_daily(path, date_key, wh, savings=0, peak=0, sample_count=1):
                 currency,
                 peak_output_w,
                 sample_count,
-                updated_at
+                updated_at{columns}
             )
-            VALUES(?, ?, ?, 0.35, 'EUR', ?, ?, ?)
+            VALUES(?, ?, ?, 0.35, 'EUR', ?, ?, ?{placeholders})
             """,
             (
                 date_key,
@@ -94,7 +129,31 @@ def insert_daily(path, date_key, wh, savings=0, peak=0, sample_count=1):
                 peak,
                 sample_count,
                 f"{date_key}T12:00:00+00:00",
+                *(
+                    float(channel_wh.get(channel.id, 0))
+                    for channel in ENERGY_CHANNELS
+                ),
             ),
+        )
+
+
+def insert_coverage(path, first_date, last_date, channel_ids=None):
+    ids = channel_ids or [channel.id for channel in ENERGY_CHANNELS]
+    with sqlite3.connect(path) as con:
+        con.executemany(
+            """
+            INSERT INTO energy_channel_coverage(
+                channel, first_date, last_date, updated_at
+            )
+            VALUES(?, ?, ?, ?)
+            ON CONFLICT(channel) DO UPDATE SET
+                first_date = excluded.first_date,
+                last_date = excluded.last_date
+            """,
+            [
+                (channel_id, first_date, last_date, f"{last_date}T12:00:00+00:00")
+                for channel_id in ids
+            ],
         )
 
 
@@ -316,6 +375,133 @@ def test_energy_large_delta_is_skipped(tmp_path):
     assert row[5] == 2
 
 
+def test_energy_sample_integrates_grid_import_and_export_separately(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True})
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    store.record(snapshot(first.isoformat(), grid=600))
+    store.record(snapshot((first + timedelta(seconds=6)).isoformat(), grid=600))
+    store.record(snapshot((first + timedelta(seconds=12)).isoformat(), grid=-300))
+
+    channels = daily_channels(path, "2026-06-01")
+    assert channels["grid_import"] == pytest.approx(600 * 6 / 3600)
+    assert channels["grid_export"] == pytest.approx(300 * 6 / 3600)
+
+
+def test_energy_sample_integrates_battery_charge_and_discharge_separately(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True})
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    store.record(snapshot(first.isoformat(), battery=900))
+    store.record(snapshot((first + timedelta(seconds=10)).isoformat(), battery=900))
+    store.record(snapshot((first + timedelta(seconds=20)).isoformat(), battery=-450))
+
+    channels = daily_channels(path, "2026-06-01")
+    assert channels["battery_charge"] == pytest.approx(900 * 10 / 3600)
+    assert channels["battery_discharge"] == pytest.approx(450 * 10 / 3600)
+
+
+def test_energy_sample_integrates_pv_and_home_consumption(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True})
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    store.record(snapshot(first.isoformat(), pv=1200, output=400, grid=100))
+    store.record(
+        snapshot(
+            (first + timedelta(seconds=9)).isoformat(),
+            pv=1200,
+            output=400,
+            grid=100,
+        )
+    )
+
+    channels = daily_channels(path, "2026-06-01")
+    assert channels["pv_yield"] == pytest.approx(1200 * 9 / 3600)
+    assert channels["home_consumption"] == pytest.approx(500 * 9 / 3600)
+
+
+def test_energy_large_delta_skips_every_channel_not_only_the_output(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(
+        path,
+        energy_savings={"enabled": True, "max_sample_delta_seconds": 60},
+    )
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    store.record(snapshot(first.isoformat(), grid=600, battery=600))
+    store.record(
+        snapshot(
+            (first + timedelta(hours=1)).isoformat(),
+            grid=600,
+            battery=600,
+        )
+    )
+
+    assert set(daily_channels(path, "2026-06-01").values()) == {0}
+
+
+def test_energy_channel_columns_are_added_to_an_existing_database(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    with sqlite3.connect(path) as con:
+        con.execute("""
+            CREATE TABLE daily_energy_stats (
+                date TEXT PRIMARY KEY,
+                inverter_output_wh REAL NOT NULL DEFAULT 0,
+                savings_value REAL NOT NULL DEFAULT 0,
+                price_per_kwh REAL NOT NULL DEFAULT 0,
+                currency TEXT NOT NULL DEFAULT 'EUR',
+                peak_output_w REAL NOT NULL DEFAULT 0,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        con.execute(
+            """
+            INSERT INTO daily_energy_stats(
+                date, inverter_output_wh, savings_value, price_per_kwh,
+                currency, peak_output_w, sample_count, updated_at
+            )
+            VALUES('2026-05-30', 4000, 1.4, 0.35, 'EUR', 700, 900,
+                   '2026-05-30T23:59:00+00:00')
+            """
+        )
+
+    DashboardStore(path)
+
+    assert daily_channels(path, "2026-05-30") == {
+        channel.id: 0 for channel in ENERGY_CHANNELS
+    }
+    assert daily_row(path, "2026-05-30")[0] == 4000
+
+
+def test_energy_channel_coverage_records_the_first_and_last_measured_day(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(
+        path,
+        energy_savings={"enabled": True, "timezone": "UTC"},
+    )
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    store.record(snapshot(first.isoformat()))
+    store.record(snapshot((first + timedelta(days=2)).isoformat()))
+
+    coverage = channel_coverage(path)
+    assert set(coverage) == {channel.id for channel in ENERGY_CHANNELS}
+    assert coverage["grid_import"] == ("2026-06-01", "2026-06-03")
+
+
+def test_energy_disabled_store_records_no_channel_coverage(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": False})
+
+    store.record(snapshot(datetime.now(timezone.utc).isoformat()))
+
+    assert channel_coverage(path) == {}
+
+
 def test_energy_same_day_aggregation_updates_peak_and_savings(tmp_path):
     path = tmp_path / "dashboard.sqlite"
     store = DashboardStore(
@@ -456,12 +642,10 @@ def test_energy_disabled_summary_includes_zero_yesterday(tmp_path):
     )
 
     assert summary["enabled"] is False
-    assert summary["yesterday"] == {
-        "inverter_output_wh": 0.0,
-        "inverter_output_kwh": 0.0,
-        "savings_value": 0.0,
-        "peak_output_w": 0.0,
-    }
+    assert summary["yesterday"]["inverter_output_wh"] == 0.0
+    assert summary["yesterday"]["inverter_output_kwh"] == 0.0
+    assert summary["yesterday"]["savings_value"] == 0.0
+    assert summary["yesterday"]["peak_output_w"] == 0.0
 
 
 def test_energy_lifetime_since_date_is_null_without_daily_stats(tmp_path):
@@ -525,19 +709,17 @@ def test_energy_monthly_and_yearly_summaries(tmp_path):
     assert monthly[0]["inverter_output_wh"] == 1000
     assert monthly[1]["inverter_output_wh"] == 0
     assert monthly[2]["inverter_output_wh"] == 7000
-    assert summary["yearly"] == [
-        {
-            "year": 2025,
-            "inverter_output_wh": 5000.0,
-            "inverter_output_kwh": 5.0,
-            "savings_value": 5.0,
-        },
-        {
-            "year": 2026,
-            "inverter_output_wh": 8000.0,
-            "inverter_output_kwh": 8.0,
-            "savings_value": 8.0,
-        },
+    assert [
+        (
+            year["year"],
+            year["inverter_output_wh"],
+            year["inverter_output_kwh"],
+            year["savings_value"],
+        )
+        for year in summary["yearly"]
+    ] == [
+        (2025, 5000.0, 5.0, 5.0),
+        (2026, 8000.0, 8.0, 8.0),
     ]
 
 
@@ -562,3 +744,135 @@ def test_energy_stats_table_is_created_for_existing_dashboard_database(tmp_path)
         ).fetchone()
 
     assert table == ("daily_energy_stats",)
+
+
+def test_energy_summary_reports_channel_totals_per_period(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    insert_daily(
+        path,
+        "2026-06-01",
+        4000,
+        savings=1.4,
+        channels={"grid_import": 2500, "grid_export": 150, "home_consumption": 6350},
+    )
+    insert_coverage(path, "2026-05-01", "2026-06-01")
+
+    summary = store.energy_summary(now="2026-06-01T23:00:00+00:00")
+
+    today = summary["today"]
+    assert today["channels"]["grid_import"] == {"wh": 2500.0, "kwh": 2.5}
+    assert today["channels"]["grid_export"] == {"wh": 150.0, "kwh": 0.15}
+    assert today["coverage"] == {}
+    assert today["ratios"]["self_sufficiency"] == pytest.approx(
+        (6350 - 2500) / 6350
+    )
+    assert today["ratios"]["self_consumption"] == pytest.approx((4000 - 150) / 4000)
+
+
+def test_energy_summary_marks_a_period_that_starts_before_the_measurement(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    insert_daily(path, "2026-01-15", 3000, savings=1.05)
+    insert_daily(
+        path,
+        "2026-06-01",
+        4000,
+        savings=1.4,
+        channels={"grid_import": 2500, "home_consumption": 6350},
+    )
+    insert_coverage(path, "2026-05-20", "2026-06-01")
+
+    summary = store.energy_summary(now="2026-06-01T23:00:00+00:00")
+
+    assert summary["today"]["coverage"] == {}
+    assert summary["last_12_months"]["coverage"]["grid_import"] == "partial"
+    assert summary["last_12_months"]["ratios"]["self_sufficiency"] is None
+    # The best day is 2026-06-01 here, which is covered; the January day is not.
+    assert summary["monthly_current_year"][0]["coverage"]["grid_import"] == "none"
+    assert summary["monthly_current_year"][0]["channels"]["grid_import"]["wh"] == 0.0
+
+
+def test_energy_summary_reports_a_ratio_only_for_a_covered_period(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    insert_daily(
+        path,
+        "2026-06-01",
+        4000,
+        channels={"grid_import": 1000, "home_consumption": 5000},
+    )
+    insert_coverage(path, "2026-06-01", "2026-06-01")
+
+    summary = store.energy_summary(now="2026-06-01T23:00:00+00:00")
+
+    assert summary["today"]["ratios"]["self_sufficiency"] == pytest.approx(0.8)
+    assert summary["last_7_days"]["ratios"]["self_sufficiency"] is None
+    assert summary["last_7_days"]["coverage"]["grid_import"] == "partial"
+
+
+def test_energy_summary_channel_meta_lists_every_channel_once(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    insert_coverage(path, "2026-05-20", "2026-06-01")
+
+    meta = store.energy_summary(now="2026-06-01T23:00:00+00:00")["channel_meta"]
+
+    assert [entry["id"] for entry in meta] == [
+        channel.id for channel in ENERGY_CHANNELS
+    ]
+    assert meta[0]["label"] == "Grid Import"
+    assert meta[0]["unit"] == "Wh"
+    assert meta[0]["since"] == "2026-05-20"
+    assert meta[0]["until"] == "2026-06-01"
+
+
+def test_energy_summary_channel_meta_reports_an_unmeasured_channel(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+
+    meta = store.energy_summary(now="2026-06-01T23:00:00+00:00")["channel_meta"]
+
+    assert meta[0]["since"] is None
+    assert meta[0]["until"] is None
+
+
+def test_disabled_energy_summary_zeroes_channels_and_drops_ratios(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": False})
+    insert_daily(path, "2026-06-01", 4000, channels={"grid_import": 2500})
+    insert_coverage(path, "2026-05-01", "2026-06-01")
+
+    summary = store.energy_summary(now="2026-06-01T23:00:00+00:00")
+
+    for period in ("today", "yesterday", "last_7_days", "last_12_months", "best_day"):
+        assert summary[period]["channels"]["grid_import"] == {"wh": 0.0, "kwh": 0.0}
+        assert summary[period]["ratios"]["self_sufficiency"] is None
+        assert summary[period]["coverage"]["grid_import"] == "none"
+
+    assert summary["monthly_current_year"][0]["channels"]["grid_import"]["wh"] == 0.0
+    assert summary["lifetime"]["channels"]["grid_import"]["wh"] == 0.0
+
+
+def test_energy_summary_month_and_year_entries_carry_channels(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
+    insert_daily(
+        path,
+        "2026-06-01",
+        4000,
+        channels={"grid_import": 2500, "battery_charge": 1800},
+    )
+    insert_coverage(path, "2026-06-01", "2026-06-30")
+
+    summary = store.energy_summary(now="2026-06-30T23:00:00+00:00")
+
+    june = summary["monthly_current_year"][5]
+    assert june["label"] == "Jun"
+    assert june["channels"]["battery_charge"]["wh"] == 1800.0
+    assert june["coverage"] == {}
+
+    year = summary["yearly"][0]
+    assert year["year"] == 2026
+    assert year["channels"]["grid_import"]["wh"] == 2500.0
+    assert summary["lifetime"]["channels"]["grid_import"]["wh"] == 2500.0
