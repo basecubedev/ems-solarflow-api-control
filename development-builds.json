@@ -1,38 +1,6 @@
 {
   "builds": [
     {
-      "admin_digest": "sha256:3091d82fb1b913b870818c40eda8fffb35bf3fc78a52e35a9b57b2bc11526783",
-      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-energy-statistics-grid-and-battery-f3a338ae0f-6a8127c-36311028862-1",
-      "admin_test_contract": 1,
-      "build_id": "dev-feat-energy-statistics-grid-and-battery-f3a338ae0f-6a8127c-36311028862-1",
-      "channel": "development",
-      "created_at": "2026-09-27T10:06:11Z",
-      "display_name": "Feature feat-energy-statistics-grid-and-battery",
-      "ems_digest": "sha256:e96c68d34574a112e492dc7ff1b27fc7345bc0765628495fa42b1643bef3dcd9",
-      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-energy-statistics-grid-and-battery-f3a338ae0f-6a8127c-36311028862-1",
-      "installable": true,
-      "revision": "6a8127c1331ebbe37dbdd41f0f735fe5336b9518",
-      "run_attempt": 1,
-      "run_id": "36311028862",
-      "tag": "dev-feat-energy-statistics-grid-and-battery-f3a338ae0f-6a8127c-36311028862-1"
-    },
-    {
-      "admin_digest": "sha256:ee717f47166430707580015bd27da16b6312ec11264703bc9f40c7f574b7989a",
-      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-energy-statistics-grid-and-battery-f3a338ae0f-4905ac3-36308726763-1",
-      "admin_test_contract": 1,
-      "build_id": "dev-feat-energy-statistics-grid-and-battery-f3a338ae0f-4905ac3-36308726763-1",
-      "channel": "development",
-      "created_at": "2026-09-27T09:21:47Z",
-      "display_name": "Feature feat-energy-statistics-grid-and-battery",
-      "ems_digest": "sha256:c25311b7d128d7fb68798747fcc81e7a4dc9effc879b9e60c8619ff7d4e1fec7",
-      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-energy-statistics-grid-and-battery-f3a338ae0f-4905ac3-36308726763-1",
-      "installable": true,
-      "revision": "4905ac32e8a84dd896eb8b8f3dd29e4f6eea639d",
-      "run_attempt": 1,
-      "run_id": "36308726763",
-      "tag": "dev-feat-energy-statistics-grid-and-battery-f3a338ae0f-4905ac3-36308726763-1"
-    },
-    {
       "admin_digest": "sha256:e34b101a9012108d0160fd56fb2a2a0b279feebc016e97ff88739f71f2f1fb22",
       "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-external-inverter-over-mqtt-3e477fd136-989c0ab-36190228503-1",
       "admin_test_contract": 1,
