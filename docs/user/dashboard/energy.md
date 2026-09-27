@@ -68,6 +68,8 @@ Expert applies everywhere on the tab: the period cards, the monthly summary,
 the yearly summary and the lifetime total all carry the same rows in the same
 order.
 
+![The Energy tab in Expert, with the channel rows on every card](../../assets/screenshots/dashboard/dashboard-energy-expert.png)
+
 **Grid import** is energy drawn from the grid, **grid export** is energy fed
 into it. **Charged** and **discharged** are the two directions of the battery.
 They are measured separately, so a day with both reports both — a single netted

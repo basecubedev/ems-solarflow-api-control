@@ -79,20 +79,33 @@ SAFE_RESPONSE_CONTENT_TYPES = {
 }
 
 
-def _preview_injection(view):
+ENERGY_DETAIL_LEVELS = ("basic", "expert")
+
+
+def _preview_injection(view, energy_detail=None):
     """Minimal bootstrap injected into the real index.html.
 
     Sets the persisted flow view so the page opens directly in the requested
     view, then re-uses the existing frontend functions (setFlowView, runDiagnose)
-    once the page is ready. Values are constants from a fixed allow-list, so no
-    dynamic/user data is interpolated into the page.
+    once the page is ready. ``energy_detail`` seeds the energy board's
+    basic/expert choice, which lives in localStorage rather than in the payload,
+    so a screenshot can document the expert rows. Values are constants from a
+    fixed allow-list, so no dynamic/user data is interpolated into the page.
     """
 
     view_json = json.dumps(view)
+    detail_seed = ""
+    if energy_detail in ENERGY_DETAIL_LEVELS:
+        detail_json = json.dumps(energy_detail)
+        detail_seed = (
+            f"try{{window.localStorage.setItem('dashboard.energyDetail',{detail_json});}}"
+            "catch(e){}"
+        )
     before = (
         "<script>"
         f"try{{window.localStorage.setItem('dashboard.flowView',{view_json});}}"
         "catch(e){}"
+        f"{detail_seed}"
         "</script>"
     )
     after = f"""
@@ -397,7 +410,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             self._send_landing()
             return
         if path.startswith("/preview/"):
-            self._send_preview(path[len("/preview/"):])
+            self._send_preview(path[len("/preview/"):], parsed.query)
             return
         if path in ("/preview-diagnose.html", "/preview-logs.html"):
             # Backwards-compatible aliases for the original screenshot helper.
@@ -653,15 +666,19 @@ class PreviewHandler(BaseHTTPRequestHandler):
         body = _landing_page(self.server.scenario_name).encode("utf-8")
         self._send_bytes(body, "text/html; charset=utf-8")
 
-    def _send_preview(self, raw_view):
+    def _send_preview(self, raw_view, query=""):
         view = raw_view.strip("/").lower()
         if view not in FLOW_VIEWS:
             self.send_error(404, "Unknown preview view")
             return
+        detail = (parse_qs(query).get("detail") or [None])[0]
+        if detail is not None and detail not in ENERGY_DETAIL_LEVELS:
+            self.send_error(404, "Unknown energy detail level")
+            return
         index_path = os.path.join(STATIC_DIR, "index.html")
         with open(index_path, encoding="utf-8") as handle:
             html = handle.read()
-        before, after = _preview_injection(view)
+        before, after = _preview_injection(view, detail)
         seed = self._chart_seed_script(view)
         marker = '<script src="/app.js"></script>'
         html = html.replace(marker, f"{before}\n  {marker}{after}{seed}", 1)
