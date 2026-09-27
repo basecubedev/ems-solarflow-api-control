@@ -105,6 +105,12 @@ class DashboardStore:
             self.energy_timezone = ZoneInfo(DEFAULT_ENERGY_SAVINGS["timezone"])
         self._lock = threading.RLock()
         self._latest = None
+        # The rollup changes only when this store writes a sample, and the
+        # live snapshot rebuilds it on every read -- once per second per SSE
+        # client, against a table that grows by a row a day. Both the coverage
+        # map and the finished summary are cached here and dropped on write.
+        self._coverage = None
+        self._summary = None
 
         parent = os.path.dirname(self.path)
         if parent:
@@ -230,6 +236,8 @@ class DashboardStore:
         with self._lock, self._connect() as con:
             if self.energy_enabled:
                 self._record_energy_sample(con, snapshot)
+                self._coverage = None
+                self._summary = None
 
             # The rollup belongs to the daily table, and latest() attaches a
             # fresh one on every read. A stored copy was pure write
@@ -312,6 +320,8 @@ class DashboardStore:
         """
         with self._lock:
             self._latest = None
+            self._coverage = None
+            self._summary = None
             restore_failed = False
             try:
                 yield
@@ -320,6 +330,8 @@ class DashboardStore:
                 raise
             finally:
                 self._latest = None
+                self._coverage = None
+                self._summary = None
                 # The restored file can come from an older version, and this
                 # store outlives the swap. Without bringing the schema forward
                 # here, every later record() raises on a missing column until
@@ -350,8 +362,28 @@ class DashboardStore:
         return [json.loads(row[0]) for row in rows]
 
     def energy_summary(self, now=None):
+        """Return the rollup, reusing the last one until a sample changes it.
+
+        The cached payload is handed out as it is rather than copied: it is
+        rebuilt on the next write, and every caller here serializes it.
+        """
+
         with self._lock, self._connect() as con:
-            return self._energy_summary(con, now)
+            if now is not None:
+                return self._energy_summary(con, now)
+
+            today = (
+                datetime.now(timezone.utc)
+                .astimezone(self.energy_timezone)
+                .date()
+                .isoformat()
+            )
+            if self._summary is not None and self._summary[0] == today:
+                return self._summary[1]
+
+            summary = self._energy_summary(con, None)
+            self._summary = (today, summary)
+            return summary
 
     def _record_energy_sample(self, con, snapshot):
         sample_time = _parse_timestamp(snapshot.get("timestamp"))
@@ -410,12 +442,16 @@ class DashboardStore:
                 channel.id for channel in _channels() if channel.id not in measured
             ]
             self._record_channel_gap(con, [date_key], updated_at, missed)
-        else:
-            # Time passed that nothing integrated -- a restart, an outage, the
-            # first sample of all. The hole belongs to the day the samples
-            # stopped and to the day they came back; whole days in between have
-            # no row at all, and a range that contains one is incomplete by the
-            # day count.
+        elif last_sample_time is not None:
+            # Time passed that nothing integrated -- a restart, an outage. The
+            # hole belongs to the day the samples stopped and to the day they
+            # came back; whole days in between have no row at all, and a range
+            # that contains one is incomplete by the day count.
+            #
+            # A sample with no predecessor at all is the start of the
+            # measurement rather than a hole in it. Marking it would leave
+            # every range containing the start -- the lifetime, the first
+            # month, the first calendar year -- incomplete for good.
             every_channel = [channel.id for channel in _channels()]
             self._record_channel_gap(
                 con,
@@ -437,36 +473,17 @@ class DashboardStore:
     def _record_channel_coverage(self, con, date_key, updated_at, channel_ids):
         """Remember the first and last day each channel was measured.
 
-        A day that is not fully measured gets a row in ``energy_channel_gap``:
-        the first day of a channel, which started somewhere inside it, and any
-        day on which a sample could not be read. Time the EMS did not sample at
-        all -- downtime, a skipped interval -- is not recorded here, because
-        that gap is in every figure on the board including the inverter output,
-        and has always been.
+        The first day a channel measured is its start, not a hole, even though
+        the channel began somewhere inside it. Marking it would leave every
+        range that contains the start -- the lifetime, the first month, the
+        first calendar year -- incomplete for good, and those are the ranges
+        whose ratio a reader keeps. What the first day costs is one partly
+        measured day inside ranges that also carry ``Channels since`` on the
+        same card, which says when the measuring began.
         """
 
         if not channel_ids:
             return
-
-        # A channel measuring its first day started inside that day.
-        con.executemany(
-            """
-            INSERT OR IGNORE INTO energy_channel_gap(
-                channel,
-                date,
-                missed_samples,
-                updated_at
-            )
-            SELECT ?, ?, 0, ?
-            WHERE NOT EXISTS (
-                SELECT 1 FROM energy_channel_coverage WHERE channel = ?
-            )
-            """,
-            [
-                (channel_id, date_key, updated_at, channel_id)
-                for channel_id in channel_ids
-            ],
-        )
 
         con.executemany(
             """
@@ -688,6 +705,9 @@ class DashboardStore:
     def _channel_coverage(self, con):
         """Return the measured range and the incomplete days of each channel."""
 
+        if self._coverage is not None:
+            return self._coverage
+
         rows = con.execute(
             """
             SELECT channel, first_date, last_date
@@ -696,20 +716,21 @@ class DashboardStore:
         ).fetchall()
         gaps = con.execute(
             """
-            SELECT channel, date
+            SELECT channel, date, missed_samples
             FROM energy_channel_gap
             ORDER BY channel, date
             """
         ).fetchall()
 
-        gap_dates = {}
-        for channel_id, date_key in gaps:
-            gap_dates.setdefault(channel_id, []).append(date_key)
+        by_channel = {}
+        for channel_id, date_key, missed in gaps:
+            by_channel.setdefault(channel_id, []).append((date_key, missed))
 
-        return {
-            row[0]: _ChannelCoverage(row[1], row[2], tuple(gap_dates.get(row[0], ())))
+        self._coverage = {
+            row[0]: _ChannelCoverage(row[1], row[2], tuple(by_channel.get(row[0], ())))
             for row in rows
         }
+        return self._coverage
 
     def _range_summary(
         self,
@@ -989,28 +1010,47 @@ def _elapsed_end(end_date, today):
 
 
 class _ChannelCoverage(NamedTuple):
-    """What a channel measured: its range, and the days inside it with a hole."""
+    """What a channel measured: its range, and the holes inside it.
+
+    ``gaps`` pairs each holed day with how many samples were missed on it. The
+    count is what lets two channels be compared exactly: both can miss the same
+    day while one missed a single sample on it and the other missed ten.
+    """
 
     first_date: str
     last_date: str
-    gap_dates: tuple = ()
+    gaps: tuple = ()
+
+    def gaps_between(self, start_date, end_date):
+        """The holed days of this channel inside the range, with their counts."""
+
+        dates = [gap[0] for gap in self.gaps]
+        start = bisect.bisect_left(dates, start_date)
+        end = bisect.bisect_right(dates, end_date)
+        return self.gaps[start:end]
 
     def has_gap_between(self, start_date, end_date):
-        index = bisect.bisect_left(self.gap_dates, start_date)
-        return index < len(self.gap_dates) and self.gap_dates[index] <= end_date
+        return bool(self.gaps_between(start_date, end_date))
 
 
-def _coverage_state(coverage, channel_id, start_date, end_date, every_day=True):
+def _coverage_state(
+    coverage,
+    channel_id,
+    start_date,
+    end_date,
+    every_day=True,
+    measured_any=True,
+    ignore_holes=False,
+):
     """Classify how much of a date range this channel actually measured.
 
     "full" means the channel measured every day of the range and read every
-    sample it took. A day the EMS never sampled counts against it too: a total
-    visibly shrinks when days are missing, but a ratio does not, and the ratios
-    are gated on this.
+    sample it took. ``ignore_holes`` answers the narrower question the ratios
+    ask -- whether the range itself is covered -- and is explained there.
     """
 
     entry = (coverage or {}).get(channel_id)
-    if not entry or not start_date or not end_date:
+    if not entry or not start_date or not end_date or not measured_any:
         return "none"
 
     first_date, last_date = entry.first_date, entry.last_date
@@ -1022,7 +1062,7 @@ def _coverage_state(coverage, channel_id, start_date, end_date, every_day=True):
         every_day
         and first_date <= start_date
         and last_date >= end_date
-        and not entry.has_gap_between(start_date, end_date)
+        and (ignore_holes or not entry.has_gap_between(start_date, end_date))
     ):
         return "full"
 
@@ -1054,17 +1094,27 @@ def _ratio_value(value):
     return None if value is None else round(value, 6)
 
 
-def _energy_ratios(channels, states):
-    """Derive the ratios, but only for a period that was measured throughout.
+def _energy_ratios(channels, range_states):
+    """Derive the ratio, for a range the channels measured from end to end.
 
-    A partly measured period would divide a half-measured numerator by a fully
-    measured denominator, which reads as a real figure and is not one. The
-    inverter output the board shows beside these is integrated whether or not
-    the devices were reporting, so "measured throughout" has to mean every
-    channel, not only the two this ratio reads.
+    ``range_states`` ignores holes inside measured days on purpose. A hole is
+    bounded by its day and the figure beside the ratio carries the mark for it;
+    a range that begins before the measurement, or that contains a day with no
+    samples at all, is not bounded and would make the ratio structurally wrong.
+
+    The price of that line is stated plainly: after a restart longer than the
+    sample window, the day's ratio is computed from the part of the day that
+    was measured. Withholding it instead would mean no installation ever sees a
+    ratio for a month, a year or its lifetime, because every one of them
+    restarts eventually -- an honest number nobody can ever read is worth less
+    than a marked one.
+
+    Both sides of the division share one basis: a sample is integrated for
+    every channel or for none of them (``ems.energy_channels``), so a hole is
+    always the same hole on both sides of it.
     """
 
-    if any(state != "full" for state in states.values()):
+    if any(state != "full" for state in range_states.values()):
         return {"self_sufficiency": None}
 
     sufficiency = _energy_channels_module().self_sufficiency(
@@ -1110,14 +1160,24 @@ def _energy_payload(
         if measured_days is None or expected_days is None
         else measured_days >= expected_days
     )
-    states = {
-        channel.id: _coverage_state(
+    # A range with no measured day at all is not partly measured; it is
+    # unmeasured, and a zero from it must not read as a figure.
+    measured_any = measured_days is None or measured_days > 0
+
+    def state_of(channel_id, ignore_holes=False):
+        return _coverage_state(
             coverage,
-            channel.id,
+            channel_id,
             start_date,
             end_date,
             every_day,
+            measured_any,
+            ignore_holes,
         )
+
+    states = {channel.id: state_of(channel.id) for channel in _channels()}
+    range_states = {
+        channel.id: state_of(channel.id, ignore_holes=True)
         for channel in _channels()
     }
     # Only the exceptions travel: a channel the client does not find here has
@@ -1127,6 +1187,6 @@ def _energy_payload(
         for channel_id, state in states.items()
         if state != "full"
     }
-    payload["ratios"] = _energy_ratios(payload["channels"], states)
+    payload["ratios"] = _energy_ratios(payload["channels"], range_states)
 
     return payload

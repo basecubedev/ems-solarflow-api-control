@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import emsctl
+from ems.diagnostics import diagnose_config_plausibility
 from ems import diagnostics
 from ems.state_store import BatteryFullChargeStateStore
 
@@ -2242,3 +2243,43 @@ def test_emsctl_diagnose_stays_silent_for_enabled_devices(tmp_path):
     config["devices"] = [{"name": "WR1", "max_power": 800, "sn": "SER1"}]
     _, codes = _diagnose_codes(tmp_path, config)
     assert "device_disabled" not in codes
+
+
+def test_a_sample_window_below_the_write_interval_is_reported():
+    """That pair silently voids every energy figure.
+
+    Each interval between two stored samples is then longer than the window the
+    statistics accept, so nothing is integrated and the board shows zeros with
+    no reason given.
+    """
+
+    checks = []
+    diagnose_config_plausibility(
+        checks,
+        None,
+        {
+            "system": {},
+            "dashboard": {"write_interval_seconds": 60},
+            "energy_savings": {"enabled": True, "max_sample_delta_seconds": 20},
+        },
+    )
+
+    codes = {check["code"]: check for check in checks}
+    assert codes["energy_sample_window_below_write_interval"]["level"] == "warning"
+
+
+def test_a_sample_window_above_the_write_interval_is_fine():
+    checks = []
+    diagnose_config_plausibility(
+        checks,
+        None,
+        {
+            "system": {},
+            "dashboard": {"write_interval_seconds": 5},
+            "energy_savings": {"enabled": True, "max_sample_delta_seconds": 20},
+        },
+    )
+
+    codes = {check["code"] for check in checks}
+    assert "energy_sample_window_valid" in codes
+    assert "energy_sample_window_below_write_interval" not in codes

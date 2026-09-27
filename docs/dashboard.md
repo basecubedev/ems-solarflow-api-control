@@ -425,13 +425,26 @@ directions of the snapshot's signed grid and battery power plus PV and house
 load; `ems/energy_channels.py` owns that split and is the only place that
 states the sign convention.
 
-Two properties of `home_consumption` are worth knowing. It is the load at the
-grid connection point (`inverter output + grid import`), so energy the EMS
-charges the battery with from AC — winter mode, full-charge assist, an
-`ac_input` device — is part of it: the grid meter cannot tell that apart from a
-household load. And it is only a measurement while the grid reading is one, so
-it shares the grid channels' validity gate: a sample whose meter did not answer
-is integrated for none of the three, and does not extend their coverage.
+`home_consumption` is the load at the grid connection point (`inverter output +
+grid import`), so energy the EMS charges the battery with from AC — winter
+mode, full-charge assist, an `ac_input` device — is part of it: the grid meter
+cannot tell that apart from a household load.
+
+Whether a sample may be integrated is decided for the sample as a whole:
+`grid_power_valid` and `device_power_valid` both have to hold, or the sample
+counts for no channel. A per-channel gate would let the two sides of the ratio
+be measured over different samples — house load rests on the meter *and* the
+devices, grid import on the meter alone — which turned a 50 % day into 25 %.
+The price is that a valid meter reading taken while a device was away is
+dropped with the rest of its sample; that keeps every channel on one basis and
+makes the hole visible in all of them.
+
+If `dashboard.write_interval_seconds` is larger than
+`energy_savings.max_sample_delta_seconds`, every interval between two stored
+samples is longer than the window the statistics accept and **nothing** is ever
+integrated. `emsctl diagnose` reports that pair as
+`energy_sample_window_below_write_interval`.
+
 
 `coverage` reports only the channels that did **not** measure the whole entry:
 a channel missing from the map measured all of it. The states are `partial`
@@ -439,21 +452,37 @@ a channel missing from the map measured all of it. The states are `partial`
 hole) and `none` (the range lies entirely outside what the channel measured).
 
 A day is recorded as holed in `energy_channel_gap` when a sample could not be
-read — an unreachable grid meter, a device that went offline —, for the first
-day of a channel, which started somewhere inside it, and when an interval was
-skipped because too much time had passed: a restart or an outage marks the day
-the samples stopped and the day they came back. Whole days in between carry no
-row at all, and a range that contains one is incomplete by its day count.
+read — an unreachable grid meter, a device that went offline — and when an
+interval was skipped because too much time had passed: a restart or an outage
+marks the day the samples stopped and the day they came back. Whole days in
+between carry no row at all, and a range that contains one is incomplete by its
+day count.
+
+The very first sample of all is the **start** of the measurement rather than a
+hole in it, even though the channel began somewhere inside that day. Marking it
+would leave every range that contains the start — the lifetime, the first
+month, the first calendar year — incomplete for good, and those are the ranges
+whose ratio a reader keeps. The price is one partly measured day inside them;
+`channel_meta[].since` and the board's `Channels since` row say when the
+measuring began.
 
 Both `coverage` and `lifetime.since_date` are built from the sample timestamps,
 so a system whose clock was wrong before it reached NTP can backdate them by
 the length of that error.
 
 `self_sufficiency` is the share of house consumption that did not come from the
-grid. It is derived at read time and is `null` unless **every** channel measured
-the whole entry: the inverter output shown beside it is integrated whether or
-not the devices were reporting, so a weaker rule would publish a ratio built on
-frozen telemetry.
+grid. It is derived at read time and is `null` unless **every** channel covered
+the whole entry — measured from its first day to its last, with no day inside
+it missing. The inverter output it is divided against keeps integrating whether
+or not the devices were reporting, so a narrower rule would publish a ratio
+built on frozen telemetry.
+
+A hole *inside* a measured day does not withhold it. The hole is bounded by its
+day and the figures beside the ratio carry the mark for it, whereas an
+uncovered range is not bounded at all. The price is that after a restart the
+day's ratio is computed from the part of the day that was measured; the
+alternative is that no installation ever reads a ratio for a month, a year or
+its lifetime, because every one of them restarts eventually.
 
 `channel_meta` lists each channel once with `id`, `label`, `unit` and the
 `since` / `until` dates it has been measured, so a client renders the channels

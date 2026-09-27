@@ -759,6 +759,41 @@ def diagnose_config_plausibility(checks, args, config_data):
     else:
         diagnose_add(checks, "config", "error", "runtime_state_path_invalid", "system.runtime_state_path must be a non-empty clean path")
 
+    energy_savings = config_data.get("energy_savings", {})
+    dashboard_config = config_data.get("dashboard", {})
+    if isinstance(energy_savings, dict) and isinstance(dashboard_config, dict):
+        write_interval = diagnose_float(dashboard_config.get("write_interval_seconds", 5))
+        max_sample_delta = diagnose_float(
+            energy_savings.get("max_sample_delta_seconds", 20)
+        )
+        if (
+            diagnose_bool(energy_savings.get("enabled", True))
+            and write_interval is not None
+            and max_sample_delta is not None
+            and write_interval > max_sample_delta
+        ):
+            # Every interval between two stored samples is then longer than the
+            # window the statistics accept, so nothing is ever integrated and
+            # every energy figure stays at zero without saying why.
+            diagnose_add(
+                checks,
+                "config",
+                "warning",
+                "energy_sample_window_below_write_interval",
+                "energy_savings.max_sample_delta_seconds is below "
+                "dashboard.write_interval_seconds; no energy is recorded at all",
+                write_interval_seconds=write_interval,
+                max_sample_delta_seconds=max_sample_delta,
+            )
+        else:
+            diagnose_add(
+                checks,
+                "config",
+                "ok",
+                "energy_sample_window_valid",
+                "energy_savings.max_sample_delta_seconds covers the dashboard write interval",
+            )
+
     assist = config_data.get("battery_full_charge_assist", {})
     if not isinstance(assist, dict):
         diagnose_add(checks, "config", "error", "battery_full_charge_assist_not_object", "battery_full_charge_assist must be an object")

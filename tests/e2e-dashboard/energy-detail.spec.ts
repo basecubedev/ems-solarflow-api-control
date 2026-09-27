@@ -66,7 +66,8 @@ test.describe("energy detail switch @smoke", () => {
 
     const rolling = card(page, "month");
     await expect(rolling).toContainText("28.9 kWh ◦");
-    await expect(rolling).toContainText("since 2026-09-12");
+    await expect(rolling).toContainText("Measured since");
+    await expect(rolling).toContainText("2026-09-12");
   });
 
   test("the Analytics tabs leave the switch alone", async ({ page }) => {

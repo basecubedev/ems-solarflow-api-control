@@ -179,7 +179,8 @@ def test_a_partly_measured_channel_carries_the_mark():
     )
 
     assert "28.9 kWh ◦" in html
-    assert "since 2026-09-12" in html
+    assert "Measured since" in html
+    assert "2026-09-12" in html
 
 
 def test_self_sufficiency_is_absent_in_basic_and_explicit_in_expert():
@@ -273,3 +274,26 @@ def test_the_detail_switch_shares_the_tab_styling_without_the_tab_hook():
     assert ".analytics-tabs,\n.energy-detail-tabs {" in css
     assert ".analytics-tabs button,\n.energy-detail-tabs button {" in css
     assert ".analytics-tabs button.active,\n.energy-detail-tabs button.active {" in css
+
+
+def test_a_marked_period_marks_its_ratio_too():
+    """The most quotable number needs the mark most."""
+
+    marked = render_period(
+        "expert",
+        payload(
+            channels={"grid_import": 28.9},
+            coverage={"grid_import": "partial"},
+            ratios={"self_sufficiency": 0.54},
+        ),
+        meta_for(),
+    )
+    clean = render_period(
+        "basic",
+        payload(ratios={"self_sufficiency": 0.54}),
+        meta_for(),
+    )
+
+    assert "54% ◦" in marked
+    assert "54%" in clean
+    assert "◦" not in clean

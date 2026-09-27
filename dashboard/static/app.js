@@ -1517,7 +1517,10 @@ function renderEnergyStats(stats) {
   const monthly = normalizeMonthlyEnergy(stats.monthly_current_year);
   const yearly = normalizeYearlyEnergy(stats.yearly);
   const lifetime = stats.lifetime || {};
-  const hasCollectedStats = Boolean(lifetime.since_date) || [
+  const hasChannelEnergy = [stats.today, stats.yesterday, lifetime].some((entry) =>
+    Object.values(entry?.channels || {}).some((channel) => Number(channel?.wh) > 0),
+  );
+  const hasCollectedStats = Boolean(lifetime.since_date) || hasChannelEnergy || [
     stats.today,
     stats.yesterday,
     stats.last_7_days,
@@ -1643,7 +1646,11 @@ function energySufficiencyFact(values) {
   // would claim a period was zero percent self-sufficient.
   const ratio = values?.ratios?.self_sufficiency;
   if (typeof ratio === "number" && Number.isFinite(ratio)) {
-    return energyFact("Self-Sufficiency", `${Math.round(ratio * 100)}%`, "gauge", "battery");
+    // The most quotable number on the card is the one that most needs the
+    // mark: it is derived from figures that carry it.
+    const partly = Object.keys(values?.coverage || {}).length > 0;
+    const text = `${Math.round(ratio * 100)}%${partly ? ` ${ENERGY_PARTIAL_MARK}` : ""}`;
+    return energyFact("Self-Sufficiency", text, "gauge", "battery");
   }
   if (!energyDetailIsExpert()) return "";
   return energyFact("Self-Sufficiency", "--", "gauge", "battery");
@@ -1697,18 +1704,21 @@ function energyPeakFact(values) {
 
 function energyCoverageFact(values, meta) {
   if (!energyDetailIsExpert()) return "";
-  const states = Object.values(values?.coverage || {});
-  if (!states.length) return "";
 
+  // The row says since when the channels have been measured, which a card with
+  // complete coverage needs just as much as one without: the reader is looking
+  // at figures that start later than the output beside them.
   const since = energyChannelsSinceDate(meta);
   // "not measured" is a statement about the whole card, so it needs every
   // channel to be unmeasured -- not just every channel that is listed here,
   // which holds the exceptions only.
   if (!since || energyChannelsAllUnmeasured(values)) {
-    return energyFact("Channels", "not measured", "history", "neutral");
+    return energyFact("Measured since", "not measured", "history", "neutral");
   }
 
-  return energyFact("Channels", `since ${formatEnergyDate(since)}`, "history", "neutral");
+  // "Measured since", not "Channels since": a channel that never measured
+  // anything shows "--" above and is not covered by this date.
+  return energyFact("Measured since", formatEnergyDate(since), "history", "neutral");
 }
 
 function energyMonthCard(month, currency, meta) {
@@ -1802,7 +1812,7 @@ function energyContextRail(stats, monthly, yearly, lifetime, currency, meta) {
         ${energyContextItem("Years", energyYearRange(yearly), "history")}
         ${stats.best_day?.date ? energyContextItem("Best Day", formatEnergyDate(stats.best_day.date), "charge") : ""}
         ${energyContextItem("Lifetime", formatEnergyKwh(lifetime), "inverter")}
-        ${energyDetailIsExpert() ? energyContextItem("Channels since", energyChannelsSince(meta), "grid") : ""}
+        ${energyDetailIsExpert() ? energyContextItem("Channels measured since", energyChannelsSince(meta), "grid") : ""}
       </div>
     </aside>
   `;

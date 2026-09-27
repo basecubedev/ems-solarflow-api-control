@@ -21,11 +21,8 @@ class EnergyChannel:
     ``column`` is the SQLite column that carries the channel's daily total. It
     is interpolated into DDL, which is why it is validated below.
 
-    ``validity`` names the snapshot flags that say whether the source carried a
-    real reading; the channel is measured only while all of them hold. A meter
-    that never answered publishes its initial 0 W, and integrating that would
-    report zero grid import and a perfect autarky for an installation whose
-    meter is simply unreachable.
+    Whether a sample may be integrated at all is decided for the sample as a
+    whole, not per channel: see ``sample_is_measured``.
     """
 
     id: str
@@ -33,36 +30,32 @@ class EnergyChannel:
     source: str
     direction: str
     column: str
-    validity: tuple = ()
 
 
-GRID_VALIDITY = "grid_power_valid"
-DEVICE_VALIDITY = "device_power_valid"
+# A sample is integrated only while every one of these holds. They are the
+# snapshot's own statements about whether its readings are readings at all: a
+# meter that never answered publishes its initial 0 W, and an offline device
+# keeps publishing its last telemetry.
+#
+# The gate is deliberately per sample rather than per channel. House load is
+# derived from both the meter and the devices while grid import comes from the
+# meter alone, so a per-channel gate would let the two sides of the autarky be
+# measured over different samples -- which turned a fifty percent day into
+# twenty-five, and then, once that was detected instead of prevented, withheld
+# the figure for good after a single blip. Skipping the whole sample costs a
+# valid meter reading now and then, keeps every channel on one basis, and makes
+# the hole visible in all of them.
+SAMPLE_VALIDITY_FLAGS = ("grid_power_valid", "device_power_valid")
 
 ENERGY_CHANNELS = (
     EnergyChannel(
-        "grid_import",
-        "Grid Import",
-        "grid_power_w",
-        POSITIVE,
-        "grid_import_wh",
-        (GRID_VALIDITY,),
+        "grid_import", "Grid Import", "grid_power_w", POSITIVE, "grid_import_wh"
     ),
     EnergyChannel(
-        "grid_export",
-        "Grid Export",
-        "grid_power_w",
-        NEGATIVE,
-        "grid_export_wh",
-        (GRID_VALIDITY,),
+        "grid_export", "Grid Export", "grid_power_w", NEGATIVE, "grid_export_wh"
     ),
     EnergyChannel(
-        "battery_charge",
-        "Charged",
-        "battery_power_w",
-        POSITIVE,
-        "battery_charge_wh",
-        (DEVICE_VALIDITY,),
+        "battery_charge", "Charged", "battery_power_w", POSITIVE, "battery_charge_wh"
     ),
     EnergyChannel(
         "battery_discharge",
@@ -70,27 +63,15 @@ ENERGY_CHANNELS = (
         "battery_power_w",
         NEGATIVE,
         "battery_discharge_wh",
-        (DEVICE_VALIDITY,),
     ),
     EnergyChannel(
-        "pv_yield",
-        "PV Yield",
-        "pv_total_w",
-        POSITIVE,
-        "pv_yield_wh",
-        (DEVICE_VALIDITY,),
+        "pv_yield", "PV Yield", "pv_total_w", POSITIVE, "pv_yield_wh"
     ),
-    # House load is derived from the inverter output and the grid reading, so
-    # it is only a measurement while both of those are. It is the load at the
-    # grid connection point: energy the EMS charges the battery with from AC is
-    # part of it, because the meter cannot tell the two apart.
+    # House load is the load at the grid connection point: energy the EMS
+    # charges the battery with from AC is part of it, because the meter cannot
+    # tell the two apart.
     EnergyChannel(
-        "home_consumption",
-        "Home",
-        "home_load_w",
-        POSITIVE,
-        "home_consumption_wh",
-        (GRID_VALIDITY, DEVICE_VALIDITY),
+        "home_consumption", "Home", "home_load_w", POSITIVE, "home_consumption_wh"
     ),
 )
 
@@ -128,44 +109,39 @@ def channel_power_w(channel, snapshot):
     return max(0.0, -value)
 
 
-def channel_is_measured(channel, snapshot):
-    """Whether this channel's source carried a real reading in this sample.
+def sample_is_measured(snapshot):
+    """Whether this sample's readings were readings at all.
 
-    A snapshot without the flag counts as measured: older writers and test
-    stubs do not carry it, and treating their samples as unmeasured would drop
-    data that was fine.
+    A snapshot without the flags counts as measured: older writers and test
+    stubs do not carry them, and treating their samples as unmeasured would
+    drop data that was fine.
     """
 
-    return all(bool(snapshot.get(flag, True)) for flag in channel.validity)
+    return all(bool(snapshot.get(flag, True)) for flag in SAMPLE_VALIDITY_FLAGS)
 
 
 def measured_channel_ids(snapshot):
-    """Ids of the channels whose source carried a reading in this sample."""
+    """Every channel, or none: the gate is per sample, not per channel."""
 
-    return tuple(
-        channel.id
-        for channel in ENERGY_CHANNELS
-        if channel_is_measured(channel, snapshot)
-    )
+    if not sample_is_measured(snapshot):
+        return ()
+
+    return CHANNEL_IDS
 
 
 def channel_sample_wh(snapshot, elapsed_hours):
     """Integrate every channel over one sampling interval.
 
     A non-positive interval yields zero for every channel, which is how a
-    skipped or restarted sample is recorded. So does a channel whose source
-    reading is not valid.
+    skipped or restarted sample is recorded. So does a sample whose readings
+    could not be read.
     """
 
-    if not elapsed_hours or elapsed_hours <= 0:
+    if not elapsed_hours or elapsed_hours <= 0 or not sample_is_measured(snapshot):
         return {channel.id: 0.0 for channel in ENERGY_CHANNELS}
 
     return {
-        channel.id: (
-            channel_power_w(channel, snapshot) * elapsed_hours
-            if channel_is_measured(channel, snapshot)
-            else 0.0
-        )
+        channel.id: channel_power_w(channel, snapshot) * elapsed_hours
         for channel in ENERGY_CHANNELS
     }
 

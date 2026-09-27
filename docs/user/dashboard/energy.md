@@ -79,13 +79,24 @@ charging is part of this figure, because the meter cannot tell it apart from a
 washing machine.
 
 **Self-sufficiency** is the share of house consumption that did not come from
-the grid. It only appears for a period that was measured from beginning to end;
-otherwise it would divide a half-measured number by a whole one. For the same
-reason, a sample whose grid meter did not answer counts for nothing: an
+the grid. It appears for a period the channels measured from beginning to end,
+with no day inside it missing; otherwise it would divide a half-measured number
+by a whole one. A sample whose grid meter did not answer counts for nothing: an
 unreachable meter reads as 0 W, and taking that at face value would report a
-perfect autarky for a system that simply lost sight of the grid. A day on which
-the EMS was not running for a while is marked the same way — the hole is in the
-day, even if the EMS came back.
+perfect autarky for a system that simply lost sight of the grid.
+
+If the grid meter does not answer, or a device is offline, **all** the figures
+stop for as long as that lasts — a meter that never answered reads as 0 W and
+an offline device keeps reporting its last reading, and counting either would
+be inventing energy. It is all of them together on purpose: taking the meter's
+reading while ignoring the device's would divide two numbers measured at
+different moments. The Overview names an offline device under **Offline
+devices**; repairing or removing it is what starts the figures again.
+
+A day on which the EMS was down for a while still shows its ratio, and its
+figures carry the `◦`. That is deliberate: a hole is bounded by its day, and
+withholding the ratio for every restart would mean you never see one for a
+month, a year or the lifetime.
 
 ### Since when a figure exists
 
