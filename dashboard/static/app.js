@@ -1720,11 +1720,7 @@ function energyChannelValue(values, channelId) {
   const kwh = values?.channels?.[channelId]?.kwh;
   if (typeof kwh !== "number" || !Number.isFinite(kwh)) return "--";
 
-  const digits = Math.abs(kwh) >= 1000 ? 0 : 1;
-  const text = `${kwh.toLocaleString("en-US", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  })} kWh`;
+  const text = formatEnergyAmount(kwh);
   return coverage === "partial" ? `${text} ${ENERGY_PARTIAL_MARK}` : text;
 }
 
@@ -1912,13 +1908,23 @@ function energyKwh(values) {
   return 0;
 }
 
-function formatEnergyKwh(values) {
-  const value = energyKwh(values);
-  const digits = Math.abs(value) >= 1000 ? 0 : 1;
-  return `${value.toLocaleString("en-US", {
+function formatEnergyAmount(kwh) {
+  // One decimal of a kilowatt-hour is a 100 Wh step, so a real measurement of
+  // 78 Wh reads as "0.1 kWh" and a figure that is growing looks frozen. Under a
+  // kilowatt-hour the watt hour is the honest unit. The rule lives here alone
+  // because the cards and the channel rows must not round differently.
+  if (!Number.isFinite(kwh)) return "--";
+  const magnitude = Math.abs(kwh);
+  if (magnitude < 1) return `${Math.round(kwh * 1000).toLocaleString("en-US")} Wh`;
+  const digits = magnitude >= 1000 ? 0 : 1;
+  return `${kwh.toLocaleString("en-US", {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   })} kWh`;
+}
+
+function formatEnergyKwh(values) {
+  return formatEnergyAmount(energyKwh(values));
 }
 
 function formatSavings(values, currency) {

@@ -166,7 +166,7 @@ def test_a_partly_measured_period_still_lists_every_channel():
 
     for channel in ENERGY_CHANNELS:
         assert channel.label in html
-    assert "0.0 kWh \u25e6" in html
+    assert "0 Wh \u25e6" in html
 
 
 def test_a_partly_measured_channel_carries_the_mark():
@@ -327,3 +327,44 @@ const app = require({json.dumps(str(APP_JS))});
 console.log(JSON.stringify({{ ids: app.ENERGY_RATIO_CHANNELS }}));
 """
     assert run_node(script)["ids"] == list(RATIO_CHANNELS)
+
+
+def test_a_figure_below_a_kilowatt_hour_is_shown_in_watt_hours():
+    """One decimal of a kWh is a 100 Wh step, which reads as frozen.
+
+    On a live installation the channels start measuring the moment the build
+    lands, so a real 78 Wh of PV showed as "0.1 kWh" and a growing figure
+    looked like no figure at all. Under a kilowatt-hour the unit is the watt
+    hour; above it, nothing changes.
+    """
+
+    html = render_period(
+        "expert",
+        payload(
+            channels={"pv_yield": 0.077968, "grid_import": 0.000642},
+            inverter_output_kwh=0.412,
+            inverter_output_wh=412.0,
+        ),
+        meta_for(),
+    )
+
+    assert "78 Wh" in html
+    assert "1 Wh" in html
+    assert "412 Wh" in html
+    assert "0.1 kWh" not in html
+    assert "0.0 kWh" not in html
+
+
+def test_a_figure_above_a_kilowatt_hour_keeps_its_kilowatt_hours():
+    html = render_period(
+        "expert",
+        payload(
+            channels={"pv_yield": 48.6},
+            inverter_output_kwh=1032.17,
+            inverter_output_wh=1032170.0,
+        ),
+        meta_for(),
+    )
+
+    assert "48.6 kWh" in html
+    assert "1,032 kWh" in html
