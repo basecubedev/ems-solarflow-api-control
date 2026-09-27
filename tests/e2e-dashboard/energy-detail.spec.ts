@@ -69,6 +69,21 @@ test.describe("energy detail switch @smoke", () => {
     await expect(rolling).toContainText("since 2026-09-12");
   });
 
+  test("the Analytics tabs leave the switch alone", async ({ page }) => {
+    // Both are segmented controls in the same page. While they shared a class,
+    // the Analytics view's global button query wired its own click handler to
+    // these two buttons and cleared their state on every analytics render.
+    await openEnergy(page);
+    await page.click('[data-energy-detail="expert"]');
+
+    await page.click('[data-flow-view="analytics"]');
+    await page.click('[data-analytics-tab="grid"]');
+    await page.click('[data-flow-view="energy"]');
+
+    await expect(page.locator('[data-energy-detail="expert"]')).toHaveClass(/active/);
+    await expect(card(page, "today")).toContainText("Grid Import");
+  });
+
   test("the chosen level survives a reload", async ({ page }) => {
     await openEnergy(page);
 

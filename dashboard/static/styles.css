@@ -2434,10 +2434,15 @@ canvas { width: 100%; min-height: 94px; border: var(--o-border) solid color-mix(
 .analytics-overlays button { min-width: 56px; height: var(--o-control-height); border: 1px solid var(--border); border-radius: var(--o-pill-radius); background: var(--tone-inner); color: var(--muted); font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; transition: transform .16s ease, border-color .16s ease, background .16s ease; }
 .analytics-overlays button:hover { transform: translateY(-1px); border-color: var(--border-strong); }
 .analytics-overlays button.active { border-color: color-mix(in srgb, var(--accent2) 46%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--accent2) 18%, transparent), color-mix(in srgb, var(--accent) 12%, transparent)); color: var(--text); }
-.analytics-tabs { display: flex; gap: calc(3px * var(--d)); padding: calc(3px * var(--d)); margin: calc(6px * var(--d)) 0 calc(8px * var(--d)); border: 1px solid color-mix(in srgb, var(--muted) 16%, transparent); border-radius: var(--o-pill-radius); background: transparent; width: fit-content; flex-wrap: wrap; }
-.analytics-tabs button { min-width: 72px; height: var(--o-control-height); border: 1px solid transparent; border-radius: var(--o-pill-radius); background: transparent; color: var(--muted); font: inherit; font-size: 11px; font-weight: 850; cursor: pointer; transition: transform .16s ease, border-color .16s ease, background .16s ease; }
-.analytics-tabs button:hover { transform: translateY(-1px); border-color: var(--border-strong); }
-.analytics-tabs button.active { border-color: color-mix(in srgb, var(--accent2) 46%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--accent2) 18%, transparent), color-mix(in srgb, var(--accent) 12%, transparent)); color: var(--text); }
+.analytics-tabs,
+.energy-detail-tabs { display: flex; gap: calc(3px * var(--d)); padding: calc(3px * var(--d)); margin: calc(6px * var(--d)) 0 calc(8px * var(--d)); border: 1px solid color-mix(in srgb, var(--muted) 16%, transparent); border-radius: var(--o-pill-radius); background: transparent; width: fit-content; flex-wrap: wrap; }
+.analytics-tabs button,
+.energy-detail-tabs button { min-width: 72px; height: var(--o-control-height); border: 1px solid transparent; border-radius: var(--o-pill-radius); background: transparent; color: var(--muted); font: inherit; font-size: 11px; font-weight: 850; cursor: pointer; transition: transform .16s ease, border-color .16s ease, background .16s ease; }
+.analytics-tabs button:hover,
+.energy-detail-tabs button:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.energy-detail-tabs { margin: 0; }
+.analytics-tabs button.active,
+.energy-detail-tabs button.active { border-color: color-mix(in srgb, var(--accent2) 46%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--accent2) 18%, transparent), color-mix(in srgb, var(--accent) 12%, transparent)); color: var(--text); }
 .analytics-chart-wrap { position: relative; }
 .analytics-loading { position: absolute; top: 10px; right: 12px; z-index: 2; padding: var(--o-pill-pad); border: 1px solid var(--border); border-radius: var(--o-pill-radius); background: var(--tone-inner); color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .04em; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
 .analytics-back-to-live { padding: var(--o-control-pad); border: 1px solid color-mix(in srgb, var(--accent2) 46%, transparent); border-radius: var(--o-pill-radius); background: linear-gradient(180deg, color-mix(in srgb, var(--accent2) 20%, transparent), color-mix(in srgb, var(--accent) 14%, transparent)); color: var(--text); font: inherit; font-size: 11px; font-weight: 850; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.28); transition: transform .16s ease, border-color .16s ease; }

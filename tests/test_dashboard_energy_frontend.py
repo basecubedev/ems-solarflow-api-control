@@ -95,8 +95,14 @@ def test_detail_switch_is_in_the_energy_heading():
 
     assert 'data-energy-detail="basic"' in html
     assert 'data-energy-detail="expert"' in html
-    # It reuses the existing segmented-control class instead of inventing one.
-    assert 'class="analytics-tabs" role="tablist" aria-label="Energy detail level"' in html
+    # Its own hook, so the Analytics view's global button query cannot reach
+    # it -- that query also wires a click handler, which fired setAnalyticsTab
+    # with an undefined tab on every Basic/Expert click.
+    assert (
+        'class="energy-detail-tabs" role="tablist" aria-label="Energy detail level"'
+        in html
+    )
+    assert "analytics-tabs" not in html.split('aria-label="Energy detail level"')[0][-200:]
     assert 'id="energyStatsSubtitle"' in html
 
 
@@ -257,3 +263,13 @@ console.log(JSON.stringify({{
     assert set(out["rollingCoverage"].values()) == {"partial"}
     assert set(out["bestDayCoverage"].values()) == {"none"}
     assert out["since"] == "2026-09-12"
+
+
+def test_the_detail_switch_shares_the_tab_styling_without_the_tab_hook():
+    """One rule, two hooks: the look is shared, the query surface is not."""
+
+    css = (ROOT / "dashboard" / "static" / "styles.css").read_text(encoding="utf-8")
+
+    assert ".analytics-tabs,\n.energy-detail-tabs {" in css
+    assert ".analytics-tabs button,\n.energy-detail-tabs button {" in css
+    assert ".analytics-tabs button.active,\n.energy-detail-tabs button.active {" in css

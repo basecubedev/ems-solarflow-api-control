@@ -439,10 +439,11 @@ a channel missing from the map measured all of it. The states are `partial`
 hole) and `none` (the range lies entirely outside what the channel measured).
 
 A day is recorded as holed in `energy_channel_gap` when a sample could not be
-read — an unreachable grid meter, a device that went offline — and for the
-first day of a channel, which started somewhere inside it. Time the EMS did not
-sample at all is **not** recorded: that gap is missing from every figure on the
-board, the inverter output included, and always has been.
+read — an unreachable grid meter, a device that went offline —, for the first
+day of a channel, which started somewhere inside it, and when an interval was
+skipped because too much time had passed: a restart or an outage marks the day
+the samples stopped and the day they came back. Whole days in between carry no
+row at all, and a range that contains one is incomplete by its day count.
 
 Both `coverage` and `lifetime.since_date` are built from the sample timestamps,
 so a system whose clock was wrong before it reached NTP can backdate them by

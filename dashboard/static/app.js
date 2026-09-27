@@ -3683,7 +3683,11 @@ function setEnergyDetail(detail, persist = true) {
     }
   }
 
-  renderEnergyStats(state.snapshot?.energy_stats);
+  // Before the first snapshot there is nothing to draw, and drawing anyway
+  // would paint the "not available yet" state over an empty board on load.
+  if (state.snapshot) {
+    renderEnergyStats(state.snapshot.energy_stats);
+  }
 }
 
 function initEnergyDetailSwitch() {
