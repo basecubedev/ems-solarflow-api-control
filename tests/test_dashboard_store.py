@@ -157,6 +157,46 @@ def test_latest_refreshes_energy_stats_from_daily_aggregates(tmp_path):
     assert latest["energy_stats"]["lifetime"]["since_date"] == "2026-05-31"
 
 
+def test_stored_snapshot_omits_the_energy_rollup(tmp_path):
+    """The rollup is derived from the daily table and attached on every read.
+
+    Storing it in each snapshot row wrote a 2 KB aggregate 34k times per
+    retention window that nothing ever read back.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(
+        path,
+        energy_savings={"enabled": True, "price_per_kwh": 0.35},
+    )
+    # A stored snapshot is subject to the retention cleanup, so it has to be
+    # recent enough to survive the same record() call that writes it.
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    store.record(snapshot(timestamp, output=400))
+
+    with sqlite3.connect(path) as con:
+        payload = con.execute("SELECT payload FROM snapshots").fetchone()[0]
+
+    assert "energy_stats" not in json.loads(payload)
+    assert json.loads(payload)["pv_total_w"] == 100
+
+
+def test_latest_carries_the_energy_rollup_after_record(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(
+        path,
+        energy_savings={"enabled": True, "price_per_kwh": 0.35},
+    )
+    insert_daily(path, "2026-06-01", 1000, savings=0.35)
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    store.record(snapshot(timestamp, output=400))
+
+    assert store.latest()["energy_stats"]["enabled"] is True
+    assert store.latest()["energy_stats"]["lifetime"]["inverter_output_wh"] == 1000
+
+
 def test_store_cleanup_uses_retention(tmp_path):
     store = DashboardStore(tmp_path / "dashboard.sqlite", retention_hours=1)
     old = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()

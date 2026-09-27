@@ -157,10 +157,10 @@ class DashboardStore:
             if self.energy_enabled:
                 self._record_energy_sample(con, snapshot)
 
-            snapshot = {
-                **snapshot,
-                "energy_stats": self._energy_summary(con, timestamp),
-            }
+            # The rollup belongs to the daily table, and latest() attaches a
+            # fresh one on every read. A stored copy was pure write
+            # amplification: 2.2 KB of a 7.9 KB row, written once per dashboard
+            # write interval and never read back.
             payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
 
             con.execute(
