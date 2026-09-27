@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from appliance.admin_deployment import ADMIN_RESTART_POLICY, INSTALLER_MARKER
+
 pytestmark = [
     pytest.mark.admin,
     pytest.mark.setup,
@@ -223,6 +225,33 @@ def test_admin_installer_https_dry_run_mentions_browser_warning(tmp_path):
     assert "https://127.0.0.1:8091" in result.stdout
     assert "certificate warning" in result.stdout
     assert "8090/8091" in result.stdout
+
+
+@pytest.mark.parametrize("flags", [[], ["--bridge"], ["--discovery-only"]])
+def test_admin_installer_lets_docker_bring_the_admin_back_after_a_reboot(tmp_path, flags):
+    # "no" left a rebooted host with EMS running and the Admin gone; an explicit
+    # Stop still holds under unless-stopped.
+    work = tmp_path / "work"
+    work.mkdir()
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--no-start", "--install-dir", str(work), *flags],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = read(work / "docker-compose.admin.yml")
+    assert f"    restart: {ADMIN_RESTART_POLICY}\n" in text
+    assert 'restart: "no"' not in text
+    # The appliance recognises the installer's own file by this line, and only
+    # there treats `restart: "no"` as the installer's rather than an operator's.
+    assert any(line.startswith(INSTALLER_MARKER) for line in text.splitlines())
+
+
+def test_admin_runtime_compose_files_bring_the_admin_back_after_a_reboot():
+    for compose in (RUNTIME_COMPOSE, RUNTIME_BRIDGE, RUNTIME_DISCOVERY):
+        text = read(compose)
+        assert f"    restart: {ADMIN_RESTART_POLICY}\n" in text, compose.name
+        assert 'restart: "no"' not in text, compose.name
 
 
 def test_admin_installer_dry_run_writes_nothing(tmp_path):
