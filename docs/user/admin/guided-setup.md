@@ -20,7 +20,8 @@ everything.
 - Docker available to the Admin container.
 - Your inverters powered on and on the same LAN (or reachable through a broker,
   for MQTT).
-- A grid meter (Shelly, everHome EcoTracker, Tasmota, or a Zendure meter). See
+- A grid meter (Shelly, everHome EcoTracker, Tasmota, a Zendure meter, or an
+  E3/DC read over Modbus TCP). See
   [Supported setups](../supported-setups.md).
 - Internet access once, to download the images.
 
@@ -108,6 +109,9 @@ safety*, *Advanced / System settings*, and a *Config validation* box.
 **What you enter:**
 
 - **Grid meter** — type and address. Only one grid meter can be active.
+  Choosing an **E3/DC** as grid meter also adds it as a read-only device, so
+  its PV, battery, inverter and grid appear on the dashboard; the preview says
+  so, and Maintenance can remove it again.
 - **Inverters** — each gets a short EMS name (`INV_1`, `INV_2`, …). This is the
   identifier used in `config.json`, logs and the dashboard. Edit it now if you
   want a different one.
