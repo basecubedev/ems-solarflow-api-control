@@ -1,0 +1,9 @@
+# GitNexus reads .gitignore but not .git/info/exclude, and develop/ is where
+# this repo keeps reference checkouts of *other* projects (see the exclude file)
+# alongside local InfluxDB and Grafana state. Indexing it puts foreign symbols
+# into query, context and impact results, and costs a reindex an order of
+# magnitude in wall clock: one checkout of ten E3/DC projects took a full
+# analyze from ~30 s to 696 s and killed four parse workers on third-party C++.
+#
+# Nothing here is this project's code, so nothing here belongs in its graph.
+/develop/
