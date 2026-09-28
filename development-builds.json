@@ -1,6 +1,22 @@
 {
   "builds": [
     {
+      "admin_digest": "sha256:ee7442811e8ef6e1768b7a783932f1d949e4a2c128492222b0e2002951c70aea",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-external-inverter-over-mqtt-3e477fd136-ddbd98a-36436864120-1",
+      "admin_test_contract": 1,
+      "build_id": "dev-feat-external-inverter-over-mqtt-3e477fd136-ddbd98a-36436864120-1",
+      "channel": "development",
+      "created_at": "2026-09-28T14:59:54Z",
+      "display_name": "Feature feat-external-inverter-over-mqtt",
+      "ems_digest": "sha256:7d8945f49e0d74801921e614b0efcd0d5a9daa897ddf17380628347e0a64ae78",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-external-inverter-over-mqtt-3e477fd136-ddbd98a-36436864120-1",
+      "installable": true,
+      "revision": "ddbd98a487cdc596bba49e14e72244990ae47483",
+      "run_attempt": 1,
+      "run_id": "36436864120",
+      "tag": "dev-feat-external-inverter-over-mqtt-3e477fd136-ddbd98a-36436864120-1"
+    },
+    {
       "admin_digest": "sha256:19b5fb1acfb527049e762fd1ea8d1f591151f281a371b7de51d3d97e965d7c26",
       "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-ac-charge-control-e8bce2d1c7-e313983-36436824210-1",
       "admin_test_contract": 1,
@@ -47,22 +63,6 @@
       "run_attempt": 1,
       "run_id": "36190162185",
       "tag": "dev-feat-ac-charge-control-e8bce2d1c7-016d626-36190162185-1"
-    },
-    {
-      "admin_digest": "sha256:46872e45adccb8debf1520550b5f052cd70c3ef3c940ab6291453697a5333c30",
-      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-external-inverter-over-mqtt-3e477fd136-fd16024-36047126688-1",
-      "admin_test_contract": 1,
-      "build_id": "dev-feat-external-inverter-over-mqtt-3e477fd136-fd16024-36047126688-1",
-      "channel": "development",
-      "created_at": "2026-09-24T19:42:30Z",
-      "display_name": "Feature feat-external-inverter-over-mqtt",
-      "ems_digest": "sha256:3e9ede30526aa56353d5cdc886f6f2c36043c35a9c709d1a4e48cf1968e753c6",
-      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-external-inverter-over-mqtt-3e477fd136-fd16024-36047126688-1",
-      "installable": true,
-      "revision": "fd1602424cbf37945a230f3a5d49dc58a2c87cd5",
-      "run_attempt": 1,
-      "run_id": "36047126688",
-      "tag": "dev-feat-external-inverter-over-mqtt-3e477fd136-fd16024-36047126688-1"
     }
   ]
 }
