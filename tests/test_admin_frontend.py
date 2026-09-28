@@ -4902,6 +4902,7 @@ def _run_maintenance_discovery_node(setup):
             "mconfigFindInverterMatch",
             "maintenanceMqttProposals",
             "mconfigIsMqttDevice",
+            "mconfigIsE3dcDevice",
             "buildMaintenanceDiscoveryReview",
         )
     )

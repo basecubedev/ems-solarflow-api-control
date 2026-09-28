@@ -4954,6 +4954,7 @@ function connectionLabelFor(source) {
   if (source === "local_api") return "API";
   if (source === "local_mqtt") return "MQTT";
   if (source === "zendure_mqtt") return "Zendure MQTT";
+  if (source === "modbus_tcp") return "Modbus TCP";
   return "Unknown";
 }
 
@@ -6513,7 +6514,12 @@ function renderGridMeterFields(meter) {
           meter.ip,
           "Address of the meter."
         ) +
-        renderGridMeterEndpointField("port", "Port", meter.port, "HTTP port.")) +
+        renderGridMeterEndpointField(
+          "port",
+          "Port",
+          meter.port,
+          gridMeterPortDescription(gridMeterVariants()[type], "HTTP port.")
+        )) +
     byLevel.normal.map(renderFeatureField).join("") +
     "</div>";
   if (byLevel.advanced.length) {
@@ -6631,6 +6637,34 @@ function isFeatureEnabled(section) {
 
 function gridMeterVariants() {
   return (setupCatalog && setupCatalog.grid_meter_variants) || {};
+}
+
+function gridMeterPortDescription(variant, fallback) {
+  return (variant && variant.port_description) || fallback;
+}
+
+// A port belongs to its protocol: switching to a meter with another default
+// port starts from that meter's default. Mirrors grid_meter_port_carries_over.
+function gridMeterPortAfterSwitch(port, previous, next) {
+  const from = previous ? previous.default_port : null;
+  const to = next ? next.default_port : null;
+  if (from != null && from === to) return port;
+  return to;
+}
+
+// Presentation memory only, never part of the draft: switching away and back
+// gives the card its own port again instead of the catalog default.
+const gridMeterPortsByType = new WeakMap();
+
+function switchGridMeterPort(meter, fromType, toType, previous, next) {
+  const remembered = gridMeterPortsByType.get(meter) || {};
+  if (meter.port != null && fromType) remembered[fromType] = meter.port;
+  gridMeterPortsByType.set(meter, remembered);
+  const port = Object.prototype.hasOwnProperty.call(remembered, toType)
+    ? remembered[toType]
+    : gridMeterPortAfterSwitch(meter.port, previous, next);
+  if (port == null) delete meter.port;
+  else meter.port = port;
 }
 
 function selectedGridMeterType() {
@@ -7051,6 +7085,7 @@ const GRID_METER_TYPE_CHOICES = new Set([
   "zendure_smartmeter_3ct_http",
   "zendure_smartmeter_d0_http",
   "tasmota_http",
+  "e3dc_modbus",
   "zendure_smartmeter_d0",
   "mqtt",
   "ha",
@@ -7278,9 +7313,13 @@ async function requestConfigPreview() {
       const summary = data.summary || {};
       const inverterCount = Number(summary.inverters || 0);
       const meterCount = Number(summary.grid_meters || 0);
+      const readOnlyCount = Number(summary.read_only_devices || 0);
       configEls.previewDevices.textContent =
         inverterCount + (inverterCount === 1 ? " inverter" : " inverters") +
-        " · " + (meterCount ? meterCount + " grid meter" : "no grid meter");
+        " · " + (meterCount ? meterCount + " grid meter" : "no grid meter") +
+        (readOnlyCount
+          ? " · " + readOnlyCount + (readOnlyCount === 1 ? " read-only device" : " read-only devices")
+          : "");
     }
     renderConfigValidation();
     notifySetupStatus();
@@ -7519,6 +7558,14 @@ if (configEls.gridMeterSelection) {
       return;
     }
     if (target.matches("[data-feature-variant-select]")) {
+      const fromType = gridMeterType(meter, "");
+      switchGridMeterPort(
+        meter,
+        fromType,
+        target.value,
+        gridMeterVariants()[fromType],
+        gridMeterVariants()[target.value]
+      );
       meter.grid_meter_type = target.value;
       syncGridMeterFeatureValues(meter);
       saveConfigDraft();
@@ -13644,6 +13691,7 @@ const mconfigEls = {
   inverters: document.getElementById("maintenance-config-inverters"),
   addInverter: document.getElementById("maintenance-config-add-inverter"),
   addMqttDevice: document.getElementById("maintenance-config-add-mqtt-device"),
+  addE3dcDevice: document.getElementById("maintenance-config-add-e3dc-device"),
   maintenanceManualBrokerForm: document.getElementById("maintenance-manual-mqtt-broker-form"),
   maintenanceManualBrokerName: document.getElementById("maintenance-manual-mqtt-broker-name"),
   maintenanceManualBrokerHost: document.getElementById("maintenance-manual-mqtt-broker-host"),
@@ -14247,6 +14295,13 @@ function renderMaintenanceGridMeter() {
     mconfigLabelRow(
       "Meter type",
       mconfigSelectControl(type, typeOptions, (v) => {
+        switchGridMeterPort(
+          meter,
+          type,
+          v,
+          mconfigGridMeterVariant(type),
+          mconfigGridMeterVariant(v)
+        );
         meter.type = v;
         meter.present = Boolean(v);
         if (v) mconfigState.openHardware.add(cardId);
@@ -14315,7 +14370,10 @@ function renderMaintenanceGridMeter() {
           },
           "number"
         ),
-        "Optional HTTP port."
+        gridMeterPortDescription(
+          mconfigGridMeterVariant(type),
+          "Optional HTTP port."
+        )
       )
     );
     return wrap;
@@ -14873,6 +14931,12 @@ function mconfigIsMqttDevice(device) {
   return device && (device.kind === "zendure_mqtt" || device.type === "zendure_mqtt");
 }
 
+// A device the EMS only reads. The backend owns what that means; the card only
+// never offers control values for it.
+function mconfigIsE3dcDevice(device) {
+  return !!device && device.kind === "e3dc_modbus";
+}
+
 // The MQTT source a configured device uses. Config may omit mqtt.source, so the
 // backend resolves it from the referenced broker profile (mqtt.effective_source);
 // the current trusted proposals are the last resort. "" means unknown and must
@@ -15189,12 +15253,104 @@ function renderMaintenanceInverters() {
   host.textContent = "";
   const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
   devices.forEach((device, index) => {
-    host.appendChild(
-      mconfigIsMqttDevice(device)
-        ? renderMaintenanceZendureMqttDevice(device, index)
-        : renderMaintenanceInverter(device, index)
-    );
+    let card;
+    if (mconfigIsE3dcDevice(device)) card = renderMaintenanceE3dcDevice(device, index);
+    else if (mconfigIsMqttDevice(device)) card = renderMaintenanceZendureMqttDevice(device, index);
+    else card = renderMaintenanceInverter(device, index);
+    host.appendChild(card);
   });
+}
+
+function mconfigE3dcSummary(device) {
+  const endpoint = String(device.ip || "") + (device.port ? ":" + String(device.port) : "");
+  return [device.name || "(unnamed)", endpoint || "Address missing", "read-only"].join(" · ");
+}
+
+function renderMaintenanceE3dcDevice(device, index) {
+  let card;
+  const updateMeta = () => {
+    card.meta.textContent = mconfigE3dcSummary(device);
+  };
+  const setText = (key) => (value) => {
+    device[key] = value;
+    updateMeta();
+  };
+  const fields = document.createElement("div");
+  fields.className = "mconfig-fields feature-fields";
+  fields.append(
+    mconfigLabelRow(
+      "Enabled",
+      mconfigCheckboxControl(device.enabled !== false, (checked) => {
+        device.enabled = checked;
+        card.element.dataset.disabled = checked ? "false" : "true";
+        card.status.textContent = checked ? "Enabled" : "Disabled";
+      }),
+      "Show this E3/DC on the dashboard. The EMS only reads it and never controls it."
+    ),
+    mconfigLabelRow("Name", mconfigTextControl(device.name, setText("name")), "Config name shown on the dashboard."),
+    mconfigLabelRow("Host / IP", mconfigTextControl(device.ip, setText("ip")), "Address of the E3/DC in your local network."),
+    mconfigLabelRow(
+      "Port",
+      mconfigTextControl(device.port == null ? "" : device.port, setText("port"), "number"),
+      "Modbus TCP port. The E3/DC default is 502."
+    ),
+    mconfigLabelRow(
+      "Modbus unit ID",
+      mconfigTextControl(device.unit_id == null ? "" : device.unit_id, setText("unit_id"), "number"),
+      "Device ID set on the E3/DC under Modbus TCP. Usually 1."
+    )
+  );
+  const id = "maintenance-e3dc-device-" + index;
+  card = mconfigHardwareCard({
+    role: "inverter",
+    id,
+    title: "Read-only device " + (index + 1),
+    model: "E3/DC storage system",
+    meta: mconfigE3dcSummary(device),
+    enabled: device.enabled !== false,
+    connectionSource: "modbus_tcp",
+    body: fields,
+    onRemove: () => {
+      mconfigState.openHardware.delete(id);
+      mconfigState.draft.devices.splice(index, 1);
+      renderMaintenanceInverters();
+      mconfigRerenderDiscoveryReview();
+    },
+  });
+  card.element.dataset.disabled = device.enabled === false ? "true" : "false";
+  return card.element;
+}
+
+function mconfigAddE3dcDevice() {
+  const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
+  const taken = new Set(devices.map((device) => String(device.name || "")));
+  let name = "E3DC";
+  for (let suffix = 2; taken.has(name); suffix += 1) name = "E3DC" + suffix;
+  devices.push({
+    kind: "e3dc_modbus",
+    original_name: null,
+    name,
+    ip: "",
+    port: 502,
+    unit_id: 1,
+    enabled: true,
+    has_enabled_key: true,
+  });
+  mconfigState.openHardware.add("maintenance-e3dc-device-" + (devices.length - 1));
+  renderMaintenanceInverters();
+}
+
+async function addManualMaintenanceE3dcDevice() {
+  if (!mconfigState.loaded) {
+    const loaded = await loadMaintenanceConfig();
+    if (!loaded || loaded.status !== "ok") return;
+  }
+  mconfigAddE3dcDevice();
+  mconfigMarkDraftChanged("manual");
+  if (mconfigEls.discoveryStatus) {
+    mconfigEls.discoveryStatus.textContent =
+      "E3/DC added to the in-memory draft as a read-only device. Enter its address on its card, then preview the changes.";
+  }
 }
 
 function mconfigAddInverter() {
@@ -15259,6 +15415,7 @@ function buildMaintenanceDiscoveryReview(discovered) {
   const results = [];
   const devices = (mconfigState.draft && mconfigState.draft.devices) || [];
   devices.forEach((configured, index) => {
+    if (mconfigIsE3dcDevice(configured)) return;
     const isMqtt = mconfigIsMqttDevice(configured);
     const match = mconfigFindInverterMatch(configured, supported, used);
     if (!match) {
@@ -16849,7 +17006,11 @@ function renderMaintenanceFeatures() {
 
 function mconfigSummaryLine(summary) {
   const devices = summary.device_count || 0;
+  const readOnly = summary.read_only_device_count || 0;
   const parts = [devices + (devices === 1 ? " inverter" : " inverters")];
+  if (readOnly) {
+    parts.push(readOnly + (readOnly === 1 ? " read-only device" : " read-only devices"));
+  }
   parts.push(summary.grid_meter_type ? summary.grid_meter_type + " grid meter" : "grid meter missing");
   return parts.join(" · ");
 }
@@ -17433,6 +17594,9 @@ async function resetMaintenanceRuntimeOverrides() {
 
 if (mconfigEls.addInverter) {
   mconfigEls.addInverter.addEventListener("click", addManualMaintenanceInverter);
+  if (mconfigEls.addE3dcDevice) {
+    mconfigEls.addE3dcDevice.addEventListener("click", addManualMaintenanceE3dcDevice);
+  }
 }
 if (mconfigEls.addMqttDevice) {
   mconfigEls.addMqttDevice.addEventListener("click", addManualMaintenanceMqttDevice);

@@ -54,15 +54,19 @@ from admin.zendure_mqtt_config_draft import (
     zendure_mqtt_untrusted_connection_block,
 )
 from ems.config import (
+    E3DC_MODBUS_GRID_METER_TYPE,
     MQTT_GRID_METER_TYPES,
     MqttBrokerReferenceAmbiguousError,
     config_control_devices_by_gate,
     config_control_flags,
+    e3dc_modbus_device_settings,
+    e3dc_modbus_grid_meter_settings,
     grid_meter_mqtt_settings,
     normalize_mqtt_grid_meter_settings,
     resolve_config_write_gate,
     resolve_grid_meter_mqtt_settings,
 )
+from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_e3dc_modbus_device_config
 from ems.config_catalog import (
     ZENDURE_MQTT_BROKER_HELP,
     config_field_index,
@@ -539,6 +543,8 @@ def _config_devices(config):
 def _device_draft(device, broker_sources=None):
     if is_zendure_mqtt_device_config(device):
         return zendure_mqtt_device_draft(device, broker_sources=broker_sources)
+    if is_e3dc_modbus_device_config(device):
+        return _e3dc_device_draft(device)
     name = str(device.get("name") or "").strip()
     draft = {
         "kind": "local_api",
@@ -554,6 +560,59 @@ def _device_draft(device, broker_sources=None):
         if key in device:
             draft[key] = device[key]
     return draft
+
+
+def _e3dc_device_draft(device):
+    """Editable view of a read-only E3/DC device: its connection, nothing to control."""
+
+    name = str(device.get("name") or "").strip()
+    draft = {
+        "kind": E3DC_MODBUS_DEVICE_TYPE,
+        "original_name": name,
+        "name": name,
+        "ip": str(device.get("ip") or "").strip(),
+        "enabled": bool(device.get("enabled", True)),
+        "has_enabled_key": "enabled" in device,
+    }
+    for key in _E3DC_DEVICE_NUMBER_KEYS:
+        if device.get(key) is not None:
+            draft[key] = device[key]
+    return draft
+
+
+_E3DC_DEVICE_NUMBER_KEYS = ("port", "unit_id")
+
+
+def _is_e3dc_draft_item(item):
+    return item.get("kind") == E3DC_MODBUS_DEVICE_TYPE
+
+
+def _materialize_e3dc_device(original, item):
+    """Write an E3/DC draft item back onto its stored entry, keeping custom keys.
+
+    A read-only device gets no Zendure defaults, no serial and no control
+    values; an entry of another kind is never turned into one silently, so only
+    a stored E3/DC entry is used as the base.
+    """
+
+    base = original if is_e3dc_modbus_device_config(original) else {}
+    device = copy.deepcopy(base)
+    device["type"] = E3DC_MODBUS_DEVICE_TYPE
+    for key in ("name", "ip"):
+        if key in item:
+            device[key] = str(item.get(key) or "").strip()
+    for key in _E3DC_DEVICE_NUMBER_KEYS:
+        if key not in item:
+            continue
+        value = item.get(key)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            device.pop(key, None)
+        else:
+            device[key] = _coerce_number(value)
+    enabled = bool(item.get("enabled", True))
+    if "enabled" in device or item.get("has_enabled_key") or not enabled:
+        device["enabled"] = enabled
+    return device
 
 
 def _stored_broker_uses_tls(broker):
@@ -649,6 +708,9 @@ def _grid_meter_draft(grid_meter):
     channels = grid_meter.get("channels")
     if isinstance(channels, list):
         draft["channels"] = [str(item) for item in channels]
+    for key in _GRID_METER_MODBUS_KEYS:
+        if grid_meter.get(key) is not None:
+            draft[key] = grid_meter.get(key)
     if draft["type"] in _MQTT_GRID_METER_TYPES:
         draft["mqtt"] = _grid_meter_mqtt_draft(grid_meter)
     return draft
@@ -766,9 +828,12 @@ def _summary(config, draft):
     grid_meter = config.get("grid_meter") if isinstance(config.get("grid_meter"), dict) else {}
     dashboard = config.get("dashboard") if isinstance(config.get("dashboard"), dict) else {}
     influx = config.get("influxdb") if isinstance(config.get("influxdb"), dict) else {}
+    read_only = [device for device in devices if _is_e3dc_draft_item(device)]
+    controlled = [device for device in devices if not _is_e3dc_draft_item(device)]
     return {
-        "device_count": len(devices),
-        "enabled_device_count": sum(1 for device in devices if device.get("enabled", True)),
+        "device_count": len(controlled),
+        "enabled_device_count": sum(1 for device in controlled if device.get("enabled", True)),
+        "read_only_device_count": len(read_only),
         "grid_meter_type": str(grid_meter.get("type") or "").strip() or None,
         "dashboard_enabled": bool(dashboard.get("enabled", False)),
         "influx_enabled": bool(influx.get("enabled", False)),
@@ -1471,6 +1536,9 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
             name = str(item.get("name") or "").strip()
             if name:
                 allocation_names.append(name)
+        if _is_e3dc_draft_item(item):
+            result.append(_materialize_e3dc_device(original, item))
+            continue
         if _is_mqtt_draft_item(item):
             was_mqtt = is_zendure_mqtt_device_config(original)
             # A resolved proposal authorizes the connection, not the device: one
@@ -1672,7 +1740,11 @@ def _coerce_number(value):
     return coerce_catalog_value({"type": "number"}, value)
 
 
-_GRID_METER_DRAFT_KEYS = ("type", "ip", "port", "url", "power_path", "channels")
+_GRID_METER_MODBUS_KEYS = ("unit_id",)
+_GRID_METER_DRAFT_KEYS = (
+    "type", "ip", "port", "url", "power_path", "channels", *_GRID_METER_MODBUS_KEYS,
+)
+_GRID_METER_OPTIONAL_NUMBER_KEYS = frozenset({"port", *_GRID_METER_MODBUS_KEYS})
 
 
 def _grid_meter_changes(grid_meter):
@@ -1688,7 +1760,7 @@ def _grid_meter_changes(grid_meter):
         if key not in grid_meter:
             continue
         value = grid_meter[key]
-        if key == "port" and value is None:
+        if key in _GRID_METER_OPTIONAL_NUMBER_KEYS and value is None:
             continue
         changes.append(ConfigChange(key, value))
     mqtt = grid_meter.get("mqtt")
@@ -1878,6 +1950,18 @@ def _validate(config, merge_issues=()):
                         validation, device, label, "Zendure MQTT"
                     )
                 continue
+            if is_e3dc_modbus_device_config(device):
+                if not _valid_host(device.get("ip")):
+                    validation["errors"].append(
+                        _issue("device_host_invalid", f"{label} has an invalid IP address or hostname.")
+                    )
+                try:
+                    e3dc_modbus_device_settings(device)
+                except ValueError as exc:
+                    validation["errors"].append(
+                        _issue("e3dc_modbus_device_invalid", f"{label}: {exc}")
+                    )
+                continue
             if not _valid_host(device.get("ip")):
                 validation["errors"].append(
                     _issue("device_host_invalid", f"{label} has an invalid IP address or hostname.")
@@ -1914,6 +1998,13 @@ def _validate(config, merge_issues=()):
             if not (meter_type == "tasmota_http" and grid_meter.get("url")):
                 validation["errors"].append(
                     _issue("grid_meter_host_invalid", "The grid meter has an invalid IP or hostname.")
+                )
+        if meter_type == E3DC_MODBUS_GRID_METER_TYPE:
+            try:
+                e3dc_modbus_grid_meter_settings(grid_meter)
+            except ValueError as exc:
+                validation["errors"].append(
+                    _issue("grid_meter_e3dc_modbus_invalid", str(exc))
                 )
         # Parity with the Core resolver EMS runs at startup: an MQTT grid meter
         # that Core rejects (missing host/topic, unknown/disabled broker ref,
@@ -1990,8 +2081,9 @@ def summarize_config_changes(before, after):
     # Which rows are live at once is Admin's half of the answer, and it comes
     # from the one module that owns the config/runtime overlap.
     for bucket in ("changes", "added", "removed"):
+        source = before if bucket == "removed" else after
         for entry in diff.get(bucket) or []:
-            entry["applies_live"] = applies_live(entry["path"])
+            entry["applies_live"] = applies_live(entry["path"], source)
     return diff
 
 

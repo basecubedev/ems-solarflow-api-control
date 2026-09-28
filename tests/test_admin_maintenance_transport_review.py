@@ -84,7 +84,7 @@ function mconfigMqttProposalState() { return "new"; }
 
 def test_configured_mqtt_device_is_not_a_phantom_missing_inverter():
     results = _run(
-        ("mconfigIsMqttDevice", "buildMaintenanceDiscoveryReview"),
+        ("mconfigIsMqttDevice", "mconfigIsE3dcDevice", "buildMaintenanceDiscoveryReview"),
         _REVIEW_STUBS
         + "console.log(JSON.stringify(buildMaintenanceDiscoveryReview([])));",
     )
