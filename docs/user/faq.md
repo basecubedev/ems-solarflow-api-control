@@ -404,7 +404,8 @@ same containers, without asking you to manage Docker yourself.
 
 ### Which grid meters are supported?
 
-Shelly, Shelly 3EM Gen1, EcoTracker, and Tasmota HTTP setups are documented in
+Shelly, Shelly 3EM Gen1, EcoTracker, Tasmota HTTP and E3/DC (read-only, Modbus
+TCP) setups are documented in
 [supported-setups.md](supported-setups.md).
 
 ### How does EMS reach my Zendure devices?

@@ -143,7 +143,7 @@ Device health:
 ```
 
 - **Grid-meter health** tracks reads of the configured grid meter (Shelly,
-  EcoTracker, Tasmota, MQTT, ...). `stale value used: yes` means the read
+  EcoTracker, Tasmota, MQTT, E3/DC, ...). `stale value used: yes` means the read
   failed, no fresh MQTT value arrived, or a cached MQTT value exceeded
   `grid_meter.max_age_seconds`; EMS kept the last known value rather than
   reacting to a bad reading. This is intentional fallback behavior, not a
