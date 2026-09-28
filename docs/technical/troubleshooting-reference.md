@@ -317,8 +317,8 @@ on the same reachable network, and run:
 docker compose exec ems python3 emsctl.py diagnose --hardware
 ```
 
-This runs short-timeout read-only checks for configured Shelly, EcoTracker, and
-Zendure endpoints. It does not write to devices. Use it when telemetry is
+This runs short-timeout read-only checks for configured Shelly, EcoTracker,
+E3/DC (one Modbus poll cycle through the EMS client) and Zendure endpoints. It does not write to devices. Use it when telemetry is
 missing, a grid meter cannot be parsed, or configured devices appear
 unreachable.
 

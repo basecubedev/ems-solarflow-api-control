@@ -63,16 +63,29 @@ secret; use the explicit clear control to remove one.
 
 A device added through Guided Setup is **enabled by default**.
 
+**An E3/DC shown read-only.** *Add a device manually* › **Add an E3/DC
+(read-only)** creates a card for an E3/DC storage system: name, host/IP, Modbus
+port (502) and unit ID (1), and an enabled switch — no serial and no control
+values, because the EMS only reads it and shows its PV, battery, inverter and
+grid on the dashboard. Guided Setup adds it on its own when the E3/DC is the
+grid meter. The summary counts it as a read-only device, not as an inverter,
+and at least one Zendure inverter is still required. Nothing about it is
+written into the EMS runtime state.
+
 ### 4 — Change the grid meter
 
 **What you see:** the **Grid meter** subsection with a type selector.
 
 **What you enter:** the type (Shelly, everHome EcoTracker, Tasmota, Zendure D0 /
-Smart Meter 3CT over HTTP, or an MQTT meter) and its address or topic.
+Smart Meter 3CT over HTTP, an E3/DC over Modbus TCP, or an MQTT meter) and its
+address or topic. An E3/DC also takes a port (502) and, under Advanced, its
+Modbus unit ID.
 
 **What it changes:** changing the *type* removes the fields the new type cannot
 use — an HTTP meter's address does not linger on an MQTT meter. Keys you added by
-hand are left alone.
+hand are left alone. A port belongs to its protocol: switching between two HTTP
+meters keeps it, switching to an E3/DC sets the Modbus port 502, switching to an
+MQTT meter removes it, and switching back restores the port the card had.
 
 **Expected result:** exactly one active grid meter.
 

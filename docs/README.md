@@ -139,6 +139,7 @@ Architecture, internals and reference. You do not need this for a normal setup.
 | Backup/restore internals | [technical/backup-restore.md](technical/backup-restore.md) | CLI backup, dry-run restore checks, encrypted backups and full restore. |
 | Analytics / InfluxDB | [technical/influxdb.md](technical/influxdb.md) | Optional long-range analytics with bundled or external InfluxDB. |
 | Dashboard performance | [technical/dashboard-performance.md](technical/dashboard-performance.md) | Live-path render gating, SSE recovery, static caching, and the measured cost of the flow animation. |
+| E3/DC Modbus interface | [technical/e3dc-modbus-interface.md](technical/e3dc-modbus-interface.md) | Measured read-only Modbus/TCP interface of an E3/DC system, and how the EMS reads it as grid meter and read-only device. |
 | CLI reference | [cli.md](cli.md) | Full `emsctl.py` reference for runtime-state, diagnostics, config and backups. |
 | Observed firmware behavior | [observed-firmware-no-energy-path.md](observed-firmware-no-energy-path.md) | Observed Zendure behavior when no energy path is available. |
 
@@ -154,6 +155,7 @@ For contributors and maintainers. Git clone and build-from-source belong here.
 | Developer notes | [developer/developer.md](developer/developer.md) | Additional development and maintenance context. |
 | Testing | [developer/testing.md](developer/testing.md) | Compile checks, self-test, simulation and the pytest suite. |
 | MQTT write-latency probe | [developer/mqtt-write-latency-probe.md](developer/mqtt-write-latency-probe.md) | On-hardware tool measuring how fast an MQTT `outputLimit` write reaches the inverter. |
+| E3/DC Modbus probe | [developer/e3dc-modbus-probe.md](developer/e3dc-modbus-probe.md) | Read-only tool establishing which local Modbus/TCP values an E3/DC system exposes, and how often it refreshes them. |
 | CI / release | [developer/ci-release.md](developer/ci-release.md) | Continuous integration, image publishing and release archives. |
 | Third-party licenses | [../THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md) | Full inventory of runtime, development, vendored, optional and container dependencies. |
 | Dashboard style guide | [developer/dashboard-style-guide.md](developer/dashboard-style-guide.md) | Dashboard UI style conventions. |

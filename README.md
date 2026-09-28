@@ -4,7 +4,7 @@
 [![Repo browser e2e](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml)
 [![CodeQL](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
-![automated tests](https://img.shields.io/badge/automated%20tests-12900%2B-blue)
+![automated tests](https://img.shields.io/badge/automated%20tests-13200%2B-blue)
 [![Test-Driven Development](https://img.shields.io/badge/Test--Driven%20Development-contract--first-blue)](docs/developer/testing.md#development-approach)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue)](LICENSE)
@@ -36,7 +36,7 @@ reports. Definitions and the full matrix live in
 | Older Hub / Hyper / AIO / Ace MQTT devices — Hub 1200/2000, Hyper 2000, AIO 2400, Ace 1500 | Local or Zendure cloud MQTT | Reverse-engineered |
 | Any Zendure device via API key | Zendure cloud MQTT | Telemetry for any device; control needs an exact supported model |
 | Zendure & Shelly grid meters — Shelly Pro, Zendure Smart Meter 3CT / Smart Meter D0 (Local API) | HTTP | Shelly Pro Validated; Zendure meters Reverse-engineered |
-| Other HTTP / MQTT grid meters — Shelly Plus/Gen2/Gen3, Shelly 3EM Gen1, everHome EcoTracker, Tasmota, generic MQTT, D0 over local MQTT | HTTP / MQTT | Family-supported / Reverse-engineered |
+| Other grid meters — Shelly Plus/Gen2/Gen3, Shelly 3EM Gen1, everHome EcoTracker, Tasmota, generic MQTT, D0 over local MQTT, E3/DC (read-only) | HTTP / MQTT / Modbus TCP | Family-supported / Reverse-engineered |
 | Home Assistant entity as a load signal | HA API | Legacy; not recommended for new setups |
 
 **MQTT control is an implemented EMS transport**, not a future feature: a

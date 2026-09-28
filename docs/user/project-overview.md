@@ -111,6 +111,7 @@ Supported options include:
 - Zendure Smart Meter D0
 - everHome EcoTracker
 - Tasmota-based meters
+- E3/DC storage systems, read-only over Modbus TCP
 - generic MQTT power meters
 - selected Home Assistant entities
 
