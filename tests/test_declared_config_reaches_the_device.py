@@ -104,7 +104,7 @@ def test_an_explicit_charge_limit_beats_a_device_that_reports_none():
 
     from ems.ac_charge_control import resolve_max_charge_power_w
 
-    silent_device = SimpleNamespace(charge_max_limit_w=0)
+    silent_device = SimpleNamespace(charge_max_limit_w=None)
     explicit = ZendureClient(
         "WR1", "192.0.2.10", "SN", None, 15, 100, 1, None,
         800, 1.0, 1.0, 1.0, max_charge_power_w=400,
@@ -169,8 +169,8 @@ def test_every_model_the_owner_catalogue_names_resolves_to_a_profile():
 # The earlier version of this list held 17 names taken from the AC-charge probe,
 # which had recorded a WATCHED subset rather than the whole report. It therefore
 # claimed to check what the device sends while checking a third of it, and
-# `chargeMaxLimit` -- the one value that decides whether a device charges at all
-# -- was outside it. Extend this when another model is read; that is what makes
+# `chargeMaxLimit` -- the value that sets how much a device charges, without
+# which only the model rating applies -- was outside it. Extend this when another model is read; that is what makes
 # the check grow with the fleet.
 OBSERVED_ON_HARDWARE = {
     "BatVolt",
@@ -451,6 +451,8 @@ def test_every_ac_charge_event_is_documented():
         "ac_charge_allocation",
         "ac_charge_share_too_small",
         "ac_charge_not_permitted",
+        "ac_charge_no_ceiling",
+        "ac_charge_surplus",
     }
     mentioned -= not_events
 

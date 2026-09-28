@@ -45,6 +45,18 @@ def _device(max_power=800, max_charge_power_w=0, battery_kwh=2.0):
     )
 
 
+def _allocate(total, states, devices, capabilities, chargeable, **kwargs):
+    """Allocate against the ceilings the controller would resolve."""
+
+    ceilings = [
+        resolve_max_charge_power_w(device, state)
+        for device, state in zip(devices, states)
+    ]
+    return allocate_charge_targets(
+        total, states, devices, capabilities, chargeable, ceilings, **kwargs
+    )
+
+
 def _capability(can_charge=True):
     return DeviceCapabilities(
         can_charge=can_charge,
@@ -79,7 +91,7 @@ def test_a_device_without_a_battery_is_never_allocated_a_charge():
     no_pack = _state(soc=0, pack_num=0)
 
     assert charge_headroom_weight(no_pack, _device(), _capability()) == 0
-    assert allocate_charge_targets(
+    assert _allocate(
         600, [no_pack], [_device()], [_capability()], [True]
     ) == [0]
 
@@ -89,7 +101,7 @@ def test_the_emptier_battery_takes_the_larger_share():
     devices = [_device(), _device()]
     capabilities = [_capability(), _capability()]
 
-    targets = allocate_charge_targets(800, states, devices, capabilities, [True, True])
+    targets = _allocate(800, states, devices, capabilities, [True, True])
 
     assert sum(targets) == -800
     # 80 vs 20 points of headroom: four times the share.
@@ -101,7 +113,7 @@ def test_a_device_that_may_not_charge_is_skipped_entirely():
     devices = [_device(), _device()]
     capabilities = [_capability(), _capability()]
 
-    targets = allocate_charge_targets(600, states, devices, capabilities, [True, False])
+    targets = _allocate(600, states, devices, capabilities, [True, False])
 
     assert targets == [-600, 0]
 
@@ -111,7 +123,7 @@ def test_a_per_device_limit_caps_its_share_and_the_rest_moves_on():
     devices = [_device(max_charge_power_w=200), _device()]
     capabilities = [_capability(), _capability()]
 
-    targets = allocate_charge_targets(800, states, devices, capabilities, [True, True])
+    targets = _allocate(800, states, devices, capabilities, [True, True])
 
     assert targets[0] == -200
     assert targets[1] == -600
@@ -121,7 +133,7 @@ def test_nothing_is_allocated_when_no_device_can_take_it():
     states = [_state(100)]
     devices = [_device()]
 
-    targets = allocate_charge_targets(500, states, devices, [_capability()], [True])
+    targets = _allocate(500, states, devices, [_capability()], [True])
 
     assert targets == [0]
 
@@ -141,7 +153,7 @@ def test_the_charge_limit_comes_from_the_device_not_from_its_output_rating():
 
     assert resolve_max_charge_power_w(device, reports_1000) == 1000
     # The output rating is never borrowed as a charge rating.
-    assert resolve_max_charge_power_w(device, _state(soc=50, charge_max_limit_w=0)) == 0
+    assert resolve_max_charge_power_w(device, _state(soc=50, charge_max_limit_w=None)) == 0
 
 
 def test_an_operator_may_go_below_the_device_ceiling_but_not_above_it():
@@ -152,12 +164,20 @@ def test_an_operator_may_go_below_the_device_ceiling_but_not_above_it():
     assert resolve_max_charge_power_w(_device(max_charge_power_w=3000), reports_1000) == 1000
     # Without a reported ceiling an explicit setting still stands on its own.
     assert resolve_max_charge_power_w(
-        _device(max_charge_power_w=600), _state(soc=50, charge_max_limit_w=0)
+        _device(max_charge_power_w=600), _state(soc=50, charge_max_limit_w=None)
     ) == 600
+    # A device that reports 0 has refused; the setting does not overrule it.
+    assert resolve_max_charge_power_w(
+        _device(max_charge_power_w=600), _state(soc=50, charge_max_limit_w=0)
+    ) == 0
 
 
-def test_a_device_that_reports_no_ceiling_charges_nothing():
-    """Every model that can charge reports one, so an absent value is a stranger."""
+def test_a_device_with_no_reported_ceiling_and_no_rating_charges_nothing():
+    """Without a report, a rating or a setting there is no figure to charge at.
+
+    The controller passes the model's rating; a model without one, or a caller
+    that passes none, leaves nothing to guess from.
+    """
 
     assert resolve_max_charge_power_w(_device(max_power=800), None) == 0
     assert resolve_max_charge_power_w(_device(max_power="?"), _state(soc=50, charge_max_limit_w="?")) == 0
@@ -285,7 +305,7 @@ def test_a_share_too_small_to_be_worth_a_direction_change_is_concentrated():
     devices = [_device()] * 6
     capabilities = [_capability()] * 6
 
-    targets = allocate_charge_targets(105, states, devices, capabilities, [True] * 6)
+    targets = _allocate(105, states, devices, capabilities, [True] * 6)
 
     taking = [value for value in targets if value != 0]
     assert len(taking) == 2, targets
@@ -299,7 +319,7 @@ def test_a_nearly_full_device_is_left_out_rather_than_trickled():
     states = [_state(soc=99), _state(soc=50), _state(soc=50)]
     devices = [_device()] * 3
 
-    targets = allocate_charge_targets(
+    targets = _allocate(
         105, states, devices, [_capability()] * 3, [True] * 3
     )
 
@@ -311,7 +331,7 @@ def test_a_large_charge_still_spreads_across_the_fleet():
     """The minimum is a floor on a share, never a reason to concentrate."""
 
     states = [_state(soc=50)] * 6
-    targets = allocate_charge_targets(
+    targets = _allocate(
         900, states, [_device()] * 6, [_capability()] * 6, [True] * 6
     )
 
@@ -325,7 +345,7 @@ def test_the_last_device_keeps_a_share_below_the_minimum():
     says charge, which is exactly the windup the floor exists to prevent."""
 
     states = [_state(soc=50)] * 3
-    targets = allocate_charge_targets(
+    targets = _allocate(
         30, states, [_device()] * 3, [_capability()] * 3, [True] * 3
     )
 
@@ -381,3 +401,25 @@ def test_no_pv_right_now_is_not_evidence_of_a_device_without_pv():
 
     # In daylight the measured share is what separates them, not a label.
     assert pv_first_weight(500, with_panels) > pv_first_weight(500, without_panels)
+
+
+def test_a_device_already_charging_keeps_its_place_until_half_the_minimum():
+    """Leaving and rejoining on every wobble of the total is two relay moves."""
+
+    states = [_state(soc=10), _state(soc=90)]
+    devices = [_device(), _device()]
+    capabilities = [_capability(), _capability()]
+
+    fresh = _allocate(400, states, devices, capabilities, [True, True])
+    held = _allocate(
+        400, states, devices, capabilities, [True, True], charging_now=[True, True]
+    )
+
+    assert fresh[1] == 0, fresh
+    assert MIN_DEVICE_CHARGE_W / 2 <= -held[1] < MIN_DEVICE_CHARGE_W, held
+    assert sum(held) == sum(fresh) == -400
+
+    tiny = _allocate(
+        150, states, devices, capabilities, [True, True], charging_now=[True, True]
+    )
+    assert tiny[1] == 0, tiny

@@ -68,8 +68,9 @@ class DeviceState:
     grid_state: int
     input_limit_w: int = 0
     # The device's own AC charge ceiling. It is not the output limit: drawing in
-    # and feeding out are different paths with different ratings.
-    charge_max_limit_w: int = 0
+    # and feeding out are different paths with different ratings. None when the
+    # device reports none, which is not the same as reporting 0.
+    charge_max_limit_w: int | None = None
     # Measured AC input power, the mirror of `output`. `input_limit_w` is what
     # was asked for; this is what flows.
     grid_input: int = 0

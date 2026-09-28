@@ -119,7 +119,7 @@
         "Which AC directions EMS may command on this device.",
         "Both directions are on by default.",
         "Charging also needs a model the hardware catalogue lists as AC chargeable.",
-        "max_charge_power_w 0 uses the limit the device reports for itself."
+        "max_charge_power_w 0 uses the limit the device reports, else the model rating."
       ],
       "ac_discharge_enabled": true,
       "ac_charge_enabled": true,
@@ -151,7 +151,7 @@
         "Which AC directions EMS may command on this device.",
         "Both directions are on by default.",
         "Charging also needs a model the hardware catalogue lists as AC chargeable.",
-        "max_charge_power_w 0 uses the limit the device reports for itself."
+        "max_charge_power_w 0 uses the limit the device reports, else the model rating."
       ],
       "ac_discharge_enabled": true,
       "ac_charge_enabled": true,

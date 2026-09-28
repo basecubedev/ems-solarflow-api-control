@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from ems import config as cfg
 from ems.ac_charge_control import (
     CHARGE_SILENCE_CYCLES,
+    OWN_DRAIN_MARGIN_W,
     ChargeDirectionSettings,
     ChargeDirectionState,
     allocate_charge_targets,
@@ -131,6 +132,9 @@ class EMSController:
         self.device_charge_limits = {}
         self.silent_charge_cycles = {}
         self.charge_entry_rate_limited = False
+        self.charge_ceiling_unknown = set()
+        self.charge_blocked_by_ceiling = set()
+        self.charge_capacity_below_stop = False
         for device in self.devices:
             set_observer = getattr(device, "set_dispatch_observer", None)
             if callable(set_observer):
@@ -284,13 +288,25 @@ class EMSController:
         return adjusted_filtered
 
     def initialize_commanded_total(self, states, max_power):
+        """Seed the total from what the devices are doing.
+
+        While charging, from what they actually feed out, never from their
+        ``outputLimit``: a device parked at the standby floor at minimum SoC
+        still reports that limit while delivering nothing, and seeding from it
+        adds a floor that does not exist to the first desired total -- enough
+        to read a marginal surplus as none and end a charge just entered.
+        """
+
         limit_total = sum(
             state.output_limit
             for state in states
             if state.output_limit > 0
         )
 
-        if limit_total > 0:
+        if self.charge_direction.charging:
+            initial = sum(state.output for state in states)
+            source = "output_while_charging"
+        elif limit_total > 0:
             initial = limit_total
             source = "output_limit"
         else:
@@ -936,7 +952,8 @@ class EMSController:
         states,
         indexes,
         enabled,
-        min_output_limit
+        min_output_limit,
+        charge_pending=False
     ):
         """Update night/min-SOC idle state and log transitions."""
 
@@ -973,6 +990,19 @@ class EMSController:
             self.night_min_soc_idle_active = False
             self.night_min_soc_idle_parked.clear()
             self.reset_output_control_state()
+            return False
+
+        if charge_pending:
+            if self.night_min_soc_idle_active:
+                log_event(
+                    logging.INFO,
+                    "night_min_soc_idle_exit",
+                    reason="ac_charge_surplus",
+                    min_output_limit_w=min_output_limit
+                )
+                self.night_min_soc_idle_active = False
+                self.night_min_soc_idle_parked.clear()
+                self.reset_output_control_state()
             return False
 
         should_enter = self.night_min_soc_idle_should_enter(
@@ -1344,10 +1374,15 @@ class EMSController:
         if not self.charge_direction.charging:
             return 0
 
+        return -self.usable_charge_capacity_w()
+
+    def usable_charge_capacity_w(self):
+        """What the chargeable devices can take, held to the installation cap."""
+
         configured = cfg.ac_charge_control_int(
             "max_total_charge_power_w", 1200, minimum=0
         )
-        return -min(configured, max(0, self.charge_capacity_w))
+        return min(configured, max(0, self.charge_capacity_w))
 
     def release_charging_devices(self):
         """Return every device this EMS put into charge, before shutting down.
@@ -1461,12 +1496,177 @@ class EMSController:
         # a running charge ended it on a single noisy sample, and re-entry then
         # costs a full confirmation window.
         already_charging = self.commanded_device_targets.get(dev.name, 0) < 0
-        if not already_charging and cfg.safe_int(
-            getattr(state, "pack_in", 0), 0, minimum=0
-        ) > 0:
+        if not already_charging and self.pack_drained_from_outside(state):
             return False
 
         return self.device_model_supports_charge(dev)
+
+    def pack_drained_from_outside(self, state):
+        """Whether the pack discharges for a reason other than this EMS.
+
+        A device feeding out under an ``outputLimit`` is following this EMS's
+        own command, since the EMS is the only writer of that value. Counting
+        that drain as foreign refused every charge on an installation with a
+        ``min_output_limit``: the standby floor alone keeps the pack
+        discharging while the surplus the charge is meant to take goes out.
+        Only a drain the output accounts for is the EMS's own; what exceeds it
+        by more than ``OWN_DRAIN_MARGIN_W`` goes somewhere else.
+        """
+
+        pack_in = cfg.safe_int(getattr(state, "pack_in", 0), 0, minimum=0)
+        if pack_in <= 0:
+            return False
+
+        output = cfg.safe_int(getattr(state, "output", 0), 0, minimum=0)
+        feeds_own_command = (
+            cfg.safe_int(getattr(state, "output_limit", 0), 0, minimum=0) > 0
+            and output > 0
+            and pack_in <= output + OWN_DRAIN_MARGIN_W
+        )
+        return not feeds_own_command
+
+    def device_charge_ceiling_w(self, dev, state):
+        """One device's charge ceiling, with its model's rating as fallback.
+
+        Bounded by ``max_power`` where the transport enforces that bound on a
+        charge too, so the regulator never allocates a share that is refused
+        at the write.
+        """
+
+        profile = self.device_charge_profile(dev)
+        ceiling = resolve_max_charge_power_w(
+            dev,
+            state,
+            rated_w=getattr(profile, "rated_charge_power_w", 0),
+        )
+        max_power = cfg.safe_int(getattr(dev, "max_power", 0), 0, minimum=0)
+        if getattr(dev, "charge_bounded_by_max_power", False) and max_power > 0:
+            return min(ceiling, max_power)
+        return ceiling
+
+    def resolve_charge_eligibility(self, states, capabilities):
+        """Settle which devices may charge this cycle, and how much each takes.
+
+        A permitted device with no ceiling is not chargeable: entering charge
+        direction for it would leave the floor at zero and the exit firing on
+        the next cycle. That is said once per device, because it is the one
+        refusal an operator can fix by setting ``max_charge_power_w``. A fleet
+        whose usable capacity cannot outlast the exit makes every device
+        non-chargeable, for the same reason.
+        """
+
+        allowed = self.chargeable_device_flags(states, capabilities)
+        chargeable = []
+        limits = {}
+        self.charge_blocked_by_ceiling = set()
+        for index, dev in enumerate(self.devices):
+            ceiling = (
+                self.device_charge_ceiling_w(dev, states[index])
+                if allowed[index]
+                else 0
+            )
+            if allowed[index] and ceiling <= 0:
+                self.charge_blocked_by_ceiling.add(dev.name)
+                if dev.name not in self.charge_ceiling_unknown:
+                    self.charge_ceiling_unknown.add(dev.name)
+                    reported = getattr(states[index], "charge_max_limit_w", None)
+                    log_event(
+                        logging.WARNING,
+                        "ac_charge_ceiling_unknown",
+                        device=dev.name,
+                        reason=(
+                            "no_reported_or_rated_charge_limit"
+                            if reported is None
+                            else "device_reports_zero_charge_limit"
+                        ),
+                    )
+            elif allowed[index]:
+                self.charge_ceiling_unknown.discard(dev.name)
+            chargeable.append(ceiling > 0)
+            limits[dev.name] = ceiling
+
+        self.device_charge_limits = limits
+        self.charge_capacity_w = sum(limits.values())
+        if any(chargeable) and not self.charge_capacity_outlasts_the_exit():
+            return [False] * len(chargeable)
+        return chargeable
+
+    def charge_capacity_outlasts_the_exit(self):
+        """Whether the chargeable devices can hold a charge past the exit.
+
+        The exit fires once the desired total rises to ``-stop_w``, and the
+        floor holds the total at the usable capacity. A capacity at or below
+        ``stop_w`` therefore leaves every entry on the next cycle: twelve an
+        hour, then the rate limit, and nothing charged. Said once until the
+        capacity is sufficient again, naming it rather than the thresholds.
+        """
+
+        usable = self.usable_charge_capacity_w()
+        stop_w = self.charge_settings().stop_w
+        if usable > stop_w:
+            self.charge_capacity_below_stop = False
+            return True
+
+        if not self.charge_capacity_below_stop:
+            self.charge_capacity_below_stop = True
+            log_event(
+                logging.WARNING,
+                "ac_charge_capacity_below_stop",
+                usable_charge_w=usable,
+                charge_capacity_w=self.charge_capacity_w,
+                max_total_charge_power_w=cfg.ac_charge_control_int(
+                    "max_total_charge_power_w", 1200, minimum=0
+                ),
+                stop_w=stop_w,
+            )
+        return False
+
+    def take_charge_decision(
+        self,
+        meter_fresh,
+        *,
+        commanded_total_w,
+        desired_total_w,
+        filtered_load_w,
+        chargeable,
+        releasable_output_w,
+    ):
+        """Decide the charge direction for this cycle; the one writer of it.
+
+        Called from the regulating path and, while night/min-SoC idle holds,
+        from the idle path. A device with no PV and an empty pack looks exactly
+        like the idle's night state while the surplus it is meant to absorb is
+        exported, and a decision that only ran outside the idle could never
+        start that charge. In the idle nothing is commanded and the filter is
+        not running, so the idle passes zero and the raw meter reading.
+
+        Entry is judged on the surplus that is left once the chargeable
+        devices stop feeding out. Their standby floor is export that vanishes
+        the moment they switch direction, so counting it lowered the entry
+        threshold by the floor of every device, sized the first charge past
+        the real surplus into import, and ended it on the next cycle.
+        """
+
+        if not meter_fresh and self.charge_direction.charging:
+            log_event(
+                logging.WARNING,
+                "ac_charge_stopped_stale_meter",
+                reason="grid_meter_reading_stale",
+            )
+        decision = decide_charge_direction(
+            self.charge_direction,
+            charging_possible=any(chargeable) and meter_fresh,
+            commanded_total_w=commanded_total_w,
+            desired_total_w=desired_total_w,
+            filtered_load_w=filtered_load_w + max(0, releasable_output_w),
+            now=time.monotonic(),
+            settings=self.charge_settings(),
+        )
+        self.log_charge_direction(
+            decision, commanded_total_w, filtered_load_w, chargeable
+        )
+        self.charge_direction = decision.state
+        return decision
 
     def observe_charge_delivery(self, states):
         """Report a commanded charge that never produced any AC input.
@@ -1535,26 +1735,31 @@ class EMSController:
                 # Permitted, but its share was below what a direction change is
                 # worth, so the charge was concentrated on the others.
                 device_explanation.decision_reason = "ac_charge_share_too_small"
+            elif dev.name in self.charge_blocked_by_ceiling:
+                device_explanation.decision_reason = "ac_charge_no_ceiling"
             else:
                 device_explanation.decision_reason = "ac_charge_not_permitted"
 
-    def log_charge_direction(self, decision, stabilized_total, chargeable):
+    def log_charge_direction(
+        self, decision, stabilized_total, filtered_load_w, chargeable
+    ):
         """Log the direction decision, loudly only when it matters.
 
         A rate-limited entry is a warning rather than a debug line: reaching the
         cap means the thresholds do not fit the installation, and silently
         refusing would hide that. It is said **once per episode**, not once per
-        cycle -- the condition holds for as long as the surplus does, and a
+        cycle: the condition holds for as long as the surplus does, and a
         misconfigured band produced sixty identical lines in a two-hundred-cycle
         run, which buries every other event in the log rather than surfacing
-        this one.
+        this one. The episode ends when the hour frees an entry again, not when
+        a dip merely unconfirms the window.
         """
 
         fields = {
             "charging": decision.charging,
             "reason": decision.reason,
             "commanded_total_w": round(stabilized_total, 1),
-            "filtered_load_w": round(self.filtered_load_w or 0, 1),
+            "filtered_load_w": round(filtered_load_w or 0, 1),
             "chargeable_devices": sum(1 for flag in chargeable if flag),
             "entries_last_hour": len(decision.state.entries),
         }
@@ -1567,7 +1772,10 @@ class EMSController:
                 log_event(logging.DEBUG, "ac_charge_entry_rate_limited", **fields)
             return
 
-        self.charge_entry_rate_limited = False
+        if len(decision.state.entries) < max(
+            1, self.charge_settings().max_entries_per_hour
+        ):
+            self.charge_entry_rate_limited = False
 
         log_event(
             logging.INFO
@@ -4096,15 +4304,32 @@ class EMSController:
                     state
                 )
 
+        chargeable = self.resolve_charge_eligibility(states, capabilities)
+        meter_fresh = self.grid_meter_reading_is_fresh()
+        releasable_output_w = sum(
+            cfg.safe_int(getattr(state, "output", 0), 0, minimum=0)
+            for state, allowed in zip(states, chargeable)
+            if allowed
+        )
         controllable_indexes = self.night_min_soc_controllable_indices()
         night_min_soc_idle = self.update_night_min_soc_idle_state(
             states,
             controllable_indexes,
             enabled,
-            min_output_limit
+            min_output_limit,
+            charge_pending=self.charge_direction.charging
         )
 
         if night_min_soc_idle:
+            raw_load = cfg.safe_float(load, 0.0)
+            self.take_charge_decision(
+                meter_fresh,
+                commanded_total_w=0,
+                desired_total_w=raw_load,
+                filtered_load_w=raw_load,
+                chargeable=chargeable,
+                releasable_output_w=releasable_output_w,
+            )
             targets = [
                 min_output_limit if i in controllable_indexes else 0
                 for i, _dev in enumerate(self.devices)
@@ -4189,22 +4414,8 @@ class EMSController:
             active_device_count=len(active_indexes)
         )
 
-        chargeable = self.chargeable_device_flags(states, capabilities)
-        self.device_charge_limits = {
-            dev.name: resolve_max_charge_power_w(dev, states[index]) if allowed else 0
-            for index, (dev, allowed) in enumerate(zip(self.devices, chargeable))
-        }
-        self.charge_capacity_w = sum(self.device_charge_limits.values())
-        meter_fresh = self.grid_meter_reading_is_fresh()
-        if not meter_fresh and self.charge_direction.charging:
-            log_event(
-                logging.WARNING,
-                "ac_charge_stopped_stale_meter",
-                reason="grid_meter_reading_stale",
-            )
-        charge_decision = decide_charge_direction(
-            self.charge_direction,
-            charging_possible=any(chargeable) and meter_fresh,
+        charge_decision = self.take_charge_decision(
+            meter_fresh,
             commanded_total_w=stabilized_total,
             desired_total_w=(
                 self.desired_total_w
@@ -4212,11 +4423,9 @@ class EMSController:
                 else stabilized_total
             ),
             filtered_load_w=self.filtered_load_w or 0,
-            now=time.monotonic(),
-            settings=self.charge_settings(),
+            chargeable=chargeable,
+            releasable_output_w=releasable_output_w,
         )
-        self.log_charge_direction(charge_decision, stabilized_total, chargeable)
-        self.charge_direction = charge_decision.state
 
         # The discharge allocator never sees a negative request: charging is a
         # different weighting of the same allocation primitive, not a sign the
@@ -4242,6 +4451,14 @@ class EMSController:
                 self.devices,
                 capabilities,
                 chargeable,
+                ceilings=[
+                    self.device_charge_limits.get(dev.name, 0)
+                    for dev in self.devices
+                ],
+                charging_now=[
+                    self.commanded_device_targets.get(dev.name, 0) < 0
+                    for dev in self.devices
+                ],
             )
             self.explain_charge_allocation(
                 control_explanation, targets, chargeable

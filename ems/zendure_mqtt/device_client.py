@@ -144,6 +144,9 @@ class ZendureMqttDeviceClient:
 
     ip = "mqtt"
     supports_state_reconciliation = False
+    # ``_enforce_power_limit`` refuses a charge above ``max_power``; the
+    # regulator reads this so it never allocates a charge the transport drops.
+    charge_bounded_by_max_power = True
 
     def __init__(
         self,

@@ -283,13 +283,26 @@ def parse_device(data):
         dc_status=props.get("dcStatus") or 0,
         grid_state=props.get("gridState") or 0,
         input_limit_w=props.get("inputLimit") or 0,
-        charge_max_limit_w=props.get("chargeMaxLimit") or 0,
+        charge_max_limit_w=_reported_charge_ceiling(props),
         grid_input=props.get("gridInputPower") or 0,
         grid_reverse=props.get("gridReverse") or 0,
         pack_num=_observed_pack_count(data, props),
         soc_status=props.get("socStatus") or 0,
         battery_calibration_time=props.get("batCalTime"),
     )
+
+
+def _reported_charge_ceiling(props):
+    """The charge ceiling the device reports, or None when it reports none.
+
+    Absent and zero are different answers: a device that says 0 has refused a
+    charge, and only one that says nothing may fall back to its model rating.
+    """
+
+    for key in ("chargeMaxLimit", "chargeLimit"):
+        if props.get(key) is not None:
+            return props[key]
+    return None
 
 
 def zero_device_state():
@@ -322,7 +335,7 @@ def zero_device_state():
         dc_status=0,
         grid_state=0,
         input_limit_w=0,
-        charge_max_limit_w=0,
+        charge_max_limit_w=None,
         grid_input=0,
         grid_reverse=0,
         pack_num=None,
