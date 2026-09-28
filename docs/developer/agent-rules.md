@@ -109,6 +109,36 @@ Browser state MUST NEVER authorize cleanup. Cleanup-scope membership does not
 authorize deletion: deletion still requires exact ownership proof and
 canonical-path validation.
 
+### Paired-registry invariant
+
+Where one authority cannot be derived from the other and the two must simply
+agree — a declared config key and the object that must accept it, a write
+allowlist and the routes that serve it, a series catalogue and the frontend that
+requests it — the pairing itself MUST be tested by walking one side and
+asserting the other honours every entry. Deriving is better where it is
+possible; a pairing test is what makes two lists one source where it is not.
+
+This is not a style preference. Six defects of exactly this shape shipped into
+this repository and none of them failed anything:
+
+- `devices[].ac_charge_enabled` and `devices[].max_charge_power_w` were
+  documented, schema-validated and editable in Admin, and neither transport
+  passed them to the device object. `resolve_max_charge_power_w`'s
+  "an explicit setting always wins" was unreachable while its own docstring
+  advertised it as the way to unblock an unidentified device.
+- The runtime write allowlist carried an `ac_charge_control` section with no
+  route behind it, so the feature could not be switched on from the dashboard.
+- An analytics KPI integrated a series its tab never requested, and so did a
+  second one that had been there since the tab was written.
+- Two hardware models' product names matched no profile alias, so such a device
+  resolves to unknown and stays telemetry-only for good.
+
+Code review is the wrong net for these. A reviewer reads what is written, and
+every one of these defects is something *missing*; what stood in the file looked
+correct in isolation. An exception belongs in an explicit list with the reason it
+is an exception — a name added there is a statement, not a way to silence a
+failure.
+
 ## 3. Architecture boundaries
 
 ### EMS/Core

@@ -18,6 +18,8 @@ DEVICE_FIELDS = {
     "max_power": ("int", (0, GENERIC_MAX_POWER_W)),
     "offgrid_socket_mode": ("enum", OFFGRID_SOCKET_MODES),
     "pv_priority_factor": ("float", (0.01, 100.0)),
+    # Stopping a device drawing from the grid must not need a restart.
+    "ac_charge_enabled": ("bool", None),
 }
 
 SECTION_FIELDS = {
@@ -26,6 +28,9 @@ SECTION_FIELDS = {
         "control_enabled": ("bool", None),
     },
     "winter": {
+        "enabled": ("bool", None),
+    },
+    "ac_charge_control": {
         "enabled": ("bool", None),
     },
 }

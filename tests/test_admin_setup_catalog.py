@@ -88,6 +88,7 @@ def test_catalog_reports_setup_mode_and_expected_section_order():
         "devices",
         "winter",
         "battery_full_charge_assist",
+        "ac_charge_control",
         "energy_savings",
         "dashboard",
         "influxdb",

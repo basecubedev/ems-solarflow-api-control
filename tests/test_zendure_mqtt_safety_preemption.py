@@ -57,7 +57,7 @@ class _FakeService:
         return True
 
 
-def _zensdk_device(**kwargs):
+def _zensdk_device(hardware_profile="solarflow_800_pro_2", **kwargs):
     """No-ack ZenSDK device (worst case: holds the slot until confirmation)."""
 
     return ZendureMqttDeviceClient(
@@ -67,7 +67,7 @@ def _zensdk_device(**kwargs):
         topic_family=FAMILY_LEGACY_JSON,
         source="local_mqtt",
         product_key="PK",
-        hardware_profile="solarflow_800_pro_2",
+        hardware_profile=hardware_profile,
         max_power=2000,
         confirmation_timeout_seconds=30.0,
         **kwargs,
@@ -272,8 +272,8 @@ def test_dispatch_queued_result():
 
 
 def test_dispatch_rejected_result_is_falsey():
-    dev = _zensdk_device()
-    # ZenSDK does not support charge; a negative target is rejected.
+    # A model whose AC charge path has not been measured rejects a charge.
+    dev = _zensdk_device("solarflow_800")
     result = dev.dispatch_output_limit(-500)
     assert result.status is WriteDispatchStatus.REJECTED
     assert result.reason
@@ -281,6 +281,6 @@ def test_dispatch_rejected_result_is_falsey():
 
 
 def test_write_output_limit_wrapper_stays_boolean():
-    dev = _zensdk_device()
+    dev = _zensdk_device("solarflow_800")
     assert dev.write_output_limit(600) is True
     assert dev.write_output_limit(-500) is False

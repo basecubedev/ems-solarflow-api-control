@@ -44,7 +44,7 @@ from ems.mqtt_control.zendure_commands import (
     build_power_command,
     next_power_message_id,
 )
-from ems.mqtt_control.zensdk_operations import (
+from ems.power_command import (
     ZenSdkOperationError,
     build_zensdk_power_operation,
 )
@@ -144,6 +144,9 @@ class ZendureMqttDeviceClient:
 
     ip = "mqtt"
     supports_state_reconciliation = False
+    # ``_enforce_power_limit`` refuses a charge above ``max_power``; the
+    # regulator reads this so it never allocates a charge the transport drops.
+    charge_bounded_by_max_power = True
 
     def __init__(
         self,
@@ -162,6 +165,9 @@ class ZendureMqttDeviceClient:
         serial_number=None,
         min_soc=0,
         max_soc=0,
+        ac_discharge_enabled=True,
+        ac_charge_enabled=True,
+        max_charge_power_w=0,
         smart_mode=1,
         grid_off_mode=None,
         max_power=None,
@@ -271,6 +277,9 @@ class ZendureMqttDeviceClient:
         self.control_gate = control_gate_for_broker_source(source)
         self.min_soc = min_soc
         self.max_soc = max_soc
+        self.ac_discharge_enabled = bool(ac_discharge_enabled)
+        self.ac_charge_enabled = bool(ac_charge_enabled)
+        self.max_charge_power_w = max_charge_power_w or 0
         self.smart_mode = smart_mode
         self.grid_off_mode = grid_off_mode
         self.max_power = max_power or cfg.MAX_DEVICE_POWER
