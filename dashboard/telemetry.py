@@ -159,6 +159,19 @@ def _state_telemetry_fields(state):
     }
 
 
+def _read_only_device_tiles(controller):
+    """Tiles of the devices the controller only reads, such as an E3/DC."""
+
+    runtime = getattr(controller, "read_only_devices", None)
+    if runtime is None:
+        return []
+    try:
+        return list(runtime.tiles())
+    except Exception:
+        logging.debug("event=dashboard_read_only_devices_unavailable", exc_info=True)
+        return []
+
+
 def _telemetry_only_tiles(controller):
     """Read-only tiles for every device that streams telemetry but takes no orders.
 
@@ -169,21 +182,21 @@ def _telemetry_only_tiles(controller):
     wired (older deployments, test doubles) so the dashboard stays stable.
     """
 
+    tiles = _read_only_device_tiles(controller)
     runtime = getattr(controller, "zendure_mqtt_runtime", None)
     if runtime is None:
-        return []
+        return tiles
 
     try:
         summaries = runtime.device_summaries()
         snapshots = runtime.snapshots()
     except Exception:
         logging.debug("event=dashboard_telemetry_devices_unavailable", exc_info=True)
-        return []
+        return tiles
 
     from ems.clients import parse_device
     from ems.zendure_mqtt.snapshot import observable_metrics, pack_witness
 
-    tiles = []
     for summary in summaries:
         name = summary.get("name")
         identifier = summary.get("identifier")
@@ -367,7 +380,9 @@ def build_dashboard_snapshot(
         inverter_total_w += fields["output_w"]
         inverter_charge_total_w += fields["ac_charge_w"]
         battery_total_w += fields["battery_power_w"]
-        if tile["soc_reported"]:
+        # A device that has never been read has no state of charge, not 0 %.
+        soc_reported = tile.get("has_reading", True) and tile.get("soc_reported", True)
+        if soc_reported:
             soc_values.append(fields["soc"])
 
         devices[name] = {
@@ -375,7 +390,8 @@ def build_dashboard_snapshot(
             "read_only": True,
             "enabled": True,
             **fields,
-            "soc_reported": tile["soc_reported"],
+            **tile.get("fields", {}),
+            "soc_reported": soc_reported,
             "target_w": 0,
             "allocated_target_w": 0,
             "capability": None,

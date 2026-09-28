@@ -16,6 +16,7 @@ from ems.clients import (
 )
 from ems.control_status import ControlStatusWriter
 from ems.controller import EMSController
+from ems.e3dc_runtime import E3dcSessions, build_e3dc_device_runtime
 from ems.device_identity import broker_sources_from_config
 from ems.logging_utils import log_event, setup_logging
 from ems.runtime_state import build_runtime_defaults, start_runtime_state
@@ -323,14 +324,18 @@ def main():
         log_event(logging.ERROR, "startup_abort", reason="no_devices")
         sys.exit(1)
 
+    e3dc_sessions = E3dcSessions()
     shelly = create_grid_meter_client(
         cfg.GRID_METER_CONFIG,
-        session
+        session,
+        e3dc_sessions=e3dc_sessions,
     )
+    e3dc_devices = build_e3dc_device_runtime(cfg.CONFIG.get("devices"), e3dc_sessions)
 
     if args.preflight:
         ok = run_live_preflight(devices, shelly)
         close_grid_meter_client(shelly)
+        e3dc_sessions.close()
         sys.exit(0 if ok else 2)
 
     runtime_state = start_runtime_state(
@@ -494,7 +499,8 @@ def main():
         dashboard_store=dashboard_store,
         influx_writer=influx_writer,
         zendure_mqtt_runtime=zendure_mqtt_runtime,
-        winter_store=None if cfg.SIMULATION_MODE else build_winter_store()
+        read_only_devices=e3dc_devices,
+        winter_store=None if cfg.SIMULATION_MODE else build_winter_store(),
     )
     control_status = ControlStatusWriter(
         paths.resolve_control_status_path(cfg.runtime_state_path())
@@ -593,6 +599,7 @@ def main():
         # owns a network loop/connection/thread; HTTP clients own none). Safe and
         # idempotent, and never masks a primary shutdown error.
         close_grid_meter_client(shelly)
+        e3dc_sessions.close()
         if influx_writer:
             influx_writer.stop()
         if zendure_mqtt_runtime is not None:
