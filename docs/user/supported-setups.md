@@ -86,9 +86,11 @@ fact, and each row says what it rests on:
 - **Measured** — the command was written to that model and the device drew the
   commanded power. Only the maintainer's 800 Pro 2.
 - **Catalogue (N W)** — the vendor/device catalogue records an AC input for
-  battery charging. Enabled, not confirmed here. The wattage is the catalogue
-  rating and is **not** used as a limit: the limit comes from the device's own
-  `chargeMaxLimit`.
+  battery charging. Enabled, not confirmed here. The limit comes from the
+  device's own `chargeMaxLimit`; only a device that reports none falls back to
+  the model's rated charge power (see [AC charging](../ac-charging.md)), which
+  can be lower than the catalogue figure — 3200 W for the 4000 Mix AC+, 1200 W
+  for the Hyper 2000.
 - **No AC charge path** — the catalogue says the model cannot charge from AC.
   The EMS refuses with a stable reason rather than failing silently.
 

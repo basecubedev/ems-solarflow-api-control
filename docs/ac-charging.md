@@ -71,9 +71,22 @@ says nothing about whether the hardware has an AC input for battery charging.
 | no | Hub 1200, Hub 2000 | — | only via an ACE 1500, which the EMS cannot command |
 | no | ACE 1500, SuperBase | — | telemetry-only: no write path at all |
 
-The catalogue rating is **not** the charge limit. The limit comes from the
-device's own `chargeMaxLimit`, capped by `max_charge_power_w` and the system
-maximum; a device that reports no ceiling charges nothing.
+The limit comes from the device's own `chargeMaxLimit` (or `chargeLimit`, the
+name some firmware uses), capped by `max_charge_power_w` and the system maximum.
+A device that reports neither falls back to its model's **rated charge power**:
+the lower of the catalogue rating above and the limit Zendure-HA uses for the
+same model, or the catalogue rating alone where Zendure-HA has none. That is
+1000 W for both 800 Pro models, 1600 W for the 1600 AC+, 2400 W for the 2400 AC
+and AC+, 3000 W for the 3000 Mix AC+, 3200 W for the 4000 Mix AC+ and 1200 W for
+the Hyper 2000. A device that *reports* a ceiling of 0 has refused a charge, and
+neither the rating nor `max_charge_power_w` overrides that. A device with no usable ceiling charges nothing
+and logs `ac_charge_ceiling_unknown`.
+
+**On MQTT a charge is also held to the device's `max_power`.** The MQTT client
+refuses any command above `max_power` before it publishes, a charge as much as
+a discharge, so the regulator never allocates more than that to an MQTT device.
+A 2400 AC on MQTT with the default `max_power` of 800 W therefore charges at up
+to 800 W; raise `max_power` for the device to let it take more.
 
 Only the 800 Pro 2 was put on a probe here. The rest are enabled on the strength
 of the vendor catalogue, which is recorded per model as `charge_evidence` and
@@ -107,8 +120,9 @@ are read-only:
    Each device carries `reported_properties` with the property **names** it
    reports (never values) and which of them the EMS does not read. That is the
    most useful thing to send back from an unfamiliar model: it says whether the
-   device reports `chargeMaxLimit` at all — without it the EMS charges nothing —
-   and it is how fields the EMS was never taught get found.
+   device reports `chargeMaxLimit` at all — without it the EMS falls back to the
+   model's rated charge power — and it is how fields the EMS was never taught
+   get found.
 
 Note that `max_total_charge_power_w` defaults to **1200 W** for the whole
 installation, which is below what a 2400-class device could draw. That is the
@@ -123,11 +137,17 @@ sliver still costs a full AC direction change while buying nothing, and may be
 too small to show up in `gridInputPower` at all. Shares below roughly 50 W are
 therefore dropped and re-allocated to devices that can use them, down to a
 single device if need be. Six devices taking 21 W each is six direction changes
-buying nothing; one device taking 126 W is one that works.
+buying nothing; one device taking 126 W is one that works. A device that is
+already charging keeps its place until its share falls below half of that, so
+a total wobbling around the point where a share crosses 50 W does not switch
+its AC direction out and back in.
 
 Charging starts only after the discharge side has already reached zero and a
 surplus above `charge_start_w` has persisted — `entry_confirm_cycles` of the
-last `entry_window_cycles` observations, five of seven by default.
+last `entry_window_cycles` observations, five of seven by default. The surplus
+is what remains once the chargeable devices stop feeding out: a device held at
+the standby floor `min_output_limit` exports those watts itself, and they vanish
+the moment it switches to charging, so they are not counted.
 
 Charging stops **immediately** when the house needs the power back. The exit is
 never delayed by a threshold, a confirmation count or the rate limit.
@@ -225,9 +245,23 @@ the remaining devices take over what they can.
 
 **A pack being drained is not charged.** If something outside the EMS draws from
 a battery — a third-party inverter on the same pack — that device is skipped for
-charging rather than charged through it. Running an EMS alongside another
+charging rather than charged through it. A device feeding out under its
+`outputLimit` is not drained from outside as long as the pack delivers no more
+than that output plus a 60 W margin for the inverter's own consumption (a
+judgement, not a measurement): the EMS is the
+only writer of that value, so the standby floor `min_output_limit` does not
+keep a device out of charging, while an off-grid load of several hundred watts
+on the same pack still does. Running an EMS alongside another
 controller on the same hardware remains unsupported; see
 [user/safety.md](user/safety.md).
+
+**Night/minSoc idle does not swallow a surplus.** A device with no PV input and
+an empty pack looks exactly like a plant at night. While the idle holds, the
+charge decision keeps running on the meter's export against `charge_start_w`,
+and once it enters a charge — the same five of seven observations as always —
+the idle is left with `night_min_soc_idle_exit reason=ac_charge_surplus`. A single export spike does not end the idle, and a stale meter
+reading never does. See
+[technical/control-logic.md](technical/control-logic.md#night--minsoc-idle).
 
 **A device with no battery never charges**, whatever its configuration says.
 Battery presence is read from telemetry, not from the config.
@@ -308,6 +342,8 @@ up as 800 W of extra household consumption.
 
 ```text
 ac_charge_band_collapsed
+ac_charge_capacity_below_stop
+ac_charge_ceiling_unknown
 ac_charge_direction
 ac_charge_entry_rate_limited
 ac_charge_not_delivered
@@ -333,6 +369,26 @@ once at startup.
 as it is, because a restart is coming. It names the signal that ended the run,
 so a device still drawing after `docker compose down` is explained rather than
 surprising. The release event is what you see when the EMS stopped by itself.
+
+`ac_charge_capacity_below_stop` is a `warning`, said once until the capacity is
+sufficient again: the
+devices that may charge can together take no more than the band's lower edge
+(`stop = max(0, charge_start_w - charge_hysteresis_w)`), counting
+`max_total_charge_power_w`. A charge that small would leave again on the next
+cycle, so the EMS does not start one. Raise `max_total_charge_power_w`,
+`max_power` on an MQTT device, or `max_charge_power_w` where it is set below
+the device's ceiling, or lower the band.
+
+`ac_charge_ceiling_unknown` is a `warning`, said once per device until it has
+a usable ceiling again: the device
+may charge by every other rule, but has no usable ceiling. With
+`reason=no_reported_or_rated_charge_limit` it reports no `chargeMaxLimit` or
+`chargeLimit` and its model carries no rated charge power; set
+`max_charge_power_w` for the device to unblock it. With
+`reason=device_reports_zero_charge_limit` the device itself reports 0, which
+the EMS respects even over `max_charge_power_w`; check the charge limit in the
+Zendure app. While another device charges, the Control view names such a device
+with `ac_charge_no_ceiling`.
 
 `ac_charge_stopped_stale_meter` is a `warning`: the load reading the charge
 rests on stopped being a measurement. It means the grid meter is unreachable,

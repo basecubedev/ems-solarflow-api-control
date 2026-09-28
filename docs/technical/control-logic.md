@@ -110,6 +110,22 @@ The idle state is left as soon as any controlled device reports positive PV on
 control memory is reset so the normal controller initializes from fresh
 telemetry.
 
+It is also left, and not entered, while an AC charge is running. A device with
+no PV input and an empty pack reports exactly the idle values above while the
+surplus it is meant to [charge from AC](../ac-charging.md) leaves through the
+meter, so the idle would return early every cycle, before the charge decision
+is reached. The charge decision therefore also runs while the idle holds, with
+nothing commanded and the raw meter reading as its load: the same
+`entry_confirm_cycles` of the last `entry_window_cycles` observations, the same
+freshness rule for the meter and the same hourly entry limit. When it enters a
+charge, the next cycle leaves the idle with `reason=ac_charge_surplus`. One
+export spike therefore never ends the idle, and the idle is never left in
+anticipation of a charge that is then not taken.
+
+A running charge always holds the idle off. Its way back belongs to the charge
+decision, which stops the devices and logs why — including
+`ac_charge_stopped_stale_meter` — and an idle entered mid-charge would skip it.
+
 ## No Export Capacity Hold
 
 If house load is positive but no active online device currently has export
@@ -208,7 +224,9 @@ Before charging there is no charge to observe, so the signal is the surplus the
 discharge side could not absorb: the integrator sits at its floor and the
 filtered load is still negative. Entry needs
 `ac_charge_control.entry_confirm_cycles` of the last `entry_window_cycles`
-observations to show that — five of seven by default.
+observations to show that — five of seven by default. The output the chargeable
+devices feed out at that moment — the standby floor — is added back first: it is
+export that stops when they switch direction, not surplus they could take.
 
 Counting observations rather than averaging them is deliberate. A mean lets
 height substitute for duration: one spike ten times the threshold averages to a
