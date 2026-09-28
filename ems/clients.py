@@ -880,6 +880,53 @@ class MqttGridMeterClient:
             pass
 
 
+class E3dcModbusGridMeterClient:
+    """Grid power from an E3/DC, read once per control cycle over Modbus TCP.
+
+    The read runs on the control loop's own call, so the poll period is the loop
+    interval and every cycle gets its own reading. The session is shared with an
+    E3/DC device tile for the same system, which then costs no second request.
+    There is deliberately no write method: the E3/DC is a meter to the EMS.
+    """
+
+    provider = "E3/DC"
+    transport = "modbus_tcp"
+
+    def __init__(self, session, *, owns_session=True):
+        self.session = session
+        self._owns_session = owns_session
+        self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
+
+    @property
+    def endpoint(self):
+        return self.session.endpoint
+
+    def get_power(self):
+        """Return this cycle's grid power, or the last good value on failure."""
+
+        reading, error = self.session.reading_for_cycle()
+        if reading is None:
+            error = error or "no E3/DC reading"
+            self.health.record_failure(error=error, latency_ms=None, stale_used=True)
+            log_event(
+                logging.WARNING,
+                "e3dc_modbus_grid_read_error",
+                endpoint=self.endpoint,
+                error=error,
+                stale_value=self.last_value,
+            )
+            return self.last_value
+
+        self.last_value = round(reading.grid_w, 1)
+        self.health.record_success(reading.round_trip_ms)
+        return self.last_value
+
+    def close(self):
+        if self._owns_session:
+            self.session.close()
+
+
 def close_grid_meter_client(client):
     """Idempotently release a grid-meter client's runtime resources.
 
@@ -901,8 +948,14 @@ def close_grid_meter_client(client):
         log_event(logging.WARNING, "grid_meter_client_close_failed", error=exc)
 
 
-def create_grid_meter_client(config, session, *, mqtt_credential_resolver=None):
-    """Create the configured household/grid power meter client."""
+def create_grid_meter_client(
+    config, session, *, mqtt_credential_resolver=None, e3dc_sessions=None
+):
+    """Create the configured household/grid power meter client.
+
+    ``e3dc_sessions`` lets an E3/DC meter share its connection with an E3/DC
+    device read in the same process; without it the meter owns its own.
+    """
 
     config = config if isinstance(config, dict) else {}
     meter_type = str(config.get("type", "shelly")).strip().lower()
@@ -935,6 +988,20 @@ def create_grid_meter_client(config, session, *, mqtt_credential_resolver=None):
         except (TypeError, ValueError) as exc:
             raise ValueError("Zendure HTTP grid meter port must be an integer") from exc
         return ZendureGridMeterHttpClient(ip, session, port=port)
+
+    if meter_type == cfg.E3DC_MODBUS_GRID_METER_TYPE:
+        from ems.e3dc_runtime import E3dcModbusSession
+
+        settings = cfg.e3dc_modbus_grid_meter_settings(config)
+        if e3dc_sessions is not None:
+            session = e3dc_sessions.session(
+                settings["host"], settings["port"], settings["unit_id"]
+            )
+            return E3dcModbusGridMeterClient(session, owns_session=False)
+        session = E3dcModbusSession(
+            settings["host"], port=settings["port"], unit_id=settings["unit_id"]
+        )
+        return E3dcModbusGridMeterClient(session)
 
     if meter_type == "tasmota_http":
         power_path = config.get("power_path")

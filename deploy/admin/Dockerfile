@@ -66,6 +66,7 @@ COPY ems/__init__.py ./ems/__init__.py
 COPY ems/paths.py ./ems/paths.py
 COPY ems/config_catalog.py ./ems/config_catalog.py
 COPY ems/config.py ./ems/config.py
+COPY ems/read_only_devices.py ./ems/read_only_devices.py
 # The canonical config mutation semantics both Admin workflows apply changes
 # through; Core-owned and client-free.
 COPY ems/config_mutation.py ./ems/config_mutation.py

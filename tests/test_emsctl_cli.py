@@ -979,6 +979,7 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
         "tasmota_http",
         "zendure_smartmeter_d0",
         "mqtt",
+        "e3dc_modbus",
         # Backward-compatible local-HTTP aliases accepted from existing configs;
         # both share the generic Zendure local-HTTP reader.
         "zendure_smartmeter_3ct_http",

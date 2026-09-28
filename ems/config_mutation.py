@@ -44,6 +44,7 @@ from ems.config_catalog import (
     GRID_METER_KNOWN_MQTT_KEYS,
     GRID_METER_KNOWN_TOP_KEYS,
     config_field_index,
+    grid_meter_port_carries_over,
     grid_meter_variant_field_spec,
     is_secret_catalog_field,
 )
@@ -51,7 +52,7 @@ from ems.config_catalog import (
 # Bumped whenever the canonical interpretation of a change moves. Preview
 # authority folds it in, so a preview issued under older semantics can never be
 # applied by a process that would now mutate differently.
-CONFIG_MUTATION_CONTRACT_VERSION = 1
+CONFIG_MUTATION_CONTRACT_VERSION = 2
 
 SET = "set"
 CLEAR = "clear"
@@ -475,6 +476,9 @@ def apply_grid_meter_changes(grid, changes, policy, *, credential=None, field_in
         )
 
     if new_type != original_type:
+        sends_port = any(change.path == "port" for change in top_changes)
+        if not sends_port and not grid_meter_port_carries_over(original_type, new_type):
+            grid.pop("port", None)
         strip_stale_grid_meter_keys(grid)
         applied = [
             entry

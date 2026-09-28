@@ -47,6 +47,7 @@ from ems.paths import (
 )
 from ems.build_info import collect_build_info
 from ems.zendure_mqtt import config_entries as zendure_mqtt_entries
+from ems.read_only_devices import is_e3dc_modbus_device_config, is_read_only_device_config
 
 
 BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
@@ -969,6 +970,14 @@ def diagnose_config_plausibility(checks, args, config_data):
                 checks, index, item, broker_sources=broker_sources
             )
             continue
+        if is_e3dc_modbus_device_config(item):
+            try:
+                config_mod.e3dc_modbus_device_settings(item)
+            except ValueError as exc:
+                diagnose_add(checks, "config", "error", "e3dc_modbus_device_invalid", f"devices.{index}: {exc}", index=index)
+            else:
+                diagnose_add(checks, "config", "ok", "e3dc_modbus_device_read_only", f"devices.{index} is an E3/DC read over Modbus TCP; the EMS never controls it", index=index)
+            continue
         name = item.get("name")
         path = f"devices.{index}"
         if not isinstance(name, str) or not name.strip():
@@ -1477,6 +1486,15 @@ def diagnose_grid_meter_config(checks, config_data):
                 f"{label} TLS: {'enabled' if tls_enabled else 'disabled'}",
                 tls=tls_enabled, tls_insecure=False,
             )
+    elif meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
+        if not str(grid_meter.get("ip") or "").strip():
+            diagnose_add(checks, "config", "error", "grid_meter_ip_missing", f"{meter_type} grid meter requires grid_meter.ip")
+        else:
+            diagnose_add(checks, "config", "ok", "grid_meter_ip_present", f"{meter_type} grid meter IP is configured")
+            try:
+                config_mod.e3dc_modbus_grid_meter_settings(grid_meter)
+            except ValueError as exc:
+                diagnose_add(checks, "config", "error", "grid_meter_e3dc_modbus_invalid", f"E3/DC Modbus grid meter settings are invalid: {exc}")
     elif meter_type in ("ha", "homeassistant", "home_assistant"):
         diagnose_add(checks, "config", "ok", "grid_meter_ha_config", "Home Assistant grid meter type detected; only config completeness is checked by diagnose")
     else:
@@ -1664,7 +1682,14 @@ def diagnose_battery_full_charge_assist_report(config_data):
     devices = []
     now = datetime.now(timezone.utc)
 
+    read_only = {
+        str(item.get("name"))
+        for item in (config_data.get("devices", []) if isinstance(config_data, dict) else [])
+        if is_read_only_device_config(item)
+    }
     for name in diagnose_config_device_names(config_data):
+        if name in read_only:
+            continue
         state = rows.get(name, {})
         devices.append({
             "device": name,
@@ -1914,6 +1939,7 @@ GRID_METER_PROVIDERS = {
     "tasmota_http": "Tasmota",
     "mqtt": "MQTT",
     "zendure_smartmeter_d0": "Zendure SmartMeter D0",
+    config_mod.E3DC_MODBUS_GRID_METER_TYPE: "E3/DC",
     "ha": "Home Assistant",
 }
 
@@ -1924,6 +1950,118 @@ def _diagnose_record_probe(tracker, start, error=None):
         tracker.record_success(latency_ms)
     else:
         tracker.record_failure(error=error, latency_ms=latency_ms)
+
+
+_E3DC_MODBUS_SWITCH_HINT = (
+    "Enable both switches on the E3/DC: Smart-Funktionen > Smart Home > "
+    "Modbus, and on the next page ModBus TCP with protocol E3DC. The EMS "
+    "must be in the same subnet."
+)
+
+
+def _diagnose_e3dc_modbus_read(settings, *, read_inverter):
+    """One read through the EMS's own E3/DC session, never a write."""
+
+    from ems.e3dc_runtime import E3dcModbusSession
+
+    session = E3dcModbusSession(
+        settings["host"], port=settings["port"], unit_id=settings["unit_id"]
+    )
+    session.read_inverter = read_inverter
+    try:
+        reading, error = session.reading_for_cycle()
+        address_offset = session.mapping.address_offset if session.mapping else None
+    finally:
+        session.close()
+    return session, reading, error, address_offset
+
+
+def _diagnose_e3dc_modbus(checks, grid_meter, grid_tracker):
+    try:
+        settings = config_mod.e3dc_modbus_grid_meter_settings(grid_meter)
+    except ValueError as exc:
+        grid_tracker.record_failure(error=exc, latency_ms=0.0)
+        diagnose_add(checks, "hardware", "warning", "grid_meter_e3dc_modbus_invalid", f"E3/DC Modbus read-only probe skipped: {exc}")
+        return grid_tracker
+
+    session, reading, error, address_offset = _diagnose_e3dc_modbus_read(
+        settings, read_inverter=False
+    )
+    if reading is not None:
+        grid_tracker.record_success(reading.round_trip_ms)
+        diagnose_add(
+            checks,
+            "hardware",
+            "ok",
+            "e3dc_modbus_read_ok",
+            "E3/DC answered over Modbus TCP and returned the grid power",
+            power_w=round(reading.grid_w, 1),
+            address_offset=address_offset,
+            model=session.device_info.get("model"),
+            firmware=session.device_info.get("firmware_release"),
+        )
+    else:
+        grid_tracker.record_failure(error=error, latency_ms=None)
+        diagnose_add(
+            checks,
+            "hardware",
+            "warning",
+            "e3dc_modbus_read_failed",
+            f"E3/DC Modbus read-only probe failed: {error}",
+            hint=_E3DC_MODBUS_SWITCH_HINT,
+        )
+    return grid_tracker
+
+
+def _diagnose_e3dc_modbus_device(checks, device, name):
+    read_tracker = CommHealth(name, kind="read")
+    try:
+        settings = config_mod.e3dc_modbus_device_settings(device)
+    except ValueError as exc:
+        read_tracker.record_failure(error=exc, latency_ms=None)
+        diagnose_add(checks, "hardware", "warning", "e3dc_modbus_device_invalid", f"E3/DC device {name} probe skipped: {exc}", device=name)
+        return read_tracker
+
+    _, reading, error, _ = _diagnose_e3dc_modbus_read(settings, read_inverter=True)
+    if reading is not None and reading.inverter_w is None:
+        read_tracker.record_failure(error="inverter block unavailable", latency_ms=None)
+        diagnose_add(
+            checks,
+            "hardware",
+            "warning",
+            "e3dc_modbus_device_inverter_unavailable",
+            f"E3/DC device {name} answered, but not for its inverter block (41000): the "
+            "dashboard shows it offline and energy statistics pause while that lasts",
+            device=name,
+            grid_w=round(reading.grid_w, 1),
+        )
+    elif reading is not None:
+        read_tracker.record_success(reading.round_trip_ms)
+        diagnose_add(
+            checks,
+            "hardware",
+            "ok",
+            "e3dc_modbus_device_read_ok",
+            f"E3/DC device {name} returned PV, battery, inverter and grid power",
+            device=name,
+            pv_w=round(reading.pv_w, 1),
+            battery_w=round(reading.battery_w, 1),
+            inverter_w=round(reading.inverter_w, 1) if reading.inverter_w is not None else None,
+            grid_w=round(reading.grid_w, 1),
+            soc=reading.soc,
+        )
+    else:
+        read_tracker.record_failure(error=error, latency_ms=None)
+        diagnose_add(
+            checks,
+            "hardware",
+            "warning",
+            "e3dc_modbus_device_read_failed",
+            f"E3/DC device {name} read-only probe failed: {error}",
+            device=name,
+            hint=_E3DC_MODBUS_SWITCH_HINT,
+        )
+    return read_tracker
 
 
 def diagnose_hardware(checks, config_data):
@@ -2006,6 +2144,8 @@ def diagnose_hardware(checks, config_data):
                     "mqtt_broker_connect_failed",
                     f"MQTT broker TCP probe failed: {exc.__class__.__name__}",
                 )
+    elif meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE and grid_meter.get("ip"):
+        grid_tracker = _diagnose_e3dc_modbus(checks, grid_meter, grid_tracker)
     else:
         diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"No read-only grid meter probe implemented for type: {meter_type}", type=meter_type)
 
@@ -2019,6 +2159,10 @@ def diagnose_hardware(checks, config_data):
         if zendure_mqtt_entries.is_zendure_mqtt_device_config(device):
             continue
         name = str(device.get("name") or f"device-{index}")
+        if is_e3dc_modbus_device_config(device):
+            read_tracker = _diagnose_e3dc_modbus_device(checks, device, name)
+            health["devices"].append({"name": name, "read": read_tracker.snapshot(), "write": None})
+            continue
         read_tracker = CommHealth(name, kind="read")
         missing = [
             key
@@ -2431,7 +2575,7 @@ def diagnose_control_distribution(config_data, runtime_data):
     config_limits = {}
     config_min_soc = {}
     for item in config_data.get("devices", []) if isinstance(config_data, dict) else []:
-        if isinstance(item, dict) and item.get("name"):
+        if isinstance(item, dict) and item.get("name") and not is_read_only_device_config(item):
             name = str(item["name"])
             config_limits[name] = diagnose_float(item.get("max_power"))
             config_min_soc[name] = diagnose_float(item.get("min_soc"))
@@ -2946,7 +3090,7 @@ def diagnose_quality_pv(config_data, runtime_data):
         system_limit = diagnose_float(system_limit)
     max_device_limit = 0
     for item in config_data.get("devices", []) if isinstance(config_data, dict) else []:
-        if isinstance(item, dict):
+        if isinstance(item, dict) and not is_read_only_device_config(item):
             max_device_limit += diagnose_float(item.get("max_power")) or 0
 
     root_causes = []

@@ -154,6 +154,19 @@ def _state_telemetry_fields(state):
     }
 
 
+def _read_only_device_tiles(controller):
+    """Tiles of the devices the controller only reads, such as an E3/DC."""
+
+    runtime = getattr(controller, "read_only_devices", None)
+    if runtime is None:
+        return []
+    try:
+        return list(runtime.tiles())
+    except Exception:
+        logging.debug("event=dashboard_read_only_devices_unavailable", exc_info=True)
+        return []
+
+
 def _telemetry_only_tiles(controller):
     """Read-only tiles for Zendure MQTT telemetry-only devices, if any.
 
@@ -164,20 +177,20 @@ def _telemetry_only_tiles(controller):
     (older deployments, test doubles) so the dashboard stays stable.
     """
 
+    tiles = _read_only_device_tiles(controller)
     runtime = getattr(controller, "zendure_mqtt_runtime", None)
     if runtime is None:
-        return []
+        return tiles
 
     try:
         summaries = runtime.device_summaries()
         snapshots = runtime.snapshots()
     except Exception:
         logging.debug("event=dashboard_telemetry_devices_unavailable", exc_info=True)
-        return []
+        return tiles
 
     from ems.clients import parse_device
 
-    tiles = []
     for summary in summaries:
         name = summary.get("name")
         identifier = summary.get("identifier")
@@ -355,13 +368,16 @@ def build_dashboard_snapshot(
         pv_total_w += fields["pv_input_w"]
         inverter_total_w += fields["output_w"]
         battery_total_w += fields["battery_power_w"]
-        soc_values.append(fields["soc"])
+        # A device that has never been read has no state of charge, not 0 %.
+        if tile.get("has_reading", True):
+            soc_values.append(fields["soc"])
 
         devices[name] = {
             "online": online,
             "read_only": True,
             "enabled": True,
             **fields,
+            **tile.get("fields", {}),
             "target_w": 0,
             "allocated_target_w": 0,
             "capability": None,
