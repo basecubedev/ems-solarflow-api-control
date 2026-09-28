@@ -152,6 +152,9 @@ const HELPERS = [
   "mconfigTextControl",
   "mconfigExternalDeviceSummary",
   "renderMaintenanceExternalDevice",
+  "mconfigIsE3dcDevice",
+  "mconfigE3dcSummary",
+  "renderMaintenanceE3dcDevice",
   "renderMaintenanceInverter",
   "renderMaintenanceInverters",
 ];

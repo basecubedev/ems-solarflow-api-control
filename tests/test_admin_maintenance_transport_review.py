@@ -84,7 +84,7 @@ function mconfigMqttProposalState() { return "new"; }
 
 def test_configured_mqtt_device_is_not_a_phantom_missing_inverter():
     results = _run(
-        ("mconfigIsMqttDevice", "mconfigIsExternalDevice", "buildMaintenanceDiscoveryReview"),
+        ("mconfigIsMqttDevice", "mconfigIsExternalDevice", "mconfigIsE3dcDevice", "buildMaintenanceDiscoveryReview"),
         _REVIEW_STUBS
         + "console.log(JSON.stringify(buildMaintenanceDiscoveryReview([])));",
     )
@@ -114,7 +114,7 @@ def test_configured_external_device_is_not_a_phantom_missing_inverter():
     )
     assert "external_mqtt" in stubs
     results = _run(
-        ("mconfigIsMqttDevice", "mconfigIsExternalDevice", "buildMaintenanceDiscoveryReview"),
+        ("mconfigIsMqttDevice", "mconfigIsExternalDevice", "mconfigIsE3dcDevice", "buildMaintenanceDiscoveryReview"),
         stubs + "console.log(JSON.stringify(buildMaintenanceDiscoveryReview([])));",
     )
 
