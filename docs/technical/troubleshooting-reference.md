@@ -401,11 +401,31 @@ min_output_limit_applied
 Night/min-SOC idle entry and exit (`night_min_soc_idle_enter`,
 `night_min_soc_idle_exit`) and the parking write (`night_min_soc_idle_park_write`)
 are real transitions/writes and stay at `info`.
+`night_min_soc_idle_exit` carries a `reason`: `pv_returned`, `state_changed`,
+`control_unavailable`, or `ac_charge_surplus` when a confirmed surplus is about
+to be charged from AC.
 `night_min_soc_idle_hold_skip_write` only confirms a device is already parked, so
 it is a `debug` trace; set `system.log_level=debug` to see it.
 
 Related docs: [configuration.md](configuration.md),
 [winter-mode.md](../winter-mode.md), [safety-model.md](safety-model.md).
+
+### AC charging does not start
+
+A surplus is exported but no device charges. The full walkthrough is in
+[AC charging](../ac-charging.md); these are the causes that leave a trace:
+
+| Symptom in the log | Cause |
+|---|---|
+| `ac_charge_direction` (debug level) never shows `charging=true`; `reason` stays `direction_held` or `entry_confirming` | the export does not stay above `charge_start_w` for `entry_confirm_cycles` of `entry_window_cycles` |
+| `ac_charge_ceiling_unknown` | the device has no usable charge limit: it reports 0, or reports none and its model carries no rating |
+| `ac_charge_capacity_below_stop` | the chargeable devices, or `max_total_charge_power_w`, allow no more than the band's lower edge, so a charge would leave on the next cycle |
+| `ac_charge_entry_rate_limited` | `max_charge_entries_per_hour` is used up; the thresholds do not fit the installation |
+| `ac_charge_stopped_stale_meter` | a running charge stopped because the grid meter reading is older than `telemetry_max_age_seconds`; a stale meter also prevents a start, silently |
+| `night_min_soc_idle_enter` while exporting, never followed by `night_min_soc_idle_exit reason=ac_charge_surplus` | no device may charge — feature or device switch off, model without an AC charge path, pack full or drained by another load, no usable ceiling or a capacity at or below the band's lower edge (see the rows above) |
+
+A device on MQTT charges at most its `max_power`, because the MQTT client
+refuses larger commands before publishing.
 
 ### Output stays at 0 W or device does not wake up
 

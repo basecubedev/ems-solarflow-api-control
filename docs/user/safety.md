@@ -130,7 +130,7 @@ rather than place it, so know what that means before you run it:
 - **Check `max_total_charge_power_w`** for your installation — your circuit and
   your fuse, which nothing in the EMS can measure. The default is 1200 W.
   `max_charge_power_w` per device at 0 means "ask the device for its own
-  ceiling".
+  ceiling" — or its model's rated charge power when it reports none.
 
 You can stop it at any time without restarting the EMS, from the dashboard's
 Control tab in write mode or from the CLI:

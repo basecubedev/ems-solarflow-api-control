@@ -2720,7 +2720,8 @@ function controlReadableDecisionReason(reason, name) {
     battery_discharge: `${name} supports the load from battery output according to the current target split.`,
     ac_charge_allocation: `${name} is charging from surplus, taking a share of it weighted by the room left in its battery.`,
     ac_charge_share_too_small: `${name} may charge, but its share of this surplus was too small to be worth changing direction for, so it went to the other devices.`,
-    ac_charge_not_permitted: `${name} is not charging: either its model has no AC charge path, or charging is switched off for it.`,
+    ac_charge_no_ceiling: `${name} may charge, but has no charge limit to charge at: it reports 0, or reports none and its model carries no rating.`,
+    ac_charge_not_permitted: `${name} is not charging this cycle: its model has no AC charge path, charging is switched off for it, or its battery is full, drained by another load or unavailable.`,
     deadband: "Write skipped because the target change is inside the deadband.",
     output_limit_update: `${name} receives a write because the target differs from the current output limit.`,
   };

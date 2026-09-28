@@ -83,7 +83,9 @@ The same value is also used as the standby/wakeup `outputLimit` for strict
 night/minSoc idle. When all active online devices report exactly no PV, no
 charge/discharge flow, no home output, and a blocked battery at `minSoc`, the
 EMS parks each device at `min_output_limit` once if needed. It then suppresses
-further `outputLimit` writes until PV telemetry becomes positive again.
+further `outputLimit` writes until PV telemetry becomes positive again, or until
+an AC charge surplus is confirmed (see
+[control-logic.md](control-logic.md#night--minsoc-idle)).
 
 ## Device Fields
 

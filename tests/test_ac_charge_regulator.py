@@ -48,8 +48,11 @@ def surplus_state(soc=50, pack_num=2):
 class Harness:
     """Runs the real control loop for N cycles against a fixed load."""
 
-    def __init__(self, devices, load, runtime_state=None, feature=True):
+    def __init__(
+        self, devices, load, runtime_state=None, feature=True, min_output_limit=0
+    ):
         self.devices = devices
+        self.min_output_limit = min_output_limit
         self.controller = EMSController(
             devices=devices,
             shelly=ShellyStub(load),
@@ -68,7 +71,7 @@ class Harness:
             "ems.controller.cfg.SYSTEM_ENABLED", True
         ), patch("ems.controller.cfg.MAX_TOTAL_POWER", 800), patch(
             "ems.controller.cfg.MAX_DEVICE_POWER", 800
-        ), patch("ems.controller.cfg.MIN_OUTPUT_LIMIT", 0), patch(
+        ), patch("ems.controller.cfg.MIN_OUTPUT_LIMIT", self.min_output_limit), patch(
             "ems.controller.cfg.DEADBAND", 10
         ), patch("ems.controller.cfg.SOC_RECONCILE_INTERVAL", 0), patch.object(
             cfg, "AC_CHARGE_CONTROL_CONFIG", self.feature
@@ -232,12 +235,12 @@ def test_a_leftover_charge_above_the_floor_is_taken_back():
 def test_a_charging_device_is_not_pushed_up_to_the_standby_output_floor():
     """min_output_limit describes output; a charging device produces none."""
 
-    harness = Harness([charging_device()], load=-900)
-    with patch("ems.controller.cfg.MIN_OUTPUT_LIMIT", 35):
-        harness.run(cycles=12)
+    harness = Harness([charging_device()], load=-900, min_output_limit=35)
+    harness.run(cycles=12)
 
     negative = [target for target in harness.targets if target < 0]
     assert negative, harness.targets
+    assert harness.targets[-1] < 0, harness.targets
 
 
 def test_shutdown_returns_a_charging_device_and_forgets_the_direction():
@@ -918,7 +921,11 @@ def test_an_mqtt_control_device_charges_through_the_same_loop():
     after a restart. So the path is walked once end to end.
 
     It also happens to be the test user's configuration: a 2400 AC on MQTT,
-    whose own ceiling is 2400 W and which the installation limit holds to 1200.
+    whose own ceiling is 2400 W. The MQTT client refuses any charge above the
+    device's ``max_power`` before it publishes, so the regulator is held to
+    that bound too. This test used to replace the write and assert -1200 W: a
+    target the real precheck refuses with ``target_above_maximum``, which is
+    the charge the test user never saw.
     """
 
     from ems.mqtt_control.zendure_profiles import WRITE_PROFILE_ZENSDK_PROPERTIES
@@ -965,10 +972,46 @@ def test_an_mqtt_control_device_charges_through_the_same_loop():
     assert harness.controller.charge_direction.charging is True
     # The pinned profile is what resolves the model, and it charges.
     assert harness.controller.device_model_supports_charge(dev) is True
-    # Its own ceiling is read from telemetry, then held to the installation limit.
-    assert harness.controller.device_charge_limits["WR1"] == 2400
-    assert harness.controller.commanded_device_targets["WR1"] == -1200
+    # Its own ceiling is read from telemetry, then held to what the transport
+    # accepts, which is below the installation limit here.
+    assert harness.controller.device_charge_limits["WR1"] == 800
+    commanded = harness.controller.commanded_device_targets["WR1"]
+    assert commanded == -800
+    assert dev._precheck_target(int(commanded)) == "charge"
     assert item.ac_mode == 1
+
+
+def test_the_mqtt_charge_bound_and_its_enforcement_agree():
+    """The flag the regulator reads and the check the client runs are a pair."""
+
+    from ems.mqtt_control.zendure_profiles import WRITE_PROFILE_ZENSDK_PROPERTIES
+    from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient, _WriteBlocked
+
+    class ServiceStub:
+        def publish(self, *args, **kwargs):
+            return True
+
+        def snapshot(self, *args, **kwargs):
+            return None
+
+    dev = ZendureMqttDeviceClient(
+        name="WR1",
+        service=ServiceStub(),
+        device_id="ABC123",
+        topic_family="zensdk_ha_scalar",
+        source="zendure_cloud_mqtt",
+        hardware_profile="solarflow_2400_ac",
+        power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
+        max_power=800,
+        min_soc=15,
+        max_soc=100,
+        smart_mode=1,
+    )
+
+    assert dev.charge_bounded_by_max_power is True
+    assert dev._precheck_target(-800) == "charge"
+    with pytest.raises(_WriteBlocked):
+        dev._precheck_target(-801)
 
 
 def test_the_regulator_state_stays_bounded_over_a_long_run():

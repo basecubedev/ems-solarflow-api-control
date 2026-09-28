@@ -96,6 +96,27 @@ def _recent_entries(entries, now):
     return tuple(t for t in entries if now - t < SECONDS_PER_HOUR)
 
 
+def _record_entry_observation(previous, observed, settings):
+    """Append one entry observation, trimmed to the configured window."""
+
+    window = (previous.entry_window + (bool(observed),))[-settings.entry_window:]
+    return replace(previous, entry_window=window)
+
+
+def _entry_rate_limited(state, now, settings):
+    """Whether the hourly entry limit leaves no entry to take right now."""
+
+    recent = _recent_entries(state.entries, now)
+    return len(recent) >= max(1, settings.max_entries_per_hour)
+
+
+def _entry_confirmed(state, settings):
+    """Whether the window holds enough observations to enter charging."""
+
+    confirmed = sum(1 for item in state.entry_window if item)
+    return confirmed >= max(1, settings.entry_confirm_cycles)
+
+
 def decide_charge_direction(
     previous,
     *,
@@ -150,17 +171,21 @@ def decide_charge_direction(
     # one observation; a cycle that fails is recorded as such rather than
     # discarding the window.
     observed = commanded_total_w <= 0 and filtered_load_w <= -settings.start_w
-    window = (previous.entry_window + (observed,))[-settings.entry_window:]
-    confirmed = sum(1 for item in window if item)
+    observing = _record_entry_observation(
+        ChargeDirectionState(False, previous.entry_window, entries),
+        observed,
+        settings,
+    )
+    window = observing.entry_window
 
-    if confirmed < max(1, settings.entry_confirm_cycles):
+    if not _entry_confirmed(observing, settings):
         return ChargeDirectionDecision(
             charging=False,
-            state=ChargeDirectionState(False, window, entries),
+            state=observing,
             reason=REASON_CONFIRMING if observed else REASON_HELD,
         )
 
-    if len(entries) >= max(1, settings.max_entries_per_hour):
+    if _entry_rate_limited(observing, now, settings):
         # Never silent: reaching this means the thresholds do not fit the
         # installation, and the caller logs it as such.
         return ChargeDirectionDecision(
@@ -213,11 +238,13 @@ def count_silent_charge_cycles(
     return max(0, safe_int(previous_count, 0)) + 1
 
 
-def resolve_max_charge_power_w(device_config, state=None):
+def resolve_max_charge_power_w(device_config, state=None, rated_w=0):
     """Highest AC charge power for one device.
 
-    Precedence is the contract, not the values: an explicit setting always wins,
-    and below it the device's own reported ceiling decides.
+    Precedence is the contract, not the values: a reported ceiling of 0 is a
+    refusal and wins over everything. Otherwise an explicit setting wins,
+    capped by the device's ceiling -- the one it reports, or its model rating
+    when it reports none -- and without a setting that ceiling is the result.
 
     It deliberately does **not** fall back to the output limit. Feeding out and
     drawing in are different paths with different ratings — a SolarFlow 800 Pro 2
@@ -226,10 +253,14 @@ def resolve_max_charge_power_w(device_config, state=None):
     house current on a circuit whose breaker sits upstream of the injection
     point, while a charge is drawn through that breaker and protected by it.
 
-    A device that reports no ceiling charges nothing. Every model that can charge
-    reports one, so an absent value means the device is not understood, and
-    guessing a charge current for hardware nobody has identified is not a guess
-    worth making. Setting ``max_charge_power_w`` explicitly unblocks it.
+    A device that reports no ceiling at all falls back to ``rated_w``, the
+    rating its identified model carries in the catalogue. That is a figure for
+    known hardware, not a guess: the controller asks only for devices already
+    permitted to charge, which requires a resolved model with an AC charge
+    path. A device that reports 0 has refused a charge, and neither the rating
+    nor an explicit setting overrides that; Zendure-HA reads a reported 0 as a
+    zero charge limit too. With no report and no rating, the device charges
+    nothing unless ``max_charge_power_w`` is set.
     """
 
     explicit = getattr(device_config, "max_charge_power_w", 0) or 0
@@ -238,16 +269,21 @@ def resolve_max_charge_power_w(device_config, state=None):
     except (TypeError, ValueError):
         explicit = 0
 
-    reported = 0
-    if state is not None:
-        reported = safe_int(getattr(state, "charge_max_limit_w", 0), 0, minimum=0)
+    raw_reported = None if state is None else getattr(state, "charge_max_limit_w", None)
+    if raw_reported is None:
+        ceiling = safe_int(rated_w, 0, minimum=0)
+    else:
+        ceiling = safe_int(raw_reported, 0, minimum=0)
+
+    if raw_reported is not None and ceiling <= 0:
+        return 0
 
     if explicit > 0:
         # The operator may go below the device's ceiling freely; above it the
         # device decides, because it is the one that has to accept the command.
-        return min(explicit, reported) if reported > 0 else explicit
+        return min(explicit, ceiling) if ceiling > 0 else explicit
 
-    return reported
+    return ceiling
 
 
 def charge_headroom_weight(state, device_config, capability):
@@ -285,6 +321,14 @@ def charge_headroom_weight(state, device_config, capability):
     return max(0, get_device_battery_kwh(device_config) * headroom_percent / 100)
 
 
+# How much more a pack may deliver than the device feeds out before the
+# difference is someone else's. The standby floor runs the inverter at a few
+# dozen watts, where its own consumption is of the same order as the output. A
+# judgement rather than a measurement, like ``MIN_DEVICE_CHARGE_W``: an
+# off-grid socket or a second inverter on the pack draws far more than this.
+OWN_DRAIN_MARGIN_W = 60
+
+
 # The smallest share worth putting a device into charge mode for. Below this a
 # charge buys nothing and costs something: the device changes AC direction for a
 # trickle, and a draw this small may not register in ``gridInputPower`` at all,
@@ -301,8 +345,20 @@ def charge_headroom_weight(state, device_config, capability):
 MIN_DEVICE_CHARGE_W = 50
 
 
+def _minimum_share_w(index, charging_now):
+    if charging_now is not None and index < len(charging_now) and charging_now[index]:
+        return MIN_DEVICE_CHARGE_W / 2
+    return MIN_DEVICE_CHARGE_W
+
+
 def allocate_charge_targets(
-    total_charge_w, states, device_configs, capabilities, chargeable
+    total_charge_w,
+    states,
+    device_configs,
+    capabilities,
+    chargeable,
+    ceilings,
+    charging_now=None,
 ):
     """Split a positive charge total into signed per-device targets.
 
@@ -314,6 +370,15 @@ def allocate_charge_targets(
     ``MIN_DEVICE_CHARGE_W`` are dropped and re-allocated to devices that can use
     them, down to a single device if need be. Six devices taking 21 W each is six
     direction changes buying nothing; one device taking 126 W is one that works.
+
+    ``ceilings`` are the per-device limits the controller resolved, with the
+    model rating and any transport bound applied; there is no second way to
+    arrive at one here.
+
+    ``charging_now`` marks devices already charging. They keep their place
+    until their share falls below half the minimum, so a total that hovers
+    around the point where a share crosses the minimum does not move a relay
+    out and back in every few cycles.
     """
 
     weights = []
@@ -326,7 +391,7 @@ def allocate_charge_targets(
             limits.append(0)
             continue
         weights.append(charge_headroom_weight(state, device_config, capability))
-        limits.append(resolve_max_charge_power_w(device_config, state))
+        limits.append(max(0, safe_int(ceilings[index], 0)))
 
     total = max(0, total_charge_w)
     allocation = weighted_limited_allocation(total, weights, limits)
@@ -340,7 +405,7 @@ def allocate_charge_targets(
         under = [
             index
             for index, value in enumerate(allocation)
-            if 0 < value < MIN_DEVICE_CHARGE_W
+            if 0 < value < _minimum_share_w(index, charging_now)
         ]
         if not under:
             break
@@ -363,6 +428,7 @@ __all__ = [
     "ChargeDirectionDecision",
     "decide_charge_direction",
     "MIN_DEVICE_CHARGE_W",
+    "OWN_DRAIN_MARGIN_W",
     "resolve_max_charge_power_w",
     "charge_headroom_weight",
     "allocate_charge_targets",

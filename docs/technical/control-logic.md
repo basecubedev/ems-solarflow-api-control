@@ -110,6 +110,22 @@ The idle state is left as soon as any controlled device reports positive PV on
 control memory is reset so the normal controller initializes from fresh
 telemetry.
 
+It is also left, and not entered, while an AC charge is running. A device with
+no PV input and an empty pack reports exactly the idle values above while the
+surplus it is meant to [charge from AC](../ac-charging.md) leaves through the
+meter, so the idle would return early every cycle, before the charge decision
+is reached. The charge decision therefore also runs while the idle holds, with
+nothing commanded and the raw meter reading as its load: the same
+`entry_confirm_cycles` of the last `entry_window_cycles` observations, the same
+freshness rule for the meter and the same hourly entry limit. When it enters a
+charge, the next cycle leaves the idle with `reason=ac_charge_surplus`. One
+export spike therefore never ends the idle, and the idle is never left in
+anticipation of a charge that is then not taken.
+
+A running charge always holds the idle off. Its way back belongs to the charge
+decision, which stops the devices and logs why — including
+`ac_charge_stopped_stale_meter` — and an idle entered mid-charge would skip it.
+
 ## No Export Capacity Hold
 
 If house load is positive but no active online device currently has export
@@ -133,9 +149,23 @@ When a grid-meter read fails, the meter client still returns its last good
 value. The EMS does not integrate that value: while the meter reports a failed
 or stale read, `commanded_total_w` is held where it was and the load filter is
 cleared, so the target cannot ramp to `max_total_power` on a reading that no
-longer changes. The log shows `event=grid_meter_unavailable_holding_target`
+longer changes. When there is no commanded total to hold — the first cycle after
+startup, after night/minSoc idle or after control is switched back on — it is
+seeded from what the devices are doing and held there; a held reading is never
+integrated, and never counts as a charge-entry observation. The log shows `event=grid_meter_unavailable_holding_target`
 when the hold starts and `event=grid_meter_recovered` when a fresh reading
 arrives.
+
+That seeded hold is a deliberate change, and it applies with AC charging off as
+well: it is not part of the charge feature. Earlier releases integrated the
+held reading into the fresh total on that one cycle and wrote the result, so
+switching control back on, or leaving the idle, during a meter outage applied
+the stale reading once before the hold began. Now the devices keep the
+`outputLimit` they already have — or their output where none is set, never
+above `max_total_power` — until a fresh reading arrives. The hold cannot wind
+up and never commands more than the devices were already set to deliver; what
+it gives up is following a load that changed while control was off, until the
+meter is back.
 
 Holding is not parking: devices keep their last output while the meter is down.
 If a long meter outage must stop discharge, disable the EMS
@@ -222,7 +252,9 @@ Before charging there is no charge to observe, so the signal is the surplus the
 discharge side could not absorb: the integrator sits at its floor and the
 filtered load is still negative. Entry needs
 `ac_charge_control.entry_confirm_cycles` of the last `entry_window_cycles`
-observations to show that — five of seven by default.
+observations to show that — five of seven by default. The output the chargeable
+devices feed out at that moment — the standby floor — is added back first: it is
+export that stops when they switch direction, not surplus they could take.
 
 Counting observations rather than averaging them is deliberate. A mean lets
 height substitute for duration: one spike ten times the threshold averages to a

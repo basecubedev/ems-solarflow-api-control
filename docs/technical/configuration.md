@@ -591,7 +591,7 @@ See [control-logic.md](control-logic.md) for the direction rules and
 |---|---|---|
 | `ac_discharge_enabled` | `true` | Whether the EMS may command this device to supply the house. Today's behaviour, written down. |
 | `ac_charge_enabled` | `true` | Whether this device may be charged from surplus. Whether the *model* can is decided separately by the hardware catalogue. Also runtime-toggleable. |
-| `max_charge_power_w` | `0` | Highest charging power for this device. `0` uses the ceiling the device reports for itself. |
+| `max_charge_power_w` | `0` | Highest charging power for this device. `0` uses the ceiling the device reports for itself, or its model's rated charge power when it reports none. |
 
 ### Why the charge limit is not the output limit
 
@@ -608,9 +608,14 @@ So the EMS never borrows one as the other. A SolarFlow 800 Pro 2 reports an
 
 | Precedence | Source |
 |---|---|
-| 1 | `devices[].max_charge_power_w`, when set — capped by the device's ceiling, because the device has to accept the command |
-| 2 | The ceiling the device reports (`chargeMaxLimit`) |
-| — | A device that reports no ceiling charges nothing, and setting the key explicitly unblocks it |
+| 1 | `devices[].max_charge_power_w`, when set — capped by the device's reported ceiling, or by its model's rated charge power when it reports none, because the device has to accept the command |
+| 2 | The ceiling the device reports (`chargeMaxLimit`, or `chargeLimit`) |
+| 3 | The rated charge power of the device's resolved model, when it reports no ceiling at all |
+| — | A device that reports a ceiling of `0` has refused a charge; neither the rating nor `max_charge_power_w` overrides that |
+| — | A device with none of these charges nothing and logs `ac_charge_ceiling_unknown`; setting the key explicitly unblocks it |
+
+On MQTT the result is additionally held to the device's `max_power`, because the
+MQTT client refuses any command above it before publishing, charge included.
 
 `ac_charge_control.max_total_charge_power_w` is a different question again: it is
 the **installation's** limit — your circuit and your fuse — not the devices'.

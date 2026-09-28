@@ -5,6 +5,7 @@ import os
 import tempfile
 import time
 from copy import deepcopy
+from dataclasses import replace
 
 from ems import config as cfg
 from ems.clients import fetch_all_devices, zero_device_state
@@ -185,6 +186,14 @@ def state_from_trace_device(data):
     state.grid_off_mode = value_from_trace(data, "grid_off_mode", "gridOffMode")
     state.ac_mode = value_from_trace(data, "ac_mode", "acMode")
     state.input_limit_w = value_from_trace(data, "input_limit_w", "inputLimit")
+    state.charge_max_limit_w = next(
+        (
+            data[key]
+            for key in ("charge_max_limit_w", "chargeMaxLimit", "chargeLimit")
+            if data.get(key) is not None
+        ),
+        None,
+    )
     state.pack_num = observed_pack_count_from_trace(data)
     state.soc_status = value_from_trace(data, "soc_status", "socStatus")
     state.battery_calibration_time = data.get(
@@ -594,6 +603,81 @@ def self_test_ac_charge_direction(ok):
         cfg.AC_CHARGE_CONTROL_CONFIG = previous
 
 
+def self_test_ac_charge_without_pv(ok):
+    """Charge a device that has no PV of its own and an empty pack.
+
+    The case the feature exists for, and the one the first check cannot reach:
+    its device has 900 W of PV and the standby floor is zero, so neither
+    night/min-SoC idle nor the floor's own drain can intervene. Both stopped
+    every charge on the installations the feature was built for.
+    """
+
+    settings = {**cfg.AC_CHARGE_CONTROL_DEFAULTS, "enabled": True}
+    previous = cfg.AC_CHARGE_CONTROL_CONFIG
+    previous_floor = cfg.MIN_OUTPUT_LIMIT
+    cfg.AC_CHARGE_CONTROL_CONFIG = settings
+    cfg.MIN_OUTPUT_LIMIT = 35
+
+    try:
+        device = SimulatedZendureClient(
+            "AC1",
+            max_power=2400,
+            battery_kwh=2.4,
+            hardware_profile="solarflow_2400_ac",
+        )
+        empty_state = zero_device_state()
+        empty_state.soc = 15
+        empty_state.min_soc = 15
+        empty_state.max_soc = 100
+        empty_state.pack_num = 1
+        empty_state.ac_mode = AC_MODE_OUTPUT
+        device.set_state(empty_state)
+        feeding_the_floor = replace(
+            empty_state, soc=40, output=35, output_limit=35, pack_in=42
+        )
+        floor_device = SimulatedZendureClient(
+            "AC2",
+            max_power=2400,
+            battery_kwh=2.4,
+            hardware_profile="solarflow_2400_ac",
+        )
+        floor_device.set_state(feeding_the_floor)
+
+        meter = SimulatedShellyClient()
+        meter.set_power(-900)
+        for devices, reason in (
+            ([device], "an_empty_device_without_pv_did_not_charge"),
+            ([floor_device], "the_standby_floor_drain_refused_the_charge"),
+        ):
+            ems = EMSController(
+                devices,
+                meter,
+                ha=None,
+                sleep_enabled=False,
+                runtime_state=None
+            )
+            ems.battery_full_charge_store = None
+
+            for _ in range(12):
+                ems.run_once()
+
+            if not ems.charge_direction.charging:
+                log_event(
+                    logging.ERROR,
+                    "self_test_failed",
+                    test="ac_charge_without_pv",
+                    reason=reason,
+                    night_min_soc_idle=ems.night_min_soc_idle_active,
+                    charge_capacity_w=ems.charge_capacity_w,
+                )
+                return False
+
+        return ok
+    finally:
+        cfg.AC_CHARGE_CONTROL_CONFIG = previous
+        cfg.MIN_OUTPUT_LIMIT = previous_floor
+
+
 def run_self_tests():
     """Run local helper checks without hardware or HA access."""
 
@@ -680,6 +764,7 @@ def run_self_tests():
         )
 
     ok = self_test_ac_charge_direction(ok)
+    ok = self_test_ac_charge_without_pv(ok)
 
     sim_devices = [
         SimulatedZendureClient("WR1"),

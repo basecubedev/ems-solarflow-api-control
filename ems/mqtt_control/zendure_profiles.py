@@ -69,6 +69,10 @@ class ZendureHardwareProfile:
     supports_charge: bool
     validation_status: str
     charge_evidence: str = CHARGE_EVIDENCE_NONE
+    # The AC charge power the model is rated for, used only when the device does
+    # not report its own ceiling. The lower of the vendor catalogue and the
+    # Zendure-HA limit for the same model; 0 where neither names one.
+    rated_charge_power_w: int = 0
     # Source-backed MQTT-writable properties; empty = no verified contract.
     state_property_writes: tuple[str, ...] = ()
 
@@ -122,6 +126,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         # Catalogue: AC grid charging integrated, up to 1000 W.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
+        rated_charge_power_w=1000,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -138,6 +143,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_charge=True,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         charge_evidence=CHARGE_EVIDENCE_MEASURED,
+        rated_charge_power_w=1000,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
     ZendureHardwareProfile(
@@ -165,6 +171,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         # Catalogue: AC-coupled storage system, up to 1600 W.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
+        rated_charge_power_w=1600,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -179,6 +186,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         # Catalogue: AC-coupled storage system, up to 2400 W.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
+        rated_charge_power_w=2400,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -193,6 +201,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         # Catalogue: AC-coupled storage system, up to 2400 W.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
+        rated_charge_power_w=2400,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -232,6 +241,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         # Catalogue: AC-coupled storage system, up to 4000 W.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
+        rated_charge_power_w=3200,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -253,6 +263,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         # Catalogue: AC-coupled storage system, up to 3000 W.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
+        rated_charge_power_w=3000,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
@@ -267,6 +278,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         # Catalogue: bidirectional AC, up to 1600 W depending on pack count.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
+        rated_charge_power_w=1200,
         validation_status=VALIDATION_COMMUNITY_REQUIRED,
     ),
     ZendureHardwareProfile(

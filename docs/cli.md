@@ -246,7 +246,8 @@ and whose job is unrelated:
 
 If the aim is "this device may charge from surplus, but never above N watts",
 the one to set is `max_charge_power_w`. `0` there means "ask the device for its
-own ceiling", which is what `chargeMaxLimit` reports — never "no charging".
+own ceiling", which is what `chargeMaxLimit` reports, or the model's rated
+charge power when it reports none — never "no charging".
 
 A config that still holds template placeholders is reported as a warning,
 `template_placeholders_safe_mode`, with every field that keeps EMS in safe mode
