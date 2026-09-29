@@ -55,7 +55,8 @@ class EMSController:
         dashboard_store=None,
         battery_full_charge_store=None,
         influx_writer=None,
-        zendure_mqtt_runtime=None
+        zendure_mqtt_runtime=None,
+        read_only_devices=None,
     ):
         self.devices = devices
         self.shelly = shelly
@@ -64,6 +65,10 @@ class EMSController:
         self.runtime_state = runtime_state
         self.dashboard_store = dashboard_store
         self.zendure_mqtt_runtime = zendure_mqtt_runtime
+        # Devices the EMS only reads (an E3/DC). They are never part of
+        # ``self.devices``, so nothing that allocates, writes or reconciles can
+        # reach them; the dashboard shows them beside the controlled ones.
+        self.read_only_devices = read_only_devices
         # Optional native InfluxDB telemetry writer (None unless influxdb is
         # enabled). Failure-isolated and non-blocking; see ems.history.influx_writer.
         self.influx_writer = influx_writer
@@ -2621,6 +2626,17 @@ class EMSController:
                 error=e
             )
 
+    def refresh_read_only_devices(self):
+        """Read the read-only devices once, in the same cycle as the grid meter."""
+
+        read_only_devices = getattr(self, "read_only_devices", None)
+        if read_only_devices is None:
+            return
+        try:
+            read_only_devices.refresh()
+        except Exception as e:
+            log_event(logging.WARNING, "read_only_devices_refresh_failed", error=e)
+
     def health_snapshot(self):
         """Aggregate in-memory grid-meter and device comm health.
 
@@ -3359,8 +3375,17 @@ class EMSController:
         try:
             from ems.history.influx_writer import build_telemetry_lines
 
+            read_only_devices = getattr(self, "read_only_devices", None)
+            read_only_tiles = (
+                read_only_devices.tiles() if read_only_devices is not None else ()
+            )
             lines = build_telemetry_lines(
-                self.devices, states, self.device_online, load, target
+                self.devices,
+                states,
+                self.device_online,
+                load,
+                target,
+                read_only_tiles=read_only_tiles,
             )
             writer.enqueue(lines)
         except Exception as e:
@@ -3385,6 +3410,7 @@ class EMSController:
             )
 
         load = self.shelly.get_power()
+        self.refresh_read_only_devices()
 
         # =====================
         # RUNTIME cfg.CONFIG

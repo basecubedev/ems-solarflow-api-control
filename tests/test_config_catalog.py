@@ -72,6 +72,7 @@ def test_catalog_contains_all_supported_grid_meter_variants():
         "zendure_smartmeter_3ct_http",
         "zendure_smartmeter_d0_http",
         "tasmota_http",
+        "e3dc_modbus",
         "zendure_smartmeter_d0",
         "mqtt",
         "ha",
@@ -153,6 +154,9 @@ def test_grid_meter_variant_field_spec_matches_v070_catalog():
     assert grid_meter_variant_field_spec("shelly")["keys"] == frozenset(
         {"type", "ip", "port", "channels"}
     )
+    assert grid_meter_variant_field_spec("e3dc_modbus")["keys"] == frozenset(
+        {"type", "ip", "port", "unit_id"}
+    )
     # MQTT variants carry only the mqtt block; D0 excludes value_path.
     d0 = grid_meter_variant_field_spec("zendure_smartmeter_d0")
     assert d0["keys"] == frozenset({"type", "mqtt"})
@@ -163,7 +167,15 @@ def test_grid_meter_variant_field_spec_matches_v070_catalog():
     assert grid_meter_variant_field_spec("does_not_exist") is None
     # The known-key unions only contain real variant fields.
     assert GRID_METER_KNOWN_TOP_KEYS == frozenset(
-        {"ip", "port", "channels", "url", "power_path", "mqtt"}
+        {
+            "ip",
+            "port",
+            "channels",
+            "url",
+            "power_path",
+            "mqtt",
+            "unit_id",
+        }
     )
     assert "value_path" in GRID_METER_KNOWN_MQTT_KEYS
 

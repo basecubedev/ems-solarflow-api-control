@@ -26,6 +26,7 @@ from ems.device_identity import (
     normalize_mqtt_route_segment,
     resolve_inverter_identity,
 )
+from ems.read_only_devices import is_read_only_device_config
 
 ZENDURE_MQTT_TYPE = "zendure_mqtt"
 
@@ -138,9 +139,9 @@ def has_runtime_control_device(config: Any) -> bool:
 
     Every enabled non-MQTT entry is an HTTP/API control device, matching
     :func:`ems.config.http_control_device_configs`. An MQTT entry participates
-    only when it explicitly requests output control. Telemetry-only MQTT entries
-    and disabled entries of either transport therefore do not make an otherwise
-    empty EMS config bootable.
+    only when it explicitly requests output control. Telemetry-only MQTT entries,
+    read-only entries such as an E3/DC, and disabled entries of either transport
+    therefore do not make an otherwise empty EMS config bootable.
     """
 
     if not isinstance(config, Mapping):
@@ -151,6 +152,7 @@ def has_runtime_control_device(config: Any) -> bool:
     return any(
         isinstance(item, Mapping)
         and config_entry_enabled(item)
+        and not is_read_only_device_config(item)
         and (
             not is_zendure_mqtt_device_config(item)
             or is_control_zendure_mqtt_device_config(item)

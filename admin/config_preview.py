@@ -32,10 +32,13 @@ from admin.zendure_mqtt_config_draft import (
     validate_zendure_mqtt_fragment,
 )
 from ems.config import (
+    E3DC_MODBUS_GRID_METER_TYPE,
     MQTT_GRID_METER_TYPES,
     ZENDURE_SMARTMETER_D0_GRID_METER_TYPE,
     MqttBrokerReferenceAmbiguousError,
     default_mqtt_port,
+    e3dc_modbus_device_settings,
+    e3dc_modbus_grid_meter_settings,
     normalize_mqtt_grid_meter_settings,
     optional_json_bool,
     parse_mqtt_port,
@@ -44,16 +47,23 @@ from ems.config import (
     zendure_smartmeter_d0_topic,
 )
 from ems.config_catalog import (
+    grid_meter_port_carries_over,
     grid_meter_types,
     grid_meter_variant_field_spec,
 )
 from ems.config_mutation import strip_incompatible_grid_meter_fields
+from ems.read_only_devices import (
+    E3DC_MODBUS_DEVICE_TYPE,
+    is_e3dc_modbus_device_config,
+    is_read_only_device_config,
+)
 from ems.device_identity import broker_sources_from_config
 from ems.influx_setup import DOCKER_FIRST_SECRET_FILE
 from ems.zendure_mqtt.config_entries import (
     SOURCE_LOCAL_MQTT,
     SOURCE_ZENDURE_CLOUD_MQTT,
     config_entry_enabled,
+    find_duplicate_device_names,
     find_duplicate_zendure_device_identities,
     find_reserved_mqtt_broker_ref_issues,
     find_zendure_mqtt_broker_profile_issues,
@@ -533,6 +543,14 @@ def _merge_zendure_mqtt_grid_meter_proposal(
     return True
 
 
+def _grid_meter_summary_transport(grid_type):
+    if grid_type in MQTT_GRID_METER_TYPES:
+        return "mqtt"
+    if grid_type == E3DC_MODBUS_GRID_METER_TYPE:
+        return "modbus_tcp"
+    return "http"
+
+
 def _grid_meter_summary(preview):
     """Describe the effective ``preview['grid_meter']`` for the setup summary.
 
@@ -549,7 +567,7 @@ def _grid_meter_summary(preview):
         return None
     return {
         "type": grid_type,
-        "transport": "mqtt" if grid_type in MQTT_GRID_METER_TYPES else "http",
+        "transport": _grid_meter_summary_transport(grid_type),
     }
 
 
@@ -594,6 +612,74 @@ def _validate_mqtt_grid_meter_via_core(preview, validation):
         validation["errors"].append(
             _issue("grid_meter_mqtt_invalid", str(exc))
         )
+
+
+def _validate_e3dc_grid_meter_via_core(preview, validation):
+    """Run a final E3/DC grid meter through the validator the EMS factory uses."""
+
+    grid = preview.get("grid_meter")
+    if not isinstance(grid, dict):
+        return
+    if str(grid.get("type") or "").strip().lower() != E3DC_MODBUS_GRID_METER_TYPE:
+        return
+    try:
+        e3dc_modbus_grid_meter_settings(grid)
+    except ValueError as exc:
+        validation["errors"].append(_issue("grid_meter_e3dc_modbus_invalid", str(exc)))
+
+
+def _add_e3dc_meter_as_read_only_device(preview, names, validation):
+    """Show an E3/DC grid meter as its own read-only device, once.
+
+    The meter only yields the grid value; the same system's PV, battery and
+    inverter are what the device tile shows, over the same connection. A device
+    that already reads this endpoint is kept as it is rather than doubled.
+    """
+
+    grid = preview.get("grid_meter")
+    if not isinstance(grid, dict):
+        return
+    if str(grid.get("type") or "").strip().lower() != E3DC_MODBUS_GRID_METER_TYPE:
+        return
+    try:
+        meter = e3dc_modbus_grid_meter_settings(grid)
+    except ValueError:
+        return
+    devices = preview.get("devices")
+    if not isinstance(devices, list):
+        return
+    for device in devices:
+        if not is_e3dc_modbus_device_config(device):
+            continue
+        try:
+            existing = e3dc_modbus_device_settings(device)
+        except ValueError:
+            continue
+        if (existing["host"].lower(), existing["port"], existing["unit_id"]) == (
+            meter["host"].lower(), meter["port"], meter["unit_id"]
+        ):
+            return
+    taken = {str(device.get("name") or "") for device in devices if isinstance(device, dict)}
+    taken.update(names)
+    name = "E3DC"
+    suffix = 2
+    while name in taken:
+        name = f"E3DC{suffix}"
+        suffix += 1
+    device = {"name": name, "type": E3DC_MODBUS_DEVICE_TYPE, "ip": meter["host"]}
+    for key in ("port", "unit_id"):
+        if key in grid:
+            device[key] = meter[key]
+    devices.append(device)
+    names.append(name)
+    validation["info"].append(
+        _issue(
+            "e3dc_read_only_device_added",
+            f"The E3/DC is also shown as the read-only device {name} (PV, battery, "
+            "inverter, grid). The EMS never controls it; remove it in Maintenance "
+            "if you only want the grid value.",
+        )
+    )
 
 
 _MQTT_TOPIC_WILDCARDS = ("+", "#")
@@ -892,6 +978,9 @@ def _build_grid_meter(meter, defaults, validation, features):
         grid_type = str((defaults or {}).get("type") or "").strip().lower() or "shelly"
 
     grid = copy.deepcopy(defaults) if isinstance(defaults, dict) else {}
+    carried_type = str(grid.get("type") or "").strip().lower()
+    if carried_type != grid_type and not grid_meter_port_carries_over(carried_type, grid_type):
+        grid.pop("port", None)
     grid["type"] = grid_type
 
     # HTTP meters need a reachable host; MQTT meters (generic/D0) do not carry
@@ -909,7 +998,13 @@ def _build_grid_meter(meter, defaults, validation, features):
         # Preserve the discovered port (default 80) so a meter advertised on a
         # non-default port keeps working at runtime instead of silently
         # falling back to port 80.
-        if "port" in spec["keys"] and meter.get("port"):
+        # The card resets its port whenever its variant changes protocol, so a
+        # draft port belongs to the card's own type, typed or discovered.
+        source_type = str(meter.get("grid_meter_type") or "").strip().lower() or (
+            _inferred_grid_type(meter)
+        )
+        port_carries = not source_type or grid_meter_port_carries_over(source_type, grid_type)
+        if "port" in spec["keys"] and meter.get("port") and port_carries:
             try:
                 grid["port"] = int(meter["port"])
             except (TypeError, ValueError):
@@ -1218,6 +1313,8 @@ class ConfigPreviewGenerator:
         # or feature-applied) must pass the same Core resolver EMS uses at
         # startup, so a "ready" preview can never fail at runtime.
         _validate_mqtt_grid_meter_via_core(preview, validation)
+        _validate_e3dc_grid_meter_via_core(preview, validation)
+        _add_e3dc_meter_as_read_only_device(preview, names, validation)
 
         _normalize_bundled_influx_secret(preview)
 
@@ -1233,6 +1330,11 @@ class ConfigPreviewGenerator:
                     f"Config names must be unique: {', '.join(duplicate_names)}.",
                 )
             )
+        else:
+            # Entries carried from the base config share the runtime name space
+            # with the selected ones; the startup guard checks all of them.
+            for issue in find_duplicate_device_names(preview.get("devices")):
+                validation["errors"].append(_issue(issue["code"], issue["message"]))
 
         for issue in find_duplicate_zendure_device_identities(
             preview.get("devices"),
@@ -1286,6 +1388,11 @@ class ConfigPreviewGenerator:
                 # is still reported as the active grid meter.
                 "grid_meters": 1 if grid_meter_summary else 0,
                 "grid_meter": grid_meter_summary,
+                "read_only_devices": sum(
+                    1
+                    for device in preview.get("devices") or ()
+                    if is_read_only_device_config(device)
+                ),
                 "zendure_mqtt_devices": mqtt_devices,
             },
             "validation": validation,
@@ -1332,7 +1439,9 @@ class ConfigPreviewGenerator:
             preview["devices"] = devices
         by_name = {}
         for device in devices:
-            if isinstance(device, dict):
+            # A read-only entry is never the base a Setup inverter is written
+            # onto; a clash in names surfaces as a duplicate instead.
+            if isinstance(device, dict) and not is_read_only_device_config(device):
                 key = str(device.get("name") or "")
                 if key and key not in by_name:
                     by_name[key] = device

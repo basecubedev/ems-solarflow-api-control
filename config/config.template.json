@@ -88,7 +88,9 @@
       "both D0 and Smart Meter 3CT). zendure_smartmeter_3ct_http is a",
       "backward-compatible alias.",
       "Zendure SmartMeter D0 and MQTT use grid_meter.mqtt with topic and",
-      "either mqtt.broker_ref or host/port; payload_format and max_age_seconds."
+      "either mqtt.broker_ref or host/port; payload_format and max_age_seconds.",
+      "e3dc_modbus reads an E3/DC over Modbus TCP (read-only) and needs",
+      "grid_meter.ip; port 502 and unit_id 1 are the defaults."
     ],
     "type": "shelly",
     "ip": "192.168.1.50"
@@ -97,7 +99,9 @@
   "_comment_devices": [
     "One entry per Zendure device.",
     "Replace IP and SN with values from your local installation.",
-    "Use one real device first, then add more devices after validation."
+    "Use one real device first, then add more devices after validation.",
+    "An E3/DC can be shown read-only with type e3dc_modbus, name and ip;",
+    "the EMS never controls it."
   ],
   "devices": [
     {

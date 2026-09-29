@@ -1451,10 +1451,11 @@ function deviceCardHtml(name, device, previousSocWidths) {
         ${deviceValue("PV", watts(devicePvPower(device)), "solar")}
         ${deviceValue("Output", watts(deviceOutputPower(device)), "inverter")}
         ${deviceValue("Battery", signedWatts(batteryFlow.valueW), batteryFlow.isCharging ? "charge" : "battery")}
+        ${Number.isFinite(device.grid_power_w) ? deviceValue("Grid", signedWatts(device.grid_power_w), "grid") : ""}
         ${readOnly ? "" : deviceValue("Target", watts(device.target_w), "gauge")}
-        ${deviceValue("Limit", watts(device.output_limit_w), "warning")}
+        ${device.output_limit_applicable === false ? "" : deviceValue("Limit", watts(device.output_limit_w), "warning")}
       </div>
-      ${renderDeviceFirmwareStatus(device)}
+      ${device.firmware_status_applicable === false ? "" : renderDeviceFirmwareStatus(device)}
       ${renderFullChargeAssist(device)}
     </article>`;
 }

@@ -7,6 +7,8 @@ import json
 import os
 
 from ems import config as config_mod
+from ems.config_catalog import grid_meter_port_carries_over
+from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_read_only_device_config
 from ems.influx_setup import DOCKER_FIRST_SECRET_FILE
 from ems.paths import resolve_template_path
 
@@ -25,6 +27,10 @@ GRID_METER_CHOICES = (
         "Zendure SmartMeter D0 via MQTT",
     ),
     ("mqtt", "Generic MQTT grid meter"),
+    (
+        config_mod.E3DC_MODBUS_GRID_METER_TYPE,
+        "E3/DC storage system via Modbus TCP (read-only)",
+    ),
 )
 # Backward-compatible grid-meter types accepted from an existing config but not
 # offered as a new interactive menu choice. The 3CT and D0 HTTP types share the
@@ -185,6 +191,7 @@ def ask_int(
     default,
     *,
     minimum=0,
+    maximum=None,
     noninteractive=False,
     allow_placeholder_default=False,
 ):
@@ -207,6 +214,11 @@ def ask_int(
             if noninteractive:
                 raise ConfigInitError(f"{label} must be >= {minimum}")
             print(f"Please enter a value >= {minimum}.")
+            continue
+        if maximum is not None and value > maximum:
+            if noninteractive:
+                raise ConfigInitError(f"{label} must be <= {maximum}")
+            print(f"Please enter a value <= {maximum}.")
             continue
         return value
 
@@ -240,6 +252,16 @@ def ask_float(
             print(f"Please enter a value >= {minimum}.")
             continue
         return value
+
+
+def _whole_number_text(value, default):
+    """A stored ``502.0`` is the answer ``502``; anything else is asked as given."""
+
+    if value is None or value == "":
+        return default
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
 
 
 def ask_grid_meter(
@@ -278,6 +300,10 @@ def ask_grid_meter(
 
     result = copy.deepcopy(existing)
     result["type"] = meter_type
+    if meter_type != current_type and not grid_meter_port_carries_over(
+        current_type, meter_type
+    ):
+        result.pop("port", None)
     if meter_type in config_mod.MQTT_GRID_METER_TYPES:
         mqtt_settings = config_mod.grid_meter_mqtt_settings(result)
         existing_password = mqtt_settings.pop("password", None)
@@ -391,8 +417,49 @@ def ask_grid_meter(
             "payload_format",
             "value_path",
             "max_age_seconds",
+            "unit_id",
         ):
             result.pop(key, None)
+    elif meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
+        result["ip"] = ask_text(
+            "E3/DC IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["port"] = ask_int(
+            "E3/DC Modbus TCP port",
+            _whole_number_text(result.get("port"), config_mod.E3DC_MODBUS_DEFAULT_PORT),
+            minimum=1,
+            maximum=65535,
+            noninteractive=noninteractive,
+        )
+        result["unit_id"] = ask_int(
+            "E3/DC Modbus unit ID",
+            _whole_number_text(result.get("unit_id"), config_mod.E3DC_MODBUS_DEFAULT_UNIT_ID),
+            minimum=0,
+            maximum=255,
+            noninteractive=noninteractive,
+        )
+        for key in (
+            "url",
+            "power_path",
+            "channels",
+            "host",
+            "username",
+            "password",
+            "topic",
+            "payload_format",
+            "value_path",
+            "max_age_seconds",
+            "mqtt",
+        ):
+            result.pop(key, None)
+        try:
+            config_mod.e3dc_modbus_grid_meter_settings(result)
+        except ValueError as exc:
+            raise ConfigInitError(str(exc)) from exc
     elif meter_type == "tasmota_http":
         current_url = result.get("url") or result.get("ip") or ""
         value = ask_text(
@@ -424,6 +491,7 @@ def ask_grid_meter(
             "payload_format",
             "value_path",
             "max_age_seconds",
+            "unit_id",
             "channels",
             "mqtt",
         ):
@@ -447,6 +515,7 @@ def ask_grid_meter(
             "payload_format",
             "value_path",
             "max_age_seconds",
+            "unit_id",
             "mqtt",
         ):
             result.pop(key, None)
@@ -560,6 +629,56 @@ def ask_devices(
     return devices
 
 
+def ask_read_only_devices(existing, grid_meter, *, noninteractive=False):
+    """Keep configured read-only devices and offer the E3/DC meter as one.
+
+    A read-only device is never asked Zendure questions: it has no serial and
+    no limits, and the EMS never controls it. The offer is made only when the
+    grid meter is an E3/DC, whose connection it then reuses; nothing is added
+    unasked.
+    """
+
+    kept = [copy.deepcopy(item) for item in existing if isinstance(item, dict)]
+    meter_is_e3dc = (
+        str(grid_meter.get("type") or "").strip().lower()
+        == config_mod.E3DC_MODBUS_GRID_METER_TYPE
+    )
+    if kept or noninteractive or not meter_is_e3dc:
+        return kept
+
+    print()
+    if not ask_confirm(
+        "Also show the E3/DC as its own read-only device "
+        "(PV, battery, inverter, grid)?",
+        default=True,
+    ):
+        return []
+    device = {
+        "name": ask_text("E3/DC device name", "E3/DC", required=True),
+        "type": E3DC_MODBUS_DEVICE_TYPE,
+        "ip": ask_text("E3/DC IP address", grid_meter.get("ip") or "", required=True),
+        "port": ask_int(
+            "E3/DC Modbus TCP port",
+            _whole_number_text(grid_meter.get("port"), config_mod.E3DC_MODBUS_DEFAULT_PORT),
+            minimum=1,
+            maximum=65535,
+        ),
+        "unit_id": ask_int(
+            "E3/DC Modbus unit ID",
+            _whole_number_text(
+                grid_meter.get("unit_id"), config_mod.E3DC_MODBUS_DEFAULT_UNIT_ID
+            ),
+            minimum=0,
+            maximum=255,
+        ),
+    }
+    try:
+        config_mod.e3dc_modbus_device_settings(device)
+    except ValueError as exc:
+        raise ConfigInitError(str(exc)) from exc
+    return [device]
+
+
 def apply_system_basics(
     config,
     *,
@@ -662,11 +781,17 @@ def apply_answers(
         noninteractive=noninteractive,
         allow_placeholder_defaults=allow_placeholder_defaults,
     )
+    existing = updated.get("devices", [])
+    existing = existing if isinstance(existing, list) else []
     updated["devices"] = ask_devices(
-        updated.get("devices", []),
+        [item for item in existing if not is_read_only_device_config(item)],
         template_config,
         noninteractive=noninteractive,
         allow_placeholder_defaults=allow_placeholder_defaults,
+    ) + ask_read_only_devices(
+        [item for item in existing if is_read_only_device_config(item)],
+        updated["grid_meter"],
+        noninteractive=noninteractive,
     )
     apply_system_basics(
         updated,
@@ -693,6 +818,13 @@ def _meter_summary(grid_meter):
     if meter_type == "tasmota_http":
         target = grid_meter.get("url") or grid_meter.get("ip") or "(not set)"
         return f"Tasmota HTTP at {target}"
+    if meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
+        port = grid_meter.get("port") or config_mod.E3DC_MODBUS_DEFAULT_PORT
+        unit_id = grid_meter.get("unit_id", config_mod.E3DC_MODBUS_DEFAULT_UNIT_ID)
+        return (
+            f"E3/DC Modbus TCP at {grid_meter.get('ip') or '(not set)'}:{port} "
+            f"unit {unit_id}"
+        )
     label = {
         "shelly": "Shelly",
         "shelly_3em_gen1": "Shelly 3EM Gen1",
@@ -715,6 +847,12 @@ def print_summary(config, config_path):
     if isinstance(devices, list):
         for device in devices:
             if not isinstance(device, dict):
+                continue
+            if is_read_only_device_config(device):
+                print(
+                    f"    {device.get('name', '(unnamed)')}: "
+                    f"{device.get('ip') or '(no IP)'}, E3/DC, read-only"
+                )
                 continue
             print(
                 f"    {device.get('name', '(unnamed)')}: "

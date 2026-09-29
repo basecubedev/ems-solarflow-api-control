@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal
 
+from ems.read_only_devices import is_read_only_device_config
+
 IdentityKind = Literal[
     "physical_serial",
     "scoped_mqtt_device_anchor",
@@ -356,6 +358,10 @@ def _endpoint_identity(item: Mapping[str, Any], fragment: Mapping[str, Any]):
 def _resolved_identities(
     item: Mapping[str, Any], broker_sources: Mapping[str, str] | None
 ) -> list[InverterIdentity]:
+    # A read-only device is not an inverter: it takes no part in inverter
+    # identity, duplicate or matching decisions.
+    if is_read_only_device_config(item):
+        return []
     fragment = _fragment(item)
     candidates = [
         _serial_identity(item, fragment),

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from ems.paths import resolve_config_path, resolve_template_path
+from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_read_only_device_config
 
 LATEST_CONFIG_SCHEMA_VERSION = 3
 CURRENT_CONFIG_SCHEMA_VERSION = LATEST_CONFIG_SCHEMA_VERSION
@@ -179,6 +180,7 @@ ZENDURE_HTTP_GRID_METER_TYPES = frozenset(
     }
 )
 MQTT_GRID_METER_TYPES = ("mqtt", ZENDURE_SMARTMETER_D0_GRID_METER_TYPE)
+E3DC_MODBUS_GRID_METER_TYPE = E3DC_MODBUS_DEVICE_TYPE
 
 # Single source of truth mapping a grid-meter ``type`` to a user-facing hardware
 # model name and a transport label. Diagnostics and status surfaces read this so
@@ -186,6 +188,7 @@ MQTT_GRID_METER_TYPES = ("mqtt", ZENDURE_SMARTMETER_D0_GRID_METER_TYPE)
 # correctly. Unknown types fall back to ``(None, None)``.
 _LOCAL_HTTP_TRANSPORT = "local HTTP API"
 _LOCAL_MQTT_TRANSPORT = "local MQTT"
+_MODBUS_TCP_TRANSPORT = "Modbus TCP"
 GRID_METER_MODEL_TRANSPORTS = {
     "shelly": ("Shelly Pro/Plus", _LOCAL_HTTP_TRANSPORT),
     "shelly_3em_gen1": ("Shelly 3EM Gen1", _LOCAL_HTTP_TRANSPORT),
@@ -202,6 +205,7 @@ GRID_METER_MODEL_TRANSPORTS = {
     ),
     ZENDURE_SMARTMETER_D0_GRID_METER_TYPE: ("Zendure Smart Meter D0", _LOCAL_MQTT_TRANSPORT),
     "mqtt": ("Generic MQTT meter", "MQTT"),
+    E3DC_MODBUS_GRID_METER_TYPE: ("E3/DC energy storage system", _MODBUS_TCP_TRANSPORT),
     "ha": ("Home Assistant (legacy)", "Home Assistant"),
 }
 
@@ -215,6 +219,78 @@ def grid_meter_model_transport(meter_type):
     """
 
     return GRID_METER_MODEL_TRANSPORTS.get(str(meter_type or "").strip().lower(), (None, None))
+
+E3DC_MODBUS_DEFAULT_PORT = 502
+E3DC_MODBUS_DEFAULT_UNIT_ID = 1
+
+
+def _strict_number(value, field, *, default, minimum, maximum=None, integer=True):
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a number, not a boolean")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a number, got {value!r}") from exc
+    if number != number or number in (float("inf"), float("-inf")):
+        raise ValueError(f"{field} must be a finite number")
+    if integer:
+        if not number.is_integer():
+            raise ValueError(f"{field} must be a whole number, got {value!r}")
+        number = int(number)
+    if number < minimum or (maximum is not None and number > maximum):
+        upper = "" if maximum is None else f"..{maximum}"
+        raise ValueError(f"{field} must be in {minimum}{upper}, got {value!r}")
+    return number
+
+
+def _e3dc_modbus_connection(entry, prefix, owner):
+    host = str(entry.get("ip") or "").strip()
+    if not host:
+        raise ValueError(f"{owner} requires {prefix}ip")
+    return {
+        "host": host,
+        "port": _strict_number(
+            entry.get("port"),
+            f"{prefix}port",
+            default=E3DC_MODBUS_DEFAULT_PORT,
+            minimum=1,
+            maximum=65535,
+        ),
+        "unit_id": _strict_number(
+            entry.get("unit_id"),
+            f"{prefix}unit_id",
+            default=E3DC_MODBUS_DEFAULT_UNIT_ID,
+            minimum=0,
+            maximum=255,
+        ),
+    }
+
+
+def e3dc_modbus_grid_meter_settings(grid_meter):
+    """Validate an ``e3dc_modbus`` grid-meter block into connection settings.
+
+    The one validator for this meter type, used by the client factory and by
+    config validation, so a value accepted in one place cannot be refused in the
+    other. An explicit invalid value raises rather than falling back to a default.
+    """
+
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    return _e3dc_modbus_connection(grid_meter, "grid_meter.", "E3/DC Modbus grid meter")
+
+
+def e3dc_modbus_device_settings(device):
+    """Validate an ``e3dc_modbus`` ``devices[]`` entry, the same way the meter is."""
+
+    device = device if isinstance(device, dict) else {}
+    name = str(device.get("name") or "").strip()
+    if not name:
+        raise ValueError("E3/DC Modbus device requires a name")
+    settings = _e3dc_modbus_connection(device, "", f"E3/DC Modbus device {name}")
+    settings["name"] = name
+    return settings
+
 
 _ZENDURE_D0_TOPIC_PREFIX = "Zendure/sensor/"
 _ZENDURE_D0_TOPIC_SUFFIX = "/totalPower"
@@ -835,7 +911,7 @@ def _merge_template_upgrade_view(template, user_config, device_defaults):
     if isinstance(devices, list):
         enriched = []
         for item in devices:
-            if isinstance(item, dict):
+            if isinstance(item, dict) and not is_read_only_device_config(item):
                 enriched.append(_deep_merge_defaults(device_defaults, item))
             else:
                 enriched.append(copy.deepcopy(item))
@@ -1152,7 +1228,10 @@ def template_placeholder_paths(config):
                 continue
             if _missing_or_placeholder(device.get("ip")):
                 paths.append(f"devices[{index}].ip")
-            if _missing_or_placeholder(device.get("sn")):
+            # A read-only device is reached by address alone; it has no serial.
+            if not is_read_only_device_config(device) and _missing_or_placeholder(
+                device.get("sn")
+            ):
                 paths.append(f"devices[{index}].sn")
 
     grid_meter = config.get("grid_meter")
@@ -1314,7 +1393,7 @@ def _template_comment_items_for_config(user_config, base_dir=None):
     if isinstance(devices, list):
         device_comment_items = _collect_comment_items(device_defaults)
         for index, device in enumerate(devices):
-            if isinstance(device, dict):
+            if isinstance(device, dict) and not is_read_only_device_config(device):
                 for path, value in device_comment_items:
                     items.append((("devices", index) + path, copy.deepcopy(value)))
 
@@ -1920,8 +1999,9 @@ def initialize(args, base_dir):
 def http_control_device_configs(devices=None):
     """Return devices[] entries that build an HTTP-controllable ZendureClient.
 
-    Telemetry-only Zendure MQTT entries carry no ip/sn and are not controlled;
-    they are excluded so startup never passes them to ZendureClient. A disabled
+    Telemetry-only Zendure MQTT entries carry no ip/sn and are not controlled,
+    and read-only entries such as an E3/DC must never be commanded; both are
+    excluded so startup never passes them to ZendureClient. A disabled
     entry is excluded for the same reason it is on the MQTT control path:
     ``enabled`` means the same thing for every transport, so an operator who
     disables a device really removes it from the control loop.
@@ -1941,6 +2021,7 @@ def http_control_device_configs(devices=None):
         for item in devices
         if isinstance(item, dict)
         and not is_zendure_mqtt_device_config(item)
+        and not is_read_only_device_config(item)
         and config_entry_enabled(item)
     ]
 

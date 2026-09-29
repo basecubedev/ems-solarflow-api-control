@@ -1141,6 +1141,8 @@ def handle_grid_meter_command(args, config):
         or str(getattr(client, "provider", "")).lower() == "mqtt"
     ):
         print("Latest power: unavailable (no fresh MQTT value received)")
+    elif str(getattr(client, "transport", "")).lower() == "modbus_tcp":
+        print("Latest power: unavailable (no fresh Modbus value received)")
     if latencies:
         print(f"p50 latency: {int(round(percentile(latencies, 0.5)))} ms")
         print(f"p95 latency: {int(round(percentile(latencies, 0.95)))} ms")

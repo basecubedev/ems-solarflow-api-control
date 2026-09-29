@@ -64,6 +64,10 @@ def grid_meter_variant_catalog():
             "fields": list(variant.get("fields", ())),
             "level": variant.get("level", "normal"),
         }
+        if variant.get("default_port") is not None:
+            variants[key]["default_port"] = variant["default_port"]
+        if variant.get("port_description"):
+            variants[key]["port_description"] = variant["port_description"]
     return variants
 
 

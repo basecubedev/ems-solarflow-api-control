@@ -556,7 +556,9 @@ More detail: [winter-mode.md](../winter-mode.md).
 
 ## Device Settings
 
-Each Zendure device entry defines static installation data:
+Each Zendure device entry defines static installation data. An E3/DC shown on
+the dashboard is a `devices[]` entry too, but a read-only one with only a few
+fields; see [E3/DC as a read-only device](#e3dc-as-a-read-only-device).
 
 ```json
 {
@@ -630,6 +632,7 @@ the physical device is installed or reports values differently. Run
 | Tasmota HTTP / SmartMeter | `tasmota_http` | `ip` or `url`, `power_path` | Uses `Status 10` JSON |
 | Zendure Smart Meter D0 — Local MQTT | `zendure_smartmeter_d0` | `mqtt.topic` + (`mqtt.broker_ref` or `mqtt.host`) | Optional alternative; D0 preset, numeric payload |
 | Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload |
+| E3/DC storage system via Modbus TCP | `e3dc_modbus` | `ip` (opt. `port`, `unit_id`) | Read-only; grid power at the E3/DC root power meter, read once per control cycle. See below. |
 
 ### Shelly Pro/Plus Gen2/Gen3 (`shelly`)
 
@@ -936,6 +939,122 @@ Example: Generic MQTT JSON payload:
 ```
 
 For a numeric payload, use `"payload_format": "number"` and omit `value_path`.
+
+### E3/DC storage system via Modbus TCP (`e3dc_modbus`)
+
+An E3/DC can take part in two ways, independently: as the **grid meter** (this
+section) and as a **read-only device** that shows its PV, battery, inverter and
+grid on the dashboard ([below](#e3dc-as-a-read-only-device)). Either, both or
+neither. The EMS never writes to an E3/DC in any role: every request is a Modbus
+read, there is no write path, and the E3/DC's own battery and inverter stay
+under the E3/DC's own control.
+
+As grid meter it reads the grid power the E3/DC measures at its root power meter
+(register 40074 of the E3/DC Simple Mode mapping). The sign already matches the
+EMS convention (negative = feed-in), so nothing is inverted. It is selectable
+like every other grid meter; with a Shelly or another meter as grid meter, the
+E3/DC can still be shown as a device.
+
+**The read runs in the control loop's own cycle.** Each cycle reads the E3/DC
+when the grid value is needed, so the poll interval is the loop interval
+(`loop_interval`, including a runtime change of it) and every cycle works on its
+own reading; nothing is read in between and no reading is handed to the control
+loop twice. When the same E3/DC is also shown as a device, the device tile uses
+that same reading over the same connection, so a cycle costs one request for
+both (plus one for the inverter block the tile needs). A failed read is reported in grid-meter health at once
+and the last good value is kept, exactly as for the HTTP meters; before the
+first successful read that value is the same 0 W placeholder every grid meter
+starts with. While the E3/DC stays unreachable, retries back off (1, 2, 4 … at
+most 30 seconds) and the cycles in between do not wait on the network. A read
+that does reach the network waits on a 2-second timeout for connecting and for
+each answer, like the timeout an HTTP meter waits on.
+
+**The E3/DC keeps regulating its own battery.** It controls its storage
+towards zero at the same grid connection this meter reads. The EMS then
+regulates the Zendure devices against a grid value that the E3/DC is moving at
+the same time, and two controllers chasing one set point can work against each
+other. Watch the first days of operation; this combination has not been tested
+on real hardware.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `ip` | required | Address of the E3/DC in the local network. Modbus only answers from the same subnet. |
+| `port` | `502` | Modbus TCP port set on the device. |
+| `unit_id` | `1` | The device ID ("Gerät") on the device's ModBus TCP page, `0`–`255`. |
+
+The register address offset is detected at every connect from the E3/DC magic
+word rather than configured, because the vendor manual states that it differs
+between Modbus implementations.
+
+Modbus TCP has to be switched on at the device, and it takes **two** switches:
+*Smart-Funktionen › Smart Home › Funktion Modbus*, then, one page to the right,
+**ModBus TCP** with its own on/off switch and protocol `E3DC` (not `SUN_SPEC`).
+With only the first switch on, port 502 stays closed. A device in SunSpec mode
+is reported as such rather than as a missing device.
+
+Example:
+
+```json
+{
+  "grid_meter": {
+    "type": "e3dc_modbus",
+    "ip": "192.0.2.60"
+  }
+}
+```
+
+`emsctl grid-meter test` and `emsctl diagnose --hardware` read the device
+through the same session code. Measurements, register semantics and what has
+and has not been proven are recorded in
+[e3dc-modbus-interface.md](e3dc-modbus-interface.md).
+
+### E3/DC as a read-only device
+
+A `devices[]` entry of type `e3dc_modbus` shows the E3/DC on the dashboard as
+its own tile: PV power, battery power and state of charge, inverter AC power
+(the three phases of its built-in inverter), and its grid power. The tile is
+marked *Telemetry only* and counts in the house totals (PV, battery, inverter
+output), so the flow picture, the energy statistics and the InfluxDB history
+include the E3/DC. The average SOC on the dashboard is a plain mean over all
+batteries, so a large E3/DC battery weighs no more than a small Zendure pack.
+
+It is **never a controlled device**. It is not part of the control loop's
+device set, gets no runtime-state entry, no output limit, no SOC, winter or
+full-charge handling, and no write of any kind. A config whose only enabled
+device is an E3/DC does not start the EMS: there has to be at least one Zendure
+device to control.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | Config name; shown on the dashboard, unique among all devices. |
+| `type` | required | `e3dc_modbus`. |
+| `ip` | required | Address of the E3/DC. No serial number is needed. |
+| `port` | `502` | Modbus TCP port. |
+| `unit_id` | `1` | Modbus device ID, `0`–`255`. |
+| `enabled` | `true` | `false` hides the device and stops reading it. |
+
+The device is read in the same cycle as the grid meter. If the grid meter is
+the same E3/DC (same `ip`, `port` and `unit_id`), both normally share one
+reading. A failed read — or an inverter block the E3/DC does not answer — shows
+the tile offline with its last known values and leaves that cycle out of the
+energy statistics, and a device that has never answered does not count in the
+average SOC; the grid meter's own reading is never affected by the inverter
+block.
+
+```json
+{
+  "devices": [
+    {"name": "WR1", "ip": "192.0.2.10", "sn": "EXAMPLE0000001"},
+    {"name": "E3DC", "type": "e3dc_modbus", "ip": "192.0.2.60"}
+  ],
+  "grid_meter": {"type": "e3dc_modbus", "ip": "192.0.2.60"}
+}
+```
+
+In the Admin console, Guided Setup adds this device automatically when the
+E3/DC is chosen as grid meter, and says so in the preview; Maintenance has an
+**Add an E3/DC (read-only)** action under *Add a device manually*, and an E3/DC
+device card with its address, port, unit ID and enabled switch.
 
 ### Legacy config compatibility
 
