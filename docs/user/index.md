@@ -71,6 +71,7 @@ setup: [developer-setup.md](../developer/developer-setup.md).
 | Topic | Document |
 | --- | --- |
 | What the project is | [Project overview](project-overview.md) |
+| How EMS, Admin and Appliance Manager fit together | [How it fits together](how-it-fits-together.md) |
 | Whether your devices fit | [Supported setups](supported-setups.md) |
 | RAM, storage and which Raspberry Pi | [Hardware requirements](hardware-requirements.md) |
 | Local API vs Local MQTT vs cloud | [Connection types](connection-types.md) |

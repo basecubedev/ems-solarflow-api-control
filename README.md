@@ -22,6 +22,18 @@ and provides a local dashboard.
 
 [![Local EMS dashboard — aggregated system view](docs/assets/preview-aggregated.jpg)](docs/dashboard.md)
 
+## How it fits together
+
+```mermaid
+flowchart LR
+    manager["Appliance Manager :8088<br/>Raspberry Pi appliance only"] -- installs --> admin["Admin Console :8090<br/>setup, discovery, updates"]
+    admin -- "config.json, deploys" --> ems["EMS + Dashboard :8080<br/>the control loop"]
+    meter["Grid meter"] -- "house load" --> ems
+    ems == "outputLimit every 5 s" ==> zendure["Zendure devices"]
+```
+
+Only the EMS controls; stopping the Admin Console or the Appliance Manager does not stop control. [How the parts fit together](docs/user/how-it-fits-together.md)
+
 ## Supported hardware at a glance
 
 Each device carries one status — **Validated**, **Family-supported**,
@@ -60,8 +72,7 @@ The machine EMS runs *on* — 64-bit `arm64` or `amd64`.
 | 1 GB | EMS with InfluxDB |
 | >1 GB | Additional headroom |
 
-InfluxDB stores energy history and is optional — control does not need it.
-[Pi matrix](docs/user/hardware-requirements.md).
+InfluxDB stores energy history and is optional — control does not need it. [Pi matrix](docs/user/hardware-requirements.md).
 
 ## Get started
 
@@ -84,9 +95,7 @@ before you rely on it.
 — one file per board, always the current build. Not under *Packages*: that
 holds the container images the appliance fetches by itself.
 
-[Flashing the card](docs/user/appliance/install.md) ·
-[First start](docs/user/appliance/first-start.md) ·
-[All appliance guides](docs/user/appliance/index.md)
+[Flashing the card](docs/user/appliance/install.md) · [First start](docs/user/appliance/first-start.md) · [All appliance guides](docs/user/appliance/index.md)
 
 ### On a machine you already run
 
@@ -126,13 +135,9 @@ Full guide, with demo videos of a fresh install and a guided update:
 
 ### Other ways to install
 
-Prefer the shell? These converge on the same `config/config.json`, so you can
-switch later.
-
-| Path | Choose this if |
-| --- | --- |
-| [Docker Bootstrap](docs/user/docker-bootstrap.md) | Shell-only Docker setup |
-| [Developer Setup](docs/developer/developer-setup.md) | Develop, debug or build from source |
+Prefer the shell? [Docker Bootstrap](docs/user/docker-bootstrap.md) is a shell-only Docker setup;
+[Developer Setup](docs/developer/developer-setup.md) is for developing or building from source. Both
+converge on the same `config/config.json`, so you can switch later.
 
 ### Connection types (reference)
 
@@ -146,15 +151,10 @@ upfront. EMS reaches your devices over any one of:
 ## Documentation
 
 - Step-by-step guides: [Admin Console](docs/user/admin/index.md) · [EMS Dashboard](docs/user/dashboard/index.md)
-- [Hardware requirements](docs/user/hardware-requirements.md) · [Raspberry Pi compatibility](docs/user/hardware-requirements.md#raspberry-pi-compatibility)
+- [How it fits together](docs/user/how-it-fits-together.md) · [Hardware requirements](docs/user/hardware-requirements.md) · [Raspberry Pi compatibility](docs/user/hardware-requirements.md#raspberry-pi-compatibility)
 - [Appliance installation](docs/appliance/installation.md) · [Administration](docs/user/admin-console.md) · [Troubleshooting](docs/user/troubleshooting.md)
-- [User documentation](docs/user/)
-- [Technical reference](docs/technical/)
-- [Developer documentation](docs/developer/)
-- [Full documentation map](docs/README.md)
+- [User documentation](docs/user/) · [Technical reference](docs/technical/) · [Developer documentation](docs/developer/) · [Full documentation map](docs/README.md)
 
 ## Getting help
 
-- [FAQ](docs/user/faq.md)
-- [Troubleshooting](docs/user/troubleshooting.md)
-- [GitHub issues](https://github.com/basecubedev/ems-solarflow-api-control/issues)
+[FAQ](docs/user/faq.md) · [Troubleshooting](docs/user/troubleshooting.md) · [GitHub issues](https://github.com/basecubedev/ems-solarflow-api-control/issues)
