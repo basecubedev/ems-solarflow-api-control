@@ -28,14 +28,21 @@ from appliance import (
     artifact_trust,
     persistent_state,
 )
-from appliance.version import version_key
+from appliance.version import (
+    DIRECTION_DOWNGRADE,
+    DIRECTION_REINSTALL,
+    DIRECTION_UNKNOWN,
+    DIRECTION_UPGRADE,
+    TRACK_STABLE,
+    direction,
+    newest_stable,
+    compare,
+    release_track,
+)
 
 TYPE_MANAGER_UPDATE = "manager.update"
 TYPE_MANAGER_REVERT = "manager.revert"
 
-DIRECTION_UPGRADE = "upgrade"
-DIRECTION_DOWNGRADE = "downgrade"
-DIRECTION_REINSTALL = "reinstall"
 DIRECTION_REVERT = "revert"
 
 STAGING_PREFIX = ".manager-fetch-"
@@ -54,19 +61,6 @@ class ManagerUpdateError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
-
-
-def direction(*, offered, installed):
-    """Which way this install moves, by the project's own version order."""
-
-    if not installed:
-        return DIRECTION_UPGRADE
-    offered_key, installed_key = version_key(offered), version_key(installed)
-    if offered_key > installed_key:
-        return DIRECTION_UPGRADE
-    if offered_key < installed_key:
-        return DIRECTION_DOWNGRADE
-    return DIRECTION_REINSTALL
 
 
 class ManagerUpdateService:
@@ -199,6 +193,7 @@ class ManagerUpdateService:
             "configured": False,
             "error": "",
             "releases": [],
+            "latest_stable": None,
             "installed_version": self.installed_version,
         }
         try:
@@ -220,12 +215,17 @@ class ManagerUpdateService:
             listing["error"] = "release_index_invalid"
             return listing
         for candidate in candidates:
-            described = candidate.get("described") or {}
+            offered = str((candidate.get("described") or {}).get("release_version") or "")
             candidate["direction"] = direction(
-                offered=str(described.get("release_version") or ""),
-                installed=self.installed_version,
+                offered=offered, installed=self.installed_version, package=True
             )
+            candidate["track"] = release_track(offered, package=True)
         listing["releases"] = candidates
+        listing["latest_stable"] = newest_stable(
+            candidates,
+            version_of=lambda item: (item.get("described") or {}).get("release_version", ""),
+            stable=lambda item: item["track"] == TRACK_STABLE,
+        )
         return listing
 
     def _candidate(self, release_id):
@@ -342,9 +342,19 @@ class ManagerUpdateService:
         pending = self._verification_pending()
         if pending:
             blockers.append(pending)
+        claimed = str((candidate.get("described") or {}).get("release_version") or "")
+        # The page offers the claim as "Update to <version>".
+        if claimed and not release_fetch.claim_matches(claimed, release.version):
+            blockers.append({
+                "code": "release_index_mismatch",
+                "message": f"the package index calls this release {claimed}, but its signed "
+                f"manifest says {release.version}",
+            })
 
         retention = manager_retention.read(self.paths)
-        moving = direction(offered=release.version, installed=self.installed_version)
+        moving, unclear = compare(
+            offered=release.version, installed=self.installed_version, package=True
+        )
         self.operations.update_target(
             operation.operation_id,
             {
@@ -369,14 +379,26 @@ class ManagerUpdateService:
             # package running now becomes the kept one when it is displaced.
             "revert_available": retention.current.present,
             "verify_window_seconds": manager_verify.DEFAULT_WINDOW_SECONDS,
-            "warning": self._warning(moving, retention.current.present),
+            "warning": self._warning(moving, retention.current.present, unclear),
         }
 
     @staticmethod
-    def _warning(moving, revert_available):
+    def _warning(moving, revert_available, unclear):
         parts = []
         if moving == DIRECTION_DOWNGRADE:
             parts.append("This installs an older Appliance Manager than the one running.")
+        elif moving == DIRECTION_UNKNOWN:
+            if unclear == "tie":
+                parts.append(
+                    "The running and the offered version are spelled differently but "
+                    "score the same, so whether this moves forward or back is unknown."
+                )
+            else:
+                side = "running Appliance Manager's" if unclear == "running" else "offered package's"
+                parts.append(
+                    f"The {side} version cannot be compared -- unreadable, or a development "
+                    "build -- so whether this moves forward or back is unknown."
+                )
         parts.append(
             "The appliance restarts its agent and web service during the install, so this "
             "console is briefly unreachable."
@@ -664,6 +686,7 @@ __all__ = [
     "DIRECTION_DOWNGRADE",
     "DIRECTION_REINSTALL",
     "DIRECTION_REVERT",
+    "DIRECTION_UNKNOWN",
     "DIRECTION_UPGRADE",
     "ManagerUpdateError",
     "ManagerUpdateService",

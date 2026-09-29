@@ -90,7 +90,7 @@ jobs:
           import sys
 
           sys.path.insert(0, ".")
-          from appliance.version import is_stable, version_from_tag
+          from appliance.version import is_readable, is_stable, version_from_tag
 
           ref = os.environ.get("GITHUB_REF_NAME", "")
           asked = (os.environ.get("WANTED") or "").strip().lstrip("vV")
@@ -103,6 +103,17 @@ jobs:
               # prerelease is spelled with a tilde so dpkg and version_key agree
               # on its order, and artifact_trust.RELEASE_ID has no tilde in its
               # grammar -- so this chain publishes releases and nothing else.
+              if "-" in wanted:
+                  raise SystemExit(
+                      f"{wanted} has a hyphen: a Manager version spells a candidate "
+                      "with ~, and dpkg would read -N as a package revision."
+                  )
+              if not is_readable(wanted):
+                  raise SystemExit(
+                      f"{wanted} is not a version this chain can read: three "
+                      "numbers, an optional ~ candidate suffix, and no + build "
+                      "metadata, like 0.3.8 or 0.3.9~rc1."
+                  )
               raise SystemExit(
                   f"{wanted} is a candidate, and a candidate has no publishable "
                   "release id: RELEASE_ID admits no '~'. Cut a release instead."

@@ -33,7 +33,7 @@ import urllib.parse
 import urllib.request
 
 from appliance import artifact_trust
-from appliance.version import version_key
+from appliance.version import same_version, version_key
 
 
 INDEX_FORMAT_VERSION = 1
@@ -151,10 +151,11 @@ class HttpsFetcher:
 
 
 # What an index entry may say about a release beyond where to fetch it. None of
-# it is trusted and none of it gates anything: it exists so an operator choosing
-# between several published releases has something to choose by, rather than a
-# column of opaque identifiers. The signed manifest remains the only authority,
-# and every one of these is replaced by the manifest's own value once verified.
+# it is trusted: it exists so an operator choosing between several published
+# releases has something to choose by, rather than a column of opaque
+# identifiers. The signed manifest remains the only authority. The one way a
+# claim reaches a plan is as a refusal -- a release_version the signed manifest
+# contradicts blocks the install the page offered under that name.
 DESCRIPTION_FIELDS = ("release_version", "created_at", "build_id", "board")
 
 MAX_DESCRIPTION = 64
@@ -188,13 +189,25 @@ def sort_key(entry):
     )
 
 
+def claim_matches(claimed, signed):
+    """Whether an index's release_version is the version its signed manifest names.
+
+    Exact but for a ``v`` prefix, for the appliance and the image build alike.
+    ``_description`` cuts a claim to MAX_DESCRIPTION, so a signed version longer
+    than that never matches its claim: installing it through the index is
+    refused, deliberately, rather than matched by a prefix.
+    """
+
+    return same_version(claimed, signed, package=True)
+
+
 def parse_index(payload):
     """Candidate releases an index names. Nothing here is trusted.
 
     Every entry is checked for shape only — a release id this appliance would
-    accept and three https URLs. What the entry claims about the release is
-    irrelevant to whether it may be installed, because the signed manifest is
-    what decides; the claims are kept only so the choice can be labelled.
+    accept and three https URLs. What the entry claims about the release never
+    permits an install, because the signed manifest is what decides; the claims
+    label the choice, and a claimed version the manifest contradicts blocks it.
     """
 
     if not isinstance(payload, dict):
@@ -243,6 +256,7 @@ def parse_index(payload):
 __all__ = [
     "FetchError",
     "HttpsFetcher",
+    "claim_matches",
     "https_url",
     "parse_index",
 ]
