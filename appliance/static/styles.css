@@ -1067,6 +1067,34 @@ table.data td.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; fon
 
 .inline-form { display: grid; gap: calc(10px * var(--d)); }
 
+/* The Admin console's advanced-details, under a name of this surface's own. */
+.disclosure {
+  border: 1px solid var(--border);
+  border-radius: var(--o-control-radius);
+  padding: calc(6px * var(--d)) calc(10px * var(--d));
+  background: var(--tone-well);
+}
+.disclosure > summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+/* Drawn as ::before rather than ::marker, which WebKit does not style. */
+.disclosure > summary::-webkit-details-marker { display: none; }
+.disclosure > summary::before { color: var(--muted2); content: "›  "; }
+.disclosure[open] > summary::before { content: "⌄  "; }
+.disclosure > summary:hover { color: var(--text); }
+.disclosure[open] > summary { margin-bottom: calc(8px * var(--d)); }
+
+.track-help { display: grid; gap: calc(6px * var(--d)); margin: 0; }
+.track-help > div { display: grid; gap: calc(2px * var(--d)); }
+.track-help dt { font-weight: 700; font-size: 12px; }
+.track-help dd { margin: 0; color: var(--muted); font-size: 12px; }
+
 .empty-state {
   border: var(--o-border) dashed var(--border-strong);
   border-radius: var(--o-card-radius);

@@ -170,6 +170,42 @@ def seed_host_files(root, *, now=None):
     return root
 
 
+MANAGER_INDEX_URL = "https://example.invalid/manager-packages.json"
+
+
+class StaticManagerIndex:
+    """An index offering a newer and an older release, a candidate and a dev build."""
+
+    def read(self, url, *, label, max_bytes):
+        if url != MANAGER_INDEX_URL:
+            from appliance.release_fetch import FetchError
+
+            raise FetchError("release_download_failed", f"{label} is unreachable")
+        entries = [
+            ("ems-appliance-manager-0.2.0-arm64", "0.2.0"),
+            ("ems-appliance-manager-0.1.0-arm64", "0.1.0"),
+            ("ems-appliance-manager-0.3.0-rc1-arm64", "0.3.0~rc1"),
+            ("ems-appliance-manager-0.0.0-dev.abc1234-arm64", "0.0.0~dev.abc1234"),
+        ]
+        base = "https://example.invalid/"
+        return json.dumps(
+            {
+                "format_version": 1,
+                "releases": [
+                    {
+                        "release_id": release_id,
+                        "manifest_url": f"{base}{release_id}.manifest.json",
+                        "signature_url": f"{base}{release_id}.manifest.json.asc",
+                        "archive_url": f"{base}{release_id}.deb",
+                        "release_version": release_version,
+                        "created_at": "2026-09-01T00:00:00Z",
+                    }
+                    for release_id, release_version in entries
+                ],
+            }
+        ).encode()
+
+
 def main():
     os.environ["EMS_APPLIANCE_TEST_MODE"] = "1"
     port = int(os.environ.get("EMS_APPLIANCE_E2E_PORT", "8124"))
@@ -208,6 +244,7 @@ def main():
     host.add_account("ems-backup", backup_home)
 
     live = {"app": None, "agent": None}
+    unconfigured_fetcher = services.manager.fetcher
 
     def seed_appliance_state(options=None):
         """Restore the scripted host so browser tests do not depend on order."""
@@ -346,6 +383,14 @@ def main():
             changed=bool(options.get("rescue_password_changed")),
             absent=bool(options.get("rescue_account_absent")),
         )
+        # The package index is never reached over the network here: the browser
+        # has to see a list to group, and the signed download behind an entry is
+        # the backend suites' business.
+        indexed = bool(options.get("manager_index"))
+        object.__setattr__(
+            services.config, "manager_index_url", MANAGER_INDEX_URL if indexed else ""
+        )
+        services.manager.fetcher = StaticManagerIndex() if indexed else unconfigured_fetcher
         seed_manager_state(
             services,
             kept=bool(options.get("manager_package_kept")),
