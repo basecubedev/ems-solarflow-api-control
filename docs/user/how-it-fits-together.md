@@ -61,7 +61,11 @@ there. The rest of the picture is the same.
 
 ## Where the control happens
 
-The EMS repeats one cycle, by default every five seconds:
+The EMS repeats one cycle, by default every five seconds. The loop interval can
+be changed while the EMS runs, without a restart: in the Dashboard's **Control**
+tab under the runtime settings, or with `emsctl system loop-interval`. See
+[runtime settings](dashboard/runtime-settings.md).
+
 
 ```mermaid
 flowchart LR
