@@ -424,6 +424,7 @@ Step-by-step, screenshot-led guides:
 
 Reference:
 
+- [How it fits together](how-it-fits-together.md) — the EMS, the Admin Console and the Appliance Manager in one picture
 - [Supported setups](supported-setups.md)
 - [Connection types](connection-types.md)
 - [Admin Console](admin-console.md)
