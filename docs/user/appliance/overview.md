@@ -18,7 +18,7 @@ not a colour you have to interpret.
 
 Below it, anything wrong is listed worst first. Each entry says what it is, what
 was observed, and what to do about it — and carries a button to the page that
-can act on it, so you are never told to "open System Updates" and left to find
+can act on it, so you are never told to "open Updates" and left to find
 it. An appliance with nothing to report shows nothing here at all.
 
 The navigation carries the same information: a section with something waiting
@@ -45,7 +45,7 @@ Six tiles, in this order:
 
 Two things are deliberately *not* here, because they belong to a page that can
 act on them: the pending package updates and the Appliance Manager's own
-version are on **System Updates**, and the read-only file export is on
+version are on **Updates**, and the read-only file export is on
 **SSH & Backup Access**.
 
 A tile is never coloured alone. Every state also carries a word, so a colour you

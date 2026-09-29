@@ -61,11 +61,11 @@ Appliance image
 | | `.deb` on your own OS | Appliance image |
 |---|---|---|
 | Operating system | `apt` | `apt` |
-| Appliance Manager | **System Updates → Appliance Manager**, or a `.deb` by hand | the same |
+| Appliance Manager | **Updates → Appliance Manager package**, or a `.deb` by hand | the same |
 | Admin and EMS containers | the Admin console | the Admin console |
 
 The Manager is not in any APT repository, so `apt` does not offer it an upgrade.
-**System Updates → Appliance Manager** does: it fetches a signed package over
+**Updates → Appliance Manager package** does: it fetches a signed package over
 HTTPS, verifies it against the keyring the appliance already ships, and installs
 it — see [os-updates.md](os-updates.md#updating-the-appliance-manager-itself).
 Installing a `.deb` by hand still works and is what a development bench does.

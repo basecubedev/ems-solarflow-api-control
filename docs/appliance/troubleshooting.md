@@ -6,13 +6,13 @@
 |---|---|
 | What does the Appliance Manager manage? | The Raspberry Pi host: OS status and updates, reboot/shutdown, network and WLAN, hostname and mDNS, Docker service state, the EMS Admin container lifecycle, SSH access, storage and temperature, host logs, appliance recovery. See [architecture.md](architecture.md). |
 | What does the EMS Admin Console manage? | EMS configuration, device discovery, grid meter and inverters, control parameters, EMS runtime state, EMS diagnostics, EMS backup/restore, Guided Setup and Guided Upgrade. |
-| How do I recover a failed Admin update? | [admin-recovery.md](admin-recovery.md) — the appliance rolls back automatically; otherwise use Repair or *Install version → Previous known-good*. |
+| How do I recover a failed Admin update? | [admin-recovery.md](admin-recovery.md) — the appliance rolls back automatically; otherwise use Repair on the Admin page, or **Updates → Choose an Admin version → Previous known-good**. |
 | The appliance will not come up at all | [console-recovery.md](console-recovery.md) — log in as `ems-rescue` at a keyboard, then work down the list. |
-| How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — pick it from the **Stable** or **Unstable** group in *Install version*. |
+| How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — pick it from the **Stable** or **Unstable** group in **Updates → Choose an Admin version**. |
 | How do I add an SSH key? | [ssh-backup-access.md](ssh-backup-access.md) |
 | How do I back up files with rsync? | rsync is not available: the backup account is SFTP-only by design. Use the `sftp` commands in [ssh-backup-access.md](ssh-backup-access.md). |
 | How do I install OS updates? | [os-updates.md](os-updates.md) |
-| How do I update the Appliance Manager itself? | **System Updates → Appliance Manager**, never `apt` — see [os-updates.md](os-updates.md#updating-the-appliance-manager-itself). |
+| How do I update the Appliance Manager itself? | **Updates → Appliance Manager package**, never `apt` — see [os-updates.md](os-updates.md#updating-the-appliance-manager-itself). |
 | The console came back on the version I had before. Why? | A manager install that did not report itself healthy in time was undone by its own deadline; see [os-updates.md](os-updates.md#what-happens-when-it-fails). |
 | Was this host flashed from an appliance image? | `sudo ems-appliance image-check` — it prints the image layer, or fails. |
 | How do I recover access after a WLAN change? | [network-recovery.md](network-recovery.md) |

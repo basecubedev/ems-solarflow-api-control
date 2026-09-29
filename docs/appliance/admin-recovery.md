@@ -107,13 +107,15 @@ something to see, not something to hide. An operator running a mirror can point
 `release_index_url` in `/etc/ems-appliance-manager/appliance.conf` at a JSON
 index instead; that replaces the registry as the source of the list.
 
-1. Open **Admin → Install version**.
+1. Open **Updates → Choose an Admin version**. To go straight to the
+   newest stable release, the **Update to …** button on the EMS Admin card at
+   the top of the page plans exactly that tag and skips steps 2 to 4.
 2. Choose the version:
    - **Channels**: *Latest stable*, *Current stable (reinstall)*, *Previous
      known-good*.
    - **Stable**: every release the registry publishes, newest first.
-   - **Unstable**: the release candidates, newest first. The group is always
-     listed. Whether a candidate can be chosen is `allow_prerelease` in
+   - **Unstable**: every pre-release tag (`-rc1`, `-beta`, `-dev.3`, …),
+     newest first — the Admin console's own grouping. Whether a candidate can be chosen is `allow_prerelease` in
      `/etc/ems-appliance-manager/allowed-images.conf`: a host that sets it to
      false shows every candidate greyed out with the reason, and the agent
      refuses the tag with `prerelease_not_allowed` even when it is typed by
@@ -123,7 +125,7 @@ index instead; that replaces the registry as the source of the list.
      reached.
 3. Tick **Reinstall the same version** when you want to reinstall what is
    already running.
-4. Press **Plan installation**.
+4. Press **Install selected version**.
 
 A newly imaged appliance ships with candidates enabled: before 1.0 this project
 publishes more Admin candidates than releases, and refusing them would leave the
@@ -538,6 +540,6 @@ sudo ems-appliance repair --apply
 3. Read the error, then **Acknowledge** the result.
 4. If the automatic rollback already restored the previous version, you are
    done — verify the health badge.
-5. Otherwise use **Repair** (preview first), or **Install version → Previous
-   known-good**.
+5. Otherwise use **Repair** (preview first), or **Updates → Choose an Admin
+   version → Previous known-good**.
 6. If Docker itself is down, start it from the repair preview and retry.
