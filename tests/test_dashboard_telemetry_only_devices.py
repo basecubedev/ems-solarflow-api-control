@@ -313,3 +313,76 @@ def test_frontend_renders_read_only_tile_without_target_and_with_badge():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_an_external_inverter_is_a_read_only_tile_like_any_other():
+    """An inverter with no local API at all -- read over MQTT from whatever a
+    home-automation system republishes -- reaches the cockpit through the very
+    same runtime as a telemetry-only Zendure device. One kind of read-only
+    tile, and one path to it."""
+
+    external = _FakeTelemetryRuntime(
+        summaries=[
+            {"name": "Kostal Piko", "identifier": "EXAMPLE0000001", "status": "online"}
+        ],
+        snapshots={"EXAMPLE0000001": _snapshot({"outputHomePower": 1234})},
+    )
+    controller = _controller(["WR1"], {"WR1": True}, runtime=external)
+
+    snapshot = build_dashboard_snapshot(
+        controller,
+        load_w=0,
+        states=[_control_state()],
+        targets=[300],
+        effective_targets=[300],
+        allocated_total_w=300,
+        effective_total_w=300,
+        enabled=True,
+        max_total_power=1600,
+        min_output_limit=35,
+    )
+
+    tile = snapshot["devices"]["Kostal Piko"]
+    assert tile["read_only"] is True
+    assert tile["online"] is True
+    assert tile["output_w"] == 1234
+    # It is not controlled and never carries a target.
+    assert tile["target_w"] == 0
+    assert tile["capability"] is None
+    # Its output is part of what the house produces.
+    assert snapshot["inverter_output_w"] == 300 + 1234
+
+
+def test_both_kinds_of_read_only_device_can_be_present_at_once():
+    # One runtime, two kinds of device: a Zendure device with no write method
+    # and an inverter with no command path at all.
+    combined = _FakeTelemetryRuntime(
+        summaries=[
+            {"name": "INV_2", "identifier": "ID2", "status": "online"},
+            {"name": "Kostal Piko", "identifier": "EXAMPLE0000001", "status": "stale"},
+        ],
+        snapshots={
+            "ID2": _snapshot({"outputHomePower": 280, "solarInputPower": 315}),
+            "EXAMPLE0000001": _snapshot({"outputHomePower": 1234}),
+        },
+    )
+    controller = _controller(["WR1"], {"WR1": True}, runtime=combined)
+
+    snapshot = build_dashboard_snapshot(
+        controller,
+        load_w=0,
+        states=[_control_state()],
+        targets=[300],
+        effective_targets=[300],
+        allocated_total_w=300,
+        effective_total_w=300,
+        enabled=True,
+        max_total_power=1600,
+        min_output_limit=35,
+    )
+
+    assert set(snapshot["devices"]) == {"WR1", "INV_2", "Kostal Piko"}
+    # A stale reading is shown as offline but still counted: the power is real,
+    # only the reading is old.
+    assert snapshot["devices"]["Kostal Piko"]["online"] is False
+    assert snapshot["inverter_output_w"] == 300 + 280 + 1234

@@ -204,6 +204,13 @@ MQTT client and does not control Zendure devices or inverters through it.
 - Home Assistant is optional.
 - InfluxDB analytics is optional.
 - Native Python is supported for advanced/manual installs.
+- A **second inverter EMS does not control** can be shown and counted if its
+  output reaches an MQTT topic — including hardware whose only interface is a
+  web page, where a home-automation system republishes the reading. EMS reads
+  that topic and never writes to it. See
+  [External Inverters over MQTT](../technical/configuration.md#external-inverters-over-mqtt-external_mqtt).
+  This does not make the inverter controllable, and it is not a Zendure
+  connection: EMS control still needs one of the transports below.
 
 At least one supported Zendure connection — Local API, Local MQTT, or Zendure
 cloud MQTT — must be available for EMS control. The Local API is recommended for

@@ -41,13 +41,18 @@ class ZendureMqttClientConfig:
     subscriptions: tuple[str, ...] | None = None
     connect_timeout_seconds: float = 10.0
     keepalive_seconds: int = 30
+    # ``{topic: (device_id, metric)}`` for inverters this project reads but does
+    # not control. Their topics follow no convention, so each is subscribed to
+    # by name and handed to the aggregator with the metric it carries.
+    external_topics: tuple[tuple[str, tuple[str, str]], ...] = ()
 
     def resolved_subscriptions(self) -> tuple[str, ...]:
         """Topic filters to subscribe to, de-duplicated and order-stable.
 
         Uses ``subscriptions`` when given, else the known local families. When an
         ``app_key`` is configured the cloud-prefixed scalar tree ``<app_key>/#``
-        is added — never a global ``#``.
+        is added — never a global ``#``. Every configured external topic is
+        added by name, because no family filter would reach it.
         """
 
         if self.subscriptions is not None:
@@ -62,6 +67,9 @@ class ZendureMqttClientConfig:
             cloud = f"{self.app_key}/#"
             if cloud not in topics:
                 topics.append(cloud)
+        for topic, _mapping in self.external_topics:
+            if topic and topic not in topics:
+                topics.append(topic)
         return tuple(topics)
 
     def redacted(self) -> "ZendureMqttClientConfig":

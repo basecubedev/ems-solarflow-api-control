@@ -131,6 +131,9 @@ class ZendureMqttRuntimeConfig:
     subscriptions: tuple[str, ...] | None = None
     connect_timeout_seconds: float = 10.0
     keepalive_seconds: int = 30
+    # Topics named in the configuration rather than recognised by shape; see
+    # ZendureMqttClientConfig.external_topics.
+    external_topics: tuple[tuple[str, tuple[str, str]], ...] = ()
     # A device snapshot older than this is reported as stale in status output.
     stale_after_seconds: float = 60.0
     # Broker profile identity. ``broker_ref`` is the key devices reference and
@@ -215,6 +218,7 @@ class ZendureMqttRuntimeConfig:
             subscriptions=self.subscriptions,
             connect_timeout_seconds=self.connect_timeout_seconds,
             keepalive_seconds=self.keepalive_seconds,
+            external_topics=self.external_topics,
         )
 
     def redacted(self) -> "ZendureMqttRuntimeConfig":

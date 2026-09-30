@@ -23,14 +23,17 @@ from pathlib import Path
 from typing import Any
 
 from ems.external_status import sanitize_external_mqtt_status
+from ems.mqtt_control.topic_families import FAMILY_EXTERNAL_SCALAR
 from ems.zendure_mqtt.config_entries import (
     DEFAULT_BROKER_REF,
     RESERVED_MQTT_BROKER_REFS,
+    external_mqtt_topic_map,
     is_control_zendure_mqtt_device_config,
+    is_external_mqtt_device_config,
     is_zendure_mqtt_device_config,
     legacy_default_broker_present,
     zendure_cloud_device_subscriptions,
-    validate_zendure_mqtt_device_config,
+    validate_mqtt_telemetry_device_config,
     zendure_mqtt_broker_ref,
     zendure_mqtt_device_identifier,
     zendure_mqtt_source,
@@ -223,17 +226,18 @@ def classify_zendure_mqtt_devices(
     if not isinstance(devices, list):
         return valid, invalid
     for index, item in enumerate(devices):
-        if not is_zendure_mqtt_device_config(item):
+        external = is_external_mqtt_device_config(item)
+        if not external and not is_zendure_mqtt_device_config(item):
             continue
         # Control (write-capable) entries are handled by the control path, not
-        # the read-only telemetry runtime.
-        if is_control_zendure_mqtt_device_config(item):
+        # the read-only telemetry runtime. An external entry never has one.
+        if not external and is_control_zendure_mqtt_device_config(item):
             continue
         name = item.get("name") if isinstance(item.get("name"), str) else f"device-{index}"
         broker_ref = zendure_mqtt_broker_ref(item)
         issues = [
             issue
-            for issue in validate_zendure_mqtt_device_config(
+            for issue in validate_mqtt_telemetry_device_config(
                 item,
                 known_broker_refs=known_broker_refs,
                 brokers_defined=brokers_defined,
@@ -247,9 +251,14 @@ def classify_zendure_mqtt_devices(
             continue
         mqtt = item.get("mqtt")
         topic_family = mqtt.get("topic_family") if isinstance(mqtt, dict) else None
+        if external:
+            identifier = str(mqtt.get("device_id") or "").strip()
+            topic_family = FAMILY_EXTERNAL_SCALAR
+        else:
+            identifier = zendure_mqtt_device_identifier(item)
         valid.append(
             ZendureMqttTelemetryDevice(
-                identifier=zendure_mqtt_device_identifier(item),
+                identifier=identifier,
                 name=name,
                 topic_family=topic_family if isinstance(topic_family, str) else None,
                 broker_ref=broker_ref,
@@ -774,6 +783,18 @@ def build_zendure_mqtt_runtime(
                 broker_config = dataclasses.replace(
                     broker_config, subscriptions=derived
                 )
+        # Topics of external inverters assigned to this broker. They are
+        # subscribed to by name and carry their metric with them, because no
+        # family filter would ever reach them.
+        external = tuple(
+            (topic, mapping)
+            for topic, mapping in external_mqtt_topic_map(config.get("devices")).items()
+            if mapping[0] in {device.identifier for device in broker_devices}
+        )
+        if external:
+            broker_config = dataclasses.replace(
+                broker_config, external_topics=external
+            )
         broker_runtimes.append(
             _BrokerRuntime(
                 broker_config,
