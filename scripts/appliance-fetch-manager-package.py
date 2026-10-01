@@ -32,7 +32,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from appliance import artifact_trust, manager_releases, release_fetch  # noqa: E402
-from appliance.version import is_stable, version_key  # noqa: E402
+from appliance.version import (  # noqa: E402
+    is_readable,
+    is_stable,
+    newest_stable as newest_stable_entry,
+)
 
 DEFAULT_KEYRING = ROOT / "packaging" / "appliance" / "config" / "release-keyring.gpg"
 # An index is a list of names, and a manifest describes one package. Neither is
@@ -64,15 +68,13 @@ def newest_stable(index, *, wanted):
     is only which manifest to go and fetch.
     """
 
-    candidates = [
-        entry for entry in release_fetch.parse_index(index)
-        if described_version(entry) and is_stable(described_version(entry))
-    ]
+    candidates = release_fetch.parse_index(index)
     if wanted:
-        candidates = [entry for entry in candidates if described_version(entry) == wanted]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda entry: version_key(described_version(entry)))
+        candidates = [
+            entry for entry in candidates
+            if release_fetch.claim_matches(described_version(entry), wanted)
+        ]
+    return newest_stable_entry(candidates, version_of=described_version)
 
 
 def main(argv=None):
@@ -154,13 +156,14 @@ def main(argv=None):
     # signed answer, and the two have to agree: an index that overstates a
     # version would otherwise have this build install an older Manager while
     # reporting the newer one, with every signature valid.
-    if manifest.version != described_version(chosen):
+    if not release_fetch.claim_matches(described_version(chosen), manifest.version):
         raise SystemExit(
             f"the index calls {release_id} version {described_version(chosen)}, "
             f"but its signed manifest says {manifest.version}"
         )
     if not is_stable(manifest.version):
-        raise SystemExit(f"{manifest.version} is a candidate; no image bakes one in")
+        reason = "a candidate" if is_readable(manifest.version) else "not a readable version"
+        raise SystemExit(f"{manifest.version} is {reason}; no image bakes one in")
 
     package_path = into / manifest.artifact_name
     package_path.write_bytes(

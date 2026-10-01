@@ -1,17 +1,69 @@
 # Updates
 
-Two different things get updated on an appliance, and they behave differently.
+Everything on the appliance that has a version is updated from one page,
+**Updates**, the second entry in the navigation.
 
 | What | Where |
 | --- | --- |
-| The operating system underneath | **System Updates** |
-| The Appliance Manager, the console you are looking at | **System Updates → Appliance Manager** |
-| The EMS and Admin containers | the Admin console, not here |
+| The Appliance Manager, the console you are looking at | **Updates → Appliance Manager package** |
+| The EMS Admin container | **Updates → EMS Admin versions** |
+| The operating system underneath | **Updates → Operating system** |
+| The EMS container | the Admin console, not here |
+
+## At a glance
+
+The top of the page has one card each for the Appliance Manager, EMS Admin and
+Raspberry Pi OS. Each says what is installed, what the newest stable version
+is, and whether that is an update. When it is, the card carries one button —
+**Update to 0.2.0**, **Update to v1.1.0**, **Install security updates** — that
+opens the plan for exactly that version. Nothing is installed by the button
+itself: the plan comes first, and it waits for your confirmation like every
+other change on this appliance.
+
+Three cases are not called up to date:
+
+- When a candidate or test build newer than the latest stable is running, the
+  card says *newer than the latest stable*: current on its own track, not on
+  the recommended one.
+
+- When the installed version cannot be read — a feature build, an image
+  without a version label — the card says *installed version cannot be
+  compared* and offers no button: whether that install is an update is exactly
+  what is unknown, so you choose from the list below.
+- When the operating-system counts are not an answer — the update check did not
+  finish, or the package manager needs recovery — the OS card names that
+  problem instead of the counts and offers no one-click install. A package
+  index that is merely old still lists real security updates, so those are
+  offered; with none waiting, the card says the index is out of date.
+
+## Stable, Unstable and Experimental
+
+Below the summary, the Appliance Manager and EMS Admin each have a version
+list, **Choose a Manager version** and **Choose an Admin version**. Both use
+the group names and explanations of the Admin console's System Build list:
+
+| Group | What it holds |
+| --- | --- |
+| **Stable** | Recommended versioned releases for normal use. |
+| **Unstable** | Release candidates for early testing. Mostly complete, but they may still contain issues. |
+| **Experimental** | Feature builds with unfinished changes. Intended for testing only. |
+
+The appliance decides the group from the version itself, never from the
+browser, and by the Admin console's rule for both lists: a release is Stable,
+every pre-release (`-rc1`, `~rc2`, `-beta`, `~test1`, …) is Unstable, and
+Experimental is a development build — for the Appliance Manager the untagged
+`0.0.0~dev…` builds. A version the appliance cannot read in full is
+Experimental, never Stable.
+
+The running Admin version is marked *installed*; a Manager package of the
+running version is marked *same version as installed*. A group with nothing in
+it is left out, and a version this appliance will not install stays listed,
+greyed out with the reason.
 
 ## The operating system
 
 The appliance runs Raspberry Pi OS, and its packages are patched in place by
-`apt`. **System Updates** shows what is pending: security updates, other package
+`apt`. **Updates** shows what is pending: security updates, other package
 updates, whether a kernel or firmware upgrade is among them, whether a reboot is
 required afterwards, and whether the package manager is healthy. A check that
 could not reach its mirrors is reported as exactly that, and the counts then
@@ -58,7 +110,7 @@ an update at all. Back up, flash the newer image, restore.
 ## The Appliance Manager
 
 The Appliance Manager is the software this console *is*. It is updated on its
-own, from **System Updates → Appliance Manager**, and nowhere else — `apt` does
+own, from **Updates → Appliance Manager package**, and nowhere else — `apt` does
 not offer it, because it is not in any package archive.
 
 > Like the rest of the appliance, this has barely run on hardware. One
@@ -81,10 +133,13 @@ after.
 
 ### Doing it
 
-1. Open **System Updates** and scroll to **Appliance Manager**.
-2. Pick a version and press **Install**. The plan names the version, says
-   whether it moves forward or back, and lists everything that could refuse.
-3. Confirm. The console goes briefly unreachable while the package is unpacked —
+1. Open **Updates**. To go to the newest stable version, press **Update to …**
+   on the Appliance Manager card and skip to step 3.
+2. Otherwise, under **Choose a Manager version**, pick a version and
+   press **Install selected version**.
+3. Read the plan. It names the version, says whether it moves forward or back,
+   and lists everything that could refuse.
+4. Confirm. The console goes briefly unreachable while the package is unpacked —
    the update restarts the very services answering your browser. Reload after a
    minute.
 
@@ -92,7 +147,9 @@ Before anything is installed, the appliance fetches the package over HTTPS and
 checks it against the signing keyring it ships. An unsigned package, one whose
 contents do not match its signed description, one built for another
 architecture, or one whose manager could not read the settings already on this
-appliance, is refused *before* the install begins.
+appliance, is refused *before* the install begins. So is a package whose
+signed version is not the version the package index named, because that name
+is what the list and the **Update to …** button showed you.
 
 ### Installing an older version is allowed
 

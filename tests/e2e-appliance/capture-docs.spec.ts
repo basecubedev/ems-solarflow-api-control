@@ -50,7 +50,7 @@ test.describe("documentation captures @docs", () => {
   test("appliance-update-plan", async ({ page }) => {
     await signIn(page);
     await setMode(page, "expert");
-    await openView(page, "admin");
+    await openView(page, "updates");
     await page.locator('[data-test="install-channel"]').selectOption("exact");
     await page.locator('[data-test="install-tag"]').fill("v1.1.0");
     await Promise.all([

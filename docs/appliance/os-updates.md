@@ -1,6 +1,6 @@
 # Operating-system updates
 
-Open **System Updates**. The operating system is patched in place with `apt`,
+Open **Updates**. The operating system is patched in place with `apt`,
 and a major OS generation change means writing the card again.
 
 There is one update path and no mode to be in. What the page adds beside the
@@ -125,7 +125,7 @@ The Appliance Manager is the package this console runs from. `apt` does not
 offer it, because it is not in any Debian archive this appliance trusts, so it
 is updated here and nowhere else.
 
-**System Updates → Appliance Manager** is where it is updated, and only there.
+**Updates → Appliance Manager package** is where it is updated, and only there.
 
 Where the packages come from is
 [manager-releases.md](manager-releases.md): each version is published at its own

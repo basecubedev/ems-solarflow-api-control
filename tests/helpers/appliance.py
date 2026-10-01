@@ -797,12 +797,17 @@ class StaticCatalogue:
         ]
 
     def latest_stable(self):
-        from appliance.releases import ReleaseResolutionError, ReleaseTarget
+        from appliance.releases import (
+            CHANNEL_LATEST_STABLE,
+            ReleaseResolutionError,
+            ReleaseTarget,
+            latest_stable_of,
+        )
 
-        for release in self.available():
-            if not release.prerelease:
-                return ReleaseTarget(tag=release.tag, channel="latest_stable")
-        raise ReleaseResolutionError("release_channel_unresolved", "no stable release")
+        release = latest_stable_of(self.available())
+        if release is None:
+            raise ReleaseResolutionError("release_channel_unresolved", "no stable release")
+        return ReleaseTarget(tag=release.tag, channel=CHANNEL_LATEST_STABLE)
 
 
 class FrozenClock:

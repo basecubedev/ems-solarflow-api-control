@@ -13,6 +13,8 @@ release, in either direction, by either caller.
 
 import re
 
+from appliance.validation import normalize_version
+
 PACKAGE_NAME = "ems-appliance-manager"
 
 # What a build with no tag behind it calls itself. dpkg refuses a package with
@@ -93,11 +95,124 @@ def is_stable(text):
 
     Derived from ``version_key`` rather than re-parsed, because a second reader
     of the same string is how ``0.1.0~rc1`` came to compare equal to ``0.1.0``
-    in the first place. The key's fourth element already carries the answer: a
-    release outranks every prerelease sharing its core, and is marked with 1.
+    in the first place. The key's fourth element carries the answer: a release
+    outranks every prerelease sharing its core, and is marked with 1. It is
+    only an answer for a string the key reads whole -- ``0.3.8+dev1`` and
+    ``0.4.0~`` both score as releases -- so anything else is not stable.
     """
 
-    return version_key(text)[3] == 1
+    return is_readable(text) and version_key(text)[3] == 1
+
+
+TRACK_STABLE = "stable"
+TRACK_UNSTABLE = "unstable"
+TRACK_EXPERIMENTAL = "experimental"
+# The Admin console's three groups and its rule for them: a release is stable,
+# every prerelease is a candidate, and experimental is a development build --
+# here the untagged 0.0.0~dev builds -- or anything nobody can read.
+_READABLE_VERSION = re.compile(r"^v?\d+\.\d+\.\d+(?:[~-][0-9A-Za-z][0-9A-Za-z.~+-]*)?$")
+
+DIRECTION_UPGRADE = "upgrade"
+DIRECTION_DOWNGRADE = "downgrade"
+DIRECTION_REINSTALL = "reinstall"
+DIRECTION_UNKNOWN = "unknown"
+
+
+def is_readable(text):
+    """Whether ``version_key`` reads the whole string rather than guessing.
+
+    An optional lowercase ``v``, as ``normalize_version`` strips; exactly three
+    core numbers, because the key keeps three and drops the rest;
+    a non-empty prerelease, because ``0.4.0~`` would read as the release; and
+    no build metadata on the core, because ``0.3.8+dev1`` scores it as 0.3.0.
+    After a prerelease the key splits on ``+`` like on ``.``, so it is read.
+    """
+
+    return bool(_READABLE_VERSION.match(str(text or "").strip()))
+
+
+def is_development(text):
+    """An untagged build: ordered by commit hash, so never by version."""
+
+    return normalize_version(text).startswith(DEVELOPMENT_VERSION_PREFIX)
+
+
+def is_comparable(text, *, package=False):
+    """Whether ``version_key`` can place this version against another one.
+
+    ``package`` is a Debian package version, where ``-N`` is a revision dpkg
+    sorts above the release and ``version_key`` would sort below it.
+    """
+
+    if package and "-" in str(text or ""):
+        return False
+    return is_readable(text) and not is_development(text)
+
+
+def release_track(text, *, package=False):
+    """Stable, unstable or experimental, by the Admin console's rule.
+
+    That rule is the one its version list is grouped by,
+    ``admin/releases.py::_is_release_candidate``: every prerelease is a
+    candidate. ``admin/system_build.classify_channel`` names build identities
+    and is not what the list shows.
+    """
+
+    raw = str(text or "").strip()
+    if not is_comparable(raw, package=package):
+        return TRACK_EXPERIMENTAL
+    return TRACK_STABLE if is_stable(raw) else TRACK_UNSTABLE
+
+
+def same_version(left, right, *, package=False):
+    """Equal but for a ``v`` prefix; a tag also ignores case, a package does not."""
+
+    if package:
+        return normalize_version(left) == normalize_version(right)
+    return normalize_version(left).lower() == normalize_version(right).lower()
+
+
+def compare(*, offered, installed, package=False):
+    """The direction, and when it is unknown, which side made it so."""
+
+    if not is_comparable(installed, package=package):
+        return DIRECTION_UNKNOWN, "running"
+    if not is_comparable(offered, package=package):
+        return DIRECTION_UNKNOWN, "offered"
+    if same_version(offered, installed, package=package):
+        return DIRECTION_REINSTALL, ""
+    offered_key, installed_key = version_key(offered), version_key(installed)
+    if offered_key > installed_key:
+        return DIRECTION_UPGRADE, ""
+    if offered_key < installed_key:
+        return DIRECTION_DOWNGRADE, ""
+    return DIRECTION_UNKNOWN, "tie"
+
+
+def direction(*, offered, installed, package=False):
+    """Which way installing ``offered`` moves from ``installed``.
+
+    Unknown unless both sides are comparable: readable, not an untagged
+    development build, and not a spelling ``version_key`` scores equal to a
+    different string. The same tag in another case is a reinstall; a package
+    version is compared exactly, as dpkg does.
+    """
+
+    return compare(offered=offered, installed=installed, package=package)[0]
+
+
+def newest_stable(entries, *, version_of, stable=None):
+    """The stable entry with the highest version, or None.
+
+    The one answer to "which is the latest stable" -- for the image build, the
+    package fetch, the Admin catalogue and the Updates page. ``stable``
+    defaults to ``is_stable`` on the entry's version; a caller whose source can
+    also demote an entry (an index's own prerelease flag) passes its own.
+    """
+
+    stable = stable or (lambda entry: is_stable(version_of(entry)))
+    candidates = [entry for entry in entries if stable(entry)]
+    return max(candidates, key=lambda entry: version_key(version_of(entry)), default=None)
 
 
 def tag_for(text):
@@ -127,8 +242,7 @@ def latest_stable(tags):
     """
 
     versions = [version for version in map(version_from_tag, tags) if version]
-    stable = [version for version in versions if is_stable(version)]
-    return max(stable, key=version_key, default="")
+    return newest_stable(versions, version_of=str) or ""
 
 
 def installed_version(package_version=None, *, refresh=False):
@@ -141,9 +255,8 @@ def installed_version(package_version=None, *, refresh=False):
 
     Empty rather than an exception on every path that is not an installed
     package -- a source checkout, a test, a host without dpkg. A caller showing
-    this to a person renders the empty string as unknown; a caller comparing
-    versions gets a key that sorts below everything, which is the safe direction
-    for something that gates installs.
+    this to a person renders the empty string as unknown, and ``direction``
+    answers unknown for it rather than guessing which way an install moves.
     """
 
     if package_version is None and not refresh and _INSTALLED_VERSION is not None:

@@ -57,8 +57,14 @@ from appliance.operations import (
     STATE_VERIFYING,
 )
 from appliance.redaction import bounded_redacted_log
-from appliance.releases import ReleaseCatalogue, ReleaseResolutionError, resolve_channel
+from appliance.releases import (
+    ReleaseCatalogue,
+    ReleaseResolutionError,
+    latest_stable_of,
+    resolve_channel,
+)
 from appliance.systemd import UNIT_DOCKER
+from appliance.version import direction
 from appliance.validation import (
     ValidationError,
     build_digest_ref,
@@ -389,12 +395,19 @@ class AdminLifecycleService:
     def releases(self):
         current = self.detect()
         try:
-            available = [item.to_dict() for item in self.catalogue.available()]
+            targets = self.catalogue.available()
             error = ""
         except ReleaseResolutionError as exc:
-            available, error = [], exc.code
+            targets, error = [], exc.code
+        available = [item.to_dict() for item in targets]
+        for item in available:
+            item["direction"] = direction(offered=item["tag"], installed=current["version"])
+        newest = latest_stable_of(targets)
         return {
             "available": available,
+            "latest_stable": next(
+                (item for item in available if newest and item["tag"] == newest.tag), None
+            ),
             "error": error,
             "current_version": current["version"],
             "previous_known_good": self.known_good.previous(),

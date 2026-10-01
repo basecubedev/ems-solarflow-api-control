@@ -47,7 +47,12 @@
     unacknowledgedCount: 0,
     lastSettledAt: 0,
     viewGeneration: 0,
-    hostStateRead: null
+    hostStateRead: null,
+    disclosures: {},
+    choices: {},
+    listingGenerations: {},
+    seenVersions: {},
+    readAgainst: {}
   };
 
   /* ---------------------------------------------------------------- DOM */
@@ -178,6 +183,40 @@
       el("h3", { class: "section-title", text: title }),
       hint ? el("p", { class: "section-hint", text: hint }) : null
     ]);
+  }
+
+  /* The poll rebuilds the page every two seconds, so an open disclosure and a
+     picked option live here rather than in the node that is about to be
+     replaced. Both are presentation state: what is installed is still decided
+     by the plan the backend returns. */
+  function disclosure(key, summary, children) {
+    var node = el("details", {
+      class: "disclosure",
+      "data-test": key,
+      open: state.disclosures[key] === true
+    }, [el("summary", { "data-test": key + "-summary", text: summary })].concat(children.filter(Boolean)));
+    node.addEventListener("toggle", function () { state.disclosures[key] = node.open; });
+    return node;
+  }
+
+  function rememberChoice(select, key) {
+    var kept = state.choices[key];
+    for (var i = 0; kept && i < select.options.length; i += 1) {
+      if (select.options[i].value === kept && !select.options[i].disabled) {
+        select.selectedIndex = i;
+        break;
+      }
+    }
+    select.addEventListener("change", function () { state.choices[key] = select.value; });
+    return select;
+  }
+
+  function rememberInput(input, key, property) {
+    if (state.choices[key] !== undefined) input[property] = state.choices[key];
+    input.addEventListener(property === "checked" ? "change" : "input", function () {
+      state.choices[key] = input[property];
+    });
+    return input;
   }
 
   /* Rebuilding #main drops whatever had focus onto the document body, and the
@@ -410,8 +449,8 @@
 
   var VIEWS = [
     { id: "overview", label: "Overview", render: renderOverview },
+    { id: "updates", label: "Updates", render: renderUpdates },
     { id: "admin", label: "Admin", render: renderAdmin },
-    { id: "updates", label: "System Updates", render: renderUpdates },
     { id: "network", label: "Network", render: renderNetwork },
     { id: "access", label: "SSH & Backup Access", render: renderAccess },
     { id: "diagnostics", label: "Diagnostics", render: renderDiagnostics },
@@ -460,6 +499,14 @@
     renderNav();
     render();
     focusPageHeading();
+  }
+
+  function viewButton(view, text, testId, className) {
+    return el("button", {
+      type: "button", class: className || "ghost-button compact", "data-test": testId,
+      text: text,
+      onclick: function () { selectView(view); }
+    });
   }
 
   function setMode(mode) {
@@ -721,6 +768,11 @@
   function invalidateDerivedViews() {
     state.viewGeneration += 1;
     DERIVED_VIEWS.forEach(function (key) { delete state.data[key]; });
+    /* A reinstall tick is spent by the install it was for; a picked version
+       goes when the installed version moves. */
+    Object.keys(state.choices).forEach(function (choice) {
+      if (/-reinstall$/.test(choice)) delete state.choices[choice];
+    });
   }
 
   /* One more settled record, or one that finished later than the last seen, is
@@ -756,8 +808,53 @@
       state.hostStateRead = null;
       state.data.status = results[0];
       state.data.manager = results[1];
+      dropOutdatedListings();
     });
     return state.hostStateRead;
+  }
+
+  /* A listing's directions were computed against the version installed when it
+     was read, and Admin replacing itself or a Manager revert changes that with
+     no operation settling here. An empty version -- a failed inspect, an
+     unlabelled image -- is never taken for a change. */
+  function dropOutdatedListings() {
+    reconcileListing("releases", "admin-", installedVersion("releases"));
+    reconcileListing("managerSources", "manager-", installedVersion("managerSources"));
+  }
+
+  function installedVersion(key) {
+    if (key === "releases") return String((((state.data.status || {}).admin) || {}).version || "");
+    var manager = state.data.manager || {};
+    return manager.error ? "" : String(manager.installed_version || "");
+  }
+
+  /* Choices go when the installed version moves. A listing is re-read when the
+     version it was requested against is not the one installed now; the re-read
+     records the current one, so it cannot loop. */
+  function reconcileListing(key, prefix, now) {
+    if (!now) return;
+    var before = state.seenVersions[key];
+    state.seenVersions[key] = now;
+    if (before && before !== now) clearChoices(prefix);
+    var listing = state.data[key];
+    /* A failed read is retried on the next host read rather than left red. */
+    if (listing && (listing.error || state.readAgainst[key] !== now)) dropListing(key);
+  }
+
+  function clearChoices(prefix) {
+    Object.keys(state.choices).forEach(function (choice) {
+      if (choice.indexOf(prefix) === 0) delete state.choices[choice];
+    });
+  }
+
+  function listingGeneration(key) {
+    return state.listingGenerations[key] || 0;
+  }
+
+  /* Its own generation: the global one would strand every other read at null. */
+  function dropListing(key) {
+    state.listingGenerations[key] = listingGeneration(key) + 1;
+    delete state.data[key];
   }
 
   /* The poll keeps an operation's progress live. Rebuilding the whole view for
@@ -1124,13 +1221,14 @@
      already on its way. */
   function loadInto(key, path) {
     var generation = state.viewGeneration;
+    var listing = listingGeneration(key);
     return api(path).then(function (payload) {
-      if (generation !== state.viewGeneration) return undefined;
+      if (generation !== state.viewGeneration || listing !== listingGeneration(key)) return undefined;
       state.data[key] = payload;
       render();
       return payload;
     }).catch(function (exc) {
-      if (generation !== state.viewGeneration) return;
+      if (generation !== state.viewGeneration || listing !== listingGeneration(key)) return;
       state.data[key] = { error: exc.code, message: exc.message };
       render();
     });
@@ -1285,7 +1383,7 @@
       ], "card-docker"),
 
       card("EMS Admin", [
-        el("p", { class: "status-value", text: admin.version || (admin.installed ? "unknown version" : "not installed") }),
+        el("p", { class: "status-value", text: adminVersionText(admin) }),
         el("div", {}, [tone(admin.healthy ? "ok" : (admin.installed ? "bad" : "warn"), admin.installed ? (admin.healthy ? "healthy" : "unhealthy") : "missing")]),
         fact("Container", (admin.container || {}).state),
         expert() ? fact("Digest", admin.digest, { mono: true }) : null
@@ -1316,10 +1414,18 @@
     main.appendChild(quickActions());
   }
 
+  /* The one reading of a daemon state: running, unavailable (not installed),
+     stopped, or unknown when nothing was read. */
+  function dockerCondition(daemonState) {
+    if (!daemonState) return "unknown";
+    if (daemonState === "running" || daemonState === "unavailable") return daemonState;
+    return "stopped";
+  }
+
   function dockerTone(docker) {
-    var state = (docker.daemon || {}).state;
-    if (state === "running") return "ok";
-    if (state === "unavailable") return "warn";
+    var condition = dockerCondition((docker.daemon || {}).state);
+    if (condition === "running") return "ok";
+    if (condition === "unavailable") return "warn";
     return "bad";
   }
 
@@ -1349,13 +1455,9 @@
     return el("div", { class: "action-grid" }, [
       actionCard(bootstrap ? "Install EMS Admin" : "Admin recovery", bootstrap
         ? "Nothing is deployed yet, so there is nothing to restart or repair"
-        : "Restart, repair or update the EMS Admin container", [
+        : "Restart or repair the EMS Admin container", [
         el("div", { class: "control-stage-actions" }, bootstrap ? [
-          el("button", {
-            type: "button", class: "primary-button compact", "data-test": "quick-install-admin",
-            text: "Install Admin",
-            onclick: function () { selectView("admin"); }
-          })
+          viewButton("admin", "Install Admin", "quick-install-admin", "primary-button compact")
         ] : [
           el("button", {
             type: "button", class: "primary-button compact", "data-test": "quick-restart-admin",
@@ -1371,26 +1473,26 @@
               planOperation({ endpoint: "/api/admin/repair", title: "Repair the EMS Admin deployment" });
             }
           }),
-          el("button", {
-            type: "button", class: "ghost-button compact", text: "Open Admin section",
-            onclick: function () { selectView("admin"); }
-          })
+          viewButton("admin", "Open Admin section", null)
         ])
       ], "quick-admin"),
 
-      actionCard("Operating system", "Install pending security updates", [
+      actionCard("Updates", "Appliance Manager, EMS Admin and Raspberry Pi OS in one place", [
         el("div", { class: "control-stage-actions" }, [
+          viewButton("updates", "Open Updates", "quick-open-updates", "primary-button compact"),
           el("button", {
-            type: "button", class: "primary-button compact", "data-test": "quick-security-updates",
+            type: "button", class: "ghost-button compact", "data-test": "quick-security-updates",
             text: "Install security updates",
-            onclick: function () {
-              planOperation({
-                endpoint: "/api/updates/plan", body: { scope: "security" },
-                title: "Install security updates", confirmLabel: "Install"
-              });
-            }
+            disabled: !securityUpdatesOffered(),
+            onclick: planSecurityUpdates
           })
-        ])
+        ]),
+        securityUpdatesOffered() ? null : el("p", {
+          class: "control-stage-subtitle", "data-test": "quick-security-reason",
+          text: updatesInDoubt(((state.data.status || {}).updates) || {})
+            ? "The package manager needs attention first; Updates shows what and can plan the repair."
+            : "No security updates are waiting."
+        })
       ], "quick-updates"),
 
       actionCard("Power", "Restart or shut down the Raspberry Pi", [
@@ -1419,26 +1521,18 @@
   function renderAdmin(main) {
     var admin = (state.data.status || {}).admin || {};
     var releases = state.data.releases;
-    if (releases === undefined) {
+    if (releases === undefined && admin.bootstrap_required) {
       state.data.releases = null;
+      state.readAgainst.releases = installedVersion("releases");
       loadInto("releases", "/api/admin/releases");
     }
 
     main.appendChild(pageHead(
       "EMS Admin",
-      "Install, reinstall, restart, repair and roll back the EMS Admin container. The Appliance Manager stays reachable throughout."
+      "Restart, repair and roll back the EMS Admin container. Versions are chosen on the Updates page. The Appliance Manager stays reachable throughout."
     ));
 
-    if ((admin.transition || {}).state === "live") {
-      main.appendChild(el("p", { class: "empty-state", "data-test": "admin-transition-live" }, [
-        el("strong", { text: "The Admin console is replacing itself right now. " }),
-        el("span", {
-          text: "Installing, rolling back, repairing, starting, stopping and restarting are "
-            + "refused until that finishes, because both would write the same deployment files. "
-            + "Stage: " + (admin.transition.stage || "unnamed") + "."
-        })
-      ]));
-    }
+    if (adminTransitionLive()) main.appendChild(adminTransitionNotice("admin-transition-live"));
 
     if (admin.bootstrap_required) {
       renderAdminBootstrap(main, releases);
@@ -1447,7 +1541,7 @@
 
     main.appendChild(el("div", { class: "card-grid" }, [
       card("Installed version", [
-        el("p", { class: "status-value", text: admin.version || (admin.installed ? "unknown" : "not installed") }),
+        el("p", { class: "status-value", text: adminVersionText(admin) }),
         el("div", {}, [tone(admin.healthy ? "ok" : (admin.installed ? "bad" : "warn"),
           admin.installed ? (admin.healthy ? "healthy" : "unhealthy") : "missing")]),
         fact("Container state", (admin.container || {}).state),
@@ -1476,8 +1570,10 @@
         ])
       ], "admin-lifecycle"),
 
-      actionCard("Install a version", "Pull, validate and replace the Admin image", [
-        renderInstallForm(releases)
+      actionCard("Change the version", "Update, reinstall or pick an older version", [
+        el("div", { class: "control-stage-actions" }, [
+          viewButton("updates", "Open Updates", "admin-open-updates", "primary-button compact")
+        ])
       ], "admin-install"),
 
       actionCard("Repair", "Inspect the deployment and preview the repair", [
@@ -1567,26 +1663,50 @@
     };
   }
 
-  /* The catalogue in the order the agent listed it: every release, then every
-     candidate, each newest first. A version this host will not install is still
-     listed -- disabled, with the agent's own reason -- because an operator
-     looking for a candidate needs to see that it exists and why it is refused.
-     A disabled option can never be the selection, so nothing the host refuses
-     can be submitted. An empty group is not rendered. */
+  /* The words and their order are the Admin console's, so a version reads the
+     same on both surfaces. Which track an entry is on is the backend's answer;
+     an entry without one is shown with the least trusted group. */
+  var RELEASE_TRACKS = [
+    { id: "stable", label: "Stable", help: "Recommended versioned releases for normal use." },
+    { id: "unstable", label: "Unstable", help: "Release candidates for early testing. Mostly complete, but they may still contain issues." },
+    { id: "experimental", label: "Experimental", help: "Feature builds with unfinished changes. Intended for testing only." }
+  ];
+
+  function groupByTrack(items) {
+    var known = RELEASE_TRACKS.map(function (track) { return track.id; });
+    return RELEASE_TRACKS.map(function (track) {
+      return {
+        track: track,
+        items: (items || []).filter(function (item) {
+          var id = known.indexOf(item.track) === -1 ? "experimental" : item.track;
+          return id === track.id;
+        })
+      };
+    }).filter(function (group) { return group.items.length > 0; });
+  }
+
+  function trackHelp(key) {
+    return disclosure(key, "What do Stable, Unstable and Experimental mean?", [
+      el("dl", { class: "track-help" }, RELEASE_TRACKS.map(function (track) {
+        return el("div", {}, [
+          el("dt", { text: track.label }),
+          el("dd", { text: track.help })
+        ]);
+      }))
+    ]);
+  }
+
+  /* A version this host will not install is still listed -- disabled, with the
+     agent's own reason -- because an operator looking for a candidate needs to
+     see that it exists and why it is refused. A disabled option can never be
+     the selection, so nothing the host refuses can be submitted. */
   function appendReleaseGroups(select, releases) {
-    var available = (releases && releases.available) || [];
-    [
-      { label: "Stable", prerelease: false },
-      { label: "Unstable", prerelease: true }
-    ].forEach(function (group) {
-      var listed = available.filter(function (item) {
-        return !!item.prerelease === group.prerelease;
-      });
-      if (!listed.length) return;
-      var optgroup = el("optgroup", { label: group.label });
-      listed.forEach(function (item) {
+    groupByTrack((releases && releases.available) || []).forEach(function (group) {
+      var optgroup = el("optgroup", { label: group.track.label });
+      group.items.forEach(function (item) {
         var refused = item.installable === false;
-        var label = refused && item.reason ? item.tag + " — " + item.reason : item.tag;
+        var label = item.direction === "reinstall" ? item.tag + " \u00b7 installed" : item.tag;
+        if (refused && item.reason) label += " \u2014 " + item.reason;
         optgroup.appendChild(installOption(item.tag, label, "exact", item.tag, refused));
       });
       select.appendChild(optgroup);
@@ -1612,16 +1732,24 @@
       el("optgroup", { label: "Channels" }, channels)
     ]);
     appendReleaseGroups(channelSelect, releases);
+    var choiceKey = opts.bootstrap ? "admin-bootstrap-version" : "admin-version";
+    rememberChoice(channelSelect, choiceKey);
 
-    var tagField = el("div", { class: "field", hidden: true }, [
+    var tagField = el("div", { class: "field", hidden: channelSelect.value !== "exact" }, [
       el("label", { for: "install-tag", text: "Release tag" }),
-      el("input", { id: "install-tag", type: "text", "data-test": "install-tag", placeholder: "v0.8.0" })
+      rememberInput(
+        el("input", { id: "install-tag", type: "text", "data-test": "install-tag", placeholder: "v0.8.0" }),
+        choiceKey + "-tag", "value"
+      )
     ]);
     channelSelect.addEventListener("change", function () {
       tagField.hidden = channelSelect.value !== "exact";
     });
 
-    var reinstall = el("input", { id: "install-reinstall", type: "checkbox", "data-test": "install-reinstall" });
+    var reinstall = rememberInput(
+      el("input", { id: "install-reinstall", type: "checkbox", "data-test": "install-reinstall" }),
+      choiceKey + "-reinstall", "checked"
+    );
 
     wrapper.appendChild(el("div", { class: "field" }, [
       el("label", { for: "install-channel", text: "Version" }), channelSelect
@@ -1642,37 +1770,300 @@
       el("button", {
         type: "button", class: "primary-button compact",
         "data-test": opts.bootstrap ? "admin-bootstrap-plan" : "install-plan",
-        text: opts.bootstrap ? "Install Admin" : "Plan installation",
+        text: opts.bootstrap ? "Install Admin" : "Install selected version",
+        /* While the list is re-read the picked version is not among the options,
+           and the select would silently stand on "Latest stable". */
+        disabled: opts.blocked === true || releases === null,
         onclick: function () {
           var target = installTargetOf(channelSelect);
-          var body = { channel: target.channel, reinstall: opts.bootstrap ? false : reinstall.checked };
-          if (target.channel === "exact") {
-            body.tag = target.tag || document.getElementById("install-tag").value.trim();
-          }
-          planOperation({ endpoint: "/api/admin/plan-install", body: body, title: "Install EMS Admin", confirmLabel: "Install" });
+          var tag = target.channel === "exact"
+            ? target.tag || document.getElementById("install-tag").value.trim()
+            : null;
+          planAdminInstall(target.channel, tag, opts.bootstrap ? false : reinstall.checked);
         }
       })
     ]));
+    wrapper.appendChild(trackHelp(opts.bootstrap ? "admin-bootstrap-track-help" : "admin-track-help"));
     return wrapper;
   }
 
   /* ----------------------------------------------------------- Updates */
 
+  /* One page for everything that has a version. The summary answers "is
+     anything out of date, and what is the one click that fixes it"; the
+     sections below it hold every other choice. A one-click update still opens
+     the same plan and confirmation as any other install. */
   function renderUpdates(main) {
     var updates = (state.data.status || {}).updates || {};
+    loadUpdateSources();
 
     main.appendChild(pageHead(
-      "System updates",
-      "Two things update from this page: this appliance's own manager package, and the Raspberry Pi OS packages."
+      "Updates",
+      "Everything on this appliance that has a version, in one place. Nothing updates on its own: every install shows its plan first and waits for your confirmation."
     ));
+    main.appendChild(el("div", { class: "action-grid", "data-test": "update-summary" }, [
+      managerSummaryCard(),
+      adminSummaryCard(),
+      systemSummaryCard(updates)
+    ]));
     renderManagerUpdates(main);
+    renderAdminVersions(main);
     renderPackageUpdates(main, updates);
   }
+
+  function loadUpdateSources() {
+    var sources = state.data.managerSources;
+    var manager = state.data.manager;
+    if (sources === undefined && manager && !manager.error) {
+      state.data.managerSources = null;
+      state.readAgainst.managerSources = installedVersion("managerSources");
+      loadInto("managerSources", "/api/manager/sources");
+    }
+    var releases = state.data.releases;
+    if (releases === undefined && ["missing", "live", "ready"].indexOf(adminGate()) !== -1) {
+      state.data.releases = null;
+      state.readAgainst.releases = installedVersion("releases");
+      loadInto("releases", "/api/admin/releases");
+    }
+  }
+
+  function planAdminInstall(channel, tag, reinstall) {
+    var body = { channel: channel, reinstall: reinstall === true };
+    if (channel === "exact") body.tag = tag;
+    planOperation({
+      endpoint: "/api/admin/plan-install", body: body,
+      title: tag ? "Install EMS Admin " + tag : "Install EMS Admin", confirmLabel: "Install"
+    });
+  }
+
+  function planSecurityUpdates() {
+    planOperation({
+      endpoint: "/api/updates/plan", body: { scope: "security" },
+      title: "Install security updates", confirmLabel: "Install"
+    });
+  }
+
+  function adminVersionText(admin) {
+    if (admin.installed === undefined || (!admin.installed && dockerStopped())) return "unknown";
+    return admin.version || (admin.installed ? "unknown version" : "not installed");
+  }
+
+  function dockerDaemonState() {
+    return String(((((state.data.status || {}).docker || {}).daemon) || {}).state || "");
+  }
+
+  /* An unread daemon is not a stopped one. */
+  function dockerStopped() {
+    var condition = dockerCondition(dockerDaemonState());
+    return condition === "stopped" || condition === "unavailable";
+  }
+
+  function dockerStateText() {
+    return dockerCondition(dockerDaemonState()) === "unavailable"
+      ? "Docker is not installed" : "Docker is not running";
+  }
+
+  function adminGate() {
+    var admin = (state.data.status || {}).admin || {};
+    if (admin.installed === undefined) return "unread";
+    if (dockerStopped()) return "docker";
+    if (admin.bootstrap_required) return "bootstrap";
+    if (!admin.installed) return "missing";
+    if (adminTransitionLive()) return "live";
+    return "ready";
+  }
+
+  function adminTransitionNotice(testId) {
+    var transition = (((state.data.status || {}).admin || {}).transition) || {};
+    return el("p", { class: "empty-state", "data-test": testId }, [
+      el("strong", { text: "The Admin console is replacing itself right now. " }),
+      el("span", {
+        text: "Installing, rolling back, repairing, starting, stopping and restarting are "
+          + "refused until that finishes, because both would write the same deployment files. "
+          + "Stage: " + (transition.stage || "unnamed") + "."
+      })
+    ]);
+  }
+
+  function adminTransitionLive() {
+    return ((((state.data.status || {}).admin || {}).transition || {}).state) === "live";
+  }
+
+  function summaryCard(title, subtitle, facts, verdict, action, testId) {
+    return actionCard(title, subtitle, [
+      el("div", { "data-test": testId + "-state" }, [tone(verdict[0], verdict[1])]),
+      el("div", {}, facts),
+      action ? el("div", { class: "control-stage-actions" }, [action]) : null
+    ], testId);
+  }
+
+  /* Only an upgrade gets a button: an unknown direction may be the same image. */
+  function latestVerdict(latest) {
+    if (latest.direction === "upgrade") return ["warn", "update available"];
+    if (latest.direction === "downgrade") return ["idle", "newer than the latest stable"];
+    if (latest.direction === "reinstall") return ["ok", "up to date"];
+    return ["idle", "installed version cannot be compared"];
+  }
+
+  function latestButton(latest, label, testId, disabled, onclick) {
+    if (latest.direction !== "upgrade") return null;
+    return el("button", {
+      type: "button", class: "primary-button compact", "data-test": testId,
+      text: "Update to " + label,
+      disabled: disabled,
+      onclick: onclick
+    });
+  }
+
+  function managerSummaryCard() {
+    var manager = state.data.manager || {};
+    /* Unread, a deadline in flight cannot be ruled out. */
+    var managerKnown = !!state.data.manager && !manager.error;
+    var sources = state.data.managerSources;
+    var latest = (sources || {}).latest_stable || null;
+    var version = latest ? (latest.described || {}).release_version : null;
+    var verdict;
+    var action = null;
+    if (state.data.manager && manager.error) verdict = ["idle", "manager state unavailable"];
+    else if (sources === null || sources === undefined) verdict = ["idle", "checking"];
+    else if (sources.error) verdict = ["bad", "package index unreadable"];
+    else if (!sources.configured) verdict = ["idle", "no package index configured"];
+    else if (!latest) verdict = ["idle", "no stable release offered"];
+    else {
+      verdict = latestVerdict(latest);
+      action = latestButton(latest, format(version), "update-manager-latest",
+        !managerKnown || !managerActions(manager, applianceNow()).canUpdate,
+        function () { planManagerInstall(latest); });
+    }
+    return summaryCard("Appliance Manager", "This console and the agent behind it", [
+      fact("Installed", manager.installed_version),
+      fact("Latest stable", version)
+    ], verdict, action, "update-summary-manager");
+  }
+
+  function adminSummaryCard() {
+    var admin = (state.data.status || {}).admin || {};
+    var gate = adminGate();
+    var releases = state.data.releases;
+    var latest = (releases || {}).latest_stable || null;
+    var verdict;
+    var action = null;
+    if (gate === "unread") verdict = ["idle", "Admin state unavailable"];
+    else if (gate === "bootstrap") {
+      verdict = ["warn", "not installed"];
+      action = viewButton("admin", "Install Admin", "update-admin-install", "primary-button compact");
+    } else if (gate === "docker") verdict = ["bad", dockerStateText()];
+    else if (gate === "missing") {
+      verdict = ["bad", "container missing"];
+      action = viewButton("admin", "Open Admin", "update-admin-repair", "primary-button compact");
+    } else if (releases === null || releases === undefined) verdict = ["idle", "checking"];
+    else if (releases.error) verdict = ["bad", "release list unavailable"];
+    else if (!latest) verdict = ["idle", "no stable release published"];
+    else {
+      verdict = latestVerdict(latest);
+      action = latestButton(latest, latest.tag, "update-admin-latest", gate === "live",
+        function () { planAdminInstall("exact", latest.tag, false); });
+    }
+    return summaryCard("EMS Admin", "The console that sets up and runs EMS", [
+      fact("Installed", adminVersionText(admin)),
+      fact("Latest stable", latest ? latest.tag : null)
+    ], verdict, action, "update-summary-admin");
+  }
+
+  function updatesFindings() {
+    return rankedFindings(state.data.status).filter(function (item) {
+      return item.section === "updates" && item.code !== "security_updates_pending";
+    });
+  }
+
+  /* A failed check or a package manager needing recovery; a stale index is not one. */
+  function updatesInDoubt(updates) {
+    return updates.error === "update_check_failed"
+      || (updates.package_manager || {}).healthy === false;
+  }
+
+  function securityUpdatesOffered() {
+    var updates = (state.data.status || {}).updates || {};
+    return Number(updates.security_count) > 0 && !updatesInDoubt(updates);
+  }
+
+  function systemSummaryCard(updates) {
+    var security = Number(updates.security_count) || 0;
+    var other = Number(updates.normal_count) || 0;
+    var known = updates.security_count !== undefined;
+    var findings = updatesFindings();
+    var stale = findings.filter(function (item) { return item.code === "package_index_stale"; })[0];
+    var doubt = !updatesInDoubt(updates) ? null
+      : findings.filter(function (item) { return item !== stale; })[0]
+        || { severity: "warning", title: "the package counts are not an answer" };
+    var verdict = !known ? ["idle", "unknown"]
+      : doubt ? [doubt.severity === "error" ? "bad" : "warn", doubt.title]
+        : security ? ["warn", "security updates waiting"]
+          : stale ? ["warn", stale.title]
+            : other ? ["ok", "no security updates waiting"]
+              : ["ok", "up to date"];
+    var action = securityUpdatesOffered() ? el("button", {
+      type: "button", class: "primary-button compact", "data-test": "update-os-security",
+      text: "Install security updates",
+      onclick: planSecurityUpdates
+    }) : null;
+    return summaryCard("Raspberry Pi OS", "Operating-system packages", [
+      fact("Security updates", updates.security_count),
+      fact("Other updates", updates.normal_count),
+      fact("Restart required", updates.reboot_required)
+    ], verdict, action, "update-summary-os");
+  }
+
+  /* The version choice for Admin, moved here from the Admin page so that every
+     version on this appliance is chosen in one place. Restart, repair and
+     rollback stay on the Admin page: they keep the version. */
+  function renderAdminVersions(main) {
+    var gate = adminGate();
+    main.appendChild(sectionHead(
+      "EMS Admin versions",
+      "The Admin container. Installing pulls and validates the image before the running one is replaced."
+    ));
+    var withheld = {
+      unread: ["admin-versions-unavailable", "The Admin state could not be read. ",
+        "Nothing is offered until it can be; Diagnostics collects what went wrong."],
+      bootstrap: ["admin-versions-bootstrap", "EMS Admin is not installed yet. ",
+        "The first installation creates its deployment, so it starts on the Admin page."],
+      docker: ["admin-versions-docker", dockerStateText() + ". ",
+        dockerCondition(dockerDaemonState()) === "unavailable"
+          ? "No Admin version can be installed on a host without Docker."
+          : "No Admin version can be installed until Docker runs; the Admin page's repair can start it."]
+    }[gate];
+    if (withheld) {
+      main.appendChild(el("p", { class: "empty-state", "data-test": withheld[0] }, [
+        el("strong", { text: withheld[1] }), el("span", { text: withheld[2] })
+      ]));
+      return;
+    }
+    if (gate === "missing") {
+      main.appendChild(el("p", { class: "empty-state", "data-test": "admin-versions-container-missing" }, [
+        el("strong", { text: "The Admin container is missing. " }),
+        el("span", { text: "Repair on the Admin page is the first thing to try; installing a version below also recreates it." })
+      ]));
+    }
+    if (gate === "live") main.appendChild(adminTransitionNotice("admin-versions-transition-live"));
+    main.appendChild(el("div", { class: "action-grid" }, [
+      actionCard("Choose an Admin version", "Every published version, grouped by how far it has been tested", [
+        renderInstallForm(state.data.releases, { blocked: gate === "live" })
+      ], "admin-install-version"),
+      actionCard("Restart, repair or roll back", "Actions that keep the installed version", [
+        el("div", { class: "control-stage-actions" }, [
+          viewButton("admin", "Open Admin", "updates-open-admin", "ghost-button compact")
+        ])
+      ], "admin-versions-recovery")
+    ]));
+  }
+
 
   var MANAGER_DIRECTIONS = {
     upgrade: "newer",
     downgrade: "older",
-    reinstall: "same version",
+    reinstall: "same version as installed",
+    unknown: "cannot be compared",
     revert: "the kept package"
   };
 
@@ -1746,43 +2137,59 @@
     if (sources === null || sources === undefined) {
       return el("p", { class: "control-stage-subtitle", text: "Reading the package index\u2026" });
     }
-    if (!sources.configured) {
-      return el("p", { class: "control-stage-subtitle", "data-test": "manager-sources-unconfigured",
-        text: "No manager package index is configured, so this appliance cannot download one. "
-          + "Set manager_index_url in appliance.conf, or install the package by hand." });
-    }
     if (sources.error) {
       return el("p", { class: "control-stage-subtitle", "data-test": "manager-sources-error" }, [
         el("strong", { text: "The package index could not be read: " }),
         el("span", { text: sources.error })
       ]);
     }
+    if (!sources.configured) {
+      return el("p", { class: "control-stage-subtitle", "data-test": "manager-sources-unconfigured",
+        text: "No manager package index is configured, so this appliance cannot download one. "
+          + "Set manager_index_url in appliance.conf, or install the package by hand." });
+    }
     var offered = sources.releases || [];
     if (!offered.length) {
       return el("p", { class: "control-stage-subtitle", "data-test": "manager-sources-empty",
         text: "The package index offers nothing." });
     }
-    return el("div", {}, [
-      el("div", { class: "control-stage-actions" }, offered.map(function (entry) {
-        return el("button", {
+    /* Two builds of one version on one day read the same; only then is the
+       release id added, so the ordinary list stays readable. */
+    var labels = {};
+    var counts = {};
+    offered.forEach(function (entry) {
+      var label = managerLabel(entry);
+      labels[entry.release_id] = label;
+      counts[label] = (counts[label] || 0) + 1;
+    });
+    function optionLabel(entry) {
+      var label = labels[entry.release_id];
+      return counts[label] > 1 ? label + " \u00b7 " + entry.release_id : label;
+    }
+    var select = el("select", { id: "manager-version", "data-test": "manager-version" },
+      groupByTrack(offered).map(function (group) {
+        return el("optgroup", { label: group.track.label }, group.items.map(function (entry) {
+          return el("option", { value: entry.release_id, title: entry.release_id, text: optionLabel(entry) });
+        }));
+      }));
+    rememberChoice(select, "manager-version");
+    return el("div", { class: "inline-form" }, [
+      el("div", { class: "field" }, [
+        el("label", { for: "manager-version", text: "Version" }), select
+      ]),
+      el("div", { class: "control-stage-actions" }, [
+        el("button", {
           type: "button", class: "primary-button compact",
           "data-test": "manager-plan-update",
-          "data-release": entry.release_id,
-          "data-direction": entry.direction || "",
-          title: entry.release_id,
-          text: "Install " + managerLabel(entry),
+          text: "Install selected version",
           disabled: !managerActions(manager, applianceNow()).canUpdate,
           onclick: function () {
-            planOperation({
-              endpoint: "/api/manager/plan-update",
-              body: { release_id: entry.release_id },
-              title: "Install the Appliance Manager package " + entry.release_id,
-              confirmLabel: "Install",
-              danger: entry.direction === "downgrade"
-            });
+            var entry = offered.filter(function (item) { return item.release_id === select.value; })[0];
+            if (entry) planManagerInstall(entry);
           }
-        });
-      })),
+        })
+      ]),
+      trackHelp("manager-track-help"),
       el("p", {
         class: "control-stage-subtitle",
         text: "An older package installs as readily as a newer one: going back is the recovery "
@@ -1792,6 +2199,16 @@
     ]);
   }
 
+  function planManagerInstall(entry) {
+    planOperation({
+      endpoint: "/api/manager/plan-update",
+      body: { release_id: entry.release_id },
+      title: "Install the Appliance Manager package " + entry.release_id,
+      confirmLabel: "Install",
+      danger: entry.direction === "downgrade" || entry.direction === "unknown"
+    });
+  }
+
   /* The Appliance Manager is the package the console itself runs from. It never
      updates on its own: an automatic update would distribute an untested
      package to every appliance at once. */
@@ -1799,11 +2216,11 @@
     var manager = state.data.manager;
     var actions = managerActions(manager, applianceNow());
     if (manager === undefined || manager === null) {
-      main.appendChild(sectionHead("Appliance Manager", "Reading the manager state\u2026"));
+      main.appendChild(sectionHead("Appliance Manager package", "Reading the manager state\u2026"));
       return;
     }
     if (manager.error) {
-      main.appendChild(sectionHead("Appliance Manager"));
+      main.appendChild(sectionHead("Appliance Manager package"));
       main.appendChild(el("p", { class: "empty-state", "data-test": "manager-unavailable" }, [
         el("strong", { text: "The manager state is unavailable: " }),
         el("span", { text: format(manager.error) })
@@ -1817,7 +2234,7 @@
     var verdict = manager.verdict || {};
 
     main.appendChild(sectionHead(
-      "Appliance Manager",
+      "Appliance Manager package",
       "The package this console runs from. It updates only when you ask it to, and the "
         + "same control installs an older package as readily as a newer one."
     ));
@@ -1898,13 +2315,9 @@
     }
 
     var sources = state.data.managerSources;
-    if (sources === undefined) {
-      state.data.managerSources = null;
-      loadInto("managerSources", "/api/manager/sources");
-    }
 
     main.appendChild(el("div", { class: "action-grid" }, [
-      actionCard("Update the Appliance Manager", "Fetched over HTTPS, then verified against the appliance keyring", [
+      actionCard("Choose a Manager version", "Fetched over HTTPS, then verified against the appliance keyring", [
         renderManagerSources(sources, manager)
       ], "manager-stage-update"),
       actionCard("Go back to the kept package", "The package this appliance ran before the last install", [
@@ -1976,9 +2389,7 @@
           el("button", {
             type: "button", class: "primary-button compact", "data-test": "updates-install-security",
             text: "Plan security updates",
-            onclick: function () {
-              planOperation({ endpoint: "/api/updates/plan", body: { scope: "security" }, title: "Install security updates", confirmLabel: "Install" });
-            }
+            onclick: planSecurityUpdates
           })
         ])
       ], "updates-stage-security")

@@ -31,7 +31,13 @@ from appliance.validation import (
     is_prerelease_tag,
     validate_release_tag,
 )
-from appliance.version import version_key
+from appliance.version import (
+    TRACK_STABLE,
+    TRACK_UNSTABLE,
+    newest_stable,
+    release_track,
+    version_key,
+)
 
 DEFAULT_TIMEOUT = 10
 MAX_INDEX_BYTES = 512 * 1024
@@ -53,11 +59,19 @@ class ReleaseTarget:
     installable: bool = True
     reason: str = ""
 
+    @property
+    def track(self):
+        """``release_track`` of the tag; an index's own prerelease flag may only demote."""
+
+        track = release_track(self.tag)
+        return TRACK_UNSTABLE if self.prerelease and track == TRACK_STABLE else track
+
     def to_dict(self):
         return {
             "tag": self.tag,
             "channel": self.channel,
             "prerelease": self.prerelease,
+            "track": self.track,
             "installable": self.installable,
             "reason": self.reason,
         }
@@ -153,13 +167,21 @@ class ReleaseCatalogue:
         return [_with_installability(item, allowed) for item in parse_release_index(payload)]
 
     def latest_stable(self):
-        for release in self.available():
-            if not release.prerelease:
-                return ReleaseTarget(tag=release.tag, channel=CHANNEL_LATEST_STABLE)
+        release = latest_stable_of(self.available())
+        if release is not None:
+            return ReleaseTarget(tag=release.tag, channel=CHANNEL_LATEST_STABLE)
         raise ReleaseResolutionError(
             "release_channel_unresolved",
             "no stable release is published; pick an exact tag or configure release_index_url",
         )
+
+
+def latest_stable_of(targets):
+    """The ReleaseTarget the Latest stable channel resolves to, or None."""
+
+    return newest_stable(
+        targets, version_of=lambda item: item.tag, stable=lambda item: item.track == TRACK_STABLE
+    )
 
 
 def resolve_channel(channel, *, catalogue, current_tag, previous_known_good, requested_tag=None):

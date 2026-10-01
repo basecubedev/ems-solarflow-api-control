@@ -106,7 +106,7 @@ test.describe("overview @smoke", () => {
     await signIn(page);
     await page.locator('[data-test="finding-open-updates"]').click();
     await expect(page.locator('[data-test="nav-updates"]')).toHaveAttribute("aria-current", "page");
-    await expect(page.locator("#main .page-title")).toHaveText("System updates");
+    await expect(page.locator("#main .page-title")).toHaveText("Updates");
   });
 
   test("the navigation marks the section that needs attention", async ({ page }) => {
@@ -338,6 +338,7 @@ test.describe("basic and expert mode", () => {
     await openView(page, "admin");
     await expect(page.locator('[data-test="admin-version"]')).toBeVisible();
     await expect(page.locator('[data-test="admin-image"]')).toHaveCount(0);
+    await openView(page, "updates");
     await expect(page.locator('[data-test="install-channel"]')).not.toContainText(
       "Exact release tag",
     );
@@ -349,9 +350,9 @@ test.describe("basic and expert mode", () => {
     await openView(page, "admin");
     await expect(page.locator('[data-test="admin-image"]')).toBeVisible();
     await expect(page.locator('[data-test="admin-image"]')).toContainText("sha256:");
-    await expect(page.locator('[data-test="install-channel"]')).toContainText("Exact release tag");
 
     await openView(page, "updates");
+    await expect(page.locator('[data-test="install-channel"]')).toContainText("Exact release tag");
     await expect(page.locator('[data-test="updates-stage-all"]')).toBeVisible();
     await expect(page.locator('[data-test="updates-stage-repair"]')).toBeVisible();
   });
@@ -379,7 +380,7 @@ test.describe("admin lifecycle @authority", () => {
   test("an install plan previews the target before anything changes", async ({ page }) => {
     await signIn(page);
     await setMode(page, "expert");
-    await openView(page, "admin");
+    await openView(page, "updates");
 
     await page.locator('[data-test="install-channel"]').selectOption("exact");
     await page.locator('[data-test="install-tag"]').fill("v1.1.0");
@@ -397,26 +398,26 @@ test.describe("admin lifecycle @authority", () => {
     const body = await dialog.innerText();
     expect(body.indexOf("Version to install")).toBeLessThan(body.indexOf("Image digest"));
     await expect(page.locator("#dialog-confirm")).toBeEnabled();
-    await expect(page.locator('[data-test="admin-version"]')).toContainText("v1.0.0");
+    await expect(page.locator('[data-test="update-summary-admin"]')).toContainText("v1.0.0");
   });
 
   test("a cancelled plan changes nothing", async ({ page }) => {
     await signIn(page);
     await setMode(page, "expert");
-    await openView(page, "admin");
+    await openView(page, "updates");
     await page.locator('[data-test="install-channel"]').selectOption("exact");
     await page.locator('[data-test="install-tag"]').fill("v1.1.0");
     await page.locator('[data-test="install-plan"]').click();
     await expect(page.locator("#dialog")).toBeVisible();
     await page.locator("#dialog-cancel").click();
     await expect(page.locator("#dialog-backdrop")).toBeHidden();
-    await expect(page.locator('[data-test="admin-version"]')).toContainText("v1.0.0");
+    await expect(page.locator('[data-test="update-summary-admin"]')).toContainText("v1.0.0");
   });
 
   test("confirming an install runs it and reports the result", async ({ page }) => {
     await signIn(page);
     await setMode(page, "expert");
-    await openView(page, "admin");
+    await openView(page, "updates");
     await page.locator('[data-test="install-channel"]').selectOption("exact");
     await page.locator('[data-test="install-tag"]').fill("v1.1.0");
     await page.locator('[data-test="install-plan"]').click();
@@ -437,7 +438,7 @@ test.describe("admin lifecycle @authority", () => {
   test("an install error is shown with its reason", async ({ page }) => {
     await signIn(page);
     await setMode(page, "expert");
-    await openView(page, "admin");
+    await openView(page, "updates");
     await page.locator('[data-test="install-channel"]').selectOption("exact");
     await page.locator('[data-test="install-tag"]').fill("v9.9.9");
 
@@ -514,12 +515,12 @@ test.describe("admin lifecycle @authority", () => {
     page,
   }) => {
     await signIn(page);
-    await openView(page, "admin");
+    await openView(page, "updates");
 
     const select = page.locator('[data-test="install-channel"]');
     await expect(select.locator('optgroup[label="Stable"] option')).toHaveText([
       "v1.1.0",
-      "v1.0.0",
+      "v1.0.0 · installed",
     ]);
     await expect(select.locator('optgroup[label="Unstable"] option')).toHaveText(["v1.2.0-rc1"]);
     // Basic mode: the versions are listed without the expert free-text field.
@@ -532,7 +533,7 @@ test.describe("admin lifecycle @authority", () => {
   }) => {
     await request.post("/api/test/reset", { data: { refuse_prereleases: true } });
     await signIn(page);
-    await openView(page, "admin");
+    await openView(page, "updates");
 
     const candidate = page.locator(
       '[data-test="install-channel"] optgroup[label="Unstable"] option',
@@ -544,12 +545,12 @@ test.describe("admin lifecycle @authority", () => {
     // The releases stay listed and pickable; only the candidate is refused.
     await expect(
       page.locator('[data-test="install-channel"] optgroup[label="Stable"] option'),
-    ).toHaveText(["v1.1.0", "v1.0.0"]);
+    ).toHaveText(["v1.1.0", "v1.0.0 · installed"]);
   });
 
   test("a candidate is installable on a host that enables candidates", async ({ page }) => {
     await signIn(page);
-    await openView(page, "admin");
+    await openView(page, "updates");
 
     await page.locator('[data-test="install-channel"]').selectOption("v1.2.0-rc1");
     const [planned] = await Promise.all([
@@ -564,7 +565,7 @@ test.describe("admin lifecycle @authority", () => {
 
   test("a version picked from the list is planned as that exact tag", async ({ page }) => {
     await signIn(page);
-    await openView(page, "admin");
+    await openView(page, "updates");
 
     await page.locator('[data-test="install-channel"]').selectOption("v1.1.0");
     const [request] = await Promise.all([
@@ -606,7 +607,7 @@ test.describe("admin lifecycle @authority", () => {
   test("typing survives the two-second poll", async ({ page }) => {
     await signIn(page);
     await setMode(page, "expert");
-    await openView(page, "admin");
+    await openView(page, "updates");
 
     await page.locator('[data-test="install-channel"]').selectOption("exact");
     const tag = page.locator('[data-test="install-tag"]');
@@ -628,7 +629,7 @@ test.describe("admin lifecycle @authority", () => {
     await request.post("/api/test/reset", { data: { break_digest: true } });
     await signIn(page);
     await setMode(page, "expert");
-    await openView(page, "admin");
+    await openView(page, "updates");
     await page.locator('[data-test="install-channel"]').selectOption("exact");
     await page.locator('[data-test="install-tag"]').fill("v1.1.0");
 
@@ -641,13 +642,13 @@ test.describe("admin lifecycle @authority", () => {
     });
     await page.locator('[data-test="install-plan"]').click();
     expect(await refusal).toContain("digest");
-    await expect(page.locator('[data-test="admin-version"]')).toContainText("v1.0.0");
+    await expect(page.locator('[data-test="update-summary-admin"]')).toContainText("v1.0.0");
   });
 
   test("an install plan shows the immutable reference in expert mode", async ({ page }) => {
     await signIn(page);
     await setMode(page, "expert");
-    await openView(page, "admin");
+    await openView(page, "updates");
     await page.locator('[data-test="install-channel"]').selectOption("exact");
     await page.locator('[data-test="install-tag"]').fill("v1.1.0");
     await Promise.all([
@@ -1214,5 +1215,132 @@ test.describe("console rescue account", () => {
     await openView(page, "access");
 
     await expect(page.locator('[data-test="rescue-account"]')).toContainText("not present");
+  });
+});
+
+test.describe("updates page @smoke", () => {
+  test("is the second section and names what is out of date", async ({ page }) => {
+    await signIn(page);
+    await expect(page.locator("#nav-list li").nth(1)).toContainText("Updates");
+    await openView(page, "updates");
+
+    const admin = page.locator('[data-test="update-summary-admin"]');
+    await expect(admin).toContainText("update available");
+    await expect(admin).toContainText("v1.0.0");
+    await expect(page.locator('[data-test="update-summary-os-state"]')).toContainText(
+      "security updates waiting",
+    );
+    await expect(page.locator('[data-test="update-summary-manager-state"]')).toContainText(
+      "no package index configured",
+    );
+  });
+
+  test("the latest stable Admin is one click from its plan", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "updates");
+
+    const button = page.locator('[data-test="update-admin-latest"]');
+    await expect(button).toHaveText("Update to v1.1.0");
+    const [planned] = await Promise.all([
+      page.waitForRequest((candidate) => candidate.url().includes("/api/admin/plan-install")),
+      button.click(),
+    ]);
+
+    // The tag the button showed, not a channel resolved again at planning time.
+    expect(planned.postDataJSON()).toMatchObject({ channel: "exact", tag: "v1.1.0" });
+    await expect(page.locator("#dialog")).toBeVisible();
+    await expect(page.locator("#dialog")).toContainText("v1.1.0");
+    await page.locator("#dialog-cancel").click();
+    await expect(page.locator('[data-test="update-summary-admin"]')).toContainText("v1.0.0");
+  });
+
+  test("the manager index is grouped by track and its newest release is one click away", async ({
+    page,
+    request,
+  }) => {
+    await resetAppliance(request, { manager_index: true });
+    await signIn(page);
+    await openView(page, "updates");
+
+    const select = page.locator('[data-test="manager-version"]');
+    await expect(select.locator('optgroup[label="Stable"] option')).toHaveCount(2);
+    await expect(select.locator('optgroup[label="Unstable"] option')).toContainText("0.3.0~rc1");
+    await expect(select.locator('optgroup[label="Experimental"] option')).toContainText(
+      "0.0.0~dev.abc1234",
+    );
+
+    const button = page.locator('[data-test="update-manager-latest"]');
+    await expect(button).toHaveText("Update to 0.2.0");
+    // The signed manifest is not reachable here, so the plan is refused; what
+    // is under test is which release the button asked for.
+    const refusal = new Promise<void>((resolve) => {
+      page.once("dialog", async (alert) => {
+        await alert.dismiss();
+        resolve();
+      });
+    });
+    const [planned] = await Promise.all([
+      page.waitForRequest((candidate) => candidate.url().includes("/api/manager/plan-update")),
+      button.click(),
+    ]);
+    expect(planned.postDataJSON()).toEqual({ release_id: "ems-appliance-manager-0.2.0-arm64" });
+    await refusal;
+  });
+
+  test("an opened explanation and a picked version survive the poll", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "updates");
+
+    const help = page.locator('[data-test="admin-track-help"]');
+    await help.locator("summary").click();
+    await expect(help).toHaveAttribute("open", "");
+    await page.locator('[data-test="install-channel"]').selectOption("v1.2.0-rc1");
+    await page.locator('[data-test="page-title"]').focus();
+
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+    await expect(help).toHaveAttribute("open", "");
+    await expect(help).toContainText("Release candidates for early testing");
+    await expect(page.locator('[data-test="install-channel"]')).toHaveValue("v1.2.0-rc1");
+  });
+
+  test("a typed tag and a ticked reinstall survive the poll once focus has left them", async ({
+    page,
+  }) => {
+    await signIn(page);
+    await setMode(page, "expert");
+    await openView(page, "updates");
+
+    await page.locator('[data-test="install-channel"]').selectOption("exact");
+    await page.locator('[data-test="install-tag"]').fill("v1.1.0");
+    await page.locator('[data-test="install-reinstall"]').check();
+    await page.locator('[data-test="install-plan"]').focus();
+
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+    await expect(page.locator('[data-test="install-tag"]')).toHaveValue("v1.1.0");
+    await expect(page.locator('[data-test="install-reinstall"]')).toBeChecked();
+    const [planned] = await Promise.all([
+      page.waitForRequest((candidate) => candidate.url().includes("/api/admin/plan-install")),
+      page.locator('[data-test="install-plan"]').click(),
+    ]);
+    expect(planned.postDataJSON()).toMatchObject({
+      channel: "exact",
+      tag: "v1.1.0",
+      reinstall: true,
+    });
+    await page.locator("#dialog-cancel").click();
+  });
+
+  test("the Admin page and the overview lead to it", async ({ page }) => {
+    await signIn(page);
+    await page.locator('[data-test="quick-open-updates"]').click();
+    await expect(page.locator('[data-test="nav-updates"]')).toHaveAttribute("aria-current", "page");
+
+    await openView(page, "admin");
+    await page.locator('[data-test="admin-open-updates"]').click();
+    await expect(page.locator('[data-test="nav-updates"]')).toHaveAttribute("aria-current", "page");
   });
 });

@@ -76,6 +76,17 @@ def finding(code, severity, section, title, message, next_step):
     }
 
 
+def _missing_admin_next_step(admin):
+    if admin.get("bootstrap_required"):
+        return "Open Admin and install it; that is where an EMS is set up."
+    return "Open Admin and repair it; choosing a version on Updates also recreates it."
+
+
+def _docker_known_down(admin):
+    daemon = (admin.get("docker") or {}).get("state")
+    return bool(daemon) and daemon != DAEMON_RUNNING
+
+
 def health_level(findings):
     """The level is the worst finding, not a second opinion about the same host."""
 
@@ -320,7 +331,9 @@ class StatusService:
                 )
 
         admin = sections.get("admin", {})
-        if admin.get("status") == SECTION_OK:
+        # A stopped daemon hides every container; docker_not_running says so, and
+        # "no Admin installed" would be false.
+        if admin.get("status") == SECTION_OK and not _docker_known_down(admin):
             if not admin.get("installed"):
                 findings.append(
                     finding(
@@ -329,7 +342,7 @@ class StatusService:
                         VIEW_ADMIN,
                         "No EMS Admin is installed",
                         "No Admin container exists here, so nothing on this appliance runs the EMS.",
-                        "Open Admin and install it; that is where an EMS is set up.",
+                        _missing_admin_next_step(admin),
                     )
                 )
             elif not admin.get("healthy"):
@@ -361,7 +374,7 @@ class StatusService:
                         VIEW_UPDATES,
                         "Security updates are waiting",
                         f"{count} {plural} available.",
-                        "Open System Updates and install them.",
+                        "Open Updates and install them.",
                     )
                 )
             if updates.get("reboot_required"):
@@ -386,7 +399,7 @@ class StatusService:
                         "The package index is out of date",
                         f"Nothing has refreshed it for {days} days, so the counts above "
                         "describe what was available then.",
-                        "Open System Updates and refresh the package index before trusting "
+                        "Open Updates and refresh the package index before trusting "
                         "an empty list.",
                     )
                 )
@@ -403,7 +416,7 @@ class StatusService:
                         "apt could not list what is available, so the counts on this page are "
                         "not an answer; an unreachable mirror or a broken sources list is the "
                         "usual cause.",
-                        "Open System Updates and refresh the package indexes; the appliance "
+                        "Open Updates and refresh the package indexes; the appliance "
                         "log names the repository that did not answer.",
                     )
                 )
@@ -415,7 +428,7 @@ class StatusService:
                         VIEW_UPDATES,
                         "The package manager needs recovery",
                         "dpkg or apt is in a state that refuses further installs.",
-                        "No update can install until it is repaired. Open System Updates and "
+                        "No update can install until it is repaired. Open Updates and "
                         "run the repair.",
                     )
                 )

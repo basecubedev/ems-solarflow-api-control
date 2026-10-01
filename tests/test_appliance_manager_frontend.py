@@ -305,10 +305,11 @@ def test_the_manager_state_is_refreshed_and_not_read_once():
 def test_only_the_index_is_fetched_lazily():
     """Reading a remote index on every poll would cost a network round trip."""
 
-    section = APP.split("function renderManagerUpdates(", 1)[1].split("\n  }", 1)[0]
+    section = extract("loadUpdateSources")
 
     assert 'loadInto("managerSources", "/api/manager/sources")' in section
     assert 'loadInto("manager"' not in section
+    assert "loadUpdateSources()" in extract("renderUpdates")
 
 
 def test_an_unfetched_state_renders_as_unknown_rather_than_as_quiet():
@@ -338,7 +339,8 @@ def test_the_periodic_tick_reads_the_host_state_and_not_only_the_operations():
         + APP.split("var STATUS_EVERY_TICKS = ", 1)[1].split(";", 1)[0]
         + ";\n"
         "var asked = [];\n"
-        "var state = { pollTimer: null, pollTicks: 0, data: {}, hostStateRead: null };\n"
+        "var state = { pollTimer: null, pollTicks: 0, data: {}, hostStateRead: null,"
+        " seenVersions: {}, readAgainst: {}, choices: {}, listingGenerations: {} };\n"
         "var ticker = null;\n"
         "var window = { setInterval: function (fn) { ticker = fn; return 1; },"
         " clearInterval: function () { ticker = null; } };\n"
@@ -347,6 +349,12 @@ def test_the_periodic_tick_reads_the_host_state_and_not_only_the_operations():
         "function renderPolled() {}\n"
         "function render() {}\n"
         + extract("readHostState")
+        + extract("dropOutdatedListings")
+        + extract("reconcileListing")
+        + extract("installedVersion")
+        + extract("clearChoices")
+        + extract("dropListing")
+        + extract("listingGeneration")
         + "\n"
         + extract("stopPolling")
         + "\n"

@@ -22,13 +22,23 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = (ROOT / "appliance" / "static" / "app.js").read_text(encoding="utf-8")
 
 # A view is what an operator sees at once, which is not always one function:
-# System Updates renders the manager block and the OS block into one page, and
-# the Admin page swaps in the bootstrap branch when nothing is installed.
+# Updates renders a summary, the manager block, the Admin versions and the OS
+# block into one page, and the Admin page swaps in the bootstrap branch when
+# nothing is installed.
 VIEWS = {
     "Overview": ["renderOverview"],
     "EMS Admin": ["renderAdmin"],
     "EMS Admin (nothing installed)": ["renderAdminBootstrap"],
-    "System updates": ["renderManagerUpdates", "renderPackageUpdates"],
+    "Updates": [
+        "renderUpdates",
+        "managerSummaryCard",
+        "adminSummaryCard",
+        "systemSummaryCard",
+        "summaryCard",
+        "renderManagerUpdates",
+        "renderAdminVersions",
+        "renderPackageUpdates",
+    ],
     "Network": ["renderNetwork"],
     "SSH & backup access": ["renderAccess"],
     "Diagnostics": ["renderDiagnostics"],
@@ -73,3 +83,24 @@ def test_the_admin_page_does_not_offer_install_version_next_to_installed_version
     admin = body("renderAdmin")
     assert '"Installed version"' in admin, "the status card was renamed; revisit this pairing"
     assert '"Install version"' not in admin
+
+
+def test_no_view_names_two_action_cards_the_same():
+    """The Updates page chooses versions for two products; "Choose a version"
+    twice leaves only the position to say which is which."""
+
+    repeats = {}
+    for view, names in VIEWS.items():
+        seen = titles(names, "actionCard") + titles(names, "summaryCard")
+        doubled = sorted({title for title in seen if seen.count(title) > 1})
+        if doubled:
+            repeats[view] = doubled
+
+    assert repeats == {}, f"one name for two different actions: {repeats}"
+
+
+def test_no_section_head_repeats_a_card_name_on_the_updates_page():
+    names = VIEWS["Updates"]
+    cards = set(titles(names, "actionCard") + titles(names, "summaryCard"))
+
+    assert set(titles(names, "sectionHead")) & cards == set()
