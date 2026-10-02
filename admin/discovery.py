@@ -56,6 +56,40 @@ def _clamp_int(value, default, low, high):
     return max(low, min(high, number))
 
 
+# An explicit list rather than ipaddress' is_private: that also answers True
+# for ::ffff:8.8.8.0/120, an IPv4-mapped range whose connections go to the
+# public IPv4 hosts it names, and for documentation and benchmark ranges that
+# hold no LAN device.
+_SCANNABLE_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",
+        "127.0.0.0/8",
+        "fc00::/7",
+        "fe80::/10",
+        "::1/128",
+    )
+)
+
+
+def is_scannable_address(address):
+    """Whether one announced address lies in a range discovery may contact.
+
+    mDNS answers come from anything on the LAN, and an announced address is
+    otherwise contacted as given: a broker candidate gets the saved credential
+    pool, a device candidate an HTTP probe.
+    """
+
+    try:
+        ip = ipaddress.ip_address(str(address).strip())
+    except ValueError:
+        return False
+    return any(ip in allowed for allowed in _SCANNABLE_NETWORKS if allowed.version == ip.version)
+
+
 def validate_cidr(raw_cidr):
     """Validate a scan CIDR and return the parsed network.
 
@@ -72,7 +106,8 @@ def validate_cidr(raw_cidr):
     except ValueError as exc:
         raise CidrValidationError(f"invalid CIDR: {exc}") from exc
 
-    if not (network.is_private or network.is_link_local or network.is_loopback):
+    if not any(network.subnet_of(allowed) for allowed in _SCANNABLE_NETWORKS
+               if allowed.version == network.version):
         raise CidrValidationError(
             "only private, link-local, or loopback ranges may be scanned"
         )
