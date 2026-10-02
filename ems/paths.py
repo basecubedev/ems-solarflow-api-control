@@ -168,7 +168,7 @@ def resolve_dashboard_auth_path(args, config):
     # in stdlib, so the cost is negligible when it is needed.
     from dashboard import auth as dashboard_auth
 
-    path = args.dashboard_auth or (
+    path = getattr(args, "dashboard_auth", None) or (
         config.get("dashboard", {})
         .get("auth_file", dashboard_auth.DEFAULT_AUTH_FILE)
     )

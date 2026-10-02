@@ -2630,3 +2630,39 @@ def test_support_bundle_json_stays_parseable_and_redacted(tmp_path, monkeypatch)
             assert secret not in raw
     diagnosis = json.loads(payloads["diagnosis.json"])["diagnosis"]
     assert diagnosis["warnings"] == ["Dashboard binds without configured auth"]
+
+
+def _dashboard_exposure_codes(tmp_path, dashboard):
+    checks = []
+    diagnose_config_plausibility(
+        checks,
+        SimpleNamespace(dashboard_auth=str(tmp_path / "no-auth.json")),
+        {"system": {}, "dashboard": dashboard},
+    )
+    return {check["code"] for check in checks}
+
+
+@pytest.mark.parametrize(
+    "dashboard",
+    [
+        {},
+        {"enabled": "true", "ssl_enabled": "false"},
+        {"enabled": True, "host": "0.0.0.0", "ssl_enabled": "off"},
+    ],
+)
+def test_open_dashboard_is_reported_as_the_runtime_would_start_it(tmp_path, dashboard):
+    codes = _dashboard_exposure_codes(tmp_path, dashboard)
+    assert "dashboard_open_without_https_auth" in codes
+
+
+@pytest.mark.parametrize(
+    "dashboard",
+    [
+        {"enabled": "false"},
+        {"enabled": True, "ssl_enabled": "true"},
+        {"enabled": True, "host": "127.0.0.1"},
+    ],
+)
+def test_closed_dashboard_is_not_reported_as_open(tmp_path, dashboard):
+    codes = _dashboard_exposure_codes(tmp_path, dashboard)
+    assert "dashboard_open_without_https_auth" not in codes

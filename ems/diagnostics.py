@@ -999,7 +999,11 @@ def diagnose_config_plausibility(checks, args, config_data):
         diagnose_add(checks, "config", "error", issue["code"], issue["message"])
 
     dashboard = config_data.get("dashboard", {})
-    if isinstance(dashboard, dict) and dashboard.get("enabled", False):
+    if isinstance(dashboard, dict):
+        dashboard = config_mod.normalize_dashboard_config(dashboard)
+    if isinstance(dashboard, dict) and config_mod.safe_bool(
+        dashboard.get("enabled"), False
+    ):
         host = dashboard.get("host")
         port = diagnose_int(dashboard.get("port"))
         if not isinstance(host, str) or not host.strip():
@@ -1012,7 +1016,8 @@ def diagnose_config_plausibility(checks, args, config_data):
             diagnose_add(checks, "config", "ok", "dashboard_port_valid", "dashboard.port is valid")
         auth_path = resolve_dashboard_auth_path(args, config_data)
         auth_configured = dashboard_auth.auth_configured(auth_path)
-        if host == "0.0.0.0" and not dashboard.get("ssl_enabled", False) and not auth_configured:
+        ssl_enabled = config_mod.safe_bool(dashboard.get("ssl_enabled"), False)
+        if host == "0.0.0.0" and not ssl_enabled and not auth_configured:
             diagnose_add(
                 checks,
                 "config",
