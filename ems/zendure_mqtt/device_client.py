@@ -118,6 +118,16 @@ def _validate_power_target(value):
     return value
 
 
+def _positive_power_ceiling(value):
+    """``value`` when it is a finite positive watt number, else ``None``."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value
+
+
 def _coerce_reply(payload):
     """Parse a reply payload (bytes/str/mapping) into a dict, or ``None``.
 
@@ -275,7 +285,7 @@ class ZendureMqttDeviceClient:
         self.max_soc = max_soc
         self.smart_mode = smart_mode
         self.grid_off_mode = grid_off_mode
-        self.max_power = max_power or cfg.MAX_DEVICE_POWER
+        self.max_power = _positive_power_ceiling(max_power) or cfg.MAX_DEVICE_POWER
         self.pv_kwp = pv_kwp or 1.0
         self.battery_kwh = battery_kwh or 1.0
         self.pv_priority_factor = pv_priority_factor or 1.0
