@@ -260,6 +260,7 @@ class ZendureMqttDeviceClient:
         self._telemetry_confirmation_override = telemetry_confirmation_supported
         self._last_confirmed_target = None
         self._last_confirmed_monotonic = None
+        self._unconfirmed_own_targets = set()
         self._foreign_streak = 0
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
@@ -1150,6 +1151,8 @@ class ZendureMqttDeviceClient:
             self._last_command_state = record.state
             self._active_command = None
             self._active_correlation_id = None
+            if record.published_monotonic is not None:
+                self._unconfirmed_own_targets.add(record.target_w)
             if record.state == STATE_CONFIRMATION_TIMED_OUT:
                 log_event(
                     logging.WARNING,
@@ -1248,6 +1251,7 @@ class ZendureMqttDeviceClient:
 
         self._last_confirmed_target = record.target_w
         self._last_confirmed_monotonic = now_monotonic
+        self._unconfirmed_own_targets = set()
         self._foreign_streak = 0
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
@@ -1257,8 +1261,9 @@ class ZendureMqttDeviceClient:
 
         Requires: no local command in flight, a previously *confirmed* local
         target, and at least two successive newer telemetry reports whose
-        ``outputLimit`` is materially away from that target. Reports evidence
-        only — never claims which controller is responsible.
+        ``outputLimit`` is materially away from that target and from every own
+        target released unconfirmed since, which the device may apply late.
+        Reports evidence only — never claims which controller is responsible.
         """
 
         if self._active_command is not None or self._last_confirmed_target is None:
@@ -1292,7 +1297,12 @@ class ZendureMqttDeviceClient:
         ):
             return
         tolerance = self._confirmation_policy().confirmation_tolerance_w
-        if abs(float(observed) - float(self._last_confirmed_target)) <= tolerance:
+        own_targets = {self._last_confirmed_target, *self._unconfirmed_own_targets}
+        if any(
+            isinstance(target, (int, float))
+            and abs(float(observed) - float(target)) <= tolerance
+            for target in own_targets
+        ):
             self._foreign_streak = 0
             self._foreign_last_observed_monotonic = observed_time
             return

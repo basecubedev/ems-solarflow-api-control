@@ -265,3 +265,30 @@ def test_new_local_confirmation_clears_suspicion():
     dev.fetch()
     assert rec2.state == "telemetry_confirmed"
     assert dev.describe()["external_control_suspected"] is False
+
+
+def test_own_timed_out_target_applied_late_is_not_external_control():
+    dev, rec = _confirmed_device()
+    dev._confirmation_timeout_s = 5.0
+    rec2 = _published(dev, 500)
+    dev.describe(now_monotonic=rec2.published_monotonic + 6.0)
+    assert rec2.state == "confirmation_timed_out"
+    base = rec2.published_monotonic
+    dev._service.set_snapshot(dict(APPLIED, outputLimit=500), base + 10.0)
+    dev.fetch()
+    dev._service.set_snapshot(dict(APPLIED, outputLimit=500), base + 20.0)
+    dev.fetch()
+    assert dev.describe()["external_control_suspected"] is False
+
+
+def test_foreign_value_after_own_timeout_is_still_detected():
+    dev, rec = _confirmed_device()
+    dev._confirmation_timeout_s = 5.0
+    rec2 = _published(dev, 500)
+    dev.describe(now_monotonic=rec2.published_monotonic + 6.0)
+    base = rec2.published_monotonic
+    dev._service.set_snapshot(dict(APPLIED, outputLimit=900), base + 10.0)
+    dev.fetch()
+    dev._service.set_snapshot(dict(APPLIED, outputLimit=900), base + 20.0)
+    dev.fetch()
+    assert dev.describe()["external_control_suspected"] is True
