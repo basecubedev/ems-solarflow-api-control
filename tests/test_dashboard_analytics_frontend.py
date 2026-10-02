@@ -599,6 +599,54 @@ console.log(JSON.stringify({{ html: host.innerHTML }}));
     assert "500 Wh" in out["html"]
 
 
+def test_range_tabs_are_tabs_and_announce_the_selected_one():
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    for attr in ("data-range=", "data-history-range="):
+        buttons = [
+            part.split(">", 1)[0] for part in html.split("<button")[1:] if attr in part.split(">", 1)[0]
+        ]
+        assert buttons, attr
+        for button in buttons:
+            assert 'role="tab"' in button and 'type="button"' in button, button
+        selected = [b for b in buttons if 'aria-selected="true"' in b]
+        assert len(selected) == 1 and 'class="active"' in selected[0]
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+function fake() {{
+  const classes = new Set();
+  return {{
+    attrs: {{}},
+    classList: {{ toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)), has: (n) => classes.has(n) }},
+    setAttribute(key, value) {{ this.attrs[key] = value; }},
+  }};
+}}
+const buttons = [fake(), fake(), fake()];
+app.markRangeTab(buttons, buttons[1]);
+const picked = buttons.map((b) => [b.attrs["aria-selected"], b.classList.has("active")]);
+app.markRangeTab(buttons, null);
+const custom = buttons.map((b) => [b.attrs["aria-selected"], b.classList.has("active")]);
+console.log(JSON.stringify({{ picked, custom }}));
+"""
+    out = run_node(script)
+    assert out["picked"] == [["false", False], ["true", True], ["false", False]]
+    assert out["custom"] == [["false", False]] * 3
+
+
+def test_device_soc_bar_is_a_progressbar_with_its_value():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const grid = {{ innerHTML: "", querySelectorAll: () => [] }};
+global.document = {{ getElementById: (id) => (id === "deviceGrid" ? grid : null), querySelectorAll: () => [] }};
+app.renderDevices({{ WR1: {{ soc: 61.6, online: true }} }});
+console.log(JSON.stringify({{ html: grid.innerHTML }}));
+"""
+    html = run_node(script)["html"]
+    bar = html.split('class="soc-bar"', 1)[1].split(">", 1)[0]
+    assert 'role="progressbar"' in bar
+    assert 'aria-valuemin="0"' in bar and 'aria-valuemax="100"' in bar
+    assert 'aria-valuenow="62"' in bar
+
+
 def test_analytics_energy_is_not_integrated_across_a_data_gap():
     """A step far longer than the series' spacing is a gap and adds no energy."""
     script = f"""

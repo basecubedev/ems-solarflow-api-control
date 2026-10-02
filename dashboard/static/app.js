@@ -1501,7 +1501,7 @@ function deviceCardHtml(name, device, previousSocWidths) {
           <span class="soc-title">${icon("battery")} Battery SOC</span>
           <strong class="soc-percent">${pct(soc)}</strong>
         </div>
-        <div class="soc-bar"><div class="soc-fill" data-device-soc-fill="${safeDeviceKey}" data-soc-start="${previousSoc}" data-soc-target="${soc}" data-soc-animate="${shouldAnimateSoc ? "true" : "false"}"></div></div>
+        <div class="soc-bar" role="progressbar" aria-label="Battery state of charge" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(soc)}"><div class="soc-fill" data-device-soc-fill="${safeDeviceKey}" data-soc-start="${previousSoc}" data-soc-target="${soc}" data-soc-animate="${shouldAnimateSoc ? "true" : "false"}"></div></div>
         <div class="soc-mode">${deviceBatteryState} ${signedWatts(batteryFlow.valueW)}</div>
       </div>
       <div class="device-values">
@@ -6061,13 +6061,21 @@ function applyCustomRange(fromValue, toValue) {
   // Selector kept in a variable so this literal does not collide with the
   // marker the node frontend tests use to trim the auto-init tail.
   const rangeSelector = ".range-tabs button";
-  document.querySelectorAll(rangeSelector).forEach((item) => item.classList.remove("active"));
+  markRangeTab(document.querySelectorAll(rangeSelector), null);
   loadAnalytics();
   return true;
 }
 
 function clearCustomRange() {
   state.analytics.custom = { active: false, start: null, end: null };
+}
+
+function markRangeTab(buttons, active) {
+  buttons.forEach((item) => {
+    const selected = item === active;
+    item.classList.toggle("active", selected);
+    item.setAttribute("aria-selected", selected ? "true" : "false");
+  });
 }
 
 // -- Zoom (Fix 1-3) --------------------------------------------------------
@@ -7324,8 +7332,7 @@ function initDashboardApp() {
   const rangeTabSelector = ".range-tabs button";
   document.querySelectorAll(rangeTabSelector).forEach((button) => {
     button.addEventListener("click", async () => {
-      document.querySelectorAll(rangeTabSelector).forEach((item) => item.classList.remove("active"));
-      button.classList.add("active");
+      markRangeTab(document.querySelectorAll(rangeTabSelector), button);
       state.range = button.dataset.range;
       clearCustomRange();
       clearZoom();
@@ -7391,8 +7398,7 @@ function initDashboardApp() {
   const historyRangeSelector = ".history-range-tabs button";
   document.querySelectorAll(historyRangeSelector).forEach((button) => {
     button.addEventListener("click", async () => {
-      document.querySelectorAll(historyRangeSelector).forEach((item) => item.classList.remove("active"));
-      button.classList.add("active");
+      markRangeTab(document.querySelectorAll(historyRangeSelector), button);
       state.history.range = button.dataset.historyRange;
       clearHistoryZoom();
       renderZoomControls();
@@ -7554,6 +7560,7 @@ if (typeof module !== "undefined") {
     toggleAnalyticsOverlay,
     applyCustomRange,
     clearCustomRange,
+    markRangeTab,
     renderAnalyticsKpis,
     renderAnalyticsLiveKpis,
     renderAnalyticsChart,
