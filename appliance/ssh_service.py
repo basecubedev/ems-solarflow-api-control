@@ -213,9 +213,14 @@ class SshService:
         for name in self.config.ssh_key_accounts:
             account = self.account(name)
             keys = []
+            refusal = ""
             if account.exists and account.home:
-                keys = [key.to_dict() for key in AuthorizedKeysStore(account.home).list()]
+                try:
+                    keys = [key.to_dict() for key in AuthorizedKeysStore(account.home).list()]
+                except ValidationError as exc:
+                    refusal = exc.code
             entry = account.to_dict()
+            entry["keys_refused"] = refusal
             entry["keys"] = keys
             entry["key_count"] = len(keys)
             accounts.append(entry)

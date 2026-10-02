@@ -27,6 +27,7 @@ directory: the Python key store the Appliance Manager writes through, and the
 
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -71,6 +72,19 @@ def store_for(tmp_path, recorded):
     return store, record
 
 
+def patch_ownership(monkeypatch, record):
+    """Record path and descriptor ownership changes under the name they end up with."""
+
+    def record_descriptor(descriptor, uid, gid):
+        path = Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+        if path.name.startswith(".authorized_keys.") and path.name.endswith(".tmp"):
+            path = path.with_name("authorized_keys")
+        record(path, uid, gid)
+
+    monkeypatch.setattr(os, "chown", record)
+    monkeypatch.setattr(os, "fchown", record_descriptor)
+
+
 # --- the rule sshd applies when it opens the file ---------------------------
 
 
@@ -79,7 +93,7 @@ def test_the_account_can_reach_the_key_file_the_appliance_wrote(tmp_path, monkey
 
     recorded = []
     store, record = store_for(tmp_path, recorded)
-    monkeypatch.setattr(os, "chown", record)
+    patch_ownership(monkeypatch, record)
     store.add(ED25519)
 
     directory = stat.S_IMODE(os.stat(store.ssh_dir).st_mode)
@@ -98,7 +112,7 @@ def test_the_key_material_is_group_owned_by_the_account(tmp_path, monkeypatch):
 
     recorded = []
     store, record = store_for(tmp_path, recorded)
-    monkeypatch.setattr(os, "chown", record)
+    patch_ownership(monkeypatch, record)
     store.add(ED25519)
 
     targets = {path: (uid, gid) for path, uid, gid in recorded}
@@ -117,7 +131,7 @@ def test_the_key_material_satisfies_openssh_strict_modes(tmp_path, monkeypatch):
 
     recorded = []
     store, record = store_for(tmp_path, recorded)
-    monkeypatch.setattr(os, "chown", record)
+    patch_ownership(monkeypatch, record)
     store.add(ED25519)
 
     for target in (store.ssh_dir, store.path):
@@ -131,7 +145,7 @@ def test_the_account_cannot_rewrite_its_own_authorisation(tmp_path, monkeypatch)
 
     recorded = []
     store, record = store_for(tmp_path, recorded)
-    monkeypatch.setattr(os, "chown", record)
+    patch_ownership(monkeypatch, record)
     store.add(ED25519)
 
     assert not stat.S_IMODE(os.stat(store.path).st_mode) & stat.S_IWGRP
@@ -143,7 +157,7 @@ def test_the_account_cannot_rewrite_its_own_authorisation(tmp_path, monkeypatch)
 def test_the_key_file_is_never_world_readable(tmp_path, monkeypatch):
     recorded = []
     store, record = store_for(tmp_path, recorded)
-    monkeypatch.setattr(os, "chown", record)
+    patch_ownership(monkeypatch, record)
     store.add(ED25519)
 
     assert not stat.S_IMODE(os.stat(store.path).st_mode) & stat.S_IROTH

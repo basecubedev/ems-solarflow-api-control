@@ -565,3 +565,16 @@ def test_enabling_ssh_on_a_socket_host_uses_the_socket(tmp_path):
     plan_and_execute(services, "ssh.plan_service", enabled=True)
 
     assert services.host.units["ssh.socket"]["enabled"] == "enabled"
+
+
+def test_status_reports_a_symlinked_ssh_directory_instead_of_following_it(tmp_path):
+    services = appliance(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "authorized_keys").write_text(ED25519 + "\n", encoding="utf-8")
+    (tmp_path / "home" / "ems-backup" / ".ssh").symlink_to(elsewhere)
+
+    accounts = {item["name"]: item for item in services.ssh.status()["accounts"]}
+
+    assert accounts["ems-backup"]["key_count"] == 0
+    assert accounts["ems-backup"]["keys_refused"] == "ssh_directory_unsafe"

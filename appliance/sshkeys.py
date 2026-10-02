@@ -10,6 +10,8 @@ import base64
 import binascii
 import hashlib
 import os
+import secrets
+import stat
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -183,45 +185,97 @@ class AuthorizedKeysStore:
     def list(self):
         return parse_authorized_keys(self._text())
 
-    def _text(self):
+    def _open_ssh_dir(self, *, create):
+        """The ``.ssh`` directory as a descriptor, never through a symlink."""
+
+        if create:
+            self.home.mkdir(parents=True, exist_ok=True)
+            try:
+                os.mkdir(self.ssh_dir, SSH_DIR_MODE)
+            except FileExistsError:
+                pass
         try:
-            return self.path.read_text(encoding="utf-8", errors="replace")
+            return os.open(self.ssh_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            if create:
+                raise
+            return None
+        except OSError:
+            raise ValidationError(
+                "ssh_directory_unsafe", f"{self.ssh_dir} is not a real directory"
+            )
+
+    def _text(self):
+        directory = self._open_ssh_dir(create=False)
+        if directory is None:
+            return ""
+        try:
+            return self._read_at(directory)
+        finally:
+            os.close(directory)
+
+    def _read_at(self, directory):
+        try:
+            descriptor = os.open(
+                self.path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
+            )
         except FileNotFoundError:
             return ""
+        except OSError:
+            raise ValidationError("authorized_keys_unsafe", f"{self.path} is not a regular file")
+        with os.fdopen(descriptor, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise ValidationError(
+                    "authorized_keys_unsafe", f"{self.path} is not a regular file"
+                )
+            return handle.read().decode("utf-8", errors="replace")
 
     def unparsed(self):
         """What is in the file that this store does not manage."""
 
         return unparsed_lines(self._text())
 
-    def _own(self, target):
+    def _own(self, descriptor):
         # Ownership boundary: root owns the key material, the account's group
         # only reads it. An account that cannot write here cannot authorise
         # itself, replace the key file, or touch the marker beside it.
         if self.owner_gid is None:
             return
         try:
-            os.chown(target, 0, self.owner_gid)
+            os.fchown(descriptor, 0, self.owner_gid)
         except (OSError, PermissionError):
             pass
 
     def _write(self, keys, *, preserve=()):
-        self.ssh_dir.mkdir(parents=True, exist_ok=True)
-        os.chmod(self.ssh_dir, SSH_DIR_MODE)
-        self._own(self.ssh_dir)
-
-        tmp = self.ssh_dir / f".authorized_keys.{os.getpid()}.tmp"
-        with open(tmp, "w", encoding="utf-8") as handle:
-            for line in preserve:
-                handle.write(line.rstrip("\n") + "\n")
-            handle.write(render_authorized_keys(keys))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp, AUTHORIZED_KEYS_MODE)
-        self._own(tmp)
-        os.replace(tmp, self.path)
-        os.chmod(self.path, AUTHORIZED_KEYS_MODE)
-        self._own(self.path)
+        directory = self._open_ssh_dir(create=True)
+        try:
+            os.fchmod(directory, SSH_DIR_MODE)
+            self._own(directory)
+            tmp = f".authorized_keys.{secrets.token_hex(8)}.tmp"
+            descriptor = os.open(
+                tmp,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                AUTHORIZED_KEYS_MODE,
+                dir_fd=directory,
+            )
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    for line in preserve:
+                        handle.write(line.rstrip("\n") + "\n")
+                    handle.write(render_authorized_keys(keys))
+                    handle.flush()
+                    os.fchmod(handle.fileno(), AUTHORIZED_KEYS_MODE)
+                    self._own(handle.fileno())
+                    os.fsync(handle.fileno())
+                os.replace(tmp, self.path.name, src_dir_fd=directory, dst_dir_fd=directory)
+            except BaseException:
+                try:
+                    os.unlink(tmp, dir_fd=directory)
+                except OSError:
+                    pass
+                raise
+        finally:
+            os.close(directory)
         return keys
 
     def add(self, public_key):

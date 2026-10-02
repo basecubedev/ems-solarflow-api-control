@@ -274,3 +274,75 @@ def test_revoking_everything_really_removes_everything_and_says_how_much(tmp_pat
 
     assert store.path.read_text(encoding="utf-8") == ""
     assert removed == 2, "the unparsed line was removed and not counted"
+
+
+def test_a_symlinked_ssh_directory_is_refused_and_its_target_untouched(tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    os.chmod(elsewhere, 0o700)
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".ssh").symlink_to(elsewhere)
+    store = AuthorizedKeysStore(home)
+
+    with pytest.raises(ValidationError) as refused:
+        store.add(ED25519)
+
+    assert refused.value.code == "ssh_directory_unsafe"
+    assert list(elsewhere.iterdir()) == []
+    assert stat.S_IMODE(elsewhere.stat().st_mode) == 0o700
+
+
+def test_a_symlinked_ssh_directory_is_not_read_through(tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "authorized_keys").write_text(ED25519 + "\n", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".ssh").symlink_to(elsewhere)
+
+    with pytest.raises(ValidationError) as refused:
+        AuthorizedKeysStore(home).list()
+
+    assert refused.value.code == "ssh_directory_unsafe"
+
+
+def test_a_symlinked_key_file_is_neither_read_nor_copied(tmp_path):
+    secret = tmp_path / "secret"
+    secret.write_text("root:$6$hash:20000::::::\n", encoding="utf-8")
+    ssh_dir = tmp_path / "home" / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "authorized_keys").symlink_to(secret)
+    store = AuthorizedKeysStore(tmp_path / "home")
+
+    with pytest.raises(ValidationError) as refused:
+        store.add(ED25519)
+
+    assert refused.value.code == "authorized_keys_unsafe"
+    assert (ssh_dir / "authorized_keys").is_symlink()
+    assert secret.read_text(encoding="utf-8") == "root:$6$hash:20000::::::\n"
+
+
+def test_a_write_left_behind_by_a_crash_never_blocks_the_next_key_change(tmp_path):
+    store = AuthorizedKeysStore(tmp_path)
+    key = store.add(ED25519)
+    (tmp_path / ".ssh" / f".authorized_keys.{os.getpid()}.tmp").write_text("interrupted\n")
+
+    assert store.remove(key.fingerprint) == 1
+    assert store.list() == []
+
+
+def test_a_failed_key_write_leaves_no_temporary_file(tmp_path, monkeypatch):
+    import appliance.sshkeys as sshkeys
+
+    store = AuthorizedKeysStore(tmp_path)
+    store.add(ED25519)
+
+    def full_disk(keys):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(sshkeys, "render_authorized_keys", full_disk)
+    with pytest.raises(OSError):
+        store.revoke_all()
+
+    assert [p.name for p in (tmp_path / ".ssh").iterdir() if p.name.endswith(".tmp")] == []
