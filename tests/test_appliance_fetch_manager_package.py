@@ -165,6 +165,7 @@ def run(monkeypatch, directory, index, mapping, signer, into, *, version=""):
         "--index", "https://example.invalid/index.json",
         "--into", str(into),
         "--keyring", str(signer["keyring"]),
+        "--fingerprint", signer["fingerprint"],
     ]
     if version:
         argv += ["--version", version]
@@ -387,3 +388,32 @@ def test_an_index_that_is_not_https_is_refused_before_anything_is_read():
         fetcher.main(["--index", "http://example.invalid/i.json", "--into", "/tmp/unused"])
 
     assert "https" in str(refused.value)
+
+
+@gpg_required
+def test_a_key_in_the_keyring_that_is_not_a_listed_signer_is_refused(
+    tmp_path, monkeypatch, signer
+):
+    """Bare gpgv accepted any key in the keyring; the appliance would not."""
+
+    released = [("0.1.0", publish(tmp_path, signer, version="0.1.0")[0])]
+    (tmp_path / "index.json").write_text(
+        json.dumps(index_for(tmp_path, released)), encoding="utf-8"
+    )
+    served = {**urls_for(tmp_path, released), "https://example.invalid/index.json": "index.json"}
+    monkeypatch.setattr(fetcher, "fetch", serve(tmp_path, served))
+
+    with pytest.raises(SystemExit) as refused:
+        fetcher.main([
+            "--index", "https://example.invalid/index.json",
+            "--into", str(tmp_path / "into"),
+            "--keyring", str(signer["keyring"]),
+            "--fingerprint", "0" * 40,
+        ])
+
+    assert "not one this project trusts" in str(refused.value)
+    assert not list((tmp_path / "into").glob("*.deb"))
+
+
+def test_the_default_signers_are_the_ones_the_shipped_appliance_accepts():
+    assert fetcher.shipped_fingerprints() == ("C5226401689A7AFFDC92D55742B3EB428EC5BD63",)
