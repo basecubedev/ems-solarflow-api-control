@@ -20,6 +20,11 @@ DEVICE_FIELDS = {
     "pv_priority_factor": ("float", (0.01, 100.0)),
 }
 
+DEVICE_AC_FIELDS = {
+    "runtime_role": ("enum", ("ac_output", "ac_input")),
+    "ac_charge_power_w": ("int", (0, GENERIC_MAX_POWER_W)),
+}
+
 SECTION_FIELDS = {
     "ha": {
         "enabled": ("bool", None),
@@ -76,6 +81,19 @@ def apply_device_update(runtime_state, device_name, payload, validation_context=
     return {"device": device_name, "state": device}
 
 
+def validate_system_values(payload, validation_context=None):
+    """Validated ``system`` values; the one rule set every runtime writer uses."""
+
+    return _validate_payload(payload, _system_fields(validation_context))
+
+
+def validate_device_values(device_name, payload, validation_context=None):
+    """Validated per-device values, including the AC role and charge power."""
+
+    fields = {**_device_fields(device_name, validation_context), **DEVICE_AC_FIELDS}
+    return _validate_payload(payload, fields)
+
+
 def build_validation_context(config=None, runtime_state=None):
     config = config if isinstance(config, dict) else {}
     system = config.get("system", {}) if isinstance(config.get("system"), dict) else {}
@@ -88,19 +106,16 @@ def build_validation_context(config=None, runtime_state=None):
         system.get("max_total_power"),
         GENERIC_MAX_POWER_W,
         minimum=0,
-        maximum=GENERIC_MAX_POWER_W,
     )
     system_max = _safe_int(
         system.get("max_total_power_limit", configured_system_max),
         configured_system_max,
         minimum=0,
-        maximum=GENERIC_MAX_POWER_W,
     )
     min_output_max = _safe_int(
         system.get("min_output_limit_max", system.get("max_total_power_limit")),
         system_max,
         minimum=0,
-        maximum=GENERIC_MAX_POWER_W,
     )
 
     device_limits = {}
@@ -110,14 +125,12 @@ def build_validation_context(config=None, runtime_state=None):
                 device.get("max_power"),
                 GENERIC_MAX_POWER_W,
                 minimum=0,
-                maximum=GENERIC_MAX_POWER_W,
             )
 
     max_device_fallback = _safe_int(
         system.get("max_device_power"),
         GENERIC_MAX_POWER_W,
         minimum=0,
-        maximum=GENERIC_MAX_POWER_W,
     )
     for device in devices:
         if not isinstance(device, dict) or not device.get("name"):
@@ -127,7 +140,6 @@ def build_validation_context(config=None, runtime_state=None):
             device.get("max_power", max_device_fallback),
             max_device_fallback,
             minimum=0,
-            maximum=GENERIC_MAX_POWER_W,
         )
 
     return {
@@ -152,13 +164,11 @@ def effective_limits(validation_context=None):
                 context.get("system_max_total_power"),
                 GENERIC_MAX_POWER_W,
                 minimum=0,
-                maximum=GENERIC_MAX_POWER_W,
             ),
             "min_output_limit": _safe_int(
                 context.get("min_output_limit_max"),
                 GENERIC_MAX_POWER_W,
                 minimum=0,
-                maximum=GENERIC_MAX_POWER_W,
             ),
         },
         "devices": dict(context.get("device_max_power") or {}),
@@ -166,7 +176,6 @@ def effective_limits(validation_context=None):
             context.get("fallback_device_max_power"),
             GENERIC_MAX_POWER_W,
             minimum=0,
-            maximum=GENERIC_MAX_POWER_W,
         ),
     }
 
@@ -269,7 +278,6 @@ def _device_fields(device_name, validation_context):
         device_limits.get(device_name),
         limits["fallback_device_max_power"],
         minimum=0,
-        maximum=GENERIC_MAX_POWER_W,
     )
     fields["max_power"] = ("int", (0, max_power))
     return fields

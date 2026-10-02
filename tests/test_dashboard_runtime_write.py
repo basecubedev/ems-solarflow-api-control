@@ -311,3 +311,17 @@ def test_runtime_state_dashboard_updates_are_thread_safe(tmp_path):
     payload = json.loads(path.read_text())
     assert isinstance(payload["system"]["max_total_power"], int)
     assert 100 <= payload["system"]["max_total_power"] < 900
+
+
+def test_a_configured_limit_above_5000_w_is_the_limit(tmp_path):
+    """Three 2400 W units: the EMS card must still accept its own config."""
+
+    context = build_validation_context(
+        {
+            "system": {"max_total_power": 7200},
+            "devices": [{"name": "WR1", "max_power": 2400}],
+        }
+    )
+    limits = effective_limits(context)
+    assert limits["system"]["max_total_power"] == 7200
+    assert limits["devices"]["WR1"] == 2400

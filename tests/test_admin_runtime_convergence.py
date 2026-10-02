@@ -128,13 +128,23 @@ def test_pure_config_key_is_not_mirrored(tmp_path):
 
 def test_value_over_runtime_ceiling_is_skipped(tmp_path):
     _seed_runtime(tmp_path)
-    config = _config(max_total_power=6000)
+    config = _config(max_total_power=6000, max_total_power_limit=3000)
     result = mirror_changed_keys_to_runtime(
         _context(tmp_path), config, ["system.max_total_power"]
     )
     assert result["applied"] == []
     assert result["skipped"][0]["path"] == "system.max_total_power"
     assert _runtime(tmp_path)["system"]["max_total_power"] == 1600
+
+
+def test_a_configured_total_above_5000_w_reaches_the_runtime(tmp_path):
+    _seed_runtime(tmp_path)
+    config = _config(max_total_power=7200)
+    result = mirror_changed_keys_to_runtime(
+        _context(tmp_path), config, ["system.max_total_power"]
+    )
+    assert result["applied"] == ["system.max_total_power"]
+    assert _runtime(tmp_path)["system"]["max_total_power"] == 7200
 
 
 def test_new_device_is_skipped_and_not_created(tmp_path):
@@ -221,7 +231,7 @@ def test_renamed_device_is_skipped_and_old_entry_untouched(tmp_path):
 
 def test_mixed_valid_and_invalid_keys_apply_per_key(tmp_path):
     _seed_runtime(tmp_path)
-    config = _config(loop_interval=7, max_total_power=6000)
+    config = _config(loop_interval=7, max_total_power=6000, max_total_power_limit=3000)
     result = mirror_changed_keys_to_runtime(
         _context(tmp_path),
         config,

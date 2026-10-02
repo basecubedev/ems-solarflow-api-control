@@ -13,6 +13,8 @@ import sys
 from datetime import datetime
 
 from dashboard import auth as dashboard_auth
+from dashboard import runtime_write
+from ems.zendure_mqtt.config_entries import is_zendure_mqtt_device_config
 
 
 from ems.paths import (
@@ -1629,8 +1631,26 @@ def print_device_ac_mode_status(device_name, device):
     }, indent=2, sort_keys=True))
 
 
-def update_system(args, state):
+def runtime_limits(config):
+    """Bounds every runtime writer shares, derived from the static config."""
+
+    return runtime_write.build_validation_context(config)
+
+
+def _validated(label, validate, *args):
+    try:
+        return validate(*args)
+    except runtime_write.RuntimeWriteError as exc:
+        raise ValueError(f"{label}: {exc}") from exc
+
+
+def update_system(args, state, limits=None):
     system = state.setdefault("system", {})
+    fields = {
+        "max-power": "max_total_power",
+        "loop-interval": "loop_interval",
+        "min-output-limit": "min_output_limit",
+    }
 
     match args.action:
         case "enable":
@@ -1639,29 +1659,48 @@ def update_system(args, state):
         case "disable":
             ensure_no_value(args)
             system["enabled"] = False
-        case "max-power":
-            system["max_total_power"] = int_value(
-                args.value,
-                "system max-power",
-                minimum=0
-            )
-        case "loop-interval":
-            system["loop_interval"] = int_value(
-                args.value,
-                "system loop-interval",
-                minimum=1
-            )
-        case "min-output-limit":
-            system["min_output_limit"] = int_value(
-                args.value,
-                "system min-output-limit",
-                minimum=0
+        case action if action in fields:
+            if args.value is None:
+                raise ValueError(f"system {action} requires a value")
+            key = fields[action]
+            system.update(
+                _validated(
+                    f"system {action}",
+                    runtime_write.validate_system_values,
+                    {key: args.value},
+                    limits,
+                )
             )
         case _:
             raise ValueError(f"unknown system action {args.action}")
 
 
-def update_device(args, state):
+def config_device_entry(config, name):
+    devices = config.get("devices") if isinstance(config, dict) else None
+    for item in devices if isinstance(devices, list) else []:
+        if isinstance(item, dict) and item.get("name") == name:
+            return item
+    return None
+
+
+def ensure_ac_mode_controllable(config, name):
+    """Refuse an AC role the device's transport cannot reconcile.
+
+    MQTT devices are output-only: the EMS cannot switch their acMode, so an
+    ``ac_input`` role would only stop output regulation and leave the device
+    feeding in at its last limit.
+    """
+
+    item = config_device_entry(config, name)
+    if item is not None and is_zendure_mqtt_device_config(item):
+        raise ValueError(
+            f"device {name} is controlled over MQTT; the EMS cannot switch its "
+            "AC mode or set an AC charge power over MQTT. Use the Zendure app, "
+            "or connect the device over the local API."
+        )
+
+
+def update_device(args, state, limits=None, config=None):
     devices = state.setdefault("devices", {})
     if args.name not in devices:
         known = ", ".join(sorted(devices)) or "(none)"
@@ -1671,6 +1710,24 @@ def update_device(args, state):
     if not isinstance(device, dict):
         raise ValueError(f"device {args.name} runtime state must be an object")
 
+    fields = {
+        "max-power": "max_power",
+        "offgrid": "offgrid_socket_mode",
+        "pv-priority-factor": "pv_priority_factor",
+        "ac-charge-power": "ac_charge_power_w",
+    }
+
+    def validated(key, value):
+        if value is None:
+            raise ValueError(f"device {args.name} {args.action} requires a value")
+        return _validated(
+            f"device {args.name} {args.action}",
+            runtime_write.validate_device_values,
+            args.name,
+            {key: value},
+            limits,
+        )
+
     match args.action:
         case "enable":
             ensure_no_value(args)
@@ -1678,37 +1735,19 @@ def update_device(args, state):
         case "disable":
             ensure_no_value(args)
             device["enabled"] = False
-        case "max-power":
-            device["max_power"] = int_value(
-                args.value,
-                f"device {args.name} max-power",
-                minimum=0
-            )
-        case "offgrid":
-            value = str(args.value or "").strip().lower()
-            if value not in OFFGRID_SOCKET_MODES:
-                raise ValueError(
-                    "device offgrid value must be 'off', 'eco', or 'standard'"
-                )
-            device["offgrid_socket_mode"] = value
-        case "pv-priority-factor":
-            device["pv_priority_factor"] = float_value(
-                args.value,
-                f"device {args.name} pv-priority-factor",
-                minimum=0.01
-            )
         case "ac-mode":
             value = str(args.value or "").strip().lower()
             if value not in DEVICE_AC_MODE_RUNTIME_ROLES:
                 raise ValueError("device ac-mode value must be 'output' or 'input'")
+            if value == "input":
+                ensure_ac_mode_controllable(config, args.name)
             device["runtime_role"] = DEVICE_AC_MODE_RUNTIME_ROLES[value]
             device["runtime_role_reason"] = "emsctl"
         case "ac-charge-power":
-            device["ac_charge_power_w"] = strict_int_value(
-                args.value,
-                f"device {args.name} ac-charge-power",
-                minimum=0
-            )
+            ensure_ac_mode_controllable(config, args.name)
+            device.update(validated("ac_charge_power_w", args.value))
+        case action if action in fields:
+            device.update(validated(fields[action], args.value))
         case _:
             raise ValueError(f"unknown device action {args.action}")
 
@@ -2678,7 +2717,11 @@ def run_interactive(args, config):
                     if value is None:
                         continue
                 state, _ = load_runtime_state(runtime_path, config)
-                update_system(make_args(action=action, value=value), state)
+                update_system(
+                    make_args(action=action, value=value),
+                    state,
+                    runtime_limits(config),
+                )
                 save_interactive(runtime_path, state)
                 continue
 
@@ -2722,7 +2765,12 @@ def run_interactive(args, config):
                     if value is None:
                         continue
                 state, _ = load_runtime_state(runtime_path, config)
-                update_device(make_args(name=name, action=action, value=value), state)
+                update_device(
+                    make_args(name=name, action=action, value=value),
+                    state,
+                    runtime_limits(config),
+                    config,
+                )
                 save_interactive(runtime_path, state)
                 continue
 
@@ -4321,7 +4369,7 @@ def main(argv=None):
             return 0
 
         if args.command == "system":
-            update_system(args, state)
+            update_system(args, state, runtime_limits(config))
         elif args.command == "device":
             devices = state.get("devices", {})
             if args.action == "ac-mode" and args.value is None:
@@ -4338,7 +4386,7 @@ def main(argv=None):
                     save_atomic(runtime_path, state)
                 print_device_ac_mode_status(args.name, devices[args.name])
                 return 0
-            update_device(args, state)
+            update_device(args, state, runtime_limits(config), config)
         elif args.command == "ha":
             set_bool_section(args, state, "ha", "enabled")
         elif args.command == "ha-control":

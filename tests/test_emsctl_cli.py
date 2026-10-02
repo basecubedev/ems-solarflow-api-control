@@ -446,7 +446,7 @@ def test_emsctl_interactive_invalid_numeric_does_not_modify_state(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert "ERROR: system max-power must be numeric" in result.stdout
+    assert "ERROR: system max-power: max_total_power must be an integer" in result.stdout
     assert "Traceback" not in result.stderr
     assert (tmp_path / "runtime-state.json").read_text() == before
 
@@ -1949,3 +1949,52 @@ def test_interactive_menu_rereads_runtime_state_before_each_action(
     on_disk = runtime_state(tmp_path)
     assert on_disk["system"]["max_total_power"] == 600
     assert on_disk["devices"]["WR1"]["enabled"] is False
+
+
+@pytest.mark.parametrize(
+    "argv, message",
+    [
+        (["system", "loop-interval", "100000"], "between 1 and 3600"),
+        (["system", "max-power", "99999"], "between 0 and 900"),
+        (["system", "max-power", "inf"], "must be an integer"),
+        (["system", "max-power", "300.7"], "must be an integer"),
+        (["device", "WR1", "max-power", "5000"], "between 0 and 800"),
+        (["device", "WR1", "pv-priority-factor", "1e300"], "between 0.01 and 100"),
+        (["device", "WR1", "ac-charge-power", "99999"], "between 0 and 5000"),
+    ],
+)
+def test_emsctl_runtime_edits_share_the_dashboard_bounds(tmp_path, argv, message):
+    """emsctl and the dashboard are two writers of one validated value set."""
+
+    assert run_emsctl(tmp_path, "status").returncode == 0
+    before = (tmp_path / "runtime-state.json").read_text()
+
+    result = run_emsctl(tmp_path, *argv)
+
+    assert result.returncode != 0
+    assert message in result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+    assert (tmp_path / "runtime-state.json").read_text() == before
+
+
+@pytest.mark.parametrize(
+    "argv", [["ac-mode", "input"], ["ac-charge-power", "300"]]
+)
+def test_emsctl_refuses_an_ac_role_an_mqtt_device_cannot_reconcile(tmp_path, argv):
+    write_config(tmp_path / "config.json")
+    config = json.loads((tmp_path / "config.json").read_text())
+    config["devices"][0].update(
+        {
+            "type": "zendure_mqtt",
+            "capabilities": {"write_output_limit": True},
+            "mqtt": {"broker_ref": "home", "device_id": "D1"},
+        }
+    )
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    assert run_emsctl(tmp_path, "status").returncode == 0
+
+    result = run_emsctl(tmp_path, "device", "WR1", *argv)
+
+    assert result.returncode != 0
+    assert "controlled over MQTT" in result.stdout + result.stderr
+    assert "runtime_role" not in runtime_state(tmp_path)["devices"]["WR1"]

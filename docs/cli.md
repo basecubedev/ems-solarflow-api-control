@@ -885,14 +885,20 @@ restore password.
 
 ## Validation
 
-The CLI rejects invalid input without changing the file:
+The CLI rejects invalid input without changing the file. It applies the same
+bounds as the dashboard, so both tools accept exactly the same values:
 
 - unknown device
-- negative watt values
-- missing or invalid `pv-priority-factor`
-- `pv-priority-factor < 0.01`
-- `loop_interval <= 0`
+- a watt value that is not a whole number, is negative, or exceeds its limit:
+  `system max-power` up to `system.max_total_power_limit` (else
+  `system.max_total_power`), `device ... max-power` up to the device's
+  configured `max_power`, `ac-charge-power` up to 5000 W
+- `loop-interval` outside 1–3600 seconds
+- `pv-priority-factor` outside 0.01–100
 - invalid offgrid value; allowed values are `off`, `eco`, and `standard`
+- `ac-mode input` or `ac-charge-power` for a device controlled over MQTT: the
+  EMS cannot switch the AC mode over MQTT, so the role would only stop output
+  regulation
 - invalid runtime-state JSON
 - unknown command
 - dashboard password confirmation mismatch
