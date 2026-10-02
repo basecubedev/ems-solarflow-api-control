@@ -404,6 +404,15 @@ function gridPowerText(snapshot) {
   return snapshot.grid_power_valid === false ? "Meter offline" : watts(snapshot.grid_power_w);
 }
 
+function gridFlowPowerW(snapshot) {
+  /** The grid power the flow picture may draw: none for a meter that is not answering. */
+  return snapshot.grid_power_valid === false ? 0 : Number(snapshot.grid_power_w || 0);
+}
+
+function gridDirectionText(snapshot) {
+  return snapshot.grid_power_valid === false ? "Offline" : gridDirectionLabel(gridFlowPowerW(snapshot));
+}
+
 function updateSnapshot(snapshot) {
   if (!snapshot) return;
   state.snapshot = snapshot;
@@ -502,7 +511,7 @@ function renderGlobalSnapshotMetrics(snapshot) {
 // pipes). Only run while the aggregated view is on screen.
 function renderAggregatedSnapshot(snapshot) {
   const batteryFlow = normalizeBatteryPowerForDisplay(aggregatedBatteryPowerW(snapshot));
-  const gridPower = Number(snapshot.grid_power_w || 0);
+  const gridPower = gridFlowPowerW(snapshot);
   const pvPower = Number(snapshot.pv_total_w || 0);
   const inverterPower = Number(snapshot.inverter_output_w || 0);
   const homeLoad = Number(snapshot.home_load_w || 0);
@@ -515,7 +524,7 @@ function renderAggregatedSnapshot(snapshot) {
   setText("flowGrid", gridPowerText(snapshot));
   setText("flowBatterySoc", pct(soc));
   setText("flowBatteryState", batteryStateLabel(batteryFlow));
-  setText("flowGridDirection", gridDirectionLabel(gridPower));
+  setText("flowGridDirection", gridDirectionText(snapshot));
 
   setBatteryFill("flowBatteryFill", soc);
   setVisualState("visualPv", flowActive("aggregate:visualPv", pvPower), "active");
@@ -2026,7 +2035,6 @@ function renderDeviceFlow(snapshotOrDevices) {
   const gridY = homeY + layout.sharedHomeGridGapY;
   const viewHeight = Math.max(rowsBottomY, gridY + layout.sharedVisualHeight) + layout.rowBottomPadding;
   const homeLoad = Number(snapshot.home_load_w || 0);
-  const gridPower = Number(snapshot.grid_power_w || 0);
   const signature = deviceFlowSignature(entries, layout, viewHeight);
   if (
     state.deviceFlowSignature === signature
@@ -2062,7 +2070,7 @@ function renderDeviceFlow(snapshotOrDevices) {
       <g class="device-flow-layer" aria-hidden="true">
         ${rows}
       </g>
-      ${deviceSharedVisuals(layout.sharedX, homeY, gridY, homeLoad, gridPower)}
+      ${deviceSharedVisuals(layout.sharedX, homeY, gridY, homeLoad, snapshot)}
     </svg>
   `;
   state.deviceFlowSignature = signature;
@@ -2181,7 +2189,7 @@ function updateDeviceFlowSnapshot(container, snapshot, entries) {
   const pipes = dataElementMap(container, "data-flow-pipe");
   const fills = dataElementMap(container, "data-device-battery-fill");
   const homeLoad = Number(snapshot.home_load_w || 0);
-  const gridPower = Number(snapshot.grid_power_w || 0);
+  const gridPower = gridFlowPowerW(snapshot);
 
   // One scale for the whole view, taken before any pipe is drawn, so a ribbon
   // in one device's row is comparable with a ribbon in another's.
@@ -2231,8 +2239,8 @@ function updateDeviceFlowSnapshot(container, snapshot, entries) {
   setSvgClass(visuals.get("shared:home"), deviceVisualClasses("home-visual", flowActive("device:shared:visualHome", homeLoad)));
   setSvgClass(visuals.get("shared:grid"), deviceVisualClasses("grid-visual", gridActive, gridPower > FLOW_THRESHOLD_W ? "importing" : gridPower < -FLOW_THRESHOLD_W ? "exporting" : "neutral"));
   setMappedText(texts, "shared:home-value", watts(homeLoad));
-  setMappedText(texts, "shared:grid-state", gridDirectionLabel(gridPower));
-  setMappedText(texts, "shared:grid-value", watts(gridPower));
+  setMappedText(texts, "shared:grid-state", gridDirectionText(snapshot));
+  setMappedText(texts, "shared:grid-value", gridPowerText(snapshot));
 }
 
 function renderControlExplain(snapshot, options = {}) {
@@ -3277,16 +3285,17 @@ function deviceBatteryVisual(
   `;
 }
 
-function deviceSharedVisuals(x, homeY, gridY, homeLoad, gridPower) {
+function deviceSharedVisuals(x, homeY, gridY, homeLoad, snapshot) {
   const gridMidY = gridY + 38;
   const homeMidY = homeY + 38;
-  const gridDirection = gridDirectionLabel(gridPower);
+  const gridPower = gridFlowPowerW(snapshot);
+  const gridDirection = gridDirectionText(snapshot);
 
   return `
     <g class="device-flow-shared-home">
       ${devicePipeGroup("grid", Math.abs(gridPower), `M${x + 88} ${gridMidY} H${x + 128} V${homeMidY} H${x + 88}`, gridPower < -FLOW_THRESHOLD_W ? "reverse" : "forward")}
       ${deviceHomeVisual(x, homeY, watts(homeLoad), flowActive("device:shared:visualHome", homeLoad))}
-      ${deviceGridVisual(x, gridY, gridDirection, watts(gridPower), flowActive("device:shared:visualGrid", Math.abs(gridPower)), gridPower > FLOW_THRESHOLD_W ? "importing" : gridPower < -FLOW_THRESHOLD_W ? "exporting" : "neutral")}
+      ${deviceGridVisual(x, gridY, gridDirection, gridPowerText(snapshot), flowActive("device:shared:visualGrid", Math.abs(gridPower)), gridPower > FLOW_THRESHOLD_W ? "importing" : gridPower < -FLOW_THRESHOLD_W ? "exporting" : "neutral")}
     </g>
   `;
 }

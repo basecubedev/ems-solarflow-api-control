@@ -182,7 +182,7 @@ decision within one loop interval.
 | --- | --- | --- |
 | No forms visible | Not logged in, or no password configured | Log in, or set a password |
 | Header pill shows **Stale** | No new snapshot for three loop intervals (at least 30 s): the control loop or the connection is stuck | Check `docker compose logs ems` |
-| Grid shows **Meter offline** | The grid meter did not answer; the EMS holds its target | [Troubleshooting](../troubleshooting.md) |
+| Grid shows **Meter offline** | The grid meter did not answer; the EMS holds its target. The flow views mark the grid **Offline** and draw no grid flow until it answers again | [Troubleshooting](../troubleshooting.md) |
 | Validation error on save | The value is out of range | Nothing was written; correct it |
 | Saved but nothing changed | Wait one loop interval, then check the pipeline | [Control pipeline](control.md) |
 | Value reverts | Something else is writing runtime state | Check `emsctl.py`, HA helpers, a second controller |

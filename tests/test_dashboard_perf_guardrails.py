@@ -219,6 +219,49 @@ console.log(JSON.stringify({
     assert out["metricPv"] == "1.80 kW"
 
 
+def test_an_offline_grid_meter_draws_no_grid_flow_in_either_view():
+    """An invalid grid reading is shown offline, with no direction and no flow."""
+    script = PRELUDE + """
+const doc = makeDoc();
+global.document = doc;
+app.state.flowActivity = new Map();
+const snapshot = {
+  timestamp: "2026-06-17T12:00:00Z",
+  pv_total_w: 0,
+  inverter_output_w: 0,
+  home_load_w: 1500,
+  grid_power_w: 1500,
+  grid_power_valid: false,
+  battery_power_w: 0,
+  average_soc: 61,
+  rules: {},
+  devices: { WR1: { soc: 60, pv_input_w: 0, output_w: 0, battery_power_w: 0 } },
+};
+app.state.flowView = "aggregated";
+app.updateSnapshot(snapshot);
+const pipe = doc.getElementById("pipeGridHome").classList;
+const visual = doc.getElementById("visualGrid").classList;
+const container = new FakeElement("deviceFlowView");
+doc._nodes.set("deviceFlowView", container);
+app.state.deviceFlowSignature = null;
+app.renderDeviceFlow(snapshot);
+const sharedGrid = container.innerHTML.split('class="device-flow-shared-home"')[1] || "";
+console.log(JSON.stringify({
+  direction: doc.getElementById("flowGridDirection").textContent,
+  pipeActive: pipe.contains("active"),
+  visualImporting: visual.contains("importing"),
+  deviceGrid: sharedGrid,
+}));
+"""
+    out = run_node(script)
+    assert out["direction"] == "Offline"
+    assert out["pipeActive"] is False
+    assert out["visualImporting"] is False
+    assert "Meter offline" in out["deviceGrid"]
+    assert ">Import<" not in out["deviceGrid"]
+    assert "importing" not in out["deviceGrid"]
+
+
 def test_device_flow_same_layout_does_not_replace_svg():
     script = PRELUDE + """
 let innerHtmlWrites = 0;
