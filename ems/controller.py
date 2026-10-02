@@ -1869,6 +1869,46 @@ class EMSController:
                         max_soc_request_pending=False
                     )
 
+    def full_charge_assist_max_soc(self, dev):
+        """``100`` while an assist owns ``socSet`` for ``dev``, else ``None``."""
+
+        store = self.battery_full_charge_store
+        if not store:
+            return None
+        record = store.get_device_state(dev.name)
+        if record and record.get("full_charge_assist_active"):
+            return 100
+        return None
+
+    def reconcile_device_state_limits(
+        self, dev, state, winter_active, winter_adjust_today
+    ):
+        """Periodic SoC/mode reconcile for one device.
+
+        An active full-charge assist owns ``socSet``; writing the configured
+        ``max_soc`` here flipped it back and let the firmware report
+        ``socLimit == 1`` below 100 %, which completed the assist early.
+        """
+
+        desired_min_soc, winter_adjustment = self.winter_reconciliation_target(
+            dev,
+            state,
+            winter_active,
+            winter_adjust_today
+        )
+
+        self.apply_soc_limits(
+            dev,
+            state,
+            desired_min_soc=desired_min_soc,
+            desired_max_soc=self.full_charge_assist_max_soc(dev)
+        )
+
+        self.apply_device_modes(dev, state)
+
+        if winter_adjustment:
+            self.apply_winter_ac_charge_limit(dev)
+
     def confirm_full_charge_assist_ac_restore(self, dev, state, intent, now):
         if not self.battery_full_charge_store:
             return
@@ -2325,22 +2365,19 @@ class EMSController:
             else dev.max_soc
         )
 
-        #
-        # 0 = unmanaged
-        #
+        managed = {}
+        differs = False
+        if effective_min_soc > 0:
+            managed["minSoc"] = int(effective_min_soc * 10)
+            differs |= int(state.min_soc) != int(effective_min_soc)
+        if effective_max_soc > 0:
+            managed["socSet"] = int(effective_max_soc * 10)
+            differs |= int(state.max_soc) != int(effective_max_soc)
 
-        if effective_min_soc <= 0 and effective_max_soc <= 0:
+        if not managed:
             return True
 
-        #
-        # Already configured
-        #
-
-        if (
-            int(state.min_soc) == int(effective_min_soc)
-            and
-            int(state.max_soc) == int(effective_max_soc)
-        ):
+        if not differs:
 
             log_event(
                 logging.DEBUG,
@@ -2368,12 +2405,9 @@ class EMSController:
 
             ok = write_device_properties(
                 dev,
-                {
-                    "minSoc": int(effective_min_soc * 10),
-                    "socSet": int(effective_max_soc * 10)
-                },
+                managed,
                 reason="soc_limits",
-                field="minSoc/socSet",
+                field="/".join(managed),
                 error_event="write_soc_limits_error",
                 log_fields={
                     "min_soc": effective_min_soc,
@@ -2444,7 +2478,9 @@ class EMSController:
             return self.winter_min_soc_targets[dev.name], False
 
         if not adjust_today:
-            return None, False
+            held = self.winter_held_min_soc(dev, state)
+            self.winter_min_soc_targets[dev.name] = held
+            return held, False
 
         effective_min_soc = self.winter_min_soc_targets.get(
             dev.name,
@@ -2470,6 +2506,22 @@ class EMSController:
         )
 
         return target, True
+
+    def winter_held_min_soc(self, dev, state):
+        """Winter minSoc to keep when no ramp target is known yet.
+
+        The ramp target lives in memory only. After a restart the device still
+        carries it, so it is adopted within the configured floor and the winter
+        ceiling instead of being written back down to the summer value.
+        """
+
+        floor = dev.min_soc if dev.min_soc > 0 else cfg.winter_config_int(
+            "summer_min_soc", 15, minimum=0
+        )
+        ceiling = max(
+            floor, cfg.winter_config_int("winter_min_soc", 40, minimum=0)
+        )
+        return max(floor, min(ceiling, int(state.min_soc)))
 
     def apply_winter_ac_charge_limit(self, dev):
         """Apply conservative winter AC charge input limit."""
@@ -3646,28 +3698,12 @@ class EMSController:
                 ):
 
                     if state:
-                        desired_min_soc, winter_adjustment = (
-                            self.winter_reconciliation_target(
-                                dev,
-                                state,
-                                winter_active,
-                                winter_adjust_today
-                            )
-                        )
-
-                        self.apply_soc_limits(
+                        self.reconcile_device_state_limits(
                             dev,
                             state,
-                            desired_min_soc=desired_min_soc
+                            winter_active,
+                            winter_adjust_today
                         )
-
-                        self.apply_device_modes(
-                            dev,
-                            state
-                        )
-
-                        if winter_adjustment:
-                            self.apply_winter_ac_charge_limit(dev)
 
                 if winter_adjust_today:
                     self.last_winter_adjust_date = today
