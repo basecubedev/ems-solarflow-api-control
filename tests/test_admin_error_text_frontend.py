@@ -105,6 +105,18 @@ def test_no_render_path_prints_a_bare_error_code_any_more():
     assert 'job.error || "' not in body
 
 
+def test_no_multi_line_fallback_prints_a_bare_error_code_either():
+    """The guard above also holds for a fallback written over several lines."""
+
+    js = _read("admin.js")
+    body = "\n".join(
+        line for line in js.splitlines() if not line.lstrip().startswith("//")
+    )
+    flat = " ".join(body.split())
+    assert "data.message || data.error ||" not in flat
+    assert "data.error || (" not in flat
+
+
 def test_the_two_message_maps_do_not_overlap():
     """Two maps that answer for the same code are two sources of truth."""
 

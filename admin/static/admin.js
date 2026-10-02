@@ -19292,9 +19292,7 @@ async function supersedeSetupBuild(nextTag, previousTag) {
   }
   if (!res.ok || data.ok !== true || !data.setup_workflow_id) {
     throw new Error(
-      data.message ||
-        data.error ||
-        "the previous System Build could not be superseded"
+      humanErrorText(data, "the previous System Build could not be superseded")
     );
   }
   clearSetupOperationContext();
@@ -20513,11 +20511,12 @@ async function abandonSystemAlignment() {
       action.owner === "guided_setup" ? data.ok === true : data.stage === "cancelled";
     if (!res.ok || !succeeded) {
       throw new Error(
-        data.message ||
-          data.error ||
-          (action.owner === "guided_setup"
+        humanErrorText(
+          data,
+          action.owner === "guided_setup"
             ? "The setup could not be discarded."
-            : "The upgrade could not be cancelled.")
+            : "The upgrade could not be cancelled."
+        )
       );
     }
     showSetupCleanupIncomplete(null);
