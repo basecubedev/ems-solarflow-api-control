@@ -6971,6 +6971,27 @@ console.log(JSON.stringify({size: zendureMqttPreviewProposals.size, payload: mqt
     assert approved["payload"][0]["replace_grid_meter"] is True
 
 
+def test_js_declined_grid_meter_replacement_keeps_the_previous_selection():
+    """Cancelling the replacement leaves the earlier MQTT grid meter selected."""
+    out = _run_mqtt_proposal_node(
+        """
+function grid(id) { return {
+  id: id, target: "grid_meter",
+  grid_meter_fragment: {type: "zendure_smartmeter_d0", mqtt: {broker_ref: "local_mqtt", topic: "Zendure/sensor/" + id + "/totalPower"}},
+  connection_source: "local_mqtt",
+}; }
+latestMqttProposals = [grid("A"), grid("B")];
+toggleMqttPreviewProposal("A");
+httpGridMeterSelected = true;
+confirmResult = false;
+toggleMqttPreviewProposal("B");
+console.log(JSON.stringify({selected: selectedMqttGridMeterId(), size: zendureMqttPreviewProposals.size}));
+"""
+    )
+    assert out["selected"] == "A"
+    assert out["size"] == 1
+
+
 def test_js_grid_meter_proposal_payload_carries_no_secrets():
     out = _run_mqtt_proposal_node(
         """

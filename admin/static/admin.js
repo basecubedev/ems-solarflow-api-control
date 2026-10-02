@@ -2712,15 +2712,15 @@ function toggleMqttPreviewProposal(proposalId) {
 
   let replaceGridMeter = false;
   if (isGrid) {
-    // Exactly one central grid meter: drop any other selected MQTT grid meter.
-    const previous = selectedMqttGridMeterId();
-    if (previous && previous !== id) {
-      zendureMqttPreviewProposals.delete(previous);
-    }
     // Never silently replace an HTTP/Shelly grid meter already selected.
     if (hasSelectedHttpGridMeter()) {
       if (!confirmGridMeterReplacement()) return;
       replaceGridMeter = true;
+    }
+    // Exactly one central grid meter: drop any other selected MQTT grid meter.
+    const previous = selectedMqttGridMeterId();
+    if (previous && previous !== id) {
+      zendureMqttPreviewProposals.delete(previous);
     }
   }
 
