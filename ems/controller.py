@@ -1041,8 +1041,8 @@ class EMSController:
                 current_output_limit_w=state.output_limit,
                 target_w=min_output_limit
             )
-            self.set_output_limit(dev, min_output_limit)
-            self.night_min_soc_idle_parked.add(dev.name)
+            if self.set_output_limit(dev, min_output_limit):
+                self.night_min_soc_idle_parked.add(dev.name)
 
     def build_night_min_soc_idle_explanation(
         self,
@@ -2279,7 +2279,11 @@ class EMSController:
             cancel(reason)
 
     def set_output_limit(self, dev, value):
-        """Write output limit to the device via its transport, behind its gate."""
+        """Write output limit to the device via its transport, behind its gate.
+
+        Returns False only when the write was attempted and not accepted, so a
+        caller that writes once (night/minSoC park) knows to try again.
+        """
 
         gate = cfg.resolve_device_write_gate(dev)
 
@@ -2294,7 +2298,7 @@ class EMSController:
                 simulation=cfg.SIMULATION_MODE,
                 **gate.as_log_fields(),
             )
-            return
+            return True
 
         try:
             result = dispatch_device_write(dev, int(value))
@@ -2305,9 +2309,10 @@ class EMSController:
                 device=dev.name,
                 error=e
             )
-            return
+            return False
 
         self._log_write_dispatch(dev, gate, result)
+        return bool(result)
 
     def _log_write_dispatch(self, dev, gate, result):
         """Log a structured write dispatch under its honest, distinct event.
