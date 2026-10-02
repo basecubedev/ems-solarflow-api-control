@@ -1141,7 +1141,9 @@ The follow-up architecture the first pass deferred:
    and the Setup-to-Upgrade conflict all run through the backend owner;
    `POST /api/admin/system-alignment/cancel` refuses Setup-owned modes with
    `setup_abandon_required` and unknown modes with
-   `transition_cancel_unsupported`. No frontend Setup path calls the primitive.
+   `transition_cancel_unsupported`, and a request without the exact
+   `operation_id` with 400 `operation_id_required`. No frontend Setup path
+   calls the primitive.
 5. **Guided Upgrade context lifecycle** — `clear_for_operation` binds cleanup to
    the operation: Cancel upgrade and a completed upgrade (after the durable
    known-good + `completed` stage) clear exactly their own context;

@@ -2889,6 +2889,10 @@ class AdminHandler(BaseHTTPRequestHandler):
         if body.get("confirm") is not True:
             self._send_json({"error": "confirmation_required"}, status=400)
             return
+        operation_id = body.get("operation_id")
+        if not isinstance(operation_id, str) or not operation_id:
+            self._send_json({"error": "operation_id_required"}, status=400)
+            return
         transition = self._alignment_status().get("transition") or {}
         # The ownership question is the arbiter's; this route only performs the
         # cancellation it is allowed to perform.
@@ -2924,7 +2928,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         mode = transition.get("mode")
         try:
             result = self.server.system_alignment.cancel(
-                operation_id=body.get("operation_id"),
+                operation_id=operation_id,
                 coordinator=self.server.operation_coordinator,
             )
         except SystemAlignmentError as exc:
@@ -2935,7 +2939,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             and isinstance(result, dict)
             and result.get("stage") == "cancelled"
         ):
-            self._clear_guided_upgrade_context(body.get("operation_id"))
+            self._clear_guided_upgrade_context(operation_id)
         self._send_json(result)
 
     # --- unified guided workflow lifecycle ---------------------------------
