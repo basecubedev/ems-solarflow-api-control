@@ -100,7 +100,8 @@ migrate_unusable_home() {
 if getent passwd "$ACCOUNT" >/dev/null 2>&1; then
     note "the shell account $ACCOUNT already exists; leaving it untouched"
     migrate_unusable_home
-    [ -f "$SUDOERS" ] || install_sudoers
+    [ -f "$SUDOERS" ] \
+        || note "$SUDOERS is absent; it is only written when this package creates $ACCOUNT"
     exit 0
 fi
 

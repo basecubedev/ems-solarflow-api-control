@@ -92,6 +92,10 @@ The drop-in is validated with `visudo -cf` before it is installed, because a
 sudoers file that does not parse takes `sudo` away from every account on the
 host — including the rescue account someone would use to repair it.
 
+The drop-in is written only when the package creates the account. An upgrade
+that finds `ems-shell` already there never writes it: that account may be an
+operator's own, or one whose drop-in was removed on purpose.
+
 ## Turning it on
 
 From the Appliance Manager console, **SSH → Root-capable shell access**: one

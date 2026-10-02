@@ -966,6 +966,10 @@ def run_shell_account(tmp_path, *, sudoers, account_exists=True):
     getent = fake_bin / "getent"
     getent.write_text(f"#!/bin/sh\nexit {0 if account_exists else 2}\n", encoding="utf-8")
     getent.chmod(0o755)
+    for tool in ("adduser", "usermod"):
+        stub = fake_bin / tool
+        stub.write_text(f'#!/bin/sh\necho "{tool} $*" >> {tmp_path}/account.calls\n', encoding="utf-8")
+        stub.chmod(0o755)
 
     environment = dict(os.environ)
     environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
@@ -982,7 +986,9 @@ def test_a_host_without_sudo_still_installs_the_package(tmp_path):
     one account cannot reach root is worse than one where it cannot: that one
     has no console at all."""
 
-    result = run_shell_account(tmp_path, sudoers=tmp_path / "absent" / "ems-shell")
+    result = run_shell_account(
+        tmp_path, sudoers=tmp_path / "absent" / "ems-shell", account_exists=False
+    )
 
     assert result.returncode == 0, result.stderr
     assert "will not be able to reach root" in result.stdout, result.stdout
@@ -995,11 +1001,25 @@ def test_the_sudoers_drop_in_is_root_only_and_says_nopasswd(tmp_path):
     sudoers_dir.mkdir()
     target = sudoers_dir / "ems-shell"
 
-    result = run_shell_account(tmp_path, sudoers=target)
+    result = run_shell_account(tmp_path, sudoers=target, account_exists=False)
 
     assert result.returncode == 0, result.stderr
     assert target.read_text(encoding="utf-8").strip() == "ems-shell ALL=(ALL:ALL) NOPASSWD: ALL"
     assert target.stat().st_mode & 0o777 == 0o440
+
+
+def test_an_existing_account_never_gets_a_sudoers_drop_in_it_lacks(tmp_path):
+    """An existing account may be an operator's, or one whose drop-in was removed on purpose."""
+
+    sudoers_dir = tmp_path / "sudoers.d"
+    sudoers_dir.mkdir()
+    target = sudoers_dir / "ems-shell"
+
+    result = run_shell_account(tmp_path, sudoers=target, account_exists=True)
+
+    assert result.returncode == 0, result.stderr
+    assert not target.exists(), "NOPASSWD root was granted to an account this run did not create"
+    assert "is absent" in result.stdout, result.stdout
 
 
 def test_the_postinst_prepares_the_shell_account_and_the_build_ships_it():
