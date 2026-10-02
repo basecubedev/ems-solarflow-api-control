@@ -76,8 +76,14 @@ its AC mode over MQTT.
 
 **What you select:** the save button on the card you changed.
 
-**What it changes:** the value is written to `data/runtime-state.json` through
-the EMS-owned runtime writer, and the control loop picks it up on its next cycle.
+**What it changes:** only the fields you changed on that card are written to
+`data/runtime-state.json` through the EMS-owned runtime writer, and the control
+loop picks them up on its next cycle. A value someone else changed in the
+meantime (emsctl, Home Assistant, another tab) is left alone. The cards reload
+the current values every 30 seconds while you are not editing.
+
+Turning the EMS or a device off, switching a device to AC charging, and changing
+the offgrid socket ask for confirmation first.
 
 **Expected result:** a confirmation on the card, and the change becomes visible in
 the [Control pipeline](control.md) below within a loop interval.
@@ -175,6 +181,8 @@ decision within one loop interval.
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
 | No forms visible | Not logged in, or no password configured | Log in, or set a password |
+| Header pill shows **Stale** | No new snapshot for three loop intervals (at least 30 s): the control loop or the connection is stuck | Check `docker compose logs ems` |
+| Grid shows **Meter offline** | The grid meter did not answer; the EMS holds its target | [Troubleshooting](../troubleshooting.md) |
 | Validation error on save | The value is out of range | Nothing was written; correct it |
 | Saved but nothing changed | Wait one loop interval, then check the pipeline | [Control pipeline](control.md) |
 | Value reverts | Something else is writing runtime state | Check `emsctl.py`, HA helpers, a second controller |

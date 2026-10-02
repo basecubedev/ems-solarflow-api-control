@@ -373,15 +373,15 @@ console.log(JSON.stringify({{
 
     assert 'value="800"' in output["maxTotalPowerInput"]
     assert 'max="5000"' in output["maxTotalPowerInput"]
-    assert 'step="50"' in output["maxTotalPowerInput"]
+    assert 'step="1"' in output["maxTotalPowerInput"]
     assert 'max="800"' not in output["maxTotalPowerInput"]
     assert 'max="5000"' in output["minOutputLimitInput"]
-    assert 'step="5"' in output["minOutputLimitInput"]
+    assert 'step="1"' in output["minOutputLimitInput"]
     assert 'max="3600"' in output["loopIntervalInput"]
     assert 'step="1"' in output["loopIntervalInput"]
     assert 'value="400"' in output["deviceMaxPowerInput"]
     assert 'max="800"' in output["deviceMaxPowerInput"]
-    assert 'step="50"' in output["deviceMaxPowerInput"]
+    assert 'step="1"' in output["deviceMaxPowerInput"]
     assert 'max="400"' not in output["deviceMaxPowerInput"]
     assert 'max="100"' in output["pvPriorityInput"]
     assert 'step="0.01"' in output["pvPriorityInput"]
@@ -1191,6 +1191,58 @@ console.log(JSON.stringify({{
     assert output["transport"] == "polling"
 
 
+def test_a_runtime_card_sends_only_the_fields_the_operator_changed():
+    """A card rendered before emsctl disabled the EMS must not re-enable it."""
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const field = (name, type, value, initial, checked) => ({{
+  name, type, value, checked, dataset: {{ initial }},
+}});
+const form = {{
+  elements: [
+    field("enabled", "checkbox", "", "true", true),
+    field("max_total_power", "number", "820", "800"),
+    field("loop_interval", "number", "5", "5"),
+    field("offgrid_socket_mode", "select-one", "off", "off"),
+  ],
+}};
+const untouched = {{ elements: form.elements.slice(2) }};
+console.log(JSON.stringify({{
+  changed: app.changedRuntimePayload(form),
+  untouched: app.changedRuntimePayload(untouched),
+}}));
+"""
+    output = run_node(script)
+
+    assert output["changed"] == {"max_total_power": 820}
+    assert output["untouched"] == {}
+
+
+def test_consequential_runtime_changes_ask_first():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const system = {{ dataset: {{ runtimeEndpoint: "/api/runtime/system" }} }};
+const device = {{ dataset: {{ runtimeEndpoint: "/api/runtime/device/WR%201" }} }};
+console.log(JSON.stringify({{
+  emsOff: app.runtimeChangeWarning(system, {{ enabled: false }}),
+  emsLimit: app.runtimeChangeWarning(system, {{ max_total_power: 600 }}),
+  deviceOff: app.runtimeChangeWarning(device, {{ enabled: false }}),
+  acInput: app.runtimeChangeWarning(device, {{ runtime_role: "ac_input" }}),
+  offgrid: app.runtimeChangeWarning(device, {{ offgrid_socket_mode: "eco" }}),
+  power: app.runtimeChangeWarning(device, {{ max_power: 600 }}),
+}}));
+"""
+    output = run_node(script)
+
+    assert "Turn the EMS off?" in output["emsOff"]
+    assert output["emsLimit"] is None
+    assert "WR 1" in output["deviceOff"]
+    assert "AC charging" in output["acInput"]
+    assert "offgrid socket" in output["offgrid"]
+    assert output["power"] is None
+
+
 def test_device_card_offers_the_ac_role_emsctl_offers():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});
@@ -1212,3 +1264,22 @@ console.log(JSON.stringify({{
     assert 'name="runtime_role"' not in output["mqtt"]
     assert "Output only (MQTT)" in output["mqtt"]
 
+
+def test_a_frozen_snapshot_reads_stale_and_a_dead_meter_reads_offline():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+app.state.runtime = {{ system: {{ loop_interval: 5 }} }};
+app.state.snapshotChangedAt = 1_000_000;
+console.log(JSON.stringify({{
+  fresh: app.snapshotIsStale(1_000_000 + 29_000),
+  stale: app.snapshotIsStale(1_000_000 + 31_000),
+  meterOffline: app.gridPowerText({{ grid_power_w: 0, grid_power_valid: false }}),
+  meterOk: app.gridPowerText({{ grid_power_w: 120, grid_power_valid: true }}),
+}}));
+"""
+    output = run_node(script)
+
+    assert output["fresh"] is False
+    assert output["stale"] is True
+    assert output["meterOffline"] == "Meter offline"
+    assert "120" in output["meterOk"]
