@@ -395,6 +395,35 @@ def test_cloud_subscriptions_preserve_case_sensitive_route():
     )
 
 
+@pytest.mark.parametrize("field", ["device_id", "product_key"])
+@pytest.mark.parametrize("value", ["DEV/OTHER", "+", "#", "DEV+", "DEV\x00"])
+def test_route_segment_with_topic_syntax_is_rejected(field, value):
+    device = _control_device()
+    device["mqtt"][field] = value
+    codes = {
+        issue["code"]
+        for issue in validate_zendure_mqtt_control_device_config(device)
+        if issue["severity"] == "error"
+    }
+    assert "mqtt_route_segment_invalid" in codes
+
+
+@pytest.mark.parametrize("field", ["device_id", "product_key"])
+def test_cloud_subscriptions_skip_a_route_segment_with_topic_syntax(field):
+    device = _control_device()
+    device["mqtt"]["broker_ref"] = "cloud"
+    device["mqtt"][field] = "+"
+    assert zendure_cloud_device_subscriptions([device], "cloud") == ()
+
+
+def test_a_plain_route_segment_is_not_flagged():
+    codes = {
+        issue["code"]
+        for issue in validate_zendure_mqtt_control_device_config(_control_device())
+    }
+    assert "mqtt_route_segment_invalid" not in codes
+
+
 # --- Migration coverage -----------------------------------------------------
 
 

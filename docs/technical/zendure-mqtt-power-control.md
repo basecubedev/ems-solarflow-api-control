@@ -476,6 +476,9 @@ proposal mapper keeps such a device telemetry-only; migration disables control
 physical serial and broker/profile metadata; the properties/write builder returns
 no message (never a `deviceId=null` payload); and Cloud device-scoped
 subscriptions contribute only for a complete `product_key`/`device_id` route.
+Both are single topic segments: a value containing `/`, `+`, `#` or NUL is
+rejected for every entry (`mqtt_route_segment_invalid`) and never contributes a
+Cloud subscription, so it can neither widen a subscription nor retarget a write.
 
 **Admin manual entry (Fresh Setup and Maintenance).** The UI carries the same
 separation, never inferring a route id from a serial. Fresh Setup's manual
