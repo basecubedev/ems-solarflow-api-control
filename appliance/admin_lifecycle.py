@@ -8,6 +8,7 @@ manage: a failed replacement is undone by restoring the saved deployment files
 and re-pinning the previous known-good digest.
 """
 
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from appliance.admin_deployment import (
     resolve_deployment,
     snapshot,
 )
+from appliance.auth import deployment_owner
 from appliance.commands import CommandError
 from appliance.docker_backend import (
     CONTAINER_RUNNING,
@@ -82,6 +84,7 @@ TYPE_REPAIR = "admin.repair"
 TYPE_LIFECYCLE = "admin.lifecycle"
 
 ACTION_SET_RESTART_POLICY = "set_restart_policy"
+BIND_PATH_MODE = 0o755
 REPAIR_SCOPE_RESTART_POLICY = "restart_policy"
 BOOT_ACTOR = "boot"
 BOOT_PLAN_TIMEOUT_SECONDS = 120
@@ -1652,13 +1655,40 @@ class AdminLifecycleService:
             target = self.paths.export_paths().get(name)
             if target is None:
                 return "unknown_path"
-            try:
-                target.mkdir(parents=True, exist_ok=True)
-            except OSError:
-                return "create_failed"
-            return "verified" if target.is_dir() else "create_failed"
+            return self._create_bind_path(target)
 
         return "unsupported"
+
+    def _create_bind_path(self, target):
+        """Create a missing bind directory as the deployment's, and prove it is.
+
+        The agent is root with ``UMask=0077``, so a bare ``mkdir`` leaves a
+        directory the EMS container cannot enter. Every component created gets
+        the deployment owner of the install root and ``BIND_PATH_MODE``.
+        """
+
+        owner = deployment_owner(self.paths.install_root)
+        missing = []
+        current = target
+        while not current.exists() and not current.is_symlink():
+            missing.append(current)
+            current = current.parent
+        try:
+            for directory in reversed(missing):
+                directory.mkdir(mode=BIND_PATH_MODE)
+                os.chmod(directory, BIND_PATH_MODE)
+                if owner is not None:
+                    os.chown(directory, owner[0], owner[1])
+            entry = os.lstat(target)
+        except OSError:
+            return "create_failed"
+        if not target.is_dir() or target.is_symlink():
+            return "create_failed"
+        if owner is not None and (entry.st_uid, entry.st_gid) != tuple(owner):
+            return "owner_not_applied"
+        if entry.st_mode & 0o777 != BIND_PATH_MODE:
+            return "mode_not_applied"
+        return "verified"
 
     def _apply_restart_policy(self):
         """The compose line, then the running container; never a stop or recreate."""
