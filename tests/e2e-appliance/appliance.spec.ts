@@ -14,7 +14,7 @@ test.describe("authentication @smoke", () => {
   test("first start requires a new appliance password", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator("#gate")).toBeVisible();
-    await expect(page.locator("#gate-intro")).toContainText("No appliance password exists yet");
+    await expect(page.locator("#gate-intro")).toContainText("No password exists yet");
     await expect(page.locator("#gate-confirm-field")).toBeVisible();
     await expect(page.locator("#gate-submit")).toHaveText("Create password");
     // Nothing about the host is visible before authentication.
@@ -686,11 +686,23 @@ test.describe("admin lifecycle @authority", () => {
     await openView(page, "admin");
     await page.locator('[data-test="admin-restart"]').click();
     await expect(page.locator("#dialog")).toBeVisible();
-    await page.locator("#dialog-cancel").click();
 
+    // Leaving the page, not pressing Cancel: Cancel withdraws the plan.
     await page.reload();
     await expect(page.locator('[data-test="operation-stage"]')).toBeVisible();
     await expect(page.locator('[data-test="operation-stage"]')).toContainText("awaiting");
+  });
+
+  test("cancelling a plan releases the operation lock", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "admin");
+    await page.locator('[data-test="admin-restart"]').click();
+    await expect(page.locator("#dialog")).toBeVisible();
+    await page.locator("#dialog-cancel").click();
+    await expect(page.locator('[data-test="operation-stage"]')).toBeHidden();
+
+    await page.locator('[data-test="admin-stop"]').click();
+    await expect(page.locator("#dialog")).toBeVisible();
   });
 
   test("a second conflicting mutation is refused", async ({ page }) => {
@@ -698,7 +710,8 @@ test.describe("admin lifecycle @authority", () => {
     await openView(page, "admin");
     await page.locator('[data-test="admin-restart"]').click();
     await expect(page.locator("#dialog")).toBeVisible();
-    await page.locator("#dialog-cancel").click();
+    await page.reload();
+    await openView(page, "admin");
 
     const conflict = new Promise<string>((resolve) => {
       page.once("dialog", async (alert) => {

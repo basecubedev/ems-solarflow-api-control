@@ -1147,6 +1147,21 @@
     state.pending = null;
   }
 
+  function dismissDialog() {
+    var pending = state.pending;
+    closeDialog();
+    if (!pending || !pending.operation) return;
+    var operationId = pending.operation.operation_id;
+    api("/api/operations/cancel", { method: "POST", body: { operation_id: operationId } })
+      .then(function () {
+        return api("/api/operations/acknowledge", {
+          method: "POST", body: { operation_id: operationId }
+        });
+      })
+      .catch(function () { /* the banner still offers its own Cancel */ })
+      .then(refresh);
+  }
+
   function confirmDialog() {
     var pending = state.pending;
     if (!pending) return;
@@ -3391,11 +3406,11 @@
     document.getElementById("refresh-button").addEventListener("click", function () { refreshEverything(); });
     document.getElementById("mode-basic").addEventListener("click", function () { setMode("basic"); });
     document.getElementById("mode-expert").addEventListener("click", function () { setMode("expert"); });
-    document.getElementById("dialog-cancel").addEventListener("click", closeDialog);
+    document.getElementById("dialog-cancel").addEventListener("click", dismissDialog);
     document.getElementById("dialog-confirm").addEventListener("click", confirmDialog);
     document.getElementById("reconnect-retry").addEventListener("click", pollReconnect);
     document.addEventListener("keydown", function (event) {
-      if (event.key === "Escape" && !document.getElementById("dialog-backdrop").hidden) closeDialog();
+      if (event.key === "Escape" && !document.getElementById("dialog-backdrop").hidden) dismissDialog();
     });
 
     document.getElementById("mode-basic").setAttribute("aria-pressed", String(state.mode === "basic"));
