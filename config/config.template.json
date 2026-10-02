@@ -1,7 +1,7 @@
 {
-  "_comment": "Copy this file to config.json and adjust your local setup.",
+  "_comment": "Copy this file to config/config.json and adjust your local setup.",
   "_comment_docs": [
-    "Detailed setup guide: docs/configuration.md.",
+    "Detailed setup guide: docs/technical/configuration.md.",
     "Example profiles: docs/configuration-examples.md."
   ],
   "config_schema_version": 3,
@@ -172,8 +172,8 @@
 
   "winter": {
     "_comment": [
-      "Optional seasonal minimum-SOC strategy.",
-      "Enable it when batteries need a higher winter reserve.",
+      "Seasonal minimum-SOC strategy, enabled by default.",
+      "In the listed months it raises minSoc towards winter_min_soc and writes inputLimit.",
       "See docs/configuration-examples.md before changing advanced values."
     ],
     "enabled": true,
@@ -187,8 +187,8 @@
 
   "battery_full_charge_assist": {
     "_comment": [
-      "Optional full-charge assist for battery-backed devices.",
-      "Temporarily raises device Max-SoC to 100%.",
+      "Full-charge assist for battery-backed devices, enabled by default.",
+      "Every interval_days it raises Max-SoC to 100% and may AC-charge from the grid.",
       "Use it when devices should reach firmware Max-SoC periodically."
     ],
     "enabled": true,

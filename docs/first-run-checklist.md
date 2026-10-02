@@ -5,7 +5,10 @@ Use this after the first config edit and before unattended operation.
 ## Docker
 
 1. Replace all placeholders in `config/config.json`, including example IPs and
-   `YOUR_SN`.
+   `YOUR_SN`, and delete the template devices you do not have. **Replacing the
+   last placeholder turns live control on** at the next start; to watch first,
+   also set `"dry_run": true` under `system` (see
+   [Safety](user/safety.md#when-ems-starts-writing)).
 2. Restart EMS:
 
 ```bash
@@ -53,6 +56,7 @@ docker compose exec ems python3 emsctl.py influx status
 python3 emsctl.py diagnose
 python3 emsctl.py diagnose --hardware
 python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
+# writes to the hardware for two minutes:
 python3 -B ems-solarflow-api-control.py --duration 120
 ```
 

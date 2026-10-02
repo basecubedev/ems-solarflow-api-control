@@ -148,6 +148,7 @@ python3 emsctl.py config init
 python3 emsctl.py config upgrade --dry-run
 python3 emsctl.py config upgrade
 python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
+# writes to the hardware for two minutes:
 python3 -B ems-solarflow-api-control.py --duration 120
 ```
 

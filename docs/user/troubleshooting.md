@@ -88,9 +88,12 @@ Then check the basics:
 
 If targets look correct but the inverter output does not change:
 
-- Make sure live writes are enabled. Until your real values are filled in, EMS
-  stays in safe mode: it calculates targets but does not write to hardware. See
-  [Safety](safety.md).
+- Look for a startup line about template placeholders in `docker compose logs
+  ems`. While any placeholder is left (a template IP such as `192.168.1.100`,
+  `YOUR_SN`, an unused second template device), EMS stays in safe mode: it
+  calculates targets but does not write to hardware. Also check that
+  `system.dry_run` is `false` and `system.enabled` is `true`. See
+  [Safety](safety.md#when-ems-starts-writing).
 - Make sure **only one controller** writes Zendure output limits. Do not run
   the Zendure app HEMS, another automation, or a second EMS at the same time.
 - Check that the battery is above its minimum SOC.

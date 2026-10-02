@@ -136,6 +136,10 @@ Set at least:
 
 Template placeholder values force safe mode until replaced. In safe mode, EMS
 control is disabled, dry-run is enabled, and hardware writes are blocked.
+**Once the last placeholder is gone, the restart below starts live control.**
+Delete template devices you do not have, and set `"dry_run": true` under
+`system` if you want to watch the decisions before EMS acts on them (see
+[Safety](user/safety.md#when-ems-starts-writing)).
 
 ## 5. Restart
 

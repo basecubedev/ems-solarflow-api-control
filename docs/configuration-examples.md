@@ -209,6 +209,7 @@ Native Python validation:
 
 ```bash
 python3 -B ems-solarflow-api-control.py --preflight
+# writes to the hardware for two minutes:
 python3 -B ems-solarflow-api-control.py --duration 120
 ```
 

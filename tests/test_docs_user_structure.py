@@ -574,7 +574,8 @@ def test_technical_troubleshooting_reference_exists():
 def test_user_safety_is_checklist_not_runtime_reference():
     text = read(ROOT / "docs" / "user" / "safety.md")
     assert text.startswith("# Safety")
-    assert "Before enabling live writes" in text
+    assert "## When EMS starts writing" in text
+    assert "## Before the first live run" in text
     assert "technical safety model" in text
     assert len(text.splitlines()) <= 250
 

@@ -3,11 +3,54 @@
 EMS controls real power hardware. Take a few minutes to check the points below
 before you let it run unattended.
 
-## Before enabling live writes
+## When EMS starts writing
+
+There is no separate "enable live writes" switch to flip. The template ships
+with `system.dry_run: false` and every write gate open, and only one thing
+holds writes back: **template placeholders**. While any device IP, the grid
+meter address or a serial still carries a placeholder, EMS runs in safe mode,
+calculates targets and writes nothing. The placeholder values are
+`192.168.1.100`, `192.168.1.101`, `192.168.1.50`, `0.0.0.0`, `localhost`,
+`example.com` (and any `*.example.com`), `YOUR_SN` and `YOUR_TOKEN_HERE`.
+
+The moment the last placeholder is replaced and EMS restarts, it writes
+`outputLimit` and reconciles `minSoc`, `socSet`, `acMode` and `inputLimit`.
+So:
+
+- Delete the template's second device if you have only one inverter. A
+  leftover placeholder device keeps the whole system in safe mode.
+- If an inverter really sits at one of the addresses above (the first DHCP
+  lease on many routers is `192.168.1.100`), give it another address; EMS
+  cannot tell your device from the template.
+- To watch before it acts, set `"dry_run": true` under `system` first, check
+  the decisions in the dashboard and with `emsctl.py diagnose --control`, then
+  set it back to `false`.
+- To stop control at any time: `python3 emsctl.py system disable` (Docker:
+  `docker compose exec ems python3 emsctl.py system disable`), or switch
+  **EMS enabled** off in the dashboard. Inverters keep their last output limit.
+
+## Features that write on their own
+
+Two features are enabled in the template and act without an operator:
+
+- **Winter mode** (`winter.enabled: true`, months 10 to 3) raises `minSoc` step
+  by step up to `winter_min_soc` (40 %) and sets a winter AC charge
+  `inputLimit` of 200 W.
+- **Battery full-charge assist** (`battery_full_charge_assist.enabled: true`)
+  raises `socSet` to 100 % every 28 days; with `enable_ac_charge_mode: true`
+  it switches the inverter to AC input at `force_time` (14:00, UTC in Docker)
+  on the due day and charges from the grid at 600 W.
+
+Turn either off in the config if you do not want it.
+
+## Before the first live run
 
 - Check your inverter serial numbers.
 - Check inverter IP addresses.
-- Check your grid meter direction (import positive, export negative).
+- Check your grid meter direction (import positive, export negative). EMS
+  does not invert a meter. If the sign is wrong, turn the clamp around or
+  select the other channels on the meter; see
+  [Troubleshooting](troubleshooting.md).
 - Check the maximum output limit.
 - Check minimum and maximum battery SOC.
 - Make sure no other controller writes Zendure output limits. Use only one
@@ -20,9 +63,6 @@ before you let it run unattended.
 - Start with conservative settings.
 - Monitor the first live run.
 
-Until your real values are filled in, EMS stays in safe mode: it calculates
-targets but does not write to hardware. Review your settings, then enable live
-writes.
 
 ## Zendure Cloud MQTT control confirmation
 
