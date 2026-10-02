@@ -11,6 +11,7 @@ next one.
 """
 
 
+import time
 import pytest
 
 from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
@@ -179,4 +180,26 @@ def test_pending_target_is_a_single_slot_not_a_queue():
     # Only the latest pending target is published; the intermediates are dropped.
     assert len(dev._service.published) == 2
     assert dev._active_command.target_w == 420
+    assert dev._pending_target is None
+
+
+def test_a_cancelled_pending_target_is_never_published_later(monkeypatch):
+    """Interleaving: 500 in flight, 800 queued, the controller skips the device."""
+
+    dev = _device()
+    dev.write_output_limit(500)
+    active = dev._active_command
+    dev.write_output_limit(800)
+    assert dev._pending_target == 800
+
+    dev.cancel_pending_output_limit("control_disabled_skip_write")
+    dev.handle_reply(_reply(active))
+
+    import ems.zendure_mqtt.device_client as device_client
+
+    later = time.monotonic() + 3600
+    monkeypatch.setattr(device_client.time, "monotonic", lambda: later)
+    dev.fetch()
+
+    assert len(dev._service.published) == 1
     assert dev._pending_target is None

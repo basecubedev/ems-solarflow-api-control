@@ -372,6 +372,16 @@ class ZendureMqttDeviceClient:
                 )
             )
 
+    def cancel_pending_output_limit(self, reason):
+        """Drop a target queued behind the in-flight command.
+
+        A queued target is the controller's intent for the cycle that asked
+        for it. Once the controller skips this device, flushing it later would
+        command power that no current decision asked for.
+        """
+
+        self._discard_pending_target(reason)
+
     def dispatch_output_limit(self, value):
         """Publish a power write and report the structured dispatch outcome.
 

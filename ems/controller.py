@@ -2256,6 +2256,13 @@ class EMSController:
         if changed:
             self.runtime_state.save_atomic()
 
+    def retire_pending_output_limit(self, dev, reason):
+        """Tell a transport with a queued target that this cycle skips it."""
+
+        cancel = getattr(dev, "cancel_pending_output_limit", None)
+        if callable(cancel):
+            cancel(reason)
+
     def set_output_limit(self, dev, value):
         """Write output limit to the device via its transport, behind its gate."""
 
@@ -3807,6 +3814,9 @@ class EMSController:
                 night_min_soc_idle=True
             )
 
+            for dev in self.devices:
+                self.retire_pending_output_limit(dev, "night_min_soc_idle")
+
             self.apply_night_min_soc_idle_control(
                 states,
                 controllable_indexes,
@@ -3969,6 +3979,7 @@ class EMSController:
                     device=dev.name,
                     target_w=targets[i]
                 )
+                self.retire_pending_output_limit(dev, "control_disabled_skip_write")
                 continue
 
             if not self.device_online.get(dev.name, True):
@@ -3979,6 +3990,7 @@ class EMSController:
                     device=dev.name
                 )
 
+                self.retire_pending_output_limit(dev, "offline_skip_write")
                 continue
 
             if not self.runtime_device_bool(dev.name, "enabled", True):
@@ -3988,6 +4000,7 @@ class EMSController:
                     device=dev.name,
                     target_w=targets[i]
                 )
+                self.retire_pending_output_limit(dev, "device_disabled_skip_write")
                 continue
 
             if not self.device_output_control_allowed_by_intent(dev.name):
@@ -4008,6 +4021,7 @@ class EMSController:
                         else "runtime_role_blocked"
                     )
                 )
+                self.retire_pending_output_limit(dev, "runtime_role_skip_output_limit")
                 continue
 
             target = effective_targets[i]
@@ -4040,6 +4054,7 @@ class EMSController:
                     reference_source=deadband_reference_source,
                     deadband_w=cfg.DEADBAND
                 )
+                self.retire_pending_output_limit(dev, "deadband_skip_write")
                 continue
 
             self.set_output_limit(dev, target)

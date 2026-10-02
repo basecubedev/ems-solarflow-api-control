@@ -1058,3 +1058,23 @@ def test_a_dead_grid_meter_does_not_wind_the_output_up():
 
     assert max(written[1:]) <= written[0] + 1
     assert controller.grid_meter_holding is True
+
+
+def test_every_skipped_device_has_its_queued_target_retired():
+    dev = device("WR1")
+    dev.cancel_pending_output_limit = Mock()
+    controller = EMSController(
+        devices=[dev], shelly=ShellyStub(300), sleep_enabled=False
+    )
+    controller.set_output_limit = Mock()
+    with patch(
+        "ems.controller.fetch_all_devices", return_value=[state()]
+    ), patch("ems.controller.cfg.SYSTEM_ENABLED", False), patch(
+        "ems.controller.cfg.SOC_RECONCILE_INTERVAL", 0
+    ):
+        controller.run_once()
+
+    controller.set_output_limit.assert_not_called()
+    dev.cancel_pending_output_limit.assert_called_once_with(
+        "control_disabled_skip_write"
+    )
