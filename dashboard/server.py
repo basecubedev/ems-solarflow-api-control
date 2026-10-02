@@ -64,6 +64,7 @@ MAX_JSON_BODY_BYTES = 16 * 1024
 MAX_SSE_CONNECTIONS = 8
 MAX_SSE_CONNECTIONS_PER_IP = 2
 SSE_MAX_CONNECTION_SECONDS = 30 * 60
+SSE_HEARTBEAT_SECONDS = 15
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -1795,24 +1796,30 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         last_timestamp = None
         started_at = time.monotonic()
+        last_write_at = started_at
 
         try:
             while time.monotonic() - started_at < self.server.sse_max_connection_seconds:
                 snapshot = self.server.store.latest()
                 timestamp = snapshot.get("timestamp")
 
+                message = None
                 if timestamp != last_timestamp:
                     payload = json.dumps(
                         _external_mqtt_status_payload(self.server, snapshot),
                         sort_keys=True,
                     )
                     message = f"event: telemetry\ndata: {payload}\n\n"
+                elif time.monotonic() - last_write_at >= SSE_HEARTBEAT_SECONDS:
+                    message = ": keepalive\n\n"
+                if message is not None:
                     try:
                         self.wfile.write(message.encode("utf-8"))
                         self.wfile.flush()
-                    except (BrokenPipeError, ConnectionResetError):
+                    except (BrokenPipeError, ConnectionResetError, OSError):
                         return
                     last_timestamp = timestamp
+                    last_write_at = time.monotonic()
 
                 time.sleep(1)
         finally:

@@ -1656,3 +1656,55 @@ def test_the_local_history_serves_any_configured_device_name():
     DashboardRequestHandler._serve_series(handler, provider, {}, log_label="history")
 
     assert queried == [["W" * 200]]
+
+
+def test_an_idle_event_stream_sends_a_heartbeat_and_frees_a_dead_client(monkeypatch):
+    """With no new snapshot the stream still writes, so a gone client is noticed."""
+
+    import dashboard.server as server_module
+
+    clock = {"now": 0.0}
+
+    class _Clock:
+        @staticmethod
+        def monotonic():
+            return clock["now"]
+
+        @staticmethod
+        def sleep(seconds):
+            clock["now"] += seconds
+
+    class _DeadAfterFirstWrite:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, data):
+            if self.writes:
+                raise BrokenPipeError
+            self.writes.append(data)
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(server_module, "time", _Clock)
+    limiter = SSEConnectionLimiter(8, 2)
+    stream = _DeadAfterFirstWrite()
+    handler = SimpleNamespace(
+        client_address=("127.0.0.1", 1),
+        wfile=stream,
+        server=SimpleNamespace(
+            store=StoreStub(),
+            sse_limiter=limiter,
+            sse_max_connection_seconds=3600,
+        ),
+        send_response=lambda status: None,
+        send_header=lambda key, value: None,
+        end_headers=lambda: None,
+        _send_security_headers=lambda: None,
+    )
+
+    DashboardRequestHandler._send_events(handler)
+
+    assert len(stream.writes) == 1
+    assert clock["now"] < server_module.SSE_HEARTBEAT_SECONDS + 2
+    assert limiter.acquire("127.0.0.1") and limiter.acquire("127.0.0.1")
