@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from ems import config as target_cfg
-from ems.controller import EMSController
+from ems.controller import EMSController, finite_grid_load
 from ems.models import DeviceCapabilities, DeviceState
 from ems.target_control import calculate_targets
 
@@ -211,6 +211,21 @@ def test_total_target_fixture_regressions(monkeypatch, case):
 
         assert step["expected_target_min_w"] <= target
         assert target <= step["expected_target_max_w"]
+
+
+@pytest.mark.parametrize("reading", [float("nan"), float("inf"), None, "x"])
+def test_non_finite_grid_reading_holds_target_and_spares_the_filter(
+    monkeypatch, reading
+):
+    ems = controller(monkeypatch)
+    states = [state(output=300, output_limit=300)]
+    ems.stabilized_total_target(finite_grid_load(300), states, 800)
+    held = ems.stabilized_total_target(finite_grid_load(reading), states, 800)
+    after = ems.stabilized_total_target(finite_grid_load(-200), states, 800)
+
+    assert held == held and held <= 800
+    assert after == after
+    assert after < held
 
 
 def test_output_filter_first_cycle_median_and_ema(monkeypatch):

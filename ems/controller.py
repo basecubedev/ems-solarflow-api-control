@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
 import logging
+import math
 import time
 from collections import deque
 from datetime import datetime, timedelta
@@ -40,6 +41,23 @@ from ems.target_control import (
 STARTUP_AC_MODE_RECONCILE_REASON = "startup_ac_mode_reconcile"
 FULL_CHARGE_ASSIST_REASON = "battery_full_charge_assist"
 FULL_CHARGE_ASSIST_RESTORE_REASON = "battery_full_charge_assist_restore"
+
+
+def finite_grid_load(value):
+    """Return a finite grid reading in W; anything else holds the target (0 W).
+
+    The load filter keeps its history, so one NaN admitted here would poison
+    every later target until restart.
+    """
+
+    try:
+        load = float(value)
+    except (TypeError, ValueError):
+        load = math.nan
+    if math.isfinite(load):
+        return load
+    log_event(logging.WARNING, "grid_load_not_finite", value=value)
+    return 0.0
 
 
 class EMSController:
@@ -3384,7 +3402,7 @@ class EMSController:
                 error=e
             )
 
-        load = self.shelly.get_power()
+        load = finite_grid_load(self.shelly.get_power())
 
         # =====================
         # RUNTIME cfg.CONFIG

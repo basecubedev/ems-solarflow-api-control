@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import logging
 import json
+import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -221,9 +222,10 @@ class HAClient:
         val = self.get_state(entity_id)
 
         try:
-            return float(val)
-        except:
+            parsed = float(val)
+        except (TypeError, ValueError):
             return default
+        return parsed if math.isfinite(parsed) else default
 
 def _observed_pack_count(data, props):
     """Return the reported pack count, unless the report contradicts itself.
@@ -1002,9 +1004,17 @@ def create_grid_meter_client(config, session, *, mqtt_credential_resolver=None):
 
 
 def _is_numeric(value):
-    """Return True for power values Shelly reports as JSON numbers."""
+    """Return True for finite power values reported as JSON numbers.
 
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    ``json`` accepts ``NaN``/``Infinity``; a meter that publishes one while a
+    sensor is unavailable must count as a failed read, not as a load.
+    """
+
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
 
 
 _SHELLY_PHASE_KEYS = ("em1:0", "em1:1", "em1:2")
@@ -1256,9 +1266,11 @@ def _parse_mqtt_number_value(value):
         return float(value)
     if isinstance(value, str) and value.strip():
         try:
-            return float(value.strip())
+            parsed = float(value.strip())
         except ValueError:
-            pass
+            parsed = None
+        if parsed is not None and math.isfinite(parsed):
+            return parsed
     raise ValueError("MQTT grid power value is not numeric")
 
 

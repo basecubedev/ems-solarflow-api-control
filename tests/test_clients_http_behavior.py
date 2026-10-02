@@ -1023,6 +1023,41 @@ def test_parse_mqtt_grid_power_payload_rejects_invalid_values():
         _parse_mqtt_grid_power_payload(b"1", payload_format="xml")
 
 
+@pytest.mark.parametrize("payload", [b"nan", b"inf", b"-Infinity", b"NaN"])
+def test_parse_mqtt_grid_power_payload_rejects_non_finite_number(payload):
+    with pytest.raises(ValueError, match="not numeric"):
+        _parse_mqtt_grid_power_payload(payload)
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+def test_grid_meter_parsers_reject_non_finite_json_values(literal):
+    import json
+
+    def load(text):
+        return json.loads(text)
+
+    with pytest.raises(ValueError):
+        _parse_mqtt_grid_power_payload(
+            ('{"power": %s}' % literal).encode(),
+            payload_format="json",
+            value_path="power",
+        )
+    with pytest.raises(ValueError):
+        _parse_shelly_power(load('{"em:0": {"total_act_power": %s}}' % literal))
+    with pytest.raises(ValueError):
+        _parse_ecotracker_power(load('{"power": %s}' % literal))
+    with pytest.raises(ValueError):
+        _parse_tasmota_http_power(
+            load('{"StatusSNS": {"Power": %s}}' % literal), "StatusSNS.Power"
+        )
+
+
+def test_ha_client_get_float_rejects_non_finite_state():
+    client = HAClient.__new__(HAClient)
+    client.get_state = lambda entity_id: "nan"
+    assert client.get_float("sensor.x", 7.0) == 7.0
+
+
 def test_mqtt_grid_meter_client_subscribes_and_returns_latest_value():
     fake = FakeMqttClient()
     client = MqttGridMeterClient(
