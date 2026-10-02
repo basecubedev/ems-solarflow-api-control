@@ -2,6 +2,7 @@
 import csv
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -76,13 +77,24 @@ def require_influx_api_env(values, *keys):
     )
 
 
+def _single_line(value):
+    """Line protocol cannot escape a line break, so it becomes a space."""
+
+    return str(value).replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+
+
 def escape_measurement(value):
-    return str(value).replace("\\", "\\\\").replace(" ", "\\ ").replace(",", "\\,")
+    return (
+        _single_line(value)
+        .replace("\\", "\\\\")
+        .replace(" ", "\\ ")
+        .replace(",", "\\,")
+    )
 
 
 def escape_tag(value):
     return (
-        str(value)
+        _single_line(value)
         .replace("\\", "\\\\")
         .replace(" ", "\\ ")
         .replace(",", "\\,")
@@ -98,12 +110,14 @@ def format_field_value(value):
         return f"{value}i"
 
     if isinstance(value, float):
+        if not math.isfinite(value):
+            return None
         return json.dumps(round(value, 6))
 
     if value is None:
         return None
 
-    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    escaped = _single_line(value).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
 
 
