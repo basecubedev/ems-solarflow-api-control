@@ -11,6 +11,7 @@ Change a small set of operating values live, from the browser, without editing
 - Take one inverter out of regulation temporarily.
 - Turn winter mode or Home Assistant publishing on or off.
 - Try a different loop interval or PV priority.
+- Switch an inverter to AC charging from the grid, and set its charge power.
 
 For anything structural — adding a device, changing a transport, changing the
 grid meter — use the Admin Console instead:
@@ -57,12 +58,19 @@ the visual cue that these are decision-affecting controls, not read-outs.
 | # | Card | Subtitle | Fields |
 | --- | --- | --- | --- |
 | 01 | **EMS / System** | Global runtime limits and loop control | `EMS enabled`, `Max total power` (W), `Min output limit` (W), `Loop interval` (s) |
-| 02/03 | **Device cards** (`WR1`, `WR2`, …) | Device runtime write values | `Device enabled`, `Max power` (W), `PV priority` (×), `Offgrid socket` |
+| 02/03 | **Device cards** (`WR1`, `WR2`, …) | Device runtime write values | `Device enabled`, `Max power` (W), `PV priority` (×), `Offgrid socket`, `AC role`, `AC charge power` (W) |
 | 04 | **Winter mode** | Seasonal charging behavior | `Winter mode` |
 | 05 | **Home Assistant** | External publishing and helper control | `HA publishing`, `HA helper control` |
 
 Each card has its own apply button: **Save EMS settings**, **Save WR1
 settings**, **Save winter mode**, **Save HA settings**.
+
+**AC role** is the same setting as `emsctl.py device WR1 ac-mode`:
+*Output (EMS regulates)* is normal operation; *AC charging (input)* takes the
+inverter out of output regulation and lets it charge from the grid at the **AC
+charge power**. **Role set by** names the last writer (`dashboard`, `emsctl`).
+A device controlled over MQTT shows *Output only (MQTT)*: the EMS cannot switch
+its AC mode over MQTT.
 
 ### 4 — Apply
 

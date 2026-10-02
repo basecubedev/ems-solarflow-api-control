@@ -1189,3 +1189,26 @@ console.log(JSON.stringify({{
     assert output["intervalCount"] == 2
     assert output["intervalMs"] == [2000, 30000]
     assert output["transport"] == "polling"
+
+
+def test_device_card_offers_the_ac_role_emsctl_offers():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const device = {{
+  enabled: true, max_power: 800, offgrid_socket_mode: "off", pv_priority_factor: 1,
+  runtime_role: "ac_input", runtime_role_reason: "emsctl", ac_charge_power_w: 600,
+}};
+console.log(JSON.stringify({{
+  api: app.runtimeDeviceForm("WR1", device, 800, 2, {{ supported: true, maxChargePower: 5000 }}),
+  mqtt: app.runtimeDeviceForm("WR2", device, 800, 3, {{ supported: false, maxChargePower: 5000 }}),
+}}));
+"""
+    output = run_node(script)
+
+    assert 'name="runtime_role"' in output["api"]
+    assert '<option value="ac_input" selected>' in output["api"]
+    assert 'name="ac_charge_power_w" value="600"' in output["api"]
+    assert "Role set by" in output["api"] and "emsctl" in output["api"]
+    assert 'name="runtime_role"' not in output["mqtt"]
+    assert "Output only (MQTT)" in output["mqtt"]
+

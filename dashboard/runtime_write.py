@@ -68,10 +68,9 @@ def apply_section_update(runtime_state, section_name, payload, validation_contex
 
 
 def apply_device_update(runtime_state, device_name, payload, validation_context=None):
-    values = _validate_payload(
-        payload,
-        _device_fields(device_name, validation_context),
-    )
+    values = validate_device_values(device_name, payload, validation_context)
+    if "runtime_role" in values:
+        values["runtime_role_reason"] = "dashboard"
     try:
         device = _update_device(runtime_state, device_name, values)
     except KeyError as exc:
@@ -88,13 +87,34 @@ def validate_system_values(payload, validation_context=None):
 
 
 def validate_device_values(device_name, payload, validation_context=None):
-    """Validated per-device values, including the AC role and charge power."""
+    """Validated per-device values, including the AC role and charge power.
 
+    The AC role is refused for a device the EMS cannot switch: over MQTT the
+    acMode is not reconciled, so ``ac_input`` would only stop output
+    regulation and leave the device feeding in at its last limit.
+    """
+
+    if isinstance(payload, dict) and not ac_role_supported(
+        device_name, validation_context
+    ):
+        refused = sorted(set(payload) & set(DEVICE_AC_FIELDS))
+        if refused:
+            raise RuntimeWriteError(
+                f"{refused[0]} is not available for {device_name}: it is "
+                "controlled over MQTT, where the EMS cannot switch the AC mode"
+            )
     fields = {**_device_fields(device_name, validation_context), **DEVICE_AC_FIELDS}
     return _validate_payload(payload, fields)
 
 
+def ac_role_supported(device_name, validation_context=None):
+    context = validation_context if isinstance(validation_context, dict) else {}
+    return device_name not in set(context.get("ac_role_unsupported") or ())
+
+
 def build_validation_context(config=None, runtime_state=None):
+    from ems.zendure_mqtt.config_entries import is_zendure_mqtt_device_config
+
     config = config if isinstance(config, dict) else {}
     system = config.get("system", {}) if isinstance(config.get("system"), dict) else {}
     devices = config.get("devices", []) if isinstance(config.get("devices"), list) else []
@@ -147,6 +167,13 @@ def build_validation_context(config=None, runtime_state=None):
         "min_output_limit_max": min_output_max,
         "device_max_power": device_limits,
         "fallback_device_max_power": max_device_fallback,
+        "ac_role_unsupported": sorted(
+            device["name"]
+            for device in devices
+            if isinstance(device, dict)
+            and device.get("name")
+            and is_zendure_mqtt_device_config(device)
+        ),
     }
 
 
@@ -177,6 +204,8 @@ def effective_limits(validation_context=None):
             GENERIC_MAX_POWER_W,
             minimum=0,
         ),
+        "ac_charge_power_max": DEVICE_AC_FIELDS["ac_charge_power_w"][1][1],
+        "ac_role_unsupported": list(context.get("ac_role_unsupported") or ()),
     }
 
 

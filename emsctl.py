@@ -14,7 +14,6 @@ from datetime import datetime
 
 from dashboard import auth as dashboard_auth
 from dashboard import runtime_write
-from ems.zendure_mqtt.config_entries import is_zendure_mqtt_device_config
 
 
 from ems.paths import (
@@ -1692,32 +1691,7 @@ def update_system(args, state, limits=None):
             raise ValueError(f"unknown system action {args.action}")
 
 
-def config_device_entry(config, name):
-    devices = config.get("devices") if isinstance(config, dict) else None
-    for item in devices if isinstance(devices, list) else []:
-        if isinstance(item, dict) and item.get("name") == name:
-            return item
-    return None
-
-
-def ensure_ac_mode_controllable(config, name):
-    """Refuse an AC role the device's transport cannot reconcile.
-
-    MQTT devices are output-only: the EMS cannot switch their acMode, so an
-    ``ac_input`` role would only stop output regulation and leave the device
-    feeding in at its last limit.
-    """
-
-    item = config_device_entry(config, name)
-    if item is not None and is_zendure_mqtt_device_config(item):
-        raise ValueError(
-            f"device {name} is controlled over MQTT; the EMS cannot switch its "
-            "AC mode or set an AC charge power over MQTT. Use the Zendure app, "
-            "or connect the device over the local API."
-        )
-
-
-def update_device(args, state, limits=None, config=None):
+def update_device(args, state, limits=None):
     devices = state.setdefault("devices", {})
     if args.name not in devices:
         known = ", ".join(sorted(devices)) or "(none)"
@@ -1756,13 +1730,11 @@ def update_device(args, state, limits=None, config=None):
             value = str(args.value or "").strip().lower()
             if value not in DEVICE_AC_MODE_RUNTIME_ROLES:
                 raise ValueError("device ac-mode value must be 'output' or 'input'")
-            if value == "input":
-                ensure_ac_mode_controllable(config, args.name)
-            device["runtime_role"] = DEVICE_AC_MODE_RUNTIME_ROLES[value]
+            role = DEVICE_AC_MODE_RUNTIME_ROLES[value]
+            if role == "ac_input":
+                validated("runtime_role", role)
+            device["runtime_role"] = role
             device["runtime_role_reason"] = "emsctl"
-        case "ac-charge-power":
-            ensure_ac_mode_controllable(config, args.name)
-            device.update(validated("ac_charge_power_w", args.value))
         case action if action in fields:
             device.update(validated(fields[action], args.value))
         case _:
@@ -2806,7 +2778,6 @@ def run_interactive(args, config):
                     make_args(name=name, action=action, value=value),
                     state,
                     runtime_limits(config),
-                    config,
                 )
                 save_interactive(runtime_path, state)
                 continue
@@ -4435,7 +4406,7 @@ def main(argv=None):
                     save_atomic(runtime_path, state)
                 print_device_ac_mode_status(args.name, devices[args.name])
                 return 0
-            update_device(args, state, runtime_limits(config), config)
+            update_device(args, state, runtime_limits(config))
         elif args.command == "ha":
             set_bool_section(args, state, "ha", "enabled")
         elif args.command == "ha-control":

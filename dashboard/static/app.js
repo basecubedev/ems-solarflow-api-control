@@ -4845,11 +4845,14 @@ function runtimeControlPanel() {
   const systemLimits = limits.system || {};
   const deviceLimits = limits.devices || {};
   const fallbackDeviceMax = Number(limits.fallback_device_max_power || 5000);
+  const acUnsupported = new Set(limits.ac_role_unsupported || []);
+  const acChargeMax = Number(limits.ac_charge_power_max || 5000);
   const deviceForms = devices.map(([name, device], index) => runtimeDeviceForm(
     name,
     device || {},
     Number(deviceLimits[name] || fallbackDeviceMax),
-    index + 2
+    index + 2,
+    { supported: !acUnsupported.has(name), maxChargePower: acChargeMax }
   )).join("");
   const winterStep = devices.length + 2;
   const haStep = devices.length + 3;
@@ -4923,7 +4926,38 @@ function runtimeStageCard({ endpoint, title, subtitle, step, kind, iconName, fie
   `;
 }
 
-function runtimeDeviceForm(name, device, maxPower = 5000, step = 1) {
+const AC_INPUT_ROLES = new Set(["ac_input", "ac_input_charge", "reserved"]);
+
+function runtimeAcRole(device) {
+  return AC_INPUT_ROLES.has(String(device?.runtime_role || "")) ? "ac_input" : "ac_output";
+}
+
+function runtimeAcRoleFields(device, ac) {
+  if (!ac || !ac.supported) {
+    return runtimeReadonlyFact("AC role", "Output only (MQTT)");
+  }
+  const reason = String(device.runtime_role_reason || "").trim();
+  return `
+      ${runtimeSelect("runtime_role", "AC role", runtimeAcRole(device), [
+        { value: "ac_output", label: "Output (EMS regulates)" },
+        { value: "ac_input", label: "AC charging (input)" },
+      ])}
+      ${runtimeNumber("ac_charge_power_w", "AC charge power", device.ac_charge_power_w, 0, ac.maxChargePower || 5000, "W", "1")}
+      ${reason ? runtimeReadonlyFact("Role set by", reason) : ""}
+  `;
+}
+
+function runtimeReadonlyFact(label, value) {
+  return `
+    <div class="runtime-field control-pipeline-fact role-config">
+      <span class="value-icon" aria-hidden="true">${icon("rule")}</span>
+      <span class="control-label">${escapeHtml(label)}</span>
+      <span class="runtime-readonly-value">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
+function runtimeDeviceForm(name, device, maxPower = 5000, step = 1, ac = { supported: true, maxChargePower: 5000 }) {
   const endpoint = `/api/runtime/device/${encodeURIComponent(name)}`;
   return runtimeStageCard({
     endpoint,
@@ -4942,6 +4976,7 @@ function runtimeDeviceForm(name, device, maxPower = 5000, step = 1) {
         { value: "eco", label: gridOffModeOptionLabel("eco") },
         { value: "standard", label: gridOffModeOptionLabel("standard") },
       ])}
+      ${runtimeAcRoleFields(device, ac)}
     `,
   });
 }
