@@ -1245,3 +1245,139 @@ def test_rollback_password_mismatch_aborts(tmp_path, monkeypatch):
             if name.startswith("ems-config-rollback-")
         ]
     assert rollbacks == []
+
+
+def test_a_database_restore_reaches_a_live_wal_database(tmp_path):
+    """Renaming over a WAL database let SQLite replay the old log onto it."""
+
+    import sqlite3
+
+    snapshot = tmp_path / "snapshot.sqlite"
+    con = sqlite3.connect(snapshot)
+    con.execute("CREATE TABLE t (x TEXT)")
+    con.executemany("INSERT INTO t VALUES (?)", [("restored",)] * 50)
+    con.commit()
+    con.close()
+
+    live = tmp_path / "live.sqlite"
+    writer = sqlite3.connect(live)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute("CREATE TABLE t (x TEXT)")
+    writer.executemany("INSERT INTO t VALUES (?)", [("old-live",)] * 500)
+    writer.commit()
+    assert (tmp_path / "live.sqlite-wal").exists()
+
+    backup._restore_sqlite(str(live), snapshot.read_bytes())
+
+    reader = sqlite3.connect(live)
+    try:
+        rows = dict(reader.execute("SELECT x, COUNT(*) FROM t GROUP BY x").fetchall())
+        assert rows == {"restored": 50}
+        assert reader.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+    finally:
+        reader.close()
+        writer.close()
+
+
+@pytest.mark.parametrize("damage", [b"\x00garbage" * 1000, b"SQLite format 3\x00" + b"\x00" * 40])
+def test_a_database_restore_replaces_a_corrupt_live_file(tmp_path, damage):
+    import sqlite3
+
+    snapshot = tmp_path / "snapshot.sqlite"
+    con = sqlite3.connect(snapshot)
+    con.execute("CREATE TABLE t (x INTEGER)")
+    con.execute("INSERT INTO t VALUES (42)")
+    con.commit()
+    con.close()
+    live = tmp_path / "live.sqlite"
+    live.write_bytes(damage)
+    (tmp_path / "live.sqlite-wal").write_bytes(b"stale")
+
+    backup._restore_sqlite(str(live), snapshot.read_bytes())
+
+    reader = sqlite3.connect(live)
+    try:
+        assert reader.execute("SELECT x FROM t").fetchall() == [(42,)]
+    finally:
+        reader.close()
+
+
+def test_a_read_only_live_database_is_left_alone_with_its_log(tmp_path):
+    import sqlite3
+    import stat as stat_mod
+
+    if os.geteuid() == 0:
+        pytest.skip("root writes a read-only file anyway")
+    snapshot = tmp_path / "snapshot.sqlite"
+    con = sqlite3.connect(snapshot)
+    con.execute("CREATE TABLE t (x INTEGER)")
+    con.execute("INSERT INTO t VALUES (1)")
+    con.commit()
+    con.close()
+    live = tmp_path / "live.sqlite"
+    writer = sqlite3.connect(live)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute("CREATE TABLE t (x INTEGER)")
+    writer.execute("INSERT INTO t VALUES (99)")
+    writer.commit()
+    live.chmod(stat_mod.S_IRUSR | stat_mod.S_IRGRP | stat_mod.S_IROTH)
+    try:
+        with pytest.raises(backup.BackupError):
+            backup._restore_sqlite(str(live), snapshot.read_bytes())
+        assert (tmp_path / "live.sqlite-wal").exists()
+        assert writer.execute("SELECT x FROM t").fetchall() == [(99,)]
+    finally:
+        live.chmod(0o600)
+        writer.close()
+
+
+def test_a_corrupt_backup_never_replaces_a_working_database(tmp_path):
+    import sqlite3
+
+    live = tmp_path / "live.sqlite"
+    con = sqlite3.connect(live)
+    con.execute("CREATE TABLE t (x INTEGER)")
+    con.execute("INSERT INTO t VALUES (7)")
+    con.commit()
+    con.close()
+
+    with pytest.raises(backup.BackupError):
+        backup._restore_sqlite(str(live), b"\x00not a database" * 100)
+
+    reader = sqlite3.connect(live)
+    try:
+        assert reader.execute("SELECT x FROM t").fetchall() == [(7,)]
+    finally:
+        reader.close()
+
+
+def test_an_abort_on_conflict_writes_nothing(tmp_path):
+    """The abort used to come after every file before the conflict was written."""
+
+    base, config, config_path = write_project(tmp_path, with_auth=True)
+    path = create(tmp_path, config, base, config_path)
+    auth = os.path.join(base, "config", "dashboard-auth.json")
+    os.remove(auth)
+    with open(os.path.join(base, "data", "runtime-state.json"), "w") as handle:
+        handle.write('{"changed": true}\n')
+
+    with pytest.raises(backup.BackupError, match="nothing was written"):
+        backup.restore_backup(path, base_dir=base, on_conflict="abort")
+
+    assert not os.path.exists(auth)
+
+
+def test_a_wrong_password_is_a_backup_error():
+    """Callers guard on BackupError; a password error walked past them."""
+
+    assert issubclass(backup.BackupPasswordError, backup.BackupError)
+
+
+def test_a_manifest_path_that_is_not_text_is_a_backup_error(tmp_path):
+    path = str(tmp_path / "odd.tar.gz")
+    manifest = {"backup_format": 1, "files": [{"path": 5, "sha256": "x", "kind": "config"}]}
+    _write_manifest_tar(path, manifest, {})
+    with pytest.raises(backup.BackupError):
+        backup.restore_backup(path, base_dir=str(tmp_path), dry_run=True)
