@@ -38,6 +38,23 @@ def zendure_write_succeeded(error_event, dev, response, **fields):
     return False
 
 
+_ZENDURE_WRITE_PARAMETERS = frozenset({"dev", "field", "properties", "error_event", "timeout"})
+
+
+def write_log_context(log_fields):
+    """Log fields safe to pass to ``zendure_write``.
+
+    A caller's context naming ``field`` collided with the parameter of the same
+    name, and the TypeError meant the write was never sent at all.
+    """
+
+    return {
+        key: value
+        for key, value in (log_fields or {}).items()
+        if key not in _ZENDURE_WRITE_PARAMETERS
+    }
+
+
 def zendure_write(dev, field, properties, error_event, timeout=2, **fields):
     """POST a Zendure properties write, record write health, return success.
 
@@ -427,7 +444,7 @@ class ZendureClient:
             field or ",".join(properties),
             properties,
             error_event or "write_properties_error",
-            **(log_fields or {}),
+            **write_log_context(log_fields),
         )
         if ok:
             return dispatch.published(None)

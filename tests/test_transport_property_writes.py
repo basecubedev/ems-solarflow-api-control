@@ -279,6 +279,30 @@ def test_a_legacy_grid_off_mode_seeds_the_runtime_offgrid_mode(grid_off_mode, mo
     assert cfg.offgrid_socket_mode_for(grid_off_mode) == mode
 
 
+def test_a_runtime_state_write_reaches_an_http_device():
+    """log_fields carried "field", which collided with zendure_write's own."""
+
+    from ems.clients import ZendureClient
+
+    session = Mock()
+    session.post.return_value = SimpleNamespace(status_code=200, text="")
+    dev = ZendureClient(
+        "WR1", "10.0.0.1", "SN1", session,
+        min_soc=10, max_soc=100, smart_mode=1, grid_off_mode=None,
+    )
+
+    result = write_device_properties(
+        dev,
+        {"gridOffMode": 1},
+        reason="runtime_device_state",
+        field="gridOffMode",
+        log_fields={"device": "WR1", "field": "gridOffMode", "desired_mode": "eco"},
+    )
+
+    assert bool(result) is True
+    assert session.post.call_args.kwargs["json"]["properties"] == {"gridOffMode": 1}
+
+
 def test_a_legacy_grid_off_mode_that_no_longer_applies_is_named_once(caplog):
     controller = EMSController(devices=[], shelly=None, sleep_enabled=False)
     dev = SimpleNamespace(name="WR1", grid_off_mode=1)
