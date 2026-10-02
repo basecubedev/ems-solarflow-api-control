@@ -622,13 +622,22 @@ class ZendureCloudDiscovery:
         credential = normalize_app_key(api_key)
         resolve_device_list_credential(credential)
         self.store.save_token(credential)
-        if validate:
-            self.test(api_key=credential)
-        return {
+        result = {
             "ok": True,
             "token_saved": True,
             "message": "Zendure credential saved.",
         }
+        if validate:
+            validation = self.test(api_key=credential)
+            result["validation"] = validation
+            if validation.get("ok") is not True:
+                result["ok"] = False
+                result["error"] = validation.get("error") or "validation_failed"
+                result["message"] = (
+                    "Zendure credential saved, but it could not be validated: "
+                    f"{validation.get('message') or 'unknown error'}"
+                )
+        return result
 
     def provision_runtime_credentials(self, credential_store, ref=None, transaction=None):
         """Persist the Core-resolvable cloud MQTT runtime credential record.

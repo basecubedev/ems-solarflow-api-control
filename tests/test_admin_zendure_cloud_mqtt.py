@@ -452,6 +452,29 @@ def test_save_ha_token_preserves_embedded_region_for_later_resolution(tmp_path):
     assert discovery.store.load_token() == token
 
 
+def test_save_with_validation_reports_a_failed_validation(tmp_path):
+    discovery = _fresh_discovery(
+        tmp_path,
+        fetcher=_fetcher(error=ZendureCloudError("Zendure token is invalid or expired.")),
+    )
+
+    result = discovery.save_token("raw-api-key", validate=True)
+
+    assert result["ok"] is False
+    assert result["token_saved"] is True
+    assert result["error"] == "device_list_failed"
+    assert result["validation"]["ok"] is False
+
+
+def test_save_with_validation_reports_a_passed_validation(tmp_path):
+    discovery = _fresh_discovery(tmp_path)
+
+    result = discovery.save_token("raw-api-key", validate=True)
+
+    assert result["ok"] is True
+    assert result["validation"]["ok"] is True
+
+
 def test_save_rejects_empty_api_key(tmp_path):
     discovery = _fresh_discovery(tmp_path)
     with pytest.raises(ZendureCloudError):
