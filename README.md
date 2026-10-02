@@ -88,8 +88,8 @@ operating-system update is recovered by you, at the machine, or by writing the
 card again and restoring a backup, which is why the backup matters more than the
 update does.
 
-The image is **not confirmed on physical hardware** yet; read what that means
-before you rely on it.
+The image is **partly confirmed on physical hardware** (one Pi 3B+, without
+EMS); read what that means before you rely on it.
 
 **[Download the newest image →](https://github.com/basecubedev/ems-solarflow-api-control/releases/tag/appliance-image-latest)**
 — one file per board, always the current build. Not under *Packages*: that
@@ -126,7 +126,7 @@ shared EMS/Admin password in the browser. **That sign-in page is how you know
 the install worked**; if it does not appear,
 `docker compose -f docker-compose.admin.yml ps` says whether the container
 came up. Host networking is the default (best for local discovery); add
-`--bridge` only if you need Docker bridge networking.
+`--bridge --bind 0.0.0.0` only if you need Docker bridge networking.
 
 ![Admin Console start page](docs/assets/screenshots/admin/admin-landing.png)
 

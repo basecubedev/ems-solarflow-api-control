@@ -53,10 +53,12 @@ Check that your EMS host is in the same local network as your devices.
 The Admin Console uses host networking by default because this usually works
 best for local discovery.
 
-If you started with bridge mode, try the default mode again:
+If you started with bridge mode, try the default mode again. `--force` is
+needed: without it the installer keeps the existing bridge-mode
+`docker-compose.admin.yml`:
 
 ```bash
-sh install-admin-console.sh
+sh install-admin-console.sh --force
 ```
 
 Also check that the device is powered on and reachable from the LAN.

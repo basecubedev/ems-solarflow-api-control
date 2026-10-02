@@ -281,7 +281,7 @@ main() {
     log "Next: choose your grid meter and set your devices in config/config.json,"
     log "or run the guided setup assistant:"
     log "  docker compose exec ems python3 emsctl.py config init"
-    log "For Zendure SmartMeter D0, select \"Zendure SmartMeter D0 via MQTT\"."
+    log "For a Zendure SmartMeter D0, select \"Zendure Grid Meter via local HTTP\" (recommended)."
     log "Then restart EMS with: docker compose restart"
 }
 
