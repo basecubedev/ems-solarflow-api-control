@@ -400,7 +400,7 @@ class ZendureMqttDeviceClient:
         now = time.monotonic()
         # Settle the in-flight command's deadline first, but do not auto-flush a
         # stale pending target here — a fresh target supersedes any pending one.
-        self._expire_active_command(now, flush=False)
+        self._expire_active_command(now)
         try:
             target = _validate_power_target(value)
         except _WriteBlocked as blocked:
@@ -460,7 +460,13 @@ class ZendureMqttDeviceClient:
             )
 
         # No command in flight: the fresh target is the latest intent and takes the
-        # slot immediately, superseding any pending target left from before.
+        # slot immediately. A pending target it repeats is published under the
+        # correlation it was queued with; any other pending target is superseded.
+        if self._pending_target == target and self._pending_correlation_id:
+            correlation_id = self._pending_correlation_id
+            self._pending_target = None
+            self._pending_correlation_id = None
+            return self._publish_target(target, now, correlation_id=correlation_id)
         self._discard_pending_target("superseded_by_fresh_target")
         return self._publish_target(target, now)
 
@@ -1103,14 +1109,13 @@ class ZendureMqttDeviceClient:
             supported_override=self._telemetry_confirmation_override,
         )
 
-    def _expire_active_command(self, now_monotonic, *, flush=True):
+    def _expire_active_command(self, now_monotonic):
         # A late PUBACK for an already-retired command is settled every cycle,
         # independently of whether a command currently occupies the active slot.
+        # Never publishes the pending target: the controller has not decided this cycle yet.
         self._reconcile_terminal_delivery(now_monotonic)
         record = self._active_command
         if record is None:
-            if flush:
-                self._flush_pending_target(now_monotonic)
             return
         self._settle_broker_delivery(record, now_monotonic)
         supports_ack = self._reply_contract().supports_acknowledgement
@@ -1156,8 +1161,6 @@ class ZendureMqttDeviceClient:
                     "device_command_ack_timed_out",
                     **self._command_log_fields(record),
                 )
-            if flush:
-                self._flush_pending_target(now_monotonic)
 
     def _confirm_from_snapshot(self, state, snapshot, now_monotonic):
         record = self._active_command
@@ -1238,7 +1241,6 @@ class ZendureMqttDeviceClient:
                 confirmation_metric=policy.confirmation_metric,
                 **self._command_log_fields(record),
             )
-            self._flush_pending_target(now_monotonic)
 
     def _note_local_confirmation(self, record, now_monotonic):
         """A locally confirmed target resets foreign-writer suspicion."""
