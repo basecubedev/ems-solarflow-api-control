@@ -12,7 +12,13 @@ from dataclasses import dataclass
 from appliance import shell_access
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
 from appliance.rescue_account import ACCOUNT as RESCUE_ACCOUNT
-from appliance.ssh_policy import parse_sshd_config, read_password_refusal
+from appliance.ssh_policy import (
+    REFUSAL_ABSENT,
+    REFUSAL_REFUSED,
+    SHELL_REFUSED_METHODS,
+    parse_sshd_config,
+    read_password_refusal,
+)
 from appliance.sshkeys import AuthorizedKeysStore, validate_public_key
 from appliance.systemd import UNIT_SSH, UNIT_SSH_SOCKET
 from appliance.validation import ValidationError
@@ -192,6 +198,13 @@ class SshService:
 
         return read_password_refusal(self.runner, user=RESCUE_ACCOUNT)
 
+    def shell_login_refusal(self):
+        """Whether the running daemon refuses the shell account every method."""
+
+        return read_password_refusal(
+            self.runner, user=shell_access.ACCOUNT, methods=SHELL_REFUSED_METHODS
+        )
+
     def status(self):
         unit = self.systemd.unit_state(UNIT_SSH)
         socket = self._socket_state()
@@ -222,6 +235,9 @@ class SshService:
             "",
         )
 
+        flag = shell_access.enabled(self.paths) if self.paths else False
+        daemon = self.shell_login_refusal()["state"]
+
         return {
             "service": unit,
             "socket": socket,
@@ -238,7 +254,10 @@ class SshService:
             # reading one of them has been told half the answer.
             "shell_access": {
                 "account": shell_access.ACCOUNT,
-                "enabled": shell_access.enabled(self.paths) if self.paths else False,
+                "enabled": flag,
+                "daemon": daemon,
+                "effectively_disabled": not flag
+                and daemon in (REFUSAL_REFUSED, REFUSAL_ABSENT),
                 "key_deployment_allowed": shell_access.ACCOUNT
                 in tuple(self.config.ssh_key_accounts),
                 # Reported next to the gates rather than discovered when a key

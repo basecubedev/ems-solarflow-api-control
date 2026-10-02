@@ -2878,7 +2878,15 @@
         text: "This account has a shell and reaches root through sudo. A key deployed on it "
           + "is root on this appliance. It is key-only and never accepts a password." }),
       fact("Account", state.account || "\u2014", { mono: true }),
-      fact("Access", on ? "enabled" : "disabled"),
+      fact("Access", on ? "enabled"
+        : (state.effectively_disabled === true ? "disabled" : "disabled, not confirmed by sshd")),
+      (!on && state.effectively_disabled !== true
+        ? el("p", { class: "control-stage-subtitle", "data-test": "shell-access-not-refused",
+            text: "Shell access is off in the appliance policy, but the running sshd "
+              + (state.daemon === "accepted" ? "still accepts a login method on this account. "
+                : "could not be asked about this account. ")
+              + "Check that /etc/ssh/sshd_config includes the appliance drop-in and reload ssh." })
+        : null),
       fact("Key deployment", state.key_deployment_allowed === false
         ? "refused by appliance.conf" : "allowed from this console"),
       (state.home_writable === false

@@ -84,6 +84,39 @@ def test_status_reports_service_accounts_and_hardening(tmp_path):
     assert names == {"ems-backup"}
 
 
+def test_disabled_shell_access_is_reported_once_sshd_refuses_the_account(tmp_path):
+    services = appliance(tmp_path)
+
+    shell = services.ssh.status()["shell_access"]
+
+    assert shell["enabled"] is False
+    assert shell["daemon"] == "refused"
+    assert shell["effectively_disabled"] is True
+
+
+def test_disabled_shell_access_is_not_claimed_while_sshd_admits_a_key(tmp_path):
+    """The flag is a promise; an sshd_config without the drop-in still takes a key."""
+
+    services = appliance(tmp_path)
+    services.host.sshd_shell_match = "pubkeyauthentication yes\npasswordauthentication no\n"
+
+    shell = services.ssh.status()["shell_access"]
+
+    assert shell["enabled"] is False
+    assert shell["daemon"] == "accepted"
+    assert shell["effectively_disabled"] is False
+
+
+def test_disabled_shell_access_is_not_claimed_when_sshd_cannot_answer(tmp_path):
+    services = appliance(tmp_path)
+    services.host.sshd_shell_match = ""
+
+    shell = services.ssh.status()["shell_access"]
+
+    assert shell["daemon"] == "unknown"
+    assert shell["effectively_disabled"] is False
+
+
 def test_status_reports_a_missing_host_account(tmp_path):
     """The configured account is reported whether or not the host has it yet."""
 

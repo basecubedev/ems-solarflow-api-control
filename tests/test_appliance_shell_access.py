@@ -250,6 +250,16 @@ def test_the_console_says_what_the_account_costs_before_it_is_enabled():
     assert "never accepts a password" in card
 
 
+def test_the_console_calls_shell_access_disabled_only_when_sshd_agrees():
+    root = Path(__file__).resolve().parents[1]
+    app_js = (root / "appliance" / "static" / "app.js").read_text(encoding="utf-8")
+    card = app_js.split("function renderShellAccessCard(", 1)[1].split("\n  }\n", 1)[0]
+
+    assert 'state.effectively_disabled === true ? "disabled"' in card
+    assert 'on ? "enabled" : "disabled"' not in card
+    assert "shell-access-not-refused" in card
+
+
 def write_conf(paths, text):
     paths.config_dir.mkdir(parents=True, exist_ok=True)
     paths.appliance_conf.write_text("[appliance]\n" + text, encoding="utf-8")
