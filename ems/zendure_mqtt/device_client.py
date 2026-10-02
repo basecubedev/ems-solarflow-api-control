@@ -94,6 +94,13 @@ DEFAULT_SAFETY_PREEMPT_MARGIN_W = 300
 DEFAULT_COMMAND_EVIDENCE_MAX_RECORDS = 64
 DEFAULT_COMMAND_EVIDENCE_MAX_AGE_SECONDS = 300.0
 
+MAX_COMMAND_ACK_TIMEOUT_SECONDS = 120.0
+MAX_CONFIRMATION_TIMEOUT_SECONDS = 300.0
+MAX_CONFIRMATION_TOLERANCE_W = 200
+MAX_SAFETY_PREEMPT_MARGIN_W = 1000
+MAX_COMMAND_EVIDENCE_RECORDS = 1024
+MAX_COMMAND_EVIDENCE_AGE_SECONDS = 3600.0
+
 
 class _WriteBlocked(Exception):
     """A power write cannot be built and must fail closed (no publish)."""
@@ -116,6 +123,20 @@ def _validate_power_target(value):
     if isinstance(value, bool) or not isinstance(value, int):
         raise _WriteBlocked("outputLimit", "invalid_power_target")
     return value
+
+
+def _bounded_tuning(value, default, low, high, cast=float):
+    """``value`` cast and clamped to ``[low, high]``; ``default`` if unusable."""
+
+    if isinstance(value, bool):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return cast(min(high, max(low, number)))
 
 
 def _positive_power_ceiling(value):
@@ -230,41 +251,48 @@ class ZendureMqttDeviceClient:
         self._last_command = None
         self._last_command_state = None
         self._command_evidence = OrderedDict()
-        try:
-            self._command_evidence_max_records = max(
-                1, int(command_evidence_max_records)
-            )
-        except (TypeError, ValueError):
-            self._command_evidence_max_records = DEFAULT_COMMAND_EVIDENCE_MAX_RECORDS
-        try:
-            self._command_evidence_max_age_s = max(
-                0.0, float(command_evidence_max_age_seconds)
-            )
-        except (TypeError, ValueError):
-            self._command_evidence_max_age_s = DEFAULT_COMMAND_EVIDENCE_MAX_AGE_SECONDS
+        self._command_evidence_max_records = _bounded_tuning(
+            command_evidence_max_records,
+            DEFAULT_COMMAND_EVIDENCE_MAX_RECORDS,
+            1,
+            MAX_COMMAND_EVIDENCE_RECORDS,
+            int,
+        )
+        self._command_evidence_max_age_s = _bounded_tuning(
+            command_evidence_max_age_seconds,
+            DEFAULT_COMMAND_EVIDENCE_MAX_AGE_SECONDS,
+            0.0,
+            MAX_COMMAND_EVIDENCE_AGE_SECONDS,
+        )
         self._dispatch_observer = None
         self._dispatch_sequence = 0
-        try:
-            self._command_ack_timeout_s = max(0.0, float(command_ack_timeout_seconds))
-        except (TypeError, ValueError):
-            self._command_ack_timeout_s = DEFAULT_COMMAND_ACK_TIMEOUT_SECONDS
-        try:
-            self._confirmation_timeout_s = max(0.0, float(confirmation_timeout_seconds))
-        except (TypeError, ValueError):
-            self._confirmation_timeout_s = DEFAULT_CONFIRMATION_TIMEOUT_SECONDS
+        self._command_ack_timeout_s = _bounded_tuning(
+            command_ack_timeout_seconds,
+            DEFAULT_COMMAND_ACK_TIMEOUT_SECONDS,
+            0.0,
+            MAX_COMMAND_ACK_TIMEOUT_SECONDS,
+        )
+        self._confirmation_timeout_s = _bounded_tuning(
+            confirmation_timeout_seconds,
+            DEFAULT_CONFIRMATION_TIMEOUT_SECONDS,
+            0.0,
+            MAX_CONFIRMATION_TIMEOUT_SECONDS,
+        )
         # None -> use the profile's default confirmation tolerance.
-        try:
-            self._confirmation_tolerance_w = (
-                None
-                if confirmation_tolerance_w is None
-                else max(0, int(confirmation_tolerance_w))
+        self._confirmation_tolerance_w = (
+            None
+            if confirmation_tolerance_w is None
+            else _bounded_tuning(
+                confirmation_tolerance_w, None, 0, MAX_CONFIRMATION_TOLERANCE_W, int
             )
-        except (TypeError, ValueError):
-            self._confirmation_tolerance_w = None
-        try:
-            self._safety_preempt_margin_w = max(0, int(safety_preempt_margin_w))
-        except (TypeError, ValueError):
-            self._safety_preempt_margin_w = DEFAULT_SAFETY_PREEMPT_MARGIN_W
+        )
+        self._safety_preempt_margin_w = _bounded_tuning(
+            safety_preempt_margin_w,
+            DEFAULT_SAFETY_PREEMPT_MARGIN_W,
+            0,
+            MAX_SAFETY_PREEMPT_MARGIN_W,
+            int,
+        )
         # None -> resolve from the write profile; explicit False -> no reliable
         # telemetry confirmation (completed_unconfirmed after publish/ack).
         self._telemetry_confirmation_override = telemetry_confirmation_supported

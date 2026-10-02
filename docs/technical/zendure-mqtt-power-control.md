@@ -790,7 +790,10 @@ command; there are **no** unlimited automatic retries. A fresh telemetry read
 confirms an acknowledged command when the observed output is newer than the
 command and within tolerance, and a bounded `confirmation_timeout_seconds`
 (default 30s) resolves an acknowledged command that never sees confirming
-telemetry.
+telemetry. These per-device tuning keys are bounded: the acknowledgement timeout
+to 120s, the confirmation timeout to 300s, `confirmation_tolerance_w` to 200 W
+and `safety_preempt_margin_w` to 1000 W; a non-numeric or non-finite value falls
+back to its default.
 
 > **Status — fixture/emulator-verified, physical validation still required.** The
 > full lifecycle (records, reply correlation, one-in-flight coordination, timeout,
