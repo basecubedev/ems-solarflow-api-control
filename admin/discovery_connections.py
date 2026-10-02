@@ -115,8 +115,8 @@ def _as_bool(value, default):
 def _normalize_priority(raw):
     priority = []
     seen = set()
-    for entry in raw or []:
-        if entry in DISCOVERY_SOURCES and entry not in seen:
+    for entry in raw if isinstance(raw, list) else []:
+        if isinstance(entry, str) and entry in DISCOVERY_SOURCES and entry not in seen:
             seen.add(entry)
             priority.append(entry)
     for source in DEFAULT_PRIORITY:
@@ -226,7 +226,8 @@ def normalize_connections(raw):
 
     used_ids = set()
     brokers = []
-    for broker_raw in local_mqtt_raw.get("brokers") or []:
+    raw_brokers = local_mqtt_raw.get("brokers")
+    for broker_raw in raw_brokers if isinstance(raw_brokers, list) else []:
         broker = _normalize_broker(broker_raw, used_ids)
         if broker is not None:
             brokers.append(broker)

@@ -357,3 +357,24 @@ def test_concurrent_credential_ref_adds_keep_both(tmp_path):
     writer_b.join(10)
 
     assert sorted(store.load()["local_mqtt"]["credential_refs"]) == ["cred-a", "cred-b"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"priority": 5},
+        {"discovery_priority": 5},
+        {"discovery_priority": [["local_api"], {"x": 1}, "local_mqtt"]},
+        {"local_mqtt": {"brokers": 5}},
+        {"local_mqtt": {"brokers": {"id": "a"}}},
+    ],
+)
+def test_malformed_container_shapes_normalize_instead_of_raising(raw):
+    normalized = normalize_connections(raw)
+
+    assert sorted(normalized["discovery_priority"]) == [
+        "local_api",
+        "local_mqtt",
+        "zendure_mqtt",
+    ]
+    assert normalized["local_mqtt"]["brokers"] == []
