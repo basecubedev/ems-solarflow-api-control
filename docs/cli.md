@@ -534,7 +534,10 @@ python3 emsctl.py dashboard auth-status
 
 Passwords are prompted without echo. The password file contains only
 PBKDF2-SHA256 hash metadata and no plaintext password. `disable-auth` removes
-the password file and makes dashboard write mode unavailable again.
+the password file and makes dashboard write mode unavailable again. The same
+file is the Admin Console password, so the Admin Console then offers
+first-password setup to whoever opens it next; the command asks for
+confirmation (`--yes` skips it in scripts).
 
 Hidden password automation flags exist for tests and non-interactive automation
 but are intentionally omitted from normal help. Do not use them for interactive

@@ -87,6 +87,9 @@ DEVICE_ACTIONS = (
     "ac-mode",
     "ac-charge-power",
 )
+RUNTIME_EDIT_COMMANDS = frozenset(
+    {"system", "device", "ha", "ha-control", "winter", "interactive", "menu"}
+)
 DEVICE_AC_MODE_VALUES = ("output", "input")
 DEVICE_AC_MODE_RUNTIME_ROLES = {
     "output": "ac_output",
@@ -475,9 +478,17 @@ omitted from normal help output.
     change_password.add_argument("--new-password", help=argparse.SUPPRESS)
     change_password.add_argument("--confirm-password", help=argparse.SUPPRESS)
 
-    dashboard_subparsers.add_parser(
+    disable_auth = dashboard_subparsers.add_parser(
         "disable-auth",
-        help="Disable dashboard write-mode authentication."
+        help=(
+            "Delete the shared Dashboard/Admin password file. The Admin Console "
+            "then offers first-password setup to the next visitor."
+        )
+    )
+    disable_auth.add_argument(
+        "--yes",
+        action="store_true",
+        help="Do not ask for confirmation.",
     )
     dashboard_subparsers.add_parser(
         "auth-status",
@@ -1221,10 +1232,7 @@ def config_device_defaults(config):
     )
 
     devices = {}
-    max_device_power = (
-        config.get("system", {})
-        .get("max_device_power", 800)
-    )
+    max_device_power = config_section(config, "system").get("max_device_power", 800)
 
     device_list = config.get("devices", []) if isinstance(config, dict) else []
     if not isinstance(device_list, list):
@@ -1462,9 +1470,16 @@ def print_quick_help():
     print(QUICK_HELP_TEXT.rstrip())
 
 
+def config_section(config, name):
+    """A config section as a dict; a missing or malformed one reads as empty."""
+
+    section = config.get(name) if isinstance(config, dict) else None
+    return section if isinstance(section, dict) else {}
+
+
 def runtime_defaults(config, existing=None):
     existing = existing if isinstance(existing, dict) else {}
-    system = config.get("system", {})
+    system = config_section(config, "system")
 
     devices = config_device_defaults(config)
     existing_devices = existing.get("devices", {})
@@ -1499,14 +1514,14 @@ def runtime_defaults(config, existing=None):
             )
         },
         "ha": {
-            "enabled": config.get("ha", {}).get("enabled", True),
-            "control_enabled": config.get("ha", {}).get(
+            "enabled": config_section(config, "ha").get("enabled", False),
+            "control_enabled": config_section(config, "ha").get(
                 "control_enabled",
-                True
+                False
             )
         },
         "winter": {
-            "enabled": config.get("winter", {}).get("enabled", False)
+            "enabled": config_section(config, "winter").get("enabled", False)
         },
         "devices": devices
     }
@@ -2552,6 +2567,25 @@ def print_influx_status(report):
         )
 
 
+def confirm_disable_auth(args, auth_path):
+    """Refuse to drop the shared password without an explicit yes."""
+
+    if getattr(args, "yes", False):
+        return
+    print(
+        f"This deletes {auth_path}, the one password for the Dashboard and the "
+        "Admin Console. Until a new one is set, the Admin Console lets whoever "
+        "opens it first choose the password."
+    )
+    if not sys.stdin.isatty():
+        raise ValueError(
+            "dashboard disable-auth needs confirmation; re-run with --yes"
+        )
+    answer = input("Type 'remove' to delete the password file: ")
+    if answer.strip() != "remove":
+        raise ValueError("cancelled; the password file was kept")
+
+
 def handle_dashboard_command(args, config):
     auth_path = resolve_dashboard_auth_path(args, config)
     command = args.dashboard_command
@@ -2567,6 +2601,7 @@ def handle_dashboard_command(args, config):
         return 0
 
     if command == "disable-auth":
+        confirm_disable_auth(args, auth_path)
         dashboard_auth.remove_auth_file(auth_path)
         print("Dashboard auth: not configured")
         print("Dashboard write mode: unavailable")
@@ -2784,6 +2819,7 @@ def run_interactive(args, config):
                         confirm_password=None,
                         current_password=None,
                         new_password=None,
+                        yes=False,
                     ),
                     config,
                 )
@@ -4310,6 +4346,17 @@ def main(argv=None):
                     code=2,
                 )
 
+        if (
+            args.config_explicit
+            and not os.path.exists(args.config)
+            and args.command in RUNTIME_EDIT_COMMANDS
+        ):
+            return fail(
+                f"config file does not exist: {args.config}\n"
+                "Check the --config path; nothing was changed.",
+                code=2,
+            )
+
         config = load_config(args.config)
 
         if args.command == "help":
@@ -4404,8 +4451,13 @@ def main(argv=None):
             print(f"updated {runtime_path}")
         return 0
 
-    except ValueError as exc:
+    except (ValueError, backup_mod.BackupError) as exc:
         return fail(str(exc))
+    except OSError as exc:
+        return fail(f"{exc.strerror or exc}: {exc.filename or ''}".rstrip(": "))
+    except KeyboardInterrupt:
+        print()
+        return fail("cancelled", code=130)
 
 
 if __name__ == "__main__":

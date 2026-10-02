@@ -318,7 +318,9 @@ Change the password:
 python3 emsctl.py dashboard change-password
 ```
 
-Disable dashboard authentication and write mode:
+Disable dashboard authentication and write mode. This deletes the shared
+Dashboard/Admin password; until a new one is set, the Admin Console lets the
+next visitor choose it. The command asks for confirmation:
 
 ```bash
 python3 emsctl.py dashboard disable-auth

@@ -625,7 +625,7 @@ def test_emsctl_dashboard_set_status_change_and_disable_auth(tmp_path):
     )
     assert result.returncode == 0, result.stderr
 
-    result = run_emsctl(tmp_path, "dashboard", "disable-auth")
+    result = run_emsctl(tmp_path, "dashboard", "disable-auth", "--yes")
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "dashboard-auth.json").exists()
 
@@ -1998,3 +1998,61 @@ def test_emsctl_refuses_an_ac_role_an_mqtt_device_cannot_reconcile(tmp_path, arg
     assert result.returncode != 0
     assert "controlled over MQTT" in result.stdout + result.stderr
     assert "runtime_role" not in runtime_state(tmp_path)["devices"]["WR1"]
+
+
+def test_disable_auth_keeps_the_shared_password_without_confirmation(tmp_path):
+    auth = tmp_path / "dashboard-auth.json"
+    auth.write_text("{}")
+
+    refused = run_emsctl(
+        tmp_path, "--dashboard-auth", str(auth), "dashboard", "disable-auth"
+    )
+    assert refused.returncode != 0
+    assert "--yes" in refused.stdout + refused.stderr
+    assert auth.exists()
+
+    confirmed = run_emsctl(
+        tmp_path, "--dashboard-auth", str(auth), "dashboard", "disable-auth", "--yes"
+    )
+    assert confirmed.returncode == 0, confirmed.stderr
+    assert not auth.exists()
+
+
+def test_a_mistyped_explicit_config_changes_nothing(tmp_path):
+    result = run_emsctl(
+        tmp_path, "--config", str(tmp_path / "conifg.json"), "system", "disable"
+    )
+
+    assert result.returncode == 2
+    assert "config file does not exist" in result.stdout + result.stderr
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+@pytest.mark.parametrize("section", ["system", "ha", "winter"])
+def test_a_null_config_section_is_an_error_message_not_a_traceback(
+    tmp_path, section
+):
+    write_config(tmp_path / "config.json")
+    config = json.loads((tmp_path / "config.json").read_text())
+    config[section] = None
+    (tmp_path / "config.json").write_text(json.dumps(config))
+
+    result = run_emsctl(tmp_path, "status")
+
+    assert "Traceback" not in result.stderr
+
+
+def test_runtime_defaults_match_the_ems_for_home_assistant():
+    """A missing ha block means no HA sync in the EMS, so emsctl must agree."""
+
+    defaults = emsctl.runtime_defaults({"system": {}, "devices": []})
+    assert defaults["ha"] == {"enabled": False, "control_enabled": False}
+
+
+@pytest.mark.parametrize("argv", [["examples"], ["dashboard", "auth-status"]])
+def test_a_missing_explicit_config_does_not_block_commands_that_write_no_runtime_state(
+    tmp_path, argv
+):
+    result = run_emsctl(tmp_path, "--config", str(tmp_path / "absent.json"), *argv)
+
+    assert "config file does not exist" not in result.stdout + result.stderr
