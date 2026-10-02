@@ -468,7 +468,18 @@ class InfluxHistoryProvider(HistoryProvider):
 
 
 def _escape(value):
-    return str(value).replace("\\", "\\\\").replace('"', '\\"')
+    """Escape a value for a Flux string literal.
+
+    Flux evaluates ``${...}`` inside a string literal, so an unescaped device
+    name from a query parameter was an expression run with the EMS token.
+    """
+
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("${", "\\${")
+    )
 
 
 def _flux_time(value):

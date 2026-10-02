@@ -482,6 +482,23 @@ def _replace_external_device_names(value, aliases):
     return value
 
 
+MAX_DEVICE_NAME_LENGTH = 128
+
+
+def _plausible_device_name(name):
+    """A device name a history query may carry: printable and bounded.
+
+    The Flux escape makes any such name a plain string; a renamed or removed
+    device keeps its history, so names are not limited to the current config.
+    """
+
+    return (
+        isinstance(name, str)
+        and 0 < len(name) <= MAX_DEVICE_NAME_LENGTH
+        and not any(ord(ch) < 32 or ord(ch) == 127 for ch in name)
+    )
+
+
 def _resolve_external_device_name(server, browser_name):
     aliases = _external_device_aliases(server)
     return {alias: raw for raw, alias in aliases.items()}.get(
@@ -1053,6 +1070,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if parsed is None:
             return
         range_name, start, end, series, devices = parsed
+        if getattr(provider, "name", "") != "sqlite" and not all(
+            _plausible_device_name(name) for name in devices or ()
+        ):
+            self._send_json(
+                {"error": "invalid_device", "message": "A device name is not valid."},
+                status=400,
+            )
+            return
 
         try:
             result = provider.query(start, end, devices=devices, series=series)

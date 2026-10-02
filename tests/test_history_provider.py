@@ -459,9 +459,13 @@ def test_a_long_window_is_thinned_and_streamed(tmp_path, monkeypatch):
     assert result.series["grid"][:3] == [0, 20, 40]
 
 
-
 def test_the_dashboard_store_thins_to_the_same_point_budget_as_the_provider():
     from dashboard import sqlite_store
     from ems.history import provider
 
     assert sqlite_store.MAX_HISTORY_POINTS == provider.MAX_HISTORY_POINTS
+def test_a_device_name_cannot_open_a_flux_interpolation():
+    from ems.history.influx_provider import build_device_filter
+
+    flux = build_device_filter(["x${string(v: 1)}y"])
+    assert "${" not in flux.replace("\\${", "")
