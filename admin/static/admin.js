@@ -1908,6 +1908,14 @@ const MDNS_STATE_TEXT = {
   unavailable_runtime: "unavailable",
 };
 
+function mdnsMessageText(status, state) {
+  const message =
+    status.message || "Automatic mDNS discovery is unavailable in this runtime.";
+  const cause = typeof status.last_error === "string" ? status.last_error.trim() : "";
+  if (!cause || state.indexOf("unavailable_") !== 0) return message;
+  return message + " Cause: " + cause;
+}
+
 function renderMdnsStatus(status) {
   const state = String(
     status.state || (status.available ? "disabled" : "unavailable_dependency")
@@ -1916,8 +1924,7 @@ function renderMdnsStatus(status) {
   els.mdnsState.className =
     "network-badge " +
     (state.indexOf("running_") === 0 ? "badge-recommended" : "badge-advanced");
-  els.mdnsMessage.textContent =
-    status.message || "Automatic mDNS discovery is unavailable in this runtime.";
+  els.mdnsMessage.textContent = mdnsMessageText(status, state);
   const count = Number(status.verified_count) || 0;
   els.mdnsCount.textContent = count + " found";
   notifySetupStatus();
@@ -2016,7 +2023,9 @@ async function toggleMdns() {
       { method: "POST" }
     );
     const status = await res.json();
-    if (!res.ok) throw new Error(status.last_error || "discovery update failed");
+    if (!res.ok) {
+      throw new Error(status.last_error || humanErrorText(status, "discovery update failed"));
+    }
     renderMdnsStatus(status);
     await pollMdns();
   } catch (err) {
@@ -2036,7 +2045,9 @@ async function refreshMdns() {
       method: "POST",
     });
     const status = await res.json();
-    if (!res.ok) throw new Error(status.last_error || "mDNS refresh failed");
+    if (!res.ok) {
+      throw new Error(status.last_error || humanErrorText(status, "mDNS refresh failed"));
+    }
     renderMdnsStatus(status);
     await pollMdns();
   } catch (err) {

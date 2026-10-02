@@ -425,6 +425,26 @@ def test_js_mdns_toggle_uses_only_enable_disable_endpoints():
     assert "results-accumulate" not in toggle
 
 
+def test_mdns_unavailable_message_names_its_cause():
+    """An unavailable mDNS state shows its last_error after the message."""
+    js = _read("admin.js")
+    script = _extract_fn(js, "mdnsMessageText") + """
+console.log(JSON.stringify({
+  failed: mdnsMessageText({ message: "mDNS could not be started.", last_error: "Address in use" }, "unavailable_runtime"),
+  running: mdnsMessageText({ message: "Running.", last_error: "old" }, "running_verified"),
+  plain: mdnsMessageText({}, "unavailable_runtime"),
+}));
+"""
+    out = _run_node(script)
+    assert out["failed"] == "mDNS could not be started. Cause: Address in use"
+    assert out["running"] == "Running."
+    assert out["plain"] == "Automatic mDNS discovery is unavailable in this runtime."
+    render = _extract_fn(js, "renderMdnsStatus")
+    assert "mdnsMessageText(status, state)" in render
+    for header in ("async function toggleMdns", "async function refreshMdns"):
+        assert "humanErrorText(status," in _async_fn_body(js, header), header
+
+
 def test_ignored_devices_are_collapsed_and_rendered_safely():
     html = _read("index.html")
     js = _read("admin.js")
