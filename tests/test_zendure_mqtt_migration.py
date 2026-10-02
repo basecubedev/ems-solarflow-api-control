@@ -338,3 +338,19 @@ def test_a_config_node_without_a_zendure_mqtt_block_names_no_broker_source():
 
     assert broker_sources_from_config({"devices": []}) == {}
     assert broker_sources_from_config({"name": "WR1", "mqtt": {}}) == {}
+def test_pinned_read_only_model_keeps_its_identity_and_names_the_real_reason():
+    device = _control_device(hardware_profile="ace_1500")
+    _cfg, warnings = migrate_zendure_mqtt_control_configs(_config(device))
+    assert device["capabilities"]["write_output_limit"] is False
+    assert device["hardware_profile"] == "ace_1500"
+    warning = next(
+        w
+        for w in warnings
+        if w["code"] == "zendure_mqtt_control_disabled_read_only_model"
+    )
+    assert "ace_1500" in warning["message"]
+    assert not any(
+        w["code"] == "zendure_mqtt_control_disabled_unknown_model" for w in warnings
+    )
+    _cfg, again = migrate_zendure_mqtt_control_configs(_config(device))
+    assert again == []
