@@ -422,6 +422,14 @@ class GuidedUpgradeExecutor:
             return self._rejected(
                 "config_missing", "config/config.json was not found.", target_release
             ), None
+        config_error = self._config_read_error(context.config_path)
+        if config_error is not None:
+            return self._rejected(
+                "config_invalid",
+                f"{config_error.rstrip('.')}. Fix the file or restore a backup "
+                "before upgrading.",
+                target_release,
+            ), None
         if not context.compose_exists:
             return self._rejected(
                 "compose_missing", "docker-compose.yml was not found.", target_release
@@ -672,6 +680,10 @@ class GuidedUpgradeExecutor:
 
         # 03 config_check (also required whenever a config write is requested)
         plan = None
+        config_error = self._config_read_error(config_path)
+        if config_error is not None and (options["config_check"] or want_config_write):
+            steps.append(_step("config_check", "error", "Check config", detail=config_error))
+            return failed()
         if options["config_check"] or want_config_write:
             try:
                 plan = ems_config.build_config_upgrade_plan(
@@ -1047,6 +1059,22 @@ class GuidedUpgradeExecutor:
     @staticmethod
     def _normalize_options(options):
         return _normalized_options(options)
+
+    @staticmethod
+    def _config_read_error(config_path):
+        """Why ``config.json`` cannot drive an upgrade, or None when it can.
+
+        ``_load_config`` reads an unparseable file as ``{}``; an upgrade built on
+        that would write template defaults over the operator's devices.
+        """
+
+        try:
+            parsed = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError) as exc:
+            return f"config/config.json cannot be read: {exc}"
+        if not isinstance(parsed, dict):
+            return "config/config.json does not hold a JSON object."
+        return None
 
     @staticmethod
     def _load_config(config_path):
