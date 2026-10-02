@@ -12358,3 +12358,35 @@ console.log(JSON.stringify(persistableFeatureValues(values, secretFeaturePaths()
 """
     result = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
     assert json.loads(result.stdout) == {"influxdb.url": "http://influx:8086"}
+
+
+def test_a_resume_that_must_wait_keeps_polling_for_the_new_admin():
+    """After F5 during an Admin update the overlay stayed up with nothing polling."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the resume contract")
+    js = _read("admin.js")
+    source = "async function resumeGuidedUpgrade" + _async_fn_body(
+        js, "async function resumeGuidedUpgrade"
+    )
+    script = """
+const calls = [];
+const authState = { adminInstanceId: "old-admin" };
+const SYSTEM_ALIGNMENT_TRANSITION_STAGES = new Set();
+function resolveSystemAlignmentStage() { return null; }
+function renderSystemAlignmentStatus() {}
+function setUpgradeRunning(value) { calls.push(["running", value]); }
+function showReconnectOverlay(message) { calls.push(["overlay", message]); }
+function waitForAdminReconnect(previous, operation) { calls.push(["wait", previous, operation]); }
+function renderUpgradeResult() { calls.push(["result"]); }
+async function fetch() {
+  return { ok: true, json: async () => ({ reconnect: true, message: "Waiting for the new Admin" }) };
+}
+""" + source + """
+resumeGuidedUpgrade("op-1").then(() => console.log(JSON.stringify(calls)));
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
+    calls = json.loads(result.stdout)
+    assert ["wait", "old-admin", "op-1"] in calls
+    assert ["overlay", "Waiting for the new Admin"] in calls

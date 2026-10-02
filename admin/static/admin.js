@@ -12526,16 +12526,27 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function setReconnectBackgroundInert(inert) {
+  const shell = typeof document !== "undefined" ? document.querySelector(".admin-shell") : null;
+  if (shell) shell.inert = inert;
+}
+
 function showReconnectOverlay(message) {
   const els = adminUpdateOverlayEls;
   if (els.title) els.title.textContent = "Reconnecting to the Admin Console…";
-  if (els.message && message) els.message.textContent = message;
+  if (els.message) {
+    els.message.textContent = message ||
+      "Admin Console update started. This page will reconnect automatically.";
+  }
   if (els.hint) els.hint.hidden = true;
   if (els.overlay) els.overlay.hidden = false;
+  setReconnectBackgroundInert(true);
+  if (els.title && typeof els.title.focus === "function") els.title.focus();
 }
 
 function hideReconnectOverlay() {
   if (adminUpdateOverlayEls.overlay) adminUpdateOverlayEls.overlay.hidden = true;
+  setReconnectBackgroundInert(false);
 }
 
 // A replaced Admin serves newer assets than this already-running page. Reload so
@@ -12722,9 +12733,9 @@ async function resumeGuidedUpgrade(operationId) {
         data.stage === "admin_reconnect_pending" ||
         data.stage === "admin_update_pending")
     ) {
-      // The replacement Admin is not ready yet; keep the reconnect overlay up.
       showReconnectOverlay(data.message);
       setUpgradeRunning(false);
+      waitForAdminReconnect(authState.adminInstanceId, operationId);
       return;
     }
     if (!res.ok || !data.ok || !data.job_id) {
@@ -18134,6 +18145,11 @@ async function startPath(choice) {
       }
     }
     enterMaintenance();
+  } catch (err) {
+    setStartError(
+      "The Admin Console did not answer (" + ((err && err.message) || String(err)) +
+        "). Check that it is running, then try again."
+    );
   } finally {
     startPathBusy = false;
   }
@@ -18541,8 +18557,7 @@ async function runWorkflowRecovery(mode) {
     });
     if (!executed.ok || executed.data.ok !== true) {
       setWorkflowRecoveryMessage(
-        (executed.data && (executed.data.message || executed.data.error)) ||
-          "The recovery did not run.",
+        humanErrorText(executed.data, "The recovery did not run."),
         "error"
       );
       await loadWorkflowRecovery({ quiet: true });
@@ -18556,6 +18571,12 @@ async function runWorkflowRecovery(mode) {
     );
     await loadWorkflowRecovery({ quiet: true });
     loadSystemAlignmentStatus();
+  } catch (err) {
+    setWorkflowRecoveryMessage(
+      "The Admin Console did not answer (" + ((err && err.message) || String(err)) +
+        "). The recovery may not have run; reload this page to see the current state.",
+      "error"
+    );
   } finally {
     workflowRecoveryBusy = false;
   }

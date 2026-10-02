@@ -682,5 +682,5 @@ def test_an_unprovable_replacement_is_explained_and_never_forced():
 
     # The backend refusal message is what the operator reads; the console adds
     # no force path of its own.
-    assert "executed.data.message" in run
+    assert "humanErrorText(executed.data" in run
     assert "force" not in run.lower()
