@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 from dataclasses import dataclass
 
@@ -175,6 +176,20 @@ def remove_auth_file(path):
         return False
 
 
+def auth_file_fingerprint(path):
+    """Digest of the password record a session was opened against, or None.
+
+    A session bound to it ends when the password changes, is removed or is
+    restored from a backup, instead of keeping write access for hours.
+    """
+
+    try:
+        with open(path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+    except OSError:
+        return None
+
+
 @dataclass
 class Session:
     session_id: str
@@ -183,6 +198,7 @@ class Session:
     # None means "never expires" (a disabled timeout). Otherwise the wall-clock
     # time at which the session becomes invalid.
     expires_at: float = None
+    credential: str = None
 
 
 class SessionStore:
@@ -201,6 +217,7 @@ class SessionStore:
         self.absolute_max_seconds = self._normalize_timeout(absolute_max_seconds)
         self.time_fn = time_fn or time.time
         self.sessions = {}
+        self._lock = threading.RLock()
 
     @staticmethod
     def _normalize_timeout(value):
@@ -217,31 +234,46 @@ class SessionStore:
             bounds.append(created_at + self.absolute_max_seconds)
         return min(bounds) if bounds else None
 
-    def create(self):
-        self.cleanup()
-        now = self.time_fn()
-        session = Session(
-            session_id=secrets.token_urlsafe(32),
-            csrf_token=secrets.token_urlsafe(32),
-            created_at=now,
-            expires_at=self._expiry(now, now),
-        )
-        self.sessions[session.session_id] = session
-        return session
+    def create(self, credential=None):
+        with self._lock:
+            self.cleanup()
+            now = self.time_fn()
+            session = Session(
+                session_id=secrets.token_urlsafe(32),
+                csrf_token=secrets.token_urlsafe(32),
+                created_at=now,
+                expires_at=self._expiry(now, now),
+                credential=credential,
+            )
+            self.sessions[session.session_id] = session
+            return session
 
-    def get(self, session_id):
+    def get(self, session_id, credential=None):
+        """The live session, or None.
+
+        A session opened against a password record (``credential``) is ended
+        once the current record differs.
+        """
+
         if not session_id:
             return None
 
-        session = self.sessions.get(session_id)
-        if session is None:
-            return None
+        with self._lock:
+            session = self.sessions.get(session_id)
+            if session is None:
+                return None
 
-        if session.expires_at is not None and session.expires_at <= self.time_fn():
-            self.sessions.pop(session_id, None)
-            return None
+            if session.expires_at is not None and session.expires_at <= self.time_fn():
+                self.sessions.pop(session_id, None)
+                return None
 
-        return session
+            if session.credential is not None and not hmac.compare_digest(
+                str(credential or ""), session.credential
+            ):
+                self.sessions.pop(session_id, None)
+                return None
+
+            return session
 
     def touch(self, session_id):
         """Slide the idle timeout on genuine activity, capped at the absolute max.
@@ -250,25 +282,31 @@ class SessionStore:
         Once the absolute cap is reached ``expires_at`` stops moving, so a session
         can never be extended past ``created_at + absolute_max_seconds``.
         """
-        session = self.get(session_id)
-        if session is None:
-            return None
-        session.expires_at = self._expiry(session.created_at, self.time_fn())
-        return session
+        with self._lock:
+            session = self.sessions.get(session_id) if session_id else None
+            if session is None or (
+                session.expires_at is not None
+                and session.expires_at <= self.time_fn()
+            ):
+                return self.get(session_id)
+            session.expires_at = self._expiry(session.created_at, self.time_fn())
+            return session
 
     def destroy(self, session_id):
         if session_id:
-            self.sessions.pop(session_id, None)
+            with self._lock:
+                self.sessions.pop(session_id, None)
 
     def cleanup(self):
-        now = self.time_fn()
-        expired = [
-            session_id
-            for session_id, session in self.sessions.items()
-            if session.expires_at is not None and session.expires_at <= now
-        ]
-        for session_id in expired:
-            self.sessions.pop(session_id, None)
+        with self._lock:
+            now = self.time_fn()
+            expired = [
+                session_id
+                for session_id, session in self.sessions.items()
+                if session.expires_at is not None and session.expires_at <= now
+            ]
+            for session_id in expired:
+                self.sessions.pop(session_id, None)
 
 
 class LoginRateLimiter:
@@ -284,25 +322,43 @@ class LoginRateLimiter:
         self.max_entries = int(max_entries)
         self.time_fn = time_fn or time.time
         self.failures = {}
+        self._lock = threading.RLock()
 
     def is_limited(self, key):
-        self.prune()
-        attempts = self._active_attempts(key)
-        return len(attempts) >= self.max_failures
+        with self._lock:
+            self.prune()
+            attempts = self._active_attempts(key)
+            return len(attempts) >= self.max_failures
+
+    def try_attempt(self, key):
+        """Count an attempt before the password is checked; False when limited.
+
+        Checking the limit first and recording the failure after the slow hash
+        let any number of concurrent guesses through the same window.
+        """
+
+        with self._lock:
+            if self.is_limited(key):
+                return False
+            self.record_failure(key)
+            return True
 
     def record_failure(self, key):
-        self.prune()
-        attempts = self._active_attempts(key)
-        attempts.append(self.time_fn())
-        self.failures[key] = attempts
-        self._cap_entries()
+        with self._lock:
+            self.prune()
+            attempts = self._active_attempts(key)
+            attempts.append(self.time_fn())
+            self.failures[key] = attempts
+            self._cap_entries()
 
     def reset(self, key):
-        self.failures.pop(key, None)
+        with self._lock:
+            self.failures.pop(key, None)
 
     def prune(self):
-        for key in list(self.failures):
-            self._active_attempts(key)
+        with self._lock:
+            for key in list(self.failures):
+                self._active_attempts(key)
 
     def _active_attempts(self, key):
         now = self.time_fn()

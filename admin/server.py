@@ -248,7 +248,7 @@ from admin.system_build import (
     SystemBuildResolver,
     is_development_build_tag,
 )
-from dashboard.auth import LoginRateLimiter, SessionStore
+from dashboard.auth import LoginRateLimiter, SessionStore, auth_file_fingerprint
 from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS
 from dashboard.static_files import build_static_asset_index, static_asset_key
 from ems.device_identity import (
@@ -1975,7 +1975,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=500,
             )
             return
-        session = self.server.auth_sessions.create()
+        session = self.server.auth_sessions.create(credential=self._auth_credential())
         self._send_json(
             {**self._auth_status_payload(), "authenticated": True,
              "csrf_token": session.csrf_token},
@@ -1993,7 +1993,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         if not auth.configured:
             self._send_json({"error": "auth_not_configured"}, status=403)
             return
-        if self.server.auth_login_limiter.is_limited(remote):
+        if not self.server.auth_login_limiter.try_attempt(remote):
             self._send_json({"error": "login_rate_limited"}, status=429)
             return
         body = self._read_json_body()
@@ -2001,11 +2001,10 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         password = body.get("password") if isinstance(body, dict) else None
         if not isinstance(password, str) or not admin_auth.verify_admin_password(password):
-            self.server.auth_login_limiter.record_failure(remote)
             self._send_json({"error": "invalid_password"}, status=403)
             return
         self.server.auth_login_limiter.reset(remote)
-        session = self.server.auth_sessions.create()
+        session = self.server.auth_sessions.create(credential=self._auth_credential())
         self._send_json(
             {**self._auth_status_payload(), "authenticated": True,
              "csrf_token": session.csrf_token},
@@ -2051,8 +2050,13 @@ class AdminHandler(BaseHTTPRequestHandler):
             return {"error": "csrf_failed"}, 403
         return None
 
+    def _auth_credential(self):
+        return auth_file_fingerprint(str(admin_auth.resolve_admin_auth_paths().auth_file))
+
     def _current_admin_session(self):
-        return self.server.auth_sessions.get(self._admin_session_cookie_value())
+        return self.server.auth_sessions.get(
+            self._admin_session_cookie_value(), credential=self._auth_credential()
+        )
 
     def _admin_session_cookie_value(self):
         raw = self.headers.get("Cookie", "")

@@ -218,3 +218,50 @@ def test_login_rate_limiter_prunes_stale_entries_and_caps_size():
     limiter.record_failure("c")
     assert len(limiter.failures) == 2
     assert "a" not in limiter.failures
+
+
+def test_a_session_ends_when_the_password_record_changes(tmp_path):
+    from dashboard.auth import SessionStore, auth_file_fingerprint, write_password_file
+
+    path = tmp_path / "dashboard-auth.json"
+    write_password_file(str(path), "first-password")
+    store = SessionStore()
+    session = store.create(credential=auth_file_fingerprint(str(path)))
+
+    assert store.get(session.session_id, auth_file_fingerprint(str(path))) is session
+
+    write_password_file(str(path), "second-password")
+    assert store.get(session.session_id, auth_file_fingerprint(str(path))) is None
+    assert session.session_id not in store.sessions
+
+    removed = store.create(credential=auth_file_fingerprint(str(path)))
+    path.unlink()
+    assert store.get(removed.session_id, auth_file_fingerprint(str(path))) is None
+
+
+def test_concurrent_logins_cannot_exceed_the_attempt_limit():
+    """Interleaving: twenty guesses arrive before any of them finished hashing."""
+
+    import threading
+
+    from dashboard.auth import LoginRateLimiter
+
+    limiter = LoginRateLimiter(max_failures=5, window_seconds=60)
+    barrier = threading.Barrier(20)
+    allowed = []
+    lock = threading.Lock()
+
+    def guess():
+        barrier.wait()
+        result = limiter.try_attempt("192.0.2.9")
+        with lock:
+            allowed.append(result)
+
+    threads = [threading.Thread(target=guess) for _ in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert allowed.count(True) == 5
+    assert limiter.is_limited("192.0.2.9")

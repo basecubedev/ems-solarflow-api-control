@@ -17,6 +17,7 @@ from dashboard.auth import (
     LoginRateLimiter,
     SessionStore,
     auth_configured,
+    auth_file_fingerprint,
     resolve_auth_path,
     verify_password_file,
 )
@@ -918,7 +919,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "invalid_password"}, status=403)
             return
 
-        if self.server.login_limiter.is_limited(remote):
+        if not self.server.login_limiter.try_attempt(remote):
             self._send_json({"error": "login_rate_limited"}, status=429)
             return
 
@@ -942,12 +943,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.server.auth_file,
             password,
         ):
-            self.server.login_limiter.record_failure(remote)
             self._send_json({"error": "invalid_password"}, status=403)
             return
 
         self.server.login_limiter.reset(remote)
-        session = self.server.sessions.create()
+        session = self.server.sessions.create(
+            credential=auth_file_fingerprint(self.server.auth_file)
+        )
         self._send_json(
             {
                 **self._auth_status_payload(),
@@ -1712,7 +1714,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         return None
 
     def _current_session(self):
-        return self.server.sessions.get(self._session_cookie_value())
+        return self.server.sessions.get(
+            self._session_cookie_value(),
+            credential=auth_file_fingerprint(self.server.auth_file),
+        )
 
     def _session_cookie_value(self):
         raw = self.headers.get("Cookie", "")
