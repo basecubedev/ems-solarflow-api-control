@@ -391,6 +391,9 @@ For Docker Bootstrap or advanced shell use:
 docker compose exec ems python3 emsctl.py diagnose --support-bundle
 ```
 
+The ZIP is written to `data/support/` next to your config, unless `--output`
+names another path.
+
 ## General
 
 ### Do I need Home Assistant?

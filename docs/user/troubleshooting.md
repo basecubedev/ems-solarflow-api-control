@@ -143,6 +143,9 @@ Create a redacted support bundle for a report:
 docker compose exec ems python3 emsctl.py diagnose --support-bundle
 ```
 
+The ZIP is written to `data/support/` next to your config, unless `--output`
+names another path.
+
 ## Technical details
 
 For command-level diagnostics and deeper failure analysis, see the

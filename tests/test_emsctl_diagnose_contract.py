@@ -375,3 +375,29 @@ def test_diagnose_broken_output_stability_anchors(tmp_path):
     assert "EMS Diagnose" in result.stdout
     assert "[ERROR] config.json is invalid JSON" in result.stdout
     assert "Result: error" in result.stdout
+
+
+def test_support_bundle_masks_the_device_identity_in_runtime_state(tmp_path):
+    write_runtime(
+        tmp_path,
+        devices={"WR1": {"enabled": True, "identity": "HOA1SECRETSN"}},
+    )
+    output_path = tmp_path / "identity.zip"
+
+    result = run_emsctl(
+        tmp_path, "diagnose", "--support-bundle", "--output", str(output_path)
+    )
+
+    assert result.returncode in (0, 1), result.stderr
+    with zipfile.ZipFile(output_path) as bundle:
+        contents = b"\n".join(bundle.read(name) for name in bundle.namelist())
+    assert b"HOA1SECRETSN" not in contents
+
+
+def test_support_bundle_defaults_to_the_data_directory(tmp_path, monkeypatch):
+    from ems import diagnostics, paths
+
+    monkeypatch.setattr(paths, "BASE_DIR", str(tmp_path))
+    path = diagnostics.diagnose_support_bundle_path(None)
+    assert Path(path).parent == tmp_path / "data" / "support"
+    assert Path(path).name.startswith("ems-diagnose-")

@@ -106,6 +106,8 @@ Modes:
   `diagnosis.json`, `diagnosis.txt`, `control-diagnostics.json`,
   `control-diagnostics.txt`, `control-quality.json`, `control-quality.txt`,
   `redacted-config.json`, `runtime-state.json`, and `bundle-metadata.json`.
+  Without `--output` it is written to `data/support/ems-diagnose-<time>.zip`,
+  the directory Docker keeps on the host.
 
 Control interpretation:
 

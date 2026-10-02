@@ -40,6 +40,7 @@ from ems.health import (
 )
 from ems.paths import (
     BASE_DIR,
+    resolve_data_dir,
     resolve_project_path,
     resolve_runtime_path,
     resolve_dashboard_auth_path,
@@ -74,6 +75,7 @@ DIAGNOSE_REDACT_KEYWORDS = (
     "username",
     "hash",
     "serial",
+    "identity",
     "sn",
     "device_id",
     "api",
@@ -2089,10 +2091,19 @@ def diagnose_redact_text_values(value):
 
 
 def diagnose_support_bundle_path(output):
+    """Where a support bundle goes when ``--output`` is not given.
+
+    ``data/support/`` is the one place every install keeps on the host: in
+    Docker only ``config/`` and ``data/`` are mounted, so the working
+    directory ``/app`` vanished with the container.
+    """
+
     if output:
         return output
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return os.path.join(os.getcwd(), f"ems-diagnose-{timestamp}.zip")
+    return os.path.join(
+        str(resolve_data_dir()), "support", f"ems-diagnose-{timestamp}.zip"
+    )
 
 
 def diagnose_nested_get(data, paths, default=None):
