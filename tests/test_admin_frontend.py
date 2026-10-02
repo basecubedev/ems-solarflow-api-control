@@ -12319,3 +12319,33 @@ def test_the_current_version_prefers_the_release_over_the_image_reference():
 
     assert script.count("cur.tag || cur.image") == 1
     assert "cur.image || cur.tag" not in script
+
+
+def test_secret_feature_values_never_reach_local_storage():
+    """An InfluxDB token typed into Guided Setup stayed in the browser profile."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the feature storage contract")
+    js = _read("admin.js")
+    sources = "\n".join(
+        header + _async_fn_body(js, header)
+        for header in ("function secretFeaturePaths", "function persistableFeatureValues")
+    )
+    script = sources + """
+let setupCatalog = { sections: [
+  { id: "influxdb", fields: [
+    { path: "influxdb.token", secret: true },
+    { path: "influxdb.url", secret: false },
+  ] },
+  { id: "grid_meter", fields: [{ path: "grid_meter.mqtt.password", secret: true }] },
+] };
+const values = {
+  "influxdb.token": "tok-123",
+  "influxdb.url": "http://influx:8086",
+  "grid_meter.mqtt.password": "pw",
+};
+console.log(JSON.stringify(persistableFeatureValues(values, secretFeaturePaths())));
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == {"influxdb.url": "http://influx:8086"}

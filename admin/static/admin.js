@@ -4058,11 +4058,31 @@ function loadFeatureValues() {
   }
 }
 
+// Secret fields stay in memory: localStorage outlives logout and setup.
+function secretFeaturePaths() {
+  const paths = new Set();
+  const sections = (setupCatalog && Array.isArray(setupCatalog.sections)) ? setupCatalog.sections : [];
+  for (const section of sections) {
+    for (const field of (section && Array.isArray(section.fields)) ? section.fields : []) {
+      if (field && field.secret && typeof field.path === "string") paths.add(field.path);
+    }
+  }
+  return paths;
+}
+
+function persistableFeatureValues(values, secretPaths) {
+  const persisted = {};
+  for (const [path, value] of Object.entries(values || {})) {
+    if (!secretPaths.has(path)) persisted[path] = value;
+  }
+  return persisted;
+}
+
 function saveFeatureValues() {
   try {
     window.localStorage.setItem(
       CONFIG_FEATURES_STORAGE_KEY,
-      JSON.stringify(featureValues)
+      JSON.stringify(persistableFeatureValues(featureValues, secretFeaturePaths()))
     );
   } catch (err) {
     /* localStorage may be unavailable; feature values still live in memory. */
