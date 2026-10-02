@@ -2618,9 +2618,7 @@ canvas { width: 100%; min-height: 94px; border: var(--o-border) solid color-mix(
   .energy-month-card .energy-value,
   .energy-year-card .energy-value { font-size: 15px; }
   .charts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: calc(6px * var(--d)); }
-  canvas { min-height: 78px; };
-  background: var(--o-layers, none), var(--o-fill, transparent);
-  box-shadow: var(--o-shadow, 0 0 0 transparent);
+  canvas { min-height: 78px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
