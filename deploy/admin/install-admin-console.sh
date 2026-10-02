@@ -380,7 +380,7 @@ EOF
 }
 
 write_compose() {
-    if [ -f "$COMPOSE_FILE" ] && [ "$FORCE" -ne 1 ]; then
+    if [ -f "$install_dir/$COMPOSE_FILE" ] && [ "$FORCE" -ne 1 ]; then
         log "Keeping existing $COMPOSE_FILE (use --force to overwrite)."
         return 0
     fi
@@ -519,6 +519,12 @@ main() {
     # Absolute host paths: the Admin container forwards these as bind mounts to
     # the host Docker daemon, so they must be valid host paths (same-path mount).
     install_dir="$(pwd -P)"
+    if [ -n "$INSTALL_DIR" ] && [ "$DRY_RUN" -eq 1 ]; then
+        case "$INSTALL_DIR" in
+            /*) install_dir="$INSTALL_DIR" ;;
+            *) install_dir="$install_dir/$INSTALL_DIR" ;;
+        esac
+    fi
     admin_data_dir="$install_dir/data/admin"
 
     require_docker
