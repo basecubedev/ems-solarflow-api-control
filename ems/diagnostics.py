@@ -2088,6 +2088,39 @@ def diagnose_redact_text(text):
     return redacted
 
 
+_DIAGNOSE_REDACT_TEXT_KEY = re.compile(
+    r"(?i)(token|password|passwd|secret|authorization|bearer|cookie|session|auth"
+    r"|sn|serial|device_id|api[_-]?key)$"
+)
+
+
+def diagnose_redact_json_text(value):
+    """Serialize ``value`` as JSON with the text-redaction rules applied per field.
+
+    Scalars under a key the text rules name are replaced and every string is
+    text-redacted, so the result is always valid JSON.
+    """
+
+    def redact(item):
+        if isinstance(item, dict):
+            return {
+                key: (
+                    "<redacted>"
+                    if _DIAGNOSE_REDACT_TEXT_KEY.search(str(key))
+                    and not isinstance(child, (dict, list))
+                    else redact(child)
+                )
+                for key, child in item.items()
+            }
+        if isinstance(item, list):
+            return [redact(child) for child in item]
+        if isinstance(item, str):
+            return diagnose_redact_text(item)
+        return item
+
+    return json.dumps(redact(value), indent=2, sort_keys=True)
+
+
 def diagnose_redact_report_for_http(report):
     external = sanitize_external_mqtt_status(report, drop_secrets=False)
     return diagnose_redact_text_values(diagnose_redact_value(external))
@@ -3299,11 +3332,11 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
         )
         bundle.writestr(
             "diagnosis.json",
-            diagnose_redact_text(json.dumps(external_report, indent=2, sort_keys=True)),
+            diagnose_redact_json_text(external_report),
         )
         bundle.writestr(
             "control-diagnostics.json",
-            diagnose_redact_text(json.dumps(control_report, indent=2, sort_keys=True)),
+            diagnose_redact_json_text(control_report),
         )
         bundle.writestr(
             "control-diagnostics.txt",
@@ -3315,7 +3348,7 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
         )
         bundle.writestr(
             "control-quality.json",
-            diagnose_redact_text(json.dumps(control_quality_report, indent=2, sort_keys=True)),
+            diagnose_redact_json_text(control_quality_report),
         )
         bundle.writestr(
             "control-quality.txt",

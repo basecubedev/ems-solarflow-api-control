@@ -2591,3 +2591,42 @@ def test_diagnose_hardware_probes_a_tasmota_meter(monkeypatch):
 
     assert captured["url"] == "http://192.0.2.60/cm?cmnd=Status%2010"
     assert _levels_by_code(checks).get("tasmota_read_ok") == "ok"
+
+
+def test_support_bundle_json_stays_parseable_and_redacted(tmp_path, monkeypatch):
+    for renderer in (
+        "diagnose_text",
+        "diagnose_control_text",
+        "diagnose_control_quality_text",
+    ):
+        monkeypatch.setattr(diagnostics, renderer, lambda report: "")
+    report = {
+        "schema_version": 1,
+        "diagnosis": {
+            "warnings": ["Dashboard binds without configured auth"],
+            "session": {"id": "abc"},
+            "auth": ["x"],
+            "note": "token=SECRET123 and http://u:pw@host/x",
+        },
+        "control": {"device_id": "DEV-SECRET", "warnings": ["no auth"]},
+        "control_quality": {"api_key": "KEY-SECRET"},
+    }
+    output = tmp_path / "bundle.zip"
+    diagnostics.diagnose_write_support_bundle(
+        report, SimpleNamespace(output=str(output)), {}, None
+    )
+    with zipfile.ZipFile(output) as bundle:
+        payloads = {
+            name: bundle.read(name).decode()
+            for name in (
+                "diagnosis.json",
+                "control-diagnostics.json",
+                "control-quality.json",
+            )
+        }
+    for raw in payloads.values():
+        json.loads(raw)
+        for secret in ("SECRET123", "DEV-SECRET", "KEY-SECRET", "pw@"):
+            assert secret not in raw
+    diagnosis = json.loads(payloads["diagnosis.json"])["diagnosis"]
+    assert diagnosis["warnings"] == ["Dashboard binds without configured auth"]
