@@ -97,3 +97,19 @@ def test_render_device_health_block_marks_not_attempted_write():
     assert "WR1:" in text
     assert "read: ok" in text
     assert "write: not attempted" in text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "http://admin:hunter2@192.0.2.5/cm?cmnd=Status%2010",
+        "http://192.0.2.5/cm?user=admin&password=hunter2&cmnd=Status%2010",
+        "ConnectionError: HTTPConnectionPool(host='x', port=80): Max retries "
+        "exceeded with url: /cm?user=admin&password=hunter2",
+    ],
+)
+def test_credentials_in_a_url_never_reach_a_log_or_health_snapshot(text):
+    from ems.health import redact_error, redact_url_credentials
+
+    assert "hunter2" not in redact_url_credentials(text)
+    assert "hunter2" not in redact_error(RuntimeError(text))

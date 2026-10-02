@@ -11,7 +11,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from ems import config as cfg
-from ems.health import CommHealth
+from ems.health import CommHealth, redact_error, redact_url_credentials
 from ems.logging_utils import log_event
 from ems.models import DeviceState, parse_pack_count
 
@@ -378,8 +378,15 @@ class ZendureClient:
                 f"http://{self.ip}/properties/report",
                 timeout=2
             )
+            if r.status_code != 200:
+                raise ValueError(f"HTTP {r.status_code} from /properties/report")
+            data = r.json()
+            if not isinstance(data, dict) or not isinstance(
+                data.get("properties"), dict
+            ):
+                raise ValueError("report carries no properties object")
 
-            state = parse_device(r.json())
+            state = parse_device(data)
             self.read_health.record_success((time.monotonic() - start) * 1000.0)
             return state
 
@@ -614,9 +621,9 @@ class TasmotaHttpClient:
             log_event(
                 logging.WARNING,
                 "tasmota_http_read_error",
-                url=self.url,
+                url=redact_url_credentials(self.url),
                 power_path=self.power_path,
-                error=e,
+                error=redact_error(e),
                 stale_value=self.last_value
             )
 

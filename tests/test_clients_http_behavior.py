@@ -1400,3 +1400,28 @@ def test_zendure_write_transport_error_records_failure_and_reraises():
         )
     assert client.write_health.failure_count == 1
     assert client.write_health.consecutive_failures == 1
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        ResponseStub(status_code=500, payload={"properties": {"electricLevel": 65}}),
+        ResponseStub(payload={"error": "busy"}),
+        ResponseStub(payload={"properties": "n/a"}),
+        ResponseStub(payload=["not", "an", "object"]),
+    ],
+)
+def test_an_error_reply_is_a_failed_read_not_zero_telemetry(response):
+    zendure = ZendureClient(
+        "WR1",
+        "192.0.2.10",
+        "SN",
+        SessionStub(get_response=response),
+        min_soc=10,
+        max_soc=100,
+        smart_mode=1,
+        grid_off_mode=None,
+    )
+
+    assert zendure.fetch() is None
+    assert zendure.read_health.consecutive_failures == 1
