@@ -981,7 +981,11 @@ def _zendure_mqtt_broker_connection(config, broker_ref):
     if effective is None:
         return None
     profile = effective.config
-    tls = safe_bool(profile.get("tls"), False)
+    tls, tls_insecure = resolve_mqtt_tls_metadata(
+        tls_mode=profile.get("tls_mode"),
+        tls=profile.get("tls"),
+        tls_insecure=profile.get("tls_insecure"),
+    )
     port = parse_mqtt_port(
         profile.get("port"), default=default_mqtt_port(tls)
     )
@@ -989,7 +993,7 @@ def _zendure_mqtt_broker_connection(config, broker_ref):
         "host": str(profile.get("host") or "").strip(),
         "port": port,
         "tls": tls,
-        "tls_insecure": safe_bool(profile.get("tls_insecure"), False),
+        "tls_insecure": tls_insecure,
         "username": str(profile.get("username") or ""),
         "password": str(profile.get("password") or ""),
         "credentials_ref": profile.get("credentials_ref"),
