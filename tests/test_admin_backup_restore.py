@@ -1017,3 +1017,17 @@ def test_delete_backup_set_with_archives_removes_only_member_archives(tmp_path):
     remaining = {r["name"] for r in service.list_backups()["backups"]}
     assert not (member_names & remaining)
     assert outsider in remaining
+
+
+@pytest.mark.parametrize("member", ["config.json", "dashboard.key", "dashboard-auth.json"])
+def test_the_admin_diff_never_returns_a_file_that_holds_credentials(tmp_path, member):
+    """The diff bypassed the redaction every other Admin view applies."""
+
+    root = _build_install(tmp_path)
+    _make_config_archive(root)
+    service = _service(root)
+    backup_id = service.list_backups()["backups"][0]["id"]
+    (root / "config" / member).unlink()
+
+    with pytest.raises(BackupRestoreError, match="holds credentials"):
+        service.diff_backup_file(backup_id, member)

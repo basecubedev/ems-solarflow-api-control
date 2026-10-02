@@ -1658,11 +1658,13 @@ def diff_backup_file(
         with open(target, "rb") as handle:
             current_data = handle.read()
 
+    sensitive = bool(match.get("sensitive"))
     if _looks_binary(backup_data) or _looks_binary(current_data):
         return {
             "binary": True,
             "text": f"{match['path']} is a binary file; not showing a diff.",
             "path": match["path"],
+            "sensitive": sensitive,
         }
 
     current_lines = current_data.decode("utf-8").splitlines(keepends=True)
@@ -1673,4 +1675,9 @@ def diff_backup_file(
         fromfile=f"current/{match['path']}",
         tofile=f"backup/{match['path']}",
     )
-    return {"binary": False, "text": "".join(diff), "path": match["path"]}
+    return {
+        "binary": False,
+        "text": "".join(diff),
+        "path": match["path"],
+        "sensitive": sensitive,
+    }

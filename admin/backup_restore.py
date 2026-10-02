@@ -525,6 +525,12 @@ class BackupInspector:
             raise BackupRestoreError("the backup password is incorrect")
         except backup_mod.BackupError as exc:
             raise BackupRestoreError(str(exc))
+        if result.get("sensitive"):
+            raise BackupRestoreError(
+                f"{result.get('path') or file_name} holds credentials; the Admin "
+                "Console does not show its contents. Compare it on the EMS host "
+                "with: python3 emsctl.py backup diff"
+            )
         if result.get("binary"):
             return {"ok": True, "binary": True, "text": result.get("text"),
                     "path": result.get("path")}
