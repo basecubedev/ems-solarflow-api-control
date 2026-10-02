@@ -101,6 +101,33 @@ class SshService:
             return backup_ownership.record_managed_keys(self.paths, blobs)
         return backup_ownership.forget_managed_keys(self.paths, blobs)
 
+    def _admit_backup_key(self, account):
+        """Refuse a backup key that sshd would accept without its confinement.
+
+        A fail-closed disable moves the key file aside and only expires the
+        account when there was a key; a key written after it would be the one
+        file sshd reads, confined or not. Removing a key never needs this.
+        """
+
+        if self.paths is None or account != self.config.backup_user:
+            return
+        from appliance.backup_confinement import build_activation
+
+        activation = build_activation(paths=self.paths, config=self.config, runner=self.runner)
+        disabled = activation.disabled_keys_path()
+        if (disabled is not None and disabled.exists()) or activation.conflicted_key_files():
+            raise SshServiceError(
+                "backup_access_withdrawn",
+                "backup access was disabled because its confinement could not be proven; "
+                "run `ems-appliance backup-access activate` before adding a key",
+            )
+        if not activation.effective_policy()["confirmed"]:
+            raise SshServiceError(
+                "backup_confinement_not_confirmed",
+                "the running sshd does not apply the backup account's confinement, "
+                "so no key is deployed on it",
+            )
+
     # --- read-only -------------------------------------------------------
 
     def account(self, name):
@@ -265,6 +292,7 @@ class SshService:
             raise SshServiceError(exc.code, exc.message)
         if any(item.fingerprint == key.fingerprint for item in store.list()):
             raise SshServiceError("duplicate_public_key", "this key is already authorized")
+        self._admit_backup_key(account)
 
         # The public key is stored with the operation so the execution survives
         # an agent restart; ``Operation.to_dict`` truncates the key body before
@@ -380,6 +408,16 @@ class SshService:
         account = operation.requested_target["account"]
         public_key = operation.requested_target["public_key"]
         store = self.keystore(account)
+        try:
+            self._admit_backup_key(account)
+        except SshServiceError as exc:
+            self.operations.finish(
+                operation.operation_id,
+                STATE_FAILED_TERMINAL,
+                stage="key_add_refused",
+                error={"code": exc.code, "message": exc.message},
+            )
+            raise
         self._advance(operation, "writing_authorized_keys")
         try:
             key = store.add(public_key)

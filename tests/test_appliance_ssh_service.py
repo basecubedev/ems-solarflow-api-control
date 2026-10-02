@@ -227,6 +227,60 @@ def test_keys_for_an_account_the_host_does_not_have_are_refused(tmp_path):
     assert getattr(excinfo.value, "code", "") == "account_missing"
 
 
+def test_a_backup_key_is_refused_while_authentication_is_withdrawn(tmp_path):
+    """A fail-closed disable moved the key file aside; a new one must not replace it."""
+
+    services = appliance(tmp_path)
+    ssh_dir = tmp_path / "home" / "ems-backup" / ".ssh"
+    ssh_dir.mkdir()
+    (ssh_dir / "authorized_keys.disabled-by-appliance").write_text(ED25519 + "\n")
+    handlers = handlers_for(services)
+
+    with pytest.raises(Exception) as excinfo:
+        handlers.dispatch(
+            {"operation": "ssh.plan_key_add", "account": "ems-backup", "public_key": ED25519}
+        )
+
+    assert getattr(excinfo.value, "code", "") == "backup_access_withdrawn"
+    assert not (ssh_dir / "authorized_keys").exists()
+
+
+def test_a_backup_key_is_refused_while_the_daemon_does_not_confine_the_account(tmp_path):
+    services = appliance(tmp_path)
+    services.host.sshd_backup_match = "forcecommand internal-sftp\npermittty no\n"
+    handlers = handlers_for(services)
+
+    with pytest.raises(Exception) as excinfo:
+        handlers.dispatch(
+            {"operation": "ssh.plan_key_add", "account": "ems-backup", "public_key": ED25519}
+        )
+
+    assert getattr(excinfo.value, "code", "") == "backup_confinement_not_confirmed"
+    assert not (tmp_path / "home" / "ems-backup" / ".ssh" / "authorized_keys").exists()
+
+
+def test_a_confinement_lost_after_the_plan_stops_the_backup_key_write(tmp_path):
+    services = appliance(tmp_path)
+    handlers = handlers_for(services)
+    planned = handlers.dispatch(
+        {"operation": "ssh.plan_key_add", "account": "ems-backup", "public_key": ED25519}
+    )
+    services.host.sshd_backup_match = ""
+
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+
+    operation = services.operations.get(planned["operation"]["operation_id"])
+    assert operation.state != STATE_SUCCEEDED
+    assert operation.error["code"] == "backup_confinement_not_confirmed"
+    assert not (tmp_path / "home" / "ems-backup" / ".ssh" / "authorized_keys").exists()
+
+
 def test_an_account_outside_the_configuration_is_refused(tmp_path):
     services = appliance(tmp_path)
     handlers = handlers_for(services)

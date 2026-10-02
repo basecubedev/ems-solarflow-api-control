@@ -337,6 +337,13 @@ and the account is expired. The UI then reports the reason by name. The
 appliance never reports confined, read-only access as active on the strength of
 a file it wrote.
 
+Adding a key to the backup account is refused while that is the case: with a
+disabled or conflicting key file present the agent answers
+`backup_access_withdrawn`, and while the running daemon does not report the
+account's confinement it answers `backup_confinement_not_confirmed`. A new key
+never becomes the one file sshd reads in place of a withdrawn one. Removing a
+key is always allowed.
+
 | Reason | What was not confirmed |
 |---|---|
 | `sshd_config_invalid` | `sshd -t` refused the configuration |
