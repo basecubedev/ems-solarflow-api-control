@@ -12390,3 +12390,89 @@ resumeGuidedUpgrade("op-1").then(() => console.log(JSON.stringify(calls)));
     calls = json.loads(result.stdout)
     assert ["wait", "old-admin", "op-1"] in calls
     assert ["overlay", "Waiting for the new Admin"] in calls
+
+
+def test_a_lost_status_request_is_retried_and_a_server_answer_ends_the_poll():
+    """One failed poll declared a still-running restore or upgrade failed."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the job poll contract")
+    js = _read("admin.js")
+    sources = "\n".join(
+        (
+            _extract_decl(js, "const ADMIN_ERROR_MESSAGES"),
+            _extract_decl(js, "function humanErrorText"),
+            _extract_decl(js, "function jobPollError"),
+            _extract_decl(js, "async function readJobStatus"),
+        )
+    )
+    script = sources + """
+const answers = [
+  () => { throw new TypeError("Failed to fetch"); },
+  () => ({ ok: false, status: 502, json: async () => { throw new SyntaxError("x"); } }),
+  () => ({ ok: false, status: 404, json: async () => ({ ok: false, error: "unknown job" }) }),
+];
+let call = 0;
+async function fetch() { return answers[call++](); }
+(async () => {
+  const out = [];
+  for (let i = 0; i < answers.length; i += 1) {
+    try { await readJobStatus("/x", "fallback"); out.push("ok"); }
+    catch (err) { out.push({ transient: err.transient, status: err.status || null }); }
+  }
+  console.log(JSON.stringify(out));
+})();
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == [
+        {"transient": True, "status": None},
+        {"transient": True, "status": None},
+        {"transient": False, "status": 404},
+    ]
+
+
+def test_the_lost_contact_warning_clears_once_the_backup_poll_answers_again():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the job poll contract")
+    js = _read("admin.js")
+    sources = "\n".join(
+        (
+            _extract_decl(js, "const ADMIN_ERROR_MESSAGES"),
+            _extract_decl(js, "function humanErrorText"),
+            _extract_decl(js, "function jobPollError"),
+            _extract_decl(js, "async function readJobStatus"),
+            _extract_decl(js, "async function pollBackupJob"),
+        )
+    )
+    script = """
+const JOB_POLL_MAX_MISSES = 20, JOB_POLL_RETRY_MS = 0, BACKUP_POLL_INTERVAL_MS = 0;
+let backupPollTimer = null, backupPollMisses = 0;
+const backupEls = { restoreSteps: {}, createSteps: {} };
+let message = null;
+const seen = [];
+function renderBackupMessage(items) { message = items; }
+function renderBackupJobSteps() { seen.push(JSON.stringify(message)); }
+function stopBackupPolling() {}
+function setBackupBusy() {}
+function loadBackups() {}
+function renderBackupJobResult() {}
+const answers = [
+  () => { throw new TypeError("Failed to fetch"); },
+  () => ({ ok: true, status: 200, json: async () => ({ ok: true, status: "running", steps: [] }) }),
+  () => ({ ok: true, status: 200, json: async () => ({ ok: true, status: "succeeded", steps: [], result: { ok: true } }) }),
+];
+let call = 0;
+async function fetch() { return answers[call++](); }
+const pending = [];
+function setTimeout(fn) { pending.push(fn); }
+""" + sources + """
+(async () => {
+  await pollBackupJob("job", "restore");
+  while (pending.length) { await pending.shift()(); }
+  console.log(JSON.stringify(seen));
+})();
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == ["[]", "[]"]

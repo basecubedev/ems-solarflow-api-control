@@ -53,7 +53,11 @@ new Function(
     "  runningAdmin: { tag: null, image: null }, completed: false };\n" +
     "scope.upgradeState = upgradeState;\n" +
     "const UPGRADE_POLL_INTERVAL_MS = 1200;\n" +
+    "const JOB_POLL_MAX_MISSES = 20;\n" +
+    "const JOB_POLL_RETRY_MS = 3000;\n" +
+    "const ADMIN_ERROR_MESSAGES = {};\n" +
     "let upgradePollTimer = null;\n" +
+    "let upgradePollMisses = 0;\n" +
     "async function fetch(url) {\n" +
     "  scope.fetched.push(url);\n" +
     "  if (url.indexOf('/api/admin/maintenance/overview') === 0) {\n" +
@@ -75,6 +79,12 @@ new Function(
     "function renderUpgradePlan() { scope.rendered.push('plan'); }\n" +
     "function setUpgradeRunning() {}\n" +
     "function updateUpgradeActionButtons() {}\n" +
+    extractFunction("humanErrorText") +
+    "\n" +
+    extractFunction("jobPollError") +
+    "\n" +
+    extractFunction("readJobStatus") +
+    "\n" +
     extractFunction("loadUpgradeCurrentVersion") +
     "\n" +
     extractFunction("pollUpgradeJob") +

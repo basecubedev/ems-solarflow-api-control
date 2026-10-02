@@ -11785,15 +11785,15 @@ function renderUpgradeSteps(steps) {
     .join("");
 }
 
+let upgradePollMisses = 0;
+
 async function pollUpgradeJob(jobId) {
   try {
-    const res = await fetch(
-      "/api/admin/maintenance/upgrade/jobs/" + encodeURIComponent(jobId)
+    const data = await readJobStatus(
+      "/api/admin/maintenance/upgrade/jobs/" + encodeURIComponent(jobId),
+      "Upgrade status unavailable."
     );
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      throw new Error(humanErrorText(data, "Upgrade status unavailable."));
-    }
+    upgradePollMisses = 0;
     if (data.transition) renderSystemAlignmentStatus(data);
     renderUpgradeSteps(data.steps);
     if (data.status === "succeeded" || data.status === "failed") {
@@ -11810,6 +11810,16 @@ async function pollUpgradeJob(jobId) {
     }
     upgradePollTimer = setTimeout(() => pollUpgradeJob(jobId), UPGRADE_POLL_INTERVAL_MS);
   } catch (err) {
+    if (err.transient && upgradePollMisses < JOB_POLL_MAX_MISSES) {
+      upgradePollMisses += 1;
+      renderUpgradeValidation([{
+        tone: "warn",
+        text: "Lost contact with the Admin Console; the upgrade keeps running there. Retrying\u2026",
+      }], false);
+      upgradePollTimer = setTimeout(() => pollUpgradeJob(jobId), JOB_POLL_RETRY_MS);
+      return;
+    }
+    upgradePollMisses = 0;
     stopUpgradePolling();
     renderUpgradeValidation([{ tone: "error", text: err.message || String(err) }], false);
     setUpgradeRunning(false);
@@ -13305,16 +13315,45 @@ function stopBackupPolling() {
   }
 }
 
+const JOB_POLL_MAX_MISSES = 20;
+const JOB_POLL_RETRY_MS = 3000;
+
+function jobPollError(message, transient) {
+  const err = new Error(message);
+  err.transient = transient;
+  return err;
+}
+
+async function readJobStatus(url, fallback) {
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (err) {
+    throw jobPollError("The Admin Console did not answer.", true);
+  }
+  const data = await res.json().catch(() => null);
+  if (res.status >= 500 || data === null) {
+    throw jobPollError("The Admin Console did not answer.", true);
+  }
+  if (!res.ok || !data.ok) {
+    const err = jobPollError(humanErrorText(data, fallback), false);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+let backupPollMisses = 0;
+
 async function pollBackupJob(jobId, kind) {
   const container = kind === "restore" ? backupEls.restoreSteps : backupEls.createSteps;
   try {
-    const res = await fetch(
-      "/api/admin/maintenance/backups/jobs/" + encodeURIComponent(jobId)
+    const data = await readJobStatus(
+      "/api/admin/maintenance/backups/jobs/" + encodeURIComponent(jobId),
+      "Backup status unavailable."
     );
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      throw new Error(humanErrorText(data, "Backup status unavailable."));
-    }
+    if (backupPollMisses > 0) renderBackupMessage([]);
+    backupPollMisses = 0;
     renderBackupJobSteps(data.steps, container);
     if (data.status === "running") {
       backupPollTimer = setTimeout(() => pollBackupJob(jobId, kind), BACKUP_POLL_INTERVAL_MS);
@@ -13326,8 +13365,24 @@ async function pollBackupJob(jobId, kind) {
     setBackupBusy(false);
     loadBackups();
   } catch (err) {
+    if (err.transient && backupPollMisses < JOB_POLL_MAX_MISSES) {
+      backupPollMisses += 1;
+      renderBackupMessage([{
+        tone: "warn",
+        text: "Lost contact with the Admin Console; the job keeps running there. Retrying\u2026",
+      }]);
+      backupPollTimer = setTimeout(() => pollBackupJob(jobId, kind), JOB_POLL_RETRY_MS);
+      return;
+    }
+    backupPollMisses = 0;
     stopBackupPolling();
-    renderBackupMessage([{ tone: "error", text: err.message || String(err) }]);
+    const sessionEnded = kind === "restore" && (err.status === 401 || err.status === 403);
+    renderBackupMessage([{
+      tone: sessionEnded ? "info" : "error",
+      text: sessionEnded
+        ? "This session ended while the restore ran, most likely because it restored the password file. Log in again, with the password from the backup if it differs, to see the result in the backup list."
+        : err.message || String(err),
+    }]);
     setBackupBusy(false);
   }
 }
