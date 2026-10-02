@@ -7117,6 +7117,21 @@ class AdminHandler(BaseHTTPRequestHandler):
             body.get("id") or body.get("label") or host
         )
         credentials_ref = self._existing_broker_ref(broker_id)
+        if (username or password) and not self._legacy_broker_may_write_secret(
+            broker_id, owned=credentials_ref == broker_id
+        ):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "credentials_ref_in_use",
+                    "message": (
+                        f"The MQTT credential '{broker_id}' belongs to the running "
+                        "configuration or another connection. Use a different id."
+                    ),
+                },
+                status=409,
+            )
+            return
         try:
             if username or password:
                 self.server.credential_store.save_mqtt_broker_secret(
@@ -7146,7 +7161,11 @@ class AdminHandler(BaseHTTPRequestHandler):
         self._drain_body()
         broker_id = CredentialStore.normalize_ref(broker_id)
         removed = self.server.discovery_preparation.remove_broker(broker_id)
-        if removed and removed.get("credentials_ref"):
+        if (
+            removed
+            and removed.get("credentials_ref")
+            and not self._runtime_credential_ref_consumed(removed["credentials_ref"])
+        ):
             try:
                 self.server.credential_store.forget_mqtt_broker_secret(
                     removed["credentials_ref"]
@@ -7155,6 +7174,41 @@ class AdminHandler(BaseHTTPRequestHandler):
                 pass
         self._reseed_configured_brokers()
         self._send_json({"ok": True, "removed": bool(removed)})
+
+    def _legacy_broker_may_write_secret(self, ref, *, owned):
+        """True when the legacy broker route may (re)write runtime record ``ref``.
+
+        That record is the one the EMS resolves, so the route only writes one it
+        created itself or a fresh one, and never one the configuration consumes.
+        """
+
+        if self._runtime_credential_ref_consumed(ref):
+            return False
+        if owned:
+            return True
+        try:
+            return not os.path.lexists(self.server.credential_store._mqtt_path(ref))
+        except (CredentialStoreError, ValueError):
+            return False
+
+    @staticmethod
+    def _runtime_credential_ref_consumed(ref):
+        """True when the installed config uses ``ref``, or cannot be read."""
+
+        from ems.mqtt_credentials import collect_mqtt_credential_consumers
+
+        context = detect_install_context()
+        if not context.config_exists:
+            return False
+        try:
+            config = json.loads(context.config_path.read_bytes().decode("utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            return True
+        try:
+            consumers = collect_mqtt_credential_consumers(config)
+        except Exception:
+            return True
+        return any(consumer.credentials_ref == ref for consumer in consumers)
 
     def _existing_broker_ref(self, broker_id):
         for broker in self.server.discovery_preparation.load()["local_mqtt"]["brokers"]:

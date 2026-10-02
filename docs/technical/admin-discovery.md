@@ -378,7 +378,11 @@ API:
 - `POST /api/discovery/connections/mqtt-brokers` /
   `DELETE /api/discovery/connections/mqtt-brokers/<id>` — legacy per-broker
   connection entries, retained for backward compatibility only; the Discovery UI
-  no longer uses them.
+  no longer uses them. Their secret lands in the runtime record
+  `config/secrets/mqtt-<id>.json`, so a save that would overwrite a record the
+  entry did not create, or one the installed config uses, is refused with
+  `409 credentials_ref_in_use`, and a delete keeps a record the config still
+  uses (an unreadable config counts as using it).
 
 ## Maintenance discovery sources
 

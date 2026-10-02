@@ -348,3 +348,101 @@ def test_broker_save_string_false_tls_is_rejected_not_coerced(server):
     )
     assert status == 400
     _assert_no_broker_persisted(server)
+
+
+def _config_consuming(install_root, ref):
+    config_dir = install_root / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "devices": [
+                    {
+                        "type": "zendure_mqtt",
+                        "enabled": True,
+                        "sn": "SN-LOCAL1",
+                        "mqtt": {"broker_ref": "local_home"},
+                    }
+                ],
+                "zendure_mqtt": {
+                    "brokers": {
+                        "local_home": {
+                            "enabled": True,
+                            "source": "local_mqtt",
+                            "host": "10.0.0.10",
+                            "port": 1883,
+                            "credentials_ref": ref,
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_legacy_broker_save_does_not_overwrite_a_foreign_runtime_credential(
+    isolated_install_root, server
+):
+    secret = _broker_secret_file(isolated_install_root, "home")
+    secret.parent.mkdir(parents=True, exist_ok=True)
+    secret.write_bytes(b'{"version": 1, "ref": "home", "username": "runtime"}')
+    before = secret.read_bytes()
+
+    status, _, payload = request(
+        f"{server}/api/discovery/connections/mqtt-brokers",
+        method="POST",
+        body={"id": "home", "host": "h", "username": "u", "password": "p"},
+    )
+
+    assert status == 409
+    assert payload["error"] == "credentials_ref_in_use"
+    assert secret.read_bytes() == before
+    _assert_no_broker_persisted(server)
+
+
+def test_legacy_broker_save_does_not_rotate_a_credential_the_config_uses(
+    isolated_install_root, server
+):
+    status, _, _ = request(
+        f"{server}/api/discovery/connections/mqtt-brokers",
+        method="POST",
+        body={"id": "shared", "host": "h", "username": "u", "password": "p"},
+    )
+    assert status == 200
+    secret = _broker_secret_file(isolated_install_root, "shared")
+    before = secret.read_bytes()
+    _config_consuming(isolated_install_root, "shared")
+
+    status, _, payload = request(
+        f"{server}/api/discovery/connections/mqtt-brokers",
+        method="POST",
+        body={"id": "shared", "host": "h", "username": "u2", "password": "p2"},
+    )
+
+    assert status == 409
+    assert payload["error"] == "credentials_ref_in_use"
+    assert secret.read_bytes() == before
+
+
+def test_legacy_broker_delete_keeps_a_credential_the_config_uses(
+    isolated_install_root, server
+):
+    status, _, _ = request(
+        f"{server}/api/discovery/connections/mqtt-brokers",
+        method="POST",
+        body={"id": "shared", "host": "h", "username": "u", "password": "p"},
+    )
+    assert status == 200
+    secret = _broker_secret_file(isolated_install_root, "shared")
+    before = secret.read_bytes()
+    _config_consuming(isolated_install_root, "shared")
+
+    status, _, deleted = request(
+        f"{server}/api/discovery/connections/mqtt-brokers/shared", method="DELETE"
+    )
+
+    assert status == 200
+    assert deleted["removed"] is True
+    assert secret.read_bytes() == before
+    _assert_no_broker_persisted(server)
