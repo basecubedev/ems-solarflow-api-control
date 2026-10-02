@@ -63,18 +63,27 @@ class AdminUpdateApplyError(Exception):
 
 
 def _atomic_write_bytes(path, raw):
-    """Restore ``raw`` bytes to ``path`` atomically (temp file + rename).
+    """Write ``raw`` bytes to ``path`` atomically (temp file + rename).
 
-    Used only for rollback, so the restored file is exactly the original bytes
-    (never a reserialized/normalized form).
+    Every compose/env write of an update goes through here: a power cut in a
+    plain ``write_text`` left a truncated compose file on a Pi. Rollback uses it
+    to put the exact original bytes back. The file keeps the mode and owner it
+    had; ``mkstemp`` alone would leave every compose file at 0600.
     """
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing = path.stat()
+    except FileNotFoundError:
+        existing = None
     fd, tmp_name = tempfile.mkstemp(prefix=".admin-rollback.", suffix=".tmp", dir=path.parent)
     tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "wb") as handle:
+            os.fchmod(handle.fileno(), existing.st_mode & 0o7777 if existing else 0o644)
+            if existing is not None and os.geteuid() == 0:
+                os.fchown(handle.fileno(), existing.st_uid, existing.st_gid)
             handle.write(raw)
             handle.flush()
             os.fsync(handle.fileno())
@@ -249,8 +258,7 @@ def _write_env_tag(env_file, tag):
             break
     if not replaced:
         lines.append(f"EMS_ADMIN_TAG={tag}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write_bytes(path, ("\n".join(lines) + "\n").encode("utf-8"))
 
 
 # A literal ``EMS_ADMIN_TAG: "value"`` line in the compose environment. Anchored
@@ -314,10 +322,11 @@ def update_admin_image_reference(
             located = True
             variable_driven = True
         if text != original:
-            compose_file.with_name(compose_file.name + ".bak").write_text(
-                original, encoding="utf-8"
+            _atomic_write_bytes(
+                compose_file.with_name(compose_file.name + ".bak"),
+                original.encode("utf-8"),
             )
-            compose_file.write_text(text, encoding="utf-8")
+            _atomic_write_bytes(compose_file, text.encode("utf-8"))
 
     # Keep the recorded env tag correct. A variable-driven compose needs the env
     # file created when it is absent, or Compose keeps using the default tag and
@@ -599,7 +608,7 @@ def apply_admin_update(
         located = update_admin_image_reference(
             compose_file, target_ref, env_file=env_file, target_digest=target_digest
         )
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         return rollback_fail(
             "compose_update_failed", f"Could not update the Admin compose/env: {exc}"
         )
