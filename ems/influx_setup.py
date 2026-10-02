@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Setup and command helpers for the bundled InfluxDB backend."""
 
+import logging
 import os
 import secrets
 import shlex
+import stat
+import tempfile
 from collections import OrderedDict
 
 from ems.paths import BASE_DIR
@@ -247,22 +250,48 @@ def render_env_file(values):
 
 
 def write_env_file(path, content):
-    """Write ``content`` to ``path`` with restrictive 0600 permissions."""
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    # Open with O_CREAT|O_WRONLY|O_TRUNC and 0600 so the secret file is not
-    # group/world readable on platforms that honor the mode.
-    flags = os.O_CREAT | os.O_WRONLY | os.O_TRUNC
-    fd = os.open(path, flags, 0o600)
+    """Write ``content`` to ``path`` atomically with 0600 permissions.
+
+    The file holds the only copy of the bundled admin token. Rewritten in
+    place, a power cut or a full card mid-write left it empty, the next run
+    generated new tokens, and the existing InfluxDB data no longer accepted
+    any of them. An unchanged file is not rewritten at all, and a rewritten
+    one keeps its owner and group where this process may set them, so the
+    EMS container still reads a file another user rewrote.
+    """
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
     try:
-        with os.fdopen(fd, "w") as handle:
+        with open(path, encoding="utf-8") as handle:
+            if handle.read() == content:
+                return
+    except (OSError, UnicodeDecodeError):
+        pass
+    try:
+        previous = os.lstat(path)
+    except OSError:
+        previous = None
+    if previous is not None and stat.S_ISLNK(previous.st_mode):
+        previous = None
+    fd, staged = tempfile.mkstemp(dir=directory, prefix=".influxdb-env-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            if previous is not None:
+                try:
+                    os.fchown(handle.fileno(), previous.st_uid, previous.st_gid)
+                except OSError:
+                    try:
+                        os.fchown(handle.fileno(), -1, previous.st_gid)
+                    except OSError:
+                        pass
             handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staged, path)
     finally:
-        # On platforms where O_CREAT mode was ignored (e.g. pre-existing file),
-        # tighten permissions explicitly. Best-effort; ignore unsupported FS.
         try:
-            os.chmod(path, 0o600)
+            os.remove(staged)
         except OSError:
             pass
 
@@ -313,8 +342,12 @@ def read_secret_file_token(influx_config, base_dir=None):
     if not os.path.exists(path):
         return ""
     token_env = (influx_config.get("token_env") or "INFLUXDB_TOKEN").strip()
-    with open(path, encoding="utf-8") as handle:
-        values = parse_env_file(handle.read())
+    try:
+        with open(path, encoding="utf-8") as handle:
+            values = parse_env_file(handle.read())
+    except (OSError, UnicodeDecodeError) as exc:
+        logging.warning("influx_secret_file_unreadable path=%s error=%s", path, exc)
+        return ""
     return values.get(token_env, "").strip()
 
 

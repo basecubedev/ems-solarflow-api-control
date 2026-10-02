@@ -2539,6 +2539,10 @@ def print_influx_status(report):
             f"last_run={task['last_run_status']} "
             f"latest_completed={task['latest_completed']}"
         )
+    for name in report.get("missing_tasks", ()):
+        print(f"    {name}: MISSING")
+    if report.get("missing_buckets") or report.get("missing_tasks"):
+        print("  run 'python3 emsctl.py influx sync' to create what is missing")
 
 
 def confirm_disable_auth(args, auth_path):

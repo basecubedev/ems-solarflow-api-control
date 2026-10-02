@@ -421,11 +421,17 @@ def status(client, influx_config):
             }
         )
 
+    missing_buckets = [b["name"] for b in buckets if not b["exists"]]
+    active = {task["name"] for task in tasks if task["status"] == "active"}
+    missing_tasks = [name for name in planned_task_names(influx_config) if name not in active]
+    healthy = healthy and not missing_buckets and not missing_tasks
+
     return {
         "bucket_prefix": prefix,
         "owned_bucket_prefix": owned_bucket_prefix,
         "buckets": buckets,
         "tasks": tasks,
         "healthy": healthy,
-        "missing_buckets": [b["name"] for b in buckets if not b["exists"]],
+        "missing_buckets": missing_buckets,
+        "missing_tasks": missing_tasks,
     }
