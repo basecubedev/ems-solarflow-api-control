@@ -838,3 +838,22 @@ def test_a_deadline_armed_with_nothing_kept_records_no_digest(paths, packaged):
     deadline, _ = arm(paths, packaged, FakeRunner(), previous="")
 
     assert deadline.previous_sha256 == ""
+
+
+def test_a_revert_the_deadline_drove_is_folded_into_the_retention_record(
+    paths, packaged, tmp_path
+):
+    """The record kept naming the refused package current; Revert re-ran it."""
+
+    from appliance import manager_install
+
+    deadline_at(paths, packaged, epoch=1)
+    tools = tmp_path / "tools"
+    fake_tools(tools, installed_version="0.2.0", agent="failed")
+
+    result = run_reverter(paths, tools, now=0)
+
+    assert result.returncode == 0, result.stderr
+    outcome = manager_install.read_outcome(paths)
+    assert outcome.outcome == manager_install.OUTCOME_REVERTED
+    assert "previous.deb" in outcome.detail

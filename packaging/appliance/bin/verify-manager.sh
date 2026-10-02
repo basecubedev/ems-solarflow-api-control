@@ -15,6 +15,8 @@ set -eu
 STATE=${1:-/var/lib/ems-appliance-manager/agent/packages}
 DEADLINE="$STATE/verify-deadline.json"
 VERDICT="$STATE/verify-verdict.json"
+# install-manager.sh's result file; a revert this script drove is recorded there too.
+RESULT="$STATE/install-result.json"
 ATTEMPTS="$STATE/verify-revert-attempts"
 TICKS="$STATE/verify-ticks"
 PACKAGE=ems-appliance-manager
@@ -58,6 +60,18 @@ record() {
 }
 EOF
     mv "$VERDICT.part" "$VERDICT"
+}
+
+record_install_reverted() {
+    umask 077
+    cat > "$RESULT.part" <<EOF
+{
+  "outcome": "reverted",
+  "detail": "$1",
+  "finished_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+    mv "$RESULT.part" "$RESULT"
 }
 
 disarm() {
@@ -159,6 +173,7 @@ fi
 echo "verify-manager: the deadline expired without a healthy $PACKAGE; reinstalling $PREVIOUS" >&2
 if dpkg --force-confold --install "$PREVIOUS"; then
     record reverted "the deadline expired without a healthy $PACKAGE $EXPECTED; $PREVIOUS was put back"
+    record_install_reverted "the verify deadline put $PREVIOUS back"
     disarm
     exit 0
 fi
