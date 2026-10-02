@@ -104,6 +104,7 @@ class EMSController:
         self.commanded_total_w = None
         self.filtered_load_w = None
         self.grid_meter_holding = False
+        self.control_enabled = None
         self.load_history = deque(
             maxlen=cfg.safe_int(
                 cfg.OUTPUT_CONTROL_CONFIG.get("median_window", 3),
@@ -855,6 +856,19 @@ class EMSController:
             devices=",".join(holders) if holders else "none",
             previous=",".join(previous) if previous else "none"
         )
+
+    def note_control_enabled(self, enabled):
+        """Start from the observed output when control is switched back on.
+
+        The integrator and the device ramps keep running while control is
+        disabled; re-enabling would otherwise write their wound-up value at
+        once.
+        """
+
+        if enabled and self.control_enabled is False:
+            self.reset_output_control_state()
+            log_event(logging.INFO, "control_enabled_reset_output_control")
+        self.control_enabled = enabled
 
     def reset_output_control_state(self):
         """Reset output-control memory after a blocked operating state."""
@@ -3503,6 +3517,7 @@ class EMSController:
             "enabled",
             cfg.SYSTEM_ENABLED
         )
+        self.note_control_enabled(enabled)
         interval = self.runtime_system_int(
             "loop_interval",
             cfg.LOOP_INTERVAL,
