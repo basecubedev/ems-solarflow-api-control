@@ -3,6 +3,7 @@
 """Safe runtime-state editor for ems-solarflow-api-control."""
 
 import argparse
+import contextlib
 import subprocess
 import getpass
 import json
@@ -4188,6 +4189,12 @@ def handle_config_migrate_zendure_command(args, config):
         for change in changes
     ]
 
+    if args.json and plan and not args.dry_run and not args.yes:
+        return fail(
+            "--json applies only with --yes, or plans with --dry-run",
+            code=2,
+        )
+
     if args.json:
         print(_json.dumps({"changes": plan, "count": len(plan)}, indent=2))
     elif not plan:
@@ -4200,22 +4207,13 @@ def handle_config_migrate_zendure_command(args, config):
     if args.dry_run or not plan:
         return 0
 
-    if not args.yes:
-        print("\nApply this migration to config.json? [y/N] ", end="")
-        try:
-            answer = input().strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            answer = ""
-        if answer not in ("y", "yes"):
-            print("Aborted.")
-            return 0
-
     try:
         migrated, _warnings = migrate_zendure_mqtt_control_configs(config)
     except ZendureMqttMigrationError as exc:
-        print("Refused: the migrated config would be invalid.")
+        report = sys.stderr if args.json else sys.stdout
+        print("Refused: the migrated config would be invalid.", file=report)
         for err in exc.errors:
-            print(f"  - {err.get('code')}: {err.get('message')}")
+            print(f"  - {err.get('code')}: {err.get('message')}", file=report)
         return fail("zendure_mqtt_control_migration_invalid", code=2)
     do_backup, status = resolve_config_upgrade_backup_policy(args)
     if status == "abort":
@@ -4223,10 +4221,17 @@ def handle_config_migrate_zendure_command(args, config):
         return 0
     if status != "ok":
         return fail(status, code=2)
-    result = write_config_upgrade(args, config, migrated, None, do_backup)
+    if args.json:
+        with contextlib.redirect_stdout(sys.stderr):
+            result = write_config_upgrade(args, config, migrated, None, do_backup)
+    else:
+        result = write_config_upgrade(args, config, migrated, None, do_backup)
     if result != 0:
         return result
-    print(f"Applied Zendure MQTT control migration to {len(plan)} device(s).")
+    print(
+        f"Applied Zendure MQTT control migration to {len(plan)} device(s).",
+        file=sys.stderr if args.json else sys.stdout,
+    )
     return 0
 
 
