@@ -206,6 +206,7 @@ class InfluxHistoryProvider(HistoryProvider):
     def __init__(self, influx_config, client=None):
         self.config = influx_config
         self._client = client
+        self._owns_client = client is None
         self._missing_buckets_cache = None
         self._missing_buckets_lock = threading.Lock()
         # Single flight belongs to the provider, not to one hold: a probe still
@@ -223,6 +224,17 @@ class InfluxHistoryProvider(HistoryProvider):
                 runtime_influx_token(self.config),
             )
         return self._client
+
+    def _forget_rejected_client(self, exc):
+        """Drop a built client whose credentials InfluxDB refused.
+
+        The token is resolved when the client is built, so a rotated token is
+        only picked up by building the client again.
+        """
+
+        response = getattr(exc, "response", None)
+        if self._owns_client and getattr(response, "status_code", None) in (401, 403):
+            self._client = None
 
     def bucket_for_range(self, start, end):
         """The bucket a query over this range reads, by the config's profiles."""
@@ -394,7 +406,13 @@ class InfluxHistoryProvider(HistoryProvider):
                 # Series with no InfluxDB mapping; leave empty rather than fail.
                 per_series_points[name] = {}
                 continue
-            points = self._query_series(spec, bucket, window, devices, start, end)
+            try:
+                points = self._query_series(
+                    spec, bucket, window, devices, start, end
+                )
+            except Exception as exc:
+                self._forget_rejected_client(exc)
+                raise
             per_series_points[name] = points
             all_timestamps.update(points.keys())
 

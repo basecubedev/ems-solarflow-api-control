@@ -459,13 +459,54 @@ def test_a_long_window_is_thinned_and_streamed(tmp_path, monkeypatch):
     assert result.series["grid"][:3] == [0, 20, 40]
 
 
-def test_the_dashboard_store_thins_to_the_same_point_budget_as_the_provider():
-    from dashboard import sqlite_store
-    from ems.history import provider
-
-    assert sqlite_store.MAX_HISTORY_POINTS == provider.MAX_HISTORY_POINTS
 def test_a_device_name_cannot_open_a_flux_interpolation():
     from ems.history.influx_provider import build_device_filter
 
     flux = build_device_filter(["x${string(v: 1)}y"])
     assert "${" not in flux.replace("\\${", "")
+
+
+def test_a_rejected_token_is_not_cached_past_the_failed_query(monkeypatch):
+    import requests
+
+    cfg = normalize_influxdb_config(
+        {
+            "enabled": True,
+            "mode": "external",
+            "url": "http://influx.invalid:8086",
+            "token_env": "INFLUXDB_TOKEN",
+        }
+    )
+    tokens_used = []
+
+    class _TokenCheckingClient:
+        def __init__(self, url, org, token):
+            self.token = token
+
+        def query_raw(self, flux):
+            tokens_used.append(self.token)
+            if self.token != "rotated":
+                response = requests.Response()
+                response.status_code = 401
+                raise requests.HTTPError("401 Unauthorized", response=response)
+            return ""
+
+    monkeypatch.setattr(_influx_client_mod, "HistoryInfluxClient", _TokenCheckingClient)
+    monkeypatch.setenv("INFLUXDB_TOKEN", "stale")
+    provider = InfluxHistoryProvider(cfg)
+    start = _utc(2026, 10, 1)
+    end = _utc(2026, 10, 1, 1)
+
+    with pytest.raises(requests.HTTPError):
+        provider.query(start, end, series=["grid"])
+
+    monkeypatch.setenv("INFLUXDB_TOKEN", "rotated")
+    provider.query(start, end, series=["grid"])
+    assert tokens_used == ["stale", "rotated"]
+
+
+def test_the_dashboard_store_thins_to_the_same_point_budget_as_the_provider():
+    from dashboard import sqlite_store
+    from ems.history import provider
+
+    assert sqlite_store.MAX_HISTORY_POINTS == provider.MAX_HISTORY_POINTS
