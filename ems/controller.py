@@ -2407,15 +2407,21 @@ class EMSController:
             )
             return True
 
+        configured_min_soc = cfg.safe_soc_limit(dev.min_soc)
+        configured_max_soc = cfg.safe_soc_limit(dev.max_soc)
         effective_min_soc = (
-            cfg.safe_int(desired_min_soc, dev.min_soc, minimum=0)
+            cfg.safe_soc_limit(
+                cfg.safe_int(desired_min_soc, configured_min_soc, minimum=0)
+            )
             if desired_min_soc is not None
-            else dev.min_soc
+            else configured_min_soc
         )
         effective_max_soc = (
-            cfg.safe_int(desired_max_soc, dev.max_soc, minimum=0)
+            cfg.safe_soc_limit(
+                cfg.safe_int(desired_max_soc, configured_max_soc, minimum=0)
+            )
             if desired_max_soc is not None
-            else dev.max_soc
+            else configured_max_soc
         )
 
         managed = {}

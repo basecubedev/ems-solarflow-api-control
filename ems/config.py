@@ -2,6 +2,7 @@
 import copy
 import json
 import logging
+import math
 import os
 import re
 import ssl
@@ -2380,7 +2381,7 @@ def dashboard_file_path(key, default):
 def safe_int(value, default=0, minimum=None):
     try:
         parsed = int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         parsed = default
 
     if minimum is not None:
@@ -2664,6 +2665,8 @@ def safe_float(value, default=0.0, minimum=None):
         parsed = float(value)
     except (TypeError, ValueError):
         parsed = default
+    if not math.isfinite(parsed):
+        parsed = default
 
     if minimum is not None:
         parsed = max(minimum, parsed)
@@ -2687,6 +2690,20 @@ def safe_bool(value, default=False):
         return False
 
     return default
+
+
+def safe_soc_limit(value):
+    """A managed SoC bound in whole percent, or 0 (unmanaged) when it is not one."""
+
+    if isinstance(value, bool):
+        return 0
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(number) or not 0 <= number <= 100:
+        return 0
+    return int(number)
 
 
 def safe_percent(value, default=0):

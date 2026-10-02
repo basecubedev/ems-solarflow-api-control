@@ -124,3 +124,26 @@ def test_a_restart_in_winter_keeps_the_ramped_min_soc(device_min_soc, expected):
 
     assert (target, adjusted) == (expected, False)
     assert controller.winter_min_soc_targets["WR1"] == expected
+
+
+@pytest.mark.parametrize(
+    "min_soc, max_soc, expected",
+    [
+        (150, 90, {"socSet": 900}),
+        (20, 250, {"minSoc": 200}),
+        (-5, 90, {"socSet": 900}),
+        (float("nan"), 90, {"socSet": 900}),
+        (float("inf"), 90, {"socSet": 900}),
+        ("abc", 90, {"socSet": 900}),
+    ],
+)
+def test_an_out_of_range_soc_bound_is_never_written(min_soc, max_soc, expected):
+    result, writes = _reconcile(_device(min_soc, max_soc), _state())
+    assert result is True
+    assert writes == [expected]
+
+
+@pytest.mark.parametrize("value", ["inf", float("inf"), "-inf", "nan", float("nan")])
+def test_safe_number_parsers_never_return_or_raise_on_non_finite_input(value):
+    assert cfg.safe_int(value, 7) == 7
+    assert cfg.safe_float(value, 7.0) == 7.0
