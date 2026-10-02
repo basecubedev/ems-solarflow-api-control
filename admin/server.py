@@ -4393,7 +4393,13 @@ class AdminHandler(BaseHTTPRequestHandler):
         plan = service.plans.get(plan_id) if isinstance(plan_id, str) else None
         if plan is None:
             self._send_json(
-                {"ok": False, "error": "unknown or expired restore plan"}, status=409
+                {
+                    "ok": False,
+                    "error": "unknown or expired restore plan",
+                    "message": "This restore preview has expired or was already "
+                    "used. Run the preview again.",
+                },
+                status=409,
             )
             return
         if plan.blocked:
@@ -4402,13 +4408,38 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=409,
             )
             return
+        if not service.restore_lock.acquire(blocking=False):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "restore_in_progress",
+                    "message": "A restore is already running. Wait for it to finish.",
+                },
+                status=409,
+            )
+            return
+        plan = service.plans.claim(plan_id)
+        if plan is None:
+            service.restore_lock.release()
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "unknown or expired restore plan",
+                    "message": "This restore preview was already used. Run the "
+                    "preview again.",
+                },
+                status=409,
+            )
+            return
         job = BackupJob(uuid.uuid4().hex, service.plan_restore_steps(plan))
 
         def runner(handle):
             try:
-                result = service.restore_from_plan(plan_id, confirm=True, progress=handle)
+                result = service.restore_claimed_plan(plan, confirm=True, progress=handle)
             except BackupRestoreError as exc:
                 result = {"ok": False, "status": "failed", "message": str(exc)}
+            finally:
+                service.restore_lock.release()
             handle.finish(result)
 
         self.server.backup_jobs.submit(job, runner)

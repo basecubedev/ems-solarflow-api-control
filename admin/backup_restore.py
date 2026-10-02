@@ -616,13 +616,31 @@ class RestorePlanRegistry:
     def get(self, plan_id):
         with self._lock:
             plan = self._plans.get(plan_id)
-        if plan is None:
-            return None
-        if datetime.now(timezone.utc) > datetime.strptime(
-            plan.expires_at, "%Y-%m-%dT%H:%M:%SZ"
-        ).replace(tzinfo=timezone.utc):
+        if plan is None or self._expired(plan):
             return None
         return plan
+
+    def claim(self, plan_id):
+        """Take a plan out of the registry so it can be executed exactly once.
+
+        A double click, a second tab or a retry otherwise started two jobs on
+        one plan, and the second job's rollback captured the half-restored
+        state.
+        """
+
+        with self._lock:
+            plan = self._plans.pop(plan_id, None)
+            if plan_id in self._order:
+                self._order.remove(plan_id)
+        if plan is None or self._expired(plan):
+            return None
+        return plan
+
+    @staticmethod
+    def _expired(plan):
+        return datetime.now(timezone.utc) > datetime.strptime(
+            plan.expires_at, "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -751,6 +769,7 @@ class BackupRestoreService:
         self._context_provider = context_provider
         self.plans = plans or RestorePlanRegistry()
         self._ems_tool = ems_tool
+        self.restore_lock = threading.Lock()
 
     # --- environment -----------------------------------------------------
 
@@ -1304,11 +1323,14 @@ class BackupRestoreService:
         return steps
 
     def restore_from_plan(self, plan_id, confirm, progress=None):
-        if confirm is not True:
-            raise BackupRestoreError("restore requires confirm=true")
         plan = self.plans.get(plan_id)
         if plan is None:
             raise BackupRestoreError("unknown or expired restore plan")
+        return self.restore_claimed_plan(plan, confirm, progress=progress)
+
+    def restore_claimed_plan(self, plan, confirm, progress=None):
+        if confirm is not True:
+            raise BackupRestoreError("restore requires confirm=true")
         if plan.blocked:
             raise BackupRestoreError(
                 plan.block_reason or "the restore plan is blocked"
