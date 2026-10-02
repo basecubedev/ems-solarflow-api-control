@@ -527,7 +527,10 @@ Short-term history (legacy snapshot list, used by older clients):
 GET /api/history?range=6h
 ```
 
-Supported ranges are `1h`, `6h`, `12h`, and `24h`.
+Supported ranges are `1h`, `6h`, `12h`, and `24h`. A range holding more than
+2000 snapshots is thinned to an even subset of at most 2000; the history chart
+endpoint (`/api/history/series`) does the same and reports the step as
+`meta.stride`.
 
 ### Two history sources: SQLite (operational) vs InfluxDB (analytics)
 

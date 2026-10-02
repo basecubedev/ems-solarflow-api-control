@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import NamedTuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+MAX_HISTORY_POINTS = 2000
 
 DEFAULT_ENERGY_SAVINGS = {
     "enabled": True,
@@ -365,20 +366,34 @@ class DashboardStore:
                     self._schema_ready = False
 
     def history(self, range_name="6h"):
+        """Snapshots of a range, thinned to at most ``MAX_HISTORY_POINTS``.
+
+        Runs without the store lock: ``record()`` is called by the control
+        loop and must not wait behind a long read.
+        """
+
         delta = SUPPORTED_RANGES.get(range_name, SUPPORTED_RANGES["6h"])
         cutoff = (datetime.now(timezone.utc) - delta).isoformat()
 
-        with self._lock, self._connect() as con:
-            rows = con.execute(
+        with contextlib.closing(self._connect()) as con:
+            (count,) = con.execute(
+                "SELECT COUNT(*) FROM snapshots WHERE timestamp >= ?",
+                (cutoff,),
+            ).fetchone()
+            stride = max(1, -(-int(count or 0) // MAX_HISTORY_POINTS))
+            cursor = con.execute(
                 """
                 SELECT payload FROM snapshots
                 WHERE timestamp >= ?
                 ORDER BY timestamp ASC
                 """,
                 (cutoff,),
-            ).fetchall()
-
-        return [json.loads(row[0]) for row in rows]
+            )
+            return [
+                json.loads(raw)
+                for index, (raw,) in enumerate(cursor)
+                if index % stride == 0
+            ]
 
     def energy_summary(self, now=None):
         """Return the rollup, reusing the last one until a sample changes it.

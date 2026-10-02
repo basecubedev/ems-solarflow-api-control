@@ -168,6 +168,9 @@ class HistoryProvider(ABC):
         """Return a :class:`HistoryResult` for the time range and series."""
 
 
+MAX_HISTORY_POINTS = 2000
+
+
 class SqliteHistoryProvider(HistoryProvider):
     """History from the existing local dashboard SQLite snapshot store.
 
@@ -199,7 +202,7 @@ class SqliteHistoryProvider(HistoryProvider):
 
         device_filter = [d for d in (devices or []) if d]
 
-        rows = self._read_snapshots(start, end)
+        rows = self._read_snapshots(start, end, result.meta)
         for payload in rows:
             ts = _parse_iso(payload.get("timestamp"))
             if ts is None:
@@ -217,25 +220,40 @@ class SqliteHistoryProvider(HistoryProvider):
         result.meta["point_count"] = len(result.time)
         return result
 
-    def _read_snapshots(self, start, end):
+    def _read_snapshots(self, start, end, meta=None):
+        """Yield decoded snapshots, thinned to at most ``MAX_HISTORY_POINTS``.
+
+        A 24 h window at a 5 s write interval is 17,280 full snapshots. Loaded
+        and decoded at once they took seconds and hundreds of MB inside the EMS
+        process; a chart cannot show more points than its width anyway.
+        """
+
         uri = f"file:{self.database_path}?mode=ro"
         con = sqlite3.connect(uri, uri=True)
         try:
+            bounds = (_iso(start), _iso(end))
+            (count,) = con.execute(
+                "SELECT COUNT(*) FROM snapshots WHERE timestamp >= ? AND timestamp <= ?",
+                bounds,
+            ).fetchone()
+            stride = max(1, -(-int(count or 0) // MAX_HISTORY_POINTS))
+            if meta is not None and stride > 1:
+                meta["stride"] = stride
             cursor = con.execute(
                 """
                 SELECT payload FROM snapshots
                 WHERE timestamp >= ? AND timestamp <= ?
                 ORDER BY timestamp ASC
                 """,
-                (_iso(start), _iso(end)),
+                bounds,
             )
-            out = []
-            for (raw,) in cursor.fetchall():
+            for index, (raw,) in enumerate(cursor):
+                if index % stride:
+                    continue
                 try:
-                    out.append(json.loads(raw))
+                    yield json.loads(raw)
                 except (TypeError, ValueError):
                     continue
-            return out
         finally:
             con.close()
 

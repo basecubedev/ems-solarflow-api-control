@@ -427,3 +427,41 @@ def test_provider_client_uses_resolved_host_url_and_token(tmp_path, monkeypatch)
     assert captured["org"] == cfg["org"]
     assert captured["token"] == secret
     assert secret
+
+
+def test_a_long_window_is_thinned_and_streamed(tmp_path, monkeypatch):
+    """24 h at 5 s is 17,280 snapshots; the chart gets an even subset."""
+
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    from ems.history import provider as provider_mod
+
+    monkeypatch.setattr(provider_mod, "MAX_HISTORY_POINTS", 50)
+    path = tmp_path / "dash.sqlite"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE snapshots (timestamp TEXT PRIMARY KEY, payload TEXT)")
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    rows = []
+    for i in range(1000):
+        ts = (start + timedelta(seconds=5 * i)).isoformat()
+        rows.append((ts, json.dumps({"timestamp": ts, "grid_power_w": i})))
+    con.executemany("INSERT INTO snapshots VALUES (?, ?)", rows)
+    con.commit()
+    con.close()
+
+    result = provider_mod.SqliteHistoryProvider(str(path)).query(
+        start, start + timedelta(hours=2), series=["grid"]
+    )
+
+    assert len(result.time) == 50
+    assert result.meta["stride"] == 20
+    assert result.series["grid"][:3] == [0, 20, 40]
+
+
+
+def test_the_dashboard_store_thins_to_the_same_point_budget_as_the_provider():
+    from dashboard import sqlite_store
+    from ems.history import provider
+
+    assert sqlite_store.MAX_HISTORY_POINTS == provider.MAX_HISTORY_POINTS
