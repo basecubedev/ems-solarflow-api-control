@@ -325,6 +325,19 @@ class DiscoveryConnectionsStore:
             self._write_block(normalized)
             return normalized
 
+    def save_local_api(self, section):
+        """Replace only the local API section; priority and switches are kept."""
+
+        with self._lock:
+            current = self.load()
+            return self.save(
+                {
+                    "priority": current["discovery_priority"],
+                    "sources": current["sources"],
+                    "local_api": dict(section),
+                }
+            )
+
     # --- broker / token helpers ------------------------------------------
 
     def upsert_broker(self, broker):

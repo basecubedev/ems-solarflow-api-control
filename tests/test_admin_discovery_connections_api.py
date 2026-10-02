@@ -446,3 +446,30 @@ def test_legacy_broker_delete_keeps_a_credential_the_config_uses(
     assert deleted["removed"] is True
     assert secret.read_bytes() == before
     _assert_no_broker_persisted(server)
+
+
+def test_local_api_save_keeps_priority_and_source_switches(server):
+    status, _, _ = request(
+        f"{server}/api/discovery/preparation",
+        method="POST",
+        body={
+            "discovery_priority": ["zendure_mqtt", "local_mqtt", "local_api"],
+            "sources": {
+                "local_api": {"enabled": True},
+                "local_mqtt": {"enabled": False},
+                "zendure_mqtt": {"enabled": True},
+            },
+        },
+    )
+    assert status == 200
+
+    status, _, payload = request(
+        f"{server}/api/discovery/connections/local-api",
+        method="POST",
+        body={"scan_ranges": ["192.168.1.0/24"]},
+    )
+
+    assert status == 200
+    assert payload["discovery_priority"] == ["zendure_mqtt", "local_mqtt", "local_api"]
+    assert payload["local_mqtt"]["enabled"] is False
+    assert payload["local_api"]["scan_ranges"] == ["192.168.1.0/24"]

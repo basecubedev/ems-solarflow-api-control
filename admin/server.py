@@ -7062,7 +7062,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "expected a JSON object"}, status=400)
             return
         try:
-            self.server.discovery_preparation.save({"local_api": body})
+            self.server.discovery_preparation.save_local_api(body)
         except (DiscoveryPreparationError, DiscoveryConnectionsError) as exc:
             self._send_json(
                 {"ok": False, "error": "store_failed", "message": str(exc)},
