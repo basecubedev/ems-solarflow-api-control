@@ -970,7 +970,7 @@ async function loadNetworks() {
       const res = await fetch("/api/discovery/networks");
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data && data.error ? data.error : "detection failed");
+        throw new Error(humanErrorText(data, "detection failed"));
       }
       renderNetworks(data);
     } catch (err) {
@@ -1163,7 +1163,7 @@ async function loadGatewayNetworks() {
     });
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data && data.error ? data.error : "gateway probe failed");
+      throw new Error(humanErrorText(data, "gateway probe failed"));
     }
     const candidates = Array.isArray(data.candidates) ? data.candidates : [];
     const reachable = candidates.filter((c) => c.status === "reachable");
@@ -3413,6 +3413,11 @@ async function saveMqttCredential(event) {
 }
 
 async function deleteMqttCredential(id) {
+  if (!window.confirm(
+    "Remove this saved MQTT credential? Its password is not shown again; you would have to type it anew."
+  )) {
+    return;
+  }
   els.mqttCredentialMessage.textContent = "Removing credential…";
   const context = discoveryContextFor(els.mqttCredentialList);
   try {
@@ -3561,7 +3566,7 @@ async function saveZendureCloudToken(event) {
     await loadZendureCloudSettings();
   } catch (err) {
     els.zendureCloudMessage.textContent =
-      "Could not save Zendure credential: " + escapeHtml(err.message || String(err));
+      "Could not save Zendure credential: " + (err.message || String(err));
   } finally {
     els.zendureCloudSave.disabled = false;
   }
@@ -3594,7 +3599,7 @@ async function testZendureCloudToken() {
     await loadZendureCloudSettings();
   } catch (err) {
     els.zendureCloudMessage.textContent =
-      "Zendure credential test failed: " + escapeHtml(err.message || String(err));
+      "Zendure credential test failed: " + (err.message || String(err));
   } finally {
     els.zendureCloudTest.disabled = false;
   }
@@ -3640,13 +3645,18 @@ async function refreshZendureCloudDiscovery() {
     }
   } catch (err) {
     els.zendureCloudMessage.textContent =
-      "Zendure cloud discovery failed: " + escapeHtml(err.message || String(err));
+      "Zendure cloud discovery failed: " + (err.message || String(err));
   } finally {
     els.zendureCloudRefresh.disabled = false;
   }
 }
 
 async function forgetZendureCloudToken() {
+  if (!window.confirm(
+    "Remove the saved Zendure cloud credential? Cloud discovery stops until you enter it again."
+  )) {
+    return;
+  }
   els.zendureCloudForget.disabled = true;
   els.zendureCloudMessage.textContent = "Removing Zendure credential…";
   const context = discoveryContextFor(els.zendureCloudForm);
@@ -3665,7 +3675,7 @@ async function forgetZendureCloudToken() {
     if (context === "setup") await refreshUnifiedDevices();
   } catch (err) {
     els.zendureCloudMessage.textContent =
-      "Could not remove Zendure credential: " + escapeHtml(err.message || String(err));
+      "Could not remove Zendure credential: " + (err.message || String(err));
   } finally {
     els.zendureCloudForget.disabled = false;
   }
@@ -6601,7 +6611,7 @@ async function loadSetupCatalog() {
     const res = await fetch("/api/setup/config/catalog");
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data && data.error ? data.error : "catalog unavailable");
+      throw new Error(humanErrorText(data, "catalog unavailable"));
     }
     setupCatalog = data;
     seedDefaultOpenFeatureSections(setupCatalog.sections, openFeatures);
@@ -9178,6 +9188,12 @@ async function resolveContainerConflict() {
   const replace = conflict && conflict.replace_available === true;
   const safe = conflict && conflict.safe_fix_available === true;
   if (!conflict || (!safe && !replace)) return;
+  if (replace && !window.confirm(
+    "Stop and remove the running container " + (conflict.container_name || "") +
+    " and continue the setup? The EMS stops controlling until the new one is up."
+  )) {
+    return;
+  }
   start.resolving_conflict = true;
   start.error = null;
   renderStart();
@@ -9524,7 +9540,7 @@ async function loadActiveConfigTemplate(expectedTag) {
   const res = await fetch("/api/setup/config-template");
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data && data.error ? data.error : "config template unavailable");
+    throw new Error(humanErrorText(data, "config template unavailable"));
   }
   if (
     !data ||
@@ -9560,7 +9576,7 @@ async function loadReleases() {
     const res = await fetch("/api/setup/releases");
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data && data.error ? data.error : "release list unavailable");
+      throw new Error(humanErrorText(data, "release list unavailable"));
     }
     const releases = Array.isArray(data.releases) ? data.releases : [];
     setupState.release.releases = releases;
@@ -11776,7 +11792,7 @@ async function pollUpgradeJob(jobId) {
     );
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      throw new Error((data && data.error) || "Upgrade status unavailable.");
+      throw new Error(humanErrorText(data, "Upgrade status unavailable."));
     }
     if (data.transition) renderSystemAlignmentStatus(data);
     renderUpgradeSteps(data.steps);
@@ -12136,7 +12152,7 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
     const res = await fetch("/api/setup/releases?flow=upgrade");
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data && data.error ? data.error : "release list unavailable");
+      throw new Error(humanErrorText(data, "release list unavailable"));
     }
     const releases = Array.isArray(data.releases) ? data.releases : [];
     upgradeState.releases = releases;
@@ -12286,11 +12302,11 @@ function upgradeResponseFingerprint(data) {
 function upgradeValidationFailureText(data, missingFingerprint) {
   const directionReason =
     data && data.upgrade_direction && data.upgrade_direction.reason;
-  return (
-    (data && (data.message || data.error)) ||
-    (missingFingerprint
+  return humanErrorText(
+    data,
+    missingFingerprint
       ? "Verification did not return a System Build fingerprint. Verify again."
-      : directionReason || "This System Build cannot be installed.")
+      : directionReason || "This System Build cannot be installed."
   );
 }
 
@@ -12876,7 +12892,7 @@ async function loadBackups() {
     const res = await fetch("/api/admin/maintenance/backups");
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      throw new Error((data && data.error) || "Backup list unavailable.");
+      throw new Error(humanErrorText(data, "Backup list unavailable."));
     }
     backupState.backups = Array.isArray(data.backups) ? data.backups : [];
     backupState.sets = Array.isArray(data.sets) ? data.sets : [];
@@ -13050,7 +13066,7 @@ async function inspectSelectedBackup(password) {
     });
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      throw new Error((data && data.error) || "Backup could not be inspected.");
+      throw new Error(humanErrorText(data, "Backup could not be inspected."));
     }
     backupState.selectedDetails = data;
     renderBackupDetails(data);
@@ -13116,7 +13132,7 @@ async function createBackup() {
     });
     const data = await res.json();
     if (!res.ok || !data.job_id) {
-      throw new Error((data && data.error) || "Backup could not be started.");
+      throw new Error(humanErrorText(data, "Backup could not be started."));
     }
     renderBackupJobSteps(data.steps, backupEls.createSteps);
     pollBackupJob(data.job_id, "create");
@@ -13151,7 +13167,7 @@ async function previewRestore() {
     // A newer preview (options changed mid-flight) already superseded this one.
     if (token !== backupState.previewToken) return;
     if (!res.ok || !data.ok) {
-      throw new Error((data && data.error) || "Restore preview failed.");
+      throw new Error(humanErrorText(data, "Restore preview failed."));
     }
     backupState.restorePlan = data;
     renderRestorePlan(data);
@@ -13246,7 +13262,7 @@ async function executeRestore() {
     });
     const data = await res.json();
     if (!res.ok || !data.job_id) {
-      throw new Error((data && data.error) || "Restore could not be started.");
+      throw new Error(humanErrorText(data, "Restore could not be started."));
     }
     renderBackupJobSteps(data.steps, backupEls.restoreSteps);
     pollBackupJob(data.job_id, "restore");
@@ -13286,7 +13302,7 @@ async function pollBackupJob(jobId, kind) {
     );
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      throw new Error((data && data.error) || "Backup status unavailable.");
+      throw new Error(humanErrorText(data, "Backup status unavailable."));
     }
     renderBackupJobSteps(data.steps, container);
     if (data.status === "running") {
@@ -13308,7 +13324,7 @@ async function pollBackupJob(jobId, kind) {
 function renderBackupJobResult(result, kind) {
   if (result.ok) {
     const text = kind === "restore"
-      ? "Restore completed. EMS may need a restart/recreate to use restored files."
+      ? "Restore completed. Restart EMS (Maintenance \u2192 Restart EMS now) so it uses the restored files."
       : "Backup created and verified.";
     renderBackupMessage([{ tone: "info", text: text }]);
     if (kind === "restore") backupState.restorePlan = null;
@@ -13323,14 +13339,22 @@ function renderBackupJobResult(result, kind) {
 async function deleteBackup(id, kind, name) {
   if (backupState.running) return;
   const label = name || "this backup";
-  if (!window.confirm("Delete " + label + "? This cannot be undone.")) return;
   const body = { id: id, confirm: true };
   if (kind === "set") {
-    const alsoArchives = window.confirm(
-      "Also delete the backup archive files in this set?\n\n" +
-      "OK = delete metadata and archives, Cancel = delete metadata only."
-    );
-    body.mode = alsoArchives ? "metadata_and_archives" : "metadata_only";
+    if (window.confirm(
+      "Delete " + label + " together with its archive files? This cannot be undone.\n\n" +
+      "Cancel to keep the archive files."
+    )) {
+      body.mode = "metadata_and_archives";
+    } else if (window.confirm(
+      "Delete only the set " + label + " and keep its archive files?"
+    )) {
+      body.mode = "metadata_only";
+    } else {
+      return;
+    }
+  } else if (!window.confirm("Delete " + label + "? This cannot be undone.")) {
+    return;
   }
   try {
     const res = await fetch("/api/admin/maintenance/backups/delete", {
@@ -13340,7 +13364,7 @@ async function deleteBackup(id, kind, name) {
     });
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      throw new Error((data && data.error) || "Backup could not be deleted.");
+      throw new Error(humanErrorText(data, "Backup could not be deleted."));
     }
     if (backupState.selectedId === id) {
       backupState.selectedId = null;
@@ -17330,14 +17354,16 @@ async function previewMaintenanceConfig() {
     // body. Rendering it keeps the reason and the next step visible instead of
     // collapsing to a generic transport failure.
     if (!resp.ok && !(payload && payload.validation)) {
-      throw new Error("preview request failed");
+      throw new Error(humanErrorText(payload, "Could not preview the config draft."));
     }
     renderMaintenanceConfigPreview(payload);
   } catch (err) {
     if (mconfigEls.result) mconfigEls.result.hidden = false;
     setMaintenanceFact(mconfigEls.validation, "preview failed", "warn");
     if (mconfigEls.warnings) {
-      mconfigEls.warnings.textContent = "Could not preview the config draft.";
+      mconfigEls.warnings.textContent =
+        (err && err.name !== "SyntaxError" && err.message) ||
+        "Could not preview the config draft.";
     }
   } finally {
     mconfigPreviewing = false;
@@ -17434,7 +17460,7 @@ async function resetMaintenanceRuntimeOverrides() {
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      throw new Error(data && data.error ? data.error : "reset failed");
+      throw new Error(humanErrorText(data, "reset failed"));
     }
     await loadMaintenanceConfig();
   } catch (err) {
@@ -18241,9 +18267,7 @@ function workflowSwitchRefusal(data) {
     recoverable:
       WORKFLOW_RECOVERABLE_CODES.has(code) ||
       Boolean(data && data.lifecycle && data.lifecycle.recoverable),
-    message:
-      (data && (data.message || data.error)) ||
-      "The guided workflow could not be switched.",
+    message: humanErrorText(data, "The guided workflow could not be switched."),
   };
 }
 
@@ -19295,8 +19319,7 @@ async function validateSelectedSystemBuild(options = {}) {
       systemBuildState.status = transient
         ? SYSTEM_BUILD_STATUS.FAILED
         : SYSTEM_BUILD_STATUS.INVALID;
-      systemBuildState.error =
-        (data && (data.message || data.error)) || "System Build validation failed.";
+      systemBuildState.error = humanErrorText(data, "System Build validation failed.");
       if (!internal && transient) systemBuildState.failedAction = "validate";
       renderSystemAlignmentStatus({
         active: true,
@@ -19458,9 +19481,7 @@ async function confirmSelectedSystemBuild() {
         selectedSystemBuildTag = activeTag;
         if (setupEls.releaseSelect) setupEls.releaseSelect.value = activeTag;
       }
-      throw new Error(
-        (data && (data.message || data.error)) || "System Build confirmation failed."
-      );
+      throw new Error(humanErrorText(data, "System Build confirmation failed."));
     }
     const confirmedTag =
       (data.system_build && data.system_build.canonical_tag) || data.system_tag || tag;
@@ -19613,7 +19634,7 @@ async function updateAdminForSystemBuild() {
     if (handleSystemBuildWorkflowConflict(data)) return;
     if (handleSetupIntentRejection(data)) return;
     if (!res.ok && res.status !== 202) {
-      throw new Error((data && (data.message || data.error)) || "Admin update failed.");
+      throw new Error(humanErrorText(data, "Admin update failed."));
     }
     // The update-admin start consumed the one-shot intent; drop it before the
     // reconnect so a resumed flow never resends a spent id.

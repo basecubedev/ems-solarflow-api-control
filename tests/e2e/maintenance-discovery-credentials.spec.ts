@@ -138,6 +138,7 @@ test("Maintenance Zendure credential lifecycle stays on generic discovery routes
   );
 
   await expect(page.locator("#zendure-cloud-forget")).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
   await page.locator("#zendure-cloud-forget").click();
   await expect(page.locator("#zendure-cloud-token-state")).toHaveText("not saved");
   await expect(page.locator("#zendure-cloud-forget")).toBeHidden();
@@ -192,6 +193,7 @@ test("Maintenance local MQTT credential save and delete use the real generic rou
     "maintenance-broker-secret",
   );
 
+  page.once("dialog", (dialog) => dialog.accept());
   await card.locator("[data-forget-credential]").click();
   await expect(page.locator("#mqtt-credential-message")).toHaveText(
     "Credential removed.",

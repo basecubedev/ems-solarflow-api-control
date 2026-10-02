@@ -51,6 +51,8 @@ def _run_node(script):
 
 
 SWITCH_HELPERS = (
+    "const ADMIN_ERROR_MESSAGES",
+    "function humanErrorText",
     "const WORKFLOW_LIFECYCLE_BASE",
     "const WORKFLOW_OWNER_LABELS",
     "const WORKFLOW_BLOCKED_CODES",

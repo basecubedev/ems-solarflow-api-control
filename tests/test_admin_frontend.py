@@ -2221,7 +2221,14 @@ def test_js_refused_upgrade_shows_the_reason_the_backend_gave():
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is required for the upgrade failure text contract")
-    failure_text = _extract_fn(_read("admin.js"), "upgradeValidationFailureText")
+    js = _read("admin.js")
+    failure_text = "\n".join(
+        (
+            _extract_decl(js, "const ADMIN_ERROR_MESSAGES"),
+            _extract_decl(js, "function humanErrorText"),
+            _extract_fn(js, "upgradeValidationFailureText"),
+        )
+    )
     script = (
         failure_text
         + """
@@ -12089,6 +12096,8 @@ def test_operation_in_progress_never_reports_a_successful_switch():
     js = _read("admin.js")
     helpers = "\n".join(
         [
+            _extract_decl(js, "const ADMIN_ERROR_MESSAGES"),
+            _extract_decl(js, "function humanErrorText"),
             _extract_decl(js, "const SETUP_OPERATION_LABELS"),
             _extract_decl(js, "function isSetupOperationInProgress"),
             _extract_decl(js, "function setupOperationInProgressMessage"),
