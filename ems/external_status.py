@@ -20,6 +20,10 @@ _DROP_KEY_MARKERS = (
     "apikey",
     "api_key",
     "credential",
+    "auth_token",
+    "bearer",
+    "cookie",
+    "private_key",
 )
 _DROP_EXACT_KEYS = frozenset({"token", "access_token", "refresh_token", "username"})
 _NON_SECRET_STATUS_KEYS = frozenset(
@@ -67,9 +71,14 @@ _EMBEDDED_ROUTE_LABEL = re.compile(
 )
 _EMBEDDED_SECRET_LABEL = re.compile(
     r"(?P<label>\b(?:password|passwd|secret|token|access_token|refresh_token|"
+    r"auth_token|bearer|private_key|"
     r"authorization(?:_code)?|auth_code|client_secret|app_key|api_key|apikey|"
-    r"username)\s*(?:=|:)\s*)(?P<quote>[\"']?)(?P<value>[^\s,;\"'}]+)"
-    r"(?P=quote)",
+    r"username)\s*(?:=|:)\s*(?:(?:bearer|basic|digest|token)\s+)?)"
+    r"(?:(?P<quote>[\"'])(?P<quoted>.*?)(?P=quote)|(?P<value>[^\s,;\"'}]+))",
+    re.IGNORECASE,
+)
+_EMBEDDED_COOKIE_HEADER = re.compile(
+    r"(?P<label>\b(?:set-)?cookie\s*:\s*)(?P<value>[^\r\n\"']+)",
     re.IGNORECASE,
 )
 _EMBEDDED_CREDENTIAL_URL = re.compile(
@@ -531,10 +540,13 @@ def mask_external_mqtt_string(
     )
     safe = _EMBEDDED_SECRET_LABEL.sub(
         lambda match: (
-            f"{match.group('label')}{match.group('quote')}"
-            f"<redacted>{match.group('quote')}"
+            f"{match.group('label')}{match.group('quote') or ''}"
+            f"<redacted>{match.group('quote') or ''}"
         ),
         safe,
+    )
+    safe = _EMBEDDED_COOKIE_HEADER.sub(
+        lambda match: f"{match.group('label')}<redacted>", safe
     )
     safe = _EMBEDDED_ROUTE_LABEL.sub(
         lambda match: (
