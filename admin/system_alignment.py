@@ -1109,14 +1109,15 @@ class SystemAlignmentService:
                 "the running EMS build does not match the verified known-good build",
             )
 
-        # Resolve and compare before cancelling the partial transition, so an
-        # unavailable/changed rollback target never removes the recovery gate.
+        # Resolve, compare and check acknowledgement before cancelling the
+        # partial transition, so a refused return never removes the recovery gate.
         target = self._resolver.resolve(target_tag)
         if not self._known_good_matches_build(known_good, target):
             raise SystemAlignmentError(
                 "known_good_mismatch",
                 "the available rollback images no longer match known-good",
             )
+        self._require_explicit_development_acknowledgement(target, False)
         try:
             self._transitions.cancel(
                 operation_id=operation_id, now=self._now_value()
