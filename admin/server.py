@@ -7352,8 +7352,14 @@ class AdminHandler(BaseHTTPRequestHandler):
         try:
             size = os.path.getsize(path)
             handle = open(path, "rb")
+        except FileNotFoundError:
+            self._send_json({"ok": False, "error": "unknown backup id"}, status=404)
+            return
         except OSError:
-            self._send_json({"ok": False, "error": "unknown backup id"}, status=400)
+            self._send_json(
+                {"ok": False, "error": "the backup file could not be read"},
+                status=500,
+            )
             return
         with handle:
             self.send_response(200)

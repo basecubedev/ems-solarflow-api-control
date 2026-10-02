@@ -1031,3 +1031,61 @@ def test_the_admin_diff_never_returns_a_file_that_holds_credentials(tmp_path, me
 
     with pytest.raises(BackupRestoreError, match="holds credentials"):
         service.diff_backup_file(backup_id, member)
+
+
+def test_one_malformed_set_entry_does_not_hide_the_backup_list(tmp_path):
+    root = _build_install(tmp_path)
+    config_path = _make_config_archive(root)
+    store = BackupStore(resolve_env(detect_install_context(base_dir=str(root))))
+    store.write_set({
+        "id": "2026-01-01-000000-system",
+        "archives": [
+            "not-an-entry",
+            {"type": "config", "name": 7},
+            {"type": "config", "name": os.path.basename(config_path)},
+        ],
+    })
+
+    sets = _service(root).list_backups()["sets"]
+
+    assert [a["present"] for a in sets[0]["archives"]] == [False, True]
+
+
+def test_a_failed_restore_with_nothing_to_roll_back_never_claims_a_rollback(tmp_path):
+    from types import SimpleNamespace
+
+    service = _service(_build_install(tmp_path))
+    influx_target = SimpleNamespace(backup_type="influxdb")
+    plan = SimpleNamespace(auto_rollback_enabled=True, password=None)
+    steps = []
+
+    result = service._maybe_auto_rollback(
+        None, plan, steps, [(influx_target, None)], 0, "post-check failed"
+    )
+
+    assert result["status"] == "failed"
+    assert "Nothing was rolled back" in result["message"]
+    assert steps[-1]["status"] == "skipped"
+
+
+@pytest.mark.parametrize(
+    "make, status",
+    [(lambda p: None, 404), (lambda p: p.mkdir(), 500)],
+)
+def test_a_backup_download_says_whether_the_file_is_missing_or_unreadable(
+    tmp_path, make, status
+):
+    from types import SimpleNamespace
+
+    from admin.server import AdminHandler
+
+    path = tmp_path / "ems-config.tar.gz"
+    make(path)
+    sent = []
+    handler = SimpleNamespace(
+        _send_json=lambda payload, status=200: sent.append((status, payload))
+    )
+
+    AdminHandler._send_file(handler, str(path), "application/gzip", path.name)
+
+    assert sent[0][0] == status

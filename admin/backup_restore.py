@@ -405,8 +405,13 @@ class BackupStore:
     def _decorate_set(self, record):
         names = set(self._iter_names())
         archives = []
-        for entry in record.get("archives", []):
+        entries = record.get("archives")
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict):
+                continue
             name = entry.get("name")
+            if not isinstance(name, str):
+                name = None
             present = bool(name) and name in names
             archives.append({
                 "type": entry.get("type"),
@@ -1488,6 +1493,7 @@ class BackupRestoreService:
                     "steps": list(steps), "actions": actions,
                     "rollback_backup": rollback_name}
         # Only generic members are rolled back here; InfluxDB rollback stays in EMS CLI.
+        rolled_back = 0
         try:
             for idx in range(applied_index, -1, -1):
                 _target, rollback_path = rollbacks[idx]
@@ -1496,12 +1502,25 @@ class BackupRestoreService:
                 if rollback_path is None:
                     raise BackupRestoreError("no rollback backup was created")
                 self._apply_rollback(env, rollback_path, plan.password)
+                rolled_back += 1
         except (backup_mod.BackupError, BackupRestoreError) as exc:
             steps.append(_step("done", "error", "Automatic rollback", detail=str(exc)))
             return {
                 "ok": False, "status": "rollback_failed",
                 "message": ("Restore failed and automatic rollback also failed. "
                             "Manual recovery is required."),
+                "steps": list(steps), "actions": actions,
+                "rollback_backup": rollback_name,
+            }
+        if not rolled_back:
+            steps.append(_step("done", "skipped", "Automatic rollback",
+                               detail="Nothing this restore changed can be "
+                                      "rolled back here."))
+            return {
+                "ok": False, "status": "failed",
+                "message": ("Restore failed. Nothing was rolled back "
+                            "automatically; an InfluxDB restore is rolled back "
+                            "with the EMS CLI."),
                 "steps": list(steps), "actions": actions,
                 "rollback_backup": rollback_name,
             }
