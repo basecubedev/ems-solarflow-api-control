@@ -9,7 +9,7 @@
 # shipped sshd policy refuses it over the network).
 #
 # Creating it is not enabling it. sshd refuses this account every
-# authentication method until 'ems-appliance shell-access --enable' is run, and
+# authentication method until 'ems-appliance shell-access enable' is run, and
 # an account with no key is no login either. Both gates are off here.
 #
 # No password at all, ever: --disabled-password, and the sudoers drop-in below

@@ -786,7 +786,7 @@ disable_account() {
     if ! record_says_created || ! identity_matches; then
         caution "the backup account $BACKUP_USER is not the account this package created;
   its key material was left untouched and its authentication was not withdrawn. Adopt the
-  account with 'ems-appliance backup-access migrate-ownership' or remove it by hand."
+  account with 'ems-appliance backup-account migrate-ownership' or remove it by hand."
         return 1
     fi
     # The key file at a replaced home belongs to whoever put it there. Expiring
