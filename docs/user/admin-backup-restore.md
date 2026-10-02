@@ -119,9 +119,16 @@ policies for CLI/advanced workflows.
 
 ## Encrypted backups
 
-Yes — the Admin Console can **create** encrypted backups: supply an encryption password when you
-create the backup. Encrypted backups then appear **locked** in the list and
-details until you supply the password again. Inspecting or restoring an encrypted
+The Admin Console does **not yet create** encrypted backups: the backups it
+creates are unencrypted, and they contain credentials (config, password file,
+certificates). Create an encrypted backup on the EMS host instead:
+
+```bash
+docker compose exec ems python3 emsctl.py backup create --password
+```
+
+The Admin Console reads encrypted backups. They appear **locked** in the list
+and details until you supply the password. Inspecting or restoring an encrypted
 backup requires the password; it is used for that request only and is never
 logged or persisted. Without the password, an encrypted backup cannot be
 restored.
