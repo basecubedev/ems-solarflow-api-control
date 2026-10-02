@@ -608,6 +608,16 @@
       }));
 
     var actions = [];
+    /* The archive lives in root-owned agent state and a flashed appliance has
+       no shell: without this link it could be created and never retrieved. */
+    if (operation.type === "support.archive" && operation.state === "succeeded"
+        && /^[0-9a-f]{32}$/.test(String(operation.operation_id || ""))) {
+      actions.push(el("a", {
+        class: "primary-button compact", "data-test": "download-support-archive",
+        href: "/api/support/archive/" + operation.operation_id, download: true,
+        text: "Download support archive"
+      }));
+    }
     if (isSettled && !operation.acknowledged) {
       actions.push(el("button", {
         type: "button", class: "primary-button compact", "data-test": "acknowledge-operation",

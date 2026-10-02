@@ -252,6 +252,27 @@ test.describe("the two-second poll", () => {
   });
 });
 
+test.describe("support archive", () => {
+  test("a created archive can be downloaded from the page", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "diagnostics");
+    await page.locator('[data-test="support-archive"]').click();
+    await expect(page.locator("#dialog")).toBeVisible();
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/operations/confirm")),
+      page.locator("#dialog-confirm").click(),
+    ]);
+
+    const outcome = page.locator('[data-test="operation-outcome"] .tone');
+    await expect(outcome).toHaveText("completed", { timeout: 20_000 });
+    const link = page.locator('[data-test="download-support-archive"]');
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute("href", /^\/api\/support\/archive\/[0-9a-f]{32}$/);
+    const response = await page.request.get((await link.getAttribute("href")) as string);
+    expect(response.status()).toBe(200);
+  });
+});
+
 // Diagnostics is the one section that fetches something of its own when it is
 // opened: until /api/settings answers, a single line stands in for the log
 // panel, and the panel that replaces it is a hundred and fifty pixels taller.
