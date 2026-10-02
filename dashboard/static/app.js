@@ -6567,11 +6567,26 @@ function renderAnalyticsChart() {
   renderZoomControls();
 }
 
+const INTEGRATION_GAP_FACTOR = 3;
+
+function integrationMaxGap(time) {
+  /** The longest step still integrated: a few times the series' typical spacing. */
+  const steps = [];
+  for (let index = 1; index < time.length; index += 1) {
+    const dt = time[index] - time[index - 1];
+    if (dt > 0) steps.push(dt);
+  }
+  if (!steps.length) return 0;
+  steps.sort((a, b) => a - b);
+  return steps[Math.floor((steps.length - 1) / 2)] * INTEGRATION_GAP_FACTOR;
+}
+
 function integrateSeries(data, id, transform) {
   if (!data || !data.time || !data.series) return null;
   const time = data.time;
   const values = data.series[id];
   if (!values || values.length < 2) return null;
+  const maxGap = integrationMaxGap(time);
   let wh = 0;
   let counted = 0;
   for (let index = 1; index < time.length; index += 1) {
@@ -6579,7 +6594,7 @@ function integrateSeries(data, id, transform) {
     const current = values[index];
     if (previous == null || current == null) continue;
     const dt = time[index] - time[index - 1];
-    if (!(dt > 0)) continue;
+    if (!(dt > 0) || dt > maxGap) continue;
     wh += ((transform(Number(previous)) + transform(Number(current))) / 2) * (dt / 3600);
     counted += 1;
   }

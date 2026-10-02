@@ -599,6 +599,23 @@ console.log(JSON.stringify({{ html: host.innerHTML }}));
     assert "500 Wh" in out["html"]
 
 
+def test_analytics_energy_is_not_integrated_across_a_data_gap():
+    """A step far longer than the series' spacing is a gap and adds no energy."""
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const pos = (value) => Math.max(0, value);
+const minute = [0, 60, 120, 180];
+const gap = [0, 60, 120, 120 + 6 * 3600, 180 + 6 * 3600];
+console.log(JSON.stringify({{
+  regular: app.integrateSeries({{ time: minute, series: {{ pv: [1000, 1000, 1000, 1000] }} }}, "pv", pos),
+  gapped: app.integrateSeries({{ time: gap, series: {{ pv: [1000, 1000, 1000, 1000, 1000] }} }}, "pv", pos),
+}}));
+"""
+    out = run_node(script)
+    assert out["regular"] == pytest.approx(50.0)
+    assert out["gapped"] == pytest.approx(50.0)
+
+
 def test_analytics_series_peak_and_power_label():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});

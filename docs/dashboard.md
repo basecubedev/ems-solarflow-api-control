@@ -683,7 +683,9 @@ the visible series and KPI cards (no extra chart pages):
 - **PV** — PV Input; KPIs PV, PV Peak, Output, SoC.
 
 Energy KPIs are integrated from the selected period; Current SoC and Runtime
-Role come from the live snapshot.
+Role come from the live snapshot. A step between two samples longer than three
+times the series' typical spacing is a gap in the record and is not
+integrated, so an outage does not count as power held at its last value.
 
 Overlay toggles add optional series on top of the active tab without changing
 it: **SoC** (drawn on a secondary right-hand percentage axis), **EMS Target**,
