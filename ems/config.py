@@ -1729,7 +1729,7 @@ def initialize(args, base_dir):
     CONFIG = load_config(args, base_dir)
     ha_config = CONFIG.get("ha", {})
 
-    SYSTEM_ENABLED = CONFIG["system"].get("enabled", True)
+    SYSTEM_ENABLED = runtime_control_flag(CONFIG["system"], "enabled")
     HA_URL = ha_config.get("url", "")
     HA_TOKEN = ha_config.get("token", "")
     MAX_TOTAL_POWER = CONFIG["system"]["max_total_power"]
@@ -1753,29 +1753,32 @@ def initialize(args, base_dir):
     except (TypeError, ValueError):
         MIN_OUTPUT_LIMIT = 0
 
-    DRY_RUN = CONFIG["system"].get("dry_run", True) or args.dry_run
-    SIMULATION_MODE = CONFIG["system"].get("simulation_mode", False) or args.simulate
-    ALLOW_HARDWARE_WRITES = CONFIG["system"].get("allow_hardware_writes", False)
-    ALLOW_MQTT_LOCAL_CONTROL_WRITES = CONFIG["system"].get(
-        "allow_mqtt_local_control_writes",
-        False
+    system_config = CONFIG["system"]
+    DRY_RUN = (
+        runtime_control_flag(system_config, "dry_run")
+        or args.dry_run
+        or not all(
+            control_flag_is_valid(system_config, name)
+            for name in CONTROL_FLAGS_INVALID_FORCE_DRY_RUN
+        )
     )
-    ALLOW_MQTT_ZENDURE_CONTROL_WRITES = CONFIG["system"].get(
-        "allow_mqtt_zendure_control_writes",
-        False
+    SIMULATION_MODE = (
+        runtime_control_flag(system_config, "simulation_mode") or args.simulate
     )
-    ALLOW_STATE_RECONCILIATION_WRITES = CONFIG["system"].get(
-        "allow_state_reconciliation_writes",
-        False
+    ALLOW_HARDWARE_WRITES = runtime_control_flag(system_config, "allow_hardware_writes")
+    ALLOW_MQTT_LOCAL_CONTROL_WRITES = runtime_control_flag(
+        system_config, "allow_mqtt_local_control_writes"
     )
-    RECONCILE_AC_MODE_ON_START = CONFIG["system"].get(
-        "reconcile_ac_mode_on_start",
-        True
+    ALLOW_MQTT_ZENDURE_CONTROL_WRITES = runtime_control_flag(
+        system_config, "allow_mqtt_zendure_control_writes"
     )
-    RECONCILE_SMART_MODE = CONFIG["system"].get(
-        "reconcile_smart_mode",
-        True
+    ALLOW_STATE_RECONCILIATION_WRITES = runtime_control_flag(
+        system_config, "allow_state_reconciliation_writes"
     )
+    RECONCILE_AC_MODE_ON_START = runtime_control_flag(
+        system_config, "reconcile_ac_mode_on_start"
+    )
+    RECONCILE_SMART_MODE = runtime_control_flag(system_config, "reconcile_smart_mode")
     HA_ENABLED = (
         ha_config.get("enabled", False)
         and not args.no_ha
@@ -2079,11 +2082,79 @@ def resolve_write_gate(control_gate) -> WriteGateDecision:
     )
 
 
+CONTROL_FLAG_BLOCKING_SIDE = {
+    "enabled": False,
+    "dry_run": True,
+    "simulation_mode": False,
+    "allow_hardware_writes": False,
+    "allow_mqtt_local_control_writes": False,
+    "allow_mqtt_zendure_control_writes": False,
+    "allow_state_reconciliation_writes": False,
+    "reconcile_ac_mode_on_start": False,
+    "reconcile_smart_mode": False,
+}
+
+
+def control_flag_default(name):
+    """Value a missing control flag takes once EMS loads the config."""
+
+    return bool(default_runtime_config()["system"][name])
+
+
+CONTROL_FLAGS_INVALID_FORCE_DRY_RUN = frozenset({"simulation_mode"})
+
+
+def control_flag_is_valid(system, name):
+    """True when a control flag is absent or a real JSON boolean."""
+
+    if not isinstance(system, dict) or name not in system:
+        return True
+    if system[name] is None:
+        return False
+    try:
+        optional_json_bool(system[name], name, default=False)
+    except ValueError:
+        return False
+    return True
+
+
 def _projected_flag(system, name, *, default, on_invalid):
+    if name in system and system[name] is None:
+        return on_invalid
     try:
         return bool(optional_json_bool(system.get(name), name, default=default))
     except ValueError:
         return on_invalid
+
+
+def runtime_control_flag(system, name):
+    """Strict boolean for a control flag; a non-boolean resolves to blocking.
+
+    ``"false"`` is a truthy string, so a plain ``.get()`` armed the very gate
+    an operator had tried to close by hand.
+    """
+
+    present = isinstance(system, dict) and name in system
+    value = system.get(name) if isinstance(system, dict) else None
+    blocking = CONTROL_FLAG_BLOCKING_SIDE[name]
+    try:
+        if present and value is None:
+            raise ValueError(f"{name} is null")
+        return bool(
+            optional_json_bool(value, name, default=control_flag_default(name))
+        )
+    except ValueError:
+        consequence = (
+            "running without hardware writes instead"
+            if name in CONTROL_FLAGS_INVALID_FORCE_DRY_RUN
+            else f"treating it as {str(blocking).lower()} (the safe side)"
+        )
+        _emit_startup_config_message(
+            logging.WARNING,
+            f"Config system.{name} is {value!r}, not true or false; "
+            f"{consequence}. Write it as true or false without quotes.",
+        )
+        return blocking
 
 
 def resolve_config_write_gate(config, control_gate) -> WriteGateDecision:
@@ -2104,11 +2175,21 @@ def resolve_config_write_gate(config, control_gate) -> WriteGateDecision:
         )
         for name, default in RELEASE_WRITE_GATE_DEFAULTS.items()
     }
+    forced_dry_run = not all(
+        control_flag_is_valid(system, name)
+        for name in CONTROL_FLAGS_INVALID_FORCE_DRY_RUN
+    )
     return _evaluate_write_gate(
         control_gate,
-        dry_run=_projected_flag(system, "dry_run", default=False, on_invalid=True),
+        dry_run=forced_dry_run
+        or _projected_flag(
+            system, "dry_run", default=control_flag_default("dry_run"), on_invalid=True
+        ),
         simulation_mode=_projected_flag(
-            system, "simulation_mode", default=False, on_invalid=True
+            system,
+            "simulation_mode",
+            default=control_flag_default("simulation_mode"),
+            on_invalid=CONTROL_FLAG_BLOCKING_SIDE["simulation_mode"],
         ),
         replay=False,
         gate_values=gate_values,
@@ -2118,23 +2199,35 @@ def resolve_config_write_gate(config, control_gate) -> WriteGateDecision:
 def config_control_flags(config):
     """Control-mode flags a stored config produces once EMS loads it.
 
-    Missing keys resolve to the template defaults the loader merges in; a value
-    that is not a real boolean resolves to the blocking side of the flag, so a
-    typo can never read as "EMS is controlling".
+    Missing keys resolve to the defaults the loader merges in; a value that is
+    not a real boolean resolves to the blocking side of the flag, so a typo can
+    never read as "EMS is controlling". An unreadable config claims no dry run
+    either: that would read as a reassurance nobody can back.
     """
 
     raw = config.get("system") if isinstance(config, dict) else None
     system = raw if isinstance(raw, dict) else {}
-    return {
-        "enabled": _projected_flag(system, "enabled", default=True, on_invalid=False),
-        "dry_run": _projected_flag(system, "dry_run", default=False, on_invalid=True),
-        "simulation_mode": _projected_flag(
-            system, "simulation_mode", default=False, on_invalid=True
-        ),
-        "allow_state_reconciliation_writes": _projected_flag(
-            system, "allow_state_reconciliation_writes", default=True, on_invalid=False
-        ),
+    readable = isinstance(raw, dict)
+    flags = {
+        name: _projected_flag(
+            system,
+            name,
+            default=control_flag_default(name) if readable else name == "enabled",
+            on_invalid=CONTROL_FLAG_BLOCKING_SIDE[name],
+        )
+        for name in (
+            "enabled",
+            "dry_run",
+            "simulation_mode",
+            "allow_state_reconciliation_writes",
+        )
     }
+    if not all(
+        control_flag_is_valid(system, name)
+        for name in CONTROL_FLAGS_INVALID_FORCE_DRY_RUN
+    ):
+        flags["dry_run"] = True
+    return flags
 
 
 def config_control_devices_by_gate(config):

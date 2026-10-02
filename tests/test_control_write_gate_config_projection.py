@@ -259,7 +259,9 @@ def test_gate_counts_stay_zero_for_an_unreadable_config(config):
 
 
 def test_control_flags_read_a_normal_config():
-    flags = cfg.config_control_flags(_config(_system()))
+    flags = cfg.config_control_flags(
+        _config(_system(allow_state_reconciliation_writes=True))
+    )
     assert flags == {
         "enabled": True,
         "dry_run": False,
@@ -268,12 +270,61 @@ def test_control_flags_read_a_normal_config():
     }
 
 
-def test_missing_control_flags_resolve_to_the_template_defaults():
+def test_missing_control_flags_resolve_to_what_the_loader_applies():
+    """A config without ``dry_run`` runs dry; the projection must say so."""
+
     flags = cfg.config_control_flags({"system": {}})
-    assert flags["enabled"] is True
-    assert flags["dry_run"] is False
-    assert flags["simulation_mode"] is False
-    assert flags["allow_state_reconciliation_writes"] is True
+    loaded = cfg.apply_runtime_config_defaults({"system": {}})["system"]
+    assert flags == {name: loaded[name] for name in flags}
+    assert flags["dry_run"] is True
+    assert flags["allow_state_reconciliation_writes"] is False
+
+
+@pytest.mark.parametrize("name", sorted(cfg.CONTROL_FLAG_BLOCKING_SIDE))
+@pytest.mark.parametrize("value", ["false", "true", "no", 0, 1, None])
+def test_runtime_control_flag_never_trusts_a_non_boolean(name, value):
+    blocking = cfg.CONTROL_FLAG_BLOCKING_SIDE[name]
+    assert cfg.runtime_control_flag({name: value}, name) is blocking
+
+
+@pytest.mark.parametrize("name", sorted(cfg.CONTROL_FLAG_BLOCKING_SIDE))
+def test_runtime_control_flag_reads_real_booleans_and_defaults(name):
+    assert cfg.runtime_control_flag({name: True}, name) is True
+    assert cfg.runtime_control_flag({name: False}, name) is False
+    assert cfg.runtime_control_flag({}, name) is cfg.control_flag_default(name)
+
+
+def test_quoted_false_gate_closes_the_loaded_runtime(tmp_path):
+    from types import SimpleNamespace
+
+    config = cfg.default_runtime_config()
+    config["system"].update(
+        {
+            "dry_run": False,
+            "allow_hardware_writes": "false",
+            "allow_state_reconciliation_writes": "false",
+        }
+    )
+    config["config_upgrade"] = {"on_startup": "disabled"}
+    path = tmp_path / "config.json"
+    path.write_text(__import__("json").dumps(config))
+    args = SimpleNamespace(
+        config=str(path),
+        dry_run=False,
+        simulate=False,
+        replay=None,
+        self_test=False,
+        no_ha=True,
+    )
+    snapshot = {name: getattr(cfg, name) for name in dir(cfg) if name.isupper()}
+    try:
+        cfg.initialize(args, str(tmp_path))
+        assert cfg.ALLOW_HARDWARE_WRITES is False
+        assert cfg.ALLOW_STATE_RECONCILIATION_WRITES is False
+        assert cfg.resolve_write_gate("api").allowed is False
+    finally:
+        for name, value in snapshot.items():
+            setattr(cfg, name, value)
 
 
 @pytest.mark.parametrize(
@@ -281,7 +332,7 @@ def test_missing_control_flags_resolve_to_the_template_defaults():
     [
         ("enabled", False),
         ("dry_run", True),
-        ("simulation_mode", True),
+        ("simulation_mode", False),
         ("allow_state_reconciliation_writes", False),
     ],
 )
@@ -310,3 +361,45 @@ def test_grouped_control_devices_back_the_counts():
     assert cfg.config_control_gate_counts(config) == {
         gate: len(items) for gate, items in grouped.items()
     }
+
+
+@pytest.mark.parametrize("gate", sorted(cfg.RELEASE_WRITE_GATE_DEFAULTS))
+def test_an_explicit_null_gate_is_blocked_in_the_projection_too(gate):
+    config = _config(_system(**{gate: None}))
+    transport = {
+        "allow_hardware_writes": "api",
+        "allow_mqtt_local_control_writes": "mqtt_local",
+        "allow_mqtt_zendure_control_writes": "mqtt_zendure",
+    }[gate]
+    assert cfg.resolve_config_write_gate(config, transport).allowed is False
+
+
+@pytest.mark.parametrize("value", [None, "true", "yes"])
+def test_an_invalid_simulation_mode_keeps_the_loop_running_dry(tmp_path, value):
+    """The built-in simulation exits; a typo must not stop control altogether."""
+
+    from types import SimpleNamespace
+
+    config = cfg.default_runtime_config()
+    config["system"].update({"dry_run": False, "simulation_mode": value})
+    config["config_upgrade"] = {"on_startup": "disabled"}
+    path = tmp_path / "config.json"
+    path.write_text(__import__("json").dumps(config))
+    args = SimpleNamespace(
+        config=str(path), dry_run=False, simulate=False, replay=None,
+        self_test=False, no_ha=True,
+    )
+    snapshot = {name: getattr(cfg, name) for name in dir(cfg) if name.isupper()}
+    try:
+        cfg.initialize(args, str(tmp_path))
+        assert cfg.SIMULATION_MODE is False
+        assert cfg.DRY_RUN is True
+        assert cfg.resolve_write_gate("api").allowed is False
+    finally:
+        for name, val in snapshot.items():
+            setattr(cfg, name, val)
+
+    flags = cfg.config_control_flags(config)
+    assert flags["simulation_mode"] is False
+    assert flags["dry_run"] is True
+    assert cfg.resolve_config_write_gate(config, "api").blocked_by == ("dry_run",)
