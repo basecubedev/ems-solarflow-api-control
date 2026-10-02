@@ -229,3 +229,14 @@ def test_the_next_cycles_fetch_never_publishes_a_target_the_cycle_has_not_asked_
 
     assert [payload for _topic, payload in dev._service.published if b"800" in payload] == []
     assert dev._pending_target is None
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity", "1e400"])
+def test_a_non_finite_report_value_is_missing_not_a_reading(literal):
+    from ems.zendure_mqtt.payloads import parse_report_payload
+
+    report = parse_report_payload(
+        ('{"properties": {"outputLimit": %s, "electricLevel": 55}}' % literal).encode()
+    )
+    assert report.properties["outputLimit"] is None
+    assert report.properties["electricLevel"] == 55

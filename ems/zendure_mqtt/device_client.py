@@ -11,6 +11,7 @@ HTTP state reconciliation (``supports_state_reconciliation = False``).
 
 import json
 import logging
+import math
 import time
 from collections import OrderedDict
 
@@ -1284,7 +1285,11 @@ class ZendureMqttDeviceClient:
         ):
             return
         observed = getattr(state, "output_limit", None)
-        if isinstance(observed, bool) or not isinstance(observed, (int, float)):
+        if (
+            isinstance(observed, bool)
+            or not isinstance(observed, (int, float))
+            or not math.isfinite(observed)
+        ):
             return
         tolerance = self._confirmation_policy().confirmation_tolerance_w
         if abs(float(observed) - float(self._last_confirmed_target)) <= tolerance:

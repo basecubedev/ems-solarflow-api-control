@@ -70,9 +70,22 @@ def _coerce_json(payload):
     if not isinstance(payload, str) or len(payload) > MAX_PAYLOAD_BYTES:
         return None
     try:
-        return json.loads(payload)
+        return json.loads(
+            payload, parse_constant=_drop_constant, parse_float=_finite_float
+        )
     except (ValueError, TypeError):
         return None
+
+
+def _drop_constant(_name):
+    """``NaN``/``Infinity`` in a report is a missing value, never a reading."""
+
+    return None
+
+
+def _finite_float(text):
+    value = float(text)
+    return value if math.isfinite(value) else None
 
 
 def _extract_packs(data, properties):
