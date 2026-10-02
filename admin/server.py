@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse
 
 from admin import auth as admin_auth
 from admin.admin_update import (
@@ -1386,6 +1387,19 @@ class AdminServer(ThreadingHTTPServer):
         self.https_active = bool(https_active)
 
 
+def _authority_hostname(authority):
+    """The lowercase host name of ``host[:port]`` or ``[v6]:port``; ``""`` if none."""
+
+    text = str(authority or "").strip().lower()
+    if not text:
+        return ""
+    if text.startswith("["):
+        return text[1:].split("]", 1)[0]
+    if text.count(":") > 1:
+        return text
+    return text.split(":", 1)[0]
+
+
 class AdminHandler(BaseHTTPRequestHandler):
     server_version = "AdminDiscovery/1.0"
     timeout = HANDSHAKE_TIMEOUT_SECONDS
@@ -1864,7 +1878,50 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     # --- auth ------------------------------------------------------------
 
+    def _public_auth_request_rejection(self, *, check_origin):
+        """Refuse a cross-site password setup or login before it is read.
+
+        These two run without a session or CSRF token. A page on any website
+        could send them as a "simple" request (text/plain, no preflight) and set
+        the first password of a fresh install. Requiring JSON forces a CORS
+        preflight. For the first-password setup a browser's Origin must also
+        name this host; only the host name is compared, because reverse
+        proxies rewrite ports and Host headers in too many ways for more.
+        """
+
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0]
+        if content_type.strip().lower() != "application/json":
+            return {
+                "error": "unsupported_media_type",
+                "message": "Send this request as application/json.",
+            }, 415
+        origin = (self.headers.get("Origin") or "").strip()
+        if check_origin and origin:
+            if _authority_hostname(urlparse(origin).netloc) not in self._request_hostnames():
+                return {
+                    "error": "origin_rejected",
+                    "message": "This request came from another site and was refused.",
+                }, 403
+        return None
+
+    def _request_hostnames(self):
+        names = set()
+        for header in ("Host", "X-Forwarded-Host"):
+            for item in (self.headers.get(header) or "").split(","):
+                name = _authority_hostname(item)
+                if name:
+                    names.add(name)
+        return names
+
     def _handle_public_auth_post(self, path):
+        if path in ("/api/admin/auth/setup", "/api/admin/auth/login"):
+            rejection = self._public_auth_request_rejection(
+                check_origin=path == "/api/admin/auth/setup"
+            )
+            if rejection is not None:
+                self._drain_body()
+                self._send_json(rejection[0], status=rejection[1])
+                return
         if path == "/api/admin/auth/setup":
             self._handle_auth_setup()
         elif path == "/api/admin/auth/login":

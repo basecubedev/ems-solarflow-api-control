@@ -147,6 +147,13 @@ exactly one local password per host, and no Admin-only password store.
   creates the initial password. Creation is atomic (`O_EXCL`) so a second
   concurrent visitor gets a clean `409` instead of overwriting it. Until the
   password is set, every setup/maintenance/discovery API stays blocked.
+  `auth/setup` and `auth/login` take no CSRF token, so they accept only an
+  `application/json` body (which forces a browser CORS preflight); `auth/setup`
+  also refuses an `Origin` whose host name is neither the `Host` nor an
+  `X-Forwarded-Host` name (ports are not compared, so reverse proxies keep
+  working). This stops a page on another website from choosing the first
+  password; it does not stop someone on the LAN with an HTTP client, so set the
+  password right after installing.
 - **Malformed file is a recovery state, not setup.** If the shared file exists
   but cannot be parsed, `auth/status` reports `recovery_required` (with
   `auth_configured: true`, `requires_initial_password: false`); the UI shows a

@@ -539,3 +539,101 @@ def test_admin_session_cookie_name_is_separate_from_dashboard(tmp_path, monkeypa
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+@pytest.mark.parametrize(
+    "headers, status, error",
+    [
+        ({"Content-Type": "text/plain"}, 415, "unsupported_media_type"),
+        (
+            {"Content-Type": "application/json", "Origin": "https://evil.example"},
+            403,
+            "origin_rejected",
+        ),
+        ({"Content-Type": "application/json", "Origin": "null"}, 403, "origin_rejected"),
+    ],
+)
+def test_a_cross_site_page_cannot_set_the_first_password(
+    tmp_path, monkeypatch, headers, status, error
+):
+    """A no-preflight fetch from any website set the first password before."""
+
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _serve()
+    try:
+        req = urllib.request.Request(
+            f"{base}/api/admin/auth/setup",
+            data=json.dumps(
+                {"password": "attacker-pass", "confirm_password": "attacker-pass"}
+            ).encode(),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                code, payload = resp.status, json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            code, payload = exc.code, json.loads(exc.read())
+
+        assert (code, payload["error"]) == (status, error)
+        assert not (tmp_path / "config" / "dashboard-auth.json").exists()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_same_origin_setup_still_works(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _serve()
+    try:
+        host = base.split("//", 1)[1]
+        status, _, payload = _request(
+            f"{base}/api/admin/auth/setup",
+            method="POST",
+            body={"password": "secret-password", "confirm_password": "secret-password"},
+            headers={"Origin": f"http://{host}"},
+        )
+        assert status == 200
+        assert payload["authenticated"] is True
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+
+@pytest.mark.parametrize(
+    "origin, headers",
+    [
+        ("https://ems.example:8443", {"Host": "ems.example"}),
+        ("https://ems.example", {"Host": "ems.example:443"}),
+        ("https://ems.example", {"Host": "127.0.0.1:8090", "X-Forwarded-Host": "ems.example, proxy.lan"}),
+        ("http://[fe80::1]:8090", {"Host": "[FE80::1]:8090"}),
+    ],
+)
+def test_reverse_proxy_shapes_still_pass_the_origin_rule(origin, headers):
+    from types import SimpleNamespace
+
+    from admin.server import AdminHandler
+
+    handler = SimpleNamespace(
+        headers={"Content-Type": "application/json", "Origin": origin, **headers}
+    )
+    handler._request_hostnames = lambda: AdminHandler._request_hostnames(handler)
+    assert AdminHandler._public_auth_request_rejection(handler, check_origin=True) is None
+
+
+def test_login_behind_a_proxy_that_rewrites_host_is_not_refused():
+    from types import SimpleNamespace
+
+    from admin.server import AdminHandler
+
+    handler = SimpleNamespace(
+        headers={
+            "Content-Type": "application/json",
+            "Origin": "https://ems.example",
+            "Host": "upstream:8090",
+        }
+    )
+    handler._request_hostnames = lambda: AdminHandler._request_hostnames(handler)
+    assert AdminHandler._public_auth_request_rejection(handler, check_origin=False) is None
+    assert AdminHandler._public_auth_request_rejection(handler, check_origin=True)[1] == 403
