@@ -1729,8 +1729,9 @@ def test_retention_runs_only_after_known_good_is_written(tmp_path):
         def __init__(self, store):
             self._store = store
 
-        def run(self):
+        def run(self, *, also_protected=()):
             seen["known_good"] = self._store.current()
+            seen["also_protected"] = set(also_protected)
 
     store = KnownGoodStore(tmp_path / "state")
     service, _, known_good, build, operation_id = _healthcheck_pending_service(
@@ -1744,6 +1745,7 @@ def test_retention_runs_only_after_known_good_is_written(tmp_path):
 
     assert seen["known_good"] is not None, "retention ran before the write"
     assert seen["known_good"]["build_id"] == known_good.current()["build_id"]
+    assert seen["also_protected"] == set()
 
 
 def test_a_failing_retention_never_fails_the_install(tmp_path):

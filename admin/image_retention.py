@@ -23,6 +23,8 @@ old one. So protection is explicit and passed in by the caller, never inferred
 from ordering.
 """
 
+import dataclasses
+
 from admin.admin_update import ADMIN_IMAGE_REPO, EMS_IMAGE_REPO
 
 # The complete set of repositories this module may remove from. Anything else
@@ -122,6 +124,8 @@ def _digests_in(payload):
     found = set()
     if payload is None:
         return found
+    if dataclasses.is_dataclass(payload) and not isinstance(payload, type):
+        payload = dataclasses.asdict(payload)
     if isinstance(payload, dict):
         items = payload.items()
     else:
@@ -173,12 +177,16 @@ class ImageRetentionService:
                 raise ProtectionUnreadable(str(exc)) from exc
         return protected
 
-    def run(self):
-        """Remove superseded images. Never raises; reports what it did."""
+    def run(self, *, also_protected=()):
+        """Remove superseded images. Never raises; reports what it did.
+
+        ``also_protected`` names images no store records any more but that are
+        still a way back, such as the build that ran just before an upgrade.
+        """
 
         result = {"removed": [], "kept_protected": 0, "skipped": None}
         try:
-            protected = self.protected_digests()
+            protected = self.protected_digests() | {str(d) for d in also_protected if d}
         except ProtectionUnreadable as exc:
             result["skipped"] = f"protection_unreadable: {exc}"
             self._emit(result)
