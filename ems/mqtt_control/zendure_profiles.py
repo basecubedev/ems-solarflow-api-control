@@ -304,10 +304,12 @@ def _normalize(value) -> str:
     Real Zendure product strings are camelCase and glue letters to digits
     (``solarFlow800Pro``). Splitting camelCase and letter/digit boundaries before
     collapsing punctuation lets a glued string match the same alias as its
-    spaced form, without dropping the numeric model identifier.
+    spaced form, without dropping the numeric model identifier. A ``+`` is the
+    ``plus`` model token (``AC+`` is the AC Plus, not the AC), so it becomes a
+    word rather than punctuation.
     """
 
-    text = str(value or "")
+    text = str(value or "").replace("+", " plus ")
     text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text)  # camelCase boundary
     text = re.sub(r"(?<=[A-Za-z])(?=[0-9])", " ", text)  # letter -> digit
     text = re.sub(r"(?<=[0-9])(?=[A-Za-z])", " ", text)  # digit -> letter
