@@ -208,7 +208,7 @@ def _attach_physical_identity_tokens(value, token_key, *, broker_sources=None):
                 for child in node:
                     walk(child, inherited_sources)
             return
-        sources = broker_sources_from_config(node) or inherited_sources or {}
+        sources = {**(inherited_sources or {}), **broker_sources_from_config(node)}
         devices = node.get("devices")
         if isinstance(devices, list):
             for device in devices:

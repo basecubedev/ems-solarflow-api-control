@@ -76,6 +76,12 @@ class InvalidZendureMqttDevice:
     broker_ref: str = DEFAULT_BROKER_REF
 
 
+
+def _canonical_source(value):
+    if isinstance(value, str) and value.strip():
+        return value.strip().lower()
+    return value
+
 def load_zendure_mqtt_runtime_config(raw) -> tuple[ZendureMqttRuntimeConfig, str | None]:
     """Parse the top-level broker block into ``(default_config, error_message)``.
 
@@ -156,7 +162,7 @@ def load_zendure_mqtt_broker_configs(
         host = profile.get("host")
         return isinstance(host, str) and bool(host.strip())
 
-    top_source = raw.get("source") or SOURCE_LOCAL_MQTT
+    top_source = _canonical_source(raw.get("source")) or SOURCE_LOCAL_MQTT
     if legacy_default_broker_present(raw):
         try:
             brokers[DEFAULT_BROKER_REF] = ZendureMqttRuntimeConfig.from_dict(
@@ -196,11 +202,11 @@ def load_zendure_mqtt_broker_configs(
                 brokers[ref] = ZendureMqttRuntimeConfig.from_dict(
                     with_credentials(
                         val,
-                        val.get("source"),
+                        _canonical_source(val.get("source")),
                         enabled=profile_enabled and _has_host(val),
                     ),
                     broker_ref=ref,
-                    source=val.get("source"),
+                    source=_canonical_source(val.get("source")),
                     enabled=profile_enabled,
                     stale_after_seconds=stale_after,
                 )

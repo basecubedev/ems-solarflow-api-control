@@ -293,3 +293,48 @@ def test_scalar_transport_without_model_evidence_is_still_disabled():
     assert any(
         w["code"] == "zendure_mqtt_control_disabled_unknown_model" for w in warnings
     )
+
+
+def test_a_legacy_single_broker_without_a_source_is_local_mqtt_everywhere():
+    """The runtime built it as local MQTT; the identity resolver said unknown,
+    which refused the start and had the migration disable a working device."""
+
+    from ems.device_identity import broker_sources_from_config
+    from ems.zendure_mqtt.migration import (
+        plan_zendure_mqtt_migration,
+        zendure_mqtt_control_migration_startup_error,
+    )
+
+    device = {
+        "name": "H",
+        "type": "zendure_mqtt",
+        "hardware_profile": "hyper_2000",
+        "capabilities": {"write_output_limit": True},
+        "mqtt": {
+            "topic_family": "legacy_zendure_json",
+            "product_key": "PK",
+            "device_id": "DEV",
+        },
+    }
+    config = {"zendure_mqtt": {"host": "192.0.2.5", "port": 1883}, "devices": [device]}
+
+    assert broker_sources_from_config(config) == {"default": "local_mqtt"}
+    assert zendure_mqtt_control_migration_startup_error(config) is None
+    assert not [
+        change for change in plan_zendure_mqtt_migration(config)
+        if change.action == "disable_control"
+    ]
+
+
+@pytest.mark.parametrize("source", ["Zendure_Cloud_MQTT", " zendure_cloud_mqtt "])
+def test_a_cloud_source_in_any_case_writes_through_the_cloud_gate(source):
+    from ems.zendure_mqtt.config_entries import control_gate_for_broker_source
+
+    assert control_gate_for_broker_source(source) == "mqtt_zendure"
+
+
+def test_a_config_node_without_a_zendure_mqtt_block_names_no_broker_source():
+    from ems.device_identity import broker_sources_from_config
+
+    assert broker_sources_from_config({"devices": []}) == {}
+    assert broker_sources_from_config({"name": "WR1", "mqtt": {}}) == {}

@@ -485,7 +485,7 @@ def control_gate_for_broker_source(source: Any) -> str:
     a transport it cannot use.
     """
 
-    return _CONTROL_GATE_BY_BROKER_SOURCE.get(source, CONTROL_GATE_MQTT_LOCAL)
+    return _CONTROL_GATE_BY_BROKER_SOURCE.get(_normalized(source), CONTROL_GATE_MQTT_LOCAL)
 
 
 def control_gate_for_config_device(config: Any, item: Any) -> str:
