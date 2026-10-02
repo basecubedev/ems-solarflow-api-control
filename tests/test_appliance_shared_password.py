@@ -456,3 +456,14 @@ def test_the_owner_is_resolved_at_every_write_not_once_at_start(tmp_path):
     # The root is owned by this test user, so that is the identity a write has to
     # hand the file to -- read now, not at construction.
     assert chowned == [(entry.st_uid, entry.st_gid)]
+
+
+def test_the_manager_ui_never_calls_the_shared_password_independent():
+    """The docs were corrected; two strings in the UI still said the opposite."""
+
+    from pathlib import Path
+
+    app_js = (
+        Path(__file__).resolve().parents[1] / "appliance" / "static" / "app.js"
+    ).read_text(encoding="utf-8").lower()
+    assert "independent from the ems admin password" not in app_js

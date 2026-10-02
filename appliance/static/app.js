@@ -350,7 +350,7 @@
     gate.hidden = false;
     document.getElementById("gate-confirm-field").hidden = !firstRun;
     document.getElementById("gate-intro").textContent = firstRun
-      ? "No appliance password exists yet. Create one to finish the first-run setup. It is independent from the EMS Admin password."
+      ? "No password exists yet. Create one to finish the first-run setup. The EMS Admin console and the dashboard use the same password."
       : "Sign in to manage this Raspberry Pi appliance.";
     document.getElementById("gate-submit").textContent = firstRun ? "Create password" : "Sign in";
     document.getElementById("gate-password-label").textContent = firstRun
@@ -3124,7 +3124,7 @@
           el("button", { type: "button", class: "ghost-button compact", text: "Use Expert mode", onclick: function () { setMode("expert"); } })
         ])
       ], "settings-mode"),
-      actionCard("Appliance password", "Independent from the EMS Admin password", [renderPasswordForm()], "settings-password")
+      actionCard("Appliance password", "Also the EMS Admin console and dashboard password", [renderPasswordForm()], "settings-password")
     ]));
   }
 
