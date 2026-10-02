@@ -360,12 +360,28 @@ def _is_maintenance_field(field):
     return is_editable_catalog_field(field, scope="maintenance", allow_secret=False)
 
 
+ZENDURE_MQTT_BROKER_CARD_FIELDS = (
+    "zendure_mqtt.host",
+    "zendure_mqtt.port",
+    "zendure_mqtt.tls",
+)
+
+
 def _maintenance_field_index():
+    """Feature fields Maintenance edits generically.
+
+    The broker card owns ``zendure_mqtt`` host, port and TLS
+    (``_merge_zendure_mqtt_broker``); as feature fields too, every apply sent
+    the old values back and reverted the card's change. The other
+    ``zendure_mqtt`` settings stay feature fields.
+    """
+
     return config_field_index(
         scope="maintenance",
         allow_secret=False,
         exclude_repeated=True,
         exclude_prefixes=("devices", "grid_meter"),
+        exclude_keys=ZENDURE_MQTT_BROKER_CARD_FIELDS,
     )
 
 

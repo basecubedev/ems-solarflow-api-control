@@ -1666,3 +1666,54 @@ def test_reset_runtime_requires_an_explicit_confirmation(tmp_path, monkeypatch):
     assert status == 400
     assert payload["error"] == "confirmation_required"
     assert json.loads(runtime_path.read_text())["system"]["loop_interval"] == 5
+
+
+def test_a_broker_address_change_survives_the_feature_round_trip():
+    """The browser sends the whole draft back; the broker card owns host and port."""
+
+    from admin.maintenance_config import _merge_draft, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {"host": "10.0.0.1", "port": 1883, "username": "u", "password": "p"},
+    }
+    draft = build_maintenance_draft(config)
+    draft["zendure_mqtt"]["host"] = "10.0.0.2"
+    draft["zendure_mqtt"]["port"] = 8883
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+
+    assert issues == []
+    assert (merged["zendure_mqtt"]["host"], merged["zendure_mqtt"]["port"]) == ("10.0.0.2", 8883)
+    assert not {"zendure_mqtt.host", "zendure_mqtt.port", "zendure_mqtt.tls"} & set(draft["features"])
+
+
+def test_the_other_zendure_mqtt_settings_stay_editable_in_maintenance():
+    from admin.maintenance_config import _merge_draft, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {
+            "host": "10.0.0.1",
+            "port": 1883,
+            "tls_insecure": False,
+            "keepalive_seconds": 30,
+            "connect_timeout_seconds": 10.0,
+        },
+    }
+    draft = build_maintenance_draft(config)
+    draft["features"]["zendure_mqtt.tls_insecure"] = True
+    draft["features"]["zendure_mqtt.keepalive_seconds"] = 60
+    draft["features"]["zendure_mqtt.connect_timeout_seconds"] = 20
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+
+    assert issues == []
+    assert merged["zendure_mqtt"]["tls_insecure"] is True
+    assert merged["zendure_mqtt"]["keepalive_seconds"] == 60
+    assert merged["zendure_mqtt"]["connect_timeout_seconds"] == 20
+    assert merged["zendure_mqtt"]["host"] == "10.0.0.1"
