@@ -446,6 +446,14 @@ class ZendureCloudTokenStore:
             raise CredentialStoreError(
                 "Could not remove the stored Zendure token."
             ) from exc
+        if self._legacy_store is not None:
+            try:
+                legacy = self._legacy_store.delete_token()
+            except Exception as exc:
+                raise CredentialStoreError(
+                    "Could not remove the earlier Admin copy of the Zendure token."
+                ) from exc
+            removed = removed or bool(legacy.get("removed"))
         return {"token_saved": False, "removed": removed}
 
     def settings(self):
@@ -487,7 +495,8 @@ class ZendureCloudTokenStore:
         """Import a legacy Admin-local token once, without deleting the source.
 
         Idempotent: skips when the new file already exists or no legacy token is
-        available. The legacy file is intentionally left in place.
+        available. The legacy file is left in place until the token is deleted,
+        which removes both copies so a deleted token never returns.
         """
 
         if self._legacy_store is None or self.token_path.exists():

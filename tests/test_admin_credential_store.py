@@ -121,6 +121,23 @@ def test_forget_mqtt_broker_secret_detaches_it(tmp_path):
     assert store.mqtt_broker_secret_status("hass")["saved"] is False
 
 
+def test_deleted_token_is_not_reimported_from_the_legacy_copy(tmp_path):
+    legacy_dir = tmp_path / "admin-data"
+    legacy = ZendureTokenStore(legacy_dir)
+    legacy.save_token(TOKEN)
+    store = CredentialStore(
+        config_dir=tmp_path / "config", legacy_admin_data_dir=legacy_dir
+    )
+    assert store.load_zendure_token() == TOKEN
+
+    result = store.zendure.delete_token()
+
+    assert result["removed"] is True
+    assert store.load_zendure_token() is None
+    assert store.zendure.settings()["token_saved"] is False
+    assert not legacy.token_path.exists()
+
+
 def test_legacy_admin_token_is_migrated(tmp_path):
     legacy_dir = tmp_path / "admin-data"
     legacy = ZendureTokenStore(legacy_dir)
