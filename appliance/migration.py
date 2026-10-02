@@ -11,6 +11,7 @@ resolve it instead of silently losing one of the two.
 import json
 import os
 import shutil
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -132,22 +133,6 @@ def _ids(name, group):
     return uid, gid
 
 
-def _mode_for(target, directory_mode, file_mode):
-    """The mode one path gets, with the one file that must stay runnable.
-
-    Agent state is uniformly root-private, except that systemd executes the
-    reverter the manager arms before an install. A blanket file mode removes
-    its execute bit, and the deadline that is the only way back out of that
-    install then fails with 203/EXEC without ever deciding.
-    """
-
-    if target.is_dir():
-        return directory_mode
-    if target.name == REVERTER_NAME:
-        return REVERTER_MODE
-    return file_mode
-
-
 def _apply_ownership(path, owner, *, mode=None):
     """Set the final owner and mode; missing accounts are not an error.
 
@@ -173,28 +158,40 @@ def _apply_ownership(path, owner, *, mode=None):
         directory_mode = AGENT_DIRECTORY_MODE if mode is None else mode
         file_mode = AGENT_FILE_MODE
 
-    def own(target):
+    def own(name, dir_fd=None):
+        # Container-writable tree: never follow a link; change through the descriptor.
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
         try:
-            if uid is not None and gid is not None:
-                os.chown(target, uid, gid)
+            fd = os.open(name, flags, dir_fd=dir_fd)
         except OSError:
-            pass
+            return
         try:
-            target.chmod(_mode_for(target, directory_mode, file_mode))
-        except OSError:
-            pass
+            info = os.fstat(fd)
+            if stat.S_ISDIR(info.st_mode):
+                target_mode = directory_mode
+            elif stat.S_ISREG(info.st_mode):
+                # systemd executes the armed reverter; a blanket file mode would
+                # take its execute bit and the deadline would fail with 203/EXEC.
+                target_mode = REVERTER_MODE if os.path.basename(name) == REVERTER_NAME else file_mode
+            else:
+                return
+            try:
+                if uid is not None and gid is not None:
+                    os.fchown(fd, uid, gid)
+            except OSError:
+                pass
+            try:
+                os.fchmod(fd, target_mode)
+            except OSError:
+                pass
+        finally:
+            os.close(fd)
 
-    own(path)
+    own(str(path))
     if path.is_dir():
-        # os.walk rather than rglob: it does not descend into symlinked
-        # directories on any supported interpreter, where rglob's guarantee has
-        # moved between versions.
-        for root, directories, files in os.walk(path):
+        for _root, directories, files, root_fd in os.fwalk(str(path), follow_symlinks=False):
             for name in directories + files:
-                target = Path(root) / name
-                if target.is_symlink():
-                    continue
-                own(target)
+                own(name, dir_fd=root_fd)
     return True
 
 
