@@ -1913,3 +1913,39 @@ def test_config_upgrade_preserves_config_permissions(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+
+
+def test_interactive_menu_rereads_runtime_state_before_each_action(
+    tmp_path, monkeypatch
+):
+    """Interleaving: the menu opens, the dashboard disables WR1, the menu saves."""
+
+    write_config(tmp_path / "config.json")
+    runtime_path = tmp_path / "runtime-state.json"
+    run_emsctl(tmp_path, "system", "enable")
+    config = emsctl.load_config(str(tmp_path / "config.json"))
+    args = config_args(
+        config=str(tmp_path / "config.json"), runtime_state=str(runtime_path)
+    )
+
+    def external_disable():
+        data = json.loads(runtime_path.read_text())
+        data["devices"]["WR1"]["enabled"] = False
+        runtime_path.write_text(json.dumps(data))
+
+    choices = iter(["status", "system-max-power", "quit"])
+
+    def choose(title, options):
+        choice = next(choices)
+        if choice == "system-max-power":
+            external_disable()
+        return choice
+
+    monkeypatch.setattr(emsctl, "prompt_choice", choose)
+    monkeypatch.setattr(emsctl, "prompt_text", lambda label, default=None: "600")
+
+    assert emsctl.run_interactive(args, config) == 0
+
+    on_disk = runtime_state(tmp_path)
+    assert on_disk["system"]["max_total_power"] == 600
+    assert on_disk["devices"]["WR1"]["enabled"] is False

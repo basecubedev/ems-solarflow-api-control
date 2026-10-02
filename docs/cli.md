@@ -915,4 +915,9 @@ The CLI writes via a temporary file and atomic rename:
 data/runtime-state.json.<pid>.tmp -> data/runtime-state.json
 ```
 
-This keeps runtime-state edits robust even when the EMS is running.
+The EMS never reads a half-written file, so editing while it runs is safe.
+Every writer (emsctl, the dashboard, the Home Assistant helper sync) re-reads
+the file before it changes a value, so a change made by one of them is kept by
+the next. There is no lock across processes, though: two writers that save
+within the same fraction of a second can still lose one change. Check with
+`python3 emsctl.py status` when you script several writers at once.

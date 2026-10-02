@@ -321,6 +321,12 @@ class RuntimeState:
 
             return self.data
 
+    def _refresh_from_disk(self):
+        """Pick up another process's write before changing anything."""
+
+        if self.path and os.path.exists(self.path):
+            self.load_if_changed()
+
     def save_atomic(self):
         with self.lock:
             parent = os.path.dirname(self.path)
@@ -348,6 +354,7 @@ class RuntimeState:
 
     def update_section(self, section_name, values):
         with self.lock:
+            self._refresh_from_disk()
             section = self.data.setdefault(section_name, {})
             if not isinstance(section, dict):
                 raise ValueError(f"runtime section {section_name} must be an object")
@@ -358,6 +365,7 @@ class RuntimeState:
 
     def update_device(self, device_name, values):
         with self.lock:
+            self._refresh_from_disk()
             devices = self.data.setdefault("devices", {})
             if device_name not in devices:
                 known = ", ".join(sorted(devices)) or "(none)"
@@ -388,6 +396,7 @@ class RuntimeState:
 
     def set_system(self, key, value):
         with self.lock:
+            self._refresh_from_disk()
             system = self.data.setdefault("system", {})
             previous = system.get(key)
             system[key] = value
@@ -395,6 +404,7 @@ class RuntimeState:
 
     def set_section(self, section_name, key, value):
         with self.lock:
+            self._refresh_from_disk()
             section = self.data.setdefault(section_name, {})
             previous = section.get(key)
             section[key] = value
@@ -412,6 +422,7 @@ class RuntimeState:
 
     def set_device(self, device_name, key, value):
         with self.lock:
+            self._refresh_from_disk()
             devices = self.data.setdefault("devices", {})
             device = devices.setdefault(device_name, {})
             previous = device.get(key)

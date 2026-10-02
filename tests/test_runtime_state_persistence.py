@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
 import logging
+import os
 
 import pytest
 
@@ -153,3 +154,43 @@ def test_runtime_state_invalid_json_keeps_current_data_and_logs_warning(tmp_path
 
     assert data["system"]["enabled"] is False
     assert "event=runtime_state_load_error" in caplog.text
+
+
+def _write_externally(path, mutate):
+    """Rewrite the file the way emsctl does, with a distinct mtime."""
+
+    data = json.loads(path.read_text())
+    mutate(data)
+    stat = path.stat()
+    path.write_text(json.dumps(data))
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+
+@pytest.mark.parametrize(
+    "save",
+    [
+        lambda state: state.update_section("system", {"max_total_power": 600}),
+        lambda state: state.update_device("WR1", {"max_power": 600}),
+        lambda state: (state.set_system("max_total_power", 600), state.save_atomic()),
+    ],
+    ids=["update_section", "update_device", "set_then_save"],
+)
+def test_a_save_keeps_a_change_another_process_wrote_since_the_last_load(
+    tmp_path, save
+):
+    """Interleaving: EMS loads, emsctl disables, the dashboard saves a field."""
+
+    path = tmp_path / "runtime-state.json"
+    state = RuntimeState(str(path), DEFAULTS)
+    state.load_or_create()
+
+    def disable(data):
+        data["system"]["enabled"] = False
+        data["devices"]["WR1"]["runtime_role"] = "ac_input"
+
+    _write_externally(path, disable)
+    save(state)
+
+    on_disk = json.loads(path.read_text())
+    assert on_disk["system"]["enabled"] is False
+    assert on_disk["devices"]["WR1"]["runtime_role"] == "ac_input"

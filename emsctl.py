@@ -2621,7 +2621,7 @@ def save_interactive(runtime_path, state):
 
 def run_interactive(args, config):
     runtime_path = resolve_runtime_path(args, config)
-    state, _ = load_runtime_state(runtime_path, config)
+    load_runtime_state(runtime_path, config)
 
     menu_items = [
         ("status", "Show status"),
@@ -2661,6 +2661,7 @@ def run_interactive(args, config):
             return 0
 
         try:
+            state, _ = load_runtime_state(runtime_path, config)
             if choice == "status":
                 print_status(runtime_path, state)
                 continue
@@ -2676,18 +2677,21 @@ def run_interactive(args, config):
                     value = prompt_text(f"system {action}")
                     if value is None:
                         continue
+                state, _ = load_runtime_state(runtime_path, config)
                 update_system(make_args(action=action, value=value), state)
                 save_interactive(runtime_path, state)
                 continue
 
             if choice.startswith("ha-control-"):
                 action = choice.removeprefix("ha-control-")
+                state, _ = load_runtime_state(runtime_path, config)
                 set_bool_section(make_args(action=action, value=None), state, "ha", "control_enabled")
                 save_interactive(runtime_path, state)
                 continue
 
             if choice.startswith("ha-"):
                 action = choice.removeprefix("ha-")
+                state, _ = load_runtime_state(runtime_path, config)
                 set_bool_section(make_args(action=action, value=None), state, "ha", "enabled")
                 save_interactive(runtime_path, state)
                 continue
@@ -2698,6 +2702,7 @@ def run_interactive(args, config):
 
             if choice.startswith("winter-"):
                 action = choice.removeprefix("winter-")
+                state, _ = load_runtime_state(runtime_path, config)
                 set_bool_section(make_args(action=action, value=None), state, "winter", "enabled")
                 save_interactive(runtime_path, state)
                 continue
@@ -2716,6 +2721,7 @@ def run_interactive(args, config):
                     value = prompt_text("Offgrid mode (off, eco, standard)")
                     if value is None:
                         continue
+                state, _ = load_runtime_state(runtime_path, config)
                 update_device(make_args(name=name, action=action, value=value), state)
                 save_interactive(runtime_path, state)
                 continue
