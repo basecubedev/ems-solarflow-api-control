@@ -129,11 +129,11 @@ def test_each_transport_names_its_own_gate():
     assert cfg.resolve_config_write_gate(config, "mqtt_zendure").allowed is False
 
 
-def test_unknown_transport_falls_back_to_the_api_gate():
+def test_unknown_transport_is_blocked_rather_than_borrowing_the_api_gate():
     config = _config(_system())
     decision = cfg.resolve_config_write_gate(config, "nonsense")
-    assert decision.gate_name == "allow_hardware_writes"
-    assert decision.transport == "http"
+    assert decision.allowed is False
+    assert decision.blocked_by == ("unknown_control_gate",)
 
 
 @pytest.mark.parametrize("config", [None, [], "config", {"system": "broken"}])

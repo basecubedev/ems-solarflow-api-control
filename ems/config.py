@@ -2055,9 +2055,15 @@ def _evaluate_write_gate(
     decision the controller actually makes.
     """
 
-    transport, gate_name = _CONTROL_GATE_TRANSPORT.get(
-        control_gate, _CONTROL_GATE_TRANSPORT["api"]
-    )
+    if control_gate not in _CONTROL_GATE_TRANSPORT:
+        return WriteGateDecision(
+            allowed=False,
+            transport="unknown",
+            gate_name="unknown_control_gate",
+            gate_enabled=False,
+            blocked_by=("unknown_control_gate",),
+        )
+    transport, gate_name = _CONTROL_GATE_TRANSPORT[control_gate]
     gate_enabled = gate_values[gate_name]
 
     blocked = []
