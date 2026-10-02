@@ -3645,8 +3645,8 @@ def test_show_auth_view_invalidates_prepared_upgrade_plan():
 
 def test_auth_loss_paths_route_through_show_auth_view():
     """Session loss (onAuthLost -> refreshAuthStatus -> applyAuthStatus) and logout
-    (submitLogout -> applyAuthStatus, or its catch) both reach showAuthView, so the
-    invalidation there covers logout and session expiry alike."""
+    (submitLogout -> applyAuthStatus once logout or status confirms it) both reach
+    showAuthView, so the invalidation there covers logout and session expiry alike."""
     js = _read("admin.js")
     on_auth_lost = _extract_fn(js, "onAuthLost")
     assert "refreshAuthStatus()" in on_auth_lost
@@ -3655,7 +3655,7 @@ def test_auth_loss_paths_route_through_show_auth_view():
     assert 'showAuthView("login")' in refresh
     logout = _extract_fn(js, "submitLogout")
     assert "applyAuthStatus(" in logout
-    assert 'showAuthView("login")' in logout
+    assert "/api/admin/auth/status" in logout
     apply_status = _extract_fn(js, "applyAuthStatus")
     assert 'showAuthView("login")' in apply_status
 
@@ -5837,6 +5837,61 @@ def test_js_logout_button_calls_endpoint_once_authenticated():
     logout = js.split("async function submitLogout", 1)[1].split("\n\n", 1)[0]
     assert "/api/admin/auth/logout" in logout
     assert 'authEls.logout.addEventListener("click", submitLogout)' in js
+
+
+def _run_logout_node(logout_response, status_authenticated):
+    js = _read("admin.js")
+    script = (
+        "const LOGOUT_FAILED_MESSAGE = 'failed';\n"
+        + _extract_decl(js, "async function readLogoutStatus")
+        + "\n"
+        + _extract_decl(js, "async function submitLogout")
+        + """
+const authState = { authenticated: true };
+const calls = [];
+globalThis.window = { alert: (text) => calls.push("alert:" + text) };
+function stopSystemAlignmentPolling() { calls.push("stop-polling"); }
+function clearSetupOperationContext() { calls.push("clear-context"); }
+const logoutResponse = %s;
+const statusAuthenticated = %s;
+async function rawFetch(url) {
+  if (url === "/api/admin/auth/logout") {
+    if (!logoutResponse) throw new Error("network down");
+    return { ok: logoutResponse.ok, json: async () => logoutResponse.body };
+  }
+  if (url === "/api/admin/auth/status") {
+    if (statusAuthenticated === null) throw new Error("network down");
+    return { ok: true, json: async () => ({ authenticated: statusAuthenticated }) };
+  }
+  throw new Error("unexpected " + url);
+}
+function applyAuthStatus(status) {
+  authState.authenticated = Boolean(status.authenticated);
+  calls.push("apply:" + authState.authenticated);
+}
+submitLogout().then(() => console.log(JSON.stringify({ calls, authenticated: authState.authenticated })));
+"""
+        % (json.dumps(logout_response), json.dumps(status_authenticated))
+    )
+    return _run_node(script)
+
+
+def test_a_failed_logout_is_not_reported_as_logged_out():
+    """Only the server decides the session ended; a refused logout says so."""
+    refused = _run_logout_node({"ok": False, "body": {"error": "csrf_failed"}}, True)
+    assert refused == {"calls": ["alert:failed"], "authenticated": True}
+    offline = _run_logout_node(None, None)
+    assert offline == {"calls": ["alert:failed"], "authenticated": True}
+    expired = _run_logout_node({"ok": False, "body": {}}, False)
+    assert expired == {
+        "calls": ["stop-polling", "clear-context", "apply:false"],
+        "authenticated": False,
+    }
+    done = _run_logout_node({"ok": True, "body": {"authenticated": False}}, True)
+    assert done == {
+        "calls": ["stop-polling", "clear-context", "apply:false"],
+        "authenticated": False,
+    }
 
 
 def test_admin_frontend_defines_is_authenticated_helper():

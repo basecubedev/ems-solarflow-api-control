@@ -704,6 +704,44 @@ global.fetch = async (url, options = {{}}) => {{
     assert output["feedbackClass"] == "runtime-feedback ok"
 
 
+def test_a_failed_dashboard_logout_keeps_the_session_shown():
+    """A refused or unreachable logout leaves write mode on and says it failed."""
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const nodes = new Map();
+global.document = {{
+  getElementById(id) {{
+    if (!nodes.has(id)) nodes.set(id, {{ id, textContent: "", className: "", hidden: false }});
+    return nodes.get(id);
+  }},
+  querySelector: () => null,
+  querySelectorAll: () => [],
+}};
+async function attempt(fetchImpl) {{
+  global.fetch = fetchImpl;
+  app.state.auth.authenticated = true;
+  app.state.auth.configured = true;
+  app.state.auth.csrfToken = "token";
+  document.getElementById("writeModeState").textContent = "Write mode";
+  await app.logout();
+  return {{
+    authenticated: app.state.auth.authenticated,
+    pill: document.getElementById("writeModeState").textContent,
+  }};
+}}
+(async () => {{
+  const refused = await attempt(async () => ({{ ok: false, status: 403 }}));
+  const offline = await attempt(async () => {{ throw new Error("offline"); }});
+  const done = await attempt(async () => ({{ ok: true, status: 200 }}));
+  console.log(JSON.stringify({{ refused, offline, done }}));
+}})();
+"""
+    out = run_node(script)
+    assert out["refused"] == {"authenticated": True, "pill": "Logout failed"}
+    assert out["offline"] == {"authenticated": True, "pill": "Logout failed"}
+    assert out["done"] == {"authenticated": False, "pill": "Read-only"}
+
+
 def test_runtime_editor_force_refresh_replaces_write_controls_after_logout():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});

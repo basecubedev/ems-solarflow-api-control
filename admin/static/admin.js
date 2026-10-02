@@ -20823,20 +20823,33 @@ async function submitLogin(event) {
   }
 }
 
+const LOGOUT_FAILED_MESSAGE =
+  "Logout failed. You are still logged in; try again.";
+
+async function readLogoutStatus(url, options) {
+  try {
+    const resp = await rawFetch(url, options);
+    return resp.ok ? await resp.json().catch(() => ({})) : null;
+  } catch (err) {
+    return null;
+  }
+}
+
 async function submitLogout() {
+  let data = await readLogoutStatus("/api/admin/auth/logout", { method: "POST" });
+  if (!data) {
+    const status = await readLogoutStatus("/api/admin/auth/status");
+    data = status && status.authenticated === false ? status : null;
+  }
+  if (!data) {
+    window.alert(LOGOUT_FAILED_MESSAGE);
+    return;
+  }
   if (typeof stopSystemAlignmentPolling === "function") {
     stopSystemAlignmentPolling();
   }
   clearSetupOperationContext();
-  try {
-    const resp = await rawFetch("/api/admin/auth/logout", { method: "POST" });
-    const data = await resp.json().catch(() => ({}));
-    applyAuthStatus(data);
-  } catch (err) {
-    authState.authenticated = false;
-    authState.csrfToken = null;
-    showAuthView("login");
-  }
+  applyAuthStatus(data);
 }
 
 /* --- theme ---------------------------------------------------------------

@@ -5453,15 +5453,22 @@ async function login() {
 }
 
 async function logout() {
+  let loggedOut = false;
   try {
-    await fetch("/api/auth/logout", { method: "POST" });
-  } finally {
-    state.auth.authenticated = false;
-    state.auth.csrfToken = null;
-    clearRuntimeEditorState();
-    renderAuthState();
-    if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor: true });
+    const response = await fetch("/api/auth/logout", { method: "POST" });
+    loggedOut = response.ok;
+  } catch (err) {
+    loggedOut = false;
   }
+  if (!loggedOut) {
+    setText("writeModeState", "Logout failed");
+    return;
+  }
+  state.auth.authenticated = false;
+  state.auth.csrfToken = null;
+  clearRuntimeEditorState();
+  renderAuthState();
+  if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor: true });
 }
 
 function demoModeFromSearch(search) {
@@ -7573,6 +7580,7 @@ if (typeof module !== "undefined") {
     logsAuthState,
     setServiceLogLevel,
     renderAuthState,
+    logout,
     maintenanceAuthState,
     maintenanceBackupTypeLabel,
     renderMaintenanceView,
