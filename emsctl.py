@@ -57,6 +57,7 @@ TOP_LEVEL_COMMANDS = (
     "influx",
     "stack",
     "diagnose",
+    "grid-meter",
     "backup",
     "config",
     "interactive",
@@ -1297,6 +1298,7 @@ def completion_word_list(words):
 
 def completion_script_bash(config):
     commands = completion_word_list(TOP_LEVEL_COMMANDS)
+    command_case = "|".join(safe_completion_words(TOP_LEVEL_COMMANDS))
     system_actions = completion_word_list(SYSTEM_ACTIONS)
     device_actions = completion_word_list(DEVICE_ACTIONS)
     ha_actions = "enable disable"
@@ -1340,7 +1342,7 @@ _emsctl_py_completion()
   command=""
   for ((i = 1; i < COMP_CWORD; i++)); do
     case "${{COMP_WORDS[i]}}" in
-      status|system|device|ha|ha-control|winter|dashboard|influx|stack|diagnose|backup|config|interactive|menu|examples|completion|help)
+      {command_case})
         command="${{COMP_WORDS[i]}}"
         break
         ;;
@@ -1355,6 +1357,9 @@ _emsctl_py_completion()
   case "$command" in
     system)
       COMPREPLY=( $(compgen -W "$system_actions" -- "$cur") )
+      ;;
+    grid-meter)
+      COMPREPLY=( $(compgen -W "test" -- "$cur") )
       ;;
     device)
       if [[ "$prev" == "device" ]]; then
@@ -1433,6 +1438,9 @@ _emsctl_py()
   case "$words[2]" in
     system)
       _describe 'system action' system_actions
+      ;;
+    grid-meter)
+      _values 'grid-meter action' test
       ;;
     device)
       if (( CURRENT == 3 )); then

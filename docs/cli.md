@@ -285,13 +285,13 @@ By default, `emsctl.py` uses this config lookup order:
 ```text
 --config PATH
 EMS_CONFIG_FILE
-config.json
 config/config.json
+config.json
 ```
 
-This preserves legacy local setups that keep `config.json` next to
-`emsctl.py`, while allowing the recommended Docker setup to use
-`/app/config/config.json` automatically.
+`config/config.json` wins when both exist. A legacy local setup that keeps
+only `config.json` next to `emsctl.py` still works, and the recommended Docker
+setup uses `/app/config/config.json` automatically.
 
 Relative `runtime_state_path` and dashboard `auth_file` values are still
 resolved relative to the application directory. The runtime-state path always
