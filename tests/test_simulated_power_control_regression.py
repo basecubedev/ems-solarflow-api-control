@@ -228,6 +228,22 @@ def test_non_finite_grid_reading_holds_target_and_spares_the_filter(
     assert after < held
 
 
+def test_a_meter_serving_its_last_value_is_reported_as_holding(monkeypatch):
+    ems = controller(monkeypatch)
+    ems.shelly = SimpleNamespace(health=SimpleNamespace(stale_used=False))
+    assert ems.update_grid_meter_holding(150) is False
+
+    ems.load_history.extend([150, 150])
+    ems.filtered_load_w = 150
+    ems.shelly.health.stale_used = True
+    assert ems.update_grid_meter_holding(150) is True
+    assert list(ems.load_history) == []
+    assert ems.filtered_load_w is None
+
+    ems.shelly.health.stale_used = False
+    assert ems.update_grid_meter_holding(150) is False
+
+
 def test_output_filter_first_cycle_median_and_ema(monkeypatch):
     ems = controller(
         monkeypatch,

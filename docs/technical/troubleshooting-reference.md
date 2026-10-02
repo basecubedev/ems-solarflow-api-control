@@ -325,8 +325,10 @@ unreachable.
 The output also includes a compact communication-health summary: grid-meter
 read health and per-device read/write health, each with a status
 (`ok`/`degraded`/`failed`/`unknown`), last-success age, consecutive errors, and
-last read latency. `stale value used: yes` means a grid-meter read failed and
-EMS kept the last known value (intended fallback, not a control bug). Read and
+last read latency. `stale value used: yes` means a grid-meter read failed. The meter
+keeps reporting its last known value, and the controller holds its target
+instead of acting on it (see "Grid Meter Unavailable Hold" in
+[control-logic.md](control-logic.md)). Read and
 write health are tracked separately, so a device can read fine while writes fail
 or are intentionally blocked. These counters are in-memory and reset on restart.
 

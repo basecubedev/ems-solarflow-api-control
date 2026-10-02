@@ -1017,3 +1017,44 @@ class WriteGateTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StaleMeterStub:
+    """A meter that went offline at +150 W import and keeps serving it."""
+
+    def __init__(self):
+        self.health = SimpleNamespace(stale_used=False, consecutive_failures=0)
+
+    def get_power(self):
+        return 150
+
+
+def test_a_dead_grid_meter_does_not_wind_the_output_up():
+    dev = device("WR1")
+    meter = StaleMeterStub()
+    controller = EMSController(
+        devices=[dev], shelly=meter, sleep_enabled=False
+    )
+    controller.set_output_limit = Mock()
+    written = []
+
+    def cycle(output):
+        with patch(
+            "ems.controller.fetch_all_devices",
+            return_value=[state(output=output, output_limit=output)],
+        ), patch("ems.controller.cfg.SYSTEM_ENABLED", True), patch(
+            "ems.controller.cfg.MAX_TOTAL_POWER", 800
+        ), patch("ems.controller.cfg.SOC_RECONCILE_INTERVAL", 0), patch(
+            "ems.controller.cfg.MIN_OUTPUT_LIMIT", 0
+        ):
+            controller.run_once()
+        written.append(controller.commanded_total_w)
+
+    cycle(250)
+    meter.health.stale_used = True
+    meter.health.consecutive_failures = 1
+    for _ in range(8):
+        cycle(250)
+
+    assert max(written[1:]) <= written[0] + 1
+    assert controller.grid_meter_holding is True

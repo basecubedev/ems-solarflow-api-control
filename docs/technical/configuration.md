@@ -914,8 +914,9 @@ a plain numeric payload, or to `json` and provide
 
 MQTT meters cache the latest parsed value. The control loop does not wait for a
 message. If no value has arrived, or its age exceeds
-`grid_meter.mqtt.max_age_seconds`, the meter is treated as stale and the last
-cached value is used.
+`grid_meter.mqtt.max_age_seconds`, the meter is treated as stale: the
+last cached value is still reported, and the controller holds its target until
+a fresh value arrives.
 
 Example: Generic MQTT JSON payload:
 

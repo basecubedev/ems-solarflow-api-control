@@ -103,6 +103,7 @@ class EMSController:
         self.last_ha_written = {}
         self.commanded_total_w = None
         self.filtered_load_w = None
+        self.grid_meter_holding = False
         self.load_history = deque(
             maxlen=cfg.safe_int(
                 cfg.OUTPUT_CONTROL_CONFIG.get("median_window", 3),
@@ -546,6 +547,31 @@ class EMSController:
             ))
 
         return filtered
+
+    def update_grid_meter_holding(self, load):
+        """Hold the commanded total while the meter serves its last value.
+
+        Every grid-meter client returns its last good value when a read fails.
+        Integrating that value each cycle would wind the commanded total up to
+        ``max_total_power`` for as long as the meter is gone.
+        """
+
+        health = getattr(self.shelly, "health", None)
+        holding = bool(getattr(health, "stale_used", False))
+        if holding != self.grid_meter_holding:
+            log_event(
+                logging.WARNING if holding else logging.INFO,
+                "grid_meter_unavailable_holding_target"
+                if holding
+                else "grid_meter_recovered",
+                stale_value_w=load,
+                consecutive_failures=getattr(health, "consecutive_failures", None),
+                commanded_total_w=self.commanded_total_w,
+            )
+            self.load_history.clear()
+            self.filtered_load_w = None
+        self.grid_meter_holding = holding
+        return holding
 
     def stabilized_total_target(
         self,
@@ -3455,6 +3481,7 @@ class EMSController:
             )
 
         load = finite_grid_load(self.shelly.get_power())
+        self.update_grid_meter_holding(load)
 
         # =====================
         # RUNTIME cfg.CONFIG
@@ -3804,14 +3831,17 @@ class EMSController:
         )
         standby_total_w = min_output_limit * len(active_indexes)
 
-        stabilized_total = self.stabilized_total_target(
-            load,
-            states,
-            max_power,
-            has_export_capacity=has_export_capacity,
-            standby_total_w=standby_total_w,
-            active_device_count=len(active_indexes)
-        )
+        if self.grid_meter_holding and self.commanded_total_w is not None:
+            stabilized_total = min(self.commanded_total_w, max_power)
+        else:
+            stabilized_total = self.stabilized_total_target(
+                load,
+                states,
+                max_power,
+                has_export_capacity=has_export_capacity,
+                standby_total_w=standby_total_w,
+                active_device_count=len(active_indexes)
+            )
 
         targets, current, new, control_explanation = calculate_targets(
             load,
