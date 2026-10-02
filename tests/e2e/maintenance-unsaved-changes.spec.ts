@@ -67,6 +67,7 @@ test.describe("Maintenance settings draft", { tag: ["@maintenance"] }, () => {
     const { card } = await openInverterCard(page);
     const serial = cardInput(page, card, "Serial number");
     await serial.fill("EDITED-NOT-SAVED");
+    page.once("dialog", (dialog) => dialog.accept());
     await page.locator("#maintenance-config-reset-btn").click();
     await expect(cardInput(page, card, "Serial number")).toHaveValue(
       "API-SERIAL",

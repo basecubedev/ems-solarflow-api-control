@@ -7783,8 +7783,14 @@ if (configEls.draftList) {
   });
 }
 
+const CLEAR_DRAFT_CONFIRM =
+  "Clear the setup draft?\n\n" +
+  "Every selected device and grid meter is removed from the draft and stays " +
+  "dismissed until you add it again. Nothing on the system is changed.";
+
 if (configEls.clearDraft) {
   configEls.clearDraft.addEventListener("click", () => {
+    if (!window.confirm(CLEAR_DRAFT_CONFIRM)) return;
     // Dismiss every discovered observation and every identified device so the
     // cleared draft stays clear. A device the backend could not identify is
     // dismissed as an observation only — never as unknown hardware.
@@ -17451,8 +17457,13 @@ async function previewMaintenanceConfig() {
   }
 }
 
+const DISCARD_CHANGES_CONFIRM =
+  "Discard your unsaved changes?\n\n" +
+  "The editor returns to the saved configuration. Nothing on the system is changed.";
+
 function resetMaintenanceConfigDraft() {
   if (!mconfigState.pristine) return;
+  if (!window.confirm(DISCARD_CHANGES_CONFIRM)) return;
   mconfigState.draft = mconfigClone(mconfigState.pristine);
   mconfigNormalizeDraftMqttControl(mconfigState.draft);
   renderMaintenanceGridMeter();

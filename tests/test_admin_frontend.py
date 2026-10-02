@@ -4672,6 +4672,42 @@ def test_js_config_reset_restores_pristine_draft():
     assert "renderMaintenanceInverters()" in fn
 
 
+def test_discard_my_changes_and_clear_draft_ask_first():
+    """Both buttons throw work away, so a declined confirmation changes nothing."""
+    js = _read("admin.js")
+    script = (
+        "const DISCARD_CHANGES_CONFIRM = 'x';\n"
+        + _extract_fn(js, "resetMaintenanceConfigDraft")
+        + """
+let answer = false;
+let renders = 0;
+globalThis.window = { confirm: () => answer };
+const mconfigEls = {};
+const mconfigState = { pristine: { v: 1 }, draft: { v: 2 } };
+const mconfigClone = (value) => JSON.parse(JSON.stringify(value));
+function mconfigNormalizeDraftMqttControl() {}
+function renderMaintenanceGridMeter() { renders += 1; }
+function syncMaintenanceBrokerForm() {}
+function renderMaintenanceInverters() {}
+function renderMaintenanceFeatures() {}
+function setMaintenanceFact() {}
+resetMaintenanceConfigDraft();
+const declined = { draft: mconfigState.draft.v, renders };
+answer = true;
+resetMaintenanceConfigDraft();
+console.log(JSON.stringify({ declined, accepted: { draft: mconfigState.draft.v, renders } }));
+"""
+    )
+    out = _run_node(script)
+    assert out["declined"] == {"draft": 2, "renders": 0}
+    assert out["accepted"] == {"draft": 1, "renders": 1}
+    clear_draft = js.split("if (configEls.clearDraft)", 1)[1].split(
+        "\nconst ADMIN_VIEWS", 1
+    )[0]
+    first_statement = clear_draft.split("=> {", 1)[1].strip().splitlines()[0]
+    assert first_statement == "if (!window.confirm(CLEAR_DRAFT_CONFIRM)) return;"
+
+
 def test_maintenance_discovery_is_first_class_review_workflow():
     html = _read("index.html")
     card = html.split('id="maintenance-config-card"', 1)[1].split("</section>", 1)[0]
