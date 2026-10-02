@@ -85,15 +85,23 @@ def zendure_write(dev, field, properties, error_event, timeout=2, **fields):
 
 
 def create_session():
-    """Create a requests session with retry logic."""
+    """Create a requests session that retries a failed request once.
+
+    The control loop runs again in a few seconds, so a retry inside a cycle
+    only delays every later read and write. A write is never re-sent once it
+    reached the device: read and status retries cover GET only, and only a
+    connection that was never established is retried for a POST. A POST to an
+    unreachable device used to block for about ten seconds and be sent four
+    times.
+    """
 
     session = requests.Session()
 
     retry = Retry(
-        total=3,
+        total=1,
         backoff_factor=0.3,
         status_forcelist=[500, 502, 503, 504],
-        allowed_methods=["GET", "POST"]
+        allowed_methods=["GET"]
     )
 
     adapter = HTTPAdapter(max_retries=retry)

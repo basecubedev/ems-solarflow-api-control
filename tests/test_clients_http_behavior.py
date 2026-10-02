@@ -113,16 +113,16 @@ class FakeMqttClient:
         self.published.append((args, kwargs))
 
 
-def test_create_session_configures_retrying_http_adapters():
+def test_create_session_retries_a_read_once_and_never_a_write():
     session = create_session()
 
     retry = session.get_adapter("http://example.test").max_retries
-    assert retry.total == 3
+    assert retry.total == 1
     assert retry.backoff_factor == 0.3
     assert set(retry.status_forcelist) == {500, 502, 503, 504}
-    assert set(retry.allowed_methods) == {"GET", "POST"}
+    assert set(retry.allowed_methods) == {"GET"}
 
-    assert session.get_adapter("https://example.test").max_retries.total == 3
+    assert session.get_adapter("https://example.test").max_retries.total == 1
 
 
 def test_zendure_write_success_handles_success_and_logs_failure(caplog):
