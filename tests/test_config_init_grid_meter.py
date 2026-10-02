@@ -79,3 +79,26 @@ def test_ask_grid_meter_zendure_d0_http_keeps_only_ip():
     assert result["ip"] == "192.0.2.84"
     assert "power_path" not in result
     assert "mqtt" not in result
+
+
+def test_dry_run_preview_redacts_every_credential_field():
+    config = {
+        "zendure_mqtt": {
+            "username": "cloud-user",
+            "password": "cloud-pass",
+            "app_key": "APPKEY-1234",
+            "client_id": "CLIENT-5678",
+        },
+        "ha": {"token": "HA-TOKEN"},
+        "influxdb": {"token": "", "api_key": "INFLUX-KEY"},
+    }
+    preview = config_init.render_redacted_config_json(config)
+    for secret in (
+        "cloud-user",
+        "cloud-pass",
+        "APPKEY-1234",
+        "CLIENT-5678",
+        "HA-TOKEN",
+        "INFLUX-KEY",
+    ):
+        assert secret not in preview
