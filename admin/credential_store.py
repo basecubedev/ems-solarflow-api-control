@@ -346,19 +346,24 @@ class _EncryptedFiles:
 
         # A malformed existing key is never silently replaced (that would orphan
         # every record it encrypted); only a truly absent key is created here.
+        # link() refuses an existing key, so concurrent first saves share one.
         key = Fernet.generate_key()
-        tmp = self.key_path.with_suffix(".key.tmp")
+        self.secrets_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, staged = tempfile.mkstemp(dir=str(self.secrets_dir), prefix=".key-")
         try:
-            self.secrets_dir.mkdir(parents=True, exist_ok=True)
-            tmp.write_bytes(key)
-            _chmod_best_effort(tmp)
-            os.replace(tmp, self.key_path)
-        except OSError:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(key)
+                handle.flush()
+                os.fsync(handle.fileno())
             try:
-                tmp.unlink()
+                os.link(staged, self.key_path)
+            except FileExistsError:
+                return self.key_path.read_bytes()
+        finally:
+            try:
+                os.unlink(staged)
             except OSError:
                 pass
-            raise
         _chmod_best_effort(self.key_path)
         return key
 

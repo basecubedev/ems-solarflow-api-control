@@ -488,6 +488,46 @@ def test_concurrent_writes_do_not_share_a_deterministic_temp_name(tmp_path):
     finally:
         _tempfile.mkstemp = original
 
-    assert len(captured) == 2
-    assert captured[0] != captured[1]  # unique temp names, no fixed ".tmp"
+    records = [name for name in captured if not name.rsplit("/", 1)[-1].startswith(".key-")]
+    assert len(records) == 2
+    assert records[0] != records[1]  # unique temp names, no fixed ".tmp"
     assert list(store.secrets_dir.glob("*.tmp")) == []
+
+
+def test_two_first_saves_agree_on_one_key(tmp_path, monkeypatch):
+    """Interleaving: both callers generate a key before either publishes it."""
+
+    import threading
+
+    from cryptography.fernet import Fernet
+
+    store = _store(tmp_path)
+    barrier = threading.Barrier(2)
+    real_generate = Fernet.generate_key
+
+    def generate_then_wait():
+        key = real_generate()
+        barrier.wait()
+        return key
+
+    monkeypatch.setattr(Fernet, "generate_key", staticmethod(generate_then_wait))
+    keys = []
+
+    errors = []
+
+    def first_save():
+        try:
+            keys.append(store._files._load_or_create_key())
+        except Exception as exc:  # surfaced below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=first_save) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert keys[0] == keys[1] == store._files.key_path.read_bytes()
+    assert (store._files.key_path.stat().st_mode & 0o777) == 0o600
+    assert not list(store._files.key_path.parent.glob(".key-*"))
