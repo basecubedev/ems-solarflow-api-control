@@ -1978,11 +1978,27 @@ def diagnose_hardware(checks, config_data):
         except Exception as exc:
             _diagnose_record_probe(grid_tracker, start, exc)
             diagnose_add(checks, "hardware", "warning", "ecotracker_read_failed", f"EcoTracker read-only probe failed: {exc.__class__.__name__}")
+    elif meter_type == "tasmota_http" and (grid_meter.get("url") or grid_meter.get("ip")):
+        url = str(grid_meter.get("url") or "").strip() or f"http://{grid_meter['ip']}/cm?cmnd=Status%2010"
+        start = time.monotonic()
+        try:
+            status, payload = diagnose_http_json(url)
+            from ems.clients import _parse_tasmota_http_power
+            power = _parse_tasmota_http_power(payload, str(grid_meter.get("power_path") or ""))
+            _diagnose_record_probe(grid_tracker, start)
+            diagnose_add(checks, "hardware", "ok", "tasmota_read_ok", "Tasmota read-only status endpoint returned parseable power", status_code=status, power_w=power)
+        except Exception as exc:
+            _diagnose_record_probe(grid_tracker, start, exc)
+            diagnose_add(checks, "hardware", "warning", "tasmota_read_failed", f"Tasmota read-only probe failed: {exc.__class__.__name__}")
     elif meter_type in config_mod.MQTT_GRID_METER_TYPES:
-        mqtt_settings = config_mod.grid_meter_mqtt_settings(grid_meter)
+        try:
+            mqtt_settings = config_mod.resolve_grid_meter_mqtt_settings(config_data)
+        except ValueError as exc:
+            mqtt_settings = {}
+            diagnose_add(checks, "hardware", "warning", "grid_meter_broker_unresolved", f"The grid meter's MQTT broker could not be resolved: {exc}", type=meter_type)
         host = str(mqtt_settings.get("host") or "").strip()
         if not host:
-            diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"No read-only grid meter probe implemented for type: {meter_type}", type=meter_type)
+            diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", "The MQTT grid meter has no broker host to probe", type=meter_type)
         else:
             start = time.monotonic()
             try:

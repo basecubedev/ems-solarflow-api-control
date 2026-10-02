@@ -2521,3 +2521,73 @@ def test_an_invalid_loop_interval_does_not_silence_the_telemetry_check():
     )
 
     assert "energy_telemetry_window_far_above_loop_interval" in codes
+
+
+def test_diagnose_hardware_resolves_a_grid_meter_broker_ref(monkeypatch):
+    """The Admin layout names the broker by reference; the probe must follow it."""
+
+    captured = {}
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def fake_create_connection(address, timeout=0):
+        captured["address"] = address
+        return FakeSocket()
+
+    monkeypatch.setattr(diagnostics.socket, "create_connection", fake_create_connection)
+
+    checks = []
+    diagnostics.diagnose_hardware(
+        checks,
+        {
+            "grid_meter": {
+                "type": "mqtt",
+                "mqtt": {"broker_ref": "home", "topic": "meter/power"},
+            },
+            "zendure_mqtt": {
+                "brokers": {
+                    "home": {
+                        "enabled": True,
+                        "source": "local_mqtt",
+                        "host": "broker.local",
+                        "port": 1883,
+                    }
+                }
+            },
+            "devices": [],
+        },
+    )
+
+    assert captured["address"] == ("broker.local", 1883)
+    assert _levels_by_code(checks).get("mqtt_broker_connect_ok") == "ok"
+
+
+def test_diagnose_hardware_probes_a_tasmota_meter(monkeypatch):
+    captured = {}
+
+    def fake_http_json(url, headers=None, timeout=2):
+        captured["url"] = url
+        return 200, {"StatusSNS": {"SML": {"Power": 321}}}
+
+    monkeypatch.setattr(diagnostics, "diagnose_http_json", fake_http_json)
+
+    checks = []
+    diagnostics.diagnose_hardware(
+        checks,
+        {
+            "grid_meter": {
+                "type": "tasmota_http",
+                "ip": "192.0.2.60",
+                "power_path": "StatusSNS.SML.Power",
+            },
+            "devices": [],
+        },
+    )
+
+    assert captured["url"] == "http://192.0.2.60/cm?cmnd=Status%2010"
+    assert _levels_by_code(checks).get("tasmota_read_ok") == "ok"
