@@ -1258,7 +1258,9 @@ def config_device_defaults(config):
                 f"devices.{name}.max_power",
                 minimum=0
             ),
-            "offgrid_socket_mode": "off",
+            "offgrid_socket_mode": config_mod.offgrid_socket_mode_for(
+                item.get("grid_off_mode")
+            ),
             "pv_priority_factor": float_value(
                 item.get("pv_priority_factor", 1.0),
                 f"devices.{name}.pv_priority_factor",

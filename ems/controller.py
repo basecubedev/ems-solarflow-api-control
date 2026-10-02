@@ -105,6 +105,7 @@ class EMSController:
         self.filtered_load_w = None
         self.grid_meter_holding = False
         self.control_enabled = None
+        self._legacy_grid_off_mode_warned = set()
         self.load_history = deque(
             maxlen=cfg.safe_int(
                 cfg.OUTPUT_CONTROL_CONFIG.get("median_window", 3),
@@ -2646,12 +2647,16 @@ class EMSController:
         )
 
     def apply_device_modes(self, dev, state):
-        """Apply device operating modes if required."""
+        """Apply device operating modes if required.
+
+        ``gridOffMode`` is not one of them: the runtime ``offgrid_socket_mode``
+        owns it (``apply_runtime_device_state``); a second writer here flipped
+        it back every reconcile interval.
+        """
 
         if not self.state_reconciliation_supported(dev, "device_modes"):
             return
 
-        manage_grid_off_mode = dev.grid_off_mode is not None
         properties = {}
         fields = {
             "device": dev.name
@@ -2664,13 +2669,6 @@ class EMSController:
         ):
             properties["smartMode"] = int(dev.smart_mode)
             fields["smart_mode"] = dev.smart_mode
-
-        if (
-            manage_grid_off_mode
-            and int(state.grid_off_mode) != int(dev.grid_off_mode)
-        ):
-            properties["gridOffMode"] = int(dev.grid_off_mode)
-            fields["grid_off_mode"] = dev.grid_off_mode
 
         if (
             int(state.ac_mode) != 2
@@ -2778,6 +2776,34 @@ class EMSController:
 
         log_event(logging.DEBUG, "runtime_device_state_unchanged", **fields)
 
+    def warn_legacy_grid_off_mode(self, dev, runtime_mode):
+        """Say once when a config ``grid_off_mode`` no longer decides anything.
+
+        The runtime ``offgrid_socket_mode`` owns ``gridOffMode``. An install
+        that set the old config key keeps its runtime value, so the operator is
+        told which one applies and where to change it.
+        """
+
+        legacy = getattr(dev, "grid_off_mode", None)
+        if legacy is None or dev.name in self._legacy_grid_off_mode_warned:
+            return
+        legacy_mode = cfg.offgrid_socket_mode_for(legacy)
+        if legacy_mode == runtime_mode:
+            return
+        self._legacy_grid_off_mode_warned.add(dev.name)
+        log_event(
+            logging.WARNING,
+            "legacy_grid_off_mode_ignored",
+            device=dev.name,
+            config_grid_off_mode=legacy,
+            config_mode=legacy_mode,
+            runtime_mode=runtime_mode,
+            hint=(
+                "set the offgrid socket in the dashboard or with "
+                f"emsctl.py device {dev.name} offgrid {legacy_mode}"
+            ),
+        )
+
     def apply_runtime_device_state(self, dev, state):
         """Apply runtime-state device intents through safe reconciliation."""
 
@@ -2818,6 +2844,7 @@ class EMSController:
         desired_grid_off_mode = cfg.OFFGRID_SOCKET_MODES[
             desired_offgrid_socket_mode
         ]
+        self.warn_legacy_grid_off_mode(dev, desired_offgrid_socket_mode)
         current_grid_off_mode = int(state.grid_off_mode)
         fields = {
             "device": dev.name,

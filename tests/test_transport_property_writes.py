@@ -248,3 +248,45 @@ def test_reconciliation_paths_skip_mqtt_devices_with_explicit_reason(caplog):
     assert len(skips) == 5
     assert all("transport_state_reconciliation_unsupported" in r for r in skips)
     assert dev._service.published == []
+
+
+def test_device_modes_never_write_grid_off_mode_beside_the_runtime_owner():
+    """Two writers flipped gridOffMode between config and runtime every reconcile."""
+
+    dev = SimpleNamespace(
+        name="WR1",
+        ip="10.0.0.1",
+        sn="SN1",
+        session=Mock(),
+        smart_mode=None,
+        grid_off_mode=1,
+    )
+    state = SimpleNamespace(smart_mode=1, grid_off_mode=2, ac_mode=2)
+    controller = EMSController(devices=[], shelly=None, sleep_enabled=False)
+    with _with_gates(), patch(
+        "ems.controller.write_device_properties"
+    ) as write, patch(
+        "ems.controller.firmware_recovery_or_ac_charge_active", lambda state: False
+    ):
+        controller.apply_device_modes(dev, state)
+    write.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "grid_off_mode, mode", [(None, "off"), (0, "standard"), (1, "eco"), (2, "off")]
+)
+def test_a_legacy_grid_off_mode_seeds_the_runtime_offgrid_mode(grid_off_mode, mode):
+    assert cfg.offgrid_socket_mode_for(grid_off_mode) == mode
+
+
+def test_a_legacy_grid_off_mode_that_no_longer_applies_is_named_once(caplog):
+    controller = EMSController(devices=[], shelly=None, sleep_enabled=False)
+    dev = SimpleNamespace(name="WR1", grid_off_mode=1)
+
+    with caplog.at_level(logging.WARNING):
+        controller.warn_legacy_grid_off_mode(dev, "off")
+        controller.warn_legacy_grid_off_mode(dev, "off")
+
+    warnings = [r for r in caplog.messages if "legacy_grid_off_mode_ignored" in r]
+    assert len(warnings) == 1
+    assert "offgrid eco" in warnings[0]

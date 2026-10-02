@@ -1679,6 +1679,15 @@ OFFGRID_SOCKET_MODES = {
     "eco": 1,
     "off": 2
 }
+
+
+def offgrid_socket_mode_for(grid_off_mode):
+    """Runtime offgrid mode seeded from a legacy ``devices[].grid_off_mode``."""
+
+    for name, value in OFFGRID_SOCKET_MODES.items():
+        if safe_int(grid_off_mode, -1) == value and grid_off_mode is not None:
+            return name
+    return "off"
 ZENDURE_CONFIG = []
 ZENDURE_MQTT_CONFIG = {}
 SHELLY_IP = ""
