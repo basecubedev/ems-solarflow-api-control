@@ -600,6 +600,32 @@ def test_a_same_origin_setup_still_works(tmp_path, monkeypatch):
         srv.server_close()
 
 
+def test_an_unreadable_config_never_offers_first_password_setup(tmp_path, monkeypatch):
+    """The config may name another password file; setup would hand it out."""
+
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.json").write_text("{ not json")
+
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(f"{base}/api/admin/auth/status")
+        assert status == 200
+        assert payload["recovery_required"] is True
+        assert payload["requires_initial_password"] is False
+        assert payload["error"] == "config_unreadable"
+
+        status, _, payload = _request(
+            f"{base}/api/admin/auth/setup",
+            method="POST",
+            body={"password": "attacker-pass", "confirm_password": "attacker-pass"},
+        )
+        assert status != 200
+        assert not (tmp_path / "config" / "dashboard-auth.json").exists()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
 
 @pytest.mark.parametrize(
     "origin, headers",

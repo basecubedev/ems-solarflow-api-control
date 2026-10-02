@@ -8825,6 +8825,7 @@ def test_reconnect_and_auth_events_start_exactly_one_resume_each(tmp_path):
             source("async function performAuthenticatedWorkflowResume"),
             source("async function resumeAuthenticatedWorkflows"),
             source("function showAuthenticatedApp"),
+            source("function renderAuthRecoveryCopy"),
             source("function applyAuthStatus"),
             source("async function refreshAuthStatus"),
         )

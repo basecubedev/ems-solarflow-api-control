@@ -20439,6 +20439,8 @@ const authEls = {
   createBlock: document.getElementById("auth-create"),
   loginBlock: document.getElementById("auth-login"),
   recoveryBlock: document.getElementById("auth-recovery"),
+  recoveryTitle: document.getElementById("auth-recovery-title"),
+  recoveryCopy: document.getElementById("auth-recovery-copy"),
   recoveryRetry: document.getElementById("auth-recovery-retry"),
   createForm: document.getElementById("auth-create-form"),
   createPassword: document.getElementById("auth-create-password"),
@@ -20485,6 +20487,18 @@ function authMessage(data) {
 
 // Show the auth gate (create, login, or recovery) and hide every workspace
 // surface so no setup/maintenance panel is reachable before authentication.
+function renderAuthRecoveryCopy(status) {
+  if (!status || !status.recovery_required) return;
+  if (authEls.recoveryTitle) {
+    authEls.recoveryTitle.textContent = status.error === "config_unreadable"
+      ? "Config file needs repair"
+      : "Password file needs repair";
+  }
+  if (authEls.recoveryCopy && typeof status.message === "string" && status.message) {
+    authEls.recoveryCopy.textContent = `${status.message} Then reload this page.`;
+  }
+}
+
 function showAuthView(mode) {
   workspaceRevealed = false;
   if (startEls.gate) startEls.gate.hidden = true;
@@ -20574,6 +20588,7 @@ function applyAuthStatus(status) {
   authState.requiresInitialPassword = Boolean(status.requires_initial_password);
   authState.recoveryRequired = Boolean(status.recovery_required);
   authState.csrfToken = status.csrf_token || null;
+  renderAuthRecoveryCopy(status);
   if (authState.authenticated) {
     return showAuthenticatedApp();
   }

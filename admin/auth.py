@@ -37,6 +37,12 @@ AUTH_FILE_INVALID_MESSAGE = (
     "Repair or remove config/dashboard-auth.json on the EMS host."
 )
 
+CONFIG_UNREADABLE_ERROR = "config_unreadable"
+CONFIG_UNREADABLE_MESSAGE = (
+    "config/config.json cannot be read, so the Admin Console cannot tell where "
+    "the password file is. Repair config/config.json on the EMS host."
+)
+
 SOURCE_DEFAULT_MISSING_CONFIG = "default_missing_config"
 SOURCE_CONFIG_DASHBOARD_AUTH_FILE = "config_dashboard_auth_file"
 SOURCE_DEFAULT_CONFIG_PARSE_FAILED = "default_config_parse_failed"
@@ -165,6 +171,15 @@ def admin_auth_status(*, base_dir=None):
             message=AUTH_FILE_INVALID_MESSAGE,
         )
     if record is None:
+        if paths.source == SOURCE_DEFAULT_CONFIG_PARSE_FAILED:
+            # The config may name another password file; setup would hand it out.
+            return AdminAuthStatus(
+                configured=True,
+                valid=False,
+                recovery_required=True,
+                error=CONFIG_UNREADABLE_ERROR,
+                message=CONFIG_UNREADABLE_MESSAGE,
+            )
         return AdminAuthStatus(configured=False, valid=False, recovery_required=False)
     return AdminAuthStatus(configured=True, valid=True, recovery_required=False)
 
