@@ -2692,6 +2692,24 @@ def safe_bool(value, default=False):
     return default
 
 
+def device_power_ceiling(value):
+    """A device's own watt ceiling, or ``MAX_DEVICE_POWER`` when it has none.
+
+    Only a finite positive number is a ceiling; anything else would disable
+    the per-device backstop instead of setting one.
+    """
+
+    if isinstance(value, bool):
+        return MAX_DEVICE_POWER
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return MAX_DEVICE_POWER
+    if not math.isfinite(number) or number <= 0:
+        return MAX_DEVICE_POWER
+    return int(number) if number.is_integer() else number
+
+
 def safe_soc_limit(value):
     """A managed SoC bound in whole percent, or 0 (unmanaged) when it is not one."""
 

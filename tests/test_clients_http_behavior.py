@@ -1425,3 +1425,45 @@ def test_an_error_reply_is_a_failed_read_not_zero_telemetry(response):
 
     assert zendure.fetch() is None
     assert zendure.read_health.consecutive_failures == 1
+
+
+@pytest.mark.parametrize(
+    "max_power", ["many", -1, float("nan"), float("inf"), 0, None, True, 10**400]
+)
+def test_an_invalid_device_maximum_falls_back_to_the_system_ceiling(
+    monkeypatch, max_power
+):
+    from ems import config as cfg
+
+    monkeypatch.setattr(cfg, "MAX_DEVICE_POWER", 800)
+    zendure = ZendureClient(
+        "WR1",
+        "192.0.2.10",
+        "SN",
+        None,
+        min_soc=10,
+        max_soc=100,
+        smart_mode=1,
+        grid_off_mode=None,
+        max_power=max_power,
+    )
+    assert zendure.max_power == 800
+
+
+@pytest.mark.parametrize("max_power, expected", [("600", 600), (600.0, 600), ("650.5", 650.5)])
+def test_a_numeric_device_maximum_is_the_device_ceiling(monkeypatch, max_power, expected):
+    from ems import config as cfg
+
+    monkeypatch.setattr(cfg, "MAX_DEVICE_POWER", 2400)
+    zendure = ZendureClient(
+        "WR1",
+        "192.0.2.10",
+        "SN",
+        None,
+        min_soc=10,
+        max_soc=100,
+        smart_mode=1,
+        grid_off_mode=None,
+        max_power=max_power,
+    )
+    assert zendure.max_power == expected
