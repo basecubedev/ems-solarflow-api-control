@@ -12,7 +12,13 @@ import os
 
 from admin.auth import install_dir_available
 from admin.install_context import detect_install_context
-from dashboard.https import _resolve_path, coerce_bool, ensure_ssl_context
+from dashboard.https import (  # noqa: F401 - re-exported for admin.__main__
+    HANDSHAKE_TIMEOUT_SECONDS,
+    _resolve_path,
+    coerce_bool,
+    ensure_ssl_context,
+    wrap_listening_socket,
+)
 
 DEFAULT_ADMIN_SSL_CERT_FILE = os.path.join("config", "admin.crt")
 DEFAULT_ADMIN_SSL_KEY_FILE = os.path.join("config", "admin.key")

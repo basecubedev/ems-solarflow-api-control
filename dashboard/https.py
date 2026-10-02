@@ -71,6 +71,22 @@ def ensure_ssl_context(
     return context
 
 
+HANDSHAKE_TIMEOUT_SECONDS = 30
+
+
+def wrap_listening_socket(context, sock):
+    """TLS-wrap a listening socket without handshaking inside ``accept()``.
+
+    With the default ``do_handshake_on_connect=True`` the handshake runs in the
+    one thread that accepts connections, with no timeout: a single client that
+    connects and never sends a ClientHello stalls every other HTTPS client.
+    Deferred, the handshake happens on the first read in the request thread,
+    bounded by the handler's ``timeout``.
+    """
+
+    return context.wrap_socket(sock, server_side=True, do_handshake_on_connect=False)
+
+
 def ensure_dashboard_ssl_context(config, base_dir):
     return ensure_ssl_context(
         config,

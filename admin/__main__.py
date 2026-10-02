@@ -17,6 +17,7 @@ from admin.https import (
     DEFAULT_ADMIN_SSL_CERT_FILE,
     DEFAULT_ADMIN_SSL_KEY_FILE,
     ensure_admin_ssl_context,
+    wrap_listening_socket,
 )
 from admin.releases import default_admin_data_dir
 from admin.server import (
@@ -155,8 +156,8 @@ def main(argv=None):
                     "ssl_auto_generate": args.https_auto_generate,
                 }
             )
-            https_server.socket = context.wrap_socket(
-                https_server.socket, server_side=True
+            https_server.socket = wrap_listening_socket(
+                context, https_server.socket
             )
         except Exception as exc:
             # HTTPS was explicitly requested and failed: do not pretend it is up.

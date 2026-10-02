@@ -20,6 +20,7 @@ from dashboard.auth import (
     resolve_auth_path,
     verify_password_file,
 )
+from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS, wrap_listening_socket
 from dashboard.runtime_write import (
     RuntimeWriteError,
     apply_device_update,
@@ -672,6 +673,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
 
 class DashboardRequestHandler(BaseHTTPRequestHandler):
     server_version = "EMSDashboard/1.0"
+    timeout = HANDSHAKE_TIMEOUT_SECONDS
 
     def end_headers(self):
         if not getattr(self, "_security_headers_sent", False):
@@ -1920,7 +1922,7 @@ def start_dashboard_server(
             },
             base_dir or BASE_DIR,
         )
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        server.socket = wrap_listening_socket(context, server.socket)
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

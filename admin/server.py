@@ -249,6 +249,7 @@ from admin.system_build import (
     is_development_build_tag,
 )
 from dashboard.auth import LoginRateLimiter, SessionStore
+from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS
 from dashboard.static_files import build_static_asset_index, static_asset_key
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
@@ -1387,6 +1388,7 @@ class AdminServer(ThreadingHTTPServer):
 
 class AdminHandler(BaseHTTPRequestHandler):
     server_version = "AdminDiscovery/1.0"
+    timeout = HANDSHAKE_TIMEOUT_SECONDS
 
     def _sanitize_external_mqtt_payload(self, payload):
         """Apply the installed-config-aware browser/export MQTT boundary."""

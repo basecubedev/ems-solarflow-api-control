@@ -153,3 +153,49 @@ def test_generic_ssl_context_error_mentions_service_label(tmp_path):
             common_name="EMS Admin Console",
             service_label="admin",
         )
+
+
+def test_an_idle_connection_does_not_stall_other_https_clients(tmp_path):
+    """Interleaving: client A connects and sends nothing; client B then asks."""
+
+    import http.server
+    import socket
+    import threading
+
+    from dashboard.https import generate_self_signed_certificate, wrap_listening_socket
+
+    cert, key = tmp_path / "c.pem", tmp_path / "k.pem"
+    generate_self_signed_certificate(str(cert), str(key), host="127.0.0.1")
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        timeout = 5
+
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(str(cert), str(key))
+    server.socket = wrap_listening_socket(context, server.socket)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    idle = socket.create_connection(("127.0.0.1", port))
+    try:
+        client = ssl.create_default_context()
+        client.minimum_version = ssl.TLSVersion.TLSv1_2
+        client.check_hostname = False
+        client.verify_mode = ssl.CERT_NONE
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as raw:
+            with client.wrap_socket(raw) as tls:
+                tls.sendall(b"GET / HTTP/1.0\r\n\r\n")
+                assert b"200" in tls.recv(64)
+    finally:
+        idle.close()
+        server.shutdown()
+        server.server_close()
