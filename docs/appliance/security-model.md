@@ -244,7 +244,9 @@ cannot regress silently.
 | Session cookie | `HttpOnly`, `SameSite=Strict`, `Path=/`. The `Secure` attribute is set only when a reverse proxy in front of it terminates TLS — the appliance never does |
 | CSRF | `X-Appliance-CSRF` must match the session token on every mutation, and the `Host` must name this appliance; a foreign `Origin` is refused |
 | CSRF before a session exists | Enrolment and login hold no token, so the `Host` and `Origin` halves apply to them on their own. Without that, a page opened anywhere on the LAN could claim the first password during the first-start window, or spend the operator's login attempts against their own address |
-| Rate limiting | 5 failures per source address per 5 minutes, then `429` |
+| Rate limiting | 5 failed password checks per client address per 5 minutes, then `429`. An IPv6 address also counts toward its /64, which allows 20: a host chooses its own addresses inside its /64, so the address alone bounded nothing, while every host on a SLAAC network shares that /64 and every link-local client shares `fe80::/64` — five typos lock out one device, not the network. An IPv4 client, also one reaching the dual-stack listener as `::ffff:a.b.c.d`, counts by its address only. A sign-in or password change that goes through clears its own address, never the /64; a lockout held by the /64 alone says so and names the appliance's IPv4 address as the way in. The current-password check of a password change counts against the same budget, and a wrong current password, or a change refused by the rate limit, as busy or with the agent unreachable, is audited like a sign-in. A change audited with `agent_unavailable` has an unknown outcome: the agent may have stored the new password before its answer was lost. The window runs on the monotonic clock, so a wall-clock step neither extends nor ends a lockout. The counters live in the web process; restarting `ems-appliance-web` clears them |
+| Ceiling across sources | none. One dual-stack host holds four sources (IPv4, global, unique-local and link-local IPv6); a ceiling it could fill on its own would keep the operator out with only the physical console left, and would not protect the password anyway, because Admin and the dashboard check the same one per address |
+| Concurrent password checks | at most two at once, sign-ins and the current-password check of a password change together. Each is a PBKDF2 derivation in the root agent; a further one is refused at once with `503 login_busy` and "try again in a moment", not queued, and not counted against its source. A busy refusal costs its source nothing, so a client holding many addresses — dozens of IPv4 addresses claimed on the LAN, fewer the slower each check — can keep both slots full and every sign-in busy, the IPv4 way out included; the physical console stays the way in. Each refusal is audited with the reason `busy` |
 | Expiration | idle timeout plus an absolute maximum lifetime |
 | Logout | destroys the session |
 | Password reset | rotates a generation marker, invalidating **all** sessions |
@@ -310,7 +312,10 @@ so it reports an event instead of appending to the file:
  "result": "failure", "reason": "invalid_password"}
 ```
 
-`event`, `result` and `reason` are each validated against a fixed set. There is
+`event`, `result` and `reason` are each validated against a fixed set, and a
+test holds the web service to the same sets: a reason the agent refused was
+counted as an unrecorded event until the web service restarted. A failure code
+the sets do not name is recorded without a reason. There is
 no free-form action name, no dictionary, no path and no way to pass a password,
 a session cookie, a CSRF token or a public key. The operation does not take the
 host mutation lock, so a login during a running Admin install is still audited.
