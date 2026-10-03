@@ -164,10 +164,9 @@ you asked for — `docker stop`, `docker compose down`, `systemctl stop`, Ctrl-C
 is usually a restart, and resetting every device for the length of an update
 would drop the house's cover and throw away a charge that then has to re-confirm
 its entry window. Discharging devices keep their `outputLimit` regardless;
-charging devices now keep theirs too.
-
-The EMS says so when it happens: `event=ac_charge_kept_across_stop` names the
-signal that stopped it and the device it left charging.
+charging devices now keep theirs too. The EMS says so when it happens:
+`event=ac_charge_kept_across_stop` names the signal that stopped it and the
+device it left charging.
 
 A **charging** device therefore keeps drawing while the EMS is away. That is
 bounded — the charge ends at the device's configured maximum SoC — but it still
@@ -177,10 +176,11 @@ after an abrupt stop, check the device and stop it in the Zendure app or with
 `emsctl.py device WR1 ac-mode output`.
 
 The EMS **does** return a charging device when it stops by itself: `--once`,
-`--max-cycles`, `--duration`, or an unhandled error. Nothing is coming back to
-supervise the charge in those cases. An unstoppable kill — power loss,
-`kill -9`, a container removed rather than stopped — writes nothing either way,
-and nothing in the device times the command out.
+`--max-cycles`, `--duration` or an error that ends it. In normal operation a
+failing cycle (`diagnose --control` names it) does not end the EMS: it stops
+where it raised, what it wrote before stands, and a charge it no longer reaches
+runs on, up to the maximum SoC. An unstoppable kill (power loss, `kill -9`, a
+container removed, not stopped) writes nothing; nothing times the command out.
 
 The same applies to a device that drops off the network mid-charge: the EMS
 cannot write to a device it cannot reach, so that one keeps charging until it is

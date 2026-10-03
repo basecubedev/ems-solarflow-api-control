@@ -99,6 +99,9 @@ def finite_grid_load(value):
     return 0.0
 
 
+CYCLE_FAILURE_WARN_EVERY = 12
+
+
 class EMSController:
     """Main EMS control loop."""
 
@@ -119,6 +122,7 @@ class EMSController:
         self.shelly = shelly
         self.ha = ha
         self.sleep_enabled = sleep_enabled
+        self.cycle_failures = 0
         self.runtime_state = runtime_state
         self.dashboard_store = dashboard_store
         self.zendure_mqtt_runtime = zendure_mqtt_runtime
@@ -4686,6 +4690,50 @@ class EMSController:
             writer.enqueue(lines)
         except Exception as e:
             log_event(logging.WARNING, "influx_publish_error", error=e)
+
+    def run_guarded(self):
+        """Run one cycle and survive it raising.
+
+        An exception in ``run_once`` used to end the EMS process, and the
+        shutdown returned a charging inverter on the way out. As the owner
+        decided (K8 in docs/developer/review-coverage.md), the cycle now stops
+        where it raised: nothing after that point is written, what came before
+        it stands, and the next cycle tries again after the loop interval. A
+        cycle that fails at the same point every time repeats the writes before
+        it; a device it no longer reaches holds its last limit, and a charging
+        one keeps charging, up to its maximum SoC. The first failure is logged
+        with its traceback, then one warning a minute while it lasts, and the
+        recovery once.
+        """
+
+        try:
+            self.run_once()
+        except Exception as exc:
+            self.cycle_failures += 1
+            if self.cycle_failures == 1:
+                logging.error(
+                    "event=control_cycle_failed consecutive=1 error=%s", exc, exc_info=True
+                )
+            elif self.cycle_failures % CYCLE_FAILURE_WARN_EVERY == 0:
+                log_event(
+                    logging.WARNING,
+                    "control_cycle_failed",
+                    consecutive=self.cycle_failures,
+                    error=exc,
+                )
+            if self.sleep_enabled:
+                time.sleep(self._loop_interval_after_failure())
+            return False
+        if self.cycle_failures:
+            log_event(logging.INFO, "control_cycle_recovered", failed_cycles=self.cycle_failures)
+            self.cycle_failures = 0
+        return True
+
+    def _loop_interval_after_failure(self):
+        try:
+            return self.runtime_system_int("loop_interval", cfg.LOOP_INTERVAL, minimum=1)
+        except Exception:
+            return max(1, int(cfg.LOOP_INTERVAL))
 
     def run_once(self):
         """Execute one EMS cycle."""

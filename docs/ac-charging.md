@@ -229,9 +229,10 @@ extra gate would leave hardware drawing from the grid when that gate closed.
 A stop you asked for leaves a running charge alone: an update or a restart is
 meant to preserve the last state, not reset it. The EMS does return a charging
 device when it stops by *itself* — `--once`, `--max-cycles`, `--duration`, an
-unhandled error — because nothing is coming back to supervise it. Either way the
-charge is bounded by the device's own maximum SoC. See
-[user/safety.md](user/safety.md).
+unhandled error — because nothing is coming back to supervise it. In normal
+operation a failing control cycle is not such a stop: the EMS keeps running, and
+a charge the cycle no longer reaches runs on. Either way the charge is bounded
+by the device's own maximum SoC. See [user/safety.md](user/safety.md).
 
 **While the regulator charges a device, it owns that device's AC direction.**
 Every cycle each device gets a default claim of `ac_output`, and the state

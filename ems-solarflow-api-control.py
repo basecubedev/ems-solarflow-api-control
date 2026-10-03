@@ -521,9 +521,13 @@ def main():
     start_time = time.time()
     cycles = 0
 
+    bounded = bool(args.once or args.max_cycles or args.duration)
     try:
         while True:
-            ems.run_once()
+            if bounded:
+                ems.run_once()
+            else:
+                ems.run_guarded()
             cycles += 1
 
             # Self-heal: re-attempt broker connections that failed at boot.
