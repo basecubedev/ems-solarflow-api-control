@@ -27,6 +27,7 @@ services:
       EMS_ADMIN_DATA_DIR: "${EMS_ADMIN_DATA_DIR}"
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
+      EMS_TIMEZONE: "${TZ:-}"
     volumes:
       - "${EMS_INSTALL_DIR}:${EMS_INSTALL_DIR}"
       - "${EMS_ADMIN_DATA_DIR}:${EMS_ADMIN_DATA_DIR}"

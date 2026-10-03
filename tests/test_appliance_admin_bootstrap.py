@@ -435,6 +435,38 @@ def test_the_shipped_installer_is_never_asked_to_overwrite_or_to_start(tmp_path,
     assert recorded["kwargs"]["env"]["PGID"] == "1000"
 
 
+def test_the_installer_gets_the_zone_chosen_since_the_agent_started(tmp_path, monkeypatch):
+    """The documented flow: set the zone, then install the Admin Console.
+
+    The agent loads its configuration once, so the zone it was started with is
+    stale the moment the operator changes it; the installer bakes it for good.
+    """
+
+    monkeypatch.setenv("EMS_APPLIANCE_LIBDIR", str(SHIPPED_INSTALLER.parent))
+    services = build_test_services(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "system.timezone.plan", "timezone": "Europe/Berlin"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    assert services.config.timezone == "UTC"
+    recorded = {}
+
+    def fake_run(command, **kwargs):
+        recorded["env"] = kwargs["env"]
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    DeploymentBootstrap(services.paths, services.config, runner=fake_run).run(
+        tag="v1.1.0", uid=1000, gid=1000
+    )
+
+    assert recorded["env"]["TZ"] == "Europe/Berlin"
+
+
 def test_privileges_are_dropped_to_the_deployment_owner_when_there_are_any(
     tmp_path, monkeypatch
 ):

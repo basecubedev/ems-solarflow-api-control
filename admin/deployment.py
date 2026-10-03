@@ -1360,10 +1360,15 @@ def _sanitize_image_inspect(entry, image_ref):
     }
 
 
+def _env_text(path):
+    text = Path(path).read_text(encoding="utf-8")
+    return text[1:] if text.startswith("\ufeff") else text
+
+
 def _read_env_file(path):
     values = {}
     try:
-        lines = Path(path).read_text(encoding="utf-8").splitlines()
+        lines = _env_text(path).split("\n")
     except OSError:
         return values
     for line in lines:
@@ -1374,6 +1379,91 @@ def _read_env_file(path):
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
             values[key] = value
     return values
+
+
+ADMIN_ZONE_MARK = "# written by the Admin Console"
+_ENV_ZONE_LINE = re.compile(r"[ \t]*(?:export[ \t]+)?TZ[ \t]*[=:]")
+
+
+def _zone_assignment(line):
+    """``(value, admin)`` of one TZ line; an inline comment or a leading ``#`` is no value."""
+
+    rest = line[_ENV_ZONE_LINE.match(line).end():]
+    value = re.sub(r" #.*$", "", rest).strip().strip("\"'").strip()
+    if value.startswith("#"):
+        value = ""
+    return value, rest.rstrip().endswith(ADMIN_ZONE_MARK)
+
+
+_COMPOSE_TZ_KEY = re.compile(
+    r"""^[ \t]*(?:-[ \t]*)?["']?TZ["']?(?:[ \t]*[:=]|[ \t]*$|[ \t]+#.*$)""", re.MULTILINE
+)
+
+
+def _compose_passes_zone(path):
+    """Whether a compose file passes TZ at all; one that is not there says nothing.
+
+    The EMS installers ask the same of a kept compose file, with the same
+    pattern in their own languages; a test holds the three together.
+    """
+
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True
+    return bool(_COMPOSE_TZ_KEY.search(text))
+
+
+def _effective_zone(assignments):
+    return assignments[-1][1] if assignments else ""
+
+
+def _env_zone_assignments(path):
+    """Every TZ assignment in an env file, in order: ``(line, value, admin)``.
+
+    Lines end where Compose ends them, at a newline; a byte order mark before
+    the first is no part of it. ``admin`` marks a line the Admin wrote itself.
+    """
+
+    try:
+        lines = _env_text(path).split("\n")
+    except OSError:
+        return []
+    found = []
+    for line in lines:
+        line = line.rstrip("\r")
+        match = _ENV_ZONE_LINE.match(line)
+        if not match:
+            continue
+        found.append((line, *_zone_assignment(line)))
+    return found
+
+
+def _zone_lines_for(assignments, zone):
+    """The TZ lines an EMS .env keeps: an operator's zone as written, else the Admin's.
+
+    Compose takes the last assignment. When the operator wrote it and it names
+    a value, the operator's TZ lines stay as they are. Otherwise the Admin's
+    zone, when it knows one, replaces them: an empty assignment is no zone
+    anyone chose, and a line the Admin wrote follows the Admin. Without a zone
+    of its own, a value it wrote earlier stays.
+    """
+
+    last = assignments[-1] if assignments else None
+    if last and last[1] and not last[2]:
+        return [line for line, _, admin in assignments if not admin]
+    if _zone_name(zone):
+        return [f"TZ={zone} {ADMIN_ZONE_MARK}"]
+    if last and last[1]:
+        return [last[0]]
+    return []
+
+
+def _zone_name(value):
+    """A time zone name as the installers accept one, and nothing a .env could misread."""
+
+    text = str(value or "")
+    return bool(re.fullmatch(r"[A-Za-z0-9_+/-]+", text) and not text.startswith("/"))
 
 
 def _valid_runtime_identity(puid, pgid):
@@ -2480,7 +2570,8 @@ class DeploymentService:
         # Place the generated config before the installer runs so install-docker.sh
         # keeps it instead of re-running config init.
         self._write_config(config)
-        self._write_deployment_env(puid, pgid)
+        zone_lines = self._deployment_zone_lines()
+        self._write_deployment_env(puid, pgid, zone_lines)
         job.finish_step("workspace")
 
         job.start_step("bootstrap", "Writing docker-compose.yml (no start)…")
@@ -2494,7 +2585,17 @@ class DeploymentService:
         # The installer keeps an existing config.json; re-assert ours to guarantee
         # the deployment uses the wizard-generated config.
         self._write_config(config)
-        self._write_deployment_env(puid, pgid)
+        decided = _effective_zone([(line, *_zone_assignment(line)) for line in zone_lines])
+        if _effective_zone(_env_zone_assignments(self.workspace_dir / ".env")) != decided:
+            job.log_line(
+                f"TZ in .env stays {decided or 'unset'}, as decided before the installer ran."
+            )
+        self._write_deployment_env(puid, pgid, zone_lines)
+        if not _compose_passes_zone(self.workspace_dir / "docker-compose.yml"):
+            job.log_line(
+                "This release's docker-compose.yml passes no TZ to the containers, so "
+                "they run on UTC whatever .env says; see docs/docker.md#time-zone."
+            )
         job.finish_step("bootstrap")
 
         for image in images:
@@ -2555,24 +2656,47 @@ class DeploymentService:
     def _reset_for_overwrite(self):
         # Drop generated scaffold so the installer regenerates it for the current
         # tag/analytics; the generated config is re-placed afterwards.
+        zone_lines = [line for line, _, _ in _env_zone_assignments(self.workspace_dir / ".env")]
         for name in ("docker-compose.yml", ".env"):
             try:
                 (self.workspace_dir / name).unlink()
             except FileNotFoundError:
                 pass
+        if zone_lines:
+            _atomic_write(
+                self.workspace_dir / ".env",
+                "".join(line + "\n" for line in zone_lines).encode(),
+            )
 
     def _write_config(self, config):
         # Copy the exact generated bytes to preserve key order and formatting.
         source = Path(config["path"])
         _atomic_write(self.workspace_dir / "config" / "config.json", source.read_bytes())
 
-    def _write_deployment_env(self, puid, pgid):
+    def _deployment_zone_lines(self):
+        """The TZ lines this prepare writes, decided once before the installer runs.
+
+        The release installer rewrites .env with a zone name of its own choosing
+        and without the Admin's mark; deciding again afterwards read its line as
+        an operator's and kept it for good.
+        """
+
+        zone = str(self._runtime_env.get("EMS_TIMEZONE") or "").strip()
+        return _zone_lines_for(_env_zone_assignments(self.workspace_dir / ".env"), zone)
+
+    def _write_deployment_env(self, puid, pgid, zone_lines):
         path = self.workspace_dir / ".env"
         values = _read_env_file(path)
         values["PUID"] = str(puid)
         values["PGID"] = str(pgid)
-        text = "".join(f"{key}={value}\n" for key, value in values.items())
-        _atomic_write(path, text.encode("utf-8"))
+        values.setdefault("TZ", None)
+        lines = []
+        for key, value in values.items():
+            if key == "TZ":
+                lines.extend(zone_lines)
+            else:
+                lines.append(f"{key}={value}")
+        _atomic_write(path, "".join(line + "\n" for line in lines).encode("utf-8"))
 
     def _write_marker(self, release, config, images, puid, pgid, *, workflow=None):
         marker = {

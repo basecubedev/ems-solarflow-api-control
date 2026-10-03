@@ -44,6 +44,7 @@ services:
       EMS_ADMIN_DATA_DIR: "${EMS_ADMIN_DATA_DIR}"
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
+      EMS_TIMEZONE: "${TZ:-}"
       DOCKER_CONFIG: /tmp/docker
       # Non-secret Admin identity for the Admin Console self-update flow. The
       # target image is always derived server-side from a trusted release tag.

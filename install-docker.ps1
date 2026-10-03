@@ -118,6 +118,7 @@ services:
     environment:
       PUID: "${PUID:-}"
       PGID: "${PGID:-}"
+      TZ: "${TZ:-UTC}"
       EMS_IN_CONTAINER: "1"
     env_file:
       - path: ./config/influxdb.env
@@ -156,20 +157,97 @@ function Write-Compose {
     Write-Info "Wrote docker-compose.yml (image tag: $Tag)."
 }
 
+function Get-EnvFileZone {
+    $value = ""
+    if (Test-Path .env) {
+        foreach ($line in Get-Content -Encoding UTF8 .env) {
+            if ($line -cmatch '^\s*(export\s+)?TZ\s*[=:]\s*(.*)$') {
+                $value = ($Matches[2] -replace ' #.*$', '').Trim().Trim('"').Trim("'")
+            }
+        }
+    }
+    return $value
+}
+
+function Resolve-TimeZone {
+    $candidates = @($env:TZ, (Get-EnvFileZone))
+    try {
+        $local = [System.TimeZoneInfo]::Local.Id
+        $convert = [System.TimeZoneInfo].GetMethod(
+            "TryConvertWindowsIdToIanaId", [type[]]@([string], [string].MakeByRefType()))
+        $iana = $null
+        if ($convert -and [System.TimeZoneInfo]::TryConvertWindowsIdToIanaId($local, [ref]$iana)) {
+            $candidates += $iana
+        }
+        $candidates += $local
+    } catch { }
+    foreach ($candidate in $candidates) {
+        if ($candidate -and $candidate -cmatch '^(UTC|[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)+)$') {
+            return $candidate
+        }
+    }
+    return ""
+}
+
+function Write-Env {
+    # Windows / Docker Desktop does not use PUID/PGID, so .env holds the time
+    # zone, and the Analytics profile once Enable-AnalyticsProfile adds it.
+    $zone = Resolve-TimeZone
+    if ($env:TZ -and $env:TZ -cne $zone) {
+        Write-Warning "TZ=$($env:TZ) does not name a time zone; it is not used."
+    }
+    $kept = Get-EnvFileZone
+    if ($kept -and $kept -cne $zone) {
+        if ($env:TZ -and $env:TZ -ceq $zone) {
+            Write-Warning "TZ=$($env:TZ) from this shell replaces TZ=$kept in .env."
+        } else {
+            Write-Warning "TZ=$kept in .env is not a zone name this installer writes; it is replaced."
+        }
+    }
+    if (-not $zone) {
+        Write-Warning "This Windows time zone could not be translated; the containers use UTC until TZ is set in .env, for example TZ=Europe/Berlin."
+    }
+    $script:Zone = $zone
+    if ($DryRun) { Write-Info "DRY-RUN: write .env (TZ=$(if ($zone) { $zone } else { 'unset' }))"; return }
+    $existing = @()
+    if (Test-Path .env) { $existing = @(Get-Content -Encoding UTF8 .env) }
+    $kept = @($existing | Where-Object { $_ -cnotmatch '^\s*(export\s+)?TZ\s*[=:]' })
+    $lines = $kept
+    if ($zone) { $lines = @("TZ=$zone") + $kept }
+    if (($lines -join "`n") -cne ($existing -join "`n")) {
+        [System.IO.File]::WriteAllLines((Join-Path $PWD.ProviderPath ".env"), [string[]]$lines)
+    }
+    if (-not (Select-String -CaseSensitive -Path docker-compose.yml -Pattern '^\s*(-\s*)?["'']?TZ["'']?(\s*[:=]|\s*$|\s+#.*$)' -Quiet)) {
+        Write-Warning "The kept docker-compose.yml passes no TZ to the containers, so they run on UTC; see docs/docker.md#time-zone."
+    } elseif ($zone) {
+        Write-Info "docker-compose.yml passes TZ; the containers that take it run in the time zone $zone (TZ in .env)."
+    }
+}
+
 function Enable-AnalyticsProfile {
     # Default plain `docker compose up -d` to the Analytics profile. Called only
     # after config/influxdb.env exists so the bundled InfluxDB service (required
     # env_file) is not pulled into scope before its secret file is generated.
-    # Windows / Docker Desktop does not use PUID/PGID, so .env holds only this.
-    if ($DryRun) { Write-Info "DRY-RUN: write .env (COMPOSE_PROFILES=with-analytics)"; return }
-    Set-Content -Path .env -Value "COMPOSE_PROFILES=with-analytics" -Encoding ascii
+    if ($DryRun) { Write-Info "DRY-RUN: set COMPOSE_PROFILES=with-analytics in .env"; return }
+    $lines = @()
+    if (Test-Path .env) {
+        $lines = @(Get-Content -Encoding UTF8 .env | Where-Object { $_ -cnotmatch '^\s*COMPOSE_PROFILES\s*=' })
+    }
+    $lines += "COMPOSE_PROFILES=with-analytics"
+    [System.IO.File]::WriteAllLines((Join-Path $PWD.ProviderPath ".env"), [string[]]$lines)
 }
 
 function Invoke-Compose {
     param([Parameter(ValueFromRemainingArguments = $true)]$ComposeArgs)
     if ($DryRun) { Write-Info "DRY-RUN: docker compose $($ComposeArgs -join ' ')"; return }
-    & docker compose @ComposeArgs
-    if ($LASTEXITCODE -ne 0) { Write-Error "docker compose $($ComposeArgs -join ' ') failed." }
+    $previous = $env:TZ
+    if ($script:Zone) { $env:TZ = $script:Zone } else { Remove-Item Env:TZ -ErrorAction SilentlyContinue }
+    try {
+        & docker compose @ComposeArgs
+        if ($LASTEXITCODE -ne 0) { Write-Error "docker compose $($ComposeArgs -join ' ') failed." }
+    } finally {
+        if ($null -eq $previous) { Remove-Item Env:TZ -ErrorAction SilentlyContinue } else { $env:TZ = $previous }
+    }
 }
 
 Test-Docker
@@ -180,6 +258,7 @@ if ($Analytics) {
 }
 
 Write-Compose
+Write-Env
 
 if ($Analytics) {
     if ((Test-Path config/config.json) -and (-not $Force)) {

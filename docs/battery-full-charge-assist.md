@@ -80,8 +80,9 @@ firmware-reported Max-SoC event.
 `assist_window_days` allows EMS to start early before the due date when current
 SOC is already at or above `assist_start_soc`.
 
-`force_time` starts assist on or after the due day at the configured local time,
-regardless of current SOC, unless firmware already reports `socLimit == 1`.
+`force_time` starts assist on or after the due day at the configured local time
+(in Docker, the container's [time zone](docker.md#time-zone)), regardless of
+current SOC, unless firmware already reports `socLimit == 1`.
 
 `enable_ac_charge_mode` controls whether active assist also requests AC input
 mode. The AC mode transition uses the runtime AC intent foundation; there is no

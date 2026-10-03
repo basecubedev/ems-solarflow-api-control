@@ -355,7 +355,8 @@ device is due soon and current SOC is at or above
 `battery_full_charge_assist.assist_start_soc`. On the due day,
 `battery_full_charge_assist.force_time` starts assist at or after the configured
 local `HH:MM` time regardless of current SOC, unless firmware already reports
-`socLimit == 1`.
+`socLimit == 1`. Local is the zone the EMS runs in; in Docker that is `TZ` (see
+[Time zone](../docker.md#time-zone)).
 
 `battery_full_charge_assist.enable_ac_charge_mode` controls whether active
 assist requests AC input mode through the existing runtime AC mode intent
@@ -547,7 +548,9 @@ the `minSoc` target; when the battery is already further above, the target is
 its SoC, up to `winter_min_soc`. A raise is written only once the battery holds
 it.
 
-`winter.adjust_hour` is the hour used for daily winter adjustment.
+`winter.adjust_hour` is the hour used for daily winter adjustment, in the
+zone the EMS runs in; in Docker that is `TZ` (see
+[Time zone](../docker.md#time-zone)).
 
 `winter.ac_charge_power` is the conservative `inputLimit` used only during the
 winter/SOC reconciliation context.

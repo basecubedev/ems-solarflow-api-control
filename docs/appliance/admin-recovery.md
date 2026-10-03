@@ -433,9 +433,9 @@ expiry or delete
 | Admin container is missing | Reinstall the selected Admin version |
 | Container exists but is stopped | Start Admin |
 | Container restarts repeatedly | Review the logs, then reinstall |
-| Compose file is missing | Manual: recreate it with `install-admin-console.sh`. With no Admin container either, the Admin page offers **Install Admin** instead |
+| Compose file is missing | Manual: recreate it with `TZ=<the zone shown under Network → Change the timezone> /usr/lib/ems-appliance-manager/install-admin-console.sh …`, so the Admin keeps the appliance's zone (the host itself runs on UTC). With no Admin container either, the Admin page offers **Install Admin** instead |
 | Admin service is not defined | Manual: add the service with `install-admin-console.sh` |
-| Environment file is missing | Manual: recreate it with `install-admin-console.sh`. Install, Update and Rollback are refused while it is gone, because its hash is a required field of every Admin plan |
+| Environment file is missing | Manual: recreate it with `/usr/lib/ems-appliance-manager/install-admin-console.sh …`; the zone comes from the kept compose file. Install, Update and Rollback are refused while it is gone, because its hash is a required field of every Admin plan |
 | Bind path is missing | Recreate the required empty directory after confirmation |
 | Restart policy does not bring the Admin back after a reboot (`restart_policy`) | Set `restart: unless-stopped` and apply it to the container. See [Restart, start, stop](#restart-start-stop) |
 | Port is occupied | The conflicting process is shown; it is never killed automatically. An Admin on the host network publishes no port, so Docker cannot be asked who owns it — the proof there is that the container runs host-networked and the Admin endpoint answers |

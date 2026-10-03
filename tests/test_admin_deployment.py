@@ -4,6 +4,9 @@
 import itertools
 import json
 import os
+import re
+import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -596,6 +599,269 @@ def test_prepare_prefers_existing_env_identity(tmp_path):
     assert job["result"]["puid"] == 1234
     assert job["result"]["pgid"] == 1235
     assert "KEEP=value\n" in (service.workspace_dir / ".env").read_text(encoding="utf-8")
+
+
+def _env_lines(service):
+    return (service.workspace_dir / ".env").read_text(encoding="utf-8").splitlines()
+
+
+def _admin_zone_line(zone):
+    return f"TZ={zone} {deployment.ADMIN_ZONE_MARK}"
+
+
+def _prepared_with_env(tmp_path, text, *, zone="Europe/Berlin", overwrite=False):
+    service = _service(tmp_path)
+    service._runtime_env = {**service._runtime_env, "EMS_TIMEZONE": zone}
+    service.workspace_dir.mkdir(parents=True)
+    (service.workspace_dir / ".env").write_text(text, encoding="utf-8")
+    _, job = _run_prepare(service, overwrite=overwrite)
+    assert job["status"] == "succeeded", job
+    return service
+
+
+def _zone_lines(service):
+    return [line for line in _env_lines(service) if re.match(r"\s*(export\s+)?TZ\s*[=:]", line)]
+
+
+def test_prepare_records_the_admins_zone_for_a_new_deployment(tmp_path):
+    """The EMS .env is the zone's one source; the Admin only fills it in."""
+
+    service = _service(tmp_path)
+    service._runtime_env = {**service._runtime_env, "EMS_TIMEZONE": "Europe/Berlin"}
+
+    _, job = _run_prepare(service)
+
+    assert job["status"] == "succeeded"
+    assert _zone_lines(service) == [_admin_zone_line("Europe/Berlin")]
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+@pytest.mark.parametrize(
+    "line",
+    [
+        "TZ=Asia/Tokyo",
+        "export TZ=Asia/Tokyo",
+        "TZ = Asia/Tokyo",
+        'TZ="Asia/Tokyo"',
+        "TZ=Asia/Tokyo # mine",
+        "TZ: Asia/Tokyo",
+    ],
+)
+def test_prepare_keeps_the_zone_an_operator_set(tmp_path, overwrite, line):
+    """Compose reads each of these forms; the Admin must keep every one of them."""
+
+    service = _prepared_with_env(tmp_path, line + "\n", overwrite=overwrite)
+
+    assert _zone_lines(service) == [line]
+
+
+def test_prepare_keeps_a_zone_behind_a_byte_order_mark(tmp_path):
+    service = _prepared_with_env(tmp_path, "\ufeffTZ=Asia/Tokyo\nFOO=1\n")
+
+    assert _zone_lines(service) == ["TZ=Asia/Tokyo"]
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+@pytest.mark.parametrize("line", ["TZ=", 'TZ=""', "TZ= # none", "TZ=\t# none", "export TZ=", 'TZ="  "', "TZ=Asia/Tokyo\nTZ="])
+def test_prepare_fills_in_a_zone_the_env_leaves_empty(tmp_path, overwrite, line):
+    """An empty TZ is no zone an operator chose; kept, it ran the EMS on UTC.
+
+    Compose takes the last assignment, so an empty one after a zone leaves
+    none either.
+    """
+
+    service = _prepared_with_env(tmp_path, line + "\n", overwrite=overwrite)
+
+    assert _zone_lines(service) == [_admin_zone_line("Europe/Berlin")]
+
+
+@pytest.mark.parametrize("overwrite", [False, True])
+def test_prepare_replaces_a_zone_it_wrote_itself(tmp_path, overwrite):
+    """A zone the Admin wrote follows the Admin; a UTC fallback was otherwise kept for good."""
+
+    service = _prepared_with_env(tmp_path, _admin_zone_line("UTC") + "\n", overwrite=overwrite)
+
+    assert _zone_lines(service) == [_admin_zone_line("Europe/Berlin")]
+
+
+def test_prepare_keeps_the_zone_it_wrote_when_it_knows_none(tmp_path):
+    service = _prepared_with_env(tmp_path, _admin_zone_line("Europe/Berlin") + "\n", zone="")
+
+    assert _zone_lines(service) == [_admin_zone_line("Europe/Berlin")]
+
+
+def test_prepare_splits_env_lines_where_compose_does(tmp_path):
+    """Only a newline ends a line for Compose; a control character inside one does not."""
+
+    service = _prepared_with_env(tmp_path, "FOO=1\x1cTZ=Asia/Tokyo\n")
+
+    lines = (service.workspace_dir / ".env").read_text(encoding="utf-8").split("\n")
+    assert "TZ=Asia/Tokyo" not in lines
+    assert "FOO=1\x1cTZ=Asia/Tokyo" in lines
+    assert _admin_zone_line("Europe/Berlin") in lines
+
+
+def test_prepare_keeps_the_zone_where_it_was(tmp_path):
+    """A value Compose reads over several lines must not take PUID and PGID into it."""
+
+    service = _prepared_with_env(tmp_path, 'FOO="a\nTZ=Asia/Tokyo"\n')
+
+    lines = _env_lines(service)
+    assert lines.index('TZ=Asia/Tokyo"') < lines.index("PUID=1000")
+
+
+def _with_release_installer(tmp_path, monkeypatch):
+    """The release install-docker.sh rewrites .env; the fake installer never does."""
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for tool, body in (("docker", '[ "$1 $2" = "compose version" ] && echo 2.30.0\nexit 0'), ("timedatectl", "exit 1")):
+        (bin_dir / tool).write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        (bin_dir / tool).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
+    monkeypatch.delenv("TZ", raising=False)
+    service = _service(tmp_path, installer=deployment.BootstrapInstaller())
+    shutil.copy(Path(__file__).resolve().parents[1] / "install-docker.sh", tmp_path / "releases" / "v0.6.0" / "install-docker.sh")
+    return service
+
+
+def test_the_admins_zone_keeps_its_mark_through_the_release_installer(tmp_path, monkeypatch):
+    service = _with_release_installer(tmp_path, monkeypatch)
+    service._runtime_env = {**service._runtime_env, "EMS_TIMEZONE": "UTC"}
+
+    _, job = _run_prepare(service)
+
+    assert job["status"] == "succeeded", job
+    assert _zone_lines(service) == [_admin_zone_line("UTC")]
+    assert not any("passes no TZ" in entry or "stays" in entry for entry in job["log"])
+
+
+def test_a_later_admin_zone_reaches_a_prepared_deployment(tmp_path, monkeypatch):
+    """A UTC fallback written once was otherwise kept for good."""
+
+    service = _with_release_installer(tmp_path, monkeypatch)
+    service._runtime_env = {**service._runtime_env, "EMS_TIMEZONE": "UTC"}
+    _run_prepare(service)
+    service._runtime_env = {**service._runtime_env, "EMS_TIMEZONE": "Europe/Berlin"}
+
+    _, job = _run_prepare(service, overwrite=True)
+
+    assert job["status"] == "succeeded", job
+    assert _zone_lines(service) == [_admin_zone_line("Europe/Berlin")]
+
+
+@pytest.mark.parametrize("line", ["TZ=CET-1CEST,M3.5.0,M10.5.0/3", "TZ=:Asia/Tokyo", "TZ=/usr/share/zoneinfo/Asia/Tokyo"])
+def test_an_operator_zone_glibc_reads_survives_the_release_installer(tmp_path, monkeypatch, line):
+    """The installer accepts zone names only; a POSIX string or a path is no less the operator's."""
+
+    service = _with_release_installer(tmp_path, monkeypatch)
+    service._runtime_env = {**service._runtime_env, "EMS_TIMEZONE": "Europe/Berlin"}
+    service.workspace_dir.mkdir(parents=True)
+    (service.workspace_dir / ".env").write_text(line + "\n", encoding="utf-8")
+
+    _, job = _run_prepare(service)
+
+    assert job["status"] == "succeeded", job
+    assert _zone_lines(service) == [line]
+    assert any(f"TZ in .env stays {line[3:]}, as decided" in entry for entry in job["log"])
+
+
+class _ReleaseBeforeZones:
+    """Writes the compose file a release from before TZ in Compose wrote."""
+
+    def prepare(self, workspace, script_path, analytics=False, tag=None, on_line=None):
+        (Path(workspace) / "docker-compose.yml").write_text(
+            "services:\n  ems:\n    environment:\n      PUID: 1000\n", encoding="utf-8"
+        )
+
+
+_TZ_KEY_FORMS = [
+    ('TZ: "${TZ:-UTC}"', True),
+    ('"TZ": "${TZ:-UTC}"', True),
+    ("'TZ': '${TZ:-UTC}'", True),
+    ("TZ : Europe/Berlin", True),
+    ("TZ:", True),
+    ("- TZ=${TZ:-UTC}", True),
+    ("- 'TZ=${TZ:-UTC}'", True),
+    ('- "TZ=${TZ:-UTC}"', True),
+    ("- TZ", True),
+    ('- "TZ"', True),
+    ("- TZ # from the shell", True),
+    ('- "TZ" # from the shell', True),
+    ("- TZ#x", False),
+    ("tz: Europe/Berlin", False),
+    ("PUID: 1000", False),
+    ("TZX: 1", False),
+    ("- TZX=1", False),
+    ("EMS_TZ: x", False),
+    ("# TZ: Europe/Berlin", False),
+]
+
+
+def _installer_tz_patterns():
+    """The patterns the two EMS installers ask a kept compose file with."""
+
+    root = Path(__file__).resolve().parents[1]
+    shell = (root / "install-docker.sh").read_text(encoding="utf-8")
+    windows = (root / "install-docker.ps1").read_text(encoding="utf-8")
+    shell_pattern = re.search(r"grep -Eq '((?:[^']|'\"'\"')+)' docker-compose\.yml", shell).group(1)
+    windows_pattern = re.search(r"-CaseSensitive [^\n]*-Pattern '((?:[^']|'')+)' -Quiet", windows).group(1)
+    return shell_pattern.replace("'\"'\"'", "'"), windows_pattern.replace("''", "'")
+
+
+@pytest.mark.parametrize(("line", "passes"), _TZ_KEY_FORMS)
+def test_the_admin_and_both_installers_agree_whether_a_compose_file_passes_tz(tmp_path, line, passes):
+    """Three copies of one question in three languages: a copy that drifts
+    tells an operator their containers run on UTC when they do not, or hides
+    that they do."""
+
+    text = f"services:\n  ems:\n    environment:\n      {line}\n"
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text(text, encoding="utf-8")
+    shell_pattern, windows_pattern = _installer_tz_patterns()
+
+    shell = subprocess.run(["grep", "-Eq", shell_pattern, str(compose)]).returncode == 0
+    windows = any(re.search(windows_pattern, row) for row in text.splitlines())
+
+    assert (deployment._compose_passes_zone(compose), shell, windows) == (passes, passes, passes)
+
+
+def test_a_compose_file_that_cannot_be_read_says_nothing_about_the_zone(tmp_path):
+    assert deployment._compose_passes_zone(tmp_path) is True
+    assert deployment._compose_passes_zone(tmp_path / "missing.yml") is True
+
+
+def test_the_zone_of_an_env_file_is_its_last_assignment(tmp_path):
+    """Compose takes the last assignment, so the zone EMS runs in is that one."""
+
+    env = tmp_path / ".env"
+    env.write_text("TZ=Europe/Lisbon\nPUID=1000\nTZ=Asia/Tokyo\n", encoding="utf-8")
+
+    assert deployment._effective_zone(deployment._env_zone_assignments(env)) == "Asia/Tokyo"
+
+
+def test_prepare_says_when_the_release_passes_no_zone_to_its_containers(tmp_path):
+    """A release from before the Compose file carried TZ runs on UTC whatever .env says."""
+
+    service = _service(tmp_path, installer=_ReleaseBeforeZones())
+    service._runtime_env = {**service._runtime_env, "EMS_TIMEZONE": "Europe/Berlin"}
+
+    _, job = _run_prepare(service)
+
+    assert job["status"] == "succeeded", job
+    assert any("passes no TZ" in entry for entry in job["log"])
+
+
+@pytest.mark.parametrize("zone", ["Europe/Berlin\nPUID=0", "../etc", ":/etc/localtime", "/Europe/Berlin", ""])
+def test_prepare_writes_no_zone_that_names_no_zone(tmp_path, zone):
+    service = _service(tmp_path)
+    service._runtime_env = {**service._runtime_env, "EMS_TIMEZONE": zone}
+
+    _, job = _run_prepare(service)
+
+    assert job["status"] == "succeeded"
+    assert _zone_lines(service) == []
+    assert "PUID=0" not in _env_lines(service)
 
 
 def test_prepare_rejects_missing_non_root_runtime_identity(tmp_path):

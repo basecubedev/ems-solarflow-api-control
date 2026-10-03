@@ -2610,7 +2610,8 @@
     });
     return el("div", { class: "inline-form" }, [
       el("p", { class: "section-hint", "data-test": "timezone-current",
-        text: "The EMS runs its control windows in this zone. Currently " + current + "." }),
+        text: "The Admin Console receives this zone when it is installed and passes it " +
+          "to the EMS, whose hour-based control windows open in it. Currently " + current + "." }),
       el("div", { class: "field" }, [
         el("label", { for: "timezone-input", text: "Timezone (IANA name)" }), input
       ]),

@@ -155,6 +155,7 @@ services:
     environment:
       PUID: "${PUID:-}"
       PGID: "${PGID:-}"
+      TZ: "${TZ:-UTC}"
       EMS_IN_CONTAINER: "1"
     env_file:
       - path: ./config/influxdb.env
@@ -185,16 +186,66 @@ YAML
     log "Wrote docker-compose.yml (image tag: $TAG)."
 }
 
+env_file_zone() {
+    bom=$(printf '\357\273\277')
+    LC_ALL=C tr -d '\015' 2>/dev/null < "${1:-/dev/null}" \
+        | LC_ALL=C sed -n -e "1s/^$bom//" -e 's/^[[:space:]]*//' -e 's/^export[[:space:]][[:space:]]*//' \
+            -e 's/^TZ[[:space:]]*[=:][[:space:]]*//p' \
+        | LC_ALL=C sed -e 's/ #.*$//' -e 's/[[:space:]]*$//' \
+            -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
+        | LC_ALL=C sed -n '$p'
+}
+
+resolve_timezone() {
+    host=1
+    if [ -e /.dockerenv ] || [ -e /run/.containerenv ]; then
+        host=0
+    fi
+    for candidate in \
+        "${TZ:-}" \
+        "$(env_file_zone "${1:-}")" \
+        "$( { [ "$host" -eq 1 ] && timedatectl show --property=Timezone --value; } 2>/dev/null || true)" \
+        "$( { [ "$host" -eq 1 ] && head -n 1 /etc/timezone; } 2>/dev/null || true)" \
+        "$( { [ "$host" -eq 1 ] && readlink /etc/localtime; } 2>/dev/null | sed -n 's|^.*/zoneinfo/||p')"; do
+        case "$candidate" in
+            ""|/*|*[!A-Za-z0-9_+/-]*) continue ;;
+        esac
+        printf '%s\n' "$candidate"
+        return 0
+    done
+    return 0
+}
+
 write_env() {
-    # Local .env runs EMS as the invoking user. The Analytics profile is added
+    # Local .env runs EMS as the invoking user, in this host's time zone unless
+    # TZ or an existing .env names another. The Analytics profile is added
     # later by enable_analytics_profile, only after config/influxdb.env exists —
     # activating it earlier would make every `docker compose run` pull the
     # bundled InfluxDB service (required env_file) into scope before its secret
     # file is generated.
     uid=$(id -u 2>/dev/null || echo "")
     gid=$(id -g 2>/dev/null || echo "")
+    zone=$(resolve_timezone .env)
+    if [ -n "${TZ:-}" ] && [ "$TZ" != "$zone" ]; then
+        warn "TZ=$TZ does not name a time zone; it is not used."
+    fi
+    kept=$(env_file_zone .env)
+    if [ -n "$kept" ] && [ "$kept" != "$zone" ]; then
+        if [ -n "${TZ:-}" ] && [ "$TZ" = "$zone" ]; then
+            warn "TZ=$TZ from this shell replaces TZ=$kept in .env."
+        else
+            warn "TZ=$kept in .env is not a zone name this installer writes; it is replaced."
+        fi
+    fi
+    if [ -n "$zone" ]; then
+        TZ=$zone
+        export TZ
+    else
+        unset TZ
+        warn "No time zone could be read here; the containers use UTC until TZ is set in .env."
+    fi
     if [ "$DRY_RUN" -eq 1 ]; then
-        log "DRY-RUN: write .env (PUID/PGID)"
+        log "DRY-RUN: write .env (PUID/PGID, TZ=${zone:-unset})"
         return 0
     fi
     {
@@ -202,7 +253,15 @@ write_env() {
             printf 'PUID=%s\n' "$uid"
             printf 'PGID=%s\n' "$gid"
         fi
+        if [ -n "$zone" ]; then
+            printf 'TZ=%s\n' "$zone"
+        fi
     } > .env
+    if ! grep -Eq '^[[:space:]]*(-[[:space:]]*)?["'"'"']?TZ["'"'"']?([[:space:]]*[:=]|[[:space:]]*$|[[:space:]]+#.*$)' docker-compose.yml 2>/dev/null; then
+        warn "The kept docker-compose.yml passes no TZ to the containers, so they run on UTC; see docs/docker.md#time-zone."
+    elif [ -n "$zone" ]; then
+        log "docker-compose.yml passes TZ; the containers that take it run in the time zone $zone (TZ in .env)."
+    fi
 }
 
 # Default plain `docker compose up -d` to the Analytics profile. Called only

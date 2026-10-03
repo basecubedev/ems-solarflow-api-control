@@ -3,8 +3,9 @@
 
 The host stays on a deterministic UTC rather than inheriting somebody else's
 clock. The operator's choice is kept beside the rest of their configuration.
-It is handed to the Admin installer as `TZ`, but no container receives it yet,
-so the EMS still opens its hour-based windows on UTC hours.
+It is handed to the Admin installer as `TZ`, which bakes it into the Admin
+Console, and the Admin Console passes it to the EMS containers it creates. A
+change after the Admin Console is installed does not reach running containers.
 """
 
 from appliance.config import effective_timezone
@@ -46,9 +47,10 @@ class TimezoneService:
             "timezone": target,
             "previous_timezone": current,
             "warning": (
-                "The zone is saved for the appliance. The EMS containers do not "
-                "receive it yet and keep running on UTC, so control windows that "
-                "name an hour stay on UTC hours."
+                "The zone is saved for the appliance and handed to the Admin Console "
+                "when it is installed, which passes it to the EMS containers it creates. "
+                "An Admin Console that is already installed keeps the zone it was "
+                "installed with: this change does not reach the running containers."
             ),
         }
 
@@ -61,7 +63,7 @@ class TimezoneService:
         payload = {
             "timezone": timezone,
             "previous_timezone": target.get("previous_timezone", ""),
-            "applies_after": "the next deployment start",
+            "applies_after": "the next time the Admin deployment is created",
         }
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload

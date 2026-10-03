@@ -487,3 +487,28 @@ def test_analytics_quickstart(built_image, tmp_path):
         raise
     finally:
         project.down()
+
+
+def test_the_installer_reads_no_host_zone_inside_a_container(tmp_path):
+    """Inside the Admin container the "host" zone is the container's own UTC.
+
+    Pinning that into .env is what made a later Admin, which does know the
+    zone, unable to fill it in.
+    """
+
+    result = subprocess.run(
+        [
+            "docker", "run", "--rm", "--network", "none",
+            "-v", f"{INSTALL_SH}:/install-docker.sh:ro",
+            "-w", "/tmp",
+            "python:3.14-slim",
+            "sh", "/install-docker.sh", "--dry-run",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "DRY-RUN: write .env (PUID/PGID, TZ=unset)" in result.stdout
+    assert "No time zone could be read here" in result.stderr
