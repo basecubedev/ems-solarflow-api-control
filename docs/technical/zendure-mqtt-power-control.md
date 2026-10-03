@@ -726,6 +726,20 @@ device:
   correlation it was queued with) or is retired when the controller skips the
   device. A status read (`describe`) never publishes.
 
+The reply-driven publish above runs on the MQTT network thread, while the
+control loop dispatches and describes and the fetch executor reads telemetry on
+their own threads. Each device client therefore holds one reentrant lock around
+every public method that reads or changes its command state (`fetch`,
+`dispatch_output_limit`, `cancel_pending_output_limit`, `write_properties`,
+`handle_reply`, `describe`, `set_dispatch_observer`), so these calls take turns:
+a stop dispatched while a reply is publishing the queued target waits for that
+publish, finds it in the slot and preempts it, instead of reaching the broker
+first and being overtaken by the older target. The lock is held across the
+publish call, which in paho only queues the packet; the network thread holds
+none of the locks a publish takes while it delivers a reply, so the two cannot
+deadlock. It does not cover `read_health`/`write_health` as read by other code,
+and it orders submissions to the client, not deliveries by the broker.
+
 Terminal records with unresolved broker delivery remain in a bounded per-device
 evidence ledger keyed by their transport receipt. By default it retains at most
 64 records for at most 300 seconds, keeps resolved records briefly for

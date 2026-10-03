@@ -9,9 +9,11 @@ publishing to the broker. It carries no HTTP session and does not participate in
 HTTP state reconciliation (``supports_state_reconciliation = False``).
 """
 
+import functools
 import json
 import logging
 import math
+import threading
 import time
 from collections import OrderedDict
 
@@ -167,6 +169,17 @@ def _reports_own_target(metrics, observed_output_limit, target, tolerance):
     return abs(float(input_limit) - abs(float(target))) <= tolerance
 
 
+def _serialized(method):
+    """Run ``method`` while holding the device client's command-state lock."""
+
+    @functools.wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return locked
+
+
 def _coerce_reply(payload):
     """Parse a reply payload (bytes/str/mapping) into a dict, or ``None``.
 
@@ -198,6 +211,16 @@ class ZendureMqttDeviceClient:
     published and changes nothing, and neither does the broker accepting the
     exit. The controller reads it as its own record of a charge, the one that
     outlives a reset of its regulation memory or the device's absence.
+
+    Three threads call one instance: the control loop (dispatch, describe), the
+    fetch executor (``fetch``) and the MQTT network thread (``handle_reply``,
+    which may publish the queued target). Every public method that reads or
+    changes the command state holds one reentrant per-device lock, so those
+    calls run one at a time. The lock is held across the broker publish: paho
+    only queues the packet there, and the network thread holds none of the
+    locks a publish takes while it delivers a reply. It does not cover
+    ``read_health``/``write_health`` read directly by other code, the dispatch
+    observer's own state, or the order in which the broker delivers.
     """
 
     ip = "mqtt"
@@ -240,6 +263,7 @@ class ZendureMqttDeviceClient:
         command_evidence_max_records=DEFAULT_COMMAND_EVIDENCE_MAX_RECORDS,
         command_evidence_max_age_seconds=DEFAULT_COMMAND_EVIDENCE_MAX_AGE_SECONDS,
     ):
+        self._lock = threading.RLock()
         self.name = name
         self._service = service
         self._device_id = device_id
@@ -357,12 +381,15 @@ class ZendureMqttDeviceClient:
         self.write_health = CommHealth(name, kind="write")
 
     @property
+    @_serialized
     def charge_commanded(self):
         return self._charge.open
 
+    @_serialized
     def charge_exit_due(self):
         return self._charge.exit_due(time.monotonic())
 
+    @_serialized
     def found_exit_due(self):
         """Whether the one exit to AC input found after a start may go out now.
 
@@ -375,6 +402,7 @@ class ZendureMqttDeviceClient:
             return False
         return self._charge.found_exit_due(time.monotonic())
 
+    @_serialized
     def found_exit_exhausted(self):
         """Whether that exit is spent, and no command of it is still in flight."""
 
@@ -384,18 +412,22 @@ class ZendureMqttDeviceClient:
         return self._charge.found_exit_exhausted(time.monotonic())
 
     @property
+    @_serialized
     def found_exit_attempts(self):
         return self._charge.found_exit_attempts
 
     @property
+    @_serialized
     def found_charge_left(self):
         return self._charge.found_charge_left
 
+    @_serialized
     def release_charge_record(self):
         """The charge is someone else's from here: a claim that writes its own."""
 
         self._charge.release()
 
+    @_serialized
     def fetch(self):
         """Map a fresh broker snapshot to a DeviceState, else signal read failure.
 
@@ -460,6 +492,7 @@ class ZendureMqttDeviceClient:
 
         return bool(self.dispatch_output_limit(value))
 
+    @_serialized
     def set_dispatch_observer(self, observer):
         """Observe later outcomes for targets initially returned as queued."""
 
@@ -491,6 +524,7 @@ class ZendureMqttDeviceClient:
                 )
             )
 
+    @_serialized
     def cancel_pending_output_limit(self, reason):
         """Drop a target queued behind the in-flight command.
 
@@ -501,6 +535,7 @@ class ZendureMqttDeviceClient:
 
         self._discard_pending_target(reason)
 
+    @_serialized
     def dispatch_output_limit(self, value, charge_exit=None):
         """Publish a power write and report the structured dispatch outcome.
 
@@ -618,6 +653,7 @@ class ZendureMqttDeviceClient:
             return not self._charge.exit_due(now)
         return found_exit and not self._charge.found_exit_due(now)
 
+    @_serialized
     def write_properties(
         self, properties, *, reason, field=None, error_event=None, log_fields=None
     ):
@@ -1210,6 +1246,7 @@ class ZendureMqttDeviceClient:
         prefix = f"{base}/{self._product_key}/{self._device_id}"
         return tuple(f"{prefix}/{suffix}" for suffix in contract.reply_suffixes)
 
+    @_serialized
     def handle_reply(self, payload):
         """Correlate a device reply to the active command. Return whether applied.
 
@@ -1594,6 +1631,7 @@ class ZendureMqttDeviceClient:
             return active.published_monotonic + self._confirmation_timeout_s
         return None
 
+    @_serialized
     def describe(self, *, now_monotonic=None):
         """Credential-free control-device status for diagnostics/status output.
 
