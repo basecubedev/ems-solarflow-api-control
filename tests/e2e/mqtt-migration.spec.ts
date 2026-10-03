@@ -1,5 +1,7 @@
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
+import { holdRead } from "./helpers/held-read";
 import { type Page } from "@playwright/test";
 
 const SECRET_SENTINEL = "e2e-super-secret-broker-password";
@@ -19,9 +21,7 @@ async function openMigration(
   await expect(page.locator("#maintenance-hub")).toBeVisible();
   await page.locator('[data-open-maintenance-path="status"]').click();
   await expect(page.locator("#maintenance-status-panel")).toBeVisible();
-  await page
-    .locator('[data-maintenance-toggle="maintenance-mqtt-migration"]')
-    .click();
+  await new MaintenancePage(page).openStatusCard("maintenance-mqtt-migration");
   await expect(page.locator("#maintenance-mqtt-migration-required")).toHaveText(
     "required",
   );
@@ -63,6 +63,31 @@ test.describe("Zendure MQTT migration", { tag: ["@maintenance"] }, () => {
     expect(applyRequest!.csrf).toBeTruthy();
     expect(applyRequest!.body).toMatchObject({ confirm: true, backup: true });
     await expect(page.locator("body")).not.toContainText(SECRET_SENTINEL);
+  });
+
+  test("the status page reads busy while an applied migration is read back", async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    await openMigration(page, seedAdminScenario);
+    const review = await holdRead(
+      page,
+      "/api/admin/maintenance/zendure-mqtt/migration-review",
+    );
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#maintenance-mqtt-migration-apply").click();
+    await review.requested;
+    await expect(page.locator("#maintenance-status-panel")).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
+
+    review.release();
+
+    await new MaintenancePage(page).waitForStatusSettled();
+    await expect(page.locator("#maintenance-mqtt-migration-required")).toHaveText(
+      "not required",
+    );
   });
 
   test("stale review and missing CSRF are rejected", async ({

@@ -19,6 +19,7 @@ export class MaintenancePage {
   // Refresh reloads the whole panel; the config read is the last one that can
   // still redraw the editor, so waiting for it is what makes this deterministic.
   async refresh() {
+    await this.waitForStatusSettled();
     await Promise.all([
       this.page.waitForResponse(
         (response) =>
@@ -49,6 +50,35 @@ export class MaintenancePage {
   async openStatus() {
     await this.enterMaintenance();
     await this.goTo("status");
+    await this.waitForStatusSettled();
+  }
+
+  /**
+   * Wait until the status page is shown and has stopped moving.
+   *
+   * Its sections appear and grow while their reads return, so a press made
+   * then can start on one control and end on another, and neither acts. The
+   * page is shown in the same task that marks it busy, so once it is visible
+   * its busy state is the current load's, not one left by an earlier visit.
+   */
+  async waitForStatusSettled() {
+    const panel = this.page.locator("#maintenance-status-panel");
+    await expect(panel).toBeVisible();
+    await expect(panel).toHaveAttribute("aria-busy", "false");
+  }
+
+  /**
+   * Expand one status-page card once the page has settled. The body check
+   * reports a lost press here rather than at a later click on a control that
+   * was never shown.
+   */
+  async openStatusCard(id: string) {
+    await this.waitForStatusSettled();
+    const body = this.page.locator("#" + id + "-body");
+    if (!(await body.isVisible())) {
+      await this.page.locator('[data-maintenance-toggle="' + id + '"]').click();
+    }
+    await expect(body).toBeVisible();
   }
 
   async openUpgrade() {
