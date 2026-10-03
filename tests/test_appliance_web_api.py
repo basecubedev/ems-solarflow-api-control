@@ -822,6 +822,163 @@ def test_a_hex_word_is_not_an_address_literal(signed_in):
     assert app.names_this_appliance("abcdef") is False
 
 
+def test_a_renamed_appliance_answers_to_its_new_name_without_a_restart(
+    signed_in, tmp_path, monkeypatch
+):
+    """ProtectHostname= gives the web unit a UTS namespace of its own, copied
+    when it starts. After `hostnamectl set-hostname` gethostname() in this
+    process went on answering the old name, so every POST under the new one --
+    login included -- was refused until the unit was restarted. The static
+    hostname file hostnamectl writes is the host's own, and the unit can read it.
+    """
+
+    import socket
+
+    services, app, client = signed_in
+    monkeypatch.setattr(socket, "gethostname", lambda: "ems-solarflow")
+    hostname_file = tmp_path / "etc-hostname"
+    hostname_file.write_text("ems-solarflow\n", encoding="utf-8")
+    app.hostname_file = hostname_file
+
+    planned = client.post("/api/network/hostname", {"hostname": "garage-pi"})[1]
+    status, payload, _ = client.post(
+        "/api/operations/confirm",
+        {
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        },
+    )
+    assert status == 200, payload
+    assert services.host.hostname == "garage-pi"
+    hostname_file.write_text(f"{services.host.hostname}\n", encoding="utf-8")
+
+    renamed = {"Host": "garage-pi.local:8088", "Origin": "http://garage-pi.local:8088"}
+    status, payload, _ = client.post("/api/admin/restart", headers=renamed)
+    assert status == 200, payload
+    status, payload, _ = client.post(
+        "/api/session/login", {"password": PASSWORD}, headers=renamed
+    )
+    assert status == 200, payload
+
+    former = {"Host": "ems-solarflow.local:8088", "Origin": "http://ems-solarflow.local:8088"}
+    status, payload, _ = client.post("/api/admin/restart", headers=former)
+    assert status == 403, payload
+    assert payload["error"] == "csrf_host_rejected"
+    assert "IP address" in payload["message"]
+
+
+def test_the_kernel_name_answers_only_without_a_static_hostname(appliance, tmp_path, monkeypatch):
+    import socket
+
+    _, app, _ = appliance
+    monkeypatch.setattr(socket, "gethostname", lambda: "kernel-name")
+
+    app.hostname_file = tmp_path / "absent"
+    assert app.probe_hostname() == "kernel-name"
+
+    blank = tmp_path / "blank"
+    blank.write_text("# written by the image\n\n", encoding="utf-8")
+    app.hostname_file = blank
+    assert app.probe_hostname() == "kernel-name"
+
+    named = tmp_path / "named"
+    named.write_text("# written by the image\n  Garage-Pi  \n", encoding="utf-8")
+    app.hostname_file = named
+    assert app.probe_hostname() == "Garage-Pi"
+
+
+@pytest.mark.parametrize(
+    "content, expected",
+    [
+        (b"garage-pi.\n", "garage-pi"),
+        (b"garage pi\n", "garagepi"),
+        (b"garage_pi\n", "garagepi"),
+        (b"\xef\xbb\xbfgarage-pi\n", "garage-pi"),
+        (b"\xef\xbb\xbf# a comment\ngarage-pi\n", "acomment"),
+        (b"\xef\xbb\xbf\ngarage-pi\n", "kernel-name"),
+        (b"\xc2\xa0# set by the image\ngarage-pi\n", "setbytheimage"),
+        (b"# reachable as pi.localhost\ngarage-pi\n", "garage-pi"),
+        (b"\ngarage-pi\n", "garage-pi"),
+        (b"   \ngarage-pi\n", "garage-pi"),
+        (b"  # a comment\ngarage-pi\n", "garage-pi"),
+        (b"\t# a comment\ngarage-pi\n", "garage-pi"),
+        (b"\x0b# a comment\ngarage-pi\n", "acomment"),
+        (b"garage-pi\rjunk\n", "garage-pi"),
+        (b"garage\x00pi\n", "garage"),
+        (b"#" * 4090 + b"\ngarage-pi\n", "garage-pi"),
+        (b"mylocalhost\n", "mylocalhost"),
+        (b"pi.localhost.localdomain\n", "kernel-name"),
+        (b"localhost-\n", "kernel-name"),
+        (b"...\n", "kernel-name"),
+        (b"!!!\ngarage-pi\n", "kernel-name"),
+        (b"\xff\xfe\ngarage-pi\n", "kernel-name"),
+        ("münchen-pi\n".encode(), "mnchen-pi"),
+        (b"garage..pi\n", "garage.pi"),
+        (b".garage-pi\n", "garage-pi"),
+        (b"garage-pi-\n", "garage-pi"),
+        (b"-garage-pi\n", "garage-pi"),
+        (b"garage.-pi\n", "garage.pi"),
+        (b"garage-.pi\n", "garage-pi"),
+        (b"garage-pi--\n", "kernel-name"),
+        (b"-.-\n", "kernel-name"),
+        (b"a" * 70 + b"\n", "a" * 64),
+        (b"a" * 63 + b".b\n", "a" * 63),
+        (b"a" * 63 + b"-x\n", "a" * 63),
+    ],
+)
+def test_the_hostname_file_is_read_as_systemd_reads_it(appliance, tmp_path, monkeypatch, content, expected):
+    """The values systemd 257 gives these files (read_etc_hostname with its
+    cleanup); read raw, a hand-edited file with a trailing dot refused every
+    sign-in under the name the host answers to."""
+
+    import socket
+
+    _, app, _ = appliance
+    monkeypatch.setattr(socket, "gethostname", lambda: "kernel-name")
+    hostname_file = tmp_path / "hostname"
+    hostname_file.write_bytes(content)
+    app.hostname_file = hostname_file
+
+    assert app.probe_hostname() == expected
+
+
+def test_the_hostname_comes_from_the_hosts_static_hostname_file():
+    from appliance import web
+
+    assert web.HOSTNAME_FILE == "/etc/hostname"
+
+
+def test_a_name_on_the_first_line_counts_whatever_follows_it(appliance, tmp_path, monkeypatch):
+    import socket
+
+    _, app, _ = appliance
+    monkeypatch.setattr(socket, "gethostname", lambda: "kernel-name")
+    named = tmp_path / "named"
+    named.write_bytes(b"garage-pi\n\xff\xfe\n")
+    app.hostname_file = named
+
+    assert app.probe_hostname() == "garage-pi"
+
+
+@pytest.mark.parametrize(
+    "placeholder", ["localhost", "localhost.localdomain", "LOCALHOST", "localhost.", "pi.localhost"]
+)
+def test_localhost_in_the_hostname_file_is_no_static_name(appliance, tmp_path, monkeypatch, placeholder):
+    """systemd treats it as unset, so the name the host goes by comes from DHCP;
+    a name on a later line does not count either."""
+
+    import socket
+
+    _, app, _ = appliance
+    monkeypatch.setattr(socket, "gethostname", lambda: "garage-pi")
+    placeholder_file = tmp_path / "placeholder"
+    placeholder_file.write_text(f"{placeholder}\nother-name\n", encoding="utf-8")
+    app.hostname_file = placeholder_file
+
+    assert app.probe_hostname() == "garage-pi"
+    assert app.names_this_appliance("garage-pi.local:8088") is True
+
+
 def test_a_support_archive_can_actually_be_retrieved(signed_in):
     """The docs tell an operator to attach it, and on an A/B image there is no
     shell and the file lives in root-owned agent state."""

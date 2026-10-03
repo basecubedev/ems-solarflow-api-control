@@ -33,6 +33,8 @@ The appliance answers to `ems-solarflow.local` by default.
 
 It can be renamed, here or on a manager installed onto your own Raspberry Pi
 OS. Update your bookmarks afterwards: the old `.local` name stops resolving.
+The new name works at once; a tab still open under the old one stops accepting
+changes, so open the new address, or the IP address from your router.
 
 ## If the name does not resolve
 

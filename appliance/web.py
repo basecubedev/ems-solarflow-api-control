@@ -44,6 +44,7 @@ STATIC_FILES = {
     "styles.css": "text/css; charset=utf-8",
 }
 MAX_BODY_BYTES = 64 * 1024
+HOSTNAME_FILE = "/etc/hostname"
 
 # A peer that connects and never finishes a request line would otherwise hold
 # a worker thread for ever, and the appliance UI is the only recovery path
@@ -170,6 +171,48 @@ class AgentAuth:
             raise AuthError("agent_unavailable", str(getattr(exc, "message", exc)))
 
 
+def is_localhost(name):
+    """Whether a hostname is one systemd treats as no hostname at all."""
+
+    name = name.lower().rstrip(".")
+    return name in ("localhost", "localhost.localdomain") or name.endswith(
+        (".localhost", ".localhost.localdomain")
+    )
+
+
+def hostname_cleanup(name):
+    """A hostname as systemd cleans one read from /etc/hostname, or "" where
+    systemd would refuse it.
+
+    Only ASCII letters, digits, '-' and '.' are kept; a dot or hyphen is
+    dropped where a label would start with one, a dot where a label would end
+    with a hyphen, one trailing dot or hyphen goes, and it ends at 64
+    characters.
+    """
+
+    out, dot, hyphen = [], True, True
+    for char in name:
+        if len(out) >= 64:
+            break
+        if char == ".":
+            if dot or hyphen:
+                continue
+            dot, hyphen = True, False
+        elif char == "-":
+            if dot:
+                continue
+            dot, hyphen = False, True
+        elif char.isascii() and char.isalnum():
+            dot = hyphen = False
+        else:
+            continue
+        out.append(char)
+    if out and out[-1] in "-.":
+        out.pop()
+    cleaned = "".join(out)
+    return "" if cleaned.endswith("-") else cleaned
+
+
 UNCHECKED_PASSWORD_CODES = ("login_busy", "agent_unavailable")
 
 _AUDIT_REASON_FOR_CODE = {"login_busy": "busy"}
@@ -209,6 +252,7 @@ class ApplianceWebApp:
         self._time = time_fn or time.time
         self._lock = threading.Lock()
         self._password_checks = threading.BoundedSemaphore(DEFAULT_CONCURRENT_PASSWORD_CHECKS)
+        self.hostname_file = HOSTNAME_FILE
         # Browser tests need a deterministic reset. The endpoint only exists
         # when the host explicitly starts the service in test mode.
         self.test_mode = os.environ.get(TEST_MODE_ENV) == "1"
@@ -249,8 +293,29 @@ class ApplianceWebApp:
         return True
 
     def probe_hostname(self):
-        import socket
+        """The host's static hostname, read on every call.
 
+        ProtectHostname= gives this unit a UTS namespace of its own, copied at
+        start, so gethostname() keeps the name the host had then. The file
+        hostnamectl writes is the host's, and stays readable in the sandbox; the
+        kernel name answers only for a host that has no static hostname. Its
+        first 64 KiB are read as systemd reads the file: the first name line,
+        cleaned, and ``localhost`` there is none.
+        """
+
+        try:
+            with open(self.hostname_file, "rb") as handle:
+                content = handle.read(65536)
+        except OSError:
+            content = b""
+        for raw in re.split(rb"\r\n|[\r\n\0]", content):
+            line = raw.strip(b" \t").decode("latin-1")
+            if not line or line.startswith("#"):
+                continue
+            name = hostname_cleanup(line)
+            if name and not is_localhost(name):
+                return name
+            break
         return socket.gethostname()
 
     # --- session ---------------------------------------------------------
@@ -547,7 +612,12 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         if not self.app.names_this_appliance(host):
             # Under DNS rebinding the browser makes Origin and Host agree on the
             # attacker's name, so comparing them proves nothing on its own.
-            self._error(403, "csrf_host_rejected", "the request names another host")
+            self._error(
+                403,
+                "csrf_host_rejected",
+                "this appliance does not answer to the name in the request; after a "
+                "rename use the new name, or open the Appliance Manager by its IP address",
+            )
             return False
         origin = self.headers.get("Origin")
         if origin:

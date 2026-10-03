@@ -140,6 +140,32 @@ def test_the_web_process_is_confined_to_the_appliance_state():
     ]
 
 
+def test_the_web_unit_can_read_the_hostname_its_namespace_freezes():
+    """ProtectHostname= keeps gethostname() at the name the host had when the
+    unit started, so the Host check reads the static hostname file instead. A
+    sandbox that hid the file would refuse every request again after a rename.
+    """
+
+    from appliance.web import HOSTNAME_FILE
+
+    assert unit(WEB_UNIT)["Service"]["ProtectHostname"] == "yes"
+    hiding = ("InaccessiblePaths", "TemporaryFileSystem", "BindPaths", "BindReadOnlyPaths")
+    for line in WEB_UNIT.read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() not in hiding:
+            continue
+        for entry in value.split():
+            parts = entry.lstrip("-+").split(":")
+            if key.strip().startswith("Bind"):
+                if len(parts) < 2 or parts[0] == parts[1]:
+                    continue
+                path = parts[1]
+            else:
+                path = parts[0]
+            hidden = path.rstrip("/")
+            assert not f"{HOSTNAME_FILE}/".startswith(f"{hidden}/"), line
+
+
 def test_the_web_process_never_receives_the_docker_socket():
     text = WEB_UNIT.read_text(encoding="utf-8")
     assert "docker.sock" not in text

@@ -93,6 +93,9 @@ http://<new-hostname>.local:8090   EMS Admin Console
 ```
 
 Update your bookmarks after the change; the old `.local` name stops resolving.
+The Appliance Manager answers to the new name at once, without a restart. A
+page still open under the old name is refused with "this appliance does not
+answer to the name in the request": open the new URL, or the IP address.
 
 ## Recovering access after a WLAN change
 

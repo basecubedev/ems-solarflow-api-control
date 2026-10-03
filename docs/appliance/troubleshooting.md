@@ -139,6 +139,23 @@ At most two password checks run at a time, sign-ins and password changes
 together, and a further one is refused rather than queued. Try again in a
 moment. It does not count as a failed attempt.
 
+## "This appliance does not answer to the name in the request"
+
+Changes and sign-ins are accepted only under the appliance's IP address, its
+hostname or `<hostname>.local`: a page reached under any other name may be a
+DNS-rebinding attack. A name your router's DNS adds, such as
+`ems-solarflow.lan`, is refused, and so is a page still open under the name the
+appliance had before a rename. Open the Appliance Manager by its IP address,
+or under its current name.
+
+The name it answers to is the static hostname, the one `hostnamectl --static`
+shows and a rename in the console sets. A Raspberry Pi OS of your own that has
+no static hostname, and takes its name from DHCP instead, falls back to the
+name the web service started with: after such a name changes, the old refusal
+remains until `sudo systemctl restart ems-appliance-web`. `localhost` in
+`/etc/hostname` counts as no static hostname. Use the IP address, or set a
+static hostname.
+
 ## An operation is stuck
 
 Open **Overview**; the current operation banner shows the stage and offers
