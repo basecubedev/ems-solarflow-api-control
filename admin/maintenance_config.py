@@ -62,6 +62,8 @@ from ems.config import (
     normalize_mqtt_grid_meter_settings,
     resolve_config_write_gate,
     resolve_grid_meter_mqtt_settings,
+    resolve_mqtt_tls_metadata,
+    TLS_INSECURE_WITHOUT_TLS,
 )
 from ems.config_catalog import (
     ZENDURE_MQTT_BROKER_HELP,
@@ -115,6 +117,7 @@ from ems.zendure_mqtt.config_entries import (
     has_runtime_control_device,
     is_control_zendure_mqtt_device_config,
     is_zendure_mqtt_device_config,
+    legacy_default_broker_present,
     normalized_broker_identity,
     validate_zendure_mqtt_control_device_config,
     validate_zendure_mqtt_device_config,
@@ -1836,6 +1839,29 @@ def _validate(config, merge_issues=()):
     # it collides with the implicit legacy top-level broker's identity.
     for issue in find_reserved_mqtt_broker_ref_issues(config):
         validation["errors"].append(_issue(issue["code"], issue["message"]))
+    zendure_block = config.get("zendure_mqtt")
+    if isinstance(zendure_block, dict) and legacy_default_broker_present(zendure_block):
+        try:
+            resolve_mqtt_tls_metadata(
+                tls_mode=zendure_block.get("tls_mode"),
+                tls=zendure_block.get("tls"),
+                tls_insecure=zendure_block.get("tls_insecure"),
+            )
+        except ValueError as exc:
+            hint = (
+                "Turn TLS on for this broker, or set zendure_mqtt.tls_insecure "
+                "to false in config.json."
+                if str(exc) == TLS_INSECURE_WITHOUT_TLS
+                else "Correct zendure_mqtt.tls, tls_insecure and tls_mode in "
+                "config.json: true or false without quotes, and no value that "
+                "contradicts tls_mode."
+            )
+            validation["errors"].append(
+                _issue(
+                    "zendure_mqtt_tls_invalid",
+                    f"The Zendure MQTT broker TLS settings are invalid: {exc}. {hint}",
+                )
+            )
     devices = config.get("devices")
     if not isinstance(devices, list) or not devices:
         validation["errors"].append(_issue("no_devices", "At least one inverter is required."))

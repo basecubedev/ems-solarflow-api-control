@@ -2524,6 +2524,9 @@ def mqtt_tls_mode_name(*, tls, tls_insecure=False):
     return MQTT_TLS_MODE_INSECURE if tls_insecure else MQTT_TLS_MODE_SYSTEM_CA
 
 
+TLS_INSECURE_WITHOUT_TLS = "tls_insecure is set but TLS is disabled"
+
+
 def resolve_mqtt_tls_metadata(*, tls_mode=None, tls=None, tls_insecure=None):
     """Reconcile TLS metadata into a canonical ``(tls, tls_insecure)`` pair.
 
@@ -2555,7 +2558,7 @@ def resolve_mqtt_tls_metadata(*, tls_mode=None, tls=None, tls_insecure=None):
     resolved_tls = tls if tls is not None else False
     resolved_insecure = tls_insecure if tls_insecure is not None else False
     if resolved_insecure and not resolved_tls:
-        raise ValueError("tls_insecure is set but TLS is disabled")
+        raise ValueError(TLS_INSECURE_WITHOUT_TLS)
     return resolved_tls, resolved_insecure
 
 
@@ -2572,7 +2575,7 @@ def configure_mqtt_client_tls(client, *, tls, tls_insecure, ca_certs=None):
 
     if not tls:
         if tls_insecure:
-            raise ValueError("tls_insecure is set but TLS is disabled")
+            raise ValueError(TLS_INSECURE_WITHOUT_TLS)
         return
     if ca_certs:
         client.tls_set(ca_certs=str(ca_certs))
