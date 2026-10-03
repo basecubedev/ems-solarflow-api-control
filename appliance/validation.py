@@ -108,6 +108,8 @@ AUDIT_RESULTS = ("success", "failure", "denied")
 
 WEB_AUDIT_REASONS = (
     "",
+    "agent_unavailable",
+    "busy",
     "first_password",
     "invalid_password",
     "password_changed",

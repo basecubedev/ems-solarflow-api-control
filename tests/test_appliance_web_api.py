@@ -6,9 +6,12 @@ server against an in-process agent, so an authorisation mistake here is visible
 as a request that reaches — or fails to reach — the agent.
 """
 
+import contextlib
 import http.client
 import json
+import re
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -819,6 +822,163 @@ def test_a_hex_word_is_not_an_address_literal(signed_in):
     assert app.names_this_appliance("abcdef") is False
 
 
+def test_a_renamed_appliance_answers_to_its_new_name_without_a_restart(
+    signed_in, tmp_path, monkeypatch
+):
+    """ProtectHostname= gives the web unit a UTS namespace of its own, copied
+    when it starts. After `hostnamectl set-hostname` gethostname() in this
+    process went on answering the old name, so every POST under the new one --
+    login included -- was refused until the unit was restarted. The static
+    hostname file hostnamectl writes is the host's own, and the unit can read it.
+    """
+
+    import socket
+
+    services, app, client = signed_in
+    monkeypatch.setattr(socket, "gethostname", lambda: "ems-solarflow")
+    hostname_file = tmp_path / "etc-hostname"
+    hostname_file.write_text("ems-solarflow\n", encoding="utf-8")
+    app.hostname_file = hostname_file
+
+    planned = client.post("/api/network/hostname", {"hostname": "garage-pi"})[1]
+    status, payload, _ = client.post(
+        "/api/operations/confirm",
+        {
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        },
+    )
+    assert status == 200, payload
+    assert services.host.hostname == "garage-pi"
+    hostname_file.write_text(f"{services.host.hostname}\n", encoding="utf-8")
+
+    renamed = {"Host": "garage-pi.local:8088", "Origin": "http://garage-pi.local:8088"}
+    status, payload, _ = client.post("/api/admin/restart", headers=renamed)
+    assert status == 200, payload
+    status, payload, _ = client.post(
+        "/api/session/login", {"password": PASSWORD}, headers=renamed
+    )
+    assert status == 200, payload
+
+    former = {"Host": "ems-solarflow.local:8088", "Origin": "http://ems-solarflow.local:8088"}
+    status, payload, _ = client.post("/api/admin/restart", headers=former)
+    assert status == 403, payload
+    assert payload["error"] == "csrf_host_rejected"
+    assert "IP address" in payload["message"]
+
+
+def test_the_kernel_name_answers_only_without_a_static_hostname(appliance, tmp_path, monkeypatch):
+    import socket
+
+    _, app, _ = appliance
+    monkeypatch.setattr(socket, "gethostname", lambda: "kernel-name")
+
+    app.hostname_file = tmp_path / "absent"
+    assert app.probe_hostname() == "kernel-name"
+
+    blank = tmp_path / "blank"
+    blank.write_text("# written by the image\n\n", encoding="utf-8")
+    app.hostname_file = blank
+    assert app.probe_hostname() == "kernel-name"
+
+    named = tmp_path / "named"
+    named.write_text("# written by the image\n  Garage-Pi  \n", encoding="utf-8")
+    app.hostname_file = named
+    assert app.probe_hostname() == "Garage-Pi"
+
+
+@pytest.mark.parametrize(
+    "content, expected",
+    [
+        (b"garage-pi.\n", "garage-pi"),
+        (b"garage pi\n", "garagepi"),
+        (b"garage_pi\n", "garagepi"),
+        (b"\xef\xbb\xbfgarage-pi\n", "garage-pi"),
+        (b"\xef\xbb\xbf# a comment\ngarage-pi\n", "acomment"),
+        (b"\xef\xbb\xbf\ngarage-pi\n", "kernel-name"),
+        (b"\xc2\xa0# set by the image\ngarage-pi\n", "setbytheimage"),
+        (b"# reachable as pi.localhost\ngarage-pi\n", "garage-pi"),
+        (b"\ngarage-pi\n", "garage-pi"),
+        (b"   \ngarage-pi\n", "garage-pi"),
+        (b"  # a comment\ngarage-pi\n", "garage-pi"),
+        (b"\t# a comment\ngarage-pi\n", "garage-pi"),
+        (b"\x0b# a comment\ngarage-pi\n", "acomment"),
+        (b"garage-pi\rjunk\n", "garage-pi"),
+        (b"garage\x00pi\n", "garage"),
+        (b"#" * 4090 + b"\ngarage-pi\n", "garage-pi"),
+        (b"mylocalhost\n", "mylocalhost"),
+        (b"pi.localhost.localdomain\n", "kernel-name"),
+        (b"localhost-\n", "kernel-name"),
+        (b"...\n", "kernel-name"),
+        (b"!!!\ngarage-pi\n", "kernel-name"),
+        (b"\xff\xfe\ngarage-pi\n", "kernel-name"),
+        ("münchen-pi\n".encode(), "mnchen-pi"),
+        (b"garage..pi\n", "garage.pi"),
+        (b".garage-pi\n", "garage-pi"),
+        (b"garage-pi-\n", "garage-pi"),
+        (b"-garage-pi\n", "garage-pi"),
+        (b"garage.-pi\n", "garage.pi"),
+        (b"garage-.pi\n", "garage-pi"),
+        (b"garage-pi--\n", "kernel-name"),
+        (b"-.-\n", "kernel-name"),
+        (b"a" * 70 + b"\n", "a" * 64),
+        (b"a" * 63 + b".b\n", "a" * 63),
+        (b"a" * 63 + b"-x\n", "a" * 63),
+    ],
+)
+def test_the_hostname_file_is_read_as_systemd_reads_it(appliance, tmp_path, monkeypatch, content, expected):
+    """The values systemd 257 gives these files (read_etc_hostname with its
+    cleanup); read raw, a hand-edited file with a trailing dot refused every
+    sign-in under the name the host answers to."""
+
+    import socket
+
+    _, app, _ = appliance
+    monkeypatch.setattr(socket, "gethostname", lambda: "kernel-name")
+    hostname_file = tmp_path / "hostname"
+    hostname_file.write_bytes(content)
+    app.hostname_file = hostname_file
+
+    assert app.probe_hostname() == expected
+
+
+def test_the_hostname_comes_from_the_hosts_static_hostname_file():
+    from appliance import web
+
+    assert web.HOSTNAME_FILE == "/etc/hostname"
+
+
+def test_a_name_on_the_first_line_counts_whatever_follows_it(appliance, tmp_path, monkeypatch):
+    import socket
+
+    _, app, _ = appliance
+    monkeypatch.setattr(socket, "gethostname", lambda: "kernel-name")
+    named = tmp_path / "named"
+    named.write_bytes(b"garage-pi\n\xff\xfe\n")
+    app.hostname_file = named
+
+    assert app.probe_hostname() == "garage-pi"
+
+
+@pytest.mark.parametrize(
+    "placeholder", ["localhost", "localhost.localdomain", "LOCALHOST", "localhost.", "pi.localhost"]
+)
+def test_localhost_in_the_hostname_file_is_no_static_name(appliance, tmp_path, monkeypatch, placeholder):
+    """systemd treats it as unset, so the name the host goes by comes from DHCP;
+    a name on a later line does not count either."""
+
+    import socket
+
+    _, app, _ = appliance
+    monkeypatch.setattr(socket, "gethostname", lambda: "garage-pi")
+    placeholder_file = tmp_path / "placeholder"
+    placeholder_file.write_text(f"{placeholder}\nother-name\n", encoding="utf-8")
+    app.hostname_file = placeholder_file
+
+    assert app.probe_hostname() == "garage-pi"
+    assert app.names_this_appliance("garage-pi.local:8088") is True
+
+
 def test_a_support_archive_can_actually_be_retrieved(signed_in):
     """The docs tell an operator to attach it, and on an A/B image there is no
     shell and the file lives in root-owned agent state."""
@@ -965,7 +1125,9 @@ def test_concurrent_logins_cannot_spend_more_than_the_documented_budget(applianc
     process an operator recovers through.
 
     The gate is forced open deterministically rather than by timing: `verify`
-    blocks until the test has seen all callers pass the check point.
+    blocks until the test has seen all callers pass the check point. The cap on
+    concurrent password checks would hold the derivations under the budget on
+    its own, so it is opened as wide as the callers: this pins the count.
     """
 
     import threading
@@ -974,6 +1136,7 @@ def test_concurrent_logins_cannot_spend_more_than_the_documented_budget(applianc
     app.auth.create(PASSWORD, PASSWORD)
 
     callers = 10
+    app._password_checks = threading.BoundedSemaphore(callers)
     budget = app.rate_limiter.max_failures
     reached_check = threading.Semaphore(0)
     release = threading.Event()
@@ -1056,3 +1219,466 @@ def test_a_correct_password_clears_what_the_attempt_itself_recorded(appliance):
 
     assert app.login(PASSWORD, source_ip="203.0.113.9") is not None
     assert not app.rate_limiter.limited("203.0.113.9")
+
+
+def _counting_verify(app):
+    checks = []
+    real_verify = app.auth.verify
+
+    def verify(password):
+        checks.append(password)
+        return real_verify(password)
+
+    app.auth.verify = verify
+    return checks
+
+
+def _wrong_login(app, source_ip):
+    from appliance.auth import AuthError
+
+    try:
+        app.login("wrong-on-purpose", source_ip=source_ip)
+    except AuthError:
+        pass
+
+
+def _login_code(app, password, source_ip):
+    from appliance.auth import AuthError
+
+    try:
+        app.login(password, source_ip=source_ip)
+    except AuthError as exc:
+        return exc.code
+    return "ok"
+
+
+def test_five_typos_on_one_ipv6_device_do_not_lock_out_its_network(appliance):
+    """Every host on a SLAAC network shares one /64. Counted by the /64 alone,
+    one device's five typos locked every IPv6 client on the LAN out of the
+    appliance for five minutes.
+    """
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+
+    for _ in range(app.rate_limiter.max_failures):
+        _wrong_login(app, "2001:db8:5:7::a")
+
+    assert _login_code(app, PASSWORD, "2001:db8:5:7::a") == "login_rate_limited"
+    assert _login_code(app, PASSWORD, "2001:db8:5:7::b") == "ok"
+
+
+def test_a_link_local_device_keeps_its_typos_to_itself(appliance):
+    """Every link-local client shares fe80::/64, on every link. The zone index
+    names this appliance's interface, not the client, so it is no part of the
+    source.
+    """
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+
+    for _ in range(app.rate_limiter.max_failures):
+        _wrong_login(app, "fe80::a%eth0")
+
+    assert _login_code(app, PASSWORD, "fe80::a%wlan0") == "login_rate_limited"
+    assert _login_code(app, PASSWORD, "fe80::b%eth0") == "ok"
+
+
+def test_rotating_addresses_inside_one_ipv6_64_share_its_budget(appliance):
+    """A host chooses its own addresses inside its /64, so its address alone is
+    a budget it renews at will -- and every attempt is 600 000 PBKDF2 rounds in
+    the root agent. The /64 is the bound it cannot renew.
+    """
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+    checks = _counting_verify(app)
+    budget = app.rate_limiter.max_network_failures
+    attempts = 2 * budget
+
+    for n in range(1, attempts + 1):
+        _wrong_login(app, f"2001:db8:5:7::{n:x}")
+
+    assert len(checks) == budget, (
+        f"{len(checks)} password checks for {attempts} addresses in one /64"
+    )
+    assert _login_code(app, PASSWORD, "2001:db8:5:7:abcd::1") == "login_rate_limited"
+    assert _login_code(app, PASSWORD, "2001:db8:5:8::1") == "ok"
+
+
+def test_a_sign_in_clears_its_own_address_never_its_network(appliance):
+    """A correct password proves something about one device, not about the
+    other addresses in its /64. Its own attempt is not a failure, though, and
+    is not left counted against the /64 either.
+    """
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+    limiter = app.rate_limiter
+    operator = "2001:db8:5:7::a"
+    typos = limiter.max_failures - 1
+
+    for _ in range(typos):
+        _wrong_login(app, operator)
+    assert _login_code(app, PASSWORD, operator) == "ok"
+
+    for n in range(1, limiter.max_network_failures - typos):
+        _wrong_login(app, f"2001:db8:5:7::1:{n:x}")
+    assert not limiter.limited(operator), "the sign-in itself was counted against the /64"
+
+    _wrong_login(app, "2001:db8:5:7::2:1")
+    assert _login_code(app, PASSWORD, operator) == "login_rate_limited"
+
+
+def test_an_ipv4_client_on_the_dual_stack_listener_keeps_its_own_budget(appliance):
+    """The listener binds `::`, so an IPv4 client arrives as ::ffff:a.b.c.d.
+
+    Taken by its /64, every IPv4 client on the network would share one budget
+    and any of them could lock all the others out.
+    """
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+
+    for _ in range(app.rate_limiter.max_failures):
+        _wrong_login(app, "::ffff:192.0.2.10")
+
+    assert app.rate_limiter.limited("192.0.2.10")
+    assert _login_code(app, PASSWORD, "::ffff:192.0.2.11") == "ok"
+
+
+def test_failures_from_other_sources_never_lock_out_an_address_with_budget_left(appliance):
+    """One dual-stack host holds four sources: its IPv4 address and a global,
+    a unique-local and a link-local IPv6 address. A ceiling across all sources
+    that it can fill on its own keeps the operator out for as long as it goes
+    on failing, with the physical console the only way back -- and protects
+    nothing, since Admin and the dashboard check the same password.
+    """
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+    one_host = ("192.0.2.66", "2001:db8:1:2::66", "fd00:1:2:3::66", "fe80::66%eth0")
+
+    for source in one_host:
+        for _ in range(app.rate_limiter.max_failures):
+            _wrong_login(app, source)
+
+    assert all(app.rate_limiter.limited(source) for source in one_host)
+    assert _login_code(app, PASSWORD, "192.0.2.50") == "ok"
+    assert _login_code(app, PASSWORD, "2001:db8:1:2::50") == "ok"
+
+
+def test_a_wall_clock_step_neither_extends_nor_ends_a_lockout(monkeypatch):
+    """The window is measured on the monotonic clock. On the wall clock, a step
+    back -- NTP correcting a Pi that booted without a real-time clock -- kept
+    every failure in the window for as long as the step, and a step forward
+    ended a lockout at once.
+    """
+
+    import time
+
+    from appliance.auth import LoginRateLimiter
+
+    wall = [1_800_000_000.0]
+    monotonic = [5_000.0]
+    monkeypatch.setattr(time, "time", lambda: wall[0])
+    monkeypatch.setattr(time, "monotonic", lambda: monotonic[0])
+    limiter = LoginRateLimiter()
+
+    for _ in range(limiter.max_failures):
+        limiter.record_failure("192.0.2.30")
+    wall[0] -= 86_400
+    monotonic[0] += limiter.window_seconds + 1
+    assert not limiter.limited("192.0.2.30"), "a backward wall-clock step kept the lockout"
+
+    for _ in range(limiter.max_failures):
+        limiter.record_failure("192.0.2.30")
+    wall[0] += 2 * 86_400
+    monotonic[0] += 1
+    assert limiter.limited("192.0.2.30"), "a forward wall-clock step ended the lockout"
+
+
+@contextlib.contextmanager
+def _two_password_checks_held(app):
+    """Two sign-ins from other sources, held inside the password check. A
+    further check is recorded and answered at once."""
+
+    entered = threading.Semaphore(0)
+    release = threading.Event()
+    counter = threading.Lock()
+    checks = []
+
+    def held_verify(password):
+        with counter:
+            checks.append(password)
+            held = len(checks) <= 2
+        if held:
+            entered.release()
+            assert release.wait(timeout=10), "the test never released the held checks"
+        return False
+
+    app.auth.verify = held_verify
+    holders = [
+        threading.Thread(target=_wrong_login, args=(app, f"198.51.100.{n}")) for n in (1, 2)
+    ]
+    try:
+        for thread in holders:
+            thread.start()
+        for _ in holders:
+            assert entered.acquire(timeout=10), "a held password check never started"
+        yield checks
+    finally:
+        release.set()
+        for thread in holders:
+            thread.join(timeout=10)
+
+
+def test_a_third_concurrent_password_check_is_refused_rather_than_queued(appliance):
+    """Protected interleaving: two password checks are held inside the
+    derivation when a third attempt arrives from a source with budget left.
+
+    Every attempt the limiter admitted ran its PBKDF2 derivation at once in the
+    root agent, as many in parallel as the attacker had sources, and that agent
+    is the process an operator recovers the appliance through. The third is
+    refused at once and told to try again; its password was never read, so it
+    is not counted either.
+    """
+
+    _, app, client = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+
+    with _two_password_checks_held(app) as checks:
+        status, payload, _ = client.login("wrong-on-purpose")
+
+    assert len(checks) == 2, f"{len(checks)} password checks ran at once"
+    assert status == 503, payload
+    assert payload["error"] == "login_busy"
+    assert "try again" in payload["message"]
+    assert "127.0.0.1" not in app.rate_limiter.failures
+
+
+# --- the current-password check of a password change -------------------------
+
+
+def _change(client, current, new_password="next-secret-1", confirmation=None):
+    return client.post(
+        "/api/settings/password",
+        {
+            "current_password": current,
+            "password": new_password,
+            "confirmation": new_password if confirmation is None else confirmation,
+        },
+    )
+
+
+def test_a_wrong_current_password_spends_the_same_budget_as_a_sign_in(signed_in):
+    """The password change reads the current password with the same derivation
+    a sign-in does. Outside the limiter, it was a password check any session
+    could run without a budget.
+    """
+
+    _, app, client = signed_in
+
+    for _ in range(app.rate_limiter.max_failures):
+        status, payload, _ = _change(client, "not-the-password")
+        assert status == 400, payload
+        assert payload["error"] == "current_password_invalid"
+
+    status, payload, _ = _change(client, "not-the-password")
+    assert status == 429, payload
+    assert payload["error"] == "login_rate_limited"
+    assert client.login()[0] == 429
+
+
+def test_only_a_wrong_current_password_is_counted(signed_in):
+    """A refusal after the current password was read and found right -- a new
+    password that does not match its confirmation -- is no failed guess."""
+
+    _, app, client = signed_in
+
+    for _ in range(app.rate_limiter.max_failures + 2):
+        status, payload, _ = _change(client, PASSWORD, confirmation="something-else")
+        assert status == 400, payload
+        assert payload["error"] == "password_mismatch"
+
+    assert not app.rate_limiter.limited("127.0.0.1")
+    assert _audited(app, "password.change") == []
+
+
+def test_a_successful_password_change_leaves_no_failure_behind(appliance):
+    """Only a wrong current password counts; a change that went through leaves
+    neither its address nor its /64 charged."""
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+    source = "2001:db8:1:2::5"
+    passwords = [PASSWORD, "next-secret-1", "next-secret-2", "next-secret-3"]
+
+    for current, new_password in zip(passwords, passwords[1:]):
+        app.change_password(current, new_password, new_password, source_ip=source)
+
+    assert app.rate_limiter.failures == {}
+
+
+def test_a_password_change_that_goes_through_clears_the_typos_before_it(appliance):
+    from appliance.auth import AuthError
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+    source = "198.51.100.9"
+    for _ in range(3):
+        with pytest.raises(AuthError):
+            app.change_password("not-the-password", "next-secret-1", "next-secret-1", source_ip=source)
+
+    app.change_password(PASSWORD, "next-secret-1", "next-secret-1", source_ip=source)
+
+    assert source not in app.rate_limiter.failures
+
+
+def test_a_change_refused_after_a_correct_current_password_leaves_the_typos(appliance):
+    """Only a change that goes through clears its address."""
+
+    from appliance.auth import AuthError
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+    source = "198.51.100.10"
+    for _ in range(2):
+        with pytest.raises(AuthError):
+            app.change_password("not-the-password", "next-secret-1", "next-secret-1", source_ip=source)
+
+    with pytest.raises(AuthError):
+        app.change_password(PASSWORD, "next-secret-1", "something-else", source_ip=source)
+
+    assert len(app.rate_limiter.failures[source]) == 2
+
+
+def test_the_documented_login_budgets_are_the_ones_in_force():
+    """The security model and the troubleshooting guide name these numbers."""
+
+    from appliance.auth import LoginRateLimiter
+
+    limiter = LoginRateLimiter()
+
+    assert (limiter.max_failures, limiter.max_network_failures, limiter.window_seconds) == (5, 20, 300)
+
+
+def test_a_password_change_waits_in_no_queue_either(signed_in):
+    """Protected interleaving: two sign-ins are held inside the password check
+    when a password change arrives; its current-password check is a third."""
+
+    _, app, client = signed_in
+
+    with _two_password_checks_held(app) as checks:
+        status, payload, _ = _change(client, PASSWORD)
+
+    assert len(checks) == 2, f"{len(checks)} password checks ran at once"
+    assert status == 503, payload
+    assert payload["error"] == "login_busy"
+    assert "127.0.0.1" not in app.rate_limiter.failures
+    assert _audited(app, "password.change") == [("failure", "busy")]
+
+
+def test_a_password_change_the_agent_could_not_check_is_audited(signed_in):
+    from appliance.auth import AuthError
+
+    _, app, client = signed_in
+
+    def unavailable(*_args, **_kwargs):
+        raise AuthError("agent_unavailable", "the appliance agent is not answering")
+
+    app.auth.change = unavailable
+    status, payload, _ = _change(client, PASSWORD)
+
+    assert status == 503, payload
+    assert "127.0.0.1" not in app.rate_limiter.failures
+    assert _audited(app, "password.change") == [("failure", "agent_unavailable")]
+
+
+def _audited(app, action):
+    return [
+        (entry["result"], entry["target"])
+        for entry in app.agent.handlers.services.audit.tail()
+        if entry["action"] == action
+    ]
+
+
+def test_a_busy_refusal_is_audited_without_breaking_the_audit(appliance):
+    """A reason the agent does not accept marks the audit as broken until the
+    web service restarts; a busy refusal is recorded with one it does.
+
+    Protected interleaving: two sign-ins are held inside the password check
+    when a third arrives and is refused as busy.
+    """
+
+    _, app, client = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+
+    with _two_password_checks_held(app):
+        status, payload, _ = client.login("whatever")
+
+    assert payload["error"] == "login_busy", payload
+    assert ("failure", "busy") in _audited(app, "login.failure")
+    assert app.audit_status()["degraded"] is False
+
+
+def test_every_audit_event_and_reason_the_web_sends_is_one_the_agent_accepts():
+    """Two lists that must agree: what web.py records and what the agent takes.
+
+    Read from the source: a reason passed in a dict or by position would get
+    past it, so web.py passes every reason by keyword.
+    """
+
+    from appliance import validation, web
+
+    source = (Path(__file__).resolve().parents[1] / "appliance" / "web.py").read_text(encoding="utf-8")
+    events = set(re.findall(r'audit\.record\(\s*"([^"]+)"', source))
+    literal = set(re.findall(r'reason="([^"]*)"', source))
+    computed = re.findall(r"reason=(?!\")([A-Za-z_][\w.]*)", source)
+
+    assert events and literal
+    assert events <= set(validation.WEB_AUDIT_EVENTS)
+    assert literal <= set(validation.WEB_AUDIT_REASONS)
+    assert set(computed) <= {"audit_reason"}, computed
+    assert set(web._AUDIT_REASON_FOR_CODE.values()) <= set(validation.WEB_AUDIT_REASONS)
+    assert set(web._AUDIT_REASON_FOR_CODE) == {"login_busy"}
+    assert web.audit_reason("login_busy") == "busy"
+    assert web.audit_reason("agent_unavailable") == "agent_unavailable"
+    assert web.audit_reason("anything_else") == ""
+
+
+def test_a_lockout_held_by_the_network_says_so_and_names_the_way_out(appliance):
+    """Only an address its own failures did not lock is told the network did."""
+
+    from appliance.auth import AuthError
+
+    _, app, _ = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+    own = "2001:db8:5:7::a"
+    for _ in range(app.rate_limiter.max_failures):
+        _wrong_login(app, own)
+    for n in range(1, app.rate_limiter.max_network_failures - app.rate_limiter.max_failures + 1):
+        _wrong_login(app, f"2001:db8:5:7::1:{n:x}")
+
+    with pytest.raises(AuthError) as network:
+        app.login(PASSWORD, source_ip="2001:db8:5:7:abcd::1")
+    with pytest.raises(AuthError) as own_lock:
+        app.login(PASSWORD, source_ip=own)
+
+    assert network.value.code == own_lock.value.code == "login_rate_limited"
+    assert "IPv4" in network.value.message
+    assert "IPv4" not in own_lock.value.message
+
+
+def test_a_password_change_refusal_is_audited(signed_in):
+    services, app, client = signed_in
+
+    for _ in range(app.rate_limiter.max_failures + 1):
+        _change(client, "not-the-password")
+
+    changes = [entry for entry in services.audit.tail() if entry["action"] == "password.change"]
+    assert [(entry["result"], entry["target"]) for entry in changes][-2:] == [
+        ("failure", "invalid_password"),
+        ("denied", "rate_limited"),
+    ]
+    assert app.audit_status()["degraded"] is False

@@ -121,9 +121,40 @@ Every session was invalidated. That happens after a password change or a
 
 ## Login says "too many failed attempts"
 
-Rate limiting engaged after five failures from your address. Wait for the window
-to pass (the message states the remaining seconds), or reset the password on the
-console.
+Rate limiting engaged after five failures from your address, or after twenty
+from the IPv6 network your address belongs to: its /64, which every device on
+your network that uses IPv6 shares. A wrong current password in **Change
+password** counts as a failure too. Wait for the window to pass (the message
+states the remaining seconds), or reset the password on the console.
+
+If the failures were not yours, something on the network is guessing; the
+message says so when only your IPv6 network is locked. Open the Appliance
+Manager by its IPv4 address, which only counts its own failures. The
+lock lifts on its own within five minutes of the attempts stopping; `sudo
+systemctl restart ems-appliance-web` clears the counters at once.
+
+## "Another password is being checked"
+
+At most two password checks run at a time, sign-ins and password changes
+together, and a further one is refused rather than queued. Try again in a
+moment. It does not count as a failed attempt.
+
+## "This appliance does not answer to the name in the request"
+
+Changes and sign-ins are accepted only under the appliance's IP address, its
+hostname or `<hostname>.local`: a page reached under any other name may be a
+DNS-rebinding attack. A name your router's DNS adds, such as
+`ems-solarflow.lan`, is refused, and so is a page still open under the name the
+appliance had before a rename. Open the Appliance Manager by its IP address,
+or under its current name.
+
+The name it answers to is the static hostname, the one `hostnamectl --static`
+shows and a rename in the console sets. A Raspberry Pi OS of your own that has
+no static hostname, and takes its name from DHCP instead, falls back to the
+name the web service started with: after such a name changes, the old refusal
+remains until `sudo systemctl restart ems-appliance-web`. `localhost` in
+`/etc/hostname` counts as no static hostname. Use the IP address, or set a
+static hostname.
 
 ## An operation is stuck
 

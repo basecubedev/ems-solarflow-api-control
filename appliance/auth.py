@@ -14,6 +14,7 @@ import base64
 import fcntl
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import secrets
@@ -29,7 +30,10 @@ CSRF_HEADER = "X-Appliance-CSRF"
 DEFAULT_IDLE_TIMEOUT = 1800
 DEFAULT_ABSOLUTE_MAX = 43200
 DEFAULT_MAX_FAILURES = 5
+DEFAULT_MAX_NETWORK_FAILURES = 20
 DEFAULT_FAILURE_WINDOW = 300
+DEFAULT_CONCURRENT_PASSWORD_CHECKS = 2
+IPV6_NETWORK_PREFIX = 64
 
 
 def lock_path(path):
@@ -391,53 +395,103 @@ class SessionStore:
             self.sessions.pop(session_id, None)
 
 
+def throttle_sources(address):
+    """The client address a failed password counts against, and its IPv6 /64.
+
+    The /64 is ``None`` for an IPv4 client, including one that reached the
+    dual-stack listener mapped into IPv6 as ``::ffff:a.b.c.d``, and for
+    anything that is not an address. The zone index of a link-local address
+    names this appliance's interface, not the client, and is left out.
+    """
+
+    text = str(address or "").strip()
+    try:
+        parsed = ipaddress.ip_address(text.partition("%")[0])
+    except ValueError:
+        return text, None
+    if parsed.version == 6 and parsed.ipv4_mapped is not None:
+        parsed = parsed.ipv4_mapped
+    if parsed.version == 4:
+        return str(parsed), None
+    network = ipaddress.IPv6Network((parsed, IPV6_NETWORK_PREFIX), strict=False)
+    return str(parsed), str(network)
+
+
 class LoginRateLimiter:
+    """Failed password checks, counted per client address and per IPv6 /64.
+
+    Five per address stop one device guessing. An IPv6 host chooses its own
+    addresses inside its /64, so for IPv6 the address alone is a budget renewed
+    at will; the /64 is the bound it cannot renew. Every host on a SLAAC network
+    shares that /64, and every link-local client shares ``fe80::/64`` whatever
+    its link, so the /64 gets a larger budget of its own: twenty, four devices'
+    worth of typos. Five on one device lock out that device, not the network.
+
+    There is no ceiling across sources. One dual-stack host holds four of them
+    (IPv4, global, unique-local and link-local IPv6), and a ceiling it can fill
+    on its own locks the operator out with only the physical console left.
+
+    Windows run on the monotonic clock, so a wall-clock step neither extends a
+    lockout nor ends one.
+    """
+
     def __init__(
         self,
         *,
         max_failures=DEFAULT_MAX_FAILURES,
+        max_network_failures=DEFAULT_MAX_NETWORK_FAILURES,
         window_seconds=DEFAULT_FAILURE_WINDOW,
         max_entries=1024,
         time_fn=None,
     ):
         self.max_failures = int(max_failures)
+        self.max_network_failures = int(max_network_failures)
         self.window_seconds = int(window_seconds)
         self.max_entries = int(max_entries)
-        self._time = time_fn or time.time
+        self._time = time_fn or time.monotonic
         self.failures = {}
 
     def limited(self, key):
-        return len(self._active(key)) >= self.max_failures
+        return self._wait(key) > 0
 
     def record_failure(self, key):
         """Record one failure and name it, so an attempt nobody judged can be
         taken back."""
 
-        attempts = self._active(key)
         stamp = self._time()
-        attempts.append(stamp)
-        self.failures[key] = attempts
+        for counter, _ in self._counters(key):
+            attempts = self._active(counter)
+            attempts.append(stamp)
+            self.failures[counter] = attempts
         self._evict()
         return stamp
 
     def forget(self, key, stamp):
         """Take back one recorded attempt. Missing is not an error."""
 
-        attempts = self.failures.get(key)
-        if not attempts or stamp is None:
+        if stamp is None:
             return
-        try:
+        for counter, _ in self._counters(key):
+            attempts = self.failures.get(counter)
+            if not attempts or stamp not in attempts:
+                continue
             attempts.remove(stamp)
-        except ValueError:
-            return
-        if attempts:
-            self.failures[key] = attempts
-        else:
-            self.failures.pop(key, None)
+            if attempts:
+                self.failures[counter] = attempts
+            else:
+                self.failures.pop(counter, None)
+
+    def _counters(self, key):
+        """Each counter ``key`` is charged to, with its budget."""
+
+        address, network = throttle_sources(key)
+        counters = [(address, self.max_failures)]
+        if network is not None:
+            counters.append((network, self.max_network_failures))
+        return counters
 
     def _evict(self):
-        """Expired keys first. Evicting a live one flushes somebody's lockout,
-        and an attacker with a /64 can make that happen on demand."""
+        """Expired keys first: evicting a live one flushes somebody's lockout."""
 
         if len(self.failures) <= self.max_entries:
             return
@@ -455,13 +509,40 @@ class LoginRateLimiter:
             self.failures.pop(stale, None)
 
     def reset(self, key):
-        self.failures.pop(key, None)
+        """Clear the client address. Its /64 keeps counting: a correct password
+        proves nothing about the other addresses in it."""
+
+        address, _ = throttle_sources(key)
+        self.failures.pop(address, None)
 
     def retry_after(self, key):
-        attempts = self._active(key)
-        if len(attempts) < self.max_failures:
+        return max(0, int(self._wait(key)))
+
+    def held_by_network(self, key):
+        """Whether only the IPv6 /64 holds ``key`` back, not its own address."""
+
+        counters = self._counters(key)
+        if len(counters) < 2:
+            return False
+        (address, budget), (network, network_budget) = counters
+        return (
+            self._until_below(self._active(address), budget) <= 0
+            and self._until_below(self._active(network), network_budget) > 0
+        )
+
+    def _wait(self, key):
+        """Seconds until ``key`` may try again; zero or less when it may now."""
+
+        return max(
+            self._until_below(self._active(counter), budget)
+            for counter, budget in self._counters(key)
+        )
+
+    def _until_below(self, stamps, limit):
+        if len(stamps) < limit:
             return 0
-        return max(0, int(min(attempts) + self.window_seconds - self._time()))
+        deciding = sorted(stamps)[len(stamps) - limit]
+        return deciding + self.window_seconds - self._time()
 
     def _active(self, key):
         now = self._time()

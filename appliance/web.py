@@ -25,6 +25,7 @@ from appliance import validation
 from appliance.agent_client import AgentCallError, AgentClient, AgentUnavailableError
 from appliance.auth import (
     CSRF_HEADER,
+    DEFAULT_CONCURRENT_PASSWORD_CHECKS,
     SESSION_COOKIE_NAME,
     AuthError,
     LoginRateLimiter,
@@ -43,6 +44,7 @@ STATIC_FILES = {
     "styles.css": "text/css; charset=utf-8",
 }
 MAX_BODY_BYTES = 64 * 1024
+HOSTNAME_FILE = "/etc/hostname"
 
 # A peer that connects and never finishes a request line would otherwise hold
 # a worker thread for ever, and the appliance UI is the only recovery path
@@ -56,6 +58,8 @@ STATUS_FOR_CODE = {
     "support_archive_not_found": 404,
     "support_archive_too_large": 409,
     "agent_unavailable": 503,
+    "login_busy": 503,
+    "login_rate_limited": 429,
     "operation_conflict": 409,
     "confirmation_token_mismatch": 403,
     "peer_not_allowed": 403,
@@ -167,6 +171,65 @@ class AgentAuth:
             raise AuthError("agent_unavailable", str(getattr(exc, "message", exc)))
 
 
+def is_localhost(name):
+    """Whether a hostname is one systemd treats as no hostname at all."""
+
+    name = name.lower().rstrip(".")
+    return name in ("localhost", "localhost.localdomain") or name.endswith(
+        (".localhost", ".localhost.localdomain")
+    )
+
+
+def hostname_cleanup(name):
+    """A hostname as systemd cleans one read from /etc/hostname, or "" where
+    systemd would refuse it.
+
+    Only ASCII letters, digits, '-' and '.' are kept; a dot or hyphen is
+    dropped where a label would start with one, a dot where a label would end
+    with a hyphen, one trailing dot or hyphen goes, and it ends at 64
+    characters.
+    """
+
+    out, dot, hyphen = [], True, True
+    for char in name:
+        if len(out) >= 64:
+            break
+        if char == ".":
+            if dot or hyphen:
+                continue
+            dot, hyphen = True, False
+        elif char == "-":
+            if dot:
+                continue
+            dot, hyphen = False, True
+        elif char.isascii() and char.isalnum():
+            dot = hyphen = False
+        else:
+            continue
+        out.append(char)
+    if out and out[-1] in "-.":
+        out.pop()
+    cleaned = "".join(out)
+    return "" if cleaned.endswith("-") else cleaned
+
+
+UNCHECKED_PASSWORD_CODES = ("login_busy", "agent_unavailable")
+
+_AUDIT_REASON_FOR_CODE = {"login_busy": "busy"}
+
+
+def audit_reason(code):
+    """The audit reason for an ``AuthError`` code, in the agent's vocabulary.
+
+    The agent refuses a reason it does not know, and the web counts a refused
+    record as unrecorded until it restarts. An unknown code is recorded
+    without a reason rather than lost.
+    """
+
+    reason = _AUDIT_REASON_FOR_CODE.get(code, code)
+    return reason if reason in validation.WEB_AUDIT_REASONS else ""
+
+
 class ApplianceWebApp:
     """Routing, session handling and agent delegation."""
 
@@ -188,6 +251,8 @@ class ApplianceWebApp:
         )
         self._time = time_fn or time.time
         self._lock = threading.Lock()
+        self._password_checks = threading.BoundedSemaphore(DEFAULT_CONCURRENT_PASSWORD_CHECKS)
+        self.hostname_file = HOSTNAME_FILE
         # Browser tests need a deterministic reset. The endpoint only exists
         # when the host explicitly starts the service in test mode.
         self.test_mode = os.environ.get(TEST_MODE_ENV) == "1"
@@ -228,8 +293,29 @@ class ApplianceWebApp:
         return True
 
     def probe_hostname(self):
-        import socket
+        """The host's static hostname, read on every call.
 
+        ProtectHostname= gives this unit a UTS namespace of its own, copied at
+        start, so gethostname() keeps the name the host had then. The file
+        hostnamectl writes is the host's, and stays readable in the sandbox; the
+        kernel name answers only for a host that has no static hostname. Its
+        first 64 KiB are read as systemd reads the file: the first name line,
+        cleaned, and ``localhost`` there is none.
+        """
+
+        try:
+            with open(self.hostname_file, "rb") as handle:
+                content = handle.read(65536)
+        except OSError:
+            content = b""
+        for raw in re.split(rb"\r\n|[\r\n\0]", content):
+            line = raw.strip(b" \t").decode("latin-1")
+            if not line or line.startswith("#"):
+                continue
+            name = hostname_cleanup(line)
+            if name and not is_localhost(name):
+                return name
+            break
         return socket.gethostname()
 
     # --- session ---------------------------------------------------------
@@ -245,40 +331,31 @@ class ApplianceWebApp:
         across either lets a handful of unauthenticated attempts make the login
         page unusable for the operator.
 
-        An attempt the agent could not judge is audited but never counted: the
-        password was never read, so it must not push an operator towards a
-        lockout that outlives the outage.
+        An attempt nobody judged -- the agent was unreachable, or every password
+        check was taken -- is audited but never counted: the password was never
+        read, so it must not push an operator towards a lockout.
         """
 
-        with self._lock:
-            limited = self.rate_limiter.limited(source_ip)
-            retry_after = self.rate_limiter.retry_after(source_ip) if limited else 0
-            # Counted here rather than after the derivation. The check and the
-            # count have to be one step under the lock, or every concurrent
-            # attempt passes a check that no failure has been recorded against
-            # yet and the budget becomes the attacker's open-connection count --
-            # each one a PBKDF2 derivation in the root agent. Taken back below
-            # on a success and on an attempt the agent could not judge.
-            attempt = None if limited else self.rate_limiter.record_failure(source_ip)
-        if limited:
+        try:
+            attempt = self._count_attempt(source_ip)
+        except AuthError:
             self.audit.record(
                 "login.failure",
                 source_ip=source_ip,
                 result=RESULT_DENIED,
                 reason="rate_limited",
             )
-            raise AuthError(
-                "login_rate_limited",
-                f"too many failed attempts; try again in {retry_after} seconds",
-            )
+            raise
 
         try:
-            verified = self.auth.verify(password)
+            verified = self._password_check(self.auth.verify, password)
         except AuthError as exc:
-            with self._lock:
-                self.rate_limiter.forget(source_ip, attempt)
+            self._take_back(source_ip, attempt)
             self.audit.record(
-                "login.failure", source_ip=source_ip, result=RESULT_FAILURE, reason=exc.code
+                "login.failure",
+                source_ip=source_ip,
+                result=RESULT_FAILURE,
+                reason=audit_reason(exc.code),
             )
             raise
 
@@ -292,10 +369,64 @@ class ApplianceWebApp:
             raise AuthError("invalid_credentials", "the appliance password is not correct")
 
         with self._lock:
-            self.rate_limiter.reset(source_ip)
+            self._clear(source_ip, attempt)
             session = self.sessions.create(self.auth.generation())
         self.audit.record("login.success", source_ip=source_ip, result=RESULT_SUCCESS)
         return session
+
+    def _count_attempt(self, source_ip):
+        """Count one password attempt against its source before it is checked.
+
+        The check and the count are one step under the lock. Counted after the
+        derivation instead, every concurrent attempt passes a check no failure
+        has been recorded against yet, and the budget becomes the attacker's
+        open-connection count -- each one a PBKDF2 derivation in the root
+        agent. The stamp returned lets the attempt be taken back.
+        """
+
+        with self._lock:
+            if self.rate_limiter.limited(source_ip):
+                retry_after = self.rate_limiter.retry_after(source_ip)
+                if self.rate_limiter.held_by_network(source_ip):
+                    raise AuthError(
+                        "login_rate_limited",
+                        "too many failed attempts from this IPv6 network; try again in "
+                        f"{retry_after} seconds, or sign in over the appliance's IPv4 address",
+                    )
+                raise AuthError(
+                    "login_rate_limited",
+                    f"too many failed attempts; try again in {retry_after} seconds",
+                )
+            return self.rate_limiter.record_failure(source_ip)
+
+    def _take_back(self, source_ip, attempt):
+        with self._lock:
+            self.rate_limiter.forget(source_ip, attempt)
+
+    def _clear(self, source_ip, attempt):
+        """A password accepted, by a sign-in or by a change that went through:
+        its own attempt is no failure, and its address starts again. Called
+        under the lock."""
+
+        self.rate_limiter.forget(source_ip, attempt)
+        self.rate_limiter.reset(source_ip)
+
+    def _password_check(self, check, *args):
+        """One password check, or a refusal when every slot is taken.
+
+        Each check is a PBKDF2 derivation in the root agent. A queue would only
+        move the pile-up from the agent into this process, so the caller is
+        told to try again instead.
+        """
+
+        if not self._password_checks.acquire(blocking=False):
+            raise AuthError(
+                "login_busy", "another password is being checked; try again in a moment"
+            )
+        try:
+            return check(*args)
+        finally:
+            self._password_checks.release()
 
     def logout(self, session_id, *, source_ip):
         self.sessions.destroy(session_id)
@@ -309,7 +440,43 @@ class ApplianceWebApp:
         return self.sessions.create(self.auth.generation())
 
     def change_password(self, current, new_password, confirmation, *, source_ip):
-        self.auth.change(current, new_password, confirmation)
+        """The current password is checked the way a sign-in is: against the
+        same budget, in the same slots. Only a wrong current password counts;
+        every other refusal came before it was read or after it was found right.
+        """
+
+        try:
+            attempt = self._count_attempt(source_ip)
+        except AuthError:
+            self.audit.record(
+                "password.change",
+                source_ip=source_ip,
+                result=RESULT_DENIED,
+                reason="rate_limited",
+            )
+            raise
+        try:
+            self._password_check(self.auth.change, current, new_password, confirmation)
+        except AuthError as exc:
+            if exc.code != "current_password_invalid":
+                self._take_back(source_ip, attempt)
+                if exc.code in UNCHECKED_PASSWORD_CODES:
+                    self.audit.record(
+                        "password.change",
+                        source_ip=source_ip,
+                        result=RESULT_FAILURE,
+                        reason=audit_reason(exc.code),
+                    )
+                raise
+            self.audit.record(
+                "password.change",
+                source_ip=source_ip,
+                result=RESULT_FAILURE,
+                reason="invalid_password",
+            )
+            raise
+        with self._lock:
+            self._clear(source_ip, attempt)
         self.sessions.destroy_all()
         self.audit.record(
             "password.change",
@@ -445,7 +612,12 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         if not self.app.names_this_appliance(host):
             # Under DNS rebinding the browser makes Origin and Host agree on the
             # attacker's name, so comparing them proves nothing on its own.
-            self._error(403, "csrf_host_rejected", "the request names another host")
+            self._error(
+                403,
+                "csrf_host_rejected",
+                "this appliance does not answer to the name in the request; after a "
+                "rename use the new name, or open the Appliance Manager by its IP address",
+            )
             return False
         origin = self.headers.get("Origin")
         if origin:
@@ -603,10 +775,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         try:
             session = self.app.login(body.get("password"), source_ip=self._client_ip())
         except AuthError as exc:
-            status = 429 if exc.code == "login_rate_limited" else STATUS_FOR_CODE.get(
-                exc.code, 401
-            )
-            return self._error(status, exc.code, exc.message)
+            return self._error(STATUS_FOR_CODE.get(exc.code, 401), exc.code, exc.message)
         return self._send(
             200,
             {
