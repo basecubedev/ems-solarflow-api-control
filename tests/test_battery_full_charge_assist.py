@@ -145,6 +145,9 @@ def run_controller_once(controller, telemetry, writes_allowed=True):
     ), patch(
         "ems.controller.cfg.state_reconciliation_writes_allowed",
         return_value=writes_allowed,
+    ), patch(
+        "ems.controller.cfg.WINTER_CONFIG",
+        {**cfg.WINTER_DEFAULTS, "enabled": False},
     ):
         controller.run_once()
 
@@ -269,6 +272,22 @@ def test_disabled_feature_tracks_passively_but_does_not_write(tmp_path):
     record = store.get_device_state("WR1")
     assert record["last_full_charge_at"] is not None
     assert record["full_charge_assist_active"] is False
+
+
+def test_the_scenarios_do_not_depend_on_the_hour_they_run_at(tmp_path):
+    """Run at noon from October to March, the default winter window wrote minSoc."""
+
+    dev = device()
+    dev.session.post.return_value = SimpleNamespace(status_code=200)
+    store = BatteryFullChargeStateStore(str(tmp_path / "ems_state.sqlite"))
+    controller = controller_for(dev, store)
+
+    with configure_assist(enabled=False), patch.object(
+        cfg, "winter_month_active", return_value=True
+    ), patch.object(cfg, "winter_adjustment_window_active", return_value=True):
+        run_controller_once(controller, state(soc=95, soc_limit=1), writes_allowed=True)
+
+    dev.session.post.assert_not_called()
 
 
 def test_first_enable_seeds_schedule_and_does_not_charge(tmp_path):
