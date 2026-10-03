@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
 
 const ADMIN_IMAGE = "ghcr.io/basecubedev/ems-solarflow-admin:v0.9.0";
 
@@ -70,7 +71,7 @@ for (const scenario of [
     await page.reload();
     await page.locator('[data-start-path="manage_existing"]').click();
     await page.locator('[data-open-maintenance-path="status"]').click();
-    await page.locator('[data-maintenance-toggle="maintenance-versions"]').click();
+    await new MaintenancePage(page).openStatusCard("maintenance-versions");
 
     await expect(page.locator("#maintenance-admin-image")).toHaveText(ADMIN_IMAGE);
     await expect(page.locator("#maintenance-ems-image")).toHaveText(

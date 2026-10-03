@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
 import { post } from "./helpers/setup-authority";
 
 // Recovering a stranded Admin workflow used to mean deleting a JSON file over
@@ -48,15 +49,9 @@ async function openManualPanel(page: Page) {
 
 async function openRecoveryCard(page: Page) {
   await openManualPanel(page);
-  const body = page.locator("#maintenance-workflow-recovery-body");
   // A blocking verdict opens the card by itself; a healthy one is expanded by
   // the operator, which is exactly the difference this helper preserves.
-  if (!(await body.isVisible())) {
-    await page
-      .locator('[data-maintenance-toggle="maintenance-workflow-recovery"]')
-      .click();
-  }
-  await expect(body).toBeVisible();
+  await new MaintenancePage(page).openStatusCard("maintenance-workflow-recovery");
 }
 
 async function login(page: Page) {

@@ -5320,9 +5320,48 @@ def test_js_maintenance_overview_is_deterministic():
     # panel after it was revealed.
     assert "await loadMaintenanceConfig()" in overview
     assert "await loadMaintenanceContainerPlan({ showPostApply })" in overview
-    # No unawaited fire-and-forget reloads remain.
-    assert "\n  loadMaintenanceConfig();" not in overview
+    # No unawaited fire-and-forget reloads remain, at any indentation.
+    assert not re.search(r"^\s*load\w*\(", overview, re.MULTILINE)
     assert "loadMaintenanceContainerPlan({ showPostApply: false })" not in overview
+
+
+def _js_function_body(js, signature):
+    assert js.count(signature) == 1, signature
+    return js.split(signature, 1)[1].split("\n}\n", 1)[0]
+
+
+def test_js_status_reloads_outside_the_overview_mark_the_page_busy():
+    """A container sync, a recheck and the read-back after an MQTT migration
+    move the status page as the overview does; each runs inside the same busy
+    mark, or a press made meanwhile can land on another control. No browser
+    test reaches the sync, so this is what holds it."""
+
+    js = _read("admin.js")
+    sync = _js_function_body(js, "async function syncMaintenanceContainers(")
+    migration = _js_function_body(js, "async function applyMqttMigration(")
+    assert (
+        "    await whileMaintenanceStatusLoads(async () => {\n"
+        "      await loadMaintenanceOverview({ refreshConfig: false, refreshContainerPlan: false });\n"
+        "      await loadMaintenanceContainerPlan({ showPostApply: keepPostApply });\n"
+        "    });"
+    ) in sync
+    assert (
+        "    await whileMaintenanceStatusLoads(async () => {\n"
+        "      await loadMaintenanceConfig();\n"
+        "      await loadZendureMqttRuntimeStatus();\n"
+        "      await loadMqttMigrationReview();\n"
+        "    });"
+    ) in migration
+    for button, show in (("mconfigEls.containersRecheck", "true"), ("maintenanceEls.runtimeContainersRecheck", "false")):
+        handler = (
+            f'  {button}.addEventListener("click", () =>\n'
+            "    whileMaintenanceStatusLoads(async () => {\n"
+            "      await loadMaintenanceOverview({ refreshConfig: false, refreshContainerPlan: false });\n"
+            f"      await loadMaintenanceContainerPlan({{ showPostApply: {show} }});\n"
+            "    })\n"
+            "  );"
+        )
+        assert js.count(handler) == 1, button
 
 
 def test_js_config_apply_does_not_reset_post_apply_via_overview():

@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
+import { MaintenancePage } from "./pages/maintenance-page";
 import { SetupPage } from "./pages/setup-page";
 import { post } from "./helpers/setup-authority";
 
@@ -225,9 +226,7 @@ test.describe("Guided workflow switching", { tag: ["@smoke", "@authority", "@wor
       );
       await page.locator('[data-open-maintenance-path="status"]').click();
       expect((await loaded).ok()).toBeTruthy();
-      await page
-        .locator('[data-maintenance-toggle="maintenance-workflow-recovery"]')
-        .click();
+      await new MaintenancePage(page).openStatusCard("maintenance-workflow-recovery");
       await expect(page.locator("#maintenance-workflow-recovery-safe")).toBeHidden();
       await expect(
         page.locator("#maintenance-workflow-recovery-advanced"),

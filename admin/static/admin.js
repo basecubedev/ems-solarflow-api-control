@@ -10682,6 +10682,27 @@ document.addEventListener("click", (event) => {
 });
 
 let maintenanceLoading = false;
+let maintenanceStatusLoads = 0;
+
+/**
+ * Run ``work`` with the status page marked busy until it has finished.
+ *
+ * Each section of the page appears or grows as its own read returns, so the
+ * page moves under the pointer while any of them is outstanding: a press can
+ * start on one control and end on another, and then neither acts. Loads that
+ * overlap are counted; the page reads idle once the last of them is done.
+ */
+async function whileMaintenanceStatusLoads(work) {
+  const panel = document.getElementById(MAINTENANCE_PANEL_IDS.status);
+  maintenanceStatusLoads += 1;
+  if (panel) panel.setAttribute("aria-busy", "true");
+  try {
+    return await work();
+  } finally {
+    maintenanceStatusLoads -= 1;
+    if (panel && maintenanceStatusLoads === 0) panel.setAttribute("aria-busy", "false");
+  }
+}
 
 async function loadMaintenanceOverview(options = {}) {
   const refreshConfig = options.refreshConfig !== false;
@@ -10690,30 +10711,33 @@ async function loadMaintenanceOverview(options = {}) {
 
   if (maintenanceLoading) return;
   maintenanceLoading = true;
-  try {
-    const resp = await fetch("/api/admin/maintenance/overview");
-    if (!resp.ok) throw new Error("maintenance overview request failed");
-    renderMaintenance(await resp.json());
-  } catch (err) {
-    renderMaintenanceError();
-  } finally {
-    maintenanceLoading = false;
-  }
+  await whileMaintenanceStatusLoads(async () => {
+    try {
+      const resp = await fetch("/api/admin/maintenance/overview");
+      if (!resp.ok) throw new Error("maintenance overview request failed");
+      renderMaintenance(await resp.json());
+    } catch (err) {
+      renderMaintenanceError();
+    } finally {
+      maintenanceLoading = false;
+    }
 
-  // Awaited follow-ups: an unawaited config reload would re-run
-  // renderMaintenanceConfig later and hide a just-revealed post-apply panel.
-  if (refreshConfig) {
-    await loadMaintenanceConfig();
-  }
-  if (refreshContainerPlan) {
-    await loadMaintenanceContainerPlan({ showPostApply });
-  }
-  await loadZendureMqttRuntimeStatus();
-  await loadMqttMigrationReview();
-  // Read the lifecycle verdict with the rest of Maintenance, so a blocked
-  // workflow is visible in the collapsed summary instead of only after the
-  // operator guesses that this card is the one to open.
-  await loadWorkflowRecovery({ quiet: true });
+    // Awaited follow-ups: an unawaited config reload would re-run
+    // renderMaintenanceConfig later and hide a just-revealed post-apply panel.
+    if (refreshConfig) {
+      await loadMaintenanceConfig();
+    }
+    if (refreshContainerPlan) {
+      await loadMaintenanceContainerPlan({ showPostApply });
+    }
+    await loadZendureMqttRuntimeStatus();
+    await loadMqttMigrationReview();
+    // Read the lifecycle verdict with the rest of Maintenance, so a blocked
+    // workflow is visible in the collapsed summary instead of only after the
+    // operator guesses that this card is the one to open.
+    await loadWorkflowRecovery({ quiet: true });
+    await maintenanceConfigSettled();
+  });
 }
 
 if (maintenanceEls.refresh) {
@@ -11178,9 +11202,11 @@ async function applyMqttMigration() {
         ? "Already migrated; no config write was needed. Refreshing validation…"
         : "Migration applied. Refreshing config, runtime and control readiness…";
     }
-    await loadMaintenanceConfig();
-    await loadZendureMqttRuntimeStatus();
-    await loadMqttMigrationReview();
+    await whileMaintenanceStatusLoads(async () => {
+      await loadMaintenanceConfig();
+      await loadZendureMqttRuntimeStatus();
+      await loadMqttMigrationReview();
+    });
     setMqttMigrationStage("validate", "done");
   } catch (err) {
     const message = err.message || String(err);
@@ -17254,11 +17280,29 @@ async function loadMaintenanceSettings(tab) {
   return undefined;
 }
 
-let mconfigLoading = false;
+let mconfigLoad = null;
 
 async function loadMaintenanceConfig(options) {
-  if (mconfigLoading) return null;
-  mconfigLoading = true;
+  if (mconfigLoad) return null;
+  mconfigLoad = readMaintenanceConfig(options);
+  try {
+    return await mconfigLoad;
+  } finally {
+    mconfigLoad = null;
+  }
+}
+
+/**
+ * Resolve once a config read already under way has rendered; at once when none is.
+ *
+ * The status page waits for it: that read fills the control and safety section
+ * above the cards, whoever started it.
+ */
+function maintenanceConfigSettled() {
+  return mconfigLoad || Promise.resolve(null);
+}
+
+async function readMaintenanceConfig(options) {
   try {
     const resp = await fetch("/api/admin/maintenance/config");
     if (!resp.ok) throw new Error("maintenance config request failed");
@@ -17273,8 +17317,6 @@ async function loadMaintenanceConfig(options) {
         "Could not load the current config. The Admin server may be unavailable.";
     }
     return null;
-  } finally {
-    mconfigLoading = false;
   }
 }
 
@@ -17855,8 +17897,10 @@ async function syncMaintenanceContainers(statusEl, reason = "manual") {
     // Refresh facts only; the container plan (and any visible post-apply panel)
     // is reloaded explicitly so the guided view is preserved.
     const keepPostApply = Boolean(mconfigEls.postApply && !mconfigEls.postApply.hidden);
-    await loadMaintenanceOverview({ refreshConfig: false, refreshContainerPlan: false });
-    await loadMaintenanceContainerPlan({ showPostApply: keepPostApply });
+    await whileMaintenanceStatusLoads(async () => {
+      await loadMaintenanceOverview({ refreshConfig: false, refreshContainerPlan: false });
+      await loadMaintenanceContainerPlan({ showPostApply: keepPostApply });
+    });
   } catch (err) {
     if (statusEl) statusEl.textContent = err.message || String(err);
   } finally {
@@ -17873,10 +17917,12 @@ if (mconfigEls.containersSync) {
   );
 }
 if (mconfigEls.containersRecheck) {
-  mconfigEls.containersRecheck.addEventListener("click", async () => {
-    await loadMaintenanceOverview({ refreshConfig: false, refreshContainerPlan: false });
-    await loadMaintenanceContainerPlan({ showPostApply: true });
-  });
+  mconfigEls.containersRecheck.addEventListener("click", () =>
+    whileMaintenanceStatusLoads(async () => {
+      await loadMaintenanceOverview({ refreshConfig: false, refreshContainerPlan: false });
+      await loadMaintenanceContainerPlan({ showPostApply: true });
+    })
+  );
 }
 if (mconfigEls.postDiagnostics) {
   mconfigEls.postDiagnostics.addEventListener("click", runDiagnostics);
@@ -17887,10 +17933,12 @@ if (maintenanceEls.runtimeContainersSync) {
   );
 }
 if (maintenanceEls.runtimeContainersRecheck) {
-  maintenanceEls.runtimeContainersRecheck.addEventListener("click", async () => {
-    await loadMaintenanceOverview({ refreshConfig: false, refreshContainerPlan: false });
-    await loadMaintenanceContainerPlan({ showPostApply: false });
-  });
+  maintenanceEls.runtimeContainersRecheck.addEventListener("click", () =>
+    whileMaintenanceStatusLoads(async () => {
+      await loadMaintenanceOverview({ refreshConfig: false, refreshContainerPlan: false });
+      await loadMaintenanceContainerPlan({ showPostApply: false });
+    })
+  );
 }
 if (maintenanceEls.runtimeDiagnostics) {
   maintenanceEls.runtimeDiagnostics.addEventListener("click", runDiagnostics);

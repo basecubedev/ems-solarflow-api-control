@@ -105,6 +105,19 @@ Tags: `@smoke` (fast critical journeys), `@setup`, `@maintenance`,
 - Prefer role/label, then `data-testid`, then CSS. Add a `data-testid` only when a
   stable hook is missing.
 - No arbitrary sleeps: wait for a response, a locator state, or an attribute.
+- Do not click on a page that is still moving. Playwright checks the target
+  only at the first pointer event, so when a section appears above the pointer
+  between the press and the release, the browser sends the click to the element
+  both events share and nothing happens -- no error, only a later step that
+  fails. The Maintenance status page renders one read at a time and says so
+  with `aria-busy="true"` while the reads that build it are out: the overview
+  with its follow-ups, a recheck or container sync, the read-back after an MQTT
+  migration. Open it with `MaintenancePage.openStatus`, which waits for that,
+  and its cards with `openStatusCard`, which also checks that the card opened.
+  A read a control on the page starts by itself -- diagnostics, a review
+  refresh, a recovery action -- is not marked; wait for its result before the
+  next click. The Firefox failure of the MQTT migration spec was this, and it
+  had been written off as a flake.
 
 ## Covered lifecycle workflows
 
