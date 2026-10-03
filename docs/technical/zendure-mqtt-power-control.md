@@ -810,10 +810,19 @@ and a new local confirmation clears the flag. A charge of the EMS's own matches
 as a charging device reports it — `outputLimit` 0 and, where reported, an
 `inputLimit` at the charge power — never as the negative target, which no
 device reports; comparing against that once flagged every steady charge as a
-foreign writer. Only a report that carries `outputLimit` as a finite number
-counts: the report parser turns `NaN`, `Infinity` and an integer too large for
-a float into a missing value (a scalar topic keeps such a number as text), and
-a missing value is never read as 0 W. Operators running Cloud MQTT
+foreign writer. A report also matches when it shows one of the last **two**
+own targets that left the slot unconfirmed since that confirmation — by an
+acknowledgement or confirmation timeout, or superseded or preempted by a newer
+target: commands leave the single slot one after another, so the device can
+still be holding the last one that left or, when that one never landed, the
+one before it. On a profile without acknowledgements every changed target
+supersedes the published one. A target sent again counts again. An older
+unconfirmed own target is not excused; a device holding it has missed two
+newer commands in a row. The confirmed target itself always matches. Only a
+report that carries `outputLimit` as a finite number counts: the report parser
+turns `NaN`, `Infinity` and an integer too large for a float into a missing
+value (a scalar topic keeps such a number as text), and foreign-writer
+detection never reads a missing value as 0 W. Operators running Cloud MQTT
 control must disable Zendure HEMS, Smart Matching, Zendure schedules and any
 other simultaneous controller (the Admin preview/apply and `diagnose` surface
 this advisory as `zendure_cloud_mqtt_single_controller`).

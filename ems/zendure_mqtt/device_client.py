@@ -15,7 +15,7 @@ import logging
 import math
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 from ems import config as cfg
 from ems.charge_record import (
@@ -109,6 +109,7 @@ MAX_CONFIRMATION_TOLERANCE_W = 200
 MAX_SAFETY_PREEMPT_MARGIN_W = 1000
 MAX_COMMAND_EVIDENCE_RECORDS = 1024
 MAX_COMMAND_EVIDENCE_AGE_SECONDS = 3600.0
+UNCONFIRMED_OWN_TARGET_HISTORY = 2
 
 
 class _WriteBlocked(Exception):
@@ -355,7 +356,7 @@ class ZendureMqttDeviceClient:
         self._telemetry_confirmation_override = telemetry_confirmation_supported
         self._last_confirmed_target = None
         self._last_confirmed_monotonic = None
-        self._unconfirmed_own_targets = set()
+        self._unconfirmed_own_targets = deque(maxlen=UNCONFIRMED_OWN_TARGET_HISTORY)
         self._ignored_report_values = []
         self._ignored_report_values_named = set()
         self._foreign_streak = 0
@@ -614,16 +615,12 @@ class ZendureMqttDeviceClient:
                 # retired command is terminal, so its late reply/telemetry can
                 # never confirm the replacement.
                 mark_superseded(active, now_monotonic=now)
-                self._last_command_state = active.state
-                self._active_command = None
-                self._active_correlation_id = None
+                self._release_superseded(active)
                 self._discard_pending_target("superseded_by_safety_target")
                 return self._publish_target(target, now, found_exit=found_exit)
             if self._should_supersede_latest(active):
                 mark_superseded(active, now_monotonic=now)
-                self._last_command_state = active.state
-                self._active_command = None
-                self._active_correlation_id = None
+                self._release_superseded(active)
                 self._discard_pending_target("superseded_by_latest_target")
                 return self._publish_target(target, now, found_exit=found_exit)
             if self._pending_target == target and self._pending_correlation_id:
@@ -1361,7 +1358,7 @@ class ZendureMqttDeviceClient:
             self._active_command = None
             self._active_correlation_id = None
             if record.published_monotonic is not None:
-                self._unconfirmed_own_targets.add(record.target_w)
+                self._remember_unconfirmed_own_target(record.target_w)
             if record.state == STATE_CONFIRMATION_TIMED_OUT:
                 log_event(
                     logging.WARNING,
@@ -1460,7 +1457,7 @@ class ZendureMqttDeviceClient:
 
         self._last_confirmed_target = record.target_w
         self._last_confirmed_monotonic = now_monotonic
-        self._unconfirmed_own_targets = set()
+        self._unconfirmed_own_targets.clear()
         self._foreign_streak = 0
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
@@ -1486,14 +1483,39 @@ class ZendureMqttDeviceClient:
                 reason="not_a_usable_number",
             )
 
+    def _release_superseded(self, record):
+        """Free the slot of a command a newer one replaced before it was confirmed."""
+
+        self._last_command_state = record.state
+        self._active_command = None
+        self._active_correlation_id = None
+        if record.published_monotonic is not None:
+            self._remember_unconfirmed_own_target(record.target_w)
+
+    def _remember_unconfirmed_own_target(self, target_w):
+        """Remember an own target that left the slot unconfirmed; keep the last two.
+
+        A published command leaves the slot by a confirmation or acknowledgement
+        timeout, or because a newer target superseded or preempted it, and the
+        next is published only after it has left, in publish order. Once the
+        slot is free the device can still legitimately report the target that
+        left it last, or the one before it when the last never landed. A target
+        sent again is a command again and counts again. An older unconfirmed
+        own target needs two newer commands lost in a row, so a report of it
+        counts as foreign evidence instead of being excused until the next
+        confirmation.
+        """
+
+        self._unconfirmed_own_targets.append(target_w)
+
     def _detect_external_control(self, snapshot):
         """Conservatively flag a foreign writer overwriting a confirmed target.
 
         Requires: no local command in flight, a previously *confirmed* local
         target, and at least two successive newer telemetry reports that show
-        neither that target nor any own target released unconfirmed since,
-        which the device may apply late -- for a discharge its ``outputLimit``,
-        for a charge the report a charging device gives (see
+        neither that target nor the last two own targets released unconfirmed
+        since, which the device may apply late -- for a discharge its
+        ``outputLimit``, for a charge the report a charging device gives (see
         ``_reports_own_target``). Only a finite number the report carried
         counts; a missing value is not read as 0 W. Reports evidence only —
         never claims which controller is responsible.
