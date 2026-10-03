@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
+import sys
 import copy
 import shutil
 import stat
@@ -1245,10 +1246,153 @@ def test_runtime_load_forces_safe_mode_for_template_placeholders(tmp_path, caplo
         ("notexample.com", False),
         ("https://notexample.com/api", False),
         ("Zendure/sensor/YOUR_D0_SERIAL/totalPower", True),
+        ("[2001:db8::1]", False),
+        ("meter[1]/SENSOR", False),
+        ("http://admin:pa[ss@192.0.2.5/cm?cmnd=Status%2010", False),
     ],
 )
 def test_template_placeholder_url_detection_uses_hostname(value, expected):
     assert cfg.is_template_placeholder_value(value) is expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("[2001:db8::1]", False),
+        ("192.0.2.100", False),
+        ("[192.0.2.100", True),
+        ("[not-an-address]", True),
+        ("http://[::1", True),
+    ],
+)
+def test_an_address_nothing_can_parse_is_held_like_a_placeholder(value, expected):
+    """It raised out of startup; a device or broker address like it reaches nothing."""
+
+    assert cfg.is_template_placeholder_value(value, address=True) is expected
+
+
+def test_the_implicit_default_broker_is_named_by_the_key_that_holds_it():
+    config = {
+        "devices": [{"name": "WR1", "ip": "192.0.2.20", "sn": "SN1"}],
+        "grid_meter": {
+            "type": "mqtt",
+            "mqtt": {"broker_ref": "default", "topic": "meter/power"},
+        },
+        "zendure_mqtt": {"host": "192.168.1.100"},
+    }
+
+    assert cfg.template_placeholder_paths(config) == ["zendure_mqtt.host"]
+
+
+def test_a_tasmota_meter_given_by_address_names_the_address_field():
+    config = {
+        "devices": [{"name": "WR1", "ip": "192.0.2.20", "sn": "SN1"}],
+        "grid_meter": {"type": "tasmota_http", "ip": "192.168.1.50", "power_path": "a.b"},
+    }
+
+    assert cfg.template_placeholder_paths(config) == ["grid_meter.ip"]
+
+
+def test_a_blank_tasmota_url_falls_back_to_the_address_as_the_client_does():
+    config = {
+        "devices": [{"name": "WR1", "ip": "192.0.2.20", "sn": "SN1"}],
+        "grid_meter": {"type": "tasmota_http", "url": "  ", "ip": "192.0.2.5", "power_path": "a"},
+    }
+
+    assert cfg.template_placeholder_paths(config) == []
+
+
+def test_a_config_nested_past_the_recursion_limit_cannot_be_judged():
+    deep = node = {}
+    for _ in range(sys.getrecursionlimit() * 2):
+        node["a"] = {}
+        node = node["a"]
+
+    assert cfg.stored_config_placeholder_paths(deep) is None
+    assert cfg.config_control_flags(deep)["dry_run"] is False
+    assert cfg.resolve_config_write_gate(deep, "api").allowed is False
+
+
+def test_a_device_label_survives_the_serial_redaction():
+    from ems.diagnostics import diagnose_redact_text
+
+    config = {
+        "devices": [{"name": "Garage Ost", "ip": "192.0.2.20", "sn": "YOUR_SN"}],
+        "grid_meter": {"type": "shelly", "ip": "192.0.2.50"},
+    }
+    text = ", ".join(cfg.stored_config_placeholder_fields(config))
+
+    assert diagnose_redact_text(text) == text == "Garage Ost: devices[0].sn"
+
+
+def _stored(**overrides):
+    values = json.loads((ROOT / "config" / "config.template.json").read_text())
+    values["grid_meter"]["ip"] = "192.0.2.50"
+    values["devices"] = [{**values["devices"][0], "ip": "192.0.2.100", "sn": "REAL_SN"}]
+    for key, value in overrides.items():
+        if value is None:
+            values.pop(key, None)
+        else:
+            values[key] = value
+    return values
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        pytest.param(_stored(), id="configured"),
+        pytest.param(_stored(grid_meter=None), id="no-grid-meter"),
+        pytest.param(
+            _stored(grid_meter=None, shelly={"ip": "192.168.1.50"}), id="legacy-shelly-template"
+        ),
+        pytest.param(
+            _stored(grid_meter=None, shelly={"ip": "192.0.2.51"}), id="legacy-shelly-configured"
+        ),
+        pytest.param(_stored(system=None), id="no-system-block"),
+        pytest.param(
+            _stored(system={"dry_run": "false", "allow_hardware_writes": True}),
+            id="quoted-dry-run",
+        ),
+        pytest.param(
+            _stored(devices=[{"name": "WR1", "ip": "192.0.2.100", "sn": ""}]), id="empty-serial"
+        ),
+    ],
+)
+def test_the_stored_config_projection_matches_what_the_loader_runs_with(tmp_path, values):
+    """Diagnose and the Admin state what EMS does once it has loaded the file."""
+
+    snapshot = snapshot_config_module()
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
+    flags = cfg.config_control_flags(values)
+    gate = cfg.resolve_config_write_gate(values, "api")
+    placeholders = cfg.stored_config_placeholder_paths(values)
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert flags["enabled"] is cfg.SYSTEM_ENABLED
+        assert flags["dry_run"] is cfg.DRY_RUN
+        assert gate.allowed is cfg.control_writes_allowed("api")
+        assert bool(placeholders) is bool(cfg.template_placeholder_paths(cfg.CONFIG))
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_an_address_nothing_can_parse_keeps_ems_in_safe_mode(tmp_path):
+    """It raised out of startup, which under Docker is a restart loop."""
+
+    snapshot = snapshot_config_module()
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
+    values = json.loads((ROOT / "config" / "config.template.json").read_text())
+    values["grid_meter"]["ip"] = "192.0.2.50"
+    values["devices"] = [{**values["devices"][0], "ip": "[192.0.2.100", "sn": "REAL_SN"}]
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.DRY_RUN is True
+        assert cfg.ALLOW_HARDWARE_WRITES is False
+    finally:
+        restore_config_module(snapshot)
 
 
 def test_runtime_load_keeps_live_mode_after_required_values_are_configured(tmp_path):

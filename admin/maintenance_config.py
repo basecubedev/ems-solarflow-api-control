@@ -63,6 +63,7 @@ from ems.config import (
     resolve_config_write_gate,
     resolve_grid_meter_mqtt_settings,
     resolve_mqtt_tls_metadata,
+    stored_config_placeholder_fields,
     TLS_INSECURE_WITHOUT_TLS,
 )
 from ems.config_catalog import (
@@ -253,6 +254,52 @@ def _attach_physical_identity_tokens(value, token_key, *, broker_sources=None):
     walk(value, broker_sources or {})
 
 
+def _cloud_route_ids_of(node, sources):
+    """The cloud route ids a cloud device node names; ``None`` for any other node."""
+
+    mqtt = node.get("mqtt")
+    if not isinstance(mqtt, dict):
+        return None
+    broker_ref = str(mqtt.get("broker_ref") or "default").strip()
+    source = str(mqtt.get("source") or sources.get(broker_ref) or "")
+    if source != "zendure_cloud_mqtt":
+        return None
+    return {
+        raw.strip()
+        for raw in (
+            mqtt.get("device_id"),
+            mqtt.get("product_key"),
+            node.get("device_id"),
+            node.get("product_key"),
+        )
+        if isinstance(raw, str) and raw.strip()
+    }
+
+
+def cloud_route_masker(config):
+    """A function masking a text built from ``config`` as the browser draft masks it."""
+
+    if not isinstance(config, dict):
+        return lambda text: mask_external_mqtt_string(text, sensitive_values=frozenset())
+    sources = broker_sources_from_config(config)
+    sensitive = set()
+
+    def collect(node):
+        if isinstance(node, dict):
+            sensitive.update(_cloud_route_ids_of(node, sources) or ())
+            for child in node.values():
+                collect(child)
+        elif isinstance(node, list):
+            for child in node:
+                collect(child)
+
+    collect(config)
+    values = frozenset(sensitive)
+    return lambda text: mask_external_mqtt_string(
+        text, sensitive_values=values, cloud_scoped=bool(values)
+    )
+
+
 def _redact_cloud_mqtt_route_ids(value, *, broker_sources=None):
     """Hide account-scoped cloud route ids while preserving physical serials."""
 
@@ -296,27 +343,15 @@ def _redact_cloud_mqtt_route_ids(value, *, broker_sources=None):
 
     def walk(node):
         if isinstance(node, dict):
-            mqtt = node.get("mqtt")
-            if isinstance(mqtt, dict):
-                broker_ref = str(mqtt.get("broker_ref") or "default").strip()
-                source = str(mqtt.get("source") or sources.get(broker_ref) or "")
-                if source == "zendure_cloud_mqtt":
-                    sensitive = {
-                        raw.strip()
-                        for raw in (
-                            mqtt.get("device_id"),
-                            mqtt.get("product_key"),
-                            node.get("device_id"),
-                            node.get("product_key"),
-                        )
-                        if isinstance(raw, str) and raw.strip()
-                    }
-                    all_sensitive.update(sensitive)
-                    mask_strings(node, sensitive)
-                    for target in (mqtt, node):
-                        for key in ("device_id", "product_key"):
-                            if target.get(key) not in (None, ""):
-                                target[key] = _REDACTED
+            sensitive = _cloud_route_ids_of(node, sources)
+            if sensitive is not None:
+                mqtt = node["mqtt"]
+                all_sensitive.update(sensitive)
+                mask_strings(node, sensitive)
+                for target in (mqtt, node):
+                    for key in ("device_id", "product_key"):
+                        if target.get(key) not in (None, ""):
+                            target[key] = _REDACTED
             for child in node.values():
                 walk(child)
         elif isinstance(node, list):
@@ -749,7 +784,10 @@ def _control_state(config):
             }
         )
 
-    if not flags["enabled"]:
+    placeholders = stored_config_placeholder_fields(config, name=cloud_route_masker(config))
+    if placeholders:
+        status = "safe_mode"
+    elif not flags["enabled"]:
         status = "disabled"
     elif flags["simulation_mode"]:
         status = "simulated"
@@ -775,6 +813,7 @@ def _control_state(config):
         "dry_run": flags["dry_run"],
         "simulation_mode": flags["simulation_mode"],
         "state_reconciliation": flags["allow_state_reconciliation_writes"],
+        "placeholder_fields": placeholders,
         "transports": transports,
         "envelope": envelope,
     }

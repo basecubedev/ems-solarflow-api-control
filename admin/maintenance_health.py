@@ -178,6 +178,37 @@ def _warning_findings(warnings):
     return findings
 
 
+def _safe_mode_findings(paths):
+    config = _mapping(paths.get("config"))
+    fields = config.get("placeholder_fields")
+    if config.get("exists") and "placeholder_fields" in config and fields is None:
+        return [
+            _finding(
+                "config_unreadable",
+                "warning",
+                "Your settings file could not be read",
+                "config.json exists but could not be read, parsed or checked, so "
+                "this page cannot say whether EMS changes your inverters.",
+                "Check that the Admin Console may read config.json and that it is "
+                "valid JSON; the Settings page shows what is wrong with it.",
+            )
+        ]
+    if not isinstance(fields, list) or not fields:
+        return []
+    return [
+        _finding(
+            "ems_safe_mode",
+            "warning",
+            "EMS writes nothing yet",
+            "EMS runs in safe mode, calculating targets but changing no inverter, "
+            "until these config.json fields have a real value: "
+            + ", ".join(str(field) for field in fields)
+            + ".",
+            "Fill in these values in the settings, then restart EMS.",
+        )
+    ]
+
+
 def build_maintenance_health(overview):
     """Rank what the Maintenance overview proves about this installation."""
 
@@ -220,6 +251,7 @@ def build_maintenance_health(overview):
     findings.extend(_container_findings(install, containers))
     findings.extend(_warning_findings(overview.get("warnings")))
     findings.extend(_restart_findings(paths, containers))
+    findings.extend(_safe_mode_findings(paths))
 
     findings.sort(key=lambda finding: SEVERITIES.index(finding["severity"]))
     status = findings[0]["severity"] if findings else "ok"

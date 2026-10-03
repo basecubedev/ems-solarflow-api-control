@@ -341,11 +341,19 @@ def test_a_non_boolean_control_flag_resolves_to_its_blocking_side(flag, blocking
     assert flags[flag] is blocking
 
 
-@pytest.mark.parametrize("config", [None, [], "config", {}, {"system": "broken"}])
+@pytest.mark.parametrize("config", [None, [], "config", {"system": "broken"}])
 def test_control_flags_stay_safe_for_an_unreadable_config(config):
     flags = cfg.config_control_flags(config)
     assert flags["dry_run"] is False
     assert flags["simulation_mode"] is False
+
+
+def test_a_config_without_a_system_block_runs_dry_as_ems_loads_it():
+    """Not unreadable: the loader merges its defaults, and they run dry."""
+
+    flags = cfg.config_control_flags({})
+    assert flags["dry_run"] is True
+    assert cfg.resolve_config_write_gate({}, "api").allowed is False
 
 
 def test_grouped_control_devices_back_the_counts():

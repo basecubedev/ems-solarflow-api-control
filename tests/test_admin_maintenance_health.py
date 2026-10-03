@@ -253,3 +253,101 @@ def test_the_health_block_is_rebuildable_from_the_payload(tmp_path):
         {key: value for key, value in overview.items() if key != "health"}
     )
     assert recomputed == overview["health"]
+
+
+def test_safe_mode_is_named_with_the_fields_that_hold_it():
+    """It stood beside a safe-mode control card that said nothing may write."""
+
+    overview = _overview()
+    overview["paths"]["config"]["placeholder_fields"] = ["WR2: devices[1].sn"]
+    health = build_maintenance_health(overview)
+    finding = _by_code(health, "ems_safe_mode")
+    assert finding["severity"] == "warning"
+    assert "WR2: devices[1].sn" in finding["message"]
+    assert health["status"] == "warning"
+
+
+def test_the_overview_reads_safe_mode_from_the_stored_config(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        '{"devices": [{"name": "WR1", "ip": "192.168.1.100", "sn": "SN1"}],'
+        ' "grid_meter": {"type": "shelly", "ip": "192.0.2.50"}}',
+        encoding="utf-8",
+    )
+
+    overview = run_maintenance_overview(base_dir=str(tmp_path))
+
+    assert overview["paths"]["config"]["placeholder_fields"] == ["WR1: devices[0].ip"]
+    assert "ems_safe_mode" in _codes(overview["health"])
+
+
+def test_an_unreadable_config_is_reported_rather_than_read_as_clean(tmp_path):
+    """No safe-mode finding must not mean "nothing holds EMS" when nothing was read."""
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text("{not json", encoding="utf-8")
+
+    overview = run_maintenance_overview(base_dir=str(tmp_path))
+
+    assert overview["paths"]["config"]["placeholder_fields"] is None
+    assert "config_unreadable" in _codes(overview["health"])
+    assert "ems_safe_mode" not in _codes(overview["health"])
+
+
+def test_a_cloud_route_id_in_a_device_name_stays_masked(tmp_path):
+    """The draft masks it everywhere; the safe-mode labels must not undo that."""
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        '{"zendure_mqtt": {"brokers": {"cloud": {"host": "mqtt.example.net",'
+        ' "source": "zendure_cloud_mqtt"}}},'
+        ' "devices": ['
+        '{"name": "Cloud", "type": "zendure_mqtt",'
+        ' "mqtt": {"broker_ref": "cloud", "device_id": "Zx9CloudDev42"}},'
+        '{"name": "Local Zx9CloudDev42", "ip": "192.0.2.30", "sn": ""}],'
+        ' "grid_meter": {"type": "shelly", "ip": "192.0.2.50"}}',
+        encoding="utf-8",
+    )
+
+    overview = run_maintenance_overview(base_dir=str(tmp_path))
+
+    fields = overview["paths"]["config"]["placeholder_fields"]
+    assert fields and all("Zx9CloudDev42" not in field for field in fields)
+    assert "Zx9CloudDev42" not in _by_code(overview["health"], "ems_safe_mode")["message"]
+
+
+def test_a_config_too_deep_to_mask_reads_as_unreadable(tmp_path, monkeypatch):
+    """The overview also feeds container actions; it must not raise."""
+
+    import admin.maintenance
+
+    def too_deep(config):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(admin.maintenance, "cloud_route_masker", too_deep)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text('{"devices": []}', encoding="utf-8")
+
+    overview = run_maintenance_overview(base_dir=str(tmp_path))
+
+    assert overview["paths"]["config"]["placeholder_fields"] is None
+    assert "config_unreadable" in _codes(overview["health"])
+
+
+def test_a_credential_in_a_device_name_is_masked_like_the_draft(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        '{"devices": [{"name": "password: hunter2", "ip": "192.0.2.30", "sn": ""}],'
+        ' "grid_meter": {"type": "shelly", "ip": "192.0.2.50"}}',
+        encoding="utf-8",
+    )
+
+    overview = run_maintenance_overview(base_dir=str(tmp_path))
+
+    fields = overview["paths"]["config"]["placeholder_fields"]
+    assert fields and all("hunter2" not in field for field in fields)

@@ -56,6 +56,8 @@ def write_config(path):
         "devices": [
             {
                 "name": "WR1",
+                "ip": "192.0.2.20",
+                "sn": "SN-TEST-0001",
                 "max_power": 800,
                 "pv_priority_factor": 1.0,
                 "min_soc": 15,
@@ -191,6 +193,32 @@ def test_root_causes_are_structured_for_control_and_quality(tmp_path):
     assert any(cause["code"] == "dry_run_enabled" for cause in payload["control"]["root_causes"])
     assert any(cause["code"] == "minimum_soc_protection_active" for cause in payload["control"]["root_causes"])
     assert any(cause["code"] == "export_peaks_detected" for cause in payload["control_quality"]["root_causes"])
+
+
+def test_safe_mode_is_reported_with_a_stable_code_and_root_cause(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["devices"][0]["sn"] = "YOUR_SN"
+    config_path.write_text(json.dumps(config))
+    write_runtime(tmp_path)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+    payload = json.loads(result.stdout)
+
+    assert_cli_status_matches_payload(result, payload)
+    check = next(
+        check for check in payload["checks"]
+        if check["code"] == "template_placeholders_safe_mode"
+    )
+    assert check["level"] == "warning"
+    assert check["details"]["paths"] == ["devices[0].sn"]
+    assert payload["control"]["snapshot"]["template_placeholders"] == ["devices[0].sn"]
+    cause = next(
+        cause for cause in payload["root_causes"]
+        if cause["code"] == "template_placeholders_safe_mode"
+    )
+    assert_root_cause_contract(cause)
 
 
 def test_support_bundle_contract_files_and_metadata(tmp_path):

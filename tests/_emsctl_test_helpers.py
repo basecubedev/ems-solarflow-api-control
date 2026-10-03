@@ -40,6 +40,8 @@ def write_config(path):
         "devices": [
             {
                 "name": "WR1",
+                "ip": "192.0.2.20",
+                "sn": "SN-TEST-0001",
                 "max_power": 800,
                 "pv_priority_factor": 1.1,
             }
@@ -156,8 +158,8 @@ def write_two_device_config(path):
     write_config(path)
     config = json.loads(path.read_text())
     config["devices"] = [
-        {"name": "WR1", "max_power": 800, "pv_priority_factor": 1.0, "min_soc": 15},
-        {"name": "WR2", "max_power": 800, "pv_priority_factor": 1.0, "min_soc": 15},
+        {"name": "WR1", "ip": "192.0.2.20", "sn": "SN-TEST-0001", "max_power": 800, "pv_priority_factor": 1.0, "min_soc": 15},
+        {"name": "WR2", "ip": "192.0.2.21", "sn": "SN-TEST-0002", "max_power": 800, "pv_priority_factor": 1.0, "min_soc": 15},
     ]
     path.write_text(json.dumps(config))
     return config

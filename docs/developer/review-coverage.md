@@ -27,6 +27,7 @@ decision first.
 | # | Date | Base | Branch | Method |
 |---|---|---|---|---|
 | 1 | 2026-10-02 | `origin/main` at `c47efe3b` | `review/full-system-review` | Round 1: eight parallel read-only reviewers per area, every finding re-verified and fixed contract-first. Round 2: the areas round one did not reach, plus an adversarial review of the round-one diff (its nine regressions were fixed before merge). Round 3: MQTT control a second time. Fixes from rounds 2–3 were made by per-area agents in separate worktrees and each re-verified. Round 4: an adversarial review of every round 2–3 commit and of the amendments folded into round 1 after its review; each finding needed a reproduction. Round 5: the same for the round 4 corrections. Round 6: the same for the round 5 corrections. Rounds 7 onwards: the same for each following correction, until a round found nothing |
+| 2 | 2026-10-03 | `origin/main` at `f8bc539b` | `review/full-system-review` | Follow-up on the open register: each item fixed contract-first in one thematic commit, then reviewed by an independent adversarial reviewer, round after round, until a round found nothing. Every correction a round found is folded into the commit it corrects; the rounds are summarised per item below |
 
 ## Coverage
 
@@ -206,10 +207,19 @@ the fix is folded into the commit it corrects.
 | R8-F1 | low | The refusal's fix hint only fitted "TLS off, verification skipped"; for a `tls_mode` contradiction or a quoted boolean it pointed at the wrong key | The hint follows the resolver's own error (`TLS_INSECURE_WITHOUT_TLS`); other errors, including non-boolean values such as `0`, name the general rule |
 | R9-F1 | low | Round 8 re-derived the pair condition, so `tls: 0` got the specific hint and a whitespace `tls_mode` the general one | Same resolution as R8-F1: the hint is chosen from the resolver's error, not re-derived |
 
+## Findings fixed in review 2
+
+Each line names the commit that fixed it, and what the review rounds found in
+the fix before it was committed.
+
+| ID | Sev. | Finding | Commit | Review rounds |
+|---|---|---|---|---|
+| D2 | high | `diagnose`, its control snapshot and the Admin Console's control projection said nothing about the template placeholders that hold EMS in safe mode, and read `dry_run` raw (a quoted, null or numeric value ran dry but was reported as live) | fix: diagnose and the Admin Console name the fields that keep EMS in safe mode | 5 rounds. Found and folded in: the projection judged the raw file rather than the loader's (a legacy `shelly` block, a missing `grid_meter` or `system` block differed); an error level failed the Guided Upgrade health gate (now a warning); the implicit default broker was named by a key that does not exist; fail-closed parsing reached non-address fields (an MQTT topic with `[`); the status page said "nothing needs your attention" beside safe mode; device-named labels bypassed the Admin's cloud-route masking and were mangled by the serial redactor; a config nested past the recursion limit crashed diagnose and the Admin; an unreadable config read as clean |
+
 ## Open register
 
 Suggested order for the next session: the high items first (A-H1 with the
-two-step plan in its row, A-H2, A-H4, D2), then the design decisions that
+two-step plan in its row, A-H2, A-H4), then the design decisions that
 block work (AM9/AM10/AM13 together, AP4, AP8, K10 with hardware evidence),
 then the medium small items, then the lows. Each fix follows
 `docs/developer/agent-rules.md` and moves its row to the fixed tables above.
@@ -230,7 +240,6 @@ reproduction; confirm or drop them before fixing.
 | C9 | medium | small | Admin config mutation passes unparsable, non-finite and out-of-range values and maps unknown boolean strings to `False`; callers ignore the issues | Return issues from coercion and make preview/apply refuse them |
 | E4 | medium | large | No cross-process lock on runtime state; two writers within the same instant can still lose a change | flock in `RuntimeState` and emsctl |
 | E7 | medium | large | `diagnose --control`/`--control-quality` evaluate fields the EMS never writes to runtime state; the dashboard diagnose shares this | Read a live snapshot from the running EMS, or narrow the modes and their docs |
-| D2 | high | large | `diagnose` says nothing about placeholders or safe mode | A check through `template_placeholder_paths()`; a contract-tested addition to the versioned diagnose output |
 | D7 | medium | large | The EMS-only install has InfluxDB enabled and warns periodically with a non-Docker hint | Default `influxdb.enabled=false` for EMS-only, Docker-aware hint |
 | D5b | medium | small | The full-charge `ac_charge_power` default is 200 W in code and 600 W in the template | Owner decision on one value |
 | A-M3 | medium | small | After a hostname change the web service still checks Host/Origin against the old name (ProtectHostname) and refuses every POST | Ask the agent for the hostname or restart the web unit; a 403 text that says to use the IP |
@@ -285,6 +294,8 @@ reproduction; confirm or drop them before fixing.
 | U-4 | low | — | *Unconfirmed.* Analytics skips integration across steps over 3× the median spacing; loops stretched by fetch timeouts during an outage would undercount energy | Measure loop spacing during a device outage before changing the threshold |
 | U-5 | low | — | *Unconfirmed.* A job-status 5xx with a real JSON message is treated as transient and after about 60 s replaced by "The Admin Console did not answer" | Show the server's message when the body carries one |
 | D15 | low | small | `WR1` vs generated `INV_1` names in examples | Doc fix |
+| E16 | low | small | Diagnose redaction matches key substrings: `snapshot` contains `sn`, `authority` contains `auth`, any `*key*` key, so `/api/diagnose` blanks the whole control snapshot and other useful blocks (found while reviewing D2) | Match whole key tokens rather than substrings |
+| D2-r | low | — | A device name ending in a redaction keyword ("WR SN", "My Token") loses the path after it in the diagnose message of the support bundle and dashboard; `details.paths` keeps every path. `devices[N]` counts only object entries of the device list | Accepted as cosmetic; revisit with E16 |
 
 ## Dashboard and emsctl parity
 

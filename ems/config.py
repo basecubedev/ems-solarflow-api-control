@@ -914,7 +914,14 @@ def _is_template_placeholder_host(host):
     return value in TEMPLATE_PLACEHOLDER_VALUES or value.endswith(".example.com")
 
 
-def is_template_placeholder_value(value):
+def is_template_placeholder_value(value, *, address=False):
+    """True for a template value; ``address`` also for a host nothing can parse.
+
+    Only an address field fails closed on a value ``urlparse`` rejects: a topic
+    or a URL password may contain ``[`` legitimately, but a device or broker
+    address that cannot be parsed reaches nothing.
+    """
+
     if value is None:
         return False
     text = str(value).strip()
@@ -931,16 +938,18 @@ def is_template_placeholder_value(value):
         or "your-" in lowered
     ):
         return True
-    parsed = urlparse(text if "://" in text else f"//{text}")
-    host = (parsed.hostname or "").lower()
+    try:
+        host = (urlparse(text if "://" in text else f"//{text}").hostname or "").lower()
+    except ValueError:
+        return address
     return _is_template_placeholder_host(host)
 
 
-def _missing_or_placeholder(value):
+def _missing_or_placeholder(value, *, address=False):
     return (
         value is None
         or str(value).strip() == ""
-        or is_template_placeholder_value(value)
+        or is_template_placeholder_value(value, address=address)
     )
 
 
@@ -1142,7 +1151,10 @@ def template_placeholder_paths(config):
         return []
 
     paths = []
-    from ems.zendure_mqtt.config_entries import is_zendure_mqtt_device_config
+    from ems.zendure_mqtt.config_entries import (
+        DEFAULT_BROKER_REF,
+        is_zendure_mqtt_device_config,
+    )
 
     devices = config.get("devices")
     configured_devices = []
@@ -1155,7 +1167,7 @@ def template_placeholder_paths(config):
             # Telemetry-only Zendure MQTT entries have no ip/sn by design.
             if is_zendure_mqtt_device_config(device):
                 continue
-            if _missing_or_placeholder(device.get("ip")):
+            if _missing_or_placeholder(device.get("ip"), address=True):
                 paths.append(f"devices[{index}].ip")
             if _missing_or_placeholder(device.get("sn")):
                 paths.append(f"devices[{index}].sn")
@@ -1182,20 +1194,27 @@ def template_placeholder_paths(config):
                     # error by resolve_grid_meter_mqtt_settings at load time.
                     connection = None
                 if connection is not None and _missing_or_placeholder(
-                    connection.get("host")
+                    connection.get("host"), address=True
                 ):
-                    paths.append(f"zendure_mqtt.brokers.{broker_ref.strip()}.host")
-            elif _missing_or_placeholder(mqtt_settings.get("host")):
+                    paths.append(
+                        "zendure_mqtt.host"
+                        if broker_ref.strip() == DEFAULT_BROKER_REF
+                        else f"zendure_mqtt.brokers.{broker_ref.strip()}.host"
+                    )
+            elif _missing_or_placeholder(mqtt_settings.get("host"), address=True):
                 paths.append("grid_meter.mqtt.host")
             if _missing_or_placeholder(mqtt_settings.get("topic")):
                 paths.append("grid_meter.mqtt.topic")
         elif meter_type == "tasmota_http":
-            endpoint = grid_meter.get("url") or grid_meter.get("ip")
-            if _missing_or_placeholder(endpoint):
-                paths.append("grid_meter.url")
+            by_ip = not str(grid_meter.get("url") or "").strip() and bool(grid_meter.get("ip"))
+            endpoint = grid_meter.get("ip") if by_ip else grid_meter.get("url")
+            if _missing_or_placeholder(endpoint, address=by_ip):
+                paths.append("grid_meter.ip" if by_ip else "grid_meter.url")
             if _missing_or_placeholder(grid_meter.get("power_path")):
                 paths.append("grid_meter.power_path")
-        elif meter_type != "ha" and _missing_or_placeholder(grid_meter.get("ip")):
+        elif meter_type != "ha" and _missing_or_placeholder(
+            grid_meter.get("ip"), address=True
+        ):
             paths.append("grid_meter.ip")
 
     ha_config = config.get("ha")
@@ -1216,7 +1235,9 @@ def apply_template_placeholder_safety(config, *, emit_message=None):
         return config
 
     protected = copy.deepcopy(config)
-    system = protected.setdefault("system", {})
+    system = protected.get("system")
+    if not isinstance(system, dict):
+        system = protected["system"] = {}
     system["enabled"] = False
     system["dry_run"] = True
     system["allow_hardware_writes"] = False
@@ -2177,6 +2198,77 @@ def runtime_control_flag(system, name):
         return blocking
 
 
+def _with_runtime_defaults(config):
+    """The stored config merged with runtime defaults, or ``None`` if it cannot be."""
+
+    if not isinstance(config, dict):
+        return None
+    try:
+        return apply_runtime_config_defaults(config)
+    except RecursionError:
+        return None
+
+
+def _as_loaded(config):
+    """A stored config as EMS loads it: runtime defaults, then placeholder safety."""
+
+    defaulted = _with_runtime_defaults(config)
+    if defaulted is None:
+        return None if isinstance(config, dict) else config
+    return apply_template_placeholder_safety(defaulted)
+
+
+def stored_config_placeholder_paths(config):
+    """The placeholder paths EMS finds in a stored config once it has loaded it.
+
+    ``None`` when the config cannot be judged at all.
+    """
+
+    if not isinstance(config, dict):
+        return []
+    defaulted = _with_runtime_defaults(config)
+    if defaulted is None:
+        return None
+    return template_placeholder_paths(defaulted)
+
+
+_DEVICE_PLACEHOLDER_PATH = re.compile(r"^devices\[(\d+)\]\.")
+
+
+def stored_config_placeholder_fields(config, *, name=None):
+    """``stored_config_placeholder_paths`` for a person; ``None`` when it is."""
+
+    paths = stored_config_placeholder_paths(config)
+    if paths is None:
+        return None
+    return placeholder_field_labels(config, paths, name=name)
+
+
+def placeholder_field_labels(config, paths, *, name=None):
+    """Placeholder paths for a person: a device field is preceded by the device's name.
+
+    Name first: a serial redactor reads whatever follows ``sn`` as the serial.
+    ``name`` is applied to a name before it is joined, so a masker sees the name
+    alone and never a ``label: value`` shape it would read as a secret.
+    """
+
+    devices = config.get("devices") if isinstance(config, dict) else None
+    named = [
+        str(device.get("name") or "").strip()
+        for device in (devices if isinstance(devices, list) else [])
+        if isinstance(device, dict)
+    ]
+    fields = []
+    for path in paths:
+        match = _DEVICE_PLACEHOLDER_PATH.match(path)
+        index = int(match.group(1)) if match else -1
+        label = named[index] if 0 <= index < len(named) else ""
+        if label and name is not None:
+            label = name(label)
+        fields.append(f"{label}: {path}" if label else path)
+    return fields
+
+
 def resolve_config_write_gate(config, control_gate) -> WriteGateDecision:
     """Write-gate decision a stored config produces once EMS loads it.
 
@@ -2186,6 +2278,7 @@ def resolve_config_write_gate(config, control_gate) -> WriteGateDecision:
     not a real boolean, resolves to blocked rather than to an armed gate.
     """
 
+    config = _as_loaded(config)
     raw = config.get("system") if isinstance(config, dict) else None
     system = raw if isinstance(raw, dict) else {}
     readable = isinstance(raw, dict)
@@ -2222,9 +2315,11 @@ def config_control_flags(config):
     Missing keys resolve to the defaults the loader merges in; a value that is
     not a real boolean resolves to the blocking side of the flag, so a typo can
     never read as "EMS is controlling". An unreadable config claims no dry run
-    either: that would read as a reassurance nobody can back.
+    either: that would read as a reassurance nobody can back. A config with no
+    ``system`` block is not unreadable: EMS merges its defaults and runs dry.
     """
 
+    config = _as_loaded(config)
     raw = config.get("system") if isinstance(config, dict) else None
     system = raw if isinstance(raw, dict) else {}
     readable = isinstance(raw, dict)

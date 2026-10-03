@@ -117,7 +117,11 @@ names what is wrong, why it matters and what to do next.
 Errors come before warnings, warnings before notes. One entry is easy to miss
 and worth knowing about: **saved settings are newer than the running EMS**.
 Saving settings writes the file; EMS reads it when it starts. Until you restart
-EMS, part of what you saved is not in effect.
+EMS, part of what you saved is not in effect. Another is **EMS writes nothing
+yet**: a template, empty or unusable value is left in a setup field, so EMS runs
+in safe mode. The entry names each field, and the device it belongs to. If
+config.json cannot be read at all, **Your settings file could not be read**
+says so instead of reporting a clean file.
 
 If the overview itself cannot be read, the list says so. It never reports a
 healthy system on missing information.
@@ -129,6 +133,9 @@ change your inverters right now?**
 
 - A sentence naming the effective state — allowed to change your inverters, only
   calculating, running on simulated data, switched off, or nothing may write.
+  Template values left in the config come first: EMS then writes nothing at
+  all, and the panel names every field that still needs your own value (see
+  [Safety](../safety.md#when-ems-starts-writing)).
 - One row per connection (**Local connection**, **Your own MQTT broker**,
   **Zendure cloud**) saying whether it is allowed and how many devices it covers.
 - The maximum output and charge window your devices are held to.
