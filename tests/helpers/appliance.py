@@ -160,6 +160,8 @@ class FakeHost:
         self.hostname = "ems-solarflow"
         self.apt_simulation = APT_SIMULATION
         self.apt_exit_code = 0
+        self.apt_mirror_unreachable = False
+        self.apt_published = None
         self.dpkg_audit = ""
         self.dpkg_selections = "libfoo\tinstall\nheld-package\thold\n"
         self.nmcli_connectivity = "full"
@@ -588,6 +590,21 @@ class FakeHost:
         if args[:1] == ["-s"] or "-s" in args[:2]:
             return self._result("apt-get", args, 0, self.apt_simulation)
         if "update" in args:
+            if self.apt_mirror_unreachable:
+                strict = "--error-on=any" in args
+                level = "E" if strict else "W"
+                return self._result(
+                    "apt-get", args, 100 if strict else 0,
+                    "Err:1 http://deb.debian.org/debian trixie InRelease\n"
+                    "  Temporary failure resolving 'deb.debian.org'\n"
+                    "Reading package lists...\n",
+                    f"{level}: Failed to fetch http://deb.debian.org/debian/dists/trixie/InRelease"
+                    "  Temporary failure resolving 'deb.debian.org'\n"
+                    f"{level}: Some index files failed to download. They have been ignored, "
+                    "or old ones used instead.\n",
+                )
+            if self.apt_published is not None:
+                self.apt_simulation = self.apt_published
             return self._result("apt-get", args, 0, "Reading package lists... Done\n")
         if self.apt_exit_code == 0:
             self.apt_simulation = "Reading package lists...\nBuilding dependency tree...\n"
