@@ -56,6 +56,52 @@ NO_WAY_BACK = (
 )
 
 
+def retained_problems(target, *, recorded, architecture):
+    """A kept package judged on what was written down when it arrived.
+
+    A package with no recorded declaration is not refused: the revert is the
+    only recovery this appliance has for its console, and taking it away because of
+    a missing annotation is worse than the risk it describes.
+    """
+
+    if not target.state_implements:
+        return []
+    stand_in = manager_releases.ManagerRelease(
+        release_id=target.build_id or "retained",
+        version=target.version,
+        architecture=target.architecture or architecture,
+        build_id=target.build_id,
+        created_at=target.retained_at,
+        project_revision="",
+        artifact_name=Path(target.path).name,
+        artifact_digest=target.sha256,
+        artifact_size=1,
+        state_implements=target.state_implements,
+        state_reads=target.state_reads,
+    )
+    return manager_releases.compatibility_problems(
+        stand_in,
+        architecture=architecture,
+        state_schemas=recorded,
+        writing=persistent_state.written_schemas(),
+    )
+
+
+def raised_schemas(release):
+    """Axes this release implements above the running manager.
+
+    Once the release runs it writes them, and the package running now could
+    not read them, so the console can no longer go back to it.
+    """
+
+    running = persistent_state.written_schemas()
+    return sorted(
+        axis
+        for axis, value in release.state_implements.items()
+        if axis in running and value > running[axis]
+    )
+
+
 class ManagerUpdateError(Exception):
     def __init__(self, code, message):
         super().__init__(message)
@@ -146,7 +192,7 @@ class ManagerUpdateService:
 
     # --- what this appliance's state is formatted as ----------------------
 
-    def _state_schemas(self, *, claim):
+    def _state_schemas(self, *, claim, incoming=None):
         """What this partition records its state as, and the reconciliation verdict.
 
         The record, never the record plus everything this manager could write.
@@ -155,34 +201,33 @@ class ManagerUpdateService:
         it had just replaced -- because no older package can declare an axis
         that did not exist, and both browser routes go together, the revert
         button and installing the older release from the index. The message was
-        untrue as well, naming state the appliance does not hold.
+        untrue as well, naming state the appliance does not hold. What this
+        manager writes is judged separately, and only on axes the artefact
+        declares (``artifact_trust.state_schema_problems``).
 
         Read before the claim, so planning and executing answer alike. ``None``
-        is undecidable and every caller refuses on it. Executing still claims,
-        because the record has to be durable before the package that must be
-        able to read it is unpacked -- but a claim is a note about what may be
-        written, not evidence about what is there, so it is not what an
-        artefact is measured against.
+        is undecidable and every caller refuses on it. Executing claims what
+        ``persistent_state.claimable`` allows for ``incoming``, the declaration
+        of the package being installed, because the record has to be durable
+        before that package is unpacked; an empty declaration claims nothing.
 
         A partition with no record at all is the exception: nothing has claimed
         anything there, and whatever state it holds was written by the manager
         running now, so that manager's own set is the honest answer. Answering
         "nothing" would let a package install that cannot read what is already
-        on the disk.
+        on the disk. Both answers come from ``persistent_state.recorded_for_judging``,
+        which the console rollback reads too.
         """
 
-        before = persistent_state.read_stamp(self.state_mountpoint)
-        verdict, _ = persistent_state.reconcile(
-            self.state_mountpoint,
-            written_by={"version": self.installed_version},
-            written_at=str(self._now()),
-            write=claim,
-        )
-        if verdict.outcome == persistent_state.STATE_UNREADABLE:
-            return None, verdict
-        if not before.present:
-            return dict(verdict.implemented), verdict
-        return dict(before.schemas), verdict
+        recorded, verdict = persistent_state.recorded_for_judging(self.state_mountpoint)
+        if claim:
+            persistent_state.reconcile(
+                self.state_mountpoint,
+                incoming=incoming,
+                written_by={"version": self.installed_version},
+                written_at=str(self._now()),
+            )
+        return recorded, verdict
 
     # --- discovery --------------------------------------------------------
 
@@ -334,7 +379,10 @@ class ManagerUpdateService:
         recorded, verdict = self._state_schemas(claim=False)
         blockers = list(
             manager_releases.compatibility_problems(
-                release, architecture=self.architecture, state_schemas=recorded
+                release,
+                architecture=self.architecture,
+                state_schemas=recorded,
+                writing=persistent_state.written_schemas(),
             )
         )
         if verdict.outcome == persistent_state.STATE_BEHIND:
@@ -379,11 +427,13 @@ class ManagerUpdateService:
             # package running now becomes the kept one when it is displaced.
             "revert_available": retention.current.present,
             "verify_window_seconds": manager_verify.DEFAULT_WINDOW_SECONDS,
-            "warning": self._warning(moving, retention.current.present, unclear),
+            "warning": self._warning(
+                moving, retention.current.present, unclear, raised_schemas(release)
+            ),
         }
 
     @staticmethod
-    def _warning(moving, revert_available, unclear):
+    def _warning(moving, revert_available, unclear, raised=()):
         parts = []
         if moving == DIRECTION_DOWNGRADE:
             parts.append("This installs an older Appliance Manager than the one running.")
@@ -405,6 +455,13 @@ class ManagerUpdateService:
         )
         if not revert_available:
             parts.append(NO_WAY_BACK)
+        elif raised:
+            parts.append(
+                f"This release writes {', '.join(raised)} in a newer format than the "
+                "running Appliance Manager reads, so once it runs this console cannot go "
+                "back to the version running now; only the install deadline still can, "
+                "if the install is not confirmed."
+            )
         return " ".join(parts)
 
     def plan_revert(self, operation):
@@ -417,7 +474,9 @@ class ManagerUpdateService:
             raise ManagerUpdateError(exc.code, exc.message)
 
         recorded, verdict = self._state_schemas(claim=False)
-        blockers = list(self._retained_problems(target, recorded))
+        blockers = list(
+            retained_problems(target, recorded=recorded, architecture=self.architecture)
+        )
         if verdict.outcome == persistent_state.STATE_BEHIND:
             blockers.append({"code": "state_schema_behind", "message": verdict.detail})
 
@@ -445,33 +504,6 @@ class ManagerUpdateService:
                 )
             ).strip(),
         }
-
-    def _retained_problems(self, target, recorded):
-        """A kept package judged on what was written down when it arrived.
-
-        A package with no recorded declaration is not refused: the revert is the
-        only recovery this appliance has for its console, and taking it away because of
-        a missing annotation is worse than the risk it describes.
-        """
-
-        if not target.state_implements:
-            return []
-        stand_in = manager_releases.ManagerRelease(
-            release_id=target.build_id or "retained",
-            version=target.version,
-            architecture=target.architecture or self.architecture,
-            build_id=target.build_id,
-            created_at=target.retained_at,
-            project_revision="",
-            artifact_name=Path(target.path).name,
-            artifact_digest=target.sha256,
-            artifact_size=1,
-            state_implements=target.state_implements,
-            state_reads=target.state_reads,
-        )
-        return manager_releases.compatibility_problems(
-            stand_in, architecture=self.architecture, state_schemas=recorded
-        )
 
     # --- execution --------------------------------------------------------
 
@@ -526,6 +558,22 @@ class ManagerUpdateService:
                 "manager_release_changed",
                 f"the index now offers version {release.version} under this release, not "
                 f"the {version} this plan was confirmed for; plan the update again",
+            )
+
+    @staticmethod
+    def _require_planned_revert(operation, target):
+        """The kept package the operator confirmed, not whichever is kept now.
+
+        A revert retried after an interruption resolves the kept package again,
+        and the interrupted install may have rotated a different one into place.
+        """
+
+        planned = str((operation.requested_target or {}).get("sha256") or "")
+        if planned and target.sha256 != planned:
+            raise ManagerUpdateError(
+                "manager_revert_changed",
+                f"the kept package is now {target.sha256}, not the {planned} this plan "
+                "was confirmed for; plan the revert again",
             )
 
     def _verified_manifest(self, operation, candidate, staging):
@@ -599,7 +647,7 @@ class ManagerUpdateService:
         return release, archive
 
     def _apply(self, operation, *, release, archive):
-        recorded, verdict = self._state_schemas(claim=True)
+        recorded, verdict = self._state_schemas(claim=False)
         if verdict.outcome == persistent_state.STATE_BEHIND:
             raise ManagerUpdateError("state_schema_behind", verdict.detail)
 
@@ -611,6 +659,10 @@ class ManagerUpdateService:
             state_schemas=recorded,
             architecture=self.architecture,
             retained_at=str(self._now()),
+            writing=persistent_state.written_schemas(),
+            before_commit=lambda: self._state_schemas(
+                claim=True, incoming=release.state_implements
+            ),
         )
         return self._arm_and_start(
             operation,
@@ -626,13 +678,22 @@ class ManagerUpdateService:
         except manager_retention.RetentionError as exc:
             raise ManagerUpdateError(exc.code, exc.message)
 
-        _, verdict = self._state_schemas(claim=True)
+        self._require_planned_revert(operation, target)
+        recorded, verdict = self._state_schemas(claim=False)
         if verdict.outcome == persistent_state.STATE_BEHIND:
             raise ManagerUpdateError("state_schema_behind", verdict.detail)
+        problems = retained_problems(target, recorded=recorded, architecture=self.architecture)
+        if problems:
+            raise ManagerUpdateError(problems[0]["code"], problems[0]["message"])
 
         self._advance(operation, "staging_package")
         _, retention = manager_install.prepare_revert(
-            self.paths, retained_at=str(self._now())
+            self.paths,
+            retained_at=str(self._now()),
+            expected_sha256=target.sha256,
+            before_commit=lambda: self._state_schemas(
+                claim=True, incoming=target.state_implements
+            ),
         )
         return self._arm_and_start(
             operation,

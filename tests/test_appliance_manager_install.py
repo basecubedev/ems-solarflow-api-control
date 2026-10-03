@@ -387,6 +387,28 @@ def test_a_kept_package_that_no_longer_hashes_to_its_record_is_refused(paths, tm
     assert kept.previous.version == "0.2.0"
 
 
+def test_a_revert_stages_only_the_kept_package_its_caller_judged(paths, tmp_path):
+    """Between the judgement and the staging another install may rotate the record."""
+
+    prepare(paths, tmp_path)
+    newer = tmp_path / "newer.deb"
+    newer.write_bytes(b"a newer package")
+    manager_retention.retain(paths, newer, sha256="sha256:" + "b" * 64, version="0.3.0")
+    judged = manager_retention.revert_target(paths)
+
+    with pytest.raises(manager_releases.ManagerReleaseError) as refusal:
+        manager_install.prepare_revert(paths, retained_at="t", expected_sha256="sha256:" + "c" * 64)
+
+    kept = manager_retention.read(paths)
+    assert refusal.value.code == "manager_revert_changed"
+    assert kept.current.version == "0.3.0"
+    assert kept.previous.sha256 == judged.sha256
+    target, _ = manager_install.prepare_revert(
+        paths, retained_at="t", expected_sha256=judged.sha256
+    )
+    assert target.version == "0.2.0"
+
+
 def test_a_revert_with_nothing_kept_refuses_before_it_writes(paths):
     with pytest.raises(manager_retention.RetentionError) as refusal:
         manager_install.prepare_revert(paths, retained_at="t")

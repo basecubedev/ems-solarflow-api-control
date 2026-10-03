@@ -712,7 +712,11 @@ Everything above applies unchanged. Three things are specific to a package:
 - **Going backwards is allowed and going blind is not.** An older package
   installs as readily as a newer one — it is the only recovery this appliance
   has for its own console — but a package whose manager could not read the state
-  already on this appliance's disk is refused, whichever direction it moves.
+  already on this appliance's disk, or the formats the running manager writes,
+  is refused, whichever direction it moves. Two exceptions are deliberate: a
+  kept package from before packages declared their formats is not judged, and
+  `ems-appliance rollback-manager --force` installs a refused one from the
+  console.
 
 The install itself is described in
 [os-updates.md](os-updates.md#updating-the-appliance-manager-itself), and what a

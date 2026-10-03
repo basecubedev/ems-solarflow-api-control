@@ -126,6 +126,17 @@ can no longer be reached and a deadline left standing would undo the rescue at
 the next tick. A rollback `dpkg` refuses leaves the deadline armed — that is
 the one moment it is the last way out.
 
+`rollback-manager` judges the kept package's state formats the way the
+console's revert does: one that declares what it reads, and could not read what
+is on the disk or what the running Manager writes, is refused with the reason.
+Unlike the console, it does not stop a Manager that is behind its own record,
+because going back to the kept package that wrote the record is how that
+Manager gets out. `--force` installs a refused package anyway — this command is
+the way out when the console itself is broken, so the choice stays yours. After
+a format refusal was forced, the Manager it installs knows it holds newer state
+and refuses its own installs with `state_schema_behind` until `rollback-manager`,
+run again, puts the release it replaced back on.
+
 ### 4. A serial console
 
 A Pi that does not reach a login prompt shows why only here. Both images already
@@ -182,10 +193,17 @@ does not cover:
 
 - **a kernel or firmware that does not boot.** `apt` on this appliance is
   unrestricted — anything an upgrade offers may install, kernel and firmware
-  included — and there is nothing to fall back into automatically
-  appliance. Recovery is steps 3 to 5 above, and failing those, step 6.
+  included — and there is nothing to fall back into automatically. Recovery is
+  steps 3 to 5 above, and failing those, step 6.
 - **the operating system.** It is patched in place. There
   is no OS-level revert.
+- **a Manager release that raised a state format.** A kept package that
+  declares what it reads goes back on only if it reads what the running Manager
+  writes; the revert plan refuses otherwise, and `rollback-manager` asks for
+  `--force`. A Manager that refuses every install with `state_schema_behind`
+  holds state written by a newer one: `rollback-manager` reinstalls that newer,
+  kept package and is the way out. See
+  [adr/manager-self-update.md](adr/manager-self-update.md).
 
 That is a deliberate decision rather than an oversight, and it is recorded with
 its reasoning in

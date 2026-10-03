@@ -126,7 +126,7 @@ def stage(paths, *, archive, version, build_id, sha256, requested_at=""):
     return request_path(paths)
 
 
-def prepare_revert(paths, *, retained_at=""):
+def prepare_revert(paths, *, retained_at="", expected_sha256="", before_commit=None):
     """Stage the kept package, rotating the record so both agree what is current.
 
     The one owner of going back, for the browser and for the console command
@@ -136,9 +136,19 @@ def prepare_revert(paths, *, retained_at=""):
     Retaining through a copy rather than naming ``previous.deb`` directly:
     rotation overwrites that file with what is current, so an install reading
     from it would put back the very package it is leaving.
+
+    ``expected_sha256`` is the kept package the caller judged; a different one
+    kept by now is refused rather than installed unjudged. ``before_commit`` runs
+    after the last refusal and before the first write.
     """
 
     target = manager_retention.revert_target(paths)
+    if expected_sha256 and target.sha256 != expected_sha256:
+        raise manager_releases.ManagerReleaseError(
+            "manager_revert_changed",
+            f"the kept package is now {target.sha256}, not the {expected_sha256} that "
+            "was judged; judge the revert again",
+        )
     observed = artifact_trust.file_digest(target.path)
     if observed != target.sha256:
         raise manager_releases.ManagerReleaseError(
@@ -146,6 +156,8 @@ def prepare_revert(paths, *, retained_at=""):
             f"{Path(target.path).name} hashes to {observed}, this appliance recorded "
             f"{target.sha256}",
         )
+    if before_commit is not None:
+        before_commit()
 
     # A fixed name rather than one built from the record: only one revert runs
     # at a time, and a path interpolated from a manifest field is a path a
@@ -224,12 +236,14 @@ def seed_installed(
 
 
 def prepare(paths, *, release, archive, state_schemas, verifier=None, manifest_path="",
-            signature_path="", architecture="arm64", retained_at=""):
+            signature_path="", architecture="arm64", retained_at="", writing=None,
+            before_commit=None):
     """Prove the package may be installed, keep the outgoing one, and stage it.
 
     Everything that can refuse happens here, before a single byte is unpacked.
     An appliance that cannot say what its state is formatted as refuses, because
     a package cannot be shown to be able to read a state nobody recorded.
+    ``before_commit`` runs after the last refusal and before the first write.
     """
 
     if verifier is not None:
@@ -252,10 +266,12 @@ def prepare(paths, *, release, archive, state_schemas, verifier=None, manifest_p
     # from is the caller's question, and answering it here would let a lookup
     # that found nothing pass as a lookup that was not asked.
     problems = manager_releases.compatibility_problems(
-        release, architecture=architecture, state_schemas=state_schemas
+        release, architecture=architecture, state_schemas=state_schemas, writing=writing
     )
     if problems:
         raise ManagerInstallError(problems[0]["code"], problems[0]["message"])
+    if before_commit is not None:
+        before_commit()
 
     # Retained before the request exists, so the archive to go back to is on
     # disk before anything can start replacing what is running.

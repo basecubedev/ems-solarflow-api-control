@@ -55,17 +55,53 @@ installed on an operator's button.**
   — the only moment it can be seeded at all.
 - **Compatibility is judged against what the partition records**, not against
   that plus everything the running manager could write. Those are different
-  claims, and folding them together made the first version to add a
-  state-schema axis refuse every package built before it — including the one it
-  had just replaced — because no older package can declare an axis that did not
-  exist. Both browser routes went at once, the revert button and installing the
-  older release from the index, and the refusal named state the appliance does
-  not hold: *this appliance holds `<axis>` state*. Executing still claims the
-  running manager's axes, because the record has to be durable before the
-  package that must read it is unpacked; a claim is a note about what may be
-  written, not evidence about what is there. A partition with no record at all
+  claims, and folding them together made the first version to add a state-schema
+  axis refuse every package built before it — including the one it had just
+  replaced — because no older package can declare an axis that did not exist.
+  Both browser routes went at once, the revert button and installing the older
+  release from the index, and the refusal named state the appliance does not
+  hold: *this appliance holds `<axis>` state*. A partition with no record at all
   is the one exception: whatever it holds was written by the manager running
   now, so that manager's own set is the honest answer there.
+- **What the running manager writes counts on the axes a package declares**
+  (amended 2026-10-03). The outgoing manager writes its own formats while it
+  runs and during the install itself — the retention record and the deadline are
+  both written after the claim — so a package that declares an axis at a lower
+  version than the running manager implements, or reads that axis only from a
+  newer one, could not read it and is refused. Retired axes are not written and
+  not judged this way. An axis the package does not declare is still judged by
+  the record alone, because its manager never reads that state: adding an axis
+  keeps the way back, raising one does not. The update plan says so for a
+  release that raises a format, before it is installed, and the revert plan
+  refuses afterwards. The same judgement runs again when a plan executes,
+  against the kept package the plan was confirmed for, and in `ems-appliance
+  rollback-manager`, which installs a refused package only with `--force`: a
+  person at the keyboard of a broken console keeps the last word. An install
+  forced past a format refusal claims the running manager's whole set, so the
+  manager it puts on knows it is behind and refuses its own installs with
+  `state_schema_behind` until the release it replaced goes back on. Every claim
+  is made after the last check and before the first write, so a refused install,
+  or a claim that cannot be written, leaves both the record and what is kept as
+  they were; a failure after that — arming the deadline, starting the install,
+  dpkg — leaves a claim that names nothing beyond what the running or the
+  incoming manager implements.
+- **The claim stops at what the incoming package implements** (amended
+  2026-10-03). Executing claims before dpkg runs, because the record has to be
+  durable before the package that must read it is unpacked; a claim is a note
+  about what may be written, not evidence about what is there. It used to name
+  the running manager's whole set, so a step back past an added axis recorded
+  that axis and the older manager came up behind its own record, refusing every
+  update and every revert — including the one forward to the release that wrote
+  the record. The claim now names only axes the incoming package declares, each
+  at no more than the version it implements, and a kept package that declares
+  nothing is installed without a claim. The claim is made by the outgoing
+  package, so this holds only for a step back taken from a manager that carries
+  it. A manager stranded by an older one — every install refused with
+  `state_schema_behind` — gets out through `ems-appliance rollback-manager`,
+  which reinstalls the kept package that wrote the record. Removing
+  `/var/lib/ems-appliance-manager/ems-appliance/state-schema.json` lets the next
+  reconciliation adopt the partition instead, and is safe only when the newer
+  manager added axes rather than raising one the older manager reads.
 - **The refusals happen before dpkg runs.** Signature, digest, architecture and
   state-schema compatibility are all checked while this project's Python is
   still the code that started the process. Afterwards the module files are the

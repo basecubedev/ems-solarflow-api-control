@@ -256,7 +256,7 @@ def verify_artifact(release, path):
     return True
 
 
-def compatibility_problems(release, *, architecture, state_schemas):
+def compatibility_problems(release, *, architecture, state_schemas, writing=None):
     """Every reason this package may not be installed on this appliance.
 
     An empty list is the only thing that authorises an install. Going backwards
@@ -277,7 +277,9 @@ def compatibility_problems(release, *, architecture, state_schemas):
                 ),
             }
         )
-    problems.extend(artifact_trust.state_schema_problems(release, recorded=state_schemas))
+    problems.extend(
+        artifact_trust.state_schema_problems(release, recorded=state_schemas, writing=writing)
+    )
     return problems
 
 
