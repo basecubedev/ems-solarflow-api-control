@@ -219,6 +219,76 @@ def test_a_revert_across_a_schema_the_older_manager_cannot_read_is_refused():
     assert any(p["code"] == "artifact_state_schema_too_old" for p in problems)
 
 
+def test_a_format_the_running_manager_writes_is_judged_like_one_on_the_disk():
+    """The running manager writes its formats during the install, after the record."""
+
+    recorded = persistent_state.implemented_schemas()
+    writing = {**recorded, "manager_retention": recorded["manager_retention"] + 1}
+
+    problems = manager_releases.compatibility_problems(
+        release(), architecture="arm64", state_schemas=recorded, writing=writing
+    )
+
+    assert [p["code"] for p in problems] == ["artifact_state_schema_too_old"]
+    assert "manager_retention" in problems[0]["message"]
+
+
+def test_an_axis_the_package_does_not_know_is_not_judged_by_the_running_manager():
+    """Its manager never reads that state, which is what keeps the step back."""
+
+    recorded = persistent_state.implemented_schemas()
+
+    problems = manager_releases.compatibility_problems(
+        release(),
+        architecture="arm64",
+        state_schemas=recorded,
+        writing={**recorded, "ssh_key_accounts": 1},
+    )
+
+    assert problems == []
+
+
+def test_an_axis_behind_both_the_disk_and_the_running_manager_is_named_once():
+    ahead = {name: value + 1 for name, value in persistent_state.implemented_schemas().items()}
+
+    problems = manager_releases.compatibility_problems(
+        release(), architecture="arm64", state_schemas=ahead, writing=ahead
+    )
+
+    axes = [p["message"].split(" schema ")[0] for p in problems]
+    assert len(axes) == len(set(axes)) == len(ahead)
+
+
+def test_a_format_the_running_manager_writes_below_the_package_s_floor_is_refused():
+    """The record had not caught up with an axis the running manager writes at 1."""
+
+    implemented = persistent_state.implemented_schemas()
+    recorded = {k: v for k, v in implemented.items() if k != "manager_retention"}
+    newer = manager_releases.implemented_state_schemas()
+    floor = implemented["manager_retention"] + 1
+    newer["implements"] = {**newer["implements"], "manager_retention": floor}
+    newer["reads"] = {**newer["reads"], "manager_retention": floor}
+
+    problems = manager_releases.compatibility_problems(
+        release(state_schemas=newer),
+        architecture="arm64",
+        state_schemas=recorded,
+        writing=implemented,
+    )
+
+    assert [p["code"] for p in problems] == ["artifact_state_schema_unreadable"]
+    assert "running Appliance Manager writes manager_retention" in problems[0]["message"]
+
+
+def test_a_retired_format_is_not_one_the_running_manager_writes():
+    written = persistent_state.written_schemas()
+
+    assert not set(written) & set(persistent_state.RETIRED_SCHEMAS)
+    assert set(written) | set(persistent_state.RETIRED_SCHEMAS) == set(
+        persistent_state.implemented_schemas()
+    )
+
+
 def test_an_appliance_that_cannot_say_what_its_state_is_refuses_everything():
     problems = manager_releases.compatibility_problems(
         release(), architecture="arm64", state_schemas=None

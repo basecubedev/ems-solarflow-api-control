@@ -243,10 +243,11 @@ def _boot_services(monkeypatch, services):
 # --- the console rollback and the deadline it runs against -------------------
 
 
-def armed_rollback(tmp_path, monkeypatch, *, dpkg_ok=True):
+def armed_rollback(tmp_path, monkeypatch, *, dpkg_ok=True, declared=False, extra_axes=None,
+                   architecture=""):
     """An appliance mid-update: v2 installed, v1 kept, a deadline armed for v2."""
 
-    from appliance import artifact_trust, manager_retention, manager_verify
+    from appliance import artifact_trust, manager_retention, manager_verify, persistent_state
     from appliance.paths import resolve_paths
 
     paths = resolve_paths()
@@ -256,8 +257,25 @@ def armed_rollback(tmp_path, monkeypatch, *, dpkg_ok=True):
     older.write_bytes(b"GOOD v1 package")
     newer = tmp_path / "v2.deb"
     newer.write_bytes(b"BROKEN v2 package")
+    declaration = (
+        {
+            "state_implements": {
+                **persistent_state.implemented_schemas(),
+                **(extra_axes or {}),
+            },
+            "state_reads": persistent_state.readable_floors(),
+        }
+        if declared
+        else {}
+    )
     manager_retention.retain(
-        paths, older, sha256=artifact_trust.file_digest(older), version="0.1.0", rotate=False
+        paths,
+        older,
+        sha256=artifact_trust.file_digest(older),
+        version="0.1.0",
+        rotate=False,
+        architecture=architecture,
+        **declaration,
     )
     manager_retention.retain(
         paths, newer, sha256=artifact_trust.file_digest(newer), version="0.2.0"
@@ -310,8 +328,174 @@ def test_a_console_rollback_retires_the_deadline_it_outran(appliance_env, monkey
 
     paths, runner = armed_rollback(appliance_env, monkeypatch)
 
-    assert command_rollback_manager(Args()) == 0
+    assert command_rollback_manager(Args(force=False)) == 0
     assert not manager_verify.read(paths).armed, "the deadline outlived the rescue"
+
+
+def _running_writes_newer_retention(monkeypatch):
+    from appliance import persistent_state
+
+    original = persistent_state.implemented_schemas
+    monkeypatch.setattr(
+        persistent_state,
+        "implemented_schemas",
+        lambda: {**original(), "manager_retention": original()["manager_retention"] + 1},
+    )
+
+
+def test_a_console_rollback_refuses_a_package_that_could_not_read_the_state(
+    appliance_env, monkeypatch, capsys
+):
+    """The browser's revert refused it; the console must not install it silently."""
+
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(appliance_env, monkeypatch, declared=True)
+    _running_writes_newer_retention(monkeypatch)
+
+    assert command_rollback_manager(Args(force=False)) != 0
+    assert not [call for call in runner.calls if call[0] == "dpkg"]
+    assert "--force" in capsys.readouterr().err
+
+
+def test_a_forced_console_rollback_installs_it_anyway(appliance_env, monkeypatch, capsys):
+    """The way out when the console is gone stays open, by an explicit choice."""
+
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(appliance_env, monkeypatch, declared=True)
+    _running_writes_newer_retention(monkeypatch)
+
+    assert command_rollback_manager(Args(force=True)) == 0
+    assert [call for call in runner.calls if call[0] == "dpkg"]
+    err = capsys.readouterr().err
+    assert "warning:" in err and "manager_retention" in err
+
+    from appliance import persistent_state
+
+    stamp = persistent_state.read_stamp(persistent_state.record_mountpoint(paths))
+    assert stamp.schemas == persistent_state.implemented_schemas()
+    monkeypatch.undo()
+    verdict = persistent_state.compare(stamp)
+    assert verdict.outcome == persistent_state.STATE_BEHIND, "it must know it is behind"
+
+
+def test_a_console_rollback_installs_only_the_package_it_judged(appliance_env, monkeypatch, capsys):
+    """A browser install rotating the record mid-command must not slip a package past."""
+
+    from appliance import artifact_trust, manager_retention
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(appliance_env, monkeypatch, declared=True)
+    resolve = manager_retention.revert_target
+    calls = []
+
+    def rotating(target_paths):
+        target = resolve(target_paths)
+        if not calls:
+            other = appliance_env / "v3.deb"
+            other.write_bytes(b"another package")
+            manager_retention.retain(
+                target_paths, other, sha256=artifact_trust.file_digest(other), version="0.0.9"
+            )
+        calls.append(target.version)
+        return target
+
+    monkeypatch.setattr(manager_retention, "revert_target", rotating)
+
+    assert command_rollback_manager(Args(force=False)) != 0
+    assert not [call for call in runner.calls if call[0] == "dpkg"]
+    assert "judge the revert again" in capsys.readouterr().err
+
+
+def _added_axis(monkeypatch):
+    from appliance import persistent_state
+
+    original = persistent_state.implemented_schemas
+    monkeypatch.setattr(
+        persistent_state, "implemented_schemas", lambda: {**original(), "ssh_key_accounts": 1}
+    )
+    return original
+
+
+def test_a_console_rollback_refused_while_staging_claims_nothing(appliance_env, monkeypatch):
+    """The claim belongs between the last check and the first write."""
+
+    from appliance import manager_retention, persistent_state
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(
+        appliance_env, monkeypatch, declared=True, extra_axes={"ssh_key_accounts": 1}
+    )
+    mountpoint = persistent_state.record_mountpoint(paths)
+    persistent_state.write_stamp(mountpoint, schemas=persistent_state.implemented_schemas())
+    _added_axis(monkeypatch)
+    Path(manager_retention.revert_target(paths).path).write_bytes(b"tampered")
+
+    assert command_rollback_manager(Args(force=False)) != 0
+    assert "ssh_key_accounts" not in persistent_state.read_stamp(mountpoint).schemas
+    assert not [call for call in runner.calls if call[0] == "dpkg"]
+
+
+def test_a_console_rollback_says_when_its_record_cannot_be_written(
+    appliance_env, monkeypatch, capsys
+):
+    """Nothing moves, and the operator gets the reason rather than a traceback."""
+
+    from appliance import manager_retention, persistent_state
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(
+        appliance_env, monkeypatch, declared=True, extra_axes={"ssh_key_accounts": 1}
+    )
+    mountpoint = persistent_state.record_mountpoint(paths)
+    persistent_state.write_stamp(mountpoint, schemas=persistent_state.implemented_schemas())
+    _added_axis(monkeypatch)
+    kept_before = manager_retention.read(paths).to_dict()
+
+    def unwritable(*args, **kwargs):
+        raise persistent_state.PersistentStateError(
+            "persistent_state_not_writable", "No space left on device"
+        )
+
+    monkeypatch.setattr(persistent_state, "write_stamp", unwritable)
+
+    assert command_rollback_manager(Args(force=False)) != 0
+    assert "error: No space left on device" in capsys.readouterr().err
+    assert manager_retention.read(paths).to_dict() == kept_before
+    assert not [call for call in runner.calls if call[0] == "dpkg"]
+
+
+def test_a_forced_rollback_past_another_refusal_claims_only_what_the_package_reads(
+    appliance_env, monkeypatch, capsys
+):
+    """Only a format refusal tells the installed manager it is behind."""
+
+    from appliance import persistent_state
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(
+        appliance_env, monkeypatch, declared=True, architecture="arm64"
+    )
+    mountpoint = persistent_state.record_mountpoint(paths)
+    persistent_state.write_stamp(mountpoint, schemas=persistent_state.implemented_schemas())
+    _added_axis(monkeypatch)
+    monkeypatch.setattr("appliance.hostprobe.host_architecture", lambda: "riscv64")
+
+    assert command_rollback_manager(Args(force=True)) == 0
+    assert "the package is arm64, this appliance is riscv64" in capsys.readouterr().err
+    assert "ssh_key_accounts" not in persistent_state.read_stamp(mountpoint).schemas
+
+
+def test_a_console_rollback_claims_the_record_as_the_browser_does(appliance_env, monkeypatch):
+    from appliance import persistent_state
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(appliance_env, monkeypatch, declared=True)
+
+    assert command_rollback_manager(Args(force=False)) == 0
+    stamp = persistent_state.read_stamp(persistent_state.record_mountpoint(paths))
+    assert stamp.schemas == persistent_state.implemented_schemas()
 
 
 def test_a_console_rollback_that_fails_leaves_the_deadline_to_try(appliance_env, monkeypatch):
@@ -322,5 +506,5 @@ def test_a_console_rollback_that_fails_leaves_the_deadline_to_try(appliance_env,
 
     paths, runner = armed_rollback(appliance_env, monkeypatch, dpkg_ok=False)
 
-    assert command_rollback_manager(Args()) != 0
+    assert command_rollback_manager(Args(force=False)) != 0
     assert manager_verify.read(paths).armed

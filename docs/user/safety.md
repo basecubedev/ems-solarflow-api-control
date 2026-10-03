@@ -12,6 +12,9 @@ meter address or a serial still carries a placeholder, EMS runs in safe mode,
 calculates targets and writes nothing. The placeholder values are
 `192.168.1.100`, `192.168.1.101`, `192.168.1.50`, `0.0.0.0`, `localhost`,
 `example.com` (and any `*.example.com`), `YOUR_SN` and `YOUR_TOKEN_HERE`.
+An address that cannot be parsed at all holds writes back the same way.
+`emsctl.py diagnose` and the Admin Console's Maintenance page name every field
+that still keeps EMS in safe mode.
 
 The moment the last placeholder is replaced and EMS restarts, it writes
 `outputLimit` and reconciles `minSoc`, `socSet`, `acMode` and `inputLimit`.

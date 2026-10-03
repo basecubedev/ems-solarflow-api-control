@@ -131,6 +131,34 @@ def test_every_non_writing_state_says_plainly_that_nothing_is_written(status, ve
     assert view["tone"] != "ok"
 
 
+def test_template_placeholders_are_named_with_the_fields_to_replace():
+    """Safe mode is the most fundamental reason nothing is written."""
+
+    control = _control(
+        "safe_mode", placeholder_fields=["WR1: devices[0].ip", "WR1: devices[0].sn"]
+    )
+    control["transports"] = [
+        _transport(
+            "api",
+            "allow_hardware_writes",
+            armed=False,
+            device_count=1,
+            blocked_by=["dry_run", "allow_hardware_writes"],
+        )
+    ]
+    view = _view(control)
+    assert view["status"] == "safe_mode"
+    assert view["tone"] == "warn"
+    assert view["verdict"] == (
+        "EMS writes nothing until every setup value it needs is filled in."
+    )
+    assert (
+        "Fill in a real value for WR1: devices[0].ip, WR1: devices[0].sn, then "
+        "restart EMS." in view["notes"]
+    )
+    assert SINGLE_CONTROLLER_NOTE not in view["notes"]
+
+
 @pytest.mark.parametrize("control", [None, {}, {"status": "made-up"}, "broken", []])
 def test_an_unproven_control_state_reads_as_unknown_never_as_healthy(control):
     view = _view(control)

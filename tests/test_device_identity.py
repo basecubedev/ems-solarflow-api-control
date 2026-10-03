@@ -764,6 +764,29 @@ def test_maintenance_masks_name_only_cloud_route_in_mixed_partial_config(tmp_pat
     assert "LOCAL_ROUTE_1234" in redacted_text
 
 
+def test_a_cloud_device_without_a_string_route_id_is_still_masked():
+    """Its topics carry the route even when device_id is a number or missing."""
+
+    from admin.maintenance_config import _redact_cloud_mqtt_route_ids
+
+    config = {
+        "zendure_mqtt": {
+            "brokers": {"cloud_a": {"host": "mqtt.example.net", "source": "zendure_cloud_mqtt"}}
+        },
+        "devices": [
+            {
+                "name": "Cloud",
+                "type": "zendure_mqtt",
+                "mqtt": {"broker_ref": "cloud_a", "device_id": 4242},
+            }
+        ],
+    }
+
+    _redact_cloud_mqtt_route_ids(config)
+
+    assert config["devices"][0]["mqtt"]["device_id"] != 4242
+
+
 # --- canonical identity status contract --------------------------------------
 # The complete evidence matrix lives here, in Core, so no endpoint, planner or
 # browser test needs to restate what counts as physical identity.

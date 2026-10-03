@@ -15,6 +15,7 @@ process doing the arming is the one being replaced.
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -679,26 +680,356 @@ def test_planning_and_executing_judge_the_same_state(tmp_path, monkeypatch):
     assert record.state == "succeeded", (record.state, record.error)
 
 
+STEP_BACK = [
+    pytest.param(("manager.plan_revert", {}), id="revert"),
+    pytest.param(("manager.plan_update", {"release_id": RELEASE_ID}), id="older-release"),
+]
+
+
+def cancel(services, planned):
+    handlers(services).dispatch(
+        {"operation": "operations.cancel", "operation_id": planned["operation"]["operation_id"]}
+    )
+
+
+@pytest.mark.parametrize("back", STEP_BACK)
+def test_the_older_manager_a_step_back_installs_can_still_move(tmp_path, monkeypatch, back):
+    """A step back past an added axis must not leave the manager it installs stuck.
+
+    Execution claimed the outgoing manager's whole set, just before that manager
+    was replaced by one that does not know the added axis. The package the plan
+    had accepted then found itself behind its own record and refused every
+    update and every revert, including the one back to the release that wrote
+    the record.
+    """
+
+    services, _ = build(tmp_path)
+    retained_with_declaration(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+
+    original = persistent_state.implemented_schemas
+    monkeypatch.setattr(
+        persistent_state, "implemented_schemas", lambda: {**original(), "ssh_key_accounts": 1}
+    )
+    operation, fields = back
+    record, _ = plan_and_execute(services, operation, **fields)
+    assert record.state == "succeeded", (record.state, record.error)
+    judged(services)
+
+    monkeypatch.setattr(persistent_state, "implemented_schemas", original)
+    for operation, fields in (
+        ("manager.plan_update", {"release_id": RELEASE_ID}),
+        ("manager.plan_revert", {}),
+    ):
+        planned = plan(services, operation, **fields)
+        cancel(services, planned)
+        codes = [item["code"] for item in planned["plan"]["blockers"]]
+        assert codes == [], planned["plan"]["blockers"]
+
+
+@pytest.mark.parametrize("axis", ["manager_retention", "manager_verify", "operations"])
+@pytest.mark.parametrize("back", STEP_BACK)
+def test_a_step_back_below_a_format_the_running_manager_writes_is_refused(
+    tmp_path, monkeypatch, axis, back
+):
+    """The outgoing manager writes its own formats during the install itself.
+
+    `prepare` retains the outgoing package in a retention record and `arm`
+    writes the deadline, both at the running manager's versions. A package that
+    implements less could not read them, so the plan has to say so before
+    anything is written; judged by the record alone, it said nothing.
+    """
+
+    services, _ = build(tmp_path)
+    retained_with_declaration(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+    record_before = persistent_state.read_stamp(services.paths.state_dir)
+
+    original = persistent_state.implemented_schemas
+    monkeypatch.setattr(
+        persistent_state,
+        "implemented_schemas",
+        lambda: {**original(), axis: original()[axis] + 1},
+    )
+    operation, fields = back
+    planned = plan(services, operation, **fields)
+    cancel(services, planned)
+
+    refusals = [
+        item for item in planned["plan"]["blockers"]
+        if item["code"] == "artifact_state_schema_too_old"
+    ]
+    assert refusals, planned["plan"]["blockers"]
+    assert axis in refusals[0]["message"]
+    assert "running Appliance Manager" in refusals[0]["message"]
+    assert persistent_state.read_stamp(services.paths.state_dir) == record_before
+
+
+def staged_request(services):
+    path = manager_install.request_path(services.paths)
+    return path.read_bytes() if path.exists() else None
+
+
+def execute_planned(services, planned):
+    handlers(services).dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    return services.operations.get(planned["operation"]["operation_id"])
+
+
+def running_writes_newer(monkeypatch, axis="manager_retention"):
+    original = persistent_state.implemented_schemas
+    monkeypatch.setattr(
+        persistent_state, "implemented_schemas", lambda: {**original(), axis: original()[axis] + 1}
+    )
+
+
+@pytest.mark.parametrize("back", STEP_BACK)
+def test_a_step_back_is_judged_again_when_it_executes(tmp_path, monkeypatch, back):
+    """Execution must refuse what a plan made now would refuse, before any staging."""
+
+    services, _ = build(tmp_path)
+    retained_with_declaration(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+    operation, fields = back
+    planned = plan(services, operation, **fields)
+    assert planned["plan"]["blockers"] == []
+
+    running_writes_newer(monkeypatch)
+    before = staged_request(services)
+    record = execute_planned(services, planned)
+
+    assert record.state == STATE_FAILED_TERMINAL, record.state
+    assert record.error["code"] == "artifact_state_schema_too_old", record.error
+    assert staged_request(services) == before
+
+
+def test_a_revert_executes_only_the_kept_package_it_was_planned_for(tmp_path):
+    """A retried revert resolved the kept package again, whatever was kept by then."""
+
+    services, _ = build(tmp_path)
+    retained_with_declaration(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+    planned = plan(services, "manager.plan_revert")
+
+    planned_target = manager_retention.revert_target(services.paths)
+    other = services.paths.packages_dir / "other.deb"
+    other.write_bytes(b"another package, rotated in by an interrupted install")
+    manager_retention.retain(
+        services.paths,
+        other,
+        sha256="sha256:" + hashlib.sha256(other.read_bytes()).hexdigest(),
+        version="0.0.5",
+        state_implements=persistent_state.implemented_schemas(),
+        state_reads=persistent_state.readable_floors(),
+    )
+    other.unlink()
+    assert manager_retention.revert_target(services.paths).sha256 != planned_target.sha256
+    before = staged_request(services)
+    record = execute_planned(services, planned)
+
+    assert record.state == STATE_FAILED_TERMINAL, record.state
+    assert record.error["code"] == "manager_revert_changed", record.error
+    assert staged_request(services) == before
+
+
+def test_a_revert_refused_at_its_last_step_claims_nothing(tmp_path, monkeypatch):
+    """A claim written before a refusal recorded a format nothing was installed in."""
+
+    services, _ = build(tmp_path)
+    original = persistent_state.implemented_schemas
+    added = {**original(), "ssh_key_accounts": 1}
+    archive = services.paths.packages_dir
+    archive.mkdir(parents=True, exist_ok=True)
+    staged = archive / "seed.deb"
+    staged.write_bytes(b"the kept package")
+    manager_retention.retain(
+        services.paths,
+        staged,
+        sha256="sha256:" + hashlib.sha256(b"the kept package").hexdigest(),
+        version="0.1.0",
+        state_implements=added,
+        state_reads=persistent_state.readable_floors(),
+        rotate=False,
+    )
+    staged.unlink()
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+    monkeypatch.setattr(persistent_state, "implemented_schemas", lambda: added)
+    planned = plan(services, "manager.plan_revert")
+    assert planned["plan"]["blockers"] == []
+
+    Path(manager_retention.revert_target(services.paths).path).write_bytes(b"tampered")
+    record = execute_planned(services, planned)
+
+    assert record.error["code"] == "manager_artifact_corrupt", record.error
+    stamp = persistent_state.read_stamp(services.paths.state_dir)
+    assert "ssh_key_accounts" not in stamp.schemas
+
+
+def _declaring(axes):
+    declared = manager_releases.implemented_state_schemas()
+    declared["implements"] = {**declared["implements"], **axes}
+    declared["reads"] = {**declared["reads"], **axes}
+    return declared
+
+
+def test_an_update_refused_while_it_is_prepared_claims_nothing(tmp_path, monkeypatch):
+    """The claim belongs between the last check and the first write."""
+
+    added = {"ssh_key_accounts": 1}
+    services, _ = build(
+        tmp_path,
+        responses={
+            f"{BASE}/{RELEASE_ID}.manifest.json": manifest_payload(state_schemas=_declaring(added))
+        },
+    )
+    persistent_state.write_stamp(
+        services.paths.state_dir, schemas=persistent_state.implemented_schemas()
+    )
+    original = persistent_state.implemented_schemas
+    monkeypatch.setattr(persistent_state, "implemented_schemas", lambda: {**original(), **added})
+    planned = plan(services, "manager.plan_update", release_id=RELEASE_ID)
+    assert planned["plan"]["blockers"] == []
+
+    running_writes_newer(monkeypatch)
+    record = execute_planned(services, planned)
+
+    assert record.error["code"] == "artifact_state_schema_too_old", record.error
+    assert "ssh_key_accounts" not in persistent_state.read_stamp(services.paths.state_dir).schemas
+
+
+@pytest.mark.parametrize("back", STEP_BACK)
+def test_a_record_that_cannot_be_written_moves_nothing(tmp_path, monkeypatch, back):
+    """A failed claim must refuse cleanly, before retention rotates or a request is staged."""
+
+    added = {"ssh_key_accounts": 1}
+    services, _ = build(tmp_path)
+    original = persistent_state.implemented_schemas
+    archive = services.paths.packages_dir
+    archive.mkdir(parents=True, exist_ok=True)
+    staged = archive / "seed.deb"
+    staged.write_bytes(b"the kept package")
+    manager_retention.retain(
+        services.paths,
+        staged,
+        sha256="sha256:" + hashlib.sha256(b"the kept package").hexdigest(),
+        version="0.1.0",
+        state_implements={**original(), **added},
+        state_reads=persistent_state.readable_floors(),
+        rotate=False,
+    )
+    staged.unlink()
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+    service = services.manager
+    service.scripted.responses[f"{BASE}/{RELEASE_ID}.manifest.json"] = manifest_payload(
+        state_schemas=_declaring(added)
+    )
+    monkeypatch.setattr(persistent_state, "implemented_schemas", lambda: {**original(), **added})
+    operation, fields = back
+    planned = plan(services, operation, **fields)
+    assert planned["plan"]["blockers"] == []
+    kept_before = manager_retention.read(services.paths).to_dict()
+    staged_before = staged_request(services)
+
+    def unwritable(*args, **kwargs):
+        raise persistent_state.PersistentStateError(
+            "persistent_state_not_writable", "No space left on device"
+        )
+
+    monkeypatch.setattr(persistent_state, "write_stamp", unwritable)
+    record = execute_planned(services, planned)
+
+    assert record.error["code"] == "persistent_state_not_writable", record.error
+    assert manager_retention.read(services.paths).to_dict() == kept_before
+    assert staged_request(services) == staged_before
+
+
+def test_a_revert_stages_the_kept_package_it_judged_even_within_one_call(tmp_path, monkeypatch):
+    services, _ = build(tmp_path)
+    retained_with_declaration(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+    planned = plan(services, "manager.plan_revert")
+    judge = manager_update.retained_problems
+
+    def judge_then_rotate(target, **kwargs):
+        problems = judge(target, **kwargs)
+        other = services.paths.packages_dir / "other.deb"
+        other.write_bytes(b"rotated in while the revert was being judged")
+        manager_retention.retain(
+            services.paths,
+            other,
+            sha256="sha256:" + hashlib.sha256(other.read_bytes()).hexdigest(),
+            version="0.0.5",
+        )
+        other.unlink()
+        return problems
+
+    monkeypatch.setattr(manager_update, "retained_problems", judge_then_rotate)
+    record = execute_planned(services, planned)
+
+    assert record.error["code"] == "manager_revert_changed", record.error
+
+
+def test_a_revert_refuses_at_execution_once_the_record_is_ahead(tmp_path):
+    services, _ = build(tmp_path)
+    retained_with_declaration(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+    planned = plan(services, "manager.plan_revert")
+    assert planned["plan"]["blockers"] == []
+
+    ahead = {name: value + 1 for name, value in persistent_state.implemented_schemas().items()}
+    persistent_state.write_stamp(services.paths.state_dir, schemas=ahead)
+    record = execute_planned(services, planned)
+
+    assert record.state == STATE_FAILED_TERMINAL, record.state
+    assert record.error["code"] == "state_schema_behind", record.error
+
+
+def test_the_plan_for_a_release_that_raises_a_format_says_the_way_back_closes(tmp_path):
+    raised = manager_releases.implemented_state_schemas()
+    raised["implements"] = {
+        **raised["implements"],
+        "manager_retention": raised["implements"]["manager_retention"] + 1,
+    }
+    services, _ = build(
+        tmp_path,
+        responses={f"{BASE}/{RELEASE_ID}.manifest.json": manifest_payload(state_schemas=raised)},
+    )
+    seed_previous(services)
+
+    planned = plan(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    assert planned["plan"]["blockers"] == []
+    assert "manager_retention" in planned["plan"]["warning"]
+    assert "cannot go back" in planned["plan"]["warning"]
+
+
 def test_a_record_that_cannot_be_read_still_refuses_everything(tmp_path, monkeypatch):
     """Undecidable is not permission."""
 
     services, service = build(tmp_path)
     retained_with_declaration(services)
-    monkeypatch.setattr(
-        persistent_state,
-        "reconcile",
-        lambda *a, **k: (
-            persistent_state.StampReconciliation(
-                outcome=persistent_state.STATE_UNREADABLE, detail="unreadable"
-            ),
-            persistent_state.read_stamp(services.paths.state_dir),
-        ),
-    )
+    record = persistent_state.stamp_path(services.paths.state_dir)
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text("{not json", encoding="utf-8")
 
-    recorded, verdict = service._state_schemas(claim=False)
-
-    assert recorded is None
-    assert verdict.outcome == persistent_state.STATE_UNREADABLE
+    for claim in (False, True):
+        recorded, verdict = service._state_schemas(claim=claim, incoming={})
+        assert recorded is None
+        assert verdict.outcome == persistent_state.STATE_UNREADABLE
+    assert record.read_text(encoding="utf-8") == "{not json"
 # --- the package the operator confirmed -------------------------------------
 
 

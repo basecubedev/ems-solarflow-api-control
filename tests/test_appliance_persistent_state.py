@@ -141,6 +141,29 @@ def test_a_reader_may_ask_without_claiming_anything(tmp_path):
     assert not persistent_state.stamp_path(tmp_path).exists()
 
 
+def test_an_install_claims_nothing_the_incoming_manager_cannot_read(tmp_path):
+    """A step back installs a manager that must still find itself readable."""
+
+    reconcile(tmp_path, OLDER)
+    running = {**NEWER, "something_later": 1}
+
+    verdict, stamp = reconcile(tmp_path, running, incoming=AXES)
+
+    assert verdict.outcome == persistent_state.STATE_RAISED
+    assert stamp.schemas == AXES
+    assert persistent_state.compare(stamp, implemented=AXES).compatible
+
+
+def test_an_install_of_a_manager_that_declares_nothing_claims_nothing(tmp_path):
+    """No record is better than one naming no schemas, which nothing can read."""
+
+    verdict, stamp = reconcile(tmp_path, incoming={})
+
+    assert verdict.outcome == persistent_state.STATE_ADOPTED
+    assert not stamp.present
+    assert not persistent_state.stamp_path(tmp_path).exists()
+
+
 def test_the_record_lives_where_nothing_re_seeds_it():
     """Placement is the whole mechanism.
 

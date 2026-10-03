@@ -158,8 +158,10 @@ one, and the plan tells you which direction it is going.
 
 Reinstalling the previous manager **is** the recovery — refusing to go
 backwards would take it away. What is refused instead is a version that could
-not read the state already on the disk, which is the question "is this number
-bigger" never answered.
+not read the state already on the disk, or the state the running Manager
+writes, which is the question "is this number bigger" never answered. A kept
+package from before packages declared what they read cannot be judged; its
+revert plan says so instead of refusing.
 
 ### If the new one does not come up
 

@@ -738,6 +738,27 @@ def diagnose_truthy(value, default=True):
     return bool(value)
 
 
+def diagnose_template_placeholders(checks, config_data):
+    paths = config_mod.stored_config_placeholder_paths(config_data)
+    if paths is None:
+        diagnose_add(checks, "config", "warning", "template_placeholders_unknown", "config.json is nested too deeply to check whether it keeps EMS in safe mode")
+        return
+    if not paths:
+        diagnose_add(checks, "config", "ok", "template_placeholders_none", "Nothing in config.json keeps EMS in safe mode")
+        return
+    diagnose_add(
+        checks,
+        "config",
+        "warning",
+        "template_placeholders_safe_mode",
+        "EMS runs in safe mode and writes nothing until these config.json fields have a real value: "
+        + ", ".join(config_mod.placeholder_field_labels(config_data, paths)),
+        hint="Replace them with the values of this installation, then restart EMS.",
+        docs="docs/user/safety.md",
+        paths=paths,
+    )
+
+
 def diagnose_config_plausibility(checks, args, config_data):
     if not isinstance(config_data, dict):
         return
@@ -2291,7 +2312,7 @@ def diagnose_meter_failure_count(runtime_data):
     return failures
 
 
-def diagnose_control_snapshot(config_data, runtime_data, runtime_path):
+def diagnose_control_snapshot(config_data, runtime_data, runtime_path, *, config_readable=True):
     devices = runtime_data.get("devices", {}) if isinstance(runtime_data.get("devices"), dict) else {}
     system_runtime = runtime_data.get("system", {}) if isinstance(runtime_data.get("system"), dict) else {}
     system_config = config_data.get("system", {}) if isinstance(config_data.get("system"), dict) else {}
@@ -2362,6 +2383,10 @@ def diagnose_control_snapshot(config_data, runtime_data, runtime_path):
     )
     if deadband_active is None and filtered_grid is not None:
         deadband_active = abs(filtered_grid) <= deadband_w
+    flags = config_mod.config_control_flags(config_data if config_readable else None)
+    placeholders = (
+        config_mod.stored_config_placeholder_paths(config_data) if config_readable else []
+    )
 
     return {
         "grid_power_w": grid_power,
@@ -2370,8 +2395,9 @@ def diagnose_control_snapshot(config_data, runtime_data, runtime_path):
         "final_output_w": final_output,
         "deadband_active": bool(deadband_active) if deadband_active is not None else None,
         "deadband_w": deadband_w,
-        "control_enabled": bool(system_runtime.get("enabled", system_config.get("enabled", True))),
-        "dry_run": bool(system_config.get("dry_run", False)),
+        "control_enabled": bool(system_runtime.get("enabled", flags["enabled"])),
+        "dry_run": flags["dry_run"],
+        "template_placeholders": placeholders or [],
         "winter_mode": bool(winter_runtime.get("enabled", winter_config.get("enabled", False))),
         "system_limit_w": diagnose_float(system_runtime.get("max_total_power", system_config.get("max_total_power"))),
         "min_output_limit_w": diagnose_float(system_runtime.get("min_output_limit", system_config.get("min_output_limit"))),
@@ -2608,9 +2634,11 @@ def diagnose_control_stale(runtime_path, runtime_data, loop_interval):
     }
 
 
-def diagnose_control_report(config_data, runtime_path, sample_seconds=0):
+def diagnose_control_report(config_data, runtime_path, sample_seconds=0, *, config_readable=True):
     runtime_data, runtime_error = diagnose_control_load_runtime(runtime_path)
-    snapshot = diagnose_control_snapshot(config_data, runtime_data, runtime_path)
+    snapshot = diagnose_control_snapshot(
+        config_data, runtime_data, runtime_path, config_readable=config_readable
+    )
     samples = diagnose_control_samples(runtime_path, runtime_data, sample_seconds)
     meter_quality = diagnose_meter_quality(samples, runtime_data, snapshot.get("loop_interval_s"))
     distribution = diagnose_control_distribution(config_data, runtime_data)
@@ -2646,6 +2674,8 @@ def diagnose_control_report(config_data, runtime_path, sample_seconds=0):
     }
 
     write_path = []
+    if snapshot["template_placeholders"]:
+        write_path.append("Safe mode: template placeholders in config.json")
     if not snapshot.get("control_enabled", True):
         write_path.append("Control disabled")
     if snapshot.get("dry_run"):
@@ -2657,6 +2687,17 @@ def diagnose_control_report(config_data, runtime_path, sample_seconds=0):
         write_path.append("No local write-path blocker detected")
 
     root_causes = []
+    if snapshot["template_placeholders"]:
+        root_causes.append({
+            "code": "template_placeholders_safe_mode",
+            "severity": "warning",
+            "title": "Template placeholders keep EMS in safe mode",
+            "message": "EMS writes nothing until these config.json fields have a real value: "
+            + ", ".join(
+                config_mod.placeholder_field_labels(config_data, snapshot["template_placeholders"])
+            ),
+            "suggested_next_check": "Replace them with the values of this installation, then restart EMS.",
+        })
     if runtime_error == "missing":
         root_causes.append("Runtime state is missing")
     if not snapshot.get("control_enabled", True):
@@ -3515,11 +3556,13 @@ def diagnose_collect(args):
     diagnose_git_info(checks)
 
     config_data, config_error = diagnose_json_file(config_path)
+    config_readable = config_error is None and isinstance(config_data, dict)
     template_data, template_error = diagnose_json_file(template_path)
 
     if config_error is None:
         if isinstance(config_data, dict):
             diagnose_add(checks, "config", "ok", "config_valid_json", "config.json is valid JSON", path=config_path)
+            diagnose_template_placeholders(checks, config_data)
         else:
             diagnose_add(checks, "config", "error", "config_not_object", "config.json must contain a JSON object", path=config_path)
             config_data = {}
@@ -3656,6 +3699,7 @@ def diagnose_collect(args):
             config_data,
             runtime_path,
             sample_seconds=max(0, args.sample_seconds or 0),
+            config_readable=config_readable,
         )
         diagnose_control_add_checks(checks, control_report)
 

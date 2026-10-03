@@ -26,6 +26,8 @@ from admin.install_state import (
     STATE_STANDARD_INSTALL,
     detect_install_state,
 )
+from admin.maintenance_config import cloud_route_masker
+from ems.config import stored_config_placeholder_fields
 from admin.maintenance_health import (
     EMS_RUNNING_IDENTITY_UNKNOWN_WARNING,
     PARTIAL_INSTALL_WARNING,
@@ -124,6 +126,7 @@ def run_maintenance_overview(base_dir=None, docker=None, admin_image=None):
                 "path": str(context.config_path),
                 "exists": context.config_exists,
                 "modified_at": _modified_at(context.config_path),
+                "placeholder_fields": _placeholder_fields(context),
             },
             "data": {
                 "path": str(context.data_dir),
@@ -153,6 +156,18 @@ def run_maintenance_overview(base_dir=None, docker=None, admin_image=None):
     # can answer "what is wrong" without the owner opening seven cards.
     payload["health"] = build_maintenance_health(payload)
     return payload
+
+
+def _placeholder_fields(context):
+    """Setup fields that keep EMS in safe mode; ``None`` when the config cannot be read."""
+
+    if not context.config_exists:
+        return []
+    try:
+        config = json.loads(context.config_path.read_text(encoding="utf-8"))
+        return stored_config_placeholder_fields(config, name=cloud_route_masker(config))
+    except (OSError, ValueError, RecursionError):
+        return None
 
 
 def _modified_at(path):

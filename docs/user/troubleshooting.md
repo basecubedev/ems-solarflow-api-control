@@ -90,10 +90,12 @@ Then check the basics:
 
 If targets look correct but the inverter output does not change:
 
-- Look for a startup line about template placeholders in `docker compose logs
-  ems`. While any placeholder is left (a template IP such as `192.168.1.100`,
-  `YOUR_SN`, an unused second template device), EMS stays in safe mode: it
-  calculates targets but does not write to hardware. Also check that
+- Run `emsctl.py diagnose` (Docker: `docker compose exec ems python3 emsctl.py
+  diagnose`) and look for template placeholders; the startup log in `docker
+  compose logs ems` says the same. While any placeholder is left (a template IP
+  such as `192.168.1.100`, `YOUR_SN`, an unused second template device), EMS
+  stays in safe mode: it calculates targets but does not write to hardware.
+  Diagnose names every field that still needs your own value. Also check that
   `system.dry_run` is `false` and `system.enabled` is `true`. See
   [Safety](safety.md#when-ems-starts-writing).
 - Make sure **only one controller** writes Zendure output limits. Do not run

@@ -229,6 +229,16 @@ telemetry reports a different current `inputLimit`. While the role is
 `ac_output`, the stored charge power is ignored for hardware writes so it can
 be prepared before switching to input mode.
 
+A config that still holds template placeholders is reported as a warning,
+`template_placeholders_safe_mode`, with every field that keeps EMS in safe mode
+(a device field also names the device). It is judged the way EMS loads the
+file, so a legacy `shelly` block counts as the grid meter. `--control` then
+shows the dry run EMS actually runs with and names the same fields as the first
+likely cause. A warning rather than an error, because safe mode is a state EMS
+chose: the exit code stays 0, and a Guided Upgrade health check still passes. A
+config.json nested too deeply to check is reported as
+`template_placeholders_unknown`.
+
 Control quality interpretation:
 
 - The quality score is a coarse support indicator from 0 to 100, not a

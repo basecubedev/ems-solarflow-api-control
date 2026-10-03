@@ -205,7 +205,57 @@ def file_digest(path, *, chunk=1024 * 1024):
 # --- compatibility -----------------------------------------------------------
 
 
-def state_schema_problems(release, *, recorded):
+def _recorded_schema_problem(release, axis, value):
+    if axis not in release.state_implements:
+        return {
+            "code": "artifact_state_schema_undeclared",
+            "message": (
+                f"this appliance holds {axis} state; the artifact does not say "
+                "whether its manager can read that format"
+            ),
+        }
+    implements = release.state_implements[axis]
+    if value > implements:
+        return {
+            "code": "artifact_state_schema_too_old",
+            "message": (
+                f"this appliance's state is written at {axis} schema {value}; "
+                f"the artifact's manager implements {implements} and could not read it"
+            ),
+        }
+    floor = release.state_reads.get(axis, 1)
+    if value < floor:
+        return {
+            "code": "artifact_state_schema_unreadable",
+            "message": (
+                f"the artifact's manager reads {axis} schema {floor} or newer; this "
+                f"appliance's state is written at {value}"
+            ),
+        }
+    return None
+
+
+def _written_schema_problem(release, axis, value):
+    if axis not in release.state_implements:
+        return None
+    implements = release.state_implements[axis]
+    floor = release.state_reads.get(axis, 1)
+    if value > implements:
+        code, reads = "artifact_state_schema_too_old", f"implements {implements}"
+    elif value < floor:
+        code, reads = "artifact_state_schema_unreadable", f"reads {floor} or newer"
+    else:
+        return None
+    return {
+        "code": code,
+        "message": (
+            f"the running Appliance Manager writes {axis} state at schema {value}; "
+            f"the artifact's manager {reads} and could not read it"
+        ),
+    }
+
+
+def state_schema_problems(release, *, recorded, writing=None):
     """Whether the code in this artifact can read the state already on the disk.
 
     ``recorded`` is what this appliance's own state record says it was last
@@ -213,6 +263,12 @@ def state_schema_problems(release, *, recorded):
     out of an installed package, and therefore the only one that can answer the
     question at all: every other number is compiled into a package and compared
     against a constant compiled into that same package.
+
+    ``writing`` is what the running manager writes. It writes those formats
+    while it runs and during the install itself, so an axis the artifact
+    declares at a lower version, or reads only from a newer one, is one its
+    manager would find unreadable. An axis the artifact does not declare is
+    judged by the record alone: its manager never reads that state.
 
     Undecidable is refused. An appliance that cannot say what its state is
     formatted as cannot be told that some artifact is safe for it.
@@ -252,41 +308,16 @@ def state_schema_problems(release, *, recorded):
 
 
     problems = []
+    named = set()
     for axis in sorted(recorded):
-        if axis not in release.state_implements:
-            problems.append(
-                {
-                    "code": "artifact_state_schema_undeclared",
-                    "message": (
-                        f"this appliance holds {axis} state; the artifact does not say "
-                        "whether its manager can read that format"
-                    ),
-                }
-            )
-            continue
-        implements = release.state_implements[axis]
-        if recorded[axis] > implements:
-            problems.append(
-                {
-                    "code": "artifact_state_schema_too_old",
-                    "message": (
-                        f"this appliance's state is written at {axis} schema {recorded[axis]}; "
-                        f"the artifact's manager implements {implements} and could not read it"
-                    ),
-                }
-            )
-            continue
-        floor = release.state_reads.get(axis, 1)
-        if recorded[axis] < floor:
-            problems.append(
-                {
-                    "code": "artifact_state_schema_unreadable",
-                    "message": (
-                        f"the artifact's manager reads {axis} schema {floor} or newer; this "
-                        f"appliance's state is written at {recorded[axis]}"
-                    ),
-                }
-            )
+        problem = _recorded_schema_problem(release, axis, recorded[axis])
+        if problem:
+            problems.append(problem)
+            named.add(axis)
+    for axis in sorted(writing or {}):
+        problem = None if axis in named else _written_schema_problem(release, axis, writing[axis])
+        if problem:
+            problems.append(problem)
     # An axis the artifact declares and this partition has no state for is not a
     # problem: there is nothing of that format here to be incompatible with.
     return problems

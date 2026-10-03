@@ -135,6 +135,79 @@ def test_dry_run_is_named_as_the_cause_and_never_reads_as_controlling(tmp_path):
         assert "dry_run" in entry["blocked_by"]
 
 
+@pytest.mark.parametrize(
+    "devices",
+    [
+        [_api_device(ip="192.168.1.100")],
+        [_api_device(sn="YOUR_SN")],
+        [_api_device(), _api_device("WR2", ip="", sn="")],
+    ],
+)
+def test_template_placeholders_are_named_as_the_cause_that_blocks_every_write(
+    tmp_path, devices
+):
+    """EMS forces safe mode on load; the projection claimed it may control."""
+
+    control = _control(tmp_path, _config(devices=devices))
+    assert control["status"] == "safe_mode"
+    assert control["placeholder_fields"]
+    assert control["dry_run"] is True
+    for entry in control["transports"]:
+        assert entry["armed"] is False
+
+
+def test_an_installation_without_placeholders_names_none(tmp_path):
+    control = _control(tmp_path, _config())
+    assert control["placeholder_fields"] == []
+
+
+def test_a_placeholder_field_names_its_device(tmp_path):
+    control = _control(
+        tmp_path, _config(devices=[_api_device(), _api_device("WR2", sn="YOUR_SN")])
+    )
+    assert control["placeholder_fields"] == ["WR2: devices[1].sn"]
+
+
+def test_a_config_that_cannot_be_judged_still_renders(tmp_path, monkeypatch):
+    """Too deep to merge with defaults: the Settings page must say so, not crash."""
+
+    import ems.config
+
+    def too_deep(config):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(ems.config, "apply_runtime_config_defaults", too_deep)
+    control = _control(tmp_path, _config())
+    assert control["placeholder_fields"] is None
+    assert control["status"] != "safe_mode"
+    assert control["status"] != "may_control"
+
+
+@pytest.mark.parametrize("name", ["Garage Device", "Balkon Product", "My Token"])
+def test_a_device_name_is_masked_alone_never_as_a_label(tmp_path, name):
+    """The masker read "Name: path" as a route or secret label and hid the path."""
+
+    config = _config(
+        devices=[_mqtt_device(), _api_device("WR1"), _api_device(name, sn="")],
+        zendure_mqtt={
+            "brokers": {"home": {"host": "mqtt.example.net", "source": "zendure_cloud_mqtt"}}
+        },
+    )
+    control = _control(tmp_path, config)
+    assert control["placeholder_fields"] == [f"{name}: devices[2].sn"]
+
+
+def test_a_legacy_meter_block_is_judged_as_ems_loads_it(tmp_path):
+    """The loader turns shelly.ip into the grid meter, placeholder and all."""
+
+    config = _config()
+    del config["grid_meter"]
+    config["shelly"] = {"ip": "192.168.1.50"}
+    control = _control(tmp_path, config)
+    assert control["status"] == "safe_mode"
+    assert control["placeholder_fields"] == ["grid_meter.ip"]
+
+
 def test_simulation_mode_outranks_dry_run_in_the_reported_status(tmp_path):
     control = _control(tmp_path, _config({"simulation_mode": True, "dry_run": True}))
     assert control["status"] == "simulated"

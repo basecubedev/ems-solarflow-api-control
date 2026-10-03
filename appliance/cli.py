@@ -258,21 +258,68 @@ def command_rollback_manager(args):
 
     The console half of one mutation, not a second one: staging goes through
     ``manager_install.prepare_revert`` so the record this leaves behind is the
-    record the browser reads. What differs is only how the package is applied —
-    a person is at the keyboard here, so there is no unit and no deadline.
+    record the browser reads, and the kept package is judged and claimed for
+    exactly as the browser's revert does. What differs is how the package is
+    applied — a person is at the keyboard here, so there is no unit and no
+    deadline — and that ``--force`` installs a package the judgement refuses,
+    because this command is the way out when the console itself is gone. A
+    manager behind its own record is not stopped here: going back to the kept
+    package that wrote the record is how it gets out. An install forced past a
+    format refusal claims the running manager's whole set, so the manager it
+    installs knows it is behind what is on the disk.
     """
 
-    from appliance import manager_install, manager_releases, manager_retention, manager_verify
+    from appliance import (
+        manager_install,
+        manager_releases,
+        manager_retention,
+        manager_update,
+        manager_verify,
+        persistent_state,
+    )
+    from appliance.hostprobe import host_architecture
 
     paths = resolve_paths()
     if os.geteuid() != 0:
         print("error: run this command as root", file=sys.stderr)
         return EXIT_ERROR
     try:
-        target, retention = manager_install.prepare_revert(
-            paths, retained_at=datetime.datetime.now(datetime.timezone.utc).isoformat()
+        kept = manager_retention.revert_target(paths)
+    except manager_retention.RetentionError as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
+        return EXIT_ERROR
+    mountpoint = persistent_state.record_mountpoint(paths)
+    recorded, _ = persistent_state.recorded_for_judging(mountpoint)
+    problems = manager_update.retained_problems(
+        kept, recorded=recorded, architecture=host_architecture()
+    )
+    for problem in problems:
+        print(f"{'warning' if args.force else 'error'}: {problem['message']}", file=sys.stderr)
+    if problems and not args.force:
+        print(
+            "error: the kept package is refused for the reasons above; "
+            "rerun with --force to install it anyway",
+            file=sys.stderr,
         )
-    except (manager_retention.RetentionError, manager_releases.ManagerReleaseError) as exc:
+        return EXIT_ERROR
+    unreadable = any(problem["code"].startswith("artifact_state_schema") for problem in problems)
+    try:
+        target, retention = manager_install.prepare_revert(
+            paths,
+            retained_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            expected_sha256=kept.sha256,
+            before_commit=lambda: persistent_state.reconcile(
+                mountpoint,
+                incoming=None if unreadable else kept.state_implements,
+                written_by={"version": installed_version()},
+                written_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            ),
+        )
+    except (
+        manager_retention.RetentionError,
+        manager_releases.ManagerReleaseError,
+        persistent_state.PersistentStateError,
+    ) as exc:
         print(f"error: {exc.message}", file=sys.stderr)
         return EXIT_ERROR
 
@@ -836,9 +883,15 @@ def build_parser():
         "operations", parents=[shared], help="list recent appliance operations"
     ).set_defaults(handler=command_operations)
 
-    subparsers.add_parser(
+    rollback = subparsers.add_parser(
         "rollback-manager", parents=[shared], help="reinstall the previous Appliance Manager package"
-    ).set_defaults(handler=command_rollback_manager)
+    )
+    rollback.add_argument(
+        "--force",
+        action="store_true",
+        help="install the kept package even when it could not read this appliance's state",
+    )
+    rollback.set_defaults(handler=command_rollback_manager)
 
     retain = subparsers.add_parser(
         "retain-installed-manager",

@@ -980,6 +980,8 @@ def test_emsctl_diagnose_control_soc_imbalance_detection(tmp_path):
     config = json.loads(config_path.read_text())
     config["devices"].append({
         "name": "WR2",
+        "ip": "192.0.2.21",
+        "sn": "SN-TEST-0002",
         "max_power": 800,
         "pv_priority_factor": 1.0,
         "min_soc": 15,
@@ -1026,6 +1028,104 @@ def test_emsctl_diagnose_control_disabled_and_dry_run_detection(tmp_path):
     assert any(check["code"] == "dry_run_enabled" for check in payload["checks"])
     assert any(cause["title"] == "Control disabled" for cause in payload["control"]["root_causes"])
     assert any(cause["title"] == "Dry run enabled" for cause in payload["control"]["root_causes"])
+
+
+def write_placeholder_config(path):
+    write_config(path)
+    config = json.loads(path.read_text())
+    config["devices"][0].update({"ip": "192.168.1.100", "sn": "YOUR_SN"})
+    path.write_text(json.dumps(config))
+
+
+def test_emsctl_diagnose_names_the_placeholders_that_keep_ems_in_safe_mode(tmp_path):
+    """A config EMS refuses to write with must not read as a healthy install.
+
+    A warning rather than an error: safe mode is a state EMS chose, and a
+    diagnose that exits non-zero fails the Guided Upgrade health gate of an
+    upgrade that worked.
+    """
+
+    write_placeholder_config(tmp_path / "config.json")
+
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    payload = json.loads(result.stdout)
+    assert result.returncode == 0, result.stderr
+    check = next(
+        check for check in payload["checks"]
+        if check["code"] == "template_placeholders_safe_mode"
+    )
+    assert check["level"] == "warning"
+    assert check["details"]["paths"] == ["devices[0].ip", "devices[0].sn"]
+    assert "WR1: devices[0].ip, WR1: devices[0].sn" in check["message"]
+    assert check["message"] in payload["diagnosis"]["warnings"]
+
+
+def test_emsctl_diagnose_judges_the_config_as_ems_loads_it(tmp_path):
+    """A legacy shelly block becomes the grid meter at load, placeholder and all."""
+
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    del config["grid_meter"]
+    config["shelly"] = {"ip": "192.168.1.50"}
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    payload = json.loads(result.stdout)
+    check = next(
+        check for check in payload["checks"]
+        if check["code"] == "template_placeholders_safe_mode"
+    )
+    assert check["details"]["paths"] == ["grid_meter.ip"]
+
+
+def test_emsctl_diagnose_control_reports_the_safe_mode_ems_runs_in(tmp_path):
+    """The snapshot showed the stored dry_run while EMS ran dry on placeholders."""
+
+    write_placeholder_config(tmp_path / "config.json")
+    write_control_runtime(tmp_path)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    payload = json.loads(result.stdout)
+    assert payload["control"]["snapshot"]["dry_run"] is True
+    causes = {cause["code"]: cause for cause in payload["control"]["root_causes"]}
+    assert causes["template_placeholders_safe_mode"]["severity"] == "warning"
+    assert "WR1: devices[0].sn" in causes["template_placeholders_safe_mode"]["message"]
+    assert result.returncode == 0, result.stderr
+
+
+def test_emsctl_diagnose_control_claims_no_dry_run_for_a_config_it_could_not_read(tmp_path):
+    """EMS does not start on such a file; a dry run would be a reassurance."""
+
+    (tmp_path / "config.json").write_text("{not json")
+    write_control_runtime(tmp_path)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    payload = json.loads(result.stdout)
+    assert payload["control"]["snapshot"]["dry_run"] is False
+    assert "Dry run enabled" not in payload["control"]["write_path"]
+
+
+@pytest.mark.parametrize("stored", [None, 0])
+def test_emsctl_diagnose_control_reads_dry_run_as_ems_loads_it(tmp_path, stored):
+    """A value that is not a real boolean runs dry, so diagnose must say so."""
+
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["devices"][0].update({"ip": "192.0.2.20", "sn": "SN-DIAGNOSE-1"})
+    config["system"]["dry_run"] = stored
+    config_path.write_text(json.dumps(config))
+    write_control_runtime(tmp_path)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    payload = json.loads(result.stdout)
+    assert payload["control"]["snapshot"]["dry_run"] is True
 
 
 def test_emsctl_diagnose_control_root_cause_min_soc(tmp_path):

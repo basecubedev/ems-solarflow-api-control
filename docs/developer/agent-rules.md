@@ -410,6 +410,10 @@ Before commit, run `git diff --check`, `git status --short`, and
 logical, in English, and have no Co-Author trailers. Use test-before-fix commits
 when explicitly required.
 
+Commits are folded by theme: one finished change per commit, with its tests and
+documentation. A correction found in review is folded into the commit it
+corrects before the branch is pushed, never stacked on top as a separate fix.
+
 Do not commit generated reports, local state, traces, screenshots, temporary
 archives, secrets or unintended scratch files. After commit, run
 `git status --short` and `git log --oneline -5`. The tree SHOULD be clean unless

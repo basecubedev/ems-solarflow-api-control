@@ -10100,6 +10100,10 @@ function setMaintenanceCardTone(cardId, tone) {
 // real answer: an unproven control state must never read as healthy.
 const MAINTENANCE_CONTROL_STATUS_TEXT = {
   may_control: { tone: "ok", verdict: "EMS is allowed to change your inverters." },
+  safe_mode: {
+    tone: "warn",
+    verdict: "EMS writes nothing until every setup value it needs is filled in.",
+  },
   calculating_only: {
     tone: "info",
     verdict: "EMS only calculates and does not change your inverters.",
@@ -10171,6 +10175,14 @@ const MAINTENANCE_CONTROL_NOTES = {
 
 function maintenanceControlNotes(control) {
   const notes = [];
+  const placeholders = Array.isArray(control.placeholder_fields)
+    ? control.placeholder_fields.filter((field) => typeof field === "string" && field)
+    : [];
+  if (placeholders.length) {
+    notes.push(
+      "Fill in a real value for " + placeholders.join(", ") + ", then restart EMS."
+    );
+  }
   const transports = Array.isArray(control.transports) ? control.transports : [];
   const writing = transports.some(
     (entry) => entry && entry.armed && Number(entry.device_count) > 0

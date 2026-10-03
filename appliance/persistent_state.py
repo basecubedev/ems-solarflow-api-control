@@ -74,6 +74,13 @@ def implemented_schemas():
     }
 
 
+def written_schemas():
+    """What the running manager writes: its formats, without the retired ones."""
+
+    implemented = implemented_schemas()
+    return {name: value for name, value in implemented.items() if name not in RETIRED_SCHEMAS}
+
+
 def readable_floors():
     """The oldest schema this manager can still read, by axis.
 
@@ -330,6 +337,24 @@ def compare(stamp, *, implemented=None):
     )
 
 
+def recorded_for_judging(mountpoint, *, implemented=None):
+    """What an artefact is judged against, and the running manager's verdict.
+
+    The record as it stands, never folded with what this manager could write;
+    with no record at all, this manager's own set, because whatever the
+    partition holds was written by it. ``None`` when the record is unreadable,
+    which every caller refuses on.
+    """
+
+    stamp = read_stamp(mountpoint)
+    verdict = compare(stamp, implemented=implemented)
+    if verdict.outcome == STATE_UNREADABLE:
+        return None, verdict
+    if not stamp.present:
+        return dict(verdict.implemented), verdict
+    return dict(stamp.schemas), verdict
+
+
 def merge(recorded, implemented):
     """The record after this manager claims what it may.
 
@@ -343,17 +368,45 @@ def merge(recorded, implemented):
     return merged
 
 
-def reconcile(mountpoint, *, implemented=None, written_by=None, written_at="", write=True):
-    """Read the record, and claim the partition when this manager may."""
+def claimable(implemented, incoming):
+    """What an install may claim for the manager it is about to start.
+
+    The running manager's formats, restricted to the axes the incoming manager
+    declares and capped at its versions. Claiming an axis it does not know left
+    it behind its own record after a step back, refusing every update and every
+    revert, while the plan had rightly accepted it: its manager never reads
+    that state.
+    """
+
+    return {
+        name: min(int(value), int(incoming[name]))
+        for name, value in implemented.items()
+        if name in incoming
+    }
+
+
+def reconcile(
+    mountpoint, *, implemented=None, incoming=None, written_by=None, written_at="", write=True
+):
+    """Read the record, and claim the partition when this manager may.
+
+    ``incoming`` is what the manager an install is about to start implements,
+    and bounds the claim through ``claimable``; it never changes the verdict,
+    which is about the manager running now.
+    """
 
     implemented = dict(implemented if implemented is not None else implemented_schemas())
     stamp = read_stamp(mountpoint)
     verdict = compare(stamp, implemented=implemented)
     if not write or verdict.outcome in (STATE_MATCHED, STATE_BEHIND, STATE_UNREADABLE):
         return verdict, stamp
+    claim = implemented if incoming is None else claimable(implemented, incoming)
+    schemas = merge(stamp.schemas, claim)
+    if not schemas or schemas == stamp.schemas:
+        return verdict, stamp
     stamp = write_stamp(
         mountpoint,
-        schemas=merge(stamp.schemas, implemented),
+        schemas=schemas,
         written_by=written_by,
         written_at=written_at,
     )
