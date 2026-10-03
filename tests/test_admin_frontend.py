@@ -425,6 +425,26 @@ def test_js_mdns_toggle_uses_only_enable_disable_endpoints():
     assert "results-accumulate" not in toggle
 
 
+def test_mdns_unavailable_message_names_its_cause():
+    """An unavailable mDNS state shows its last_error after the message."""
+    js = _read("admin.js")
+    script = _extract_fn(js, "mdnsMessageText") + """
+console.log(JSON.stringify({
+  failed: mdnsMessageText({ message: "mDNS could not be started.", last_error: "Address in use" }, "unavailable_runtime"),
+  running: mdnsMessageText({ message: "Running.", last_error: "old" }, "running_verified"),
+  plain: mdnsMessageText({}, "unavailable_runtime"),
+}));
+"""
+    out = _run_node(script)
+    assert out["failed"] == "mDNS could not be started. Cause: Address in use"
+    assert out["running"] == "Running."
+    assert out["plain"] == "Automatic mDNS discovery is unavailable in this runtime."
+    render = _extract_fn(js, "renderMdnsStatus")
+    assert "mdnsMessageText(status, state)" in render
+    for header in ("async function toggleMdns", "async function refreshMdns"):
+        assert "humanErrorText(status," in _async_fn_body(js, header), header
+
+
 def test_ignored_devices_are_collapsed_and_rendered_safely():
     html = _read("index.html")
     js = _read("admin.js")
@@ -2221,7 +2241,14 @@ def test_js_refused_upgrade_shows_the_reason_the_backend_gave():
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is required for the upgrade failure text contract")
-    failure_text = _extract_fn(_read("admin.js"), "upgradeValidationFailureText")
+    js = _read("admin.js")
+    failure_text = "\n".join(
+        (
+            _extract_decl(js, "const ADMIN_ERROR_MESSAGES"),
+            _extract_decl(js, "function humanErrorText"),
+            _extract_fn(js, "upgradeValidationFailureText"),
+        )
+    )
     script = (
         failure_text
         + """
@@ -3618,8 +3645,8 @@ def test_show_auth_view_invalidates_prepared_upgrade_plan():
 
 def test_auth_loss_paths_route_through_show_auth_view():
     """Session loss (onAuthLost -> refreshAuthStatus -> applyAuthStatus) and logout
-    (submitLogout -> applyAuthStatus, or its catch) both reach showAuthView, so the
-    invalidation there covers logout and session expiry alike."""
+    (submitLogout -> applyAuthStatus once logout or status confirms it) both reach
+    showAuthView, so the invalidation there covers logout and session expiry alike."""
     js = _read("admin.js")
     on_auth_lost = _extract_fn(js, "onAuthLost")
     assert "refreshAuthStatus()" in on_auth_lost
@@ -3628,7 +3655,7 @@ def test_auth_loss_paths_route_through_show_auth_view():
     assert 'showAuthView("login")' in refresh
     logout = _extract_fn(js, "submitLogout")
     assert "applyAuthStatus(" in logout
-    assert 'showAuthView("login")' in logout
+    assert "/api/admin/auth/status" in logout
     apply_status = _extract_fn(js, "applyAuthStatus")
     assert 'showAuthView("login")' in apply_status
 
@@ -4643,6 +4670,42 @@ def test_js_config_reset_restores_pristine_draft():
     )[0]
     assert "mconfigState.pristine" in fn
     assert "renderMaintenanceInverters()" in fn
+
+
+def test_discard_my_changes_and_clear_draft_ask_first():
+    """Both buttons throw work away, so a declined confirmation changes nothing."""
+    js = _read("admin.js")
+    script = (
+        "const DISCARD_CHANGES_CONFIRM = 'x';\n"
+        + _extract_fn(js, "resetMaintenanceConfigDraft")
+        + """
+let answer = false;
+let renders = 0;
+globalThis.window = { confirm: () => answer };
+const mconfigEls = {};
+const mconfigState = { pristine: { v: 1 }, draft: { v: 2 } };
+const mconfigClone = (value) => JSON.parse(JSON.stringify(value));
+function mconfigNormalizeDraftMqttControl() {}
+function renderMaintenanceGridMeter() { renders += 1; }
+function syncMaintenanceBrokerForm() {}
+function renderMaintenanceInverters() {}
+function renderMaintenanceFeatures() {}
+function setMaintenanceFact() {}
+resetMaintenanceConfigDraft();
+const declined = { draft: mconfigState.draft.v, renders };
+answer = true;
+resetMaintenanceConfigDraft();
+console.log(JSON.stringify({ declined, accepted: { draft: mconfigState.draft.v, renders } }));
+"""
+    )
+    out = _run_node(script)
+    assert out["declined"] == {"draft": 2, "renders": 0}
+    assert out["accepted"] == {"draft": 1, "renders": 1}
+    clear_draft = js.split("if (configEls.clearDraft)", 1)[1].split(
+        "\nconst ADMIN_VIEWS", 1
+    )[0]
+    first_statement = clear_draft.split("=> {", 1)[1].strip().splitlines()[0]
+    assert first_statement == "if (!window.confirm(CLEAR_DRAFT_CONFIRM)) return;"
 
 
 def test_maintenance_discovery_is_first_class_review_workflow():
@@ -5774,6 +5837,61 @@ def test_js_logout_button_calls_endpoint_once_authenticated():
     logout = js.split("async function submitLogout", 1)[1].split("\n\n", 1)[0]
     assert "/api/admin/auth/logout" in logout
     assert 'authEls.logout.addEventListener("click", submitLogout)' in js
+
+
+def _run_logout_node(logout_response, status_authenticated):
+    js = _read("admin.js")
+    script = (
+        "const LOGOUT_FAILED_MESSAGE = 'failed';\n"
+        + _extract_decl(js, "async function readLogoutStatus")
+        + "\n"
+        + _extract_decl(js, "async function submitLogout")
+        + """
+const authState = { authenticated: true };
+const calls = [];
+globalThis.window = { alert: (text) => calls.push("alert:" + text) };
+function stopSystemAlignmentPolling() { calls.push("stop-polling"); }
+function clearSetupOperationContext() { calls.push("clear-context"); }
+const logoutResponse = %s;
+const statusAuthenticated = %s;
+async function rawFetch(url) {
+  if (url === "/api/admin/auth/logout") {
+    if (!logoutResponse) throw new Error("network down");
+    return { ok: logoutResponse.ok, json: async () => logoutResponse.body };
+  }
+  if (url === "/api/admin/auth/status") {
+    if (statusAuthenticated === null) throw new Error("network down");
+    return { ok: true, json: async () => ({ authenticated: statusAuthenticated }) };
+  }
+  throw new Error("unexpected " + url);
+}
+function applyAuthStatus(status) {
+  authState.authenticated = Boolean(status.authenticated);
+  calls.push("apply:" + authState.authenticated);
+}
+submitLogout().then(() => console.log(JSON.stringify({ calls, authenticated: authState.authenticated })));
+"""
+        % (json.dumps(logout_response), json.dumps(status_authenticated))
+    )
+    return _run_node(script)
+
+
+def test_a_failed_logout_is_not_reported_as_logged_out():
+    """Only the server decides the session ended; a refused logout says so."""
+    refused = _run_logout_node({"ok": False, "body": {"error": "csrf_failed"}}, True)
+    assert refused == {"calls": ["alert:failed"], "authenticated": True}
+    offline = _run_logout_node(None, None)
+    assert offline == {"calls": ["alert:failed"], "authenticated": True}
+    expired = _run_logout_node({"ok": False, "body": {}}, False)
+    assert expired == {
+        "calls": ["stop-polling", "clear-context", "apply:false"],
+        "authenticated": False,
+    }
+    done = _run_logout_node({"ok": True, "body": {"authenticated": False}}, True)
+    assert done == {
+        "calls": ["stop-polling", "clear-context", "apply:false"],
+        "authenticated": False,
+    }
 
 
 def test_admin_frontend_defines_is_authenticated_helper():
@@ -6942,6 +7060,27 @@ console.log(JSON.stringify({size: zendureMqttPreviewProposals.size, payload: mqt
     )
     assert approved["size"] == 1
     assert approved["payload"][0]["replace_grid_meter"] is True
+
+
+def test_js_declined_grid_meter_replacement_keeps_the_previous_selection():
+    """Cancelling the replacement leaves the earlier MQTT grid meter selected."""
+    out = _run_mqtt_proposal_node(
+        """
+function grid(id) { return {
+  id: id, target: "grid_meter",
+  grid_meter_fragment: {type: "zendure_smartmeter_d0", mqtt: {broker_ref: "local_mqtt", topic: "Zendure/sensor/" + id + "/totalPower"}},
+  connection_source: "local_mqtt",
+}; }
+latestMqttProposals = [grid("A"), grid("B")];
+toggleMqttPreviewProposal("A");
+httpGridMeterSelected = true;
+confirmResult = false;
+toggleMqttPreviewProposal("B");
+console.log(JSON.stringify({selected: selectedMqttGridMeterId(), size: zendureMqttPreviewProposals.size}));
+"""
+    )
+    assert out["selected"] == "A"
+    assert out["size"] == 1
 
 
 def test_js_grid_meter_proposal_payload_carries_no_secrets():
@@ -8825,6 +8964,7 @@ def test_reconnect_and_auth_events_start_exactly_one_resume_each(tmp_path):
             source("async function performAuthenticatedWorkflowResume"),
             source("async function resumeAuthenticatedWorkflows"),
             source("function showAuthenticatedApp"),
+            source("function renderAuthRecoveryCopy"),
             source("function applyAuthStatus"),
             source("async function refreshAuthStatus"),
         )
@@ -12088,6 +12228,8 @@ def test_operation_in_progress_never_reports_a_successful_switch():
     js = _read("admin.js")
     helpers = "\n".join(
         [
+            _extract_decl(js, "const ADMIN_ERROR_MESSAGES"),
+            _extract_decl(js, "function humanErrorText"),
             _extract_decl(js, "const SETUP_OPERATION_LABELS"),
             _extract_decl(js, "function isSetupOperationInProgress"),
             _extract_decl(js, "function setupOperationInProgressMessage"),
@@ -12318,3 +12460,151 @@ def test_the_current_version_prefers_the_release_over_the_image_reference():
 
     assert script.count("cur.tag || cur.image") == 1
     assert "cur.image || cur.tag" not in script
+
+
+def test_secret_feature_values_never_reach_local_storage():
+    """An InfluxDB token typed into Guided Setup stayed in the browser profile."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the feature storage contract")
+    js = _read("admin.js")
+    sources = "\n".join(
+        header + _async_fn_body(js, header)
+        for header in ("function secretFeaturePaths", "function persistableFeatureValues")
+    )
+    script = sources + """
+let setupCatalog = { sections: [
+  { id: "influxdb", fields: [
+    { path: "influxdb.token", secret: true },
+    { path: "influxdb.url", secret: false },
+  ] },
+  { id: "grid_meter", fields: [{ path: "grid_meter.mqtt.password", secret: true }] },
+] };
+const values = {
+  "influxdb.token": "tok-123",
+  "influxdb.url": "http://influx:8086",
+  "grid_meter.mqtt.password": "pw",
+};
+console.log(JSON.stringify(persistableFeatureValues(values, secretFeaturePaths())));
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == {"influxdb.url": "http://influx:8086"}
+
+
+def test_a_resume_that_must_wait_keeps_polling_for_the_new_admin():
+    """After F5 during an Admin update the overlay stayed up with nothing polling."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the resume contract")
+    js = _read("admin.js")
+    source = "async function resumeGuidedUpgrade" + _async_fn_body(
+        js, "async function resumeGuidedUpgrade"
+    )
+    script = """
+const calls = [];
+const authState = { adminInstanceId: "old-admin" };
+const SYSTEM_ALIGNMENT_TRANSITION_STAGES = new Set();
+function resolveSystemAlignmentStage() { return null; }
+function renderSystemAlignmentStatus() {}
+function setUpgradeRunning(value) { calls.push(["running", value]); }
+function showReconnectOverlay(message) { calls.push(["overlay", message]); }
+function waitForAdminReconnect(previous, operation) { calls.push(["wait", previous, operation]); }
+function renderUpgradeResult() { calls.push(["result"]); }
+async function fetch() {
+  return { ok: true, json: async () => ({ reconnect: true, message: "Waiting for the new Admin" }) };
+}
+""" + source + """
+resumeGuidedUpgrade("op-1").then(() => console.log(JSON.stringify(calls)));
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
+    calls = json.loads(result.stdout)
+    assert ["wait", "old-admin", "op-1"] in calls
+    assert ["overlay", "Waiting for the new Admin"] in calls
+
+
+def test_a_lost_status_request_is_retried_and_a_server_answer_ends_the_poll():
+    """One failed poll declared a still-running restore or upgrade failed."""
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the job poll contract")
+    js = _read("admin.js")
+    sources = "\n".join(
+        (
+            _extract_decl(js, "const ADMIN_ERROR_MESSAGES"),
+            _extract_decl(js, "function humanErrorText"),
+            _extract_decl(js, "function jobPollError"),
+            _extract_decl(js, "async function readJobStatus"),
+        )
+    )
+    script = sources + """
+const answers = [
+  () => { throw new TypeError("Failed to fetch"); },
+  () => ({ ok: false, status: 502, json: async () => { throw new SyntaxError("x"); } }),
+  () => ({ ok: false, status: 404, json: async () => ({ ok: false, error: "unknown job" }) }),
+];
+let call = 0;
+async function fetch() { return answers[call++](); }
+(async () => {
+  const out = [];
+  for (let i = 0; i < answers.length; i += 1) {
+    try { await readJobStatus("/x", "fallback"); out.push("ok"); }
+    catch (err) { out.push({ transient: err.transient, status: err.status || null }); }
+  }
+  console.log(JSON.stringify(out));
+})();
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == [
+        {"transient": True, "status": None},
+        {"transient": True, "status": None},
+        {"transient": False, "status": 404},
+    ]
+
+
+def test_the_lost_contact_warning_clears_once_the_backup_poll_answers_again():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the job poll contract")
+    js = _read("admin.js")
+    sources = "\n".join(
+        (
+            _extract_decl(js, "const ADMIN_ERROR_MESSAGES"),
+            _extract_decl(js, "function humanErrorText"),
+            _extract_decl(js, "function jobPollError"),
+            _extract_decl(js, "async function readJobStatus"),
+            _extract_decl(js, "async function pollBackupJob"),
+        )
+    )
+    script = """
+const JOB_POLL_MAX_MISSES = 20, JOB_POLL_RETRY_MS = 0, BACKUP_POLL_INTERVAL_MS = 0;
+let backupPollTimer = null, backupPollMisses = 0;
+const backupEls = { restoreSteps: {}, createSteps: {} };
+let message = null;
+const seen = [];
+function renderBackupMessage(items) { message = items; }
+function renderBackupJobSteps() { seen.push(JSON.stringify(message)); }
+function stopBackupPolling() {}
+function setBackupBusy() {}
+function loadBackups() {}
+function renderBackupJobResult() {}
+const answers = [
+  () => { throw new TypeError("Failed to fetch"); },
+  () => ({ ok: true, status: 200, json: async () => ({ ok: true, status: "running", steps: [] }) }),
+  () => ({ ok: true, status: 200, json: async () => ({ ok: true, status: "succeeded", steps: [], result: { ok: true } }) }),
+];
+let call = 0;
+async function fetch() { return answers[call++](); }
+const pending = [];
+function setTimeout(fn) { pending.push(fn); }
+""" + sources + """
+(async () => {
+  await pollBackupJob("job", "restore");
+  while (pending.length) { await pending.shift()(); }
+  console.log(JSON.stringify(seen));
+})();
+"""
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == ["[]", "[]"]

@@ -443,16 +443,27 @@ def test_the_owner_is_resolved_at_every_write_not_once_at_start(tmp_path):
 
     chowned = []
     monkey = appliance_auth.os
-    real_geteuid, real_chown = monkey.geteuid, monkey.chown
+    real_geteuid, real_fchown = monkey.geteuid, monkey.fchown
     monkey.geteuid = lambda: 0
-    monkey.chown = lambda path, uid, gid: chowned.append((uid, gid))
+    monkey.fchown = lambda descriptor, uid, gid: chowned.append((uid, gid))
     try:
         # Adoption happens now, the way the deployment bootstrap does it.
         entry = install_root.stat()
         store.change(PASSWORD, "a-second-shared-secret-2")
     finally:
-        monkey.geteuid, monkey.chown = real_geteuid, real_chown
+        monkey.geteuid, monkey.fchown = real_geteuid, real_fchown
 
     # The root is owned by this test user, so that is the identity a write has to
     # hand the file to -- read now, not at construction.
     assert chowned == [(entry.st_uid, entry.st_gid)]
+
+
+def test_the_manager_ui_never_calls_the_shared_password_independent():
+    """The docs were corrected; two strings in the UI still said the opposite."""
+
+    from pathlib import Path
+
+    app_js = (
+        Path(__file__).resolve().parents[1] / "appliance" / "static" / "app.js"
+    ).read_text(encoding="utf-8").lower()
+    assert "independent from the ems admin password" not in app_js

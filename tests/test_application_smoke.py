@@ -54,8 +54,20 @@ def test_application_self_test_smoke(tmp_path):
     assert "event=self_test_ok" in result.stderr
 
 
-def test_application_builtin_simulation_smoke_uses_temp_runtime_state(tmp_path):
+def test_application_builtin_simulation_leaves_the_live_runtime_state_alone(
+    tmp_path,
+):
     config_path = write_simulation_config(tmp_path)
+    live = tmp_path / "runtime-state.json"
+    live.write_text(
+        json.dumps(
+            {
+                "system": {"enabled": False},
+                "devices": {"Garage": {"enabled": False, "runtime_role": "ac_input"}},
+            }
+        )
+    )
+    before = live.read_bytes()
 
     result = run_app(
         "--config",
@@ -69,4 +81,5 @@ def test_application_builtin_simulation_smoke_uses_temp_runtime_state(tmp_path):
     assert "event=replay_frame" in result.stderr
     assert "event=replay_stopped" in result.stderr
     assert "reason=max_cycles" in result.stderr
-    assert (tmp_path / "runtime-state.json").exists()
+    assert live.read_bytes() == before
+    assert not (tmp_path / "runtime-state.json.bak").exists()

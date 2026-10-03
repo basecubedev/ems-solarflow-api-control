@@ -3,6 +3,7 @@
 """Safe runtime-state editor for ems-solarflow-api-control."""
 
 import argparse
+import contextlib
 import subprocess
 import getpass
 import json
@@ -13,6 +14,7 @@ import sys
 from datetime import datetime
 
 from dashboard import auth as dashboard_auth
+from dashboard import runtime_write
 
 
 from ems.paths import (
@@ -55,6 +57,7 @@ TOP_LEVEL_COMMANDS = (
     "influx",
     "stack",
     "diagnose",
+    "grid-meter",
     "backup",
     "config",
     "interactive",
@@ -84,6 +87,9 @@ DEVICE_ACTIONS = (
     "pv-priority-factor",
     "ac-mode",
     "ac-charge-power",
+)
+RUNTIME_EDIT_COMMANDS = frozenset(
+    {"system", "device", "ha", "ha-control", "winter", "interactive", "menu"}
 )
 DEVICE_AC_MODE_VALUES = ("output", "input")
 DEVICE_AC_MODE_RUNTIME_ROLES = {
@@ -473,9 +479,17 @@ omitted from normal help output.
     change_password.add_argument("--new-password", help=argparse.SUPPRESS)
     change_password.add_argument("--confirm-password", help=argparse.SUPPRESS)
 
-    dashboard_subparsers.add_parser(
+    disable_auth = dashboard_subparsers.add_parser(
         "disable-auth",
-        help="Disable dashboard write-mode authentication."
+        help=(
+            "Delete the shared Dashboard/Admin password file. The Admin Console "
+            "then offers first-password setup to the next visitor."
+        )
+    )
+    disable_auth.add_argument(
+        "--yes",
+        action="store_true",
+        help="Do not ask for confirmation.",
     )
     dashboard_subparsers.add_parser(
         "auth-status",
@@ -1219,10 +1233,7 @@ def config_device_defaults(config):
     )
 
     devices = {}
-    max_device_power = (
-        config.get("system", {})
-        .get("max_device_power", 800)
-    )
+    max_device_power = config_section(config, "system").get("max_device_power", 800)
 
     device_list = config.get("devices", []) if isinstance(config, dict) else []
     if not isinstance(device_list, list):
@@ -1248,7 +1259,9 @@ def config_device_defaults(config):
                 f"devices.{name}.max_power",
                 minimum=0
             ),
-            "offgrid_socket_mode": "off",
+            "offgrid_socket_mode": config_mod.offgrid_socket_mode_for(
+                item.get("grid_off_mode")
+            ),
             "pv_priority_factor": float_value(
                 item.get("pv_priority_factor", 1.0),
                 f"devices.{name}.pv_priority_factor",
@@ -1285,6 +1298,7 @@ def completion_word_list(words):
 
 def completion_script_bash(config):
     commands = completion_word_list(TOP_LEVEL_COMMANDS)
+    command_case = "|".join(safe_completion_words(TOP_LEVEL_COMMANDS))
     system_actions = completion_word_list(SYSTEM_ACTIONS)
     device_actions = completion_word_list(DEVICE_ACTIONS)
     ha_actions = "enable disable"
@@ -1328,7 +1342,7 @@ _emsctl_py_completion()
   command=""
   for ((i = 1; i < COMP_CWORD; i++)); do
     case "${{COMP_WORDS[i]}}" in
-      status|system|device|ha|ha-control|winter|dashboard|influx|stack|diagnose|backup|config|interactive|menu|examples|completion|help)
+      {command_case})
         command="${{COMP_WORDS[i]}}"
         break
         ;;
@@ -1343,6 +1357,9 @@ _emsctl_py_completion()
   case "$command" in
     system)
       COMPREPLY=( $(compgen -W "$system_actions" -- "$cur") )
+      ;;
+    grid-meter)
+      COMPREPLY=( $(compgen -W "test" -- "$cur") )
       ;;
     device)
       if [[ "$prev" == "device" ]]; then
@@ -1422,6 +1439,9 @@ _emsctl_py()
     system)
       _describe 'system action' system_actions
       ;;
+    grid-meter)
+      _values 'grid-meter action' test
+      ;;
     device)
       if (( CURRENT == 3 )); then
         _describe 'device' devices
@@ -1460,9 +1480,16 @@ def print_quick_help():
     print(QUICK_HELP_TEXT.rstrip())
 
 
+def config_section(config, name):
+    """A config section as a dict; a missing or malformed one reads as empty."""
+
+    section = config.get(name) if isinstance(config, dict) else None
+    return section if isinstance(section, dict) else {}
+
+
 def runtime_defaults(config, existing=None):
     existing = existing if isinstance(existing, dict) else {}
-    system = config.get("system", {})
+    system = config_section(config, "system")
 
     devices = config_device_defaults(config)
     existing_devices = existing.get("devices", {})
@@ -1497,14 +1524,14 @@ def runtime_defaults(config, existing=None):
             )
         },
         "ha": {
-            "enabled": config.get("ha", {}).get("enabled", True),
-            "control_enabled": config.get("ha", {}).get(
+            "enabled": config_section(config, "ha").get("enabled", False),
+            "control_enabled": config_section(config, "ha").get(
                 "control_enabled",
-                True
+                False
             )
         },
         "winter": {
-            "enabled": config.get("winter", {}).get("enabled", False)
+            "enabled": config_section(config, "winter").get("enabled", False)
         },
         "devices": devices
     }
@@ -1629,8 +1656,26 @@ def print_device_ac_mode_status(device_name, device):
     }, indent=2, sort_keys=True))
 
 
-def update_system(args, state):
+def runtime_limits(config):
+    """Bounds every runtime writer shares, derived from the static config."""
+
+    return runtime_write.build_validation_context(config)
+
+
+def _validated(label, validate, *args):
+    try:
+        return validate(*args)
+    except runtime_write.RuntimeWriteError as exc:
+        raise ValueError(f"{label}: {exc}") from exc
+
+
+def update_system(args, state, limits=None):
     system = state.setdefault("system", {})
+    fields = {
+        "max-power": "max_total_power",
+        "loop-interval": "loop_interval",
+        "min-output-limit": "min_output_limit",
+    }
 
     match args.action:
         case "enable":
@@ -1639,29 +1684,23 @@ def update_system(args, state):
         case "disable":
             ensure_no_value(args)
             system["enabled"] = False
-        case "max-power":
-            system["max_total_power"] = int_value(
-                args.value,
-                "system max-power",
-                minimum=0
-            )
-        case "loop-interval":
-            system["loop_interval"] = int_value(
-                args.value,
-                "system loop-interval",
-                minimum=1
-            )
-        case "min-output-limit":
-            system["min_output_limit"] = int_value(
-                args.value,
-                "system min-output-limit",
-                minimum=0
+        case action if action in fields:
+            if args.value is None:
+                raise ValueError(f"system {action} requires a value")
+            key = fields[action]
+            system.update(
+                _validated(
+                    f"system {action}",
+                    runtime_write.validate_system_values,
+                    {key: args.value},
+                    limits,
+                )
             )
         case _:
             raise ValueError(f"unknown system action {args.action}")
 
 
-def update_device(args, state):
+def update_device(args, state, limits=None):
     devices = state.setdefault("devices", {})
     if args.name not in devices:
         known = ", ".join(sorted(devices)) or "(none)"
@@ -1671,6 +1710,24 @@ def update_device(args, state):
     if not isinstance(device, dict):
         raise ValueError(f"device {args.name} runtime state must be an object")
 
+    fields = {
+        "max-power": "max_power",
+        "offgrid": "offgrid_socket_mode",
+        "pv-priority-factor": "pv_priority_factor",
+        "ac-charge-power": "ac_charge_power_w",
+    }
+
+    def validated(key, value):
+        if value is None:
+            raise ValueError(f"device {args.name} {args.action} requires a value")
+        return _validated(
+            f"device {args.name} {args.action}",
+            runtime_write.validate_device_values,
+            args.name,
+            {key: value},
+            limits,
+        )
+
     match args.action:
         case "enable":
             ensure_no_value(args)
@@ -1678,37 +1735,17 @@ def update_device(args, state):
         case "disable":
             ensure_no_value(args)
             device["enabled"] = False
-        case "max-power":
-            device["max_power"] = int_value(
-                args.value,
-                f"device {args.name} max-power",
-                minimum=0
-            )
-        case "offgrid":
-            value = str(args.value or "").strip().lower()
-            if value not in OFFGRID_SOCKET_MODES:
-                raise ValueError(
-                    "device offgrid value must be 'off', 'eco', or 'standard'"
-                )
-            device["offgrid_socket_mode"] = value
-        case "pv-priority-factor":
-            device["pv_priority_factor"] = float_value(
-                args.value,
-                f"device {args.name} pv-priority-factor",
-                minimum=0.01
-            )
         case "ac-mode":
             value = str(args.value or "").strip().lower()
             if value not in DEVICE_AC_MODE_RUNTIME_ROLES:
                 raise ValueError("device ac-mode value must be 'output' or 'input'")
-            device["runtime_role"] = DEVICE_AC_MODE_RUNTIME_ROLES[value]
+            role = DEVICE_AC_MODE_RUNTIME_ROLES[value]
+            if role == "ac_input":
+                validated("runtime_role", role)
+            device["runtime_role"] = role
             device["runtime_role_reason"] = "emsctl"
-        case "ac-charge-power":
-            device["ac_charge_power_w"] = strict_int_value(
-                args.value,
-                f"device {args.name} ac-charge-power",
-                minimum=0
-            )
+        case action if action in fields:
+            device.update(validated(fields[action], args.value))
         case _:
             raise ValueError(f"unknown device action {args.action}")
 
@@ -2511,6 +2548,29 @@ def print_influx_status(report):
             f"last_run={task['last_run_status']} "
             f"latest_completed={task['latest_completed']}"
         )
+    for name in report.get("missing_tasks", ()):
+        print(f"    {name}: MISSING")
+    if report.get("missing_buckets") or report.get("missing_tasks"):
+        print("  run 'python3 emsctl.py influx sync' to create what is missing")
+
+
+def confirm_disable_auth(args, auth_path):
+    """Refuse to drop the shared password without an explicit yes."""
+
+    if getattr(args, "yes", False):
+        return
+    print(
+        f"This deletes {auth_path}, the one password for the Dashboard and the "
+        "Admin Console. Until a new one is set, the Admin Console lets whoever "
+        "opens it first choose the password."
+    )
+    if not sys.stdin.isatty():
+        raise ValueError(
+            "dashboard disable-auth needs confirmation; re-run with --yes"
+        )
+    answer = input("Type 'remove' to delete the password file: ")
+    if answer.strip() != "remove":
+        raise ValueError("cancelled; the password file was kept")
 
 
 def handle_dashboard_command(args, config):
@@ -2528,6 +2588,7 @@ def handle_dashboard_command(args, config):
         return 0
 
     if command == "disable-auth":
+        confirm_disable_auth(args, auth_path)
         dashboard_auth.remove_auth_file(auth_path)
         print("Dashboard auth: not configured")
         print("Dashboard write mode: unavailable")
@@ -2621,7 +2682,7 @@ def save_interactive(runtime_path, state):
 
 def run_interactive(args, config):
     runtime_path = resolve_runtime_path(args, config)
-    state, _ = load_runtime_state(runtime_path, config)
+    load_runtime_state(runtime_path, config)
 
     menu_items = [
         ("status", "Show status"),
@@ -2661,6 +2722,7 @@ def run_interactive(args, config):
             return 0
 
         try:
+            state, _ = load_runtime_state(runtime_path, config)
             if choice == "status":
                 print_status(runtime_path, state)
                 continue
@@ -2676,18 +2738,25 @@ def run_interactive(args, config):
                     value = prompt_text(f"system {action}")
                     if value is None:
                         continue
-                update_system(make_args(action=action, value=value), state)
+                state, _ = load_runtime_state(runtime_path, config)
+                update_system(
+                    make_args(action=action, value=value),
+                    state,
+                    runtime_limits(config),
+                )
                 save_interactive(runtime_path, state)
                 continue
 
             if choice.startswith("ha-control-"):
                 action = choice.removeprefix("ha-control-")
+                state, _ = load_runtime_state(runtime_path, config)
                 set_bool_section(make_args(action=action, value=None), state, "ha", "control_enabled")
                 save_interactive(runtime_path, state)
                 continue
 
             if choice.startswith("ha-"):
                 action = choice.removeprefix("ha-")
+                state, _ = load_runtime_state(runtime_path, config)
                 set_bool_section(make_args(action=action, value=None), state, "ha", "enabled")
                 save_interactive(runtime_path, state)
                 continue
@@ -2698,6 +2767,7 @@ def run_interactive(args, config):
 
             if choice.startswith("winter-"):
                 action = choice.removeprefix("winter-")
+                state, _ = load_runtime_state(runtime_path, config)
                 set_bool_section(make_args(action=action, value=None), state, "winter", "enabled")
                 save_interactive(runtime_path, state)
                 continue
@@ -2716,7 +2786,12 @@ def run_interactive(args, config):
                     value = prompt_text("Offgrid mode (off, eco, standard)")
                     if value is None:
                         continue
-                update_device(make_args(name=name, action=action, value=value), state)
+                state, _ = load_runtime_state(runtime_path, config)
+                update_device(
+                    make_args(name=name, action=action, value=value),
+                    state,
+                    runtime_limits(config),
+                )
                 save_interactive(runtime_path, state)
                 continue
 
@@ -2730,6 +2805,7 @@ def run_interactive(args, config):
                         confirm_password=None,
                         current_password=None,
                         new_password=None,
+                        yes=False,
                     ),
                     config,
                 )
@@ -4121,6 +4197,12 @@ def handle_config_migrate_zendure_command(args, config):
         for change in changes
     ]
 
+    if args.json and plan and not args.dry_run and not args.yes:
+        return fail(
+            "--json applies only with --yes, or plans with --dry-run",
+            code=2,
+        )
+
     if args.json:
         print(_json.dumps({"changes": plan, "count": len(plan)}, indent=2))
     elif not plan:
@@ -4133,22 +4215,13 @@ def handle_config_migrate_zendure_command(args, config):
     if args.dry_run or not plan:
         return 0
 
-    if not args.yes:
-        print("\nApply this migration to config.json? [y/N] ", end="")
-        try:
-            answer = input().strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            answer = ""
-        if answer not in ("y", "yes"):
-            print("Aborted.")
-            return 0
-
     try:
         migrated, _warnings = migrate_zendure_mqtt_control_configs(config)
     except ZendureMqttMigrationError as exc:
-        print("Refused: the migrated config would be invalid.")
+        report = sys.stderr if args.json else sys.stdout
+        print("Refused: the migrated config would be invalid.", file=report)
         for err in exc.errors:
-            print(f"  - {err.get('code')}: {err.get('message')}")
+            print(f"  - {err.get('code')}: {err.get('message')}", file=report)
         return fail("zendure_mqtt_control_migration_invalid", code=2)
     do_backup, status = resolve_config_upgrade_backup_policy(args)
     if status == "abort":
@@ -4156,10 +4229,17 @@ def handle_config_migrate_zendure_command(args, config):
         return 0
     if status != "ok":
         return fail(status, code=2)
-    result = write_config_upgrade(args, config, migrated, None, do_backup)
+    if args.json:
+        with contextlib.redirect_stdout(sys.stderr):
+            result = write_config_upgrade(args, config, migrated, None, do_backup)
+    else:
+        result = write_config_upgrade(args, config, migrated, None, do_backup)
     if result != 0:
         return result
-    print(f"Applied Zendure MQTT control migration to {len(plan)} device(s).")
+    print(
+        f"Applied Zendure MQTT control migration to {len(plan)} device(s).",
+        file=sys.stderr if args.json else sys.stdout,
+    )
     return 0
 
 
@@ -4256,6 +4336,17 @@ def main(argv=None):
                     code=2,
                 )
 
+        if (
+            args.config_explicit
+            and not os.path.exists(args.config)
+            and args.command in RUNTIME_EDIT_COMMANDS
+        ):
+            return fail(
+                f"config file does not exist: {args.config}\n"
+                "Check the --config path; nothing was changed.",
+                code=2,
+            )
+
         config = load_config(args.config)
 
         if args.command == "help":
@@ -4315,7 +4406,7 @@ def main(argv=None):
             return 0
 
         if args.command == "system":
-            update_system(args, state)
+            update_system(args, state, runtime_limits(config))
         elif args.command == "device":
             devices = state.get("devices", {})
             if args.action == "ac-mode" and args.value is None:
@@ -4332,7 +4423,7 @@ def main(argv=None):
                     save_atomic(runtime_path, state)
                 print_device_ac_mode_status(args.name, devices[args.name])
                 return 0
-            update_device(args, state)
+            update_device(args, state, runtime_limits(config))
         elif args.command == "ha":
             set_bool_section(args, state, "ha", "enabled")
         elif args.command == "ha-control":
@@ -4350,8 +4441,13 @@ def main(argv=None):
             print(f"updated {runtime_path}")
         return 0
 
-    except ValueError as exc:
+    except (ValueError, backup_mod.BackupError) as exc:
         return fail(str(exc))
+    except OSError as exc:
+        return fail(f"{exc.strerror or exc}: {exc.filename or ''}".rstrip(": "))
+    except KeyboardInterrupt:
+        print()
+        return fail("cancelled", code=130)
 
 
 if __name__ == "__main__":

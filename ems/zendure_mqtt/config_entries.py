@@ -171,6 +171,29 @@ def _mqtt_raw(item: Any, key: str) -> str | None:
     return None
 
 
+_ROUTE_SEGMENT_FORBIDDEN = frozenset("/+#\x00")
+_ROUTE_SEGMENT_KEYS = ("device_id", "product_key")
+
+
+def zendure_mqtt_route_segment_invalid_keys(item: Any) -> tuple[str, ...]:
+    """``mqtt`` route keys whose value carries MQTT topic syntax.
+
+    ``mqtt.device_id`` and ``mqtt.product_key`` are interpolated into subscribe
+    and publish topics as single segments; a ``/``, ``+``, ``#`` or NUL would
+    widen a subscription or retarget a write, so such a value is never a route.
+    """
+
+    mqtt = item.get("mqtt") if isinstance(item, Mapping) else None
+    if not isinstance(mqtt, Mapping):
+        return ()
+    return tuple(
+        key
+        for key in _ROUTE_SEGMENT_KEYS
+        if isinstance(mqtt.get(key), str)
+        and _ROUTE_SEGMENT_FORBIDDEN.intersection(mqtt[key])
+    )
+
+
 def zendure_mqtt_write_topic(item: Any) -> str | None:
     """Explicit ``mqtt.write_topic`` override for a control entry, or ``None``."""
 
@@ -410,6 +433,8 @@ def zendure_cloud_device_subscriptions(devices: Any, broker_ref: str) -> tuple[s
         identifier = zendure_mqtt_route_device_id(item)
         if not product_key or not identifier:
             continue
+        if zendure_mqtt_route_segment_invalid_keys(item):
+            continue
         for topic in (
             f"/{product_key}/{identifier}/#",
             f"iot/{product_key}/{identifier}/#",
@@ -485,7 +510,7 @@ def control_gate_for_broker_source(source: Any) -> str:
     a transport it cannot use.
     """
 
-    return _CONTROL_GATE_BY_BROKER_SOURCE.get(source, CONTROL_GATE_MQTT_LOCAL)
+    return _CONTROL_GATE_BY_BROKER_SOURCE.get(_normalized(source), CONTROL_GATE_MQTT_LOCAL)
 
 
 def control_gate_for_config_device(config: Any, item: Any) -> str:
@@ -716,6 +741,16 @@ def _structural_issues(
                 "device_identifier_missing",
                 "a device identifier is required "
                 "(mqtt.device_id, serial_number or device_id)",
+            )
+        )
+
+    for key in zendure_mqtt_route_segment_invalid_keys(item):
+        issues.append(
+            _issue(
+                "error",
+                "mqtt_route_segment_invalid",
+                f"mqtt.{key} must be a single MQTT topic segment without '/', "
+                "'+', '#' or NUL",
             )
         )
 

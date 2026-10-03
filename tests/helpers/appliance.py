@@ -20,6 +20,7 @@ from appliance.health import HealthResult
 from appliance.paths import AppliancePaths
 from appliance.rescue_account import ACCOUNT as RESCUE_ACCOUNT
 from appliance.services import build_services
+from appliance.shell_access import ACCOUNT as SHELL_ACCOUNT
 
 ADMIN_REPOSITORY = "ghcr.io/basecubedev/ems-solarflow-admin"
 IMAGE_SOURCE = "https://github.com/basecubedev/ems-solarflow-api-control"
@@ -105,6 +106,13 @@ kbdinteractiveauthentication no
 pubkeyauthentication yes
 """
 
+# The shell account's Match block as a fresh install renders it: shell access off.
+SSHD_SHELL_DISABLED_MATCH = """permitrootlogin no
+passwordauthentication no
+kbdinteractiveauthentication no
+pubkeyauthentication no
+"""
+
 
 class FakeHost:
     """A scripted Raspberry Pi host."""
@@ -184,6 +192,7 @@ class FakeHost:
         self.stop_container_sticks = True
         self.sshd_backup_match = SSHD_BACKUP_MATCH.format(export_root=paths.export_root)
         self.sshd_rescue_match = SSHD_RESCUE_MATCH
+        self.sshd_shell_match = SSHD_SHELL_DISABLED_MATCH
         self.sshd_config_valid = True
         self.reload_failures = set()
         self.failing_tools = set()
@@ -705,6 +714,8 @@ class FakeHost:
         user = self._connection_user(args)
         if user == RESCUE_ACCOUNT and self.sshd_rescue_match is not None:
             return self._result("sshd", args, 0, self.sshd_rescue_match)
+        if user == SHELL_ACCOUNT and self.sshd_shell_match is not None:
+            return self._result("sshd", args, 0, self.sshd_shell_match)
         if user and self.sshd_backup_match is not None:
             return self._result("sshd", args, 0, self.sshd_backup_match)
         return self._result("sshd", args, 0, SSHD_CONFIG)

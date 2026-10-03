@@ -67,11 +67,7 @@ MISSING_DATABASE_REASON = "missing"
 INFLUX_SKIP_REASON = "use_influxdb_backup_type"
 
 
-class BackupError(Exception):
-    """Raised for backup/restore failures that are safe to show the user."""
-
-
-# Re-export so callers only need to import ems.backup for password handling.
+BackupError = backup_crypto.BackupError
 BackupPasswordError = backup_crypto.BackupPasswordError
 BackupFormatError = backup_crypto.BackupFormatError
 
@@ -1289,7 +1285,7 @@ def open_backup_archive(archive_path, password=None, allowed_root=None):
 
 
 def _is_safe_member_path(name):
-    if not name or name.startswith("/") or os.path.isabs(name):
+    if not isinstance(name, str) or not name or name.startswith("/") or os.path.isabs(name):
         return False
     normalized = os.path.normpath(name)
     if normalized.startswith("..") or normalized.startswith("/"):
@@ -1323,7 +1319,7 @@ def read_manifest(tar):
         raise BackupError("backup-manifest.json 'files' must be a list")
 
     for entry in manifest["files"]:
-        if not isinstance(entry, dict) or "path" not in entry:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
             raise BackupError("backup-manifest.json has an invalid file entry")
         if not _is_safe_member_path(entry["path"]):
             raise BackupError(
@@ -1523,6 +1519,63 @@ def _atomic_write(target, data):
             pass
 
 
+def _restore_sqlite(target, data):
+    """Restore a SQLite database into the live file through SQLite itself.
+
+    The dashboard database runs in WAL mode. Renaming a file over it left the
+    old ``-wal``/``-shm`` beside the restored one: SQLite replayed the old log
+    onto it, so the restore came back as the old data or as "database disk
+    image is malformed". The backup API writes through the database's own
+    journal, which every open connection then sees. Only a live file SQLite
+    reports as corrupt is replaced as a file instead; an operational error
+    (read-only, locked, disk full) leaves the live database and its log alone.
+    """
+
+    if not os.path.exists(target):
+        _atomic_write(target, data)
+        return
+    parent = os.path.dirname(target) or "."
+    try:
+        fd, staged = tempfile.mkstemp(dir=parent, prefix=".restore-", suffix=".sqlite")
+    except OSError as exc:
+        raise BackupError(f"restore could not write {target}: {exc}") from exc
+    replace_file = False
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        source = sqlite3.connect(staged)
+        try:
+            source.execute("PRAGMA schema_version").fetchone()
+            try:
+                destination = sqlite3.connect(target, timeout=30)
+                try:
+                    source.backup(destination)
+                finally:
+                    destination.close()
+            except sqlite3.OperationalError:
+                raise
+            except sqlite3.DatabaseError:
+                replace_file = True
+        finally:
+            source.close()
+        if replace_file:
+            for suffix in ("-wal", "-shm"):
+                try:
+                    os.remove(target + suffix)
+                except FileNotFoundError:
+                    pass
+            os.replace(staged, target)
+    except (OSError, sqlite3.Error) as exc:
+        raise BackupError(f"restore could not write {target}: {exc}") from exc
+    finally:
+        try:
+            os.remove(staged)
+        except OSError:
+            pass
+
+
 def _dry_run_action(entry):
     status = entry["status"]
     if status == "identical":
@@ -1582,6 +1635,14 @@ def restore_backup(
                 actions.append(_dry_run_action(entry))
             return {"manifest": manifest, "actions": actions, "dry_run": True}
 
+        if conflict_resolver is None and on_conflict == "abort":
+            conflicting = [entry["path"] for entry in entries if entry["status"] == "conflict"]
+            if conflicting:
+                raise BackupError(
+                    f"restore aborted at conflicting file: {conflicting[0]}; "
+                    "nothing was written"
+                )
+
         for entry in entries:
             status = entry["status"]
             if status == "identical":
@@ -1606,7 +1667,10 @@ def restore_backup(
                     continue
                 # decision == "replace" falls through to write.
 
-            _atomic_write(entry["target"], entry["_data"])
+            if entry.get("kind") == "sqlite":
+                _restore_sqlite(entry["target"], entry["_data"])
+            else:
+                _atomic_write(entry["target"], entry["_data"])
             actions.append({
                 "path": entry["path"],
                 "action": "restored",
@@ -1658,11 +1722,13 @@ def diff_backup_file(
         with open(target, "rb") as handle:
             current_data = handle.read()
 
+    sensitive = bool(match.get("sensitive"))
     if _looks_binary(backup_data) or _looks_binary(current_data):
         return {
             "binary": True,
             "text": f"{match['path']} is a binary file; not showing a diff.",
             "path": match["path"],
+            "sensitive": sensitive,
         }
 
     current_lines = current_data.decode("utf-8").splitlines(keepends=True)
@@ -1673,4 +1739,9 @@ def diff_backup_file(
         fromfile=f"current/{match['path']}",
         tofile=f"backup/{match['path']}",
     )
-    return {"binary": False, "text": "".join(diff), "path": match["path"]}
+    return {
+        "binary": False,
+        "text": "".join(diff),
+        "path": match["path"],
+        "sensitive": sensitive,
+    }

@@ -94,6 +94,46 @@ def pytest_collection_finish(session):
         raise pytest.UsageError(shortfall)
 
 
+REPOSITORY_SECRETS_DIR = Path(__file__).resolve().parents[1] / "config" / "secrets"
+
+
+def _inside_repository_secrets(directory):
+    resolved = Path(os.path.realpath(directory))
+    return resolved == REPOSITORY_SECRETS_DIR or REPOSITORY_SECRETS_DIR in resolved.parents
+
+
+@pytest.fixture(autouse=True)
+def _repository_secrets_stay_untouched(monkeypatch):
+    """Refuse any credential-store write into the checkout's ``config/secrets``.
+
+    A server or store built without an isolated install root resolves its
+    secrets directory to the repository's own ``config/secrets``; a test that
+    saved a credential there once left a real ``mqtt-home.json`` behind. The
+    write primitives fail the test instead, so a missing isolation is a red
+    test rather than a stray file.
+    """
+
+    from admin import credential_store
+
+    files = credential_store._EncryptedFiles
+
+    def guarded(name):
+        original = getattr(files, name)
+
+        def refuse_repository_write(self, *args, **kwargs):
+            if _inside_repository_secrets(self.secrets_dir):
+                raise AssertionError(
+                    f"test wrote into the repository's {REPOSITORY_SECRETS_DIR}; "
+                    "use isolated_install_root or pass a tmp_path credential store"
+                )
+            return original(self, *args, **kwargs)
+
+        monkeypatch.setattr(files, name, refuse_repository_write)
+
+    for name in ("_atomic_write", "delete_file", "_load_or_create_key"):
+        guarded(name)
+
+
 @pytest.fixture
 def isolated_install_root(tmp_path_factory, monkeypatch):
     """Point EMS path resolution at an empty temporary install root.

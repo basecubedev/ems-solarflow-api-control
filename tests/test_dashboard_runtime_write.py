@@ -311,3 +311,90 @@ def test_runtime_state_dashboard_updates_are_thread_safe(tmp_path):
     payload = json.loads(path.read_text())
     assert isinstance(payload["system"]["max_total_power"], int)
     assert 100 <= payload["system"]["max_total_power"] < 900
+
+
+def test_a_configured_limit_above_5000_w_is_the_limit(tmp_path):
+    """Three 2400 W units: the EMS card must still accept its own config."""
+
+    context = build_validation_context(
+        {
+            "system": {"max_total_power": 7200},
+            "devices": [{"name": "WR1", "max_power": 2400}],
+        }
+    )
+    limits = effective_limits(context)
+    assert limits["system"]["max_total_power"] == 7200
+    assert limits["devices"]["WR1"] == 2400
+
+
+def _ac_runtime(tmp_path):
+    runtime_state = RuntimeState(
+        str(tmp_path / "runtime-state.json"),
+        {
+            "system": {"enabled": True, "max_total_power": 800, "loop_interval": 5},
+            "ha": {"enabled": False, "control_enabled": False},
+            "winter": {"enabled": False},
+            "devices": {
+                "WR1": {"enabled": True, "max_power": 800},
+                "CLOUD": {"enabled": True, "max_power": 800},
+            },
+        },
+    )
+    runtime_state.load_or_create()
+    context = build_validation_context(
+        {
+            "devices": [
+                {"name": "WR1", "max_power": 800, "ip": "192.0.2.10"},
+                {
+                    "name": "CLOUD",
+                    "type": "zendure_mqtt",
+                    "capabilities": {"write_output_limit": True},
+                    "mqtt": {"broker_ref": "cloud", "device_id": "D1"},
+                },
+            ]
+        },
+        runtime_state,
+    )
+    return runtime_state, context
+
+
+def test_the_dashboard_sets_the_ac_role_and_charge_power_like_emsctl(tmp_path):
+    runtime_state, context = _ac_runtime(tmp_path)
+
+    result = apply_device_update(
+        runtime_state,
+        "WR1",
+        {"runtime_role": "ac_input", "ac_charge_power_w": 600},
+        context,
+    )
+
+    assert result["state"]["runtime_role"] == "ac_input"
+    assert result["state"]["runtime_role_reason"] == "dashboard"
+    assert result["state"]["ac_charge_power_w"] == 600
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"runtime_role": "ac_input"}, {"ac_charge_power_w": 300}],
+)
+def test_the_ac_role_is_refused_for_an_mqtt_device(tmp_path, payload):
+    runtime_state, context = _ac_runtime(tmp_path)
+
+    with pytest.raises(RuntimeWriteError, match="controlled over MQTT"):
+        apply_device_update(runtime_state, "CLOUD", payload, context)
+    assert "runtime_role" not in runtime_state.snapshot()["devices"]["CLOUD"]
+    assert effective_limits(context)["ac_role_unsupported"] == ["CLOUD"]
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        ({"runtime_role": "reserved"}, "must be one of"),
+        ({"ac_charge_power_w": 99999}, "between 0 and 5000"),
+        ({"ac_charge_power_w": 300.5}, "must be an integer"),
+    ],
+)
+def test_ac_values_are_validated(tmp_path, payload, message):
+    runtime_state, context = _ac_runtime(tmp_path)
+    with pytest.raises(RuntimeWriteError, match=message):
+        apply_device_update(runtime_state, "WR1", payload, context)

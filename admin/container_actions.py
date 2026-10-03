@@ -601,11 +601,39 @@ class MaintenanceContainerActions:
             return {}
         return parsed if isinstance(parsed, dict) else {}
 
+    @staticmethod
+    def _config_read_error(context):
+        if not context.config_exists:
+            return None
+        try:
+            parsed = json.loads(context.config_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, UnicodeDecodeError) as exc:
+            return f"config/config.json cannot be read: {exc}"
+        if not isinstance(parsed, dict):
+            return "config/config.json does not hold a JSON object."
+        return None
+
     def plan(self):
+        """The sync plan; nothing to run while the config cannot be read.
+
+        Read as ``{}``, an unreadable config looked like "Analytics disabled":
+        the sync stopped the bundled InfluxDB and recreated EMS against a file
+        it could not parse.
+        """
+
         context = self._install_context_provider()
         config = self._load_config(context)
         overview = self._overview_provider()
-        return build_container_sync_plan(config, overview)
+        plan = build_container_sync_plan(config, overview)
+        config_error = self._config_read_error(context)
+        if config_error is not None:
+            plan["available"] = False
+            plan["actions"] = []
+            plan["message"] = (
+                f"{config_error.rstrip('.')}. Fix the file or restore a backup; "
+                "containers are left as they are."
+            )
+        return plan
 
     def sync(self):
         plan = self.plan()

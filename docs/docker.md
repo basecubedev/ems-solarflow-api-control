@@ -72,6 +72,11 @@ problems are reported as warnings instead of aborting.
 Every step the installer performs, run by hand. Compose V2 uses
 `docker compose` (with a space), not the legacy `docker-compose`.
 
+The downloaded `docker-compose.yml` pins an older EMS image tag; the `sed` line
+below points it at `latest` before the first pull (the installer does this for
+you). Use a release tag such as `v0.8.11` instead of `latest` to stay on one
+release.
+
 EMS only:
 
 ```bash
@@ -79,6 +84,7 @@ mkdir ems-solarflow-api-control
 cd ems-solarflow-api-control
 mkdir -p config data
 curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.yml
+sed -i 's#ems-solarflow-api-control:v[0-9][0-9.]*#ems-solarflow-api-control:latest#' docker-compose.yml
 docker compose pull
 docker compose up -d
 ```
@@ -90,6 +96,7 @@ mkdir ems-solarflow-api-control
 cd ems-solarflow-api-control
 mkdir -p config data data/influxdb
 curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.yml
+sed -i 's#ems-solarflow-api-control:v[0-9][0-9.]*#ems-solarflow-api-control:latest#' docker-compose.yml
 docker compose run --rm ems python3 emsctl.py config init --analytics --yes --no-backup
 docker compose run --rm ems python3 emsctl.py influx init --no-start
 docker compose --profile with-analytics up -d
@@ -168,8 +175,10 @@ docker compose exec ems python3 emsctl.py diagnose
 ```
 
 `config init` is optional and does not blindly replace an existing edited
-config. Choose your grid meter in the guided setup assistant. For Zendure
-SmartMeter D0, select "Zendure SmartMeter D0 via MQTT". Manual editing of
+config. Choose your grid meter in the guided setup assistant. For a Zendure
+SmartMeter D0, select "Zendure Grid Meter via local HTTP (D0 / Smart Meter
+3CT)" (recommended), or "Zendure SmartMeter D0 via MQTT" if it only reaches you
+over MQTT. Manual editing of
 `config/config.json` remains fully supported.
 
 ## CLI Inside Docker

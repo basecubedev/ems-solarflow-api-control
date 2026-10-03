@@ -20,6 +20,7 @@ source.
 import json
 import os
 import tempfile
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -114,8 +115,8 @@ def _as_bool(value, default):
 def _normalize_priority(raw):
     priority = []
     seen = set()
-    for entry in raw or []:
-        if entry in DISCOVERY_SOURCES and entry not in seen:
+    for entry in raw if isinstance(raw, list) else []:
+        if isinstance(entry, str) and entry in DISCOVERY_SOURCES and entry not in seen:
             seen.add(entry)
             priority.append(entry)
     for source in DEFAULT_PRIORITY:
@@ -225,7 +226,8 @@ def normalize_connections(raw):
 
     used_ids = set()
     brokers = []
-    for broker_raw in local_mqtt_raw.get("brokers") or []:
+    raw_brokers = local_mqtt_raw.get("brokers")
+    for broker_raw in raw_brokers if isinstance(raw_brokers, list) else []:
         broker = _normalize_broker(broker_raw, used_ids)
         if broker is not None:
             brokers.append(broker)
@@ -309,6 +311,7 @@ class DiscoveryConnectionsStore:
     def __init__(self, path=None, *, legacy_preparation_store=None):
         self.path = Path(path) if path else default_connections_path()
         self._legacy_preparation_store = legacy_preparation_store
+        self._lock = threading.RLock()
 
     def load(self):
         block = self._read_block()
@@ -317,67 +320,86 @@ class DiscoveryConnectionsStore:
         return normalize_connections(block or {})
 
     def save(self, payload):
-        merged = self._merge(self.load(), payload)
-        normalized = normalize_connections(merged)
-        self._write_block(normalized)
-        return normalized
+        with self._lock:
+            merged = self._merge(self.load(), payload)
+            normalized = normalize_connections(merged)
+            self._write_block(normalized)
+            return normalized
+
+    def save_local_api(self, section):
+        """Replace only the local API section; priority and switches are kept."""
+
+        with self._lock:
+            current = self.load()
+            return self.save(
+                {
+                    "priority": current["discovery_priority"],
+                    "sources": current["sources"],
+                    "local_api": dict(section),
+                }
+            )
 
     # --- broker / token helpers ------------------------------------------
 
     def upsert_broker(self, broker):
-        current = self.load()
-        brokers = [
-            item
-            for item in current["local_mqtt"]["brokers"]
-            if item["id"] != broker.get("id")
-        ]
-        brokers.append(dict(broker))
-        current["local_mqtt"]["brokers"] = brokers
-        normalized = normalize_connections(current)
-        self._write_block(normalized)
-        return normalized
+        with self._lock:
+            current = self.load()
+            brokers = [
+                item
+                for item in current["local_mqtt"]["brokers"]
+                if item["id"] != broker.get("id")
+            ]
+            brokers.append(dict(broker))
+            current["local_mqtt"]["brokers"] = brokers
+            normalized = normalize_connections(current)
+            self._write_block(normalized)
+            return normalized
 
     def remove_broker(self, broker_id):
-        current = self.load()
-        removed = None
-        kept = []
-        for item in current["local_mqtt"]["brokers"]:
-            if item["id"] == broker_id:
-                removed = item
-            else:
-                kept.append(item)
-        current["local_mqtt"]["brokers"] = kept
-        self._write_block(normalize_connections(current))
-        return removed
+        with self._lock:
+            current = self.load()
+            removed = None
+            kept = []
+            for item in current["local_mqtt"]["brokers"]:
+                if item["id"] == broker_id:
+                    removed = item
+                else:
+                    kept.append(item)
+            current["local_mqtt"]["brokers"] = kept
+            self._write_block(normalize_connections(current))
+            return removed
 
     def add_credential_ref(self, ref):
-        ref = str(ref or "").strip()
-        if not ref:
-            return self.load()
-        current = self.load()
-        refs = list(current["local_mqtt"]["credential_refs"])
-        if ref not in refs:
-            refs.append(ref)
-        current["local_mqtt"]["credential_refs"] = refs
-        normalized = normalize_connections(current)
-        self._write_block(normalized)
-        return normalized
+        with self._lock:
+            ref = str(ref or "").strip()
+            if not ref:
+                return self.load()
+            current = self.load()
+            refs = list(current["local_mqtt"]["credential_refs"])
+            if ref not in refs:
+                refs.append(ref)
+            current["local_mqtt"]["credential_refs"] = refs
+            normalized = normalize_connections(current)
+            self._write_block(normalized)
+            return normalized
 
     def remove_credential_ref(self, ref):
-        ref = str(ref or "").strip()
-        current = self.load()
-        refs = [r for r in current["local_mqtt"]["credential_refs"] if r != ref]
-        removed = len(refs) != len(current["local_mqtt"]["credential_refs"])
-        current["local_mqtt"]["credential_refs"] = refs
-        self._write_block(normalize_connections(current))
-        return removed
+        with self._lock:
+            ref = str(ref or "").strip()
+            current = self.load()
+            refs = [r for r in current["local_mqtt"]["credential_refs"] if r != ref]
+            removed = len(refs) != len(current["local_mqtt"]["credential_refs"])
+            current["local_mqtt"]["credential_refs"] = refs
+            self._write_block(normalize_connections(current))
+            return removed
 
     def set_zendure_token_ref(self, token_ref):
-        current = self.load()
-        current["zendure_mqtt"]["token_ref"] = token_ref
-        normalized = normalize_connections(current)
-        self._write_block(normalized)
-        return normalized
+        with self._lock:
+            current = self.load()
+            current["zendure_mqtt"]["token_ref"] = token_ref
+            normalized = normalize_connections(current)
+            self._write_block(normalized)
+            return normalized
 
     # --- internals -------------------------------------------------------
 

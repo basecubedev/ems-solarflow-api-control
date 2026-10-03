@@ -67,6 +67,12 @@ MIGRATION_BROKER_SOURCE_WARNING = (
     "write route is verified, or keep it as a telemetry source."
 )
 
+MIGRATION_READ_ONLY_MODEL_WARNING = (
+    "MQTT power control was disabled because the configured Zendure hardware "
+    "model '{profile_id}' is supported for telemetry only; it has no verified "
+    "output-control route. The device stays a telemetry source."
+)
+
 ACTION_PIN_PROFILE = "pin_profile"
 ACTION_DISABLE_CONTROL = "disable_control"
 # A pure cleanup: a profile-backed device carries an obsolete mqtt.write_topic
@@ -427,6 +433,17 @@ def _plan_device(device, index, broker_source=None) -> ZendureMqttMigrationChang
                 # unproven, so the resolved identity is worth preserving.
                 keep_identity=True,
             )
+        if not cap.model_supported and source == zendure_mqtt_hardware_profile(device):
+            return _disable_change(
+                device,
+                index,
+                name,
+                device_id,
+                code="zendure_mqtt_control_disabled_read_only_model",
+                message=f"{name}: "
+                + MIGRATION_READ_ONLY_MODEL_WARNING.format(profile_id=profile_id),
+                keep_identity=True,
+            )
         if cap.supported:
             if _addressing_complete(device, profile_backed=True):
                 return _pin_change(
@@ -596,8 +613,8 @@ def _apply_change(device, change: ZendureMqttMigrationChange) -> None:
         caps["write_output_limit"] = False
     # A disabled control device drops any writable identity so it can't be
     # re-enabled with a stale/unaddressable model; the telemetry entry stays. A
-    # change that kept the identity (the model is fine, its broker source is not)
-    # preserves the pinned model instead.
+    # change that kept the identity (a broker-source block, or a read-only model
+    # that can never be re-enabled for control) preserves the pinned model.
     if change.hardware_profile is None:
         device.pop("hardware_profile", None)
         device.pop("power_write_profile", None)

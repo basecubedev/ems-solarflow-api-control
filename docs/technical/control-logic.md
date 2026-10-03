@@ -123,6 +123,20 @@ With two active devices and `min_output_limit=35`, the global target is held at
 `70W` instead of integrating toward `800W`. Once PV, discharge capability, or
 current output is observed again, the normal fast output controller resumes.
 
+## Grid Meter Unavailable Hold
+
+When a grid-meter read fails, the meter client still returns its last good
+value. The EMS does not integrate that value: while the meter reports a failed
+or stale read, `commanded_total_w` is held where it was and the load filter is
+cleared, so the target cannot ramp to `max_total_power` on a reading that no
+longer changes. The log shows `event=grid_meter_unavailable_holding_target`
+when the hold starts and `event=grid_meter_recovered` when a fresh reading
+arrives.
+
+Holding is not parking: devices keep their last output while the meter is down.
+If a long meter outage must stop discharge, disable the EMS
+(`emsctl.py system disable`) until the meter is back.
+
 ## PV-First Allocation
 
 When PV can cover the requested target, the EMS allocates output using PV-first

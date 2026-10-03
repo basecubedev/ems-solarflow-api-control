@@ -9,6 +9,7 @@ down with it.
 import time
 
 from appliance import rescue_account, validation
+from appliance.config import effective_timezone
 from appliance.docker_backend import CONTAINER_RUNNING, DAEMON_RUNNING
 from appliance.packages import UPDATE_CHECK_FAILED
 from appliance.redaction import bounded_redacted_log
@@ -180,7 +181,7 @@ class StatusService:
                 "ems_data": self.probe.filesystem(str(self.paths.ems_data_dir)),
             },
             "hostname": self.probe.hostname(),
-            "timezone": str(getattr(self.config, "timezone", "UTC") or "UTC"),
+            "timezone": effective_timezone(self.paths, self.config),
             "services": self.systemd.unit_states(
                 (UNIT_APPLIANCE_WEB, UNIT_APPLIANCE_AGENT, UNIT_DOCKER)
             ),

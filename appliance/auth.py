@@ -183,7 +183,7 @@ class AuthStore:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lock = lock_path(self.path)
-        handle = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o600)
+        handle = os.open(str(lock), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
             fcntl.flock(handle, fcntl.LOCK_EX)
         except OSError:
@@ -205,27 +205,17 @@ class AuthStore:
         record = hash_password(password, self.iterations)
         payload = json.dumps(record, indent=2, sort_keys=True) + "\n"
 
+        # Container-writable directory: mode and owner change only through our own descriptor.
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
         if exclusive:
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-            handle = os.open(self.path, flags, 0o600)
-            with os.fdopen(handle, "w", encoding="utf-8") as stream:
-                stream.write(payload)
-                stream.flush()
-                os.fsync(stream.fileno())
-            self._own(self.path)
+            self._write_new(self.path, flags, payload)
         else:
             tmp = self.path.with_name(
                 f".{self.path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
             )
-            with open(tmp, "w", encoding="utf-8") as stream:
-                stream.write(payload)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.chmod(tmp, 0o600)
-            self._own(tmp)
+            self._write_new(tmp, flags, payload)
             os.replace(tmp, self.path)
-        os.chmod(self.path, 0o600)
         # The rename is a directory operation: without flushing the parent a
         # power cut can leave no password file at all, and the box would boot
         # into first-run enrolment with a root-capable agent behind it.
@@ -254,14 +244,23 @@ class AuthStore:
                 return None
         return owner or None
 
-    def _own(self, path):
+    def _write_new(self, path, flags, payload):
+        handle = os.open(path, flags, 0o600)
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            self._own(stream.fileno())
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+
+    def _own(self, descriptor):
         owner = self._resolved_owner()
         if not owner:
             return False
         try:
             if os.geteuid() != 0:
                 return False
-            os.chown(path, int(owner[0]), int(owner[1]))
+            os.fchown(descriptor, int(owner[0]), int(owner[1]))
         except (AttributeError, OSError, TypeError, ValueError):
             return False
         return True

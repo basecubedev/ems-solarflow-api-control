@@ -72,11 +72,12 @@ sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin dock
 
 ## Raspberry Pi OS
 
-For 64-bit Raspberry Pi OS, Docker recommends the Debian `arm64` packages. For
-32-bit Raspberry Pi OS, follow the official Raspberry Pi OS page because Docker
-version support differs by OS release.
+Use **64-bit** Raspberry Pi OS: the EMS images are published for `arm64` and
+`amd64` only, so a 32-bit system can run Docker but not EMS. On 64-bit
+Raspberry Pi OS, follow Docker's Debian instructions above (`arm64` packages).
 
-The current 32-bit Raspberry Pi OS path uses the `raspbian` repository:
+For reference only, Docker's 32-bit Raspberry Pi OS path uses the `raspbian`
+repository:
 
 ```bash
 sudo apt-get update
@@ -99,10 +100,11 @@ docker --version
 docker compose version
 ```
 
-If Docker requires `sudo`, either prefix the EMS quickstart commands with
-`sudo` or complete Docker's optional Linux post-install step.
+If Docker requires `sudo`, complete the post-install step below before you
+install EMS. Do not run the EMS installers with `sudo`: they refuse to run as
+root, and an EMS container started as root refuses to start.
 
-## Optional: Run Docker Without Sudo
+## Run Docker Without Sudo
 
 Docker's post-install guide uses:
 
@@ -130,9 +132,9 @@ The Compose plugin is missing or too old. Install
 
 ### Permission Denied On Docker Socket
 
-Your user cannot access the Docker daemon socket. Run the command with `sudo`
-or complete the optional Docker post-install group step, then open a new login
-session.
+Your user cannot access the Docker daemon socket. Complete the Docker
+post-install group step above, then open a new login session. Running the EMS
+installers with `sudo` instead does not work: they refuse to run as root.
 
 ### Old `docker-compose` v1
 

@@ -350,7 +350,7 @@
     gate.hidden = false;
     document.getElementById("gate-confirm-field").hidden = !firstRun;
     document.getElementById("gate-intro").textContent = firstRun
-      ? "No appliance password exists yet. Create one to finish the first-run setup. It is independent from the EMS Admin password."
+      ? "No password exists yet. Create one to finish the first-run setup. The EMS Admin console and the dashboard use the same password."
       : "Sign in to manage this Raspberry Pi appliance.";
     document.getElementById("gate-submit").textContent = firstRun ? "Create password" : "Sign in";
     document.getElementById("gate-password-label").textContent = firstRun
@@ -608,6 +608,16 @@
       }));
 
     var actions = [];
+    /* The archive lives in root-owned agent state and a flashed appliance has
+       no shell: without this link it could be created and never retrieved. */
+    if (operation.type === "support.archive" && operation.state === "succeeded"
+        && /^[0-9a-f]{32}$/.test(String(operation.operation_id || ""))) {
+      actions.push(el("a", {
+        class: "primary-button compact", "data-test": "download-support-archive",
+        href: "/api/support/archive/" + operation.operation_id, download: true,
+        text: "Download support archive"
+      }));
+    }
     if (isSettled && !operation.acknowledged) {
       actions.push(el("button", {
         type: "button", class: "primary-button compact", "data-test": "acknowledge-operation",
@@ -1145,6 +1155,21 @@
   function closeDialog() {
     document.getElementById("dialog-backdrop").hidden = true;
     state.pending = null;
+  }
+
+  function dismissDialog() {
+    var pending = state.pending;
+    closeDialog();
+    if (!pending || !pending.operation) return;
+    var operationId = pending.operation.operation_id;
+    api("/api/operations/cancel", { method: "POST", body: { operation_id: operationId } })
+      .then(function () {
+        return api("/api/operations/acknowledge", {
+          method: "POST", body: { operation_id: operationId }
+        });
+      })
+      .catch(function () { /* the banner still offers its own Cancel */ })
+      .then(refresh);
   }
 
   function confirmDialog() {
@@ -2853,7 +2878,15 @@
         text: "This account has a shell and reaches root through sudo. A key deployed on it "
           + "is root on this appliance. It is key-only and never accepts a password." }),
       fact("Account", state.account || "\u2014", { mono: true }),
-      fact("Access", on ? "enabled" : "disabled"),
+      fact("Access", on ? "enabled"
+        : (state.effectively_disabled === true ? "disabled" : "disabled, not confirmed by sshd")),
+      (!on && state.effectively_disabled !== true
+        ? el("p", { class: "control-stage-subtitle", "data-test": "shell-access-not-refused",
+            text: "Shell access is off in the appliance policy, but the running sshd "
+              + (state.daemon === "accepted" ? "still accepts a login method on this account. "
+                : "could not be asked about this account. ")
+              + "Check that /etc/ssh/sshd_config includes the appliance drop-in and reload ssh." })
+        : null),
       fact("Key deployment", state.key_deployment_allowed === false
         ? "refused by appliance.conf" : "allowed from this console"),
       (state.home_writable === false
@@ -3124,7 +3157,7 @@
           el("button", { type: "button", class: "ghost-button compact", text: "Use Expert mode", onclick: function () { setMode("expert"); } })
         ])
       ], "settings-mode"),
-      actionCard("Appliance password", "Independent from the EMS Admin password", [renderPasswordForm()], "settings-password")
+      actionCard("Appliance password", "Also the EMS Admin console and dashboard password", [renderPasswordForm()], "settings-password")
     ]));
   }
 
@@ -3391,11 +3424,11 @@
     document.getElementById("refresh-button").addEventListener("click", function () { refreshEverything(); });
     document.getElementById("mode-basic").addEventListener("click", function () { setMode("basic"); });
     document.getElementById("mode-expert").addEventListener("click", function () { setMode("expert"); });
-    document.getElementById("dialog-cancel").addEventListener("click", closeDialog);
+    document.getElementById("dialog-cancel").addEventListener("click", dismissDialog);
     document.getElementById("dialog-confirm").addEventListener("click", confirmDialog);
     document.getElementById("reconnect-retry").addEventListener("click", pollReconnect);
     document.addEventListener("keydown", function (event) {
-      if (event.key === "Escape" && !document.getElementById("dialog-backdrop").hidden) closeDialog();
+      if (event.key === "Escape" && !document.getElementById("dialog-backdrop").hidden) dismissDialog();
     });
 
     document.getElementById("mode-basic").setAttribute("aria-pressed", String(state.mode === "basic"));

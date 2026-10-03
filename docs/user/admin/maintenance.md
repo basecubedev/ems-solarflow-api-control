@@ -205,7 +205,7 @@ tabs at once, and each tab reports how many matches it holds.
 apply them, so nothing that reloads this page throws them away — including
 *Refresh* on the status page. When that happens the page says so and the summary
 reads *unsaved changes kept*. Use **Discard my changes** to drop them and load
-the saved settings again.
+the saved settings again; it asks for confirmation first.
 
 **Review changes** splits what you changed into two groups: *Takes effect
 immediately* and *Needs an EMS restart*. It is a grouping, not a filter — every

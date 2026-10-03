@@ -303,3 +303,30 @@ def test_a_refused_removal_is_not_reported_as_removed():
     result = ImageRetentionService(docker=docker, keep=5).run()
 
     assert result["removed"] == []
+
+
+def test_the_build_that_ran_before_the_upgrade_survives_it():
+    """Retention runs after known-good names the new build; the outgoing one
+    is in no store any more and was removed although it is the way back."""
+
+    images = _series(ADMIN_IMAGE_REPO, 7)
+    outgoing = images[0]["digest"]
+    docker = _FakeDocker({ADMIN_IMAGE_REPO: images})
+
+    result = ImageRetentionService(docker=docker, keep=5).run(also_protected={outgoing})
+
+    assert outgoing not in result["removed"]
+    assert outgoing not in docker.removed
+
+
+def test_a_dataclass_record_is_read_whole_for_its_digests():
+    from dataclasses import dataclass
+
+    from admin.image_retention import _digests_in
+
+    @dataclass
+    class Transition:
+        admin_digest: str
+        orchestrator_admin_digest: str
+
+    assert _digests_in(Transition("sha256:a", "sha256:o")) == {"sha256:a", "sha256:o"}

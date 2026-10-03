@@ -295,12 +295,12 @@
                 <h2><svg class="heading-icon" aria-hidden="true"><use href="#icon-history"></use></svg>Analytics<span id="analyticsSource" class="chart-source-badge" hidden></span></h2>
                 <div class="analytics-controls">
                   <div class="range-tabs" role="tablist" aria-label="Analytics range">
-                    <button data-range="1h">1h</button>
-                    <button data-range="6h">6h</button>
-                    <button data-range="24h" class="active">24h</button>
-                    <button data-range="7d">7d</button>
-                    <button data-range="30d">30d</button>
-                    <button data-range="365d">365d</button>
+                    <button type="button" data-range="1h" role="tab" aria-selected="false">1h</button>
+                    <button type="button" data-range="6h" role="tab" aria-selected="false">6h</button>
+                    <button type="button" data-range="24h" class="active" role="tab" aria-selected="true">24h</button>
+                    <button type="button" data-range="7d" role="tab" aria-selected="false">7d</button>
+                    <button type="button" data-range="30d" role="tab" aria-selected="false">30d</button>
+                    <button type="button" data-range="365d" role="tab" aria-selected="false">365d</button>
                   </div>
                   <label class="analytics-device">
                     <span class="analytics-device-label">Device</span>
@@ -372,10 +372,10 @@
         <h2><svg class="heading-icon" aria-hidden="true"><use href="#icon-history"></use></svg>History<span id="historySource" class="chart-source-badge" hidden></span></h2>
         <div class="analytics-controls">
           <div class="history-range-tabs" role="tablist" aria-label="History range">
-            <button data-history-range="1h">1h</button>
-            <button data-history-range="6h">6h</button>
-            <button data-history-range="24h" class="active">24h</button>
-            <button data-history-range="7d">7d</button>
+            <button type="button" data-history-range="1h" role="tab" aria-selected="false">1h</button>
+            <button type="button" data-history-range="6h" role="tab" aria-selected="false">6h</button>
+            <button type="button" data-history-range="24h" class="active" role="tab" aria-selected="true">24h</button>
+            <button type="button" data-history-range="7d" role="tab" aria-selected="false">7d</button>
           </div>
           <label class="analytics-device">
             <span class="analytics-device-label">Device</span>

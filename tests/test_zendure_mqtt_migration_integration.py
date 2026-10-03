@@ -108,3 +108,64 @@ def test_migration_is_available_through_emsctl_dry_run(tmp_path):
     assert rc == 0
     # A dry-run never writes the config file.
     assert config_path.read_text(encoding="utf-8") == before
+
+
+def _migration_config_path(tmp_path):
+    config = {"devices": [_control_device(product="Hyper 2000")]}
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    config_path = config_dir / "config.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    return config_path
+
+
+def test_an_interactive_migration_asks_once_before_writing(tmp_path, monkeypatch):
+    import emsctl
+
+    config_path = _migration_config_path(tmp_path)
+    questions = []
+
+    def answer(question, default=None):
+        questions.append(question)
+        return "n" if "backup" in question.lower() else "y"
+
+    monkeypatch.setattr(emsctl, "prompt_text", answer)
+    monkeypatch.setattr(emsctl.sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr("builtins.input", lambda *a: pytest.fail("second prompt"))
+
+    rc = emsctl.main(["--config", str(config_path), "config", "migrate-zendure-mqtt"])
+
+    assert rc == 0
+    assert len([q for q in questions if "Write" in q]) == 1
+
+
+def test_a_json_migration_never_waits_for_a_prompt(tmp_path, capsys):
+    import emsctl
+
+    config_path = _migration_config_path(tmp_path)
+    before = config_path.read_text(encoding="utf-8")
+
+    rc = emsctl.main(
+        ["--config", str(config_path), "config", "migrate-zendure-mqtt", "--json"]
+    )
+
+    assert rc == 2
+    assert config_path.read_text(encoding="utf-8") == before
+    assert capsys.readouterr().out == ""
+
+
+def test_a_json_migration_with_yes_prints_only_json_on_stdout(tmp_path, capsys):
+    import emsctl
+
+    config_path = _migration_config_path(tmp_path)
+
+    rc = emsctl.main(
+        [
+            "--config", str(config_path), "config", "migrate-zendure-mqtt",
+            "--json", "--yes", "--no-backup",
+        ]
+    )
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert json.loads(out)["count"] >= 1

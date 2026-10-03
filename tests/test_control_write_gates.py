@@ -69,8 +69,21 @@ def test_control_writes_allowed_dispatches_by_gate_name():
         assert cfg.control_writes_allowed("api") is False
         assert cfg.control_writes_allowed("mqtt_local") is True
         assert cfg.control_writes_allowed("mqtt_zendure") is False
-        # Unknown gate falls back to the API gate.
         assert cfg.control_writes_allowed("something_else") is False
+
+
+def test_an_unknown_control_gate_never_borrows_the_api_gate():
+    with _enabled_preconditions(), patch.multiple(
+        cfg,
+        ALLOW_HARDWARE_WRITES=True,
+        ALLOW_MQTT_LOCAL_CONTROL_WRITES=True,
+        ALLOW_MQTT_ZENDURE_CONTROL_WRITES=True,
+    ):
+        for gate in ("something_else", None, "API"):
+            decision = cfg.resolve_write_gate(gate)
+            assert decision.allowed is False
+            assert decision.blocked_by == ("unknown_control_gate",)
+            assert cfg.state_reconciliation_writes_allowed(gate) is False
 
 
 # --- effective write-gate decision (transport-aware diagnostics) ------------

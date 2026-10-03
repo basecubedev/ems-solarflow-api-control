@@ -1448,3 +1448,77 @@ def test_prune_still_accepts_its_dry_run(monkeypatch):
 
     assert code == 0
     assert seen == {"action": "prune", "dry_run": True}
+
+
+def test_the_secret_file_is_replaced_atomically_and_only_when_it_changes(tmp_path):
+    from ems import influx_setup
+
+    path = tmp_path / "deploy" / "influxdb.env"
+    influx_setup.write_env_file(str(path), "A=1\n")
+    first = path.stat()
+    influx_setup.write_env_file(str(path), "A=1\n")
+
+    assert path.stat().st_ino == first.st_ino
+    assert (path.stat().st_mode & 0o777) == 0o600
+    influx_setup.write_env_file(str(path), "A=2\n")
+    assert path.read_text() == "A=2\n"
+    assert not list(path.parent.glob(".influxdb-env-*"))
+
+
+def test_an_unreadable_secret_file_reads_as_no_token(tmp_path):
+    from ems import influx_setup
+
+    (tmp_path / "secret").mkdir()
+    config = {"secret_file": "secret", "token_env": "INFLUXDB_TOKEN"}
+    assert influx_setup.read_secret_file_token(config, base_dir=str(tmp_path)) == ""
+
+
+def test_a_rewritten_secret_file_keeps_its_group(tmp_path):
+    groups = [gid for gid in os.getgroups() if gid != os.getegid()]
+    if not groups:
+        pytest.skip("needs a second group to tell a kept group from a new one")
+    path = tmp_path / "influxdb.env"
+    path.write_text("A=1\n")
+    os.chown(path, -1, groups[0])
+
+    influx_setup.write_env_file(str(path), "A=2\n")
+
+    assert path.read_text() == "A=2\n"
+    assert path.stat().st_gid == groups[0]
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_a_rewritten_secret_file_keeps_its_group_when_its_owner_cannot_be_kept(
+    tmp_path, monkeypatch
+):
+    groups = [gid for gid in os.getgroups() if gid != os.getegid()]
+    if not groups:
+        pytest.skip("needs a second group to tell a kept group from a new one")
+    path = tmp_path / "influxdb.env"
+    path.write_text("A=1\n")
+    os.chown(path, -1, groups[0])
+    real_fchown = os.fchown
+
+    def owner_refused(fd, uid, gid):
+        if uid != -1:
+            raise PermissionError(1, "Operation not permitted")
+        real_fchown(fd, uid, gid)
+
+    monkeypatch.setattr(influx_setup.os, "fchown", owner_refused)
+
+    influx_setup.write_env_file(str(path), "A=2\n")
+
+    assert path.stat().st_gid == groups[0]
+
+
+def test_a_symlinked_secret_file_lends_no_owner_to_the_new_file(tmp_path):
+    target = tmp_path / "elsewhere.env"
+    target.write_text("A=1\n")
+    path = tmp_path / "influxdb.env"
+    path.symlink_to(target)
+
+    influx_setup.write_env_file(str(path), "A=2\n")
+
+    assert not path.is_symlink()
+    assert path.read_text() == "A=2\n"
+    assert target.read_text() == "A=1\n"

@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse
 
 from admin import auth as admin_auth
 from admin.admin_update import (
@@ -248,7 +249,8 @@ from admin.system_build import (
     SystemBuildResolver,
     is_development_build_tag,
 )
-from dashboard.auth import LoginRateLimiter, SessionStore
+from dashboard.auth import LoginRateLimiter, SessionStore, auth_file_fingerprint
+from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS
 from dashboard.static_files import build_static_asset_index, static_asset_key
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
@@ -1385,8 +1387,22 @@ class AdminServer(ThreadingHTTPServer):
         self.https_active = bool(https_active)
 
 
+def _authority_hostname(authority):
+    """The lowercase host name of ``host[:port]`` or ``[v6]:port``; ``""`` if none."""
+
+    text = str(authority or "").strip().lower()
+    if not text:
+        return ""
+    if text.startswith("["):
+        return text[1:].split("]", 1)[0]
+    if text.count(":") > 1:
+        return text
+    return text.split(":", 1)[0]
+
+
 class AdminHandler(BaseHTTPRequestHandler):
     server_version = "AdminDiscovery/1.0"
+    timeout = HANDSHAKE_TIMEOUT_SECONDS
 
     def _sanitize_external_mqtt_payload(self, payload):
         """Apply the installed-config-aware browser/export MQTT boundary."""
@@ -1862,7 +1878,50 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     # --- auth ------------------------------------------------------------
 
+    def _public_auth_request_rejection(self, *, check_origin):
+        """Refuse a cross-site password setup or login before it is read.
+
+        These two run without a session or CSRF token. A page on any website
+        could send them as a "simple" request (text/plain, no preflight) and set
+        the first password of a fresh install. Requiring JSON forces a CORS
+        preflight. For the first-password setup a browser's Origin must also
+        name this host; only the host name is compared, because reverse
+        proxies rewrite ports and Host headers in too many ways for more.
+        """
+
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0]
+        if content_type.strip().lower() != "application/json":
+            return {
+                "error": "unsupported_media_type",
+                "message": "Send this request as application/json.",
+            }, 415
+        origin = (self.headers.get("Origin") or "").strip()
+        if check_origin and origin:
+            if _authority_hostname(urlparse(origin).netloc) not in self._request_hostnames():
+                return {
+                    "error": "origin_rejected",
+                    "message": "This request came from another site and was refused.",
+                }, 403
+        return None
+
+    def _request_hostnames(self):
+        names = set()
+        for header in ("Host", "X-Forwarded-Host"):
+            for item in (self.headers.get(header) or "").split(","):
+                name = _authority_hostname(item)
+                if name:
+                    names.add(name)
+        return names
+
     def _handle_public_auth_post(self, path):
+        if path in ("/api/admin/auth/setup", "/api/admin/auth/login"):
+            rejection = self._public_auth_request_rejection(
+                check_origin=path == "/api/admin/auth/setup"
+            )
+            if rejection is not None:
+                self._drain_body()
+                self._send_json(rejection[0], status=rejection[1])
+                return
         if path == "/api/admin/auth/setup":
             self._handle_auth_setup()
         elif path == "/api/admin/auth/login":
@@ -1973,7 +2032,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=500,
             )
             return
-        session = self.server.auth_sessions.create()
+        session = self.server.auth_sessions.create(credential=self._auth_credential())
         self._send_json(
             {**self._auth_status_payload(), "authenticated": True,
              "csrf_token": session.csrf_token},
@@ -1991,7 +2050,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         if not auth.configured:
             self._send_json({"error": "auth_not_configured"}, status=403)
             return
-        if self.server.auth_login_limiter.is_limited(remote):
+        if not self.server.auth_login_limiter.try_attempt(remote):
             self._send_json({"error": "login_rate_limited"}, status=429)
             return
         body = self._read_json_body()
@@ -1999,11 +2058,10 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         password = body.get("password") if isinstance(body, dict) else None
         if not isinstance(password, str) or not admin_auth.verify_admin_password(password):
-            self.server.auth_login_limiter.record_failure(remote)
             self._send_json({"error": "invalid_password"}, status=403)
             return
         self.server.auth_login_limiter.reset(remote)
-        session = self.server.auth_sessions.create()
+        session = self.server.auth_sessions.create(credential=self._auth_credential())
         self._send_json(
             {**self._auth_status_payload(), "authenticated": True,
              "csrf_token": session.csrf_token},
@@ -2049,8 +2107,13 @@ class AdminHandler(BaseHTTPRequestHandler):
             return {"error": "csrf_failed"}, 403
         return None
 
+    def _auth_credential(self):
+        return auth_file_fingerprint(str(admin_auth.resolve_admin_auth_paths().auth_file))
+
     def _current_admin_session(self):
-        return self.server.auth_sessions.get(self._admin_session_cookie_value())
+        return self.server.auth_sessions.get(
+            self._admin_session_cookie_value(), credential=self._auth_credential()
+        )
 
     def _admin_session_cookie_value(self):
         raw = self.headers.get("Cookie", "")
@@ -2826,6 +2889,10 @@ class AdminHandler(BaseHTTPRequestHandler):
         if body.get("confirm") is not True:
             self._send_json({"error": "confirmation_required"}, status=400)
             return
+        operation_id = body.get("operation_id")
+        if not isinstance(operation_id, str) or not operation_id:
+            self._send_json({"error": "operation_id_required"}, status=400)
+            return
         transition = self._alignment_status().get("transition") or {}
         # The ownership question is the arbiter's; this route only performs the
         # cancellation it is allowed to perform.
@@ -2861,7 +2928,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         mode = transition.get("mode")
         try:
             result = self.server.system_alignment.cancel(
-                operation_id=body.get("operation_id"),
+                operation_id=operation_id,
                 coordinator=self.server.operation_coordinator,
             )
         except SystemAlignmentError as exc:
@@ -2872,7 +2939,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             and isinstance(result, dict)
             and result.get("stage") == "cancelled"
         ):
-            self._clear_guided_upgrade_context(body.get("operation_id"))
+            self._clear_guided_upgrade_context(operation_id)
         self._send_json(result)
 
     # --- unified guided workflow lifecycle ---------------------------------
@@ -4387,7 +4454,13 @@ class AdminHandler(BaseHTTPRequestHandler):
         plan = service.plans.get(plan_id) if isinstance(plan_id, str) else None
         if plan is None:
             self._send_json(
-                {"ok": False, "error": "unknown or expired restore plan"}, status=409
+                {
+                    "ok": False,
+                    "error": "unknown or expired restore plan",
+                    "message": "This restore preview has expired or was already "
+                    "used. Run the preview again.",
+                },
+                status=409,
             )
             return
         if plan.blocked:
@@ -4396,13 +4469,38 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=409,
             )
             return
+        if not service.restore_lock.acquire(blocking=False):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "restore_in_progress",
+                    "message": "A restore is already running. Wait for it to finish.",
+                },
+                status=409,
+            )
+            return
+        plan = service.plans.claim(plan_id)
+        if plan is None:
+            service.restore_lock.release()
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "unknown or expired restore plan",
+                    "message": "This restore preview was already used. Run the "
+                    "preview again.",
+                },
+                status=409,
+            )
+            return
         job = BackupJob(uuid.uuid4().hex, service.plan_restore_steps(plan))
 
         def runner(handle):
             try:
-                result = service.restore_from_plan(plan_id, confirm=True, progress=handle)
+                result = service.restore_claimed_plan(plan, confirm=True, progress=handle)
             except BackupRestoreError as exc:
                 result = {"ok": False, "status": "failed", "message": str(exc)}
+            finally:
+                service.restore_lock.release()
             handle.finish(result)
 
         self.server.backup_jobs.submit(job, runner)
@@ -6968,7 +7066,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "expected a JSON object"}, status=400)
             return
         try:
-            self.server.discovery_preparation.save({"local_api": body})
+            self.server.discovery_preparation.save_local_api(body)
         except (DiscoveryPreparationError, DiscoveryConnectionsError) as exc:
             self._send_json(
                 {"ok": False, "error": "store_failed", "message": str(exc)},
@@ -7023,6 +7121,21 @@ class AdminHandler(BaseHTTPRequestHandler):
             body.get("id") or body.get("label") or host
         )
         credentials_ref = self._existing_broker_ref(broker_id)
+        if (username or password) and not self._legacy_broker_may_write_secret(
+            broker_id, owned=credentials_ref == broker_id
+        ):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "credentials_ref_in_use",
+                    "message": (
+                        f"The MQTT credential '{broker_id}' belongs to the running "
+                        "configuration or another connection. Use a different id."
+                    ),
+                },
+                status=409,
+            )
+            return
         try:
             if username or password:
                 self.server.credential_store.save_mqtt_broker_secret(
@@ -7052,7 +7165,11 @@ class AdminHandler(BaseHTTPRequestHandler):
         self._drain_body()
         broker_id = CredentialStore.normalize_ref(broker_id)
         removed = self.server.discovery_preparation.remove_broker(broker_id)
-        if removed and removed.get("credentials_ref"):
+        if (
+            removed
+            and removed.get("credentials_ref")
+            and not self._runtime_credential_ref_consumed(removed["credentials_ref"])
+        ):
             try:
                 self.server.credential_store.forget_mqtt_broker_secret(
                     removed["credentials_ref"]
@@ -7061,6 +7178,41 @@ class AdminHandler(BaseHTTPRequestHandler):
                 pass
         self._reseed_configured_brokers()
         self._send_json({"ok": True, "removed": bool(removed)})
+
+    def _legacy_broker_may_write_secret(self, ref, *, owned):
+        """True when the legacy broker route may (re)write runtime record ``ref``.
+
+        That record is the one the EMS resolves, so the route only writes one it
+        created itself or a fresh one, and never one the configuration consumes.
+        """
+
+        if self._runtime_credential_ref_consumed(ref):
+            return False
+        if owned:
+            return True
+        try:
+            return not os.path.lexists(self.server.credential_store._mqtt_path(ref))
+        except (CredentialStoreError, ValueError):
+            return False
+
+    @staticmethod
+    def _runtime_credential_ref_consumed(ref):
+        """True when the installed config uses ``ref``, or cannot be read."""
+
+        from ems.mqtt_credentials import collect_mqtt_credential_consumers
+
+        context = detect_install_context()
+        if not context.config_exists:
+            return False
+        try:
+            config = json.loads(context.config_path.read_bytes().decode("utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            return True
+        try:
+            consumers = collect_mqtt_credential_consumers(config)
+        except Exception:
+            return True
+        return any(consumer.credentials_ref == ref for consumer in consumers)
 
     def _existing_broker_ref(self, broker_id):
         for broker in self.server.discovery_preparation.load()["local_mqtt"]["brokers"]:
@@ -7258,8 +7410,14 @@ class AdminHandler(BaseHTTPRequestHandler):
         try:
             size = os.path.getsize(path)
             handle = open(path, "rb")
+        except FileNotFoundError:
+            self._send_json({"ok": False, "error": "unknown backup id"}, status=404)
+            return
         except OSError:
-            self._send_json({"ok": False, "error": "unknown backup id"}, status=400)
+            self._send_json(
+                {"ok": False, "error": "the backup file could not be read"},
+                status=500,
+            )
             return
         with handle:
             self.send_response(200)

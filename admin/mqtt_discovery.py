@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from ems.config import default_mqtt_port, parse_mqtt_port, resolve_mqtt_tls_metadata
 
 from admin.discovery import (
+    is_scannable_address,
     TIMEOUT_MS_MIN,
     clamp_max_workers,
     clamp_timeout_ms,
@@ -110,10 +111,11 @@ def decode_mqtt_txt(properties):
 def build_mqtt_mdns_candidate(service_name, hostname, addresses, port, properties):
     """Normalize a resolved ``_mqtt._tcp`` service."""
 
-    if not addresses or not port:
+    usable = [address for address in addresses or () if is_scannable_address(address)]
+    if not usable or not port:
         return None
     return MqttBrokerCandidate(
-        host=str(addresses[0]),
+        host=str(usable[0]),
         port=int(port),
         hostname=str(hostname) if hostname else None,
         service_name=str(service_name) if service_name else None,

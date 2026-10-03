@@ -2652,3 +2652,26 @@ def test_execute_continues_when_the_direction_is_allowed():
     assert len(alignment.direction_calls) == 1
     # The executor's own current-state rejection is what stops this run.
     assert body["reason"] == "config_missing"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"config_schema_version": 3, "devices": [{"name": "WR1", "sn": "REAL"}],}',
+        '["not", "an", "object"]',
+    ],
+)
+def test_an_unreadable_config_stops_the_upgrade_before_anything_is_written(
+    tmp_path, content
+):
+    """An unparseable config read as {} became template defaults with ok: True."""
+
+    executor, install, compose, docker = _make_executor(tmp_path)
+    config = install / "config" / "config.json"
+    config.write_text(content, encoding="utf-8")
+
+    result = executor.execute(TAG, {**ALL_OPTIONS, "backup": False}, confirm=True)
+
+    assert result["ok"] is False
+    assert result["reason"] == "config_invalid"
+    assert config.read_text(encoding="utf-8") == content

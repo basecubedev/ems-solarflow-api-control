@@ -106,6 +106,8 @@ Modes:
   `diagnosis.json`, `diagnosis.txt`, `control-diagnostics.json`,
   `control-diagnostics.txt`, `control-quality.json`, `control-quality.txt`,
   `redacted-config.json`, `runtime-state.json`, and `bundle-metadata.json`.
+  Without `--output` it is written to `data/support/ems-diagnose-<time>.zip`,
+  the directory Docker keeps on the host.
 
 Control interpretation:
 
@@ -283,13 +285,13 @@ By default, `emsctl.py` uses this config lookup order:
 ```text
 --config PATH
 EMS_CONFIG_FILE
-config.json
 config/config.json
+config.json
 ```
 
-This preserves legacy local setups that keep `config.json` next to
-`emsctl.py`, while allowing the recommended Docker setup to use
-`/app/config/config.json` automatically.
+`config/config.json` wins when both exist. A legacy local setup that keeps
+only `config.json` next to `emsctl.py` still works, and the recommended Docker
+setup uses `/app/config/config.json` automatically.
 
 Relative `runtime_state_path` and dashboard `auth_file` values are still
 resolved relative to the application directory. The runtime-state path always
@@ -534,7 +536,10 @@ python3 emsctl.py dashboard auth-status
 
 Passwords are prompted without echo. The password file contains only
 PBKDF2-SHA256 hash metadata and no plaintext password. `disable-auth` removes
-the password file and makes dashboard write mode unavailable again.
+the password file and makes dashboard write mode unavailable again. The same
+file is the Admin Console password, so the Admin Console then offers
+first-password setup to whoever opens it next; the command asks for
+confirmation (`--yes` skips it in scripts).
 
 Hidden password automation flags exist for tests and non-interactive automation
 but are intentionally omitted from normal help. Do not use them for interactive
@@ -885,14 +890,20 @@ restore password.
 
 ## Validation
 
-The CLI rejects invalid input without changing the file:
+The CLI rejects invalid input without changing the file. It applies the same
+bounds as the dashboard, so both tools accept exactly the same values:
 
 - unknown device
-- negative watt values
-- missing or invalid `pv-priority-factor`
-- `pv-priority-factor < 0.01`
-- `loop_interval <= 0`
+- a watt value that is not a whole number, is negative, or exceeds its limit:
+  `system max-power` up to `system.max_total_power_limit` (else
+  `system.max_total_power`), `device ... max-power` up to the device's
+  configured `max_power`, `ac-charge-power` up to 5000 W
+- `loop-interval` outside 1–3600 seconds
+- `pv-priority-factor` outside 0.01–100
 - invalid offgrid value; allowed values are `off`, `eco`, and `standard`
+- `ac-mode input` or `ac-charge-power` for a device controlled over MQTT: the
+  EMS cannot switch the AC mode over MQTT, so the role would only stop output
+  regulation
 - invalid runtime-state JSON
 - unknown command
 - dashboard password confirmation mismatch
@@ -915,4 +926,9 @@ The CLI writes via a temporary file and atomic rename:
 data/runtime-state.json.<pid>.tmp -> data/runtime-state.json
 ```
 
-This keeps runtime-state edits robust even when the EMS is running.
+The EMS never reads a half-written file, so editing while it runs is safe.
+Every writer (emsctl, the dashboard, the Home Assistant helper sync) re-reads
+the file before it changes a value, so a change made by one of them is kept by
+the next. There is no lock across processes, though: two writers that save
+within the same fraction of a second can still lose one change. Check with
+`python3 emsctl.py status` when you script several writers at once.

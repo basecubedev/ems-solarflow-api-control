@@ -268,6 +268,34 @@ def test_admin_installer_dry_run_writes_nothing(tmp_path):
     assert not (tmp_path / "config").exists()
 
 
+def test_admin_installer_dry_run_plans_for_the_named_install_dir(tmp_path):
+    target = tmp_path / "planned"
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--dry-run", "--install-dir", str(target)],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"Install dir:   {target}\n" in result.stdout
+    assert f"{target}/data/admin" in result.stdout
+    assert not target.exists()
+
+
+def test_admin_installer_dry_run_checks_existing_files_in_the_install_dir(tmp_path):
+    (tmp_path / "docker-compose.admin.yml").write_text("services: {}\n")
+    target = tmp_path / "planned"
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--dry-run", "--install-dir", str(target)],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "DRY-RUN: write docker-compose.admin.yml" in result.stdout
+    assert "Keeping existing" not in result.stdout
+
+
 def test_admin_installer_dry_run_ok_with_root_ids(tmp_path):
     # Root/zero ids must not fail --dry-run (it writes nothing anyway).
     env = dict(os.environ, PUID="0", PGID="0")

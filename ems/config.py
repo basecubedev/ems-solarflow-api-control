@@ -2,6 +2,7 @@
 import copy
 import json
 import logging
+import math
 import os
 import re
 import ssl
@@ -981,7 +982,11 @@ def _zendure_mqtt_broker_connection(config, broker_ref):
     if effective is None:
         return None
     profile = effective.config
-    tls = safe_bool(profile.get("tls"), False)
+    tls, tls_insecure = resolve_mqtt_tls_metadata(
+        tls_mode=profile.get("tls_mode"),
+        tls=profile.get("tls"),
+        tls_insecure=profile.get("tls_insecure"),
+    )
     port = parse_mqtt_port(
         profile.get("port"), default=default_mqtt_port(tls)
     )
@@ -989,7 +994,7 @@ def _zendure_mqtt_broker_connection(config, broker_ref):
         "host": str(profile.get("host") or "").strip(),
         "port": port,
         "tls": tls,
-        "tls_insecure": safe_bool(profile.get("tls_insecure"), False),
+        "tls_insecure": tls_insecure,
         "username": str(profile.get("username") or ""),
         "password": str(profile.get("password") or ""),
         "credentials_ref": profile.get("credentials_ref"),
@@ -1675,6 +1680,15 @@ OFFGRID_SOCKET_MODES = {
     "eco": 1,
     "off": 2
 }
+
+
+def offgrid_socket_mode_for(grid_off_mode):
+    """Runtime offgrid mode seeded from a legacy ``devices[].grid_off_mode``."""
+
+    for name, value in OFFGRID_SOCKET_MODES.items():
+        if safe_int(grid_off_mode, -1) == value and grid_off_mode is not None:
+            return name
+    return "off"
 ZENDURE_CONFIG = []
 ZENDURE_MQTT_CONFIG = {}
 SHELLY_IP = ""
@@ -1729,7 +1743,7 @@ def initialize(args, base_dir):
     CONFIG = load_config(args, base_dir)
     ha_config = CONFIG.get("ha", {})
 
-    SYSTEM_ENABLED = CONFIG["system"].get("enabled", True)
+    SYSTEM_ENABLED = runtime_control_flag(CONFIG["system"], "enabled")
     HA_URL = ha_config.get("url", "")
     HA_TOKEN = ha_config.get("token", "")
     MAX_TOTAL_POWER = CONFIG["system"]["max_total_power"]
@@ -1753,29 +1767,32 @@ def initialize(args, base_dir):
     except (TypeError, ValueError):
         MIN_OUTPUT_LIMIT = 0
 
-    DRY_RUN = CONFIG["system"].get("dry_run", True) or args.dry_run
-    SIMULATION_MODE = CONFIG["system"].get("simulation_mode", False) or args.simulate
-    ALLOW_HARDWARE_WRITES = CONFIG["system"].get("allow_hardware_writes", False)
-    ALLOW_MQTT_LOCAL_CONTROL_WRITES = CONFIG["system"].get(
-        "allow_mqtt_local_control_writes",
-        False
+    system_config = CONFIG["system"]
+    DRY_RUN = (
+        runtime_control_flag(system_config, "dry_run")
+        or args.dry_run
+        or not all(
+            control_flag_is_valid(system_config, name)
+            for name in CONTROL_FLAGS_INVALID_FORCE_DRY_RUN
+        )
     )
-    ALLOW_MQTT_ZENDURE_CONTROL_WRITES = CONFIG["system"].get(
-        "allow_mqtt_zendure_control_writes",
-        False
+    SIMULATION_MODE = (
+        runtime_control_flag(system_config, "simulation_mode") or args.simulate
     )
-    ALLOW_STATE_RECONCILIATION_WRITES = CONFIG["system"].get(
-        "allow_state_reconciliation_writes",
-        False
+    ALLOW_HARDWARE_WRITES = runtime_control_flag(system_config, "allow_hardware_writes")
+    ALLOW_MQTT_LOCAL_CONTROL_WRITES = runtime_control_flag(
+        system_config, "allow_mqtt_local_control_writes"
     )
-    RECONCILE_AC_MODE_ON_START = CONFIG["system"].get(
-        "reconcile_ac_mode_on_start",
-        True
+    ALLOW_MQTT_ZENDURE_CONTROL_WRITES = runtime_control_flag(
+        system_config, "allow_mqtt_zendure_control_writes"
     )
-    RECONCILE_SMART_MODE = CONFIG["system"].get(
-        "reconcile_smart_mode",
-        True
+    ALLOW_STATE_RECONCILIATION_WRITES = runtime_control_flag(
+        system_config, "allow_state_reconciliation_writes"
     )
+    RECONCILE_AC_MODE_ON_START = runtime_control_flag(
+        system_config, "reconcile_ac_mode_on_start"
+    )
+    RECONCILE_SMART_MODE = runtime_control_flag(system_config, "reconcile_smart_mode")
     HA_ENABLED = (
         ha_config.get("enabled", False)
         and not args.no_ha
@@ -2039,9 +2056,15 @@ def _evaluate_write_gate(
     decision the controller actually makes.
     """
 
-    transport, gate_name = _CONTROL_GATE_TRANSPORT.get(
-        control_gate, _CONTROL_GATE_TRANSPORT["api"]
-    )
+    if control_gate not in _CONTROL_GATE_TRANSPORT:
+        return WriteGateDecision(
+            allowed=False,
+            transport="unknown",
+            gate_name="unknown_control_gate",
+            gate_enabled=False,
+            blocked_by=("unknown_control_gate",),
+        )
+    transport, gate_name = _CONTROL_GATE_TRANSPORT[control_gate]
     gate_enabled = gate_values[gate_name]
 
     blocked = []
@@ -2079,11 +2102,79 @@ def resolve_write_gate(control_gate) -> WriteGateDecision:
     )
 
 
+CONTROL_FLAG_BLOCKING_SIDE = {
+    "enabled": False,
+    "dry_run": True,
+    "simulation_mode": False,
+    "allow_hardware_writes": False,
+    "allow_mqtt_local_control_writes": False,
+    "allow_mqtt_zendure_control_writes": False,
+    "allow_state_reconciliation_writes": False,
+    "reconcile_ac_mode_on_start": False,
+    "reconcile_smart_mode": False,
+}
+
+
+def control_flag_default(name):
+    """Value a missing control flag takes once EMS loads the config."""
+
+    return bool(default_runtime_config()["system"][name])
+
+
+CONTROL_FLAGS_INVALID_FORCE_DRY_RUN = frozenset({"simulation_mode"})
+
+
+def control_flag_is_valid(system, name):
+    """True when a control flag is absent or a real JSON boolean."""
+
+    if not isinstance(system, dict) or name not in system:
+        return True
+    if system[name] is None:
+        return False
+    try:
+        optional_json_bool(system[name], name, default=False)
+    except ValueError:
+        return False
+    return True
+
+
 def _projected_flag(system, name, *, default, on_invalid):
+    if name in system and system[name] is None:
+        return on_invalid
     try:
         return bool(optional_json_bool(system.get(name), name, default=default))
     except ValueError:
         return on_invalid
+
+
+def runtime_control_flag(system, name):
+    """Strict boolean for a control flag; a non-boolean resolves to blocking.
+
+    ``"false"`` is a truthy string, so a plain ``.get()`` armed the very gate
+    an operator had tried to close by hand.
+    """
+
+    present = isinstance(system, dict) and name in system
+    value = system.get(name) if isinstance(system, dict) else None
+    blocking = CONTROL_FLAG_BLOCKING_SIDE[name]
+    try:
+        if present and value is None:
+            raise ValueError(f"{name} is null")
+        return bool(
+            optional_json_bool(value, name, default=control_flag_default(name))
+        )
+    except ValueError:
+        consequence = (
+            "running without hardware writes instead"
+            if name in CONTROL_FLAGS_INVALID_FORCE_DRY_RUN
+            else f"treating it as {str(blocking).lower()} (the safe side)"
+        )
+        _emit_startup_config_message(
+            logging.WARNING,
+            f"Config system.{name} is {value!r}, not true or false; "
+            f"{consequence}. Write it as true or false without quotes.",
+        )
+        return blocking
 
 
 def resolve_config_write_gate(config, control_gate) -> WriteGateDecision:
@@ -2104,11 +2195,21 @@ def resolve_config_write_gate(config, control_gate) -> WriteGateDecision:
         )
         for name, default in RELEASE_WRITE_GATE_DEFAULTS.items()
     }
+    forced_dry_run = not all(
+        control_flag_is_valid(system, name)
+        for name in CONTROL_FLAGS_INVALID_FORCE_DRY_RUN
+    )
     return _evaluate_write_gate(
         control_gate,
-        dry_run=_projected_flag(system, "dry_run", default=False, on_invalid=True),
+        dry_run=forced_dry_run
+        or _projected_flag(
+            system, "dry_run", default=control_flag_default("dry_run"), on_invalid=True
+        ),
         simulation_mode=_projected_flag(
-            system, "simulation_mode", default=False, on_invalid=True
+            system,
+            "simulation_mode",
+            default=control_flag_default("simulation_mode"),
+            on_invalid=CONTROL_FLAG_BLOCKING_SIDE["simulation_mode"],
         ),
         replay=False,
         gate_values=gate_values,
@@ -2118,23 +2219,35 @@ def resolve_config_write_gate(config, control_gate) -> WriteGateDecision:
 def config_control_flags(config):
     """Control-mode flags a stored config produces once EMS loads it.
 
-    Missing keys resolve to the template defaults the loader merges in; a value
-    that is not a real boolean resolves to the blocking side of the flag, so a
-    typo can never read as "EMS is controlling".
+    Missing keys resolve to the defaults the loader merges in; a value that is
+    not a real boolean resolves to the blocking side of the flag, so a typo can
+    never read as "EMS is controlling". An unreadable config claims no dry run
+    either: that would read as a reassurance nobody can back.
     """
 
     raw = config.get("system") if isinstance(config, dict) else None
     system = raw if isinstance(raw, dict) else {}
-    return {
-        "enabled": _projected_flag(system, "enabled", default=True, on_invalid=False),
-        "dry_run": _projected_flag(system, "dry_run", default=False, on_invalid=True),
-        "simulation_mode": _projected_flag(
-            system, "simulation_mode", default=False, on_invalid=True
-        ),
-        "allow_state_reconciliation_writes": _projected_flag(
-            system, "allow_state_reconciliation_writes", default=True, on_invalid=False
-        ),
+    readable = isinstance(raw, dict)
+    flags = {
+        name: _projected_flag(
+            system,
+            name,
+            default=control_flag_default(name) if readable else name == "enabled",
+            on_invalid=CONTROL_FLAG_BLOCKING_SIDE[name],
+        )
+        for name in (
+            "enabled",
+            "dry_run",
+            "simulation_mode",
+            "allow_state_reconciliation_writes",
+        )
     }
+    if not all(
+        control_flag_is_valid(system, name)
+        for name in CONTROL_FLAGS_INVALID_FORCE_DRY_RUN
+    ):
+        flags["dry_run"] = True
+    return flags
 
 
 def config_control_devices_by_gate(config):
@@ -2268,7 +2381,7 @@ def dashboard_file_path(key, default):
 def safe_int(value, default=0, minimum=None):
     try:
         parsed = int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         parsed = default
 
     if minimum is not None:
@@ -2411,6 +2524,9 @@ def mqtt_tls_mode_name(*, tls, tls_insecure=False):
     return MQTT_TLS_MODE_INSECURE if tls_insecure else MQTT_TLS_MODE_SYSTEM_CA
 
 
+TLS_INSECURE_WITHOUT_TLS = "tls_insecure is set but TLS is disabled"
+
+
 def resolve_mqtt_tls_metadata(*, tls_mode=None, tls=None, tls_insecure=None):
     """Reconcile TLS metadata into a canonical ``(tls, tls_insecure)`` pair.
 
@@ -2442,7 +2558,7 @@ def resolve_mqtt_tls_metadata(*, tls_mode=None, tls=None, tls_insecure=None):
     resolved_tls = tls if tls is not None else False
     resolved_insecure = tls_insecure if tls_insecure is not None else False
     if resolved_insecure and not resolved_tls:
-        raise ValueError("tls_insecure is set but TLS is disabled")
+        raise ValueError(TLS_INSECURE_WITHOUT_TLS)
     return resolved_tls, resolved_insecure
 
 
@@ -2459,7 +2575,7 @@ def configure_mqtt_client_tls(client, *, tls, tls_insecure, ca_certs=None):
 
     if not tls:
         if tls_insecure:
-            raise ValueError("tls_insecure is set but TLS is disabled")
+            raise ValueError(TLS_INSECURE_WITHOUT_TLS)
         return
     if ca_certs:
         client.tls_set(ca_certs=str(ca_certs))
@@ -2552,6 +2668,8 @@ def safe_float(value, default=0.0, minimum=None):
         parsed = float(value)
     except (TypeError, ValueError):
         parsed = default
+    if not math.isfinite(parsed):
+        parsed = default
 
     if minimum is not None:
         parsed = max(minimum, parsed)
@@ -2575,6 +2693,38 @@ def safe_bool(value, default=False):
         return False
 
     return default
+
+
+def device_power_ceiling(value):
+    """A device's own watt ceiling, or ``MAX_DEVICE_POWER`` when it has none.
+
+    Only a finite positive number is a ceiling; anything else would disable
+    the per-device backstop instead of setting one.
+    """
+
+    if isinstance(value, bool):
+        return MAX_DEVICE_POWER
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return MAX_DEVICE_POWER
+    if not math.isfinite(number) or number <= 0:
+        return MAX_DEVICE_POWER
+    return int(number) if number.is_integer() else number
+
+
+def safe_soc_limit(value):
+    """A managed SoC bound in whole percent, or 0 (unmanaged) when it is not one."""
+
+    if isinstance(value, bool):
+        return 0
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(number) or not 0 <= number <= 100:
+        return 0
+    return int(number)
 
 
 def safe_percent(value, default=0):

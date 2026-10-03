@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
 import logging
+import math
 import time
 from collections import deque
 from datetime import datetime, timedelta
@@ -40,6 +41,23 @@ from ems.target_control import (
 STARTUP_AC_MODE_RECONCILE_REASON = "startup_ac_mode_reconcile"
 FULL_CHARGE_ASSIST_REASON = "battery_full_charge_assist"
 FULL_CHARGE_ASSIST_RESTORE_REASON = "battery_full_charge_assist_restore"
+
+
+def finite_grid_load(value):
+    """Return a finite grid reading in W; anything else holds the target (0 W).
+
+    The load filter keeps its history, so one NaN admitted here would poison
+    every later target until restart.
+    """
+
+    try:
+        load = float(value)
+    except (TypeError, ValueError):
+        load = math.nan
+    if math.isfinite(load):
+        return load
+    log_event(logging.WARNING, "grid_load_not_finite", value=value)
+    return 0.0
 
 
 class EMSController:
@@ -85,6 +103,9 @@ class EMSController:
         self.last_ha_written = {}
         self.commanded_total_w = None
         self.filtered_load_w = None
+        self.grid_meter_holding = False
+        self.control_enabled = None
+        self._legacy_grid_off_mode_warned = set()
         self.load_history = deque(
             maxlen=cfg.safe_int(
                 cfg.OUTPUT_CONTROL_CONFIG.get("median_window", 3),
@@ -529,6 +550,31 @@ class EMSController:
 
         return filtered
 
+    def update_grid_meter_holding(self, load):
+        """Hold the commanded total while the meter serves its last value.
+
+        Every grid-meter client returns its last good value when a read fails.
+        Integrating that value each cycle would wind the commanded total up to
+        ``max_total_power`` for as long as the meter is gone.
+        """
+
+        health = getattr(self.shelly, "health", None)
+        holding = bool(getattr(health, "stale_used", False))
+        if holding != self.grid_meter_holding:
+            log_event(
+                logging.WARNING if holding else logging.INFO,
+                "grid_meter_unavailable_holding_target"
+                if holding
+                else "grid_meter_recovered",
+                stale_value_w=load,
+                consecutive_failures=getattr(health, "consecutive_failures", None),
+                commanded_total_w=self.commanded_total_w,
+            )
+            self.load_history.clear()
+            self.filtered_load_w = None
+        self.grid_meter_holding = holding
+        return holding
+
     def stabilized_total_target(
         self,
         raw_load,
@@ -812,6 +858,19 @@ class EMSController:
             previous=",".join(previous) if previous else "none"
         )
 
+    def note_control_enabled(self, enabled):
+        """Start from the observed output when control is switched back on.
+
+        The integrator and the device ramps keep running while control is
+        disabled; re-enabling would otherwise write their wound-up value at
+        once.
+        """
+
+        if enabled and self.control_enabled is False:
+            self.reset_output_control_state()
+            log_event(logging.INFO, "control_enabled_reset_output_control")
+        self.control_enabled = enabled
+
     def reset_output_control_state(self):
         """Reset output-control memory after a blocked operating state."""
 
@@ -982,8 +1041,8 @@ class EMSController:
                 current_output_limit_w=state.output_limit,
                 target_w=min_output_limit
             )
-            self.set_output_limit(dev, min_output_limit)
-            self.night_min_soc_idle_parked.add(dev.name)
+            if self.set_output_limit(dev, min_output_limit):
+                self.night_min_soc_idle_parked.add(dev.name)
 
     def build_night_min_soc_idle_explanation(
         self,
@@ -1851,6 +1910,46 @@ class EMSController:
                         max_soc_request_pending=False
                     )
 
+    def full_charge_assist_max_soc(self, dev):
+        """``100`` while an assist owns ``socSet`` for ``dev``, else ``None``."""
+
+        store = self.battery_full_charge_store
+        if not store:
+            return None
+        record = store.get_device_state(dev.name)
+        if record and record.get("full_charge_assist_active"):
+            return 100
+        return None
+
+    def reconcile_device_state_limits(
+        self, dev, state, winter_active, winter_adjust_today
+    ):
+        """Periodic SoC/mode reconcile for one device.
+
+        An active full-charge assist owns ``socSet``; writing the configured
+        ``max_soc`` here flipped it back and let the firmware report
+        ``socLimit == 1`` below 100 %, which completed the assist early.
+        """
+
+        desired_min_soc, winter_adjustment = self.winter_reconciliation_target(
+            dev,
+            state,
+            winter_active,
+            winter_adjust_today
+        )
+
+        self.apply_soc_limits(
+            dev,
+            state,
+            desired_min_soc=desired_min_soc,
+            desired_max_soc=self.full_charge_assist_max_soc(dev)
+        )
+
+        self.apply_device_modes(dev, state)
+
+        if winter_adjustment:
+            self.apply_winter_ac_charge_limit(dev)
+
     def confirm_full_charge_assist_ac_restore(self, dev, state, intent, now):
         if not self.battery_full_charge_store:
             return
@@ -2172,8 +2271,19 @@ class EMSController:
         if changed:
             self.runtime_state.save_atomic()
 
+    def retire_pending_output_limit(self, dev, reason):
+        """Tell a transport with a queued target that this cycle skips it."""
+
+        cancel = getattr(dev, "cancel_pending_output_limit", None)
+        if callable(cancel):
+            cancel(reason)
+
     def set_output_limit(self, dev, value):
-        """Write output limit to the device via its transport, behind its gate."""
+        """Write output limit to the device via its transport, behind its gate.
+
+        Returns False only when the write was attempted and not accepted, so a
+        caller that writes once (night/minSoC park) knows to try again.
+        """
 
         gate = cfg.resolve_device_write_gate(dev)
 
@@ -2188,7 +2298,7 @@ class EMSController:
                 simulation=cfg.SIMULATION_MODE,
                 **gate.as_log_fields(),
             )
-            return
+            return True
 
         try:
             result = dispatch_device_write(dev, int(value))
@@ -2199,9 +2309,10 @@ class EMSController:
                 device=dev.name,
                 error=e
             )
-            return
+            return False
 
         self._log_write_dispatch(dev, gate, result)
+        return bool(result)
 
     def _log_write_dispatch(self, dev, gate, result):
         """Log a structured write dispatch under its honest, distinct event.
@@ -2296,33 +2407,36 @@ class EMSController:
             )
             return True
 
+        configured_min_soc = cfg.safe_soc_limit(dev.min_soc)
+        configured_max_soc = cfg.safe_soc_limit(dev.max_soc)
         effective_min_soc = (
-            cfg.safe_int(desired_min_soc, dev.min_soc, minimum=0)
+            cfg.safe_soc_limit(
+                cfg.safe_int(desired_min_soc, configured_min_soc, minimum=0)
+            )
             if desired_min_soc is not None
-            else dev.min_soc
+            else configured_min_soc
         )
         effective_max_soc = (
-            cfg.safe_int(desired_max_soc, dev.max_soc, minimum=0)
+            cfg.safe_soc_limit(
+                cfg.safe_int(desired_max_soc, configured_max_soc, minimum=0)
+            )
             if desired_max_soc is not None
-            else dev.max_soc
+            else configured_max_soc
         )
 
-        #
-        # 0 = unmanaged
-        #
+        managed = {}
+        differs = False
+        if effective_min_soc > 0:
+            managed["minSoc"] = int(effective_min_soc * 10)
+            differs |= int(state.min_soc) != int(effective_min_soc)
+        if effective_max_soc > 0:
+            managed["socSet"] = int(effective_max_soc * 10)
+            differs |= int(state.max_soc) != int(effective_max_soc)
 
-        if effective_min_soc <= 0 and effective_max_soc <= 0:
+        if not managed:
             return True
 
-        #
-        # Already configured
-        #
-
-        if (
-            int(state.min_soc) == int(effective_min_soc)
-            and
-            int(state.max_soc) == int(effective_max_soc)
-        ):
+        if not differs:
 
             log_event(
                 logging.DEBUG,
@@ -2350,12 +2464,9 @@ class EMSController:
 
             ok = write_device_properties(
                 dev,
-                {
-                    "minSoc": int(effective_min_soc * 10),
-                    "socSet": int(effective_max_soc * 10)
-                },
+                managed,
                 reason="soc_limits",
-                field="minSoc/socSet",
+                field="/".join(managed),
                 error_event="write_soc_limits_error",
                 log_fields={
                     "min_soc": effective_min_soc,
@@ -2426,7 +2537,9 @@ class EMSController:
             return self.winter_min_soc_targets[dev.name], False
 
         if not adjust_today:
-            return None, False
+            held = self.winter_held_min_soc(dev, state)
+            self.winter_min_soc_targets[dev.name] = held
+            return held, False
 
         effective_min_soc = self.winter_min_soc_targets.get(
             dev.name,
@@ -2452,6 +2565,22 @@ class EMSController:
         )
 
         return target, True
+
+    def winter_held_min_soc(self, dev, state):
+        """Winter minSoc to keep when no ramp target is known yet.
+
+        The ramp target lives in memory only. After a restart the device still
+        carries it, so it is adopted within the configured floor and the winter
+        ceiling instead of being written back down to the summer value.
+        """
+
+        floor = dev.min_soc if dev.min_soc > 0 else cfg.winter_config_int(
+            "summer_min_soc", 15, minimum=0
+        )
+        ceiling = max(
+            floor, cfg.winter_config_int("winter_min_soc", 40, minimum=0)
+        )
+        return max(floor, min(ceiling, int(state.min_soc)))
 
     def apply_winter_ac_charge_limit(self, dev):
         """Apply conservative winter AC charge input limit."""
@@ -2529,12 +2658,16 @@ class EMSController:
         )
 
     def apply_device_modes(self, dev, state):
-        """Apply device operating modes if required."""
+        """Apply device operating modes if required.
+
+        ``gridOffMode`` is not one of them: the runtime ``offgrid_socket_mode``
+        owns it (``apply_runtime_device_state``); a second writer here flipped
+        it back every reconcile interval.
+        """
 
         if not self.state_reconciliation_supported(dev, "device_modes"):
             return
 
-        manage_grid_off_mode = dev.grid_off_mode is not None
         properties = {}
         fields = {
             "device": dev.name
@@ -2547,13 +2680,6 @@ class EMSController:
         ):
             properties["smartMode"] = int(dev.smart_mode)
             fields["smart_mode"] = dev.smart_mode
-
-        if (
-            manage_grid_off_mode
-            and int(state.grid_off_mode) != int(dev.grid_off_mode)
-        ):
-            properties["gridOffMode"] = int(dev.grid_off_mode)
-            fields["grid_off_mode"] = dev.grid_off_mode
 
         if (
             int(state.ac_mode) != 2
@@ -2661,6 +2787,34 @@ class EMSController:
 
         log_event(logging.DEBUG, "runtime_device_state_unchanged", **fields)
 
+    def warn_legacy_grid_off_mode(self, dev, runtime_mode):
+        """Say once when a config ``grid_off_mode`` no longer decides anything.
+
+        The runtime ``offgrid_socket_mode`` owns ``gridOffMode``. An install
+        that set the old config key keeps its runtime value, so the operator is
+        told which one applies and where to change it.
+        """
+
+        legacy = getattr(dev, "grid_off_mode", None)
+        if legacy is None or dev.name in self._legacy_grid_off_mode_warned:
+            return
+        legacy_mode = cfg.offgrid_socket_mode_for(legacy)
+        if legacy_mode == runtime_mode:
+            return
+        self._legacy_grid_off_mode_warned.add(dev.name)
+        log_event(
+            logging.WARNING,
+            "legacy_grid_off_mode_ignored",
+            device=dev.name,
+            config_grid_off_mode=legacy,
+            config_mode=legacy_mode,
+            runtime_mode=runtime_mode,
+            hint=(
+                "set the offgrid socket in the dashboard or with "
+                f"emsctl.py device {dev.name} offgrid {legacy_mode}"
+            ),
+        )
+
     def apply_runtime_device_state(self, dev, state):
         """Apply runtime-state device intents through safe reconciliation."""
 
@@ -2701,6 +2855,7 @@ class EMSController:
         desired_grid_off_mode = cfg.OFFGRID_SOCKET_MODES[
             desired_offgrid_socket_mode
         ]
+        self.warn_legacy_grid_off_mode(dev, desired_offgrid_socket_mode)
         current_grid_off_mode = int(state.grid_off_mode)
         fields = {
             "device": dev.name,
@@ -3384,7 +3539,8 @@ class EMSController:
                 error=e
             )
 
-        load = self.shelly.get_power()
+        load = finite_grid_load(self.shelly.get_power())
+        self.update_grid_meter_holding(load)
 
         # =====================
         # RUNTIME cfg.CONFIG
@@ -3399,6 +3555,7 @@ class EMSController:
             "enabled",
             cfg.SYSTEM_ENABLED
         )
+        self.note_control_enabled(enabled)
         interval = self.runtime_system_int(
             "loop_interval",
             cfg.LOOP_INTERVAL,
@@ -3628,28 +3785,12 @@ class EMSController:
                 ):
 
                     if state:
-                        desired_min_soc, winter_adjustment = (
-                            self.winter_reconciliation_target(
-                                dev,
-                                state,
-                                winter_active,
-                                winter_adjust_today
-                            )
-                        )
-
-                        self.apply_soc_limits(
+                        self.reconcile_device_state_limits(
                             dev,
                             state,
-                            desired_min_soc=desired_min_soc
+                            winter_active,
+                            winter_adjust_today
                         )
-
-                        self.apply_device_modes(
-                            dev,
-                            state
-                        )
-
-                        if winter_adjustment:
-                            self.apply_winter_ac_charge_limit(dev)
 
                 if winter_adjust_today:
                     self.last_winter_adjust_date = today
@@ -3726,6 +3867,9 @@ class EMSController:
                 night_min_soc_idle=True
             )
 
+            for dev in self.devices:
+                self.retire_pending_output_limit(dev, "night_min_soc_idle")
+
             self.apply_night_min_soc_idle_control(
                 states,
                 controllable_indexes,
@@ -3750,14 +3894,17 @@ class EMSController:
         )
         standby_total_w = min_output_limit * len(active_indexes)
 
-        stabilized_total = self.stabilized_total_target(
-            load,
-            states,
-            max_power,
-            has_export_capacity=has_export_capacity,
-            standby_total_w=standby_total_w,
-            active_device_count=len(active_indexes)
-        )
+        if self.grid_meter_holding and self.commanded_total_w is not None:
+            stabilized_total = min(self.commanded_total_w, max_power)
+        else:
+            stabilized_total = self.stabilized_total_target(
+                load,
+                states,
+                max_power,
+                has_export_capacity=has_export_capacity,
+                standby_total_w=standby_total_w,
+                active_device_count=len(active_indexes)
+            )
 
         targets, current, new, control_explanation = calculate_targets(
             load,
@@ -3885,6 +4032,7 @@ class EMSController:
                     device=dev.name,
                     target_w=targets[i]
                 )
+                self.retire_pending_output_limit(dev, "control_disabled_skip_write")
                 continue
 
             if not self.device_online.get(dev.name, True):
@@ -3895,6 +4043,7 @@ class EMSController:
                     device=dev.name
                 )
 
+                self.retire_pending_output_limit(dev, "offline_skip_write")
                 continue
 
             if not self.runtime_device_bool(dev.name, "enabled", True):
@@ -3904,6 +4053,7 @@ class EMSController:
                     device=dev.name,
                     target_w=targets[i]
                 )
+                self.retire_pending_output_limit(dev, "device_disabled_skip_write")
                 continue
 
             if not self.device_output_control_allowed_by_intent(dev.name):
@@ -3924,6 +4074,7 @@ class EMSController:
                         else "runtime_role_blocked"
                     )
                 )
+                self.retire_pending_output_limit(dev, "runtime_role_skip_output_limit")
                 continue
 
             target = effective_targets[i]
@@ -3956,6 +4107,7 @@ class EMSController:
                     reference_source=deadband_reference_source,
                     deadband_w=cfg.DEADBAND
                 )
+                self.retire_pending_output_limit(dev, "deadband_skip_write")
                 continue
 
             self.set_output_limit(dev, target)

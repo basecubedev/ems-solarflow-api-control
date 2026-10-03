@@ -109,3 +109,22 @@ def test_night_idle_hold_skip_logs_debug(caplog):
     assert all(r.levelno == logging.DEBUG for r in holds)
     assert not _events(caplog, "night_min_soc_idle_hold_skip_write", logging.INFO)
     assert not _events(caplog, "night_min_soc_idle_park_write")
+
+
+def test_a_failed_night_idle_park_write_is_tried_again():
+    controller, states = make_night_idle_controller(output_limit=0)
+    outcomes = iter([False, True])
+    calls = []
+
+    def write(dev, value):
+        calls.append(value)
+        return next(outcomes)
+
+    controller.set_output_limit = write
+
+    controller.apply_night_min_soc_idle_control(states, [0], min_output_limit=30)
+    assert "WR1" not in controller.night_min_soc_idle_parked
+    controller.apply_night_min_soc_idle_control(states, [0], min_output_limit=30)
+
+    assert calls == [30, 30]
+    assert "WR1" in controller.night_min_soc_idle_parked

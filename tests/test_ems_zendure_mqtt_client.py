@@ -237,3 +237,31 @@ def test_tls_without_insecure_keeps_full_verification():
     assert fake.tls_set_calls == [((), {})]
     assert fake.tls_insecure_calls == []
     assert fake.call_order.index("tls_set") < fake.call_order.index("connect")
+
+
+class _ReasonCode:
+    def __init__(self, failure, text):
+        self.is_failure = failure
+        self.text = text
+
+    def __str__(self):
+        return self.text
+
+
+@pytest.mark.parametrize(
+    "reason, connected",
+    [
+        (0, True),
+        (5, False),
+        ("Not authorized", False),
+        (_ReasonCode(False, "Success"), True),
+        (_ReasonCode(True, "Bad user name or password"), False),
+    ],
+)
+def test_a_refused_connack_is_not_a_connection(reason, connected):
+    client, fake = _build()
+    fake.loop_start = lambda: fake.on_connect(fake, None, None, reason, None)
+    client.start()
+
+    assert bool(client._connected) is connected
+    assert bool(fake.subscriptions) is connected

@@ -550,6 +550,29 @@ class StatusTest(unittest.TestCase):
         self.assertIn("ems_1m", report["missing_buckets"])
         self.assertEqual(len(report["tasks"]), 1)
 
+    def test_a_half_synced_schema_is_not_healthy(self):
+        """Only the raw bucket and no task used to read as healthy."""
+
+        config = normalize_influxdb_config({"enabled": True, "bucket_prefix": "ems"})
+        client = FakeInfluxClient()
+        client.ensure_bucket_retention("ems_raw", 14 * 86400)
+
+        report = schema.status(client, config)
+
+        self.assertFalse(report["healthy"])
+        self.assertEqual(report["missing_tasks"], schema.planned_task_names(config))
+
+    def test_a_complete_schema_is_healthy(self):
+        config = normalize_influxdb_config({"enabled": True, "bucket_prefix": "ems"})
+        client = FakeInfluxClient()
+        schema.sync(client, config)
+
+        report = schema.status(client, config)
+
+        self.assertEqual(report["missing_buckets"], [])
+        self.assertEqual(report["missing_tasks"], [])
+        self.assertTrue(report["healthy"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import logging
 import json
+import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -10,7 +11,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from ems import config as cfg
-from ems.health import CommHealth
+from ems.health import CommHealth, redact_error, redact_url_credentials
 from ems.logging_utils import log_event
 from ems.models import DeviceState, parse_pack_count
 
@@ -35,6 +36,23 @@ def zendure_write_succeeded(error_event, dev, response, **fields):
     )
 
     return False
+
+
+_ZENDURE_WRITE_PARAMETERS = frozenset({"dev", "field", "properties", "error_event", "timeout"})
+
+
+def write_log_context(log_fields):
+    """Log fields safe to pass to ``zendure_write``.
+
+    A caller's context naming ``field`` collided with the parameter of the same
+    name, and the TypeError meant the write was never sent at all.
+    """
+
+    return {
+        key: value
+        for key, value in (log_fields or {}).items()
+        if key not in _ZENDURE_WRITE_PARAMETERS
+    }
 
 
 def zendure_write(dev, field, properties, error_event, timeout=2, **fields):
@@ -84,15 +102,23 @@ def zendure_write(dev, field, properties, error_event, timeout=2, **fields):
 
 
 def create_session():
-    """Create a requests session with retry logic."""
+    """Create a requests session that retries a failed request once.
+
+    The control loop runs again in a few seconds, so a retry inside a cycle
+    only delays every later read and write. A write is never re-sent once it
+    reached the device: read and status retries cover GET only, and only a
+    connection that was never established is retried for a POST. A POST to an
+    unreachable device used to block for about ten seconds and be sent four
+    times.
+    """
 
     session = requests.Session()
 
     retry = Retry(
-        total=3,
+        total=1,
         backoff_factor=0.3,
         status_forcelist=[500, 502, 503, 504],
-        allowed_methods=["GET", "POST"]
+        allowed_methods=["GET"]
     )
 
     adapter = HTTPAdapter(max_retries=retry)
@@ -221,9 +247,10 @@ class HAClient:
         val = self.get_state(entity_id)
 
         try:
-            return float(val)
-        except:
+            parsed = float(val)
+        except (TypeError, ValueError):
             return default
+        return parsed if math.isfinite(parsed) else default
 
 def _observed_pack_count(data, props):
     """Return the reported pack count, unless the report contradicts itself.
@@ -352,7 +379,7 @@ class ZendureClient:
         self.max_soc = max_soc
         self.smart_mode = smart_mode
         self.grid_off_mode = grid_off_mode
-        self.max_power = max_power or cfg.MAX_DEVICE_POWER
+        self.max_power = cfg.device_power_ceiling(max_power)
         self.pv_kwp = pv_kwp or 1.0
         self.battery_kwh = battery_kwh or 1.0
         self.pv_priority_factor = pv_priority_factor or 1.0
@@ -368,8 +395,15 @@ class ZendureClient:
                 f"http://{self.ip}/properties/report",
                 timeout=2
             )
+            if r.status_code != 200:
+                raise ValueError(f"HTTP {r.status_code} from /properties/report")
+            data = r.json()
+            if not isinstance(data, dict) or not isinstance(
+                data.get("properties"), dict
+            ):
+                raise ValueError("report carries no properties object")
 
-            state = parse_device(r.json())
+            state = parse_device(data)
             self.read_health.record_success((time.monotonic() - start) * 1000.0)
             return state
 
@@ -410,7 +444,7 @@ class ZendureClient:
             field or ",".join(properties),
             properties,
             error_event or "write_properties_error",
-            **(log_fields or {}),
+            **write_log_context(log_fields),
         )
         if ok:
             return dispatch.published(None)
@@ -604,9 +638,9 @@ class TasmotaHttpClient:
             log_event(
                 logging.WARNING,
                 "tasmota_http_read_error",
-                url=self.url,
+                url=redact_url_credentials(self.url),
                 power_path=self.power_path,
-                error=e,
+                error=redact_error(e),
                 stale_value=self.last_value
             )
 
@@ -1002,9 +1036,17 @@ def create_grid_meter_client(config, session, *, mqtt_credential_resolver=None):
 
 
 def _is_numeric(value):
-    """Return True for power values Shelly reports as JSON numbers."""
+    """Return True for finite power values reported as JSON numbers.
 
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    ``json`` accepts ``NaN``/``Infinity``; a meter that publishes one while a
+    sensor is unavailable must count as a failed read, not as a load.
+    """
+
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
 
 
 _SHELLY_PHASE_KEYS = ("em1:0", "em1:1", "em1:2")
@@ -1256,9 +1298,11 @@ def _parse_mqtt_number_value(value):
         return float(value)
     if isinstance(value, str) and value.strip():
         try:
-            return float(value.strip())
+            parsed = float(value.strip())
         except ValueError:
-            pass
+            parsed = None
+        if parsed is not None and math.isfinite(parsed):
+            return parsed
     raise ValueError("MQTT grid power value is not numeric")
 
 

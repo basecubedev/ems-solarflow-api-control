@@ -159,13 +159,16 @@ RESCUE_REFUSED_METHODS = (
     ("kbdinteractiveauthentication", "no"),
 )
 
+# Shell access off refuses every method: the console can deploy a key.
+SHELL_REFUSED_METHODS = (("pubkeyauthentication", "no"),) + RESCUE_REFUSED_METHODS
+
 REFUSAL_REFUSED = "refused"
 REFUSAL_ACCEPTED = "accepted"
 REFUSAL_UNKNOWN = "unknown"
 REFUSAL_ABSENT = "absent"
 
 
-def evaluate_password_refusal(effective):
+def evaluate_password_refusal(effective, *, methods=RESCUE_REFUSED_METHODS):
     """Does this effective policy refuse the account its password?
 
     The same per-option shape as :func:`evaluate_policy`, so a card can show
@@ -174,7 +177,7 @@ def evaluate_password_refusal(effective):
 
     effective = effective or {}
     restrictions = {}
-    for option, expected in RESCUE_REFUSED_METHODS:
+    for option, expected in methods:
         actual = str(effective.get(option, ""))
         restrictions[option] = {
             "value": actual,
@@ -182,12 +185,12 @@ def evaluate_password_refusal(effective):
             "confirmed": actual.lower() == expected,
         }
     violations = [
-        option for option, _ in RESCUE_REFUSED_METHODS if not restrictions[option]["confirmed"]
+        option for option, _ in methods if not restrictions[option]["confirmed"]
     ]
     return {"restrictions": restrictions, "violations": violations}
 
 
-def read_password_refusal(runner, *, user):
+def read_password_refusal(runner, *, user, methods=RESCUE_REFUSED_METHODS):
     """Whether the running daemon refuses ``user`` a password, asked of the daemon.
 
     A drop-in on disk is a promise. An ``/etc/ssh/sshd_config`` carried over
@@ -215,6 +218,6 @@ def read_password_refusal(runner, *, user):
     if not effective:
         verdict["state"] = REFUSAL_UNKNOWN
         return verdict
-    verdict.update(evaluate_password_refusal(effective))
+    verdict.update(evaluate_password_refusal(effective, methods=methods))
     verdict["state"] = REFUSAL_ACCEPTED if verdict["violations"] else REFUSAL_REFUSED
     return verdict

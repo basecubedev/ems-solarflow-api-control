@@ -84,6 +84,39 @@ def test_status_reports_service_accounts_and_hardening(tmp_path):
     assert names == {"ems-backup"}
 
 
+def test_disabled_shell_access_is_reported_once_sshd_refuses_the_account(tmp_path):
+    services = appliance(tmp_path)
+
+    shell = services.ssh.status()["shell_access"]
+
+    assert shell["enabled"] is False
+    assert shell["daemon"] == "refused"
+    assert shell["effectively_disabled"] is True
+
+
+def test_disabled_shell_access_is_not_claimed_while_sshd_admits_a_key(tmp_path):
+    """The flag is a promise; an sshd_config without the drop-in still takes a key."""
+
+    services = appliance(tmp_path)
+    services.host.sshd_shell_match = "pubkeyauthentication yes\npasswordauthentication no\n"
+
+    shell = services.ssh.status()["shell_access"]
+
+    assert shell["enabled"] is False
+    assert shell["daemon"] == "accepted"
+    assert shell["effectively_disabled"] is False
+
+
+def test_disabled_shell_access_is_not_claimed_when_sshd_cannot_answer(tmp_path):
+    services = appliance(tmp_path)
+    services.host.sshd_shell_match = ""
+
+    shell = services.ssh.status()["shell_access"]
+
+    assert shell["daemon"] == "unknown"
+    assert shell["effectively_disabled"] is False
+
+
 def test_status_reports_a_missing_host_account(tmp_path):
     """The configured account is reported whether or not the host has it yet."""
 
@@ -225,6 +258,60 @@ def test_keys_for_an_account_the_host_does_not_have_are_refused(tmp_path):
             {"operation": "ssh.plan_key_add", "account": "ems-backup", "public_key": ED25519}
         )
     assert getattr(excinfo.value, "code", "") == "account_missing"
+
+
+def test_a_backup_key_is_refused_while_authentication_is_withdrawn(tmp_path):
+    """A fail-closed disable moved the key file aside; a new one must not replace it."""
+
+    services = appliance(tmp_path)
+    ssh_dir = tmp_path / "home" / "ems-backup" / ".ssh"
+    ssh_dir.mkdir()
+    (ssh_dir / "authorized_keys.disabled-by-appliance").write_text(ED25519 + "\n")
+    handlers = handlers_for(services)
+
+    with pytest.raises(Exception) as excinfo:
+        handlers.dispatch(
+            {"operation": "ssh.plan_key_add", "account": "ems-backup", "public_key": ED25519}
+        )
+
+    assert getattr(excinfo.value, "code", "") == "backup_access_withdrawn"
+    assert not (ssh_dir / "authorized_keys").exists()
+
+
+def test_a_backup_key_is_refused_while_the_daemon_does_not_confine_the_account(tmp_path):
+    services = appliance(tmp_path)
+    services.host.sshd_backup_match = "forcecommand internal-sftp\npermittty no\n"
+    handlers = handlers_for(services)
+
+    with pytest.raises(Exception) as excinfo:
+        handlers.dispatch(
+            {"operation": "ssh.plan_key_add", "account": "ems-backup", "public_key": ED25519}
+        )
+
+    assert getattr(excinfo.value, "code", "") == "backup_confinement_not_confirmed"
+    assert not (tmp_path / "home" / "ems-backup" / ".ssh" / "authorized_keys").exists()
+
+
+def test_a_confinement_lost_after_the_plan_stops_the_backup_key_write(tmp_path):
+    services = appliance(tmp_path)
+    handlers = handlers_for(services)
+    planned = handlers.dispatch(
+        {"operation": "ssh.plan_key_add", "account": "ems-backup", "public_key": ED25519}
+    )
+    services.host.sshd_backup_match = ""
+
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+
+    operation = services.operations.get(planned["operation"]["operation_id"])
+    assert operation.state != STATE_SUCCEEDED
+    assert operation.error["code"] == "backup_confinement_not_confirmed"
+    assert not (tmp_path / "home" / "ems-backup" / ".ssh" / "authorized_keys").exists()
 
 
 def test_an_account_outside_the_configuration_is_refused(tmp_path):
@@ -478,3 +565,16 @@ def test_enabling_ssh_on_a_socket_host_uses_the_socket(tmp_path):
     plan_and_execute(services, "ssh.plan_service", enabled=True)
 
     assert services.host.units["ssh.socket"]["enabled"] == "enabled"
+
+
+def test_status_reports_a_symlinked_ssh_directory_instead_of_following_it(tmp_path):
+    services = appliance(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "authorized_keys").write_text(ED25519 + "\n", encoding="utf-8")
+    (tmp_path / "home" / "ems-backup" / ".ssh").symlink_to(elsewhere)
+
+    accounts = {item["name"]: item for item in services.ssh.status()["accounts"]}
+
+    assert accounts["ems-backup"]["key_count"] == 0
+    assert accounts["ems-backup"]["keys_refused"] == "ssh_directory_unsafe"

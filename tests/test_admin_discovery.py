@@ -121,6 +121,23 @@ def test_validate_cidr_rejects_public_range():
         validate_cidr("8.8.8.0/24")
 
 
+@pytest.mark.parametrize(
+    "cidr",
+    ["::ffff:8.8.8.0/120", "::ffff:1.1.1.1/128", "64:ff9b::808:800/120", "198.18.0.0/24", "192.0.2.0/24"],
+)
+def test_validate_cidr_rejects_ranges_that_only_look_private(cidr):
+    """is_private answered True for an IPv4-mapped public range; connecting to
+    it reached the public IPv4 host, and discovery sent saved credentials there."""
+
+    with pytest.raises(CidrValidationError):
+        validate_cidr(cidr)
+
+
+def test_validate_cidr_accepts_ipv6_local_ranges():
+    assert validate_cidr("fd00:1::/120")
+    assert validate_cidr("fe80::/120")
+
+
 def test_validate_cidr_rejects_too_broad():
     with pytest.raises(CidrValidationError):
         validate_cidr("10.0.0.0/16")
@@ -492,3 +509,20 @@ def test_scan_network_reports_progress_callback_per_host():
     assert [u["checked_hosts"] for u in updates] == [1, 2]
     assert all(u["total_hosts"] == 2 for u in updates)
     assert all("current_ip" in u for u in updates)
+
+
+@pytest.mark.parametrize(
+    "addresses, expected",
+    [
+        (["192.168.1.20"], "192.168.1.20"),
+        (["8.8.8.8", "192.168.1.20"], "192.168.1.20"),
+        (["169.254.169.254"], "169.254.169.254"),
+        (["8.8.8.8"], None),
+        (["::ffff:8.8.8.8"], None),
+    ],
+)
+def test_an_announced_broker_outside_the_lan_is_not_a_candidate(addresses, expected):
+    from admin.mqtt_discovery import build_mqtt_mdns_candidate
+
+    candidate = build_mqtt_mdns_candidate("broker", "broker.local", addresses, 1883, {})
+    assert (candidate or {}).get("host") == expected

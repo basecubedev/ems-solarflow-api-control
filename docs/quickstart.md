@@ -116,8 +116,10 @@ docker compose exec ems python3 emsctl.py config init
 
 The setup assistant is optional. It helps fill common settings and does not
 blindly replace an existing edited config.
-Choose your grid meter in the guided setup assistant. For Zendure SmartMeter
-D0, select "Zendure SmartMeter D0 via MQTT".
+Choose your grid meter in the guided setup assistant. For a Zendure SmartMeter
+D0, select "Zendure Grid Meter via local HTTP (D0 / Smart Meter 3CT)"
+(recommended), or "Zendure SmartMeter D0 via MQTT" if it only reaches you over
+MQTT.
 
 ### Option B: Manual Editing
 
@@ -136,6 +138,10 @@ Set at least:
 
 Template placeholder values force safe mode until replaced. In safe mode, EMS
 control is disabled, dry-run is enabled, and hardware writes are blocked.
+**Once the last placeholder is gone, the restart below starts live control.**
+Delete template devices you do not have, and set `"dry_run": true` under
+`system` if you want to watch the decisions before EMS acts on them (see
+[Safety](user/safety.md#when-ems-starts-writing)).
 
 ## 5. Restart
 

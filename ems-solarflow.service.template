@@ -1,6 +1,10 @@
 [Unit]
 Description=EMS Solarflow API Controller
-After=network.target
+Wants=network-online.target
+After=network-online.target
+
+# Prevent restart limits (a [Unit] setting; systemd ignores it under [Service])
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -12,16 +16,14 @@ User=YOUR_USER
 # Path to your project directory
 WorkingDirectory=/home/YOUR_USER/ems-solarflow-api-control
 
-# Path to your Python script
-ExecStart=/usr/bin/python3 /home/YOUR_USER/ems-solarflow-api-control/ems-solarflow-api-control.py
+# The Python of the project's virtual environment, which holds requests,
+# paho-mqtt and cryptography (see docs/native-python.md)
+ExecStart=/home/YOUR_USER/ems-solarflow-api-control/.venv/bin/python -B /home/YOUR_USER/ems-solarflow-api-control/ems-solarflow-api-control.py
 
 # ===== BEHAVIOR =====
 # Always restart if the script crashes
 Restart=always
 RestartSec=5
-
-# Prevent restart limits
-StartLimitIntervalSec=0
 
 # ===== LOGGING =====
 # Send logs to journalctl

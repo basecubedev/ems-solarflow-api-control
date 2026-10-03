@@ -75,11 +75,20 @@ LEGACY_KDF_ITERATIONS = 200_000
 LEGACY_ENCRYPTION_METHOD = "fernet-pbkdf2-sha256"
 
 
-class BackupPasswordError(Exception):
-    """Raised when an encrypted backup cannot be decrypted with the password."""
+class BackupError(Exception):
+    """Raised for backup/restore failures that are safe to show the user."""
 
 
-class BackupFormatError(Exception):
+class BackupPasswordError(BackupError):
+    """Raised when an encrypted backup cannot be decrypted with the password.
+
+    A ``BackupError`` because every caller guards on that: a password error
+    that was not one walked past the dashboard's handlers and dropped the
+    connection instead of saying the password was wrong.
+    """
+
+
+class BackupFormatError(BackupError):
     """Raised for a malformed, truncated or unsupported encrypted backup."""
 
 

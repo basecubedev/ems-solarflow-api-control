@@ -40,6 +40,7 @@ from ems.health import (
 )
 from ems.paths import (
     BASE_DIR,
+    resolve_data_dir,
     resolve_project_path,
     resolve_runtime_path,
     resolve_dashboard_auth_path,
@@ -74,6 +75,7 @@ DIAGNOSE_REDACT_KEYWORDS = (
     "username",
     "hash",
     "serial",
+    "identity",
     "sn",
     "device_id",
     "api",
@@ -997,7 +999,11 @@ def diagnose_config_plausibility(checks, args, config_data):
         diagnose_add(checks, "config", "error", issue["code"], issue["message"])
 
     dashboard = config_data.get("dashboard", {})
-    if isinstance(dashboard, dict) and dashboard.get("enabled", False):
+    if isinstance(dashboard, dict):
+        dashboard = config_mod.normalize_dashboard_config(dashboard)
+    if isinstance(dashboard, dict) and config_mod.safe_bool(
+        dashboard.get("enabled"), False
+    ):
         host = dashboard.get("host")
         port = diagnose_int(dashboard.get("port"))
         if not isinstance(host, str) or not host.strip():
@@ -1010,7 +1016,8 @@ def diagnose_config_plausibility(checks, args, config_data):
             diagnose_add(checks, "config", "ok", "dashboard_port_valid", "dashboard.port is valid")
         auth_path = resolve_dashboard_auth_path(args, config_data)
         auth_configured = dashboard_auth.auth_configured(auth_path)
-        if host == "0.0.0.0" and not dashboard.get("ssl_enabled", False) and not auth_configured:
+        ssl_enabled = config_mod.safe_bool(dashboard.get("ssl_enabled"), False)
+        if host == "0.0.0.0" and not ssl_enabled and not auth_configured:
             diagnose_add(
                 checks,
                 "config",
@@ -1976,11 +1983,27 @@ def diagnose_hardware(checks, config_data):
         except Exception as exc:
             _diagnose_record_probe(grid_tracker, start, exc)
             diagnose_add(checks, "hardware", "warning", "ecotracker_read_failed", f"EcoTracker read-only probe failed: {exc.__class__.__name__}")
+    elif meter_type == "tasmota_http" and (grid_meter.get("url") or grid_meter.get("ip")):
+        url = str(grid_meter.get("url") or "").strip() or f"http://{grid_meter['ip']}/cm?cmnd=Status%2010"
+        start = time.monotonic()
+        try:
+            status, payload = diagnose_http_json(url)
+            from ems.clients import _parse_tasmota_http_power
+            power = _parse_tasmota_http_power(payload, str(grid_meter.get("power_path") or ""))
+            _diagnose_record_probe(grid_tracker, start)
+            diagnose_add(checks, "hardware", "ok", "tasmota_read_ok", "Tasmota read-only status endpoint returned parseable power", status_code=status, power_w=power)
+        except Exception as exc:
+            _diagnose_record_probe(grid_tracker, start, exc)
+            diagnose_add(checks, "hardware", "warning", "tasmota_read_failed", f"Tasmota read-only probe failed: {exc.__class__.__name__}")
     elif meter_type in config_mod.MQTT_GRID_METER_TYPES:
-        mqtt_settings = config_mod.grid_meter_mqtt_settings(grid_meter)
+        try:
+            mqtt_settings = config_mod.resolve_grid_meter_mqtt_settings(config_data)
+        except ValueError as exc:
+            mqtt_settings = {}
+            diagnose_add(checks, "hardware", "warning", "grid_meter_broker_unresolved", f"The grid meter's MQTT broker could not be resolved: {exc}", type=meter_type)
         host = str(mqtt_settings.get("host") or "").strip()
         if not host:
-            diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"No read-only grid meter probe implemented for type: {meter_type}", type=meter_type)
+            diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", "The MQTT grid meter has no broker host to probe", type=meter_type)
         else:
             start = time.monotonic()
             try:
@@ -2070,6 +2093,39 @@ def diagnose_redact_text(text):
     return redacted
 
 
+_DIAGNOSE_REDACT_TEXT_KEY = re.compile(
+    r"(?i)(token|password|passwd|secret|authorization|bearer|cookie|session|auth"
+    r"|sn|serial|device_id|api[_-]?key)$"
+)
+
+
+def diagnose_redact_json_text(value):
+    """Serialize ``value`` as JSON with the text-redaction rules applied per field.
+
+    Scalars under a key the text rules name are replaced and every string is
+    text-redacted, so the result is always valid JSON.
+    """
+
+    def redact(item):
+        if isinstance(item, dict):
+            return {
+                key: (
+                    "<redacted>"
+                    if _DIAGNOSE_REDACT_TEXT_KEY.search(str(key))
+                    and not isinstance(child, (dict, list))
+                    else redact(child)
+                )
+                for key, child in item.items()
+            }
+        if isinstance(item, list):
+            return [redact(child) for child in item]
+        if isinstance(item, str):
+            return diagnose_redact_text(item)
+        return item
+
+    return json.dumps(redact(value), indent=2, sort_keys=True)
+
+
 def diagnose_redact_report_for_http(report):
     external = sanitize_external_mqtt_status(report, drop_secrets=False)
     return diagnose_redact_text_values(diagnose_redact_value(external))
@@ -2089,10 +2145,19 @@ def diagnose_redact_text_values(value):
 
 
 def diagnose_support_bundle_path(output):
+    """Where a support bundle goes when ``--output`` is not given.
+
+    ``data/support/`` is the one place every install keeps on the host: in
+    Docker only ``config/`` and ``data/`` are mounted, so the working
+    directory ``/app`` vanished with the container.
+    """
+
     if output:
         return output
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return os.path.join(os.getcwd(), f"ems-diagnose-{timestamp}.zip")
+    return os.path.join(
+        str(resolve_data_dir()), "support", f"ems-diagnose-{timestamp}.zip"
+    )
 
 
 def diagnose_nested_get(data, paths, default=None):
@@ -3272,11 +3337,11 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
         )
         bundle.writestr(
             "diagnosis.json",
-            diagnose_redact_text(json.dumps(external_report, indent=2, sort_keys=True)),
+            diagnose_redact_json_text(external_report),
         )
         bundle.writestr(
             "control-diagnostics.json",
-            diagnose_redact_text(json.dumps(control_report, indent=2, sort_keys=True)),
+            diagnose_redact_json_text(control_report),
         )
         bundle.writestr(
             "control-diagnostics.txt",
@@ -3288,7 +3353,7 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
         )
         bundle.writestr(
             "control-quality.json",
-            diagnose_redact_text(json.dumps(control_quality_report, indent=2, sort_keys=True)),
+            diagnose_redact_json_text(control_quality_report),
         )
         bundle.writestr(
             "control-quality.txt",

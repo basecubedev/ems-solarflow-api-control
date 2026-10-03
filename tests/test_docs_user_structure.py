@@ -232,16 +232,18 @@ def test_the_hardware_requirements_page_covers_memory_and_raspberry_pi():
 
 
 def test_the_hardware_page_states_the_pi3_limit_without_overclaiming_the_rest():
-    """The image is built for a Pi 3; nothing has booted one, and both are said.
+    """The image is built for a Pi 3; one has booted it without EMS; both are said.
 
-    Collapsing those two into one verdict is the failure mode in both
-    directions — "Pi 3 works" and "Pi 3 is useless" are each wrong.
+    Collapsing those into one verdict is the failure mode in both directions —
+    "Pi 3 works" and "Pi 3 is useless" are each wrong. The boot itself is
+    recorded in docs/appliance/hardware-validation.md, the authority.
     """
 
     text = read(ROOT / "docs" / "user" / "hardware-requirements.md")
     section = text.split("### Raspberry Pi 3 and 3B+", 1)[1].split("\n## ", 1)[0]
     assert "built for it" in section.lower()
-    assert "never been booted" in section
+    assert "One Pi 3B+ has booted it" in section
+    assert "never with EMS on it" in section
     assert "not tested" in section.lower() or "nobody has tested" in section
     assert "not listed as supported" in section
     assert "guaranteed" not in text.lower()
@@ -574,7 +576,8 @@ def test_technical_troubleshooting_reference_exists():
 def test_user_safety_is_checklist_not_runtime_reference():
     text = read(ROOT / "docs" / "user" / "safety.md")
     assert text.startswith("# Safety")
-    assert "Before enabling live writes" in text
+    assert "## When EMS starts writing" in text
+    assert "## Before the first live run" in text
     assert "technical safety model" in text
     assert len(text.splitlines()) <= 250
 

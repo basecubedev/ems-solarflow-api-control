@@ -167,7 +167,7 @@ each one waits for your confirmation.
 | Add, change or remove a device | Admin Console (`:8090`) → **Maintenance** |
 | Update EMS and Admin | Admin Console → **Guided Upgrade** |
 | Back up or restore the EMS | Admin Console → **Backup / restore** |
-| Update the operating system or the Appliance Manager | Appliance Manager (`:8088`) → **System Updates** |
+| Update the operating system or the Appliance Manager | Appliance Manager (`:8088`) → **Updates** |
 | Install, update, repair or roll back the Admin Console | Appliance Manager → **Admin** |
 | Change the network or WLAN of the Pi | Appliance Manager → **Network** |
 | Copy backups off the Pi | Appliance Manager → **SSH & Backup Access** |

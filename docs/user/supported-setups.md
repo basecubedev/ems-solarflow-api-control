@@ -93,7 +93,7 @@ verified write protocol exists, and it is a first-class EMS transport: a
 supported inverter joins the same control loop, target calculation,
 distribution and safety gates as a local API device.
 
-Control eligibility requires all five conditions:
+Control eligibility requires all six conditions:
 
 1. an **exact supported hardware model** resolved from verified device evidence;
 2. a **compatible broker transport**;
@@ -136,7 +136,7 @@ support above.
 | Component | Status |
 |---|---|
 | Appliance image (Pi 4 / Pi 5) | **Reverse-engineered** — built in the builder VM and inspected against its contract, and the release gates pass end to end for both boards. No board has booted it |
-| Appliance image (Pi 3 / 3B+) | **Reverse-engineered** — built twice on 2026-08-26 and inspected both times (33 checks pass, 0 fail); the release-gate run for this board was cut off before it produced a verdict. No Pi 3 has booted it, and 1 GB of RAM against Docker, EMS and InfluxDB is unmeasured |
+| Appliance image (Pi 3 / 3B+) | **Partly confirmed** — one Pi 3B+ has booted the single-slot image from microSD since 2026-08-29, grown its root, brought up the agent and web service, and fetched and installed signed Manager packages over HTTPS. EMS and InfluxDB on it, and 1 GB of RAM against all of them, are unmeasured. See [hardware validation](../appliance/hardware-validation.md) |
 
 Everything about it is tested without hardware: the package installs and its
 services start on a booted aarch64 guest under emulation, the update mechanism
@@ -146,12 +146,11 @@ of that is a Raspberry Pi.
 
 What only real hardware settles:
 
-- whether the image boots on a board at all — it has not
-- whether the first boot grows the root partition to fill a real card
+- whether the image boots a Pi 4 or a Pi 5 — only a Pi 3B+ has booted it
 - behaviour when power is cut mid-update
 - whether a Pi 3's 1 GB of RAM carries Docker, Admin, EMS and InfluxDB together
-- whether an appliance can fetch and install a signed Appliance Manager package
-  over HTTPS from a real network
+- whether an expired verify deadline reverts a package on a board — only the
+  confirming branch has been seen on hardware
 - SD-card wear
 
 Until someone runs one and reports back, "hardware-ready" would be a claim
@@ -231,7 +230,9 @@ while active.
   write gate can publish. The scalar-telemetry path builds the identical publish
   topic but has not been confirmed on physical hardware either.
   Please report both successful and failed hardware tests (see below).
-- Older MQTT-only Zendure devices without the local Zendure API / ZenSDK.
+- Older MQTT-only Zendure devices without the local Zendure API / ZenSDK,
+  unless the model is listed in the MQTT table above (Hub 1200/2000, Hyper
+  2000, AIO 2400 carry a reverse-engineered MQTT control profile).
 - Any Zendure model not listed above, unless your own tested setup confirms the
   local API behavior.
 - Running EMS alongside another controller that writes Zendure `outputLimit`.

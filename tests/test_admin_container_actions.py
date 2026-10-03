@@ -702,3 +702,23 @@ def test_the_restart_stays_available_whatever_the_answer_is(config_modified_at):
         ),
     )
     assert _actions(plan)["ems"]["action"] == "recreate"
+
+
+def test_an_unreadable_config_runs_nothing_and_says_why(tmp_path):
+    """Read as {}, a JSON typo looked like Analytics disabled and stopped InfluxDB."""
+
+    influx = {"found": True, "running": True, "status": "running", "name": "ems-influxdb"}
+    compose = FakeCompose()
+    actions = make_actions(
+        tmp_path, influx_config(), make_overview(influx=influx), compose
+    )
+    (tmp_path / "config.json").write_text('{"influxdb": {"enabled": true,}', encoding="utf-8")
+
+    plan = actions.plan()
+    result = actions.sync()
+
+    assert plan["available"] is False
+    assert plan["actions"] == []
+    assert "config/config.json cannot be read" in plan["message"]
+    assert result["ok"] is False
+    assert compose.calls == []

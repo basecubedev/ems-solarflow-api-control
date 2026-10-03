@@ -18,8 +18,10 @@ timezone = Europe/Berlin
 ```
 
 The value chosen in the UI is written to `/etc/ems-appliance-manager/timezone`,
-which is a shared path, and it outranks the packaged default. It reaches the
-containers as `TZ` the next time the deployment starts.
+which is a shared path, and it outranks the packaged default. It does **not**
+reach the EMS containers yet: they run on UTC, so hour-based control windows
+(the winter adjustment hour, the full-charge assist `force_time`) are UTC
+hours. Translate them when you set them.
 
 ## Supported platforms
 

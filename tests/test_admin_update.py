@@ -2770,3 +2770,43 @@ def test_expired_transition_escape_is_explicit_cancel_then_begin(tmp_path):
     )
     assert replacement.stage == TRANSITION_STAGE_ADMIN_UPDATE_PENDING
     assert store.read().mode == "fresh_install"
+
+
+def test_a_non_utf8_env_file_fails_the_update_and_rolls_the_compose_back(tmp_path):
+    """The sidecar died on UnicodeDecodeError with the compose already rewritten."""
+
+    store = PendingAdminUpdateStore(tmp_path / "state")
+    plan_id = _seed_started(store)
+    compose = tmp_path / "docker-compose.admin.yml"
+    original = "services:\n  ems-solarflow-admin:\n    image: " + CURRENT_REF + "\n"
+    compose.write_text(original, encoding="utf-8")
+    (tmp_path / ".env.admin").write_bytes(b"EMS_ADMIN_TAG=\xff\xfe\n")
+
+    def _must_not_recreate(cf, svc):
+        raise AssertionError("recreate must not run after a failed rewrite")
+
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=_must_not_recreate,
+        delay_seconds=0,
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "compose_update_failed"
+    assert store.read()["stage"] == STAGE_FAILED
+    assert compose.read_text(encoding="utf-8") == original
+
+
+def test_an_updated_compose_file_keeps_its_mode(tmp_path):
+    compose = tmp_path / "docker-compose.admin.yml"
+    compose.write_text("image: " + CURRENT_REF + "\n", encoding="utf-8")
+    compose.chmod(0o644)
+
+    update_apply._atomic_write_bytes(compose, b"image: " + TARGET_REF.encode() + b"\n")
+    update_apply._atomic_write_bytes(tmp_path / ".env.admin", b"EMS_ADMIN_TAG=x\n")
+
+    assert (compose.stat().st_mode & 0o777) == 0o644
+    assert ((tmp_path / ".env.admin").stat().st_mode & 0o777) == 0o644

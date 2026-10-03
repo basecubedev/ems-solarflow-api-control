@@ -53,10 +53,12 @@ Check that your EMS host is in the same local network as your devices.
 The Admin Console uses host networking by default because this usually works
 best for local discovery.
 
-If you started with bridge mode, try the default mode again:
+If you started with bridge mode, try the default mode again. `--force` is
+needed: without it the installer keeps the existing bridge-mode
+`docker-compose.admin.yml`:
 
 ```bash
-sh install-admin-console.sh
+sh install-admin-console.sh --force
 ```
 
 Also check that the device is powered on and reachable from the LAN.
@@ -88,9 +90,12 @@ Then check the basics:
 
 If targets look correct but the inverter output does not change:
 
-- Make sure live writes are enabled. Until your real values are filled in, EMS
-  stays in safe mode: it calculates targets but does not write to hardware. See
-  [Safety](safety.md).
+- Look for a startup line about template placeholders in `docker compose logs
+  ems`. While any placeholder is left (a template IP such as `192.168.1.100`,
+  `YOUR_SN`, an unused second template device), EMS stays in safe mode: it
+  calculates targets but does not write to hardware. Also check that
+  `system.dry_run` is `false` and `system.enabled` is `true`. See
+  [Safety](safety.md#when-ems-starts-writing).
 - Make sure **only one controller** writes Zendure output limits. Do not run
   the Zendure app HEMS, another automation, or a second EMS at the same time.
 - Check that the battery is above its minimum SOC.
@@ -142,6 +147,9 @@ Create a redacted support bundle for a report:
 ```bash
 docker compose exec ems python3 emsctl.py diagnose --support-bundle
 ```
+
+The ZIP is written to `data/support/` next to your config, unless `--output`
+names another path.
 
 ## Technical details
 

@@ -121,6 +121,23 @@ def test_forget_mqtt_broker_secret_detaches_it(tmp_path):
     assert store.mqtt_broker_secret_status("hass")["saved"] is False
 
 
+def test_deleted_token_is_not_reimported_from_the_legacy_copy(tmp_path):
+    legacy_dir = tmp_path / "admin-data"
+    legacy = ZendureTokenStore(legacy_dir)
+    legacy.save_token(TOKEN)
+    store = CredentialStore(
+        config_dir=tmp_path / "config", legacy_admin_data_dir=legacy_dir
+    )
+    assert store.load_zendure_token() == TOKEN
+
+    result = store.zendure.delete_token()
+
+    assert result["removed"] is True
+    assert store.load_zendure_token() is None
+    assert store.zendure.settings()["token_saved"] is False
+    assert not legacy.token_path.exists()
+
+
 def test_legacy_admin_token_is_migrated(tmp_path):
     legacy_dir = tmp_path / "admin-data"
     legacy = ZendureTokenStore(legacy_dir)
@@ -488,6 +505,46 @@ def test_concurrent_writes_do_not_share_a_deterministic_temp_name(tmp_path):
     finally:
         _tempfile.mkstemp = original
 
-    assert len(captured) == 2
-    assert captured[0] != captured[1]  # unique temp names, no fixed ".tmp"
+    records = [name for name in captured if not name.rsplit("/", 1)[-1].startswith(".key-")]
+    assert len(records) == 2
+    assert records[0] != records[1]  # unique temp names, no fixed ".tmp"
     assert list(store.secrets_dir.glob("*.tmp")) == []
+
+
+def test_two_first_saves_agree_on_one_key(tmp_path, monkeypatch):
+    """Interleaving: both callers generate a key before either publishes it."""
+
+    import threading
+
+    from cryptography.fernet import Fernet
+
+    store = _store(tmp_path)
+    barrier = threading.Barrier(2)
+    real_generate = Fernet.generate_key
+
+    def generate_then_wait():
+        key = real_generate()
+        barrier.wait()
+        return key
+
+    monkeypatch.setattr(Fernet, "generate_key", staticmethod(generate_then_wait))
+    keys = []
+
+    errors = []
+
+    def first_save():
+        try:
+            keys.append(store._files._load_or_create_key())
+        except Exception as exc:  # surfaced below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=first_save) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert keys[0] == keys[1] == store._files.key_path.read_bytes()
+    assert (store._files.key_path.stat().st_mode & 0o777) == 0o600
+    assert not list(store._files.key_path.parent.glob(".key-*"))

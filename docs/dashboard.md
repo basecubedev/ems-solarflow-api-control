@@ -318,7 +318,9 @@ Change the password:
 python3 emsctl.py dashboard change-password
 ```
 
-Disable dashboard authentication and write mode:
+Disable dashboard authentication and write mode. This deletes the shared
+Dashboard/Admin password; until a new one is set, the Admin Console lets the
+next visitor choose it. The command asks for confirmation:
 
 ```bash
 python3 emsctl.py dashboard disable-auth
@@ -525,7 +527,10 @@ Short-term history (legacy snapshot list, used by older clients):
 GET /api/history?range=6h
 ```
 
-Supported ranges are `1h`, `6h`, `12h`, and `24h`.
+Supported ranges are `1h`, `6h`, `12h`, and `24h`. A range holding more than
+2000 snapshots is thinned to an even subset of at most 2000; the history chart
+endpoint (`/api/history/series`) does the same and reports the step as
+`meta.stride`.
 
 ### Two history sources: SQLite (operational) vs InfluxDB (analytics)
 
@@ -678,7 +683,9 @@ the visible series and KPI cards (no extra chart pages):
 - **PV** — PV Input; KPIs PV, PV Peak, Output, SoC.
 
 Energy KPIs are integrated from the selected period; Current SoC and Runtime
-Role come from the live snapshot.
+Role come from the live snapshot. A step between two samples longer than three
+times the series' typical spacing is a gap in the record and is not
+integrated, so an outage does not count as power held at its last value.
 
 Overlay toggles add optional series on top of the active tab without changing
 it: **SoC** (drawn on a secondary right-hand percentage axis), **EMS Target**,

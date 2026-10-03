@@ -11,6 +11,7 @@ next one.
 """
 
 
+import time
 import pytest
 
 from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
@@ -134,6 +135,9 @@ def test_pending_target_publishes_after_acknowledgement_completion():
     )
     dev.fetch()
     assert rec.state == "telemetry_confirmed"
+    assert len(dev._service.published) == 1
+    assert dev._pending_target == 300
+    dev.write_output_limit(300)
     assert len(dev._service.published) == 2
     assert dev._active_command.target_w == 300
 
@@ -144,9 +148,10 @@ def test_pending_target_publishes_after_acknowledgement_timeout():
     rec = dev._active_command
     dev.write_output_limit(300)
     assert len(dev._service.published) == 1
-    # No reply before the deadline → active times out → pending flushes.
     dev.describe(now_monotonic=rec.created_monotonic + 6.0)
     assert rec.state == "timed_out"
+    assert len(dev._service.published) == 1
+    dev.write_output_limit(300)
     assert len(dev._service.published) == 2
     assert dev._active_command.target_w == 300
 
@@ -156,8 +161,8 @@ def test_old_reply_cannot_acknowledge_the_next_command():
     dev.write_output_limit(500)
     old = dev._active_command
     dev.write_output_limit(300)
-    # Active (500) times out → pending 300 publishes as a new command.
     dev.describe(now_monotonic=old.created_monotonic + 6.0)
+    dev.write_output_limit(300)
     new = dev._active_command
     assert new is not old
     assert new.target_w == 300
@@ -180,3 +185,58 @@ def test_pending_target_is_a_single_slot_not_a_queue():
     assert len(dev._service.published) == 2
     assert dev._active_command.target_w == 420
     assert dev._pending_target is None
+
+
+def test_a_cancelled_pending_target_is_never_published_later(monkeypatch):
+    """Interleaving: 500 in flight, 800 queued, the controller skips the device."""
+
+    dev = _device()
+    dev.write_output_limit(500)
+    active = dev._active_command
+    dev.write_output_limit(800)
+    assert dev._pending_target == 800
+
+    dev.cancel_pending_output_limit("control_disabled_skip_write")
+    dev.handle_reply(_reply(active))
+
+    import ems.zendure_mqtt.device_client as device_client
+
+    later = time.monotonic() + 3600
+    monkeypatch.setattr(device_client.time, "monotonic", lambda: later)
+    dev.fetch()
+
+    assert len(dev._service.published) == 1
+    assert dev._pending_target is None
+
+
+def test_the_next_cycles_fetch_never_publishes_a_target_the_cycle_has_not_asked_for(
+    monkeypatch,
+):
+    """Interleaving: 800 W queued; the operator disables the EMS; the next
+    cycle's fetch sees the 300 W command confirmed before the controller skips."""
+
+    dev = _device()
+    dev.write_output_limit(300)
+    rec = dev._active_command
+    dev.write_output_limit(800)
+    dev.handle_reply(_reply(rec))
+    dev._service.set_snapshot(
+        {"outputLimit": 300}, last_seen_monotonic=rec.published_monotonic + 1.0
+    )
+
+    dev.fetch()
+    dev.cancel_pending_output_limit("control_disabled_skip_write")
+
+    assert [payload for _topic, payload in dev._service.published if b"800" in payload] == []
+    assert dev._pending_target is None
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity", "1e400"])
+def test_a_non_finite_report_value_is_missing_not_a_reading(literal):
+    from ems.zendure_mqtt.payloads import parse_report_payload
+
+    report = parse_report_payload(
+        ('{"properties": {"outputLimit": %s, "electricLevel": 55}}' % literal).encode()
+    )
+    assert report.properties["outputLimit"] is None
+    assert report.properties["electricLevel"] == 55

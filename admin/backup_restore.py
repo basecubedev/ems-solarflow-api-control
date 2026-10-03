@@ -405,8 +405,13 @@ class BackupStore:
     def _decorate_set(self, record):
         names = set(self._iter_names())
         archives = []
-        for entry in record.get("archives", []):
+        entries = record.get("archives")
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, dict):
+                continue
             name = entry.get("name")
+            if not isinstance(name, str):
+                name = None
             present = bool(name) and name in names
             archives.append({
                 "type": entry.get("type"),
@@ -525,6 +530,12 @@ class BackupInspector:
             raise BackupRestoreError("the backup password is incorrect")
         except backup_mod.BackupError as exc:
             raise BackupRestoreError(str(exc))
+        if result.get("sensitive"):
+            raise BackupRestoreError(
+                f"{result.get('path') or file_name} holds credentials; the Admin "
+                "Console does not show its contents. Compare it on the EMS host "
+                "with: python3 emsctl.py backup diff"
+            )
         if result.get("binary"):
             return {"ok": True, "binary": True, "text": result.get("text"),
                     "path": result.get("path")}
@@ -616,13 +627,31 @@ class RestorePlanRegistry:
     def get(self, plan_id):
         with self._lock:
             plan = self._plans.get(plan_id)
-        if plan is None:
-            return None
-        if datetime.now(timezone.utc) > datetime.strptime(
-            plan.expires_at, "%Y-%m-%dT%H:%M:%SZ"
-        ).replace(tzinfo=timezone.utc):
+        if plan is None or self._expired(plan):
             return None
         return plan
+
+    def claim(self, plan_id):
+        """Take a plan out of the registry so it can be executed exactly once.
+
+        A double click, a second tab or a retry otherwise started two jobs on
+        one plan, and the second job's rollback captured the half-restored
+        state.
+        """
+
+        with self._lock:
+            plan = self._plans.pop(plan_id, None)
+            if plan_id in self._order:
+                self._order.remove(plan_id)
+        if plan is None or self._expired(plan):
+            return None
+        return plan
+
+    @staticmethod
+    def _expired(plan):
+        return datetime.now(timezone.utc) > datetime.strptime(
+            plan.expires_at, "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc)
 
 
 # ---------------------------------------------------------------------------
@@ -751,6 +780,7 @@ class BackupRestoreService:
         self._context_provider = context_provider
         self.plans = plans or RestorePlanRegistry()
         self._ems_tool = ems_tool
+        self.restore_lock = threading.Lock()
 
     # --- environment -----------------------------------------------------
 
@@ -1304,11 +1334,14 @@ class BackupRestoreService:
         return steps
 
     def restore_from_plan(self, plan_id, confirm, progress=None):
-        if confirm is not True:
-            raise BackupRestoreError("restore requires confirm=true")
         plan = self.plans.get(plan_id)
         if plan is None:
             raise BackupRestoreError("unknown or expired restore plan")
+        return self.restore_claimed_plan(plan, confirm, progress=progress)
+
+    def restore_claimed_plan(self, plan, confirm, progress=None):
+        if confirm is not True:
+            raise BackupRestoreError("restore requires confirm=true")
         if plan.blocked:
             raise BackupRestoreError(
                 plan.block_reason or "the restore plan is blocked"
@@ -1460,6 +1493,7 @@ class BackupRestoreService:
                     "steps": list(steps), "actions": actions,
                     "rollback_backup": rollback_name}
         # Only generic members are rolled back here; InfluxDB rollback stays in EMS CLI.
+        rolled_back = 0
         try:
             for idx in range(applied_index, -1, -1):
                 _target, rollback_path = rollbacks[idx]
@@ -1468,12 +1502,25 @@ class BackupRestoreService:
                 if rollback_path is None:
                     raise BackupRestoreError("no rollback backup was created")
                 self._apply_rollback(env, rollback_path, plan.password)
+                rolled_back += 1
         except (backup_mod.BackupError, BackupRestoreError) as exc:
             steps.append(_step("done", "error", "Automatic rollback", detail=str(exc)))
             return {
                 "ok": False, "status": "rollback_failed",
                 "message": ("Restore failed and automatic rollback also failed. "
                             "Manual recovery is required."),
+                "steps": list(steps), "actions": actions,
+                "rollback_backup": rollback_name,
+            }
+        if not rolled_back:
+            steps.append(_step("done", "skipped", "Automatic rollback",
+                               detail="Nothing this restore changed can be "
+                                      "rolled back here."))
+            return {
+                "ok": False, "status": "failed",
+                "message": ("Restore failed. Nothing was rolled back "
+                            "automatically; an InfluxDB restore is rolled back "
+                            "with the EMS CLI."),
                 "steps": list(steps), "actions": actions,
                 "rollback_backup": rollback_name,
             }

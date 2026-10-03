@@ -17,7 +17,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from admin.discovery import verify_shelly_meter_endpoint, verify_zendure_endpoint
+from admin.discovery import (
+    is_scannable_address,
+    verify_shelly_meter_endpoint,
+    verify_zendure_endpoint,
+)
 from admin.models import utc_now_iso
 from admin.mqtt_discovery import MQTT_MDNS_SERVICE_TYPE, build_mqtt_mdns_candidate
 
@@ -125,7 +129,8 @@ def build_candidate(service_name, hostname, addresses, port, properties,
     if service_type not in MDNS_SERVICE_TYPES:
         return None
     hints = classify_mdns_service(service_name, service_type)
-    ip = addresses[0] if addresses else None
+    usable = [address for address in addresses or () if is_scannable_address(address)]
+    ip = usable[0] if usable else None
     candidate = {
         "source": "mdns",
         "service_name": service_name,

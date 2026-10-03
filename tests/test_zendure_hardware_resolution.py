@@ -160,3 +160,19 @@ def test_telemetry_only_models_are_identified_but_not_writable(product, profile_
 def test_ambiguous_and_unknown_resolutions_are_not_writable():
     assert resolve_hardware_profile_detail("Hyper").writable is False
     assert resolve_hardware_profile_detail("Totally Unknown").writable is False
+
+
+@pytest.mark.parametrize(
+    ("product", "expected"),
+    [
+        ("SolarFlow 2400 AC+", "solarflow_2400_ac_plus"),
+        ("SolarFlow2400AC+", "solarflow_2400_ac_plus"),
+        ("solarFlow2400AC+", "solarflow_2400_ac_plus"),
+        ("SolarFlow 2400 AC Plus", "solarflow_2400_ac_plus"),
+        ("SolarFlow 2400 AC", "solarflow_2400_ac"),
+        ("SolarFlow 1600 AC+", "solarflow_1600_ac_plus"),
+        ("SolarFlow 4000 AC+", "solarflow_4000_ac_plus"),
+    ],
+)
+def test_plus_suffix_names_the_plus_model_not_its_sibling(product, expected):
+    assert resolve_hardware_profile_detail(product).profile_id == expected

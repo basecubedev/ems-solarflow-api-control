@@ -476,6 +476,9 @@ proposal mapper keeps such a device telemetry-only; migration disables control
 physical serial and broker/profile metadata; the properties/write builder returns
 no message (never a `deviceId=null` payload); and Cloud device-scoped
 subscriptions contribute only for a complete `product_key`/`device_id` route.
+Both are single topic segments: a value containing `/`, `+`, `#` or NUL is
+rejected for every entry (`mqtt_route_segment_invalid`) and never contributes a
+Cloud subscription, so it can neither widen a subscription nor retarget a write.
 
 **Admin manual entry (Fresh Setup and Maintenance).** The UI carries the same
 separation, never inferring a route id from a serial. Fresh Setup's manual
@@ -706,9 +709,14 @@ device:
   **within the same cycle**, so a safety stop never waits for the old command's
   timeout. Correlation stays strict — the retired command can never confirm the
   replacement;
-- once the active command reaches a terminal state (rejection, supersession,
-  acknowledgement completion or either timeout) → publish the latest pending
-  target **once**.
+- once the active command reaches a terminal state on a broker reply
+  (rejection, supersession, acknowledgement completion) → publish the latest
+  pending target **once**. When the slot is freed by a timeout or by telemetry
+  confirmation instead, nothing is published: those are seen by the next
+  cycle's fetch, before the controller has decided that cycle, so the pending
+  target waits for the controller's next dispatch (which publishes it under the
+  correlation it was queued with) or is retired when the controller skips the
+  device. A status read (`describe`) never publishes.
 
 Terminal records with unresolved broker delivery remain in a bounded per-device
 evidence ledger keyed by their transport receipt. By default it retains at most
@@ -782,7 +790,10 @@ command; there are **no** unlimited automatic retries. A fresh telemetry read
 confirms an acknowledged command when the observed output is newer than the
 command and within tolerance, and a bounded `confirmation_timeout_seconds`
 (default 30s) resolves an acknowledged command that never sees confirming
-telemetry.
+telemetry. These per-device tuning keys are bounded: the acknowledgement timeout
+to 120s, the confirmation timeout to 300s, `confirmation_tolerance_w` to 200 W
+and `safety_preempt_margin_w` to 1000 W; a non-numeric or non-finite value falls
+back to its default.
 
 > **Status — fixture/emulator-verified, physical validation still required.** The
 > full lifecycle (records, reply correlation, one-in-flight coordination, timeout,

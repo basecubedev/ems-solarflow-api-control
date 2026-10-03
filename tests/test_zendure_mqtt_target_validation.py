@@ -162,3 +162,27 @@ def test_zensdk_never_publishes_negative_output_limit():
 def test_nan_is_not_finite_guard():
     # Regression guard: NaN must never slip through as a "number".
     assert not math.isfinite(float("nan"))
+
+
+@pytest.mark.parametrize("max_power", ["many", -1, math.nan, math.inf, 0, None, 10**400])
+def test_invalid_device_maximum_falls_back_to_the_system_ceiling(
+    monkeypatch, max_power
+):
+    from ems import config as cfg
+
+    monkeypatch.setattr(cfg, "MAX_DEVICE_POWER", 800)
+    dev = _device("hyper_2000", max_power=max_power)
+    assert dev.max_power == 800
+    assert dev.write_output_limit(1500) is False
+    assert dev._service.published == []
+    assert dev.write_health.last_error == "target_above_maximum"
+
+
+def test_a_numeric_string_device_maximum_is_the_device_ceiling(monkeypatch):
+    from ems import config as cfg
+
+    monkeypatch.setattr(cfg, "MAX_DEVICE_POWER", 2400)
+    dev = _device("hyper_2000", max_power="600")
+    assert dev.max_power == 600
+    assert dev.write_output_limit(700) is False
+    assert dev._service.published == []

@@ -14,7 +14,7 @@ test.describe("authentication @smoke", () => {
   test("first start requires a new appliance password", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator("#gate")).toBeVisible();
-    await expect(page.locator("#gate-intro")).toContainText("No appliance password exists yet");
+    await expect(page.locator("#gate-intro")).toContainText("No password exists yet");
     await expect(page.locator("#gate-confirm-field")).toBeVisible();
     await expect(page.locator("#gate-submit")).toHaveText("Create password");
     // Nothing about the host is visible before authentication.
@@ -249,6 +249,27 @@ test.describe("the two-second poll", () => {
     await page.waitForResponse((response) => response.url().includes("/api/operations"));
 
     await expect(page.locator("#main .page-title")).toBeFocused();
+  });
+});
+
+test.describe("support archive", () => {
+  test("a created archive can be downloaded from the page", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "diagnostics");
+    await page.locator('[data-test="support-archive"]').click();
+    await expect(page.locator("#dialog")).toBeVisible();
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/operations/confirm")),
+      page.locator("#dialog-confirm").click(),
+    ]);
+
+    const outcome = page.locator('[data-test="operation-outcome"] .tone');
+    await expect(outcome).toHaveText("completed", { timeout: 20_000 });
+    const link = page.locator('[data-test="download-support-archive"]');
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute("href", /^\/api\/support\/archive\/[0-9a-f]{32}$/);
+    const response = await page.request.get((await link.getAttribute("href")) as string);
+    expect(response.status()).toBe(200);
   });
 });
 
@@ -686,11 +707,23 @@ test.describe("admin lifecycle @authority", () => {
     await openView(page, "admin");
     await page.locator('[data-test="admin-restart"]').click();
     await expect(page.locator("#dialog")).toBeVisible();
-    await page.locator("#dialog-cancel").click();
 
+    // Leaving the page, not pressing Cancel: Cancel withdraws the plan.
     await page.reload();
     await expect(page.locator('[data-test="operation-stage"]')).toBeVisible();
     await expect(page.locator('[data-test="operation-stage"]')).toContainText("awaiting");
+  });
+
+  test("cancelling a plan releases the operation lock", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "admin");
+    await page.locator('[data-test="admin-restart"]').click();
+    await expect(page.locator("#dialog")).toBeVisible();
+    await page.locator("#dialog-cancel").click();
+    await expect(page.locator('[data-test="operation-stage"]')).toBeHidden();
+
+    await page.locator('[data-test="admin-stop"]').click();
+    await expect(page.locator("#dialog")).toBeVisible();
   });
 
   test("a second conflicting mutation is refused", async ({ page }) => {
@@ -698,7 +731,8 @@ test.describe("admin lifecycle @authority", () => {
     await openView(page, "admin");
     await page.locator('[data-test="admin-restart"]').click();
     await expect(page.locator("#dialog")).toBeVisible();
-    await page.locator("#dialog-cancel").click();
+    await page.reload();
+    await openView(page, "admin");
 
     const conflict = new Promise<string>((resolve) => {
       page.once("dialog", async (alert) => {

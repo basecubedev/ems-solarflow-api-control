@@ -2,6 +2,7 @@
 """Persistent discovery connection metadata store + broker credential wiring."""
 
 import json
+import threading
 
 import pytest
 
@@ -296,3 +297,84 @@ def test_refresh_anonymous_only_when_no_credentials(tmp_path):
     candidate = discovery.refresh()["candidates"][0]
     assert seen == [None]  # anonymous only
     assert [a["label"] for a in candidate["attempts"]] == ["anonymous"]
+
+
+class _ObservedLock:
+    """An RLock that reports when a second thread starts waiting for it."""
+
+    def __init__(self, waiting, thread_name):
+        self._lock = threading.RLock()
+        self._waiting = waiting
+        self._thread_name = thread_name
+
+    def __enter__(self):
+        if threading.current_thread().name == self._thread_name:
+            self._waiting.set()
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self._lock.release()
+        return False
+
+
+def test_concurrent_credential_ref_adds_keep_both(tmp_path):
+    """Interleaving: A has read the block, B adds and writes, A writes.
+
+    Without serialization A's write drops B's ref; with it B waits for A.
+    """
+
+    store = _store(tmp_path)
+    a_loaded = threading.Event()
+    release_a = threading.Event()
+    b_progress = threading.Event()
+    original_load = store.load
+
+    def load():
+        result = original_load()
+        if threading.current_thread().name == "writer-a" and not a_loaded.is_set():
+            a_loaded.set()
+            assert release_a.wait(10)
+        return result
+
+    store.load = load
+    store._lock = _ObservedLock(b_progress, "writer-b")
+
+    def run_b():
+        store.add_credential_ref("cred-b")
+        b_progress.set()
+
+    writer_a = threading.Thread(
+        target=store.add_credential_ref, args=("cred-a",), name="writer-a"
+    )
+    writer_b = threading.Thread(target=run_b, name="writer-b")
+    writer_a.start()
+    assert a_loaded.wait(10)
+    writer_b.start()
+    assert b_progress.wait(10)
+    release_a.set()
+    writer_a.join(10)
+    writer_b.join(10)
+
+    assert sorted(store.load()["local_mqtt"]["credential_refs"]) == ["cred-a", "cred-b"]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"priority": 5},
+        {"discovery_priority": 5},
+        {"discovery_priority": [["local_api"], {"x": 1}, "local_mqtt"]},
+        {"local_mqtt": {"brokers": 5}},
+        {"local_mqtt": {"brokers": {"id": "a"}}},
+    ],
+)
+def test_malformed_container_shapes_normalize_instead_of_raising(raw):
+    normalized = normalize_connections(raw)
+
+    assert sorted(normalized["discovery_priority"]) == [
+        "local_api",
+        "local_mqtt",
+        "zendure_mqtt",
+    ]
+    assert normalized["local_mqtt"]["brokers"] == []

@@ -61,6 +61,8 @@ const state = {
   },
   runtime: null,
   runtimeEditorDirty: false,
+  lastSnapshotTimestamp: null,
+  snapshotChangedAt: null,
   runtimeEditorFocused: false,
   flowActivity: new Map(),
   deviceFlowSignature: null,
@@ -350,6 +352,25 @@ function aggregatedBatteryPowerW(snapshot) {
   );
 }
 
+const DASHBOARD_ERROR_TEXT = {
+  invalid_password: "Wrong password.",
+  login_rate_limited: "Too many login attempts. Wait a minute, then try again.",
+  auth_not_configured: "No dashboard password is set. Set one with: python3 emsctl.py dashboard set-password",
+  not_authenticated: "Your session has ended. Log in again.",
+  csrf_failed: "Your session has ended. Reload the page and log in again.",
+  read_only: "Log in to make changes.",
+  maintenance_busy: "Another backup, restore or config upgrade is still running. Try again when it has finished.",
+  diagnose_busy: "A diagnosis is already running. Try again in a moment.",
+  request_too_large: "The request is too large.",
+};
+
+function dashboardErrorText(payload, fallback) {
+  const message = payload && typeof payload.message === "string" ? payload.message.trim() : "";
+  if (message) return message;
+  const code = payload && typeof payload.error === "string" ? payload.error : "";
+  return DASHBOARD_ERROR_TEXT[code] || code || fallback;
+}
+
 function setText(id, text) {
   const el = $(id);
   if (el) el.textContent = text;
@@ -361,13 +382,49 @@ function setConnection(text, connected) {
   el.className = connected ? "pill" : "pill muted";
 }
 
+// Timed by the browser clock, so a skewed EMS host clock cannot keep it live.
+function snapshotStaleAfterMs() {
+  const loopSeconds = Number(state.runtime?.system?.loop_interval) || 5;
+  return Math.max(30, loopSeconds * 3) * 1000;
+}
+
+function snapshotIsStale(now = Date.now()) {
+  if (state.demoMode || !state.snapshotChangedAt) return false;
+  return now - state.snapshotChangedAt > snapshotStaleAfterMs();
+}
+
+function refreshLiveFreshness() {
+  if (!snapshotIsStale()) return;
+  const pill = $("connectionState");
+  const text = pill ? pill.textContent : "";
+  if (text === "Live" || text === "Polling") setConnection("Stale", false);
+}
+
+function gridPowerText(snapshot) {
+  return snapshot.grid_power_valid === false ? "Meter offline" : watts(snapshot.grid_power_w);
+}
+
+function gridFlowPowerW(snapshot) {
+  /** The grid power the flow picture may draw: none for a meter that is not answering. */
+  return snapshot.grid_power_valid === false ? 0 : Number(snapshot.grid_power_w || 0);
+}
+
+function gridDirectionText(snapshot) {
+  return snapshot.grid_power_valid === false ? "Offline" : gridDirectionLabel(gridFlowPowerW(snapshot));
+}
+
 function updateSnapshot(snapshot) {
   if (!snapshot) return;
   state.snapshot = snapshot;
+  if (snapshot.timestamp !== state.lastSnapshotTimestamp) {
+    state.lastSnapshotTimestamp = snapshot.timestamp;
+    state.snapshotChangedAt = Date.now();
+  }
   const status = state.demoMode
     ? "Demo"
     : state.liveTransport === "polling" ? "Polling" : "Live";
   setConnection(status, true);
+  refreshLiveFreshness();
 
   const timestamp = snapshot.timestamp;
   if (timestamp && timestamp === renderedSnapshotTimestamp && !deferredSnapshotRender) {
@@ -444,7 +501,7 @@ function renderGlobalSnapshotMetrics(snapshot) {
   const batteryFlow = normalizeBatteryPowerForDisplay(aggregatedBatteryPowerW(snapshot));
   setText("metricPv", watts(snapshot.pv_total_w));
   setText("metricHome", watts(snapshot.home_load_w));
-  setText("metricGrid", watts(snapshot.grid_power_w));
+  setText("metricGrid", gridPowerText(snapshot));
   setText("metricBattery", signedWatts(batteryFlow.valueW));
   setText("metricSoc", pct(snapshot.average_soc));
   setText("lastUpdated", new Date(snapshot.timestamp).toLocaleTimeString());
@@ -454,7 +511,7 @@ function renderGlobalSnapshotMetrics(snapshot) {
 // pipes). Only run while the aggregated view is on screen.
 function renderAggregatedSnapshot(snapshot) {
   const batteryFlow = normalizeBatteryPowerForDisplay(aggregatedBatteryPowerW(snapshot));
-  const gridPower = Number(snapshot.grid_power_w || 0);
+  const gridPower = gridFlowPowerW(snapshot);
   const pvPower = Number(snapshot.pv_total_w || 0);
   const inverterPower = Number(snapshot.inverter_output_w || 0);
   const homeLoad = Number(snapshot.home_load_w || 0);
@@ -464,10 +521,10 @@ function renderAggregatedSnapshot(snapshot) {
   setText("flowBattery", signedWatts(batteryFlow.valueW));
   setText("flowInverter", watts(snapshot.inverter_output_w));
   setText("flowHome", watts(snapshot.home_load_w));
-  setText("flowGrid", watts(snapshot.grid_power_w));
+  setText("flowGrid", gridPowerText(snapshot));
   setText("flowBatterySoc", pct(soc));
   setText("flowBatteryState", batteryStateLabel(batteryFlow));
-  setText("flowGridDirection", gridDirectionLabel(gridPower));
+  setText("flowGridDirection", gridDirectionText(snapshot));
 
   setBatteryFill("flowBatteryFill", soc);
   setVisualState("visualPv", flowActive("aggregate:visualPv", pvPower), "active");
@@ -1444,7 +1501,7 @@ function deviceCardHtml(name, device, previousSocWidths) {
           <span class="soc-title">${icon("battery")} Battery SOC</span>
           <strong class="soc-percent">${pct(soc)}</strong>
         </div>
-        <div class="soc-bar"><div class="soc-fill" data-device-soc-fill="${safeDeviceKey}" data-soc-start="${previousSoc}" data-soc-target="${soc}" data-soc-animate="${shouldAnimateSoc ? "true" : "false"}"></div></div>
+        <div class="soc-bar" role="progressbar" aria-label="Battery state of charge" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(soc)}"><div class="soc-fill" data-device-soc-fill="${safeDeviceKey}" data-soc-start="${previousSoc}" data-soc-target="${soc}" data-soc-animate="${shouldAnimateSoc ? "true" : "false"}"></div></div>
         <div class="soc-mode">${deviceBatteryState} ${signedWatts(batteryFlow.valueW)}</div>
       </div>
       <div class="device-values">
@@ -1978,7 +2035,6 @@ function renderDeviceFlow(snapshotOrDevices) {
   const gridY = homeY + layout.sharedHomeGridGapY;
   const viewHeight = Math.max(rowsBottomY, gridY + layout.sharedVisualHeight) + layout.rowBottomPadding;
   const homeLoad = Number(snapshot.home_load_w || 0);
-  const gridPower = Number(snapshot.grid_power_w || 0);
   const signature = deviceFlowSignature(entries, layout, viewHeight);
   if (
     state.deviceFlowSignature === signature
@@ -2014,7 +2070,7 @@ function renderDeviceFlow(snapshotOrDevices) {
       <g class="device-flow-layer" aria-hidden="true">
         ${rows}
       </g>
-      ${deviceSharedVisuals(layout.sharedX, homeY, gridY, homeLoad, gridPower)}
+      ${deviceSharedVisuals(layout.sharedX, homeY, gridY, homeLoad, snapshot)}
     </svg>
   `;
   state.deviceFlowSignature = signature;
@@ -2133,7 +2189,7 @@ function updateDeviceFlowSnapshot(container, snapshot, entries) {
   const pipes = dataElementMap(container, "data-flow-pipe");
   const fills = dataElementMap(container, "data-device-battery-fill");
   const homeLoad = Number(snapshot.home_load_w || 0);
-  const gridPower = Number(snapshot.grid_power_w || 0);
+  const gridPower = gridFlowPowerW(snapshot);
 
   // One scale for the whole view, taken before any pipe is drawn, so a ribbon
   // in one device's row is comparable with a ribbon in another's.
@@ -2183,8 +2239,8 @@ function updateDeviceFlowSnapshot(container, snapshot, entries) {
   setSvgClass(visuals.get("shared:home"), deviceVisualClasses("home-visual", flowActive("device:shared:visualHome", homeLoad)));
   setSvgClass(visuals.get("shared:grid"), deviceVisualClasses("grid-visual", gridActive, gridPower > FLOW_THRESHOLD_W ? "importing" : gridPower < -FLOW_THRESHOLD_W ? "exporting" : "neutral"));
   setMappedText(texts, "shared:home-value", watts(homeLoad));
-  setMappedText(texts, "shared:grid-state", gridDirectionLabel(gridPower));
-  setMappedText(texts, "shared:grid-value", watts(gridPower));
+  setMappedText(texts, "shared:grid-state", gridDirectionText(snapshot));
+  setMappedText(texts, "shared:grid-value", gridPowerText(snapshot));
 }
 
 function renderControlExplain(snapshot, options = {}) {
@@ -3229,16 +3285,17 @@ function deviceBatteryVisual(
   `;
 }
 
-function deviceSharedVisuals(x, homeY, gridY, homeLoad, gridPower) {
+function deviceSharedVisuals(x, homeY, gridY, homeLoad, snapshot) {
   const gridMidY = gridY + 38;
   const homeMidY = homeY + 38;
-  const gridDirection = gridDirectionLabel(gridPower);
+  const gridPower = gridFlowPowerW(snapshot);
+  const gridDirection = gridDirectionText(snapshot);
 
   return `
     <g class="device-flow-shared-home">
       ${devicePipeGroup("grid", Math.abs(gridPower), `M${x + 88} ${gridMidY} H${x + 128} V${homeMidY} H${x + 88}`, gridPower < -FLOW_THRESHOLD_W ? "reverse" : "forward")}
       ${deviceHomeVisual(x, homeY, watts(homeLoad), flowActive("device:shared:visualHome", homeLoad))}
-      ${deviceGridVisual(x, gridY, gridDirection, watts(gridPower), flowActive("device:shared:visualGrid", Math.abs(gridPower)), gridPower > FLOW_THRESHOLD_W ? "importing" : gridPower < -FLOW_THRESHOLD_W ? "exporting" : "neutral")}
+      ${deviceGridVisual(x, gridY, gridDirection, gridPowerText(snapshot), flowActive("device:shared:visualGrid", Math.abs(gridPower)), gridPower > FLOW_THRESHOLD_W ? "importing" : gridPower < -FLOW_THRESHOLD_W ? "exporting" : "neutral")}
     </g>
   `;
 }
@@ -3935,7 +3992,7 @@ async function runDiagnose(profile) {
     );
     if (!response.ok) {
       const detail = await response.json().catch(() => ({}));
-      setDiagnoseStatus(`Diagnose failed (${response.status}${detail.error ? `: ${detail.error}` : ""}).`);
+      setDiagnoseStatus(`Diagnose failed (${response.status}): ${dashboardErrorText(detail, "unknown error")}`);
       return;
     }
     state.diagnose.report = await response.json();
@@ -4562,7 +4619,7 @@ async function createMaintenanceBackup(type) {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setMaintenanceMessage(`Backup failed (${response.status}${payload.error ? `: ${payload.error}` : ""}).`);
+      setMaintenanceMessage(`Backup failed (${response.status}): ${dashboardErrorText(payload, "unknown error")}`);
     } else if (payload.created) {
       setMaintenanceMessage(`Created ${payload.backup?.name || type}.`);
       await loadBackupList();
@@ -4590,7 +4647,7 @@ async function inspectMaintenanceBackup(name) {
     const payload = await response.json().catch(() => ({}));
     const detail = $("maintenanceBackupDetail");
     if (!response.ok) {
-      setMaintenanceMessage(`Inspect failed (${response.status}${payload.error ? `: ${payload.error}` : ""}).`);
+      setMaintenanceMessage(`Inspect failed (${response.status}): ${dashboardErrorText(payload, "unknown error")}`);
       return;
     }
     setMaintenanceMessage("");
@@ -4682,7 +4739,7 @@ async function previewRestore() {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setMaintenanceMessage(`Restore preview failed (${response.status}${payload.error ? `: ${payload.error}` : ""}).`);
+      setMaintenanceMessage(`Restore preview failed (${response.status}): ${dashboardErrorText(payload, "unknown error")}`);
       return;
     }
     state.maintenance.restore.plan = payload;
@@ -4702,6 +4759,12 @@ async function confirmRestore() {
   if (!state.auth.authenticated || !state.auth.csrfToken) return;
   const restore = state.maintenance.restore;
   if (!restore.file || !restore.previewed) return;
+  if (typeof window !== "undefined" && typeof window.confirm === "function") {
+    const confirmed = window.confirm(
+      `Restore ${restore.file}? The files shown in the preview are replaced. A rollback backup is taken first.`
+    );
+    if (!confirmed) return;
+  }
   const passwordInput = $("restorePassword");
   const password = passwordInput ? passwordInput.value : "";
   state.maintenance.running = true;
@@ -4722,7 +4785,7 @@ async function confirmRestore() {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setMaintenanceMessage(`Restore failed (${response.status}${payload.error ? `: ${payload.error}` : ""}).`);
+      setMaintenanceMessage(`Restore failed (${response.status}): ${dashboardErrorText(payload, "unknown error")}`);
     } else if (payload.restored) {
       const hints = [];
       if (payload.requires_restart) hints.push("Restart EMS.");
@@ -4769,7 +4832,7 @@ async function applyConfigUpgrade() {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      setMaintenanceMessage(`Config upgrade failed (${response.status}${payload.error ? `: ${payload.error}` : ""}).`);
+      setMaintenanceMessage(`Config upgrade failed (${response.status}): ${dashboardErrorText(payload, "unknown error")}`);
     } else if (payload.changed) {
       const backup = payload.backup_name ? ` Backup: ${payload.backup_name}.` : "";
       const restart = payload.requires_restart ? " Restart EMS." : "";
@@ -4845,11 +4908,14 @@ function runtimeControlPanel() {
   const systemLimits = limits.system || {};
   const deviceLimits = limits.devices || {};
   const fallbackDeviceMax = Number(limits.fallback_device_max_power || 5000);
+  const acUnsupported = new Set(limits.ac_role_unsupported || []);
+  const acChargeMax = Number(limits.ac_charge_power_max || 5000);
   const deviceForms = devices.map(([name, device], index) => runtimeDeviceForm(
     name,
     device || {},
     Number(deviceLimits[name] || fallbackDeviceMax),
-    index + 2
+    index + 2,
+    { supported: !acUnsupported.has(name), maxChargePower: acChargeMax }
   )).join("");
   const winterStep = devices.length + 2;
   const haStep = devices.length + 3;
@@ -4858,7 +4924,7 @@ function runtimeControlPanel() {
     <section class="runtime-editor-panel control-stage-row" aria-label="Runtime write controls">
       <div class="runtime-editor-head control-context-rail">
         <div class="control-context-title">Runtime Settings</div>
-        <span id="runtimeWriteFeedback" class="runtime-feedback"></span>
+        <span id="runtimeWriteFeedback" class="runtime-feedback" role="status" aria-live="polite"></span>
       </div>
       <div class="runtime-editor-grid control-global-pipeline">
         ${runtimeStageCard({
@@ -4871,8 +4937,8 @@ function runtimeControlPanel() {
           submitLabel: "Save EMS settings",
           fields: `
           ${runtimeToggle("enabled", "EMS enabled", system.enabled)}
-          ${runtimeNumber("max_total_power", "Max total power", system.max_total_power, 0, Number(systemLimits.max_total_power || 5000), "W", "50")}
-          ${runtimeNumber("min_output_limit", "Min output limit", system.min_output_limit, 0, Number(systemLimits.min_output_limit || 5000), "W", "5")}
+          ${runtimeNumber("max_total_power", "Max total power", system.max_total_power, 0, Number(systemLimits.max_total_power || 5000), "W", "1")}
+          ${runtimeNumber("min_output_limit", "Min output limit", system.min_output_limit, 0, Number(systemLimits.min_output_limit || 5000), "W", "1")}
           ${runtimeNumber("loop_interval", "Loop interval", system.loop_interval, 1, 3600, "s", "1")}
         `})}
         ${deviceForms}
@@ -4923,7 +4989,38 @@ function runtimeStageCard({ endpoint, title, subtitle, step, kind, iconName, fie
   `;
 }
 
-function runtimeDeviceForm(name, device, maxPower = 5000, step = 1) {
+const AC_INPUT_ROLES = new Set(["ac_input", "ac_input_charge", "reserved"]);
+
+function runtimeAcRole(device) {
+  return AC_INPUT_ROLES.has(String(device?.runtime_role || "")) ? "ac_input" : "ac_output";
+}
+
+function runtimeAcRoleFields(device, ac) {
+  if (!ac || !ac.supported) {
+    return runtimeReadonlyFact("AC role", "Output only (MQTT)");
+  }
+  const reason = String(device.runtime_role_reason || "").trim();
+  return `
+      ${runtimeSelect("runtime_role", "AC role", runtimeAcRole(device), [
+        { value: "ac_output", label: "Output (EMS regulates)" },
+        { value: "ac_input", label: "AC charging (input)" },
+      ])}
+      ${runtimeNumber("ac_charge_power_w", "AC charge power", device.ac_charge_power_w, 0, ac.maxChargePower || 5000, "W", "1")}
+      ${reason ? runtimeReadonlyFact("Role set by", reason) : ""}
+  `;
+}
+
+function runtimeReadonlyFact(label, value) {
+  return `
+    <div class="runtime-field control-pipeline-fact role-config">
+      <span class="value-icon" aria-hidden="true">${icon("rule")}</span>
+      <span class="control-label">${escapeHtml(label)}</span>
+      <span class="runtime-readonly-value">${escapeHtml(value)}</span>
+    </div>
+  `;
+}
+
+function runtimeDeviceForm(name, device, maxPower = 5000, step = 1, ac = { supported: true, maxChargePower: 5000 }) {
   const endpoint = `/api/runtime/device/${encodeURIComponent(name)}`;
   return runtimeStageCard({
     endpoint,
@@ -4935,13 +5032,14 @@ function runtimeDeviceForm(name, device, maxPower = 5000, step = 1) {
     submitLabel: `Save ${name} settings`,
     fields: `
       ${runtimeToggle("enabled", "Device enabled", device.enabled)}
-      ${runtimeNumber("max_power", "Max power", device.max_power, 0, maxPower, "W", "50")}
+      ${runtimeNumber("max_power", "Max power", device.max_power, 0, maxPower, "W", "1")}
       ${runtimeNumber("pv_priority_factor", "PV priority", device.pv_priority_factor, 0.01, 100, "x", "0.01")}
       ${runtimeSelect("offgrid_socket_mode", "Offgrid socket", device.offgrid_socket_mode, [
         { value: "off", label: gridOffModeOptionLabel("off") },
         { value: "eco", label: gridOffModeOptionLabel("eco") },
         { value: "standard", label: gridOffModeOptionLabel("standard") },
       ])}
+      ${runtimeAcRoleFields(device, ac)}
     `,
   });
 }
@@ -4951,7 +5049,7 @@ function runtimeToggle(name, label, value) {
     <label class="runtime-toggle control-pipeline-fact role-config">
       <span class="value-icon" aria-hidden="true">${icon("rule")}</span>
       <span class="control-label">${escapeHtml(label)}</span>
-      <input type="checkbox" name="${escapeHtml(name)}" ${value ? "checked" : ""}>
+      <input type="checkbox" name="${escapeHtml(name)}" data-initial="${value ? "true" : "false"}" ${value ? "checked" : ""}>
     </label>
   `;
 }
@@ -4963,7 +5061,7 @@ function runtimeNumber(name, label, value, min, max, unit, step = "1") {
       <span class="value-icon" aria-hidden="true">${icon("gauge")}</span>
       <span class="control-label">${escapeHtml(label)}</span>
       <span class="runtime-number-wrap">
-        <input type="number" name="${escapeHtml(name)}" value="${rendered}" min="${min}" max="${max}" step="${step}">
+        <input type="number" name="${escapeHtml(name)}" value="${rendered}" data-initial="${rendered}" min="${min}" max="${max}" step="${step}">
         <span>${escapeHtml(unit)}</span>
       </span>
     </label>
@@ -4988,7 +5086,7 @@ function runtimeSelect(name, label, selectedValue, options, optionLabelFormatter
     <label class="runtime-field control-pipeline-fact role-config">
       <span class="value-icon" aria-hidden="true">${icon("rule")}</span>
       <span class="control-label">${escapeHtml(label)}</span>
-      <select name="${escapeHtml(name)}">
+      <select name="${escapeHtml(name)}" data-initial="${escapeHtml(selectedValue ?? "")}">
         ${normalized.map(({ value, label: optionLabel }) => `
           <option value="${escapeHtml(value)}" ${selectedValue === value ? "selected" : ""}>${escapeHtml(optionLabel)}</option>
         `).join("")}
@@ -4998,7 +5096,7 @@ function runtimeSelect(name, label, selectedValue, options, optionLabelFormatter
 }
 
 function runtimeSubmit(label = "Apply") {
-  return `<button class="primary-button compact" type="submit"><span class="button-ring" aria-hidden="true"><i></i></span>${escapeHtml(label)}</button>`;
+  return `<button class="primary-button compact" type="submit"><span class="button-ring" aria-hidden="true"><i></i></span>${escapeHtml(label)}</button><span class="runtime-feedback" data-runtime-feedback role="status" aria-live="polite"></span>`;
 }
 
 function activeRuntimeEditorElement() {
@@ -5060,20 +5158,23 @@ function initRuntimeForms() {
   });
 }
 
-async function submitRuntimeForm(form) {
-  if (!state.auth.authenticated || !state.auth.csrfToken) {
-    setRuntimeFeedback("Login required.", true);
-    return;
-  }
+function runtimeElementValue(element) {
+  if (element.type === "checkbox") return element.checked ? "true" : "false";
+  return String(element.value ?? "");
+}
 
+function changedRuntimePayload(form) {
   const payload = {};
-  Array.from(form.elements).forEach((element) => {
+  Array.from(form.elements || []).forEach((element) => {
     if (!element.name) return;
+    const initial = element.dataset ? element.dataset.initial : undefined;
+    if (initial !== undefined && runtimeElementValue(element) === String(initial)) return;
     if (element.type === "checkbox") {
       payload[element.name] = element.checked;
       return;
     }
     if (element.type === "number") {
+      if (element.value === "") return;
       payload[element.name] = element.value.includes(".")
         ? Number.parseFloat(element.value)
         : Number.parseInt(element.value, 10);
@@ -5081,9 +5182,69 @@ async function submitRuntimeForm(form) {
     }
     payload[element.name] = element.value;
   });
+  return payload;
+}
+
+function runtimeFormSubject(form) {
+  const endpoint = String(form?.dataset?.runtimeEndpoint || "");
+  const prefix = "/api/runtime/device/";
+  return endpoint.startsWith(prefix) ? decodeURIComponent(endpoint.slice(prefix.length)) : "";
+}
+
+function runtimeChangeWarning(form, payload) {
+  const device = runtimeFormSubject(form);
+  const endpoint = String(form?.dataset?.runtimeEndpoint || "");
+  if (endpoint === "/api/runtime/system" && payload.enabled === false) {
+    return "Turn the EMS off? It stops writing to every inverter; each keeps its last output limit until the EMS is on again.";
+  }
+  if (!device) return null;
+  if (payload.enabled === false) {
+    return `Take ${device} out of EMS control? It keeps its last output limit until you enable it again.`;
+  }
+  if (payload.runtime_role === "ac_input") {
+    return `Switch ${device} to AC charging? The EMS stops regulating its output and lets it charge from the grid at the AC charge power.`;
+  }
+  if (payload.offgrid_socket_mode !== undefined) {
+    return `Change the offgrid socket of ${device}? The EMS writes the new mode to the inverter.`;
+  }
+  return null;
+}
+
+function runtimeErrorText(form, message) {
+  let text = String(message || "Runtime update failed.");
+  Array.from(form?.elements || []).forEach((element) => {
+    if (!element.name) return;
+    const label = element.closest?.("label")?.querySelector?.(".control-label")?.textContent;
+    if (label) text = text.split(element.name).join(label);
+  });
+  return text;
+}
+
+function confirmRuntimeChange(message) {
+  if (!message) return true;
+  if (typeof window === "undefined" || typeof window.confirm !== "function") return true;
+  return window.confirm(message);
+}
+
+async function submitRuntimeForm(form) {
+  const endpoint = form.dataset.runtimeEndpoint;
+  if (!state.auth.authenticated || !state.auth.csrfToken) {
+    setRuntimeFeedback("Login required.", true, endpoint);
+    return;
+  }
+
+  const payload = changedRuntimePayload(form);
+  if (!Object.keys(payload).length) {
+    setRuntimeFeedback("Nothing to save: no value was changed.", false, endpoint);
+    return;
+  }
+  if (!confirmRuntimeChange(runtimeChangeWarning(form, payload))) {
+    setRuntimeFeedback("Not saved.", false, endpoint);
+    return;
+  }
 
   try {
-    const response = await fetch(form.dataset.runtimeEndpoint, {
+    const response = await fetch(endpoint, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
@@ -5096,20 +5257,30 @@ async function submitRuntimeForm(form) {
       if (response.status === 401 || response.status === 403) {
         await loadAuthStatus();
       }
-      throw new Error(result.message || result.error || "Runtime update failed");
+      throw new Error(runtimeErrorText(form, result.message || result.error || "Runtime update failed"));
     }
     await loadRuntimeState({ forceRuntimeEditor: true });
-    setRuntimeFeedback("Saved.", false);
+    setRuntimeFeedback("Saved.", false, endpoint);
   } catch (error) {
-    setRuntimeFeedback(error.message || "Runtime update failed.", true);
+    setRuntimeFeedback(error.message || "Runtime update failed.", true, endpoint);
   }
 }
 
-function setRuntimeFeedback(message, isError) {
+function setRuntimeFeedback(message, isError, endpoint) {
+  const className = `runtime-feedback ${isError ? "error" : "ok"}`;
   const el = $("runtimeWriteFeedback");
-  if (!el) return;
-  el.textContent = message;
-  el.className = `runtime-feedback ${isError ? "error" : "ok"}`;
+  if (el) {
+    el.textContent = message;
+    el.className = className;
+  }
+  if (!endpoint || typeof document === "undefined" || !document.querySelectorAll) return;
+  document.querySelectorAll(".runtime-form").forEach((form) => {
+    if (form.dataset.runtimeEndpoint !== endpoint) return;
+    const card = form.querySelector("[data-runtime-feedback]");
+    if (!card) return;
+    card.textContent = message;
+    card.className = className;
+  });
 }
 
 async function loadRuntimeState(options = {}) {
@@ -5264,7 +5435,7 @@ async function login() {
     });
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.message || payload.error || "Login failed");
+      throw new Error(dashboardErrorText(payload, "Login failed"));
     }
     state.auth.configured = Boolean(payload.auth_configured);
     state.auth.authenticated = true;
@@ -5282,15 +5453,22 @@ async function login() {
 }
 
 async function logout() {
+  let loggedOut = false;
   try {
-    await fetch("/api/auth/logout", { method: "POST" });
-  } finally {
-    state.auth.authenticated = false;
-    state.auth.csrfToken = null;
-    clearRuntimeEditorState();
-    renderAuthState();
-    if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor: true });
+    const response = await fetch("/api/auth/logout", { method: "POST" });
+    loggedOut = response.ok;
+  } catch (err) {
+    loggedOut = false;
   }
+  if (!loggedOut) {
+    setText("writeModeState", "Logout failed");
+    return;
+  }
+  state.auth.authenticated = false;
+  state.auth.csrfToken = null;
+  clearRuntimeEditorState();
+  renderAuthState();
+  if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor: true });
 }
 
 function demoModeFromSearch(search) {
@@ -5883,13 +6061,21 @@ function applyCustomRange(fromValue, toValue) {
   // Selector kept in a variable so this literal does not collide with the
   // marker the node frontend tests use to trim the auto-init tail.
   const rangeSelector = ".range-tabs button";
-  document.querySelectorAll(rangeSelector).forEach((item) => item.classList.remove("active"));
+  markRangeTab(document.querySelectorAll(rangeSelector), null);
   loadAnalytics();
   return true;
 }
 
 function clearCustomRange() {
   state.analytics.custom = { active: false, start: null, end: null };
+}
+
+function markRangeTab(buttons, active) {
+  buttons.forEach((item) => {
+    const selected = item === active;
+    item.classList.toggle("active", selected);
+    item.setAttribute("aria-selected", selected ? "true" : "false");
+  });
 }
 
 // -- Zoom (Fix 1-3) --------------------------------------------------------
@@ -6405,11 +6591,26 @@ function renderAnalyticsChart() {
   renderZoomControls();
 }
 
+const INTEGRATION_GAP_FACTOR = 3;
+
+function integrationMaxGap(time) {
+  /** The longest step still integrated: a few times the series' typical spacing. */
+  const steps = [];
+  for (let index = 1; index < time.length; index += 1) {
+    const dt = time[index] - time[index - 1];
+    if (dt > 0) steps.push(dt);
+  }
+  if (!steps.length) return 0;
+  steps.sort((a, b) => a - b);
+  return steps[Math.floor((steps.length - 1) / 2)] * INTEGRATION_GAP_FACTOR;
+}
+
 function integrateSeries(data, id, transform) {
   if (!data || !data.time || !data.series) return null;
   const time = data.time;
   const values = data.series[id];
   if (!values || values.length < 2) return null;
+  const maxGap = integrationMaxGap(time);
   let wh = 0;
   let counted = 0;
   for (let index = 1; index < time.length; index += 1) {
@@ -6417,7 +6618,7 @@ function integrateSeries(data, id, transform) {
     const current = values[index];
     if (previous == null || current == null) continue;
     const dt = time[index] - time[index - 1];
-    if (!(dt > 0)) continue;
+    if (!(dt > 0) || dt > maxGap) continue;
     wh += ((transform(Number(previous)) + transform(Number(current))) / 2) * (dt / 3600);
     counted += 1;
   }
@@ -7131,8 +7332,7 @@ function initDashboardApp() {
   const rangeTabSelector = ".range-tabs button";
   document.querySelectorAll(rangeTabSelector).forEach((button) => {
     button.addEventListener("click", async () => {
-      document.querySelectorAll(rangeTabSelector).forEach((item) => item.classList.remove("active"));
-      button.classList.add("active");
+      markRangeTab(document.querySelectorAll(rangeTabSelector), button);
       state.range = button.dataset.range;
       clearCustomRange();
       clearZoom();
@@ -7198,8 +7398,7 @@ function initDashboardApp() {
   const historyRangeSelector = ".history-range-tabs button";
   document.querySelectorAll(historyRangeSelector).forEach((button) => {
     button.addEventListener("click", async () => {
-      document.querySelectorAll(historyRangeSelector).forEach((item) => item.classList.remove("active"));
-      button.classList.add("active");
+      markRangeTab(document.querySelectorAll(historyRangeSelector), button);
       state.history.range = button.dataset.historyRange;
       clearHistoryZoom();
       renderZoomControls();
@@ -7259,12 +7458,14 @@ function initDashboardApp() {
     if (state.flowView === "analytics") loadAnalytics();
     if (historyVisible()) loadHistory();
     setInterval(loadAuthStatus, 60000);
+    setInterval(refreshLiveFreshness, 10000);
     // Periodic refresh skips fetching while a panel is off-screen, the tab is
     // backgrounded (lazy loading), or its chart is zoomed -- a refresh resets
     // the axis, and a zoomed axis is what the reader is looking at.
     setInterval(() => {
       if (analyticsShouldAutoRefresh()) loadAnalytics(false);
       if (historyShouldAutoRefresh()) loadHistory(false);
+      if (!document.hidden) loadRuntimeState();
     }, 30000);
   }
 }
@@ -7359,6 +7560,7 @@ if (typeof module !== "undefined") {
     toggleAnalyticsOverlay,
     applyCustomRange,
     clearCustomRange,
+    markRangeTab,
     renderAnalyticsKpis,
     renderAnalyticsLiveKpis,
     renderAnalyticsChart,
@@ -7385,6 +7587,7 @@ if (typeof module !== "undefined") {
     logsAuthState,
     setServiceLogLevel,
     renderAuthState,
+    logout,
     maintenanceAuthState,
     maintenanceBackupTypeLabel,
     renderMaintenanceView,
@@ -7409,6 +7612,12 @@ if (typeof module !== "undefined") {
     sendSessionHeartbeat,
     runtimeControlPanel,
     runtimeDeviceForm,
+    changedRuntimePayload,
+    dashboardErrorText,
+    snapshotIsStale,
+    gridPowerText,
+    runtimeChangeWarning,
+    runtimeErrorText,
     runtimeNumber,
     initRuntimeForms,
     submitRuntimeForm,

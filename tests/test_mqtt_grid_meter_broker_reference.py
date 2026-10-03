@@ -288,3 +288,28 @@ def test_grid_meter_cloud_broker_still_rejected():
     }
     with pytest.raises(ValueError, match="not a local_mqtt broker"):
         cfg.resolve_grid_meter_mqtt_settings(config)
+
+
+@pytest.mark.parametrize(
+    "tls_mode, port, tls, insecure",
+    [
+        ("system_ca", 8883, True, False),
+        ("insecure_no_verify", 8883, True, True),
+        ("plain", 1883, False, False),
+    ],
+)
+def test_grid_meter_broker_ref_honours_the_profile_tls_mode(
+    tls_mode, port, tls, insecure
+):
+    """The Zendure service and the grid meter must reach one broker the same way."""
+
+    config = _broker_ref_grid_config()
+    profile = config["zendure_mqtt"]["brokers"]["home"]
+    profile.pop("port")
+    profile["tls_mode"] = tls_mode
+    resolved = cfg.resolve_grid_meter_mqtt_settings(config)
+    assert (resolved["port"], resolved["tls"], resolved["tls_insecure"]) == (
+        port,
+        tls,
+        insecure,
+    )

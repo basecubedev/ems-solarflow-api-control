@@ -1666,3 +1666,179 @@ def test_reset_runtime_requires_an_explicit_confirmation(tmp_path, monkeypatch):
     assert status == 400
     assert payload["error"] == "confirmation_required"
     assert json.loads(runtime_path.read_text())["system"]["loop_interval"] == 5
+
+
+def test_a_broker_address_change_survives_the_feature_round_trip():
+    """The browser sends the whole draft back; the broker card owns host and port."""
+
+    from admin.maintenance_config import _merge_draft, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {"host": "10.0.0.1", "port": 1883, "username": "u", "password": "p"},
+    }
+    draft = build_maintenance_draft(config)
+    draft["zendure_mqtt"]["host"] = "10.0.0.2"
+    draft["zendure_mqtt"]["port"] = 8883
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+
+    assert issues == []
+    assert (merged["zendure_mqtt"]["host"], merged["zendure_mqtt"]["port"]) == ("10.0.0.2", 8883)
+    assert not {"zendure_mqtt.host", "zendure_mqtt.port", "zendure_mqtt.tls"} & set(draft["features"])
+
+
+def test_the_other_zendure_mqtt_settings_stay_editable_in_maintenance():
+    from admin.maintenance_config import _merge_draft, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {
+            "host": "10.0.0.1",
+            "port": 1883,
+            "tls_insecure": False,
+            "keepalive_seconds": 30,
+            "connect_timeout_seconds": 10.0,
+        },
+    }
+    draft = build_maintenance_draft(config)
+    draft["features"]["zendure_mqtt.tls_insecure"] = True
+    draft["features"]["zendure_mqtt.keepalive_seconds"] = 60
+    draft["features"]["zendure_mqtt.connect_timeout_seconds"] = 20
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+
+    assert issues == []
+    assert merged["zendure_mqtt"]["tls_insecure"] is True
+    assert merged["zendure_mqtt"]["keepalive_seconds"] == 60
+    assert merged["zendure_mqtt"]["connect_timeout_seconds"] == 20
+    assert merged["zendure_mqtt"]["host"] == "10.0.0.1"
+
+
+def test_an_apply_that_leaves_tls_off_with_verification_skipped_is_refused():
+    """The EMS disables such a broker at start; Maintenance says so first."""
+
+    from admin.maintenance_config import _merge_draft, _validate, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {"host": "10.0.0.1", "port": 8883, "tls": True, "tls_insecure": True},
+    }
+    draft = build_maintenance_draft(config)
+    draft["zendure_mqtt"]["tls"] = False
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+    codes = [issue["code"] for issue in _validate(merged, issues)["errors"]]
+
+    assert "zendure_mqtt_tls_invalid" in codes
+
+
+def test_tls_with_verification_skipped_is_a_valid_maintenance_apply():
+    from admin.maintenance_config import _validate
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {"host": "10.0.0.1", "port": 8883, "tls": True, "tls_insecure": True},
+    }
+
+    codes = [issue["code"] for issue in _validate(config)["errors"]]
+
+    assert "zendure_mqtt_tls_invalid" not in codes
+
+
+@pytest.mark.parametrize("tls", [False, "false"])
+def test_top_level_tls_keys_beside_named_brokers_do_not_block_an_apply(tls):
+    """Named brokers without a top-level host: the EMS runs no broker there."""
+
+    from admin.maintenance_config import _validate
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {
+            "tls": tls,
+            "tls_insecure": True,
+            "brokers": {"home": {"host": "192.168.50.10", "source": "local_mqtt", "port": 1883}},
+        },
+    }
+
+    codes = [issue["code"] for issue in _validate(config)["errors"]]
+
+    assert "zendure_mqtt_tls_invalid" not in codes
+
+
+@pytest.mark.parametrize(
+    "block, refused",
+    [
+        ({"tls": False, "tls_insecure": True}, True),
+        ({"host": "   ", "tls": False, "tls_insecure": True}, True),
+        ({"tls": "false"}, True),
+        ({"tls": "false", "brokers": {}}, True),
+        ({"host": "10.0.0.1", "tls": False, "tls_insecure": True}, True),
+        ({"host": "10.0.0.1", "tls": True, "tls_insecure": True}, False),
+        (
+            {
+                "host": 123,
+                "tls": False,
+                "tls_insecure": True,
+                "brokers": {"home": {"host": "192.168.50.10", "source": "local_mqtt"}},
+            },
+            False,
+        ),
+    ],
+)
+def test_maintenance_refuses_exactly_the_top_level_tls_pairs_the_ems_rejects(block, refused):
+    from admin.maintenance_config import _validate
+    from ems.zendure_mqtt.runtime import load_zendure_mqtt_broker_configs
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": block,
+    }
+
+    codes = [issue["code"] for issue in _validate(config)["errors"]]
+    _brokers, runtime_errors, _timeout = load_zendure_mqtt_broker_configs(block)
+
+    assert ("zendure_mqtt_tls_invalid" in codes) is refused
+    assert bool(runtime_errors.get("default")) is refused
+
+
+@pytest.mark.parametrize(
+    "block, hint",
+    [
+        ({"host": "10.0.0.1", "tls": False, "tls_insecure": True}, "tls_insecure to false"),
+        ({"host": "10.0.0.1", "tls_insecure": True}, "tls_insecure to false"),
+        ({"host": "10.0.0.1", "tls": "false"}, "without quotes"),
+        ({"host": "10.0.0.1", "tls": 0, "tls_insecure": True}, "without quotes"),
+        ({"host": "10.0.0.1", "tls_mode": "  ", "tls": False, "tls_insecure": True}, "tls_insecure to false"),
+        (
+            {"host": "10.0.0.1", "tls_mode": "insecure_no_verify", "tls_insecure": False},
+            "contradicts tls_mode",
+        ),
+    ],
+)
+def test_the_tls_refusal_names_the_fix_that_applies(block, hint):
+    from admin.maintenance_config import _validate
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": block,
+    }
+
+    messages = [
+        issue["message"]
+        for issue in _validate(config)["errors"]
+        if issue["code"] == "zendure_mqtt_tls_invalid"
+    ]
+
+    assert len(messages) == 1
+    assert hint in messages[0]

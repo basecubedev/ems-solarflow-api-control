@@ -239,11 +239,18 @@ def broker_sources_from_config(config: Any) -> dict[str, str]:
 
     if not isinstance(config, Mapping):
         return {}
-    raw = _mapping(config.get("zendure_mqtt"))
+    block = config.get("zendure_mqtt")
+    raw = _mapping(block)
     sources: dict[str, str] = {}
     top_source = _clean(raw.get("source"), fold_case=True)
     if top_source in _MQTT_SOURCES:
         sources[DEFAULT_BROKER_REF] = top_source
+    elif top_source is None and isinstance(block, Mapping):
+        from ems.zendure_mqtt.config_entries import legacy_default_broker_present
+
+        # The runtime builds a legacy broker without a source as local MQTT.
+        if legacy_default_broker_present(raw):
+            sources[DEFAULT_BROKER_REF] = SOURCE_LOCAL_MQTT
     brokers = raw.get("brokers")
     if isinstance(brokers, Mapping):
         for ref, profile in brokers.items():

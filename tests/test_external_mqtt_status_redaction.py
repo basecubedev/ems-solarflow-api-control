@@ -542,3 +542,26 @@ def test_incomplete_cloud_context_masks_name_left_as_only_route_evidence():
 
     assert route not in json.dumps(safe)
     assert safe["devices"][0]["name"] != f"Rejected Cloud {route}"
+
+
+@pytest.mark.parametrize(
+    ("text", "secret"),
+    [
+        ("Authorization: Bearer abcdef123456", "abcdef123456"),
+        ("authorization=Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"),
+        ("Cookie: sid=abc123", "abc123"),
+        ('token: "abc def"', "abc def"),
+        ("bearer=xyz987", "xyz987"),
+    ],
+)
+def test_embedded_credentials_are_redacted_in_free_text(text, secret):
+    safe = sanitize_external_mqtt_status({"message": text})
+    assert secret not in safe["message"]
+    assert "<redacted>" in safe["message"]
+
+
+@pytest.mark.parametrize("key", ["auth_token", "bearer", "cookie", "private_key"])
+def test_credential_keys_are_dropped(key):
+    safe = sanitize_external_mqtt_status({key: "CREDENTIAL-VALUE", "note": "kept"})
+    assert key not in safe
+    assert safe["note"] == "kept"

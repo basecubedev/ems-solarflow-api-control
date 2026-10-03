@@ -317,6 +317,16 @@ def _read_timezone(paths):
         return ""
 
 
+def effective_timezone(paths, config):
+    """The zone in force now: a choice made since the agent started counts.
+
+    ``config.timezone`` is read once at start. Reading only that, the agent
+    refused to switch back after one change and kept showing the old zone.
+    """
+
+    return _read_timezone(paths) or str(getattr(config, "timezone", "") or DEFAULT_TIMEZONE)
+
+
 def load_config(paths):
     """Load ``appliance.conf``; missing files fall back to packaged defaults."""
 

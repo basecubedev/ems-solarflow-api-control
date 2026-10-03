@@ -143,6 +143,7 @@ def test_maintenance_indexes_delegate_to_the_catalog_query():
         allow_secret=False,
         exclude_repeated=True,
         exclude_prefixes=("devices", "grid_meter"),
+        exclude_keys=("zendure_mqtt.host", "zendure_mqtt.port", "zendure_mqtt.tls"),
     )
     assert device_common_fields.common_device_value_fields() == config_field_index(
         scope="maintenance",

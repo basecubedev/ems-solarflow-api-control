@@ -619,3 +619,25 @@ def test_nothing_is_continued_when_no_transition_is_pending(tmp_path):
         srv.shutdown()
 
     assert executor.run_calls == 0
+
+
+@pytest.mark.parametrize("operation_id", [None, "", 7])
+def test_cancel_requires_the_exact_operation_id(tmp_path, operation_id):
+    alignment = _UpgradeAlignment()
+    srv, base = _serve(
+        release_manager=_release_manager(tmp_path), system_alignment=alignment
+    )
+    body = {"confirm": True}
+    if operation_id is not None:
+        body["operation_id"] = operation_id
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/system-alignment/cancel", method="POST", body=body
+        )
+
+        assert status == 400, payload
+        assert payload["error"] == "operation_id_required"
+        assert alignment.cancelled == []
+    finally:
+        srv.shutdown()
+        srv.server_close()

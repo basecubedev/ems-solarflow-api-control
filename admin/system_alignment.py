@@ -1109,14 +1109,15 @@ class SystemAlignmentService:
                 "the running EMS build does not match the verified known-good build",
             )
 
-        # Resolve and compare before cancelling the partial transition, so an
-        # unavailable/changed rollback target never removes the recovery gate.
+        # Resolve, compare and check acknowledgement before cancelling the
+        # partial transition, so a refused return never removes the recovery gate.
         target = self._resolver.resolve(target_tag)
         if not self._known_good_matches_build(known_good, target):
             raise SystemAlignmentError(
                 "known_good_mismatch",
                 "the available rollback images no longer match known-good",
             )
+        self._require_explicit_development_acknowledgement(target, False)
         try:
             self._transitions.cancel(
                 operation_id=operation_id, now=self._now_value()
@@ -2147,6 +2148,7 @@ class SystemAlignmentService:
         records the real modern Admin, never the historical Admin image.
         """
 
+        outgoing = self._outgoing_known_good_digests()
         recorded = self._known_good.record(
             system_build,
             orchestrator_admin=record.orchestrator_admin,
@@ -2155,17 +2157,26 @@ class SystemAlignmentService:
         )
         # Only now is the new build the known-good one, so only now can
         # retention see which images are still a way back. Strictly after the
-        # write, and never able to affect its outcome.
-        self._prune_local_images()
+        # write, and never able to affect its outcome. The build that ran until
+        # now is no longer in any store, and it is the first way back.
+        self._prune_local_images(also_protected=outgoing)
         return recorded
 
-    def _prune_local_images(self) -> None:
+    def _outgoing_known_good_digests(self):
+        from admin.image_retention import _digests_in
+
+        try:
+            return _digests_in(self._known_good.current())
+        except Exception:  # noqa: BLE001 - unreadable means nothing is pruned
+            return None
+
+    def _prune_local_images(self, also_protected=()) -> None:
         """Bound the local image history. Never disturbs the install."""
 
-        if self._image_retention is None:
+        if self._image_retention is None or also_protected is None:
             return
         try:
-            self._image_retention.run()
+            self._image_retention.run(also_protected=also_protected)
         except Exception:  # noqa: BLE001 - housekeeping never fails an upgrade
             pass
 

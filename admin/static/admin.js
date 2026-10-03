@@ -970,7 +970,7 @@ async function loadNetworks() {
       const res = await fetch("/api/discovery/networks");
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data && data.error ? data.error : "detection failed");
+        throw new Error(humanErrorText(data, "detection failed"));
       }
       renderNetworks(data);
     } catch (err) {
@@ -1163,7 +1163,7 @@ async function loadGatewayNetworks() {
     });
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data && data.error ? data.error : "gateway probe failed");
+      throw new Error(humanErrorText(data, "gateway probe failed"));
     }
     const candidates = Array.isArray(data.candidates) ? data.candidates : [];
     const reachable = candidates.filter((c) => c.status === "reachable");
@@ -1908,6 +1908,14 @@ const MDNS_STATE_TEXT = {
   unavailable_runtime: "unavailable",
 };
 
+function mdnsMessageText(status, state) {
+  const message =
+    status.message || "Automatic mDNS discovery is unavailable in this runtime.";
+  const cause = typeof status.last_error === "string" ? status.last_error.trim() : "";
+  if (!cause || state.indexOf("unavailable_") !== 0) return message;
+  return message + " Cause: " + cause;
+}
+
 function renderMdnsStatus(status) {
   const state = String(
     status.state || (status.available ? "disabled" : "unavailable_dependency")
@@ -1916,8 +1924,7 @@ function renderMdnsStatus(status) {
   els.mdnsState.className =
     "network-badge " +
     (state.indexOf("running_") === 0 ? "badge-recommended" : "badge-advanced");
-  els.mdnsMessage.textContent =
-    status.message || "Automatic mDNS discovery is unavailable in this runtime.";
+  els.mdnsMessage.textContent = mdnsMessageText(status, state);
   const count = Number(status.verified_count) || 0;
   els.mdnsCount.textContent = count + " found";
   notifySetupStatus();
@@ -2016,7 +2023,9 @@ async function toggleMdns() {
       { method: "POST" }
     );
     const status = await res.json();
-    if (!res.ok) throw new Error(status.last_error || "discovery update failed");
+    if (!res.ok) {
+      throw new Error(status.last_error || humanErrorText(status, "discovery update failed"));
+    }
     renderMdnsStatus(status);
     await pollMdns();
   } catch (err) {
@@ -2036,7 +2045,9 @@ async function refreshMdns() {
       method: "POST",
     });
     const status = await res.json();
-    if (!res.ok) throw new Error(status.last_error || "mDNS refresh failed");
+    if (!res.ok) {
+      throw new Error(status.last_error || humanErrorText(status, "mDNS refresh failed"));
+    }
     renderMdnsStatus(status);
     await pollMdns();
   } catch (err) {
@@ -2701,15 +2712,15 @@ function toggleMqttPreviewProposal(proposalId) {
 
   let replaceGridMeter = false;
   if (isGrid) {
-    // Exactly one central grid meter: drop any other selected MQTT grid meter.
-    const previous = selectedMqttGridMeterId();
-    if (previous && previous !== id) {
-      zendureMqttPreviewProposals.delete(previous);
-    }
     // Never silently replace an HTTP/Shelly grid meter already selected.
     if (hasSelectedHttpGridMeter()) {
       if (!confirmGridMeterReplacement()) return;
       replaceGridMeter = true;
+    }
+    // Exactly one central grid meter: drop any other selected MQTT grid meter.
+    const previous = selectedMqttGridMeterId();
+    if (previous && previous !== id) {
+      zendureMqttPreviewProposals.delete(previous);
     }
   }
 
@@ -3413,6 +3424,11 @@ async function saveMqttCredential(event) {
 }
 
 async function deleteMqttCredential(id) {
+  if (!window.confirm(
+    "Remove this saved MQTT credential? Its password is not shown again; you would have to type it anew."
+  )) {
+    return;
+  }
   els.mqttCredentialMessage.textContent = "Removing credential…";
   const context = discoveryContextFor(els.mqttCredentialList);
   try {
@@ -3561,7 +3577,7 @@ async function saveZendureCloudToken(event) {
     await loadZendureCloudSettings();
   } catch (err) {
     els.zendureCloudMessage.textContent =
-      "Could not save Zendure credential: " + escapeHtml(err.message || String(err));
+      "Could not save Zendure credential: " + (err.message || String(err));
   } finally {
     els.zendureCloudSave.disabled = false;
   }
@@ -3594,7 +3610,7 @@ async function testZendureCloudToken() {
     await loadZendureCloudSettings();
   } catch (err) {
     els.zendureCloudMessage.textContent =
-      "Zendure credential test failed: " + escapeHtml(err.message || String(err));
+      "Zendure credential test failed: " + (err.message || String(err));
   } finally {
     els.zendureCloudTest.disabled = false;
   }
@@ -3640,13 +3656,18 @@ async function refreshZendureCloudDiscovery() {
     }
   } catch (err) {
     els.zendureCloudMessage.textContent =
-      "Zendure cloud discovery failed: " + escapeHtml(err.message || String(err));
+      "Zendure cloud discovery failed: " + (err.message || String(err));
   } finally {
     els.zendureCloudRefresh.disabled = false;
   }
 }
 
 async function forgetZendureCloudToken() {
+  if (!window.confirm(
+    "Remove the saved Zendure cloud credential? Cloud discovery stops until you enter it again."
+  )) {
+    return;
+  }
   els.zendureCloudForget.disabled = true;
   els.zendureCloudMessage.textContent = "Removing Zendure credential…";
   const context = discoveryContextFor(els.zendureCloudForm);
@@ -3665,7 +3686,7 @@ async function forgetZendureCloudToken() {
     if (context === "setup") await refreshUnifiedDevices();
   } catch (err) {
     els.zendureCloudMessage.textContent =
-      "Could not remove Zendure credential: " + escapeHtml(err.message || String(err));
+      "Could not remove Zendure credential: " + (err.message || String(err));
   } finally {
     els.zendureCloudForget.disabled = false;
   }
@@ -4058,11 +4079,31 @@ function loadFeatureValues() {
   }
 }
 
+// Secret fields stay in memory: localStorage outlives logout and setup.
+function secretFeaturePaths() {
+  const paths = new Set();
+  const sections = (setupCatalog && Array.isArray(setupCatalog.sections)) ? setupCatalog.sections : [];
+  for (const section of sections) {
+    for (const field of (section && Array.isArray(section.fields)) ? section.fields : []) {
+      if (field && field.secret && typeof field.path === "string") paths.add(field.path);
+    }
+  }
+  return paths;
+}
+
+function persistableFeatureValues(values, secretPaths) {
+  const persisted = {};
+  for (const [path, value] of Object.entries(values || {})) {
+    if (!secretPaths.has(path)) persisted[path] = value;
+  }
+  return persisted;
+}
+
 function saveFeatureValues() {
   try {
     window.localStorage.setItem(
       CONFIG_FEATURES_STORAGE_KEY,
-      JSON.stringify(featureValues)
+      JSON.stringify(persistableFeatureValues(featureValues, secretFeaturePaths()))
     );
   } catch (err) {
     /* localStorage may be unavailable; feature values still live in memory. */
@@ -6581,7 +6622,7 @@ async function loadSetupCatalog() {
     const res = await fetch("/api/setup/config/catalog");
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data && data.error ? data.error : "catalog unavailable");
+      throw new Error(humanErrorText(data, "catalog unavailable"));
     }
     setupCatalog = data;
     seedDefaultOpenFeatureSections(setupCatalog.sections, openFeatures);
@@ -7742,8 +7783,14 @@ if (configEls.draftList) {
   });
 }
 
+const CLEAR_DRAFT_CONFIRM =
+  "Clear the setup draft?\n\n" +
+  "Every selected device and grid meter is removed from the draft and stays " +
+  "dismissed until you add it again. Nothing on the system is changed.";
+
 if (configEls.clearDraft) {
   configEls.clearDraft.addEventListener("click", () => {
+    if (!window.confirm(CLEAR_DRAFT_CONFIRM)) return;
     // Dismiss every discovered observation and every identified device so the
     // cleared draft stays clear. A device the backend could not identify is
     // dismissed as an observation only — never as unknown hardware.
@@ -9158,6 +9205,12 @@ async function resolveContainerConflict() {
   const replace = conflict && conflict.replace_available === true;
   const safe = conflict && conflict.safe_fix_available === true;
   if (!conflict || (!safe && !replace)) return;
+  if (replace && !window.confirm(
+    "Stop and remove the running container " + (conflict.container_name || "") +
+    " and continue the setup? The EMS stops controlling until the new one is up."
+  )) {
+    return;
+  }
   start.resolving_conflict = true;
   start.error = null;
   renderStart();
@@ -9504,7 +9557,7 @@ async function loadActiveConfigTemplate(expectedTag) {
   const res = await fetch("/api/setup/config-template");
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data && data.error ? data.error : "config template unavailable");
+    throw new Error(humanErrorText(data, "config template unavailable"));
   }
   if (
     !data ||
@@ -9540,7 +9593,7 @@ async function loadReleases() {
     const res = await fetch("/api/setup/releases");
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data && data.error ? data.error : "release list unavailable");
+      throw new Error(humanErrorText(data, "release list unavailable"));
     }
     const releases = Array.isArray(data.releases) ? data.releases : [];
     setupState.release.releases = releases;
@@ -11749,15 +11802,15 @@ function renderUpgradeSteps(steps) {
     .join("");
 }
 
+let upgradePollMisses = 0;
+
 async function pollUpgradeJob(jobId) {
   try {
-    const res = await fetch(
-      "/api/admin/maintenance/upgrade/jobs/" + encodeURIComponent(jobId)
+    const data = await readJobStatus(
+      "/api/admin/maintenance/upgrade/jobs/" + encodeURIComponent(jobId),
+      "Upgrade status unavailable."
     );
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      throw new Error((data && data.error) || "Upgrade status unavailable.");
-    }
+    upgradePollMisses = 0;
     if (data.transition) renderSystemAlignmentStatus(data);
     renderUpgradeSteps(data.steps);
     if (data.status === "succeeded" || data.status === "failed") {
@@ -11774,6 +11827,16 @@ async function pollUpgradeJob(jobId) {
     }
     upgradePollTimer = setTimeout(() => pollUpgradeJob(jobId), UPGRADE_POLL_INTERVAL_MS);
   } catch (err) {
+    if (err.transient && upgradePollMisses < JOB_POLL_MAX_MISSES) {
+      upgradePollMisses += 1;
+      renderUpgradeValidation([{
+        tone: "warn",
+        text: "Lost contact with the Admin Console; the upgrade keeps running there. Retrying\u2026",
+      }], false);
+      upgradePollTimer = setTimeout(() => pollUpgradeJob(jobId), JOB_POLL_RETRY_MS);
+      return;
+    }
+    upgradePollMisses = 0;
     stopUpgradePolling();
     renderUpgradeValidation([{ tone: "error", text: err.message || String(err) }], false);
     setUpgradeRunning(false);
@@ -12116,7 +12179,7 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
     const res = await fetch("/api/setup/releases?flow=upgrade");
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data && data.error ? data.error : "release list unavailable");
+      throw new Error(humanErrorText(data, "release list unavailable"));
     }
     const releases = Array.isArray(data.releases) ? data.releases : [];
     upgradeState.releases = releases;
@@ -12266,11 +12329,11 @@ function upgradeResponseFingerprint(data) {
 function upgradeValidationFailureText(data, missingFingerprint) {
   const directionReason =
     data && data.upgrade_direction && data.upgrade_direction.reason;
-  return (
-    (data && (data.message || data.error)) ||
-    (missingFingerprint
+  return humanErrorText(
+    data,
+    missingFingerprint
       ? "Verification did not return a System Build fingerprint. Verify again."
-      : directionReason || "This System Build cannot be installed.")
+      : directionReason || "This System Build cannot be installed."
   );
 }
 
@@ -12490,16 +12553,27 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function setReconnectBackgroundInert(inert) {
+  const shell = typeof document !== "undefined" ? document.querySelector(".admin-shell") : null;
+  if (shell) shell.inert = inert;
+}
+
 function showReconnectOverlay(message) {
   const els = adminUpdateOverlayEls;
   if (els.title) els.title.textContent = "Reconnecting to the Admin Console…";
-  if (els.message && message) els.message.textContent = message;
+  if (els.message) {
+    els.message.textContent = message ||
+      "Admin Console update started. This page will reconnect automatically.";
+  }
   if (els.hint) els.hint.hidden = true;
   if (els.overlay) els.overlay.hidden = false;
+  setReconnectBackgroundInert(true);
+  if (els.title && typeof els.title.focus === "function") els.title.focus();
 }
 
 function hideReconnectOverlay() {
   if (adminUpdateOverlayEls.overlay) adminUpdateOverlayEls.overlay.hidden = true;
+  setReconnectBackgroundInert(false);
 }
 
 // A replaced Admin serves newer assets than this already-running page. Reload so
@@ -12686,9 +12760,9 @@ async function resumeGuidedUpgrade(operationId) {
         data.stage === "admin_reconnect_pending" ||
         data.stage === "admin_update_pending")
     ) {
-      // The replacement Admin is not ready yet; keep the reconnect overlay up.
       showReconnectOverlay(data.message);
       setUpgradeRunning(false);
+      waitForAdminReconnect(authState.adminInstanceId, operationId);
       return;
     }
     if (!res.ok || !data.ok || !data.job_id) {
@@ -12856,7 +12930,7 @@ async function loadBackups() {
     const res = await fetch("/api/admin/maintenance/backups");
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      throw new Error((data && data.error) || "Backup list unavailable.");
+      throw new Error(humanErrorText(data, "Backup list unavailable."));
     }
     backupState.backups = Array.isArray(data.backups) ? data.backups : [];
     backupState.sets = Array.isArray(data.sets) ? data.sets : [];
@@ -13030,7 +13104,7 @@ async function inspectSelectedBackup(password) {
     });
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      throw new Error((data && data.error) || "Backup could not be inspected.");
+      throw new Error(humanErrorText(data, "Backup could not be inspected."));
     }
     backupState.selectedDetails = data;
     renderBackupDetails(data);
@@ -13096,7 +13170,7 @@ async function createBackup() {
     });
     const data = await res.json();
     if (!res.ok || !data.job_id) {
-      throw new Error((data && data.error) || "Backup could not be started.");
+      throw new Error(humanErrorText(data, "Backup could not be started."));
     }
     renderBackupJobSteps(data.steps, backupEls.createSteps);
     pollBackupJob(data.job_id, "create");
@@ -13131,7 +13205,7 @@ async function previewRestore() {
     // A newer preview (options changed mid-flight) already superseded this one.
     if (token !== backupState.previewToken) return;
     if (!res.ok || !data.ok) {
-      throw new Error((data && data.error) || "Restore preview failed.");
+      throw new Error(humanErrorText(data, "Restore preview failed."));
     }
     backupState.restorePlan = data;
     renderRestorePlan(data);
@@ -13226,7 +13300,7 @@ async function executeRestore() {
     });
     const data = await res.json();
     if (!res.ok || !data.job_id) {
-      throw new Error((data && data.error) || "Restore could not be started.");
+      throw new Error(humanErrorText(data, "Restore could not be started."));
     }
     renderBackupJobSteps(data.steps, backupEls.restoreSteps);
     pollBackupJob(data.job_id, "restore");
@@ -13258,16 +13332,45 @@ function stopBackupPolling() {
   }
 }
 
+const JOB_POLL_MAX_MISSES = 20;
+const JOB_POLL_RETRY_MS = 3000;
+
+function jobPollError(message, transient) {
+  const err = new Error(message);
+  err.transient = transient;
+  return err;
+}
+
+async function readJobStatus(url, fallback) {
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (err) {
+    throw jobPollError("The Admin Console did not answer.", true);
+  }
+  const data = await res.json().catch(() => null);
+  if (res.status >= 500 || data === null) {
+    throw jobPollError("The Admin Console did not answer.", true);
+  }
+  if (!res.ok || !data.ok) {
+    const err = jobPollError(humanErrorText(data, fallback), false);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+let backupPollMisses = 0;
+
 async function pollBackupJob(jobId, kind) {
   const container = kind === "restore" ? backupEls.restoreSteps : backupEls.createSteps;
   try {
-    const res = await fetch(
-      "/api/admin/maintenance/backups/jobs/" + encodeURIComponent(jobId)
+    const data = await readJobStatus(
+      "/api/admin/maintenance/backups/jobs/" + encodeURIComponent(jobId),
+      "Backup status unavailable."
     );
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
-      throw new Error((data && data.error) || "Backup status unavailable.");
-    }
+    if (backupPollMisses > 0) renderBackupMessage([]);
+    backupPollMisses = 0;
     renderBackupJobSteps(data.steps, container);
     if (data.status === "running") {
       backupPollTimer = setTimeout(() => pollBackupJob(jobId, kind), BACKUP_POLL_INTERVAL_MS);
@@ -13279,8 +13382,24 @@ async function pollBackupJob(jobId, kind) {
     setBackupBusy(false);
     loadBackups();
   } catch (err) {
+    if (err.transient && backupPollMisses < JOB_POLL_MAX_MISSES) {
+      backupPollMisses += 1;
+      renderBackupMessage([{
+        tone: "warn",
+        text: "Lost contact with the Admin Console; the job keeps running there. Retrying\u2026",
+      }]);
+      backupPollTimer = setTimeout(() => pollBackupJob(jobId, kind), JOB_POLL_RETRY_MS);
+      return;
+    }
+    backupPollMisses = 0;
     stopBackupPolling();
-    renderBackupMessage([{ tone: "error", text: err.message || String(err) }]);
+    const sessionEnded = kind === "restore" && (err.status === 401 || err.status === 403);
+    renderBackupMessage([{
+      tone: sessionEnded ? "info" : "error",
+      text: sessionEnded
+        ? "This session ended while the restore ran, most likely because it restored the password file. Log in again, with the password from the backup if it differs, to see the result in the backup list."
+        : err.message || String(err),
+    }]);
     setBackupBusy(false);
   }
 }
@@ -13288,7 +13407,7 @@ async function pollBackupJob(jobId, kind) {
 function renderBackupJobResult(result, kind) {
   if (result.ok) {
     const text = kind === "restore"
-      ? "Restore completed. EMS may need a restart/recreate to use restored files."
+      ? "Restore completed. Restart EMS (Maintenance \u2192 Restart EMS now) so it uses the restored files."
       : "Backup created and verified.";
     renderBackupMessage([{ tone: "info", text: text }]);
     if (kind === "restore") backupState.restorePlan = null;
@@ -13303,14 +13422,22 @@ function renderBackupJobResult(result, kind) {
 async function deleteBackup(id, kind, name) {
   if (backupState.running) return;
   const label = name || "this backup";
-  if (!window.confirm("Delete " + label + "? This cannot be undone.")) return;
   const body = { id: id, confirm: true };
   if (kind === "set") {
-    const alsoArchives = window.confirm(
-      "Also delete the backup archive files in this set?\n\n" +
-      "OK = delete metadata and archives, Cancel = delete metadata only."
-    );
-    body.mode = alsoArchives ? "metadata_and_archives" : "metadata_only";
+    if (window.confirm(
+      "Delete " + label + " together with its archive files? This cannot be undone.\n\n" +
+      "Cancel to keep the archive files."
+    )) {
+      body.mode = "metadata_and_archives";
+    } else if (window.confirm(
+      "Delete only the set " + label + " and keep its archive files?"
+    )) {
+      body.mode = "metadata_only";
+    } else {
+      return;
+    }
+  } else if (!window.confirm("Delete " + label + "? This cannot be undone.")) {
+    return;
   }
   try {
     const res = await fetch("/api/admin/maintenance/backups/delete", {
@@ -13320,7 +13447,7 @@ async function deleteBackup(id, kind, name) {
     });
     const data = await res.json();
     if (!res.ok || !data.ok) {
-      throw new Error((data && data.error) || "Backup could not be deleted.");
+      throw new Error(humanErrorText(data, "Backup could not be deleted."));
     }
     if (backupState.selectedId === id) {
       backupState.selectedId = null;
@@ -17310,14 +17437,16 @@ async function previewMaintenanceConfig() {
     // body. Rendering it keeps the reason and the next step visible instead of
     // collapsing to a generic transport failure.
     if (!resp.ok && !(payload && payload.validation)) {
-      throw new Error("preview request failed");
+      throw new Error(humanErrorText(payload, "Could not preview the config draft."));
     }
     renderMaintenanceConfigPreview(payload);
   } catch (err) {
     if (mconfigEls.result) mconfigEls.result.hidden = false;
     setMaintenanceFact(mconfigEls.validation, "preview failed", "warn");
     if (mconfigEls.warnings) {
-      mconfigEls.warnings.textContent = "Could not preview the config draft.";
+      mconfigEls.warnings.textContent =
+        (err && err.name !== "SyntaxError" && err.message) ||
+        "Could not preview the config draft.";
     }
   } finally {
     mconfigPreviewing = false;
@@ -17328,8 +17457,13 @@ async function previewMaintenanceConfig() {
   }
 }
 
+const DISCARD_CHANGES_CONFIRM =
+  "Discard your unsaved changes?\n\n" +
+  "The editor returns to the saved configuration. Nothing on the system is changed.";
+
 function resetMaintenanceConfigDraft() {
   if (!mconfigState.pristine) return;
+  if (!window.confirm(DISCARD_CHANGES_CONFIRM)) return;
   mconfigState.draft = mconfigClone(mconfigState.pristine);
   mconfigNormalizeDraftMqttControl(mconfigState.draft);
   renderMaintenanceGridMeter();
@@ -17414,7 +17548,7 @@ async function resetMaintenanceRuntimeOverrides() {
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) {
-      throw new Error(data && data.error ? data.error : "reset failed");
+      throw new Error(humanErrorText(data, "reset failed"));
     }
     await loadMaintenanceConfig();
   } catch (err) {
@@ -18088,6 +18222,11 @@ async function startPath(choice) {
       }
     }
     enterMaintenance();
+  } catch (err) {
+    setStartError(
+      "The Admin Console did not answer (" + ((err && err.message) || String(err)) +
+        "). Check that it is running, then try again."
+    );
   } finally {
     startPathBusy = false;
   }
@@ -18221,9 +18360,7 @@ function workflowSwitchRefusal(data) {
     recoverable:
       WORKFLOW_RECOVERABLE_CODES.has(code) ||
       Boolean(data && data.lifecycle && data.lifecycle.recoverable),
-    message:
-      (data && (data.message || data.error)) ||
-      "The guided workflow could not be switched.",
+    message: humanErrorText(data, "The guided workflow could not be switched."),
   };
 }
 
@@ -18497,8 +18634,7 @@ async function runWorkflowRecovery(mode) {
     });
     if (!executed.ok || executed.data.ok !== true) {
       setWorkflowRecoveryMessage(
-        (executed.data && (executed.data.message || executed.data.error)) ||
-          "The recovery did not run.",
+        humanErrorText(executed.data, "The recovery did not run."),
         "error"
       );
       await loadWorkflowRecovery({ quiet: true });
@@ -18512,6 +18648,12 @@ async function runWorkflowRecovery(mode) {
     );
     await loadWorkflowRecovery({ quiet: true });
     loadSystemAlignmentStatus();
+  } catch (err) {
+    setWorkflowRecoveryMessage(
+      "The Admin Console did not answer (" + ((err && err.message) || String(err)) +
+        "). The recovery may not have run; reload this page to see the current state.",
+      "error"
+    );
   } finally {
     workflowRecoveryBusy = false;
   }
@@ -19172,9 +19314,7 @@ async function supersedeSetupBuild(nextTag, previousTag) {
   }
   if (!res.ok || data.ok !== true || !data.setup_workflow_id) {
     throw new Error(
-      data.message ||
-        data.error ||
-        "the previous System Build could not be superseded"
+      humanErrorText(data, "the previous System Build could not be superseded")
     );
   }
   clearSetupOperationContext();
@@ -19275,8 +19415,7 @@ async function validateSelectedSystemBuild(options = {}) {
       systemBuildState.status = transient
         ? SYSTEM_BUILD_STATUS.FAILED
         : SYSTEM_BUILD_STATUS.INVALID;
-      systemBuildState.error =
-        (data && (data.message || data.error)) || "System Build validation failed.";
+      systemBuildState.error = humanErrorText(data, "System Build validation failed.");
       if (!internal && transient) systemBuildState.failedAction = "validate";
       renderSystemAlignmentStatus({
         active: true,
@@ -19438,9 +19577,7 @@ async function confirmSelectedSystemBuild() {
         selectedSystemBuildTag = activeTag;
         if (setupEls.releaseSelect) setupEls.releaseSelect.value = activeTag;
       }
-      throw new Error(
-        (data && (data.message || data.error)) || "System Build confirmation failed."
-      );
+      throw new Error(humanErrorText(data, "System Build confirmation failed."));
     }
     const confirmedTag =
       (data.system_build && data.system_build.canonical_tag) || data.system_tag || tag;
@@ -19593,7 +19730,7 @@ async function updateAdminForSystemBuild() {
     if (handleSystemBuildWorkflowConflict(data)) return;
     if (handleSetupIntentRejection(data)) return;
     if (!res.ok && res.status !== 202) {
-      throw new Error((data && (data.message || data.error)) || "Admin update failed.");
+      throw new Error(humanErrorText(data, "Admin update failed."));
     }
     // The update-admin start consumed the one-shot intent; drop it before the
     // reconnect so a resumed flow never resends a spent id.
@@ -20396,11 +20533,12 @@ async function abandonSystemAlignment() {
       action.owner === "guided_setup" ? data.ok === true : data.stage === "cancelled";
     if (!res.ok || !succeeded) {
       throw new Error(
-        data.message ||
-          data.error ||
-          (action.owner === "guided_setup"
+        humanErrorText(
+          data,
+          action.owner === "guided_setup"
             ? "The setup could not be discarded."
-            : "The upgrade could not be cancelled.")
+            : "The upgrade could not be cancelled."
+        )
       );
     }
     showSetupCleanupIncomplete(null);
@@ -20439,6 +20577,8 @@ const authEls = {
   createBlock: document.getElementById("auth-create"),
   loginBlock: document.getElementById("auth-login"),
   recoveryBlock: document.getElementById("auth-recovery"),
+  recoveryTitle: document.getElementById("auth-recovery-title"),
+  recoveryCopy: document.getElementById("auth-recovery-copy"),
   recoveryRetry: document.getElementById("auth-recovery-retry"),
   createForm: document.getElementById("auth-create-form"),
   createPassword: document.getElementById("auth-create-password"),
@@ -20485,6 +20625,18 @@ function authMessage(data) {
 
 // Show the auth gate (create, login, or recovery) and hide every workspace
 // surface so no setup/maintenance panel is reachable before authentication.
+function renderAuthRecoveryCopy(status) {
+  if (!status || !status.recovery_required) return;
+  if (authEls.recoveryTitle) {
+    authEls.recoveryTitle.textContent = status.error === "config_unreadable"
+      ? "Config file needs repair"
+      : "Password file needs repair";
+  }
+  if (authEls.recoveryCopy && typeof status.message === "string" && status.message) {
+    authEls.recoveryCopy.textContent = `${status.message} Then reload this page.`;
+  }
+}
+
 function showAuthView(mode) {
   workspaceRevealed = false;
   if (startEls.gate) startEls.gate.hidden = true;
@@ -20574,6 +20726,7 @@ function applyAuthStatus(status) {
   authState.requiresInitialPassword = Boolean(status.requires_initial_password);
   authState.recoveryRequired = Boolean(status.recovery_required);
   authState.csrfToken = status.csrf_token || null;
+  renderAuthRecoveryCopy(status);
   if (authState.authenticated) {
     return showAuthenticatedApp();
   }
@@ -20670,20 +20823,33 @@ async function submitLogin(event) {
   }
 }
 
+const LOGOUT_FAILED_MESSAGE =
+  "Logout failed. You are still logged in; try again.";
+
+async function readLogoutStatus(url, options) {
+  try {
+    const resp = await rawFetch(url, options);
+    return resp.ok ? await resp.json().catch(() => ({})) : null;
+  } catch (err) {
+    return null;
+  }
+}
+
 async function submitLogout() {
+  let data = await readLogoutStatus("/api/admin/auth/logout", { method: "POST" });
+  if (!data) {
+    const status = await readLogoutStatus("/api/admin/auth/status");
+    data = status && status.authenticated === false ? status : null;
+  }
+  if (!data) {
+    window.alert(LOGOUT_FAILED_MESSAGE);
+    return;
+  }
   if (typeof stopSystemAlignmentPolling === "function") {
     stopSystemAlignmentPolling();
   }
   clearSetupOperationContext();
-  try {
-    const resp = await rawFetch("/api/admin/auth/logout", { method: "POST" });
-    const data = await resp.json().catch(() => ({}));
-    applyAuthStatus(data);
-  } catch (err) {
-    authState.authenticated = false;
-    authState.csrfToken = null;
-    showAuthView("login");
-  }
+  applyAuthStatus(data);
 }
 
 /* --- theme ---------------------------------------------------------------

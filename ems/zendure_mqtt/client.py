@@ -29,6 +29,21 @@ def _default_client_factory(config: ZendureMqttClientConfig):
         return mqtt.Client(client_id=client_id)
 
 
+
+def _connect_refused(reason) -> bool:
+    """Whether a CONNACK reason code refuses the session.
+
+    paho calls ``on_connect`` for a refused CONNACK too, so a wrong password
+    must not read as a connected client.
+    """
+
+    failure = getattr(reason, "is_failure", None)
+    if failure is not None:
+        return bool(failure)
+    if reason in (0, None):
+        return False
+    return str(reason).strip().lower() not in ("0", "success")
+
 class ZendureMqttReadClient:
     """Connects to a broker and mirrors Zendure telemetry into snapshots.
 
@@ -115,7 +130,14 @@ class ZendureMqttReadClient:
         except Exception:
             pass
 
-    def _on_connect(self, client, *_args, **_kwargs):
+    def _on_connect(self, client, *args, **kwargs):
+        reason = args[2] if len(args) >= 3 else kwargs.get("reason_code")
+        if _connect_refused(reason):
+            self._connected = False
+            logger.warning(
+                "event=zendure_mqtt_connect_refused reason=%s", str(reason)
+            )
+            return
         self._connected = True
         for topic in self._config.resolved_subscriptions():
             try:

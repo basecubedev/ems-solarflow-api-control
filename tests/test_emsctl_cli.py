@@ -365,7 +365,7 @@ def test_emsctl_completion_bash_contains_commands_and_configured_device(tmp_path
     result = run_emsctl(tmp_path, "completion", "bash")
 
     assert result.returncode == 0, result.stderr
-    assert "status system device ha ha-control winter dashboard influx stack diagnose backup config interactive menu examples completion help" in result.stdout
+    assert "status system device ha ha-control winter dashboard influx stack diagnose grid-meter backup config interactive menu examples completion help" in result.stdout
     assert "set-password change-password disable-auth auth-status" in result.stdout
     assert "off eco standard" in result.stdout
     assert "output input" in result.stdout
@@ -373,11 +373,25 @@ def test_emsctl_completion_bash_contains_commands_and_configured_device(tmp_path
     assert not (tmp_path / "runtime-state.json").exists()
 
 
+def test_completion_offers_every_top_level_command_the_parser_has():
+    import argparse
+
+    parser = emsctl.build_parser()
+    subcommands = next(
+        action.choices
+        for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    assert set(subcommands) == set(emsctl.TOP_LEVEL_COMMANDS)
+    script = emsctl.completion_script_bash({})
+    assert "|grid-meter|" in script
+
+
 def test_emsctl_completion_zsh_contains_commands_and_configured_device(tmp_path):
     result = run_emsctl(tmp_path, "completion", "zsh")
 
     assert result.returncode == 0, result.stderr
-    assert "commands=(status system device ha ha-control winter dashboard influx stack diagnose backup config interactive menu examples completion help)" in result.stdout
+    assert "commands=(status system device ha ha-control winter dashboard influx stack diagnose grid-meter backup config interactive menu examples completion help)" in result.stdout
     assert "dashboard_actions=(set-password change-password disable-auth auth-status)" in result.stdout
     assert "offgrid_modes=(off eco standard)" in result.stdout
     assert "ac_modes=(output input)" in result.stdout
@@ -446,7 +460,7 @@ def test_emsctl_interactive_invalid_numeric_does_not_modify_state(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert "ERROR: system max-power must be numeric" in result.stdout
+    assert "ERROR: system max-power: max_total_power must be an integer" in result.stdout
     assert "Traceback" not in result.stderr
     assert (tmp_path / "runtime-state.json").read_text() == before
 
@@ -625,7 +639,7 @@ def test_emsctl_dashboard_set_status_change_and_disable_auth(tmp_path):
     )
     assert result.returncode == 0, result.stderr
 
-    result = run_emsctl(tmp_path, "dashboard", "disable-auth")
+    result = run_emsctl(tmp_path, "dashboard", "disable-auth", "--yes")
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "dashboard-auth.json").exists()
 
@@ -1913,3 +1927,146 @@ def test_config_upgrade_preserves_config_permissions(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+
+
+def test_interactive_menu_rereads_runtime_state_before_each_action(
+    tmp_path, monkeypatch
+):
+    """Interleaving: the menu opens, the dashboard disables WR1, the menu saves."""
+
+    write_config(tmp_path / "config.json")
+    runtime_path = tmp_path / "runtime-state.json"
+    run_emsctl(tmp_path, "system", "enable")
+    config = emsctl.load_config(str(tmp_path / "config.json"))
+    args = config_args(
+        config=str(tmp_path / "config.json"), runtime_state=str(runtime_path)
+    )
+
+    def external_disable():
+        data = json.loads(runtime_path.read_text())
+        data["devices"]["WR1"]["enabled"] = False
+        runtime_path.write_text(json.dumps(data))
+
+    choices = iter(["status", "system-max-power", "quit"])
+
+    def choose(title, options):
+        choice = next(choices)
+        if choice == "system-max-power":
+            external_disable()
+        return choice
+
+    monkeypatch.setattr(emsctl, "prompt_choice", choose)
+    monkeypatch.setattr(emsctl, "prompt_text", lambda label, default=None: "600")
+
+    assert emsctl.run_interactive(args, config) == 0
+
+    on_disk = runtime_state(tmp_path)
+    assert on_disk["system"]["max_total_power"] == 600
+    assert on_disk["devices"]["WR1"]["enabled"] is False
+
+
+@pytest.mark.parametrize(
+    "argv, message",
+    [
+        (["system", "loop-interval", "100000"], "between 1 and 3600"),
+        (["system", "max-power", "99999"], "between 0 and 900"),
+        (["system", "max-power", "inf"], "must be an integer"),
+        (["system", "max-power", "300.7"], "must be an integer"),
+        (["device", "WR1", "max-power", "5000"], "between 0 and 800"),
+        (["device", "WR1", "pv-priority-factor", "1e300"], "between 0.01 and 100"),
+        (["device", "WR1", "ac-charge-power", "99999"], "between 0 and 5000"),
+    ],
+)
+def test_emsctl_runtime_edits_share_the_dashboard_bounds(tmp_path, argv, message):
+    """emsctl and the dashboard are two writers of one validated value set."""
+
+    assert run_emsctl(tmp_path, "status").returncode == 0
+    before = (tmp_path / "runtime-state.json").read_text()
+
+    result = run_emsctl(tmp_path, *argv)
+
+    assert result.returncode != 0
+    assert message in result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+    assert (tmp_path / "runtime-state.json").read_text() == before
+
+
+@pytest.mark.parametrize(
+    "argv", [["ac-mode", "input"], ["ac-charge-power", "300"]]
+)
+def test_emsctl_refuses_an_ac_role_an_mqtt_device_cannot_reconcile(tmp_path, argv):
+    write_config(tmp_path / "config.json")
+    config = json.loads((tmp_path / "config.json").read_text())
+    config["devices"][0].update(
+        {
+            "type": "zendure_mqtt",
+            "capabilities": {"write_output_limit": True},
+            "mqtt": {"broker_ref": "home", "device_id": "D1"},
+        }
+    )
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    assert run_emsctl(tmp_path, "status").returncode == 0
+
+    result = run_emsctl(tmp_path, "device", "WR1", *argv)
+
+    assert result.returncode != 0
+    assert "controlled over MQTT" in result.stdout + result.stderr
+    assert "runtime_role" not in runtime_state(tmp_path)["devices"]["WR1"]
+
+
+def test_disable_auth_keeps_the_shared_password_without_confirmation(tmp_path):
+    auth = tmp_path / "dashboard-auth.json"
+    auth.write_text("{}")
+
+    refused = run_emsctl(
+        tmp_path, "--dashboard-auth", str(auth), "dashboard", "disable-auth"
+    )
+    assert refused.returncode != 0
+    assert "--yes" in refused.stdout + refused.stderr
+    assert auth.exists()
+
+    confirmed = run_emsctl(
+        tmp_path, "--dashboard-auth", str(auth), "dashboard", "disable-auth", "--yes"
+    )
+    assert confirmed.returncode == 0, confirmed.stderr
+    assert not auth.exists()
+
+
+def test_a_mistyped_explicit_config_changes_nothing(tmp_path):
+    result = run_emsctl(
+        tmp_path, "--config", str(tmp_path / "conifg.json"), "system", "disable"
+    )
+
+    assert result.returncode == 2
+    assert "config file does not exist" in result.stdout + result.stderr
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+@pytest.mark.parametrize("section", ["system", "ha", "winter"])
+def test_a_null_config_section_is_an_error_message_not_a_traceback(
+    tmp_path, section
+):
+    write_config(tmp_path / "config.json")
+    config = json.loads((tmp_path / "config.json").read_text())
+    config[section] = None
+    (tmp_path / "config.json").write_text(json.dumps(config))
+
+    result = run_emsctl(tmp_path, "status")
+
+    assert "Traceback" not in result.stderr
+
+
+def test_runtime_defaults_match_the_ems_for_home_assistant():
+    """A missing ha block means no HA sync in the EMS, so emsctl must agree."""
+
+    defaults = emsctl.runtime_defaults({"system": {}, "devices": []})
+    assert defaults["ha"] == {"enabled": False, "control_enabled": False}
+
+
+@pytest.mark.parametrize("argv", [["examples"], ["dashboard", "auth-status"]])
+def test_a_missing_explicit_config_does_not_block_commands_that_write_no_runtime_state(
+    tmp_path, argv
+):
+    result = run_emsctl(tmp_path, "--config", str(tmp_path / "absent.json"), *argv)
+
+    assert "config file does not exist" not in result.stdout + result.stderr

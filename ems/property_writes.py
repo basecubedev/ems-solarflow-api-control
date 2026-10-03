@@ -11,7 +11,7 @@ transport to another.
 
 import logging
 
-from ems.clients import zendure_write
+from ems.clients import write_log_context, zendure_write
 from ems.logging_utils import log_event
 from ems.mqtt_control import dispatch
 
@@ -45,7 +45,7 @@ def write_device_properties(
             field or ",".join(properties),
             properties,
             error_event or "write_properties_error",
-            **(log_fields or {}),
+            **write_log_context(log_fields),
         )
         return dispatch.published(None) if ok else dispatch.failed(
             None, reason="http_write_failed"

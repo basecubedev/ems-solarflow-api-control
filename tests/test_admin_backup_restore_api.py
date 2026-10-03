@@ -355,3 +355,73 @@ def test_restore_execute_endpoint_rejects_raw_command_args(server, install):
     assert status == 400
     assert "error" in data
     assert "job_id" not in data
+
+
+def test_a_restore_plan_runs_once(influx_server, install):
+    """A double click or a second tab started two restores of one plan."""
+
+    base, fake = influx_server
+    _make_influxdb_archive(install)
+    backup_id = _first_backup_id(base)
+    status, preview = _request(
+        base + "/api/admin/maintenance/backups/restore/preview",
+        method="POST",
+        body={"id": backup_id, "scope": "influxdb", "rollback": True},
+    )
+    assert status == 200
+
+    first_status, first = _request(
+        base + "/api/admin/maintenance/backups/restore/execute",
+        method="POST",
+        body={"plan_id": preview["plan_id"], "confirm": True},
+    )
+    assert first_status == 202
+    _poll_job(base, first["job_id"])
+
+    again_status, again = _request(
+        base + "/api/admin/maintenance/backups/restore/execute",
+        method="POST",
+        body={"plan_id": preview["plan_id"], "confirm": True},
+    )
+    assert again_status == 409
+    assert "preview again" in again["message"]
+    executions = [c for c in fake.calls if "--dry-run" not in c["args"]]
+    assert len([c for c in executions if "--on-conflict" in c["args"]]) == 1
+
+
+def test_a_second_restore_is_refused_while_one_runs(install):
+    """Interleaving: restore A holds the restore lock; plan B is executed."""
+
+    fake = _FakeEmsTool(dry_run_rc=0, restore_rc=0)
+    service = BackupRestoreService(
+        context_provider=lambda: detect_install_context(base_dir=str(install)),
+        ems_tool=fake,
+    )
+    srv = create_server("127.0.0.1", 0, backup_service=service)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    authenticate(base)
+    try:
+        _make_influxdb_archive(install)
+        backup_id = _first_backup_id(base)
+        status, preview = _request(
+            base + "/api/admin/maintenance/backups/restore/preview",
+            method="POST",
+            body={"id": backup_id, "scope": "influxdb"},
+        )
+        assert status == 200
+        assert service.restore_lock.acquire(blocking=False)
+        try:
+            status, data = _request(
+                base + "/api/admin/maintenance/backups/restore/execute",
+                method="POST",
+                body={"plan_id": preview["plan_id"], "confirm": True},
+            )
+        finally:
+            service.restore_lock.release()
+        assert status == 409
+        assert data["error"] == "restore_in_progress"
+        assert service.plans.get(preview["plan_id"]) is not None
+    finally:
+        srv.shutdown()
+        srv.server_close()

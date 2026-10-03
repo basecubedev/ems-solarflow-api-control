@@ -10,12 +10,32 @@ so it can later feed InfluxDB or the dashboard.
 
 from __future__ import annotations
 
+import re
 import time
 from collections import deque
 
 DEFAULT_LATENCY_SAMPLES = 32
 DEFAULT_FAIL_THRESHOLD = 3
 DEFAULT_STALE_AFTER_S = 60.0
+
+
+_URL_USERINFO = re.compile(r"(?P<scheme>[a-z][a-z0-9+.-]*://)[^/@\s]+@", re.I)
+_URL_SECRET_PARAM = re.compile(
+    r"(?P<name>[?&](?:user|username|password|pass|pwd|token|key)=)[^&#\s]*", re.I
+)
+
+
+def redact_url_credentials(text):
+    """Mask ``user:pass@`` and credential query parameters in a URL or message.
+
+    Tasmota takes its web password only in the URL, and requests repeats the
+    URL in every connection error.
+    """
+
+    if text is None:
+        return None
+    text = _URL_USERINFO.sub(r"\g<scheme><redacted>@", str(text))
+    return _URL_SECRET_PARAM.sub(r"\g<name><redacted>", text)
 
 
 def redact_error(error, max_len=200):
@@ -29,7 +49,7 @@ def redact_error(error, max_len=200):
     else:
         text = str(error)
 
-    text = " ".join(text.split())
+    text = redact_url_credentials(" ".join(text.split()))
     if len(text) > max_len:
         text = text[: max_len - 1] + "…"
     return text

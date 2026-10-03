@@ -22,8 +22,10 @@ and that is not an error, it is a build that has to fall back to its own source.
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -32,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from appliance import artifact_trust, manager_releases, release_fetch  # noqa: E402
+from appliance.config import _as_tuple, _read_ini  # noqa: E402
 from appliance.version import (  # noqa: E402
     is_readable,
     is_stable,
@@ -39,6 +42,26 @@ from appliance.version import (  # noqa: E402
 )
 
 DEFAULT_KEYRING = ROOT / "packaging" / "appliance" / "config" / "release-keyring.gpg"
+SHIPPED_CONFIG = ROOT / "packaging" / "appliance" / "config" / "appliance.conf"
+
+
+def shipped_fingerprints():
+    """The release signers the appliance this image becomes will accept."""
+
+    return _as_tuple(_read_ini(SHIPPED_CONFIG), "release_fingerprints", ())
+
+
+class GpgvRunner:
+    """The two methods artifact_trust.SignatureVerifier asks of a runner."""
+
+    def available(self, tool):
+        return shutil.which(tool) is not None
+
+    def run(self, tool, args, timeout=None):
+        done = subprocess.run(
+            [tool, *args], capture_output=True, text=True, check=False, timeout=timeout
+        )
+        return SimpleNamespace(ok=done.returncode == 0, stdout=done.stdout, stderr=done.stderr)
 # An index is a list of names, and a manifest describes one package. Neither is
 # large, and neither may decide how much of this host's memory it occupies.
 MAX_DOCUMENT_BYTES = 1024 * 1024
@@ -82,6 +105,12 @@ def main(argv=None):
     parser.add_argument("--index", required=True, help="the package index url")
     parser.add_argument("--into", required=True, help="a directory to write the package into")
     parser.add_argument("--keyring", default=str(DEFAULT_KEYRING))
+    parser.add_argument(
+        "--fingerprint",
+        action="append",
+        default=None,
+        help="a release signer to accept (default: release_fingerprints of the shipped appliance.conf)",
+    )
     parser.add_argument("--version", default="", help="take this version instead of the newest")
     args = parser.parse_args(argv)
 
@@ -131,18 +160,17 @@ def main(argv=None):
         fetch(chosen["signature_url"], limit=MAX_DOCUMENT_BYTES, label="the signature")
     )
 
-    # gpgv rather than gpg --verify, and the shipped keyring rather than a
-    # developer's own: this is the decision the appliance would make, made here.
-    verified = subprocess.run(
-        ["gpgv", "--keyring", str(keyring.resolve()), str(signature_path), str(manifest_path)],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
+    # The appliance's own verifier: bare gpgv accepts revoked, expired and foreign keys.
+    fingerprints = tuple(args.fingerprint) if args.fingerprint else shipped_fingerprints()
+    verifier = artifact_trust.SignatureVerifier(
+        GpgvRunner(), keyring=str(keyring.resolve()), fingerprints=fingerprints
     )
-    if verified.returncode != 0:
-        print(verified.stderr.strip(), file=sys.stderr)
-        raise SystemExit(f"{release_id}: the signature is not one this project trusts")
+    try:
+        verifier.verify(manifest_path, signature_path)
+    except artifact_trust.ReleaseError as exc:
+        raise SystemExit(
+            f"{release_id}: the signature is not one this project trusts ({exc})"
+        )
 
     try:
         manifest = manager_releases.parse_manifest(
@@ -165,7 +193,7 @@ def main(argv=None):
         reason = "a candidate" if is_readable(manifest.version) else "not a readable version"
         raise SystemExit(f"{manifest.version} is {reason}; no image bakes one in")
 
-    package_path = into / manifest.artifact_name
+    package_path = into / Path(manifest.artifact_name).name
     package_path.write_bytes(
         fetch(chosen["archive_url"], limit=MAX_PACKAGE_BYTES, label="the package")
     )

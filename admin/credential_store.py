@@ -346,19 +346,24 @@ class _EncryptedFiles:
 
         # A malformed existing key is never silently replaced (that would orphan
         # every record it encrypted); only a truly absent key is created here.
+        # link() refuses an existing key, so concurrent first saves share one.
         key = Fernet.generate_key()
-        tmp = self.key_path.with_suffix(".key.tmp")
+        self.secrets_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, staged = tempfile.mkstemp(dir=str(self.secrets_dir), prefix=".key-")
         try:
-            self.secrets_dir.mkdir(parents=True, exist_ok=True)
-            tmp.write_bytes(key)
-            _chmod_best_effort(tmp)
-            os.replace(tmp, self.key_path)
-        except OSError:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(key)
+                handle.flush()
+                os.fsync(handle.fileno())
             try:
-                tmp.unlink()
+                os.link(staged, self.key_path)
+            except FileExistsError:
+                return self.key_path.read_bytes()
+        finally:
+            try:
+                os.unlink(staged)
             except OSError:
                 pass
-            raise
         _chmod_best_effort(self.key_path)
         return key
 
@@ -441,6 +446,14 @@ class ZendureCloudTokenStore:
             raise CredentialStoreError(
                 "Could not remove the stored Zendure token."
             ) from exc
+        if self._legacy_store is not None:
+            try:
+                legacy = self._legacy_store.delete_token()
+            except Exception as exc:
+                raise CredentialStoreError(
+                    "Could not remove the earlier Admin copy of the Zendure token."
+                ) from exc
+            removed = removed or bool(legacy.get("removed"))
         return {"token_saved": False, "removed": removed}
 
     def settings(self):
@@ -482,7 +495,8 @@ class ZendureCloudTokenStore:
         """Import a legacy Admin-local token once, without deleting the source.
 
         Idempotent: skips when the new file already exists or no legacy token is
-        available. The legacy file is intentionally left in place.
+        available. The legacy file is left in place until the token is deleted,
+        which removes both copies so a deleted token never returns.
         """
 
         if self._legacy_store is None or self.token_path.exists():

@@ -2,10 +2,20 @@
 """Effectiveness-based telemetry confirmation and foreign-writer detection."""
 
 import logging
+import math
 
 import pytest
 
-from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
+from ems.mqtt_control.confirmation import DEFAULT_CONFIRMATION_TIMEOUT_SECONDS
+from ems.zendure_mqtt.device_client import (
+    DEFAULT_COMMAND_ACK_TIMEOUT_SECONDS,
+    DEFAULT_SAFETY_PREEMPT_MARGIN_W,
+    MAX_COMMAND_ACK_TIMEOUT_SECONDS,
+    MAX_CONFIRMATION_TIMEOUT_SECONDS,
+    MAX_CONFIRMATION_TOLERANCE_W,
+    MAX_SAFETY_PREEMPT_MARGIN_W,
+    ZendureMqttDeviceClient,
+)
 from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
 
 pytestmark = [
@@ -265,3 +275,55 @@ def test_new_local_confirmation_clears_suspicion():
     dev.fetch()
     assert rec2.state == "telemetry_confirmed"
     assert dev.describe()["external_control_suspected"] is False
+
+
+def test_own_timed_out_target_applied_late_is_not_external_control():
+    dev, rec = _confirmed_device()
+    dev._confirmation_timeout_s = 5.0
+    rec2 = _published(dev, 500)
+    dev.describe(now_monotonic=rec2.published_monotonic + 6.0)
+    assert rec2.state == "confirmation_timed_out"
+    base = rec2.published_monotonic
+    dev._service.set_snapshot(dict(APPLIED, outputLimit=500), base + 10.0)
+    dev.fetch()
+    dev._service.set_snapshot(dict(APPLIED, outputLimit=500), base + 20.0)
+    dev.fetch()
+    assert dev.describe()["external_control_suspected"] is False
+
+
+def test_foreign_value_after_own_timeout_is_still_detected():
+    dev, rec = _confirmed_device()
+    dev._confirmation_timeout_s = 5.0
+    rec2 = _published(dev, 500)
+    dev.describe(now_monotonic=rec2.published_monotonic + 6.0)
+    base = rec2.published_monotonic
+    dev._service.set_snapshot(dict(APPLIED, outputLimit=900), base + 10.0)
+    dev.fetch()
+    dev._service.set_snapshot(dict(APPLIED, outputLimit=900), base + 20.0)
+    dev.fetch()
+    assert dev.describe()["external_control_suspected"] is True
+
+
+def test_unbounded_timeout_tuning_is_capped():
+    dev = _device(command_ack_timeout_seconds=1e12, confirmation_timeout_seconds=1e12)
+    assert dev._command_ack_timeout_s == MAX_COMMAND_ACK_TIMEOUT_SECONDS
+    assert dev._confirmation_timeout_s == MAX_CONFIRMATION_TIMEOUT_SECONDS
+
+
+def test_non_finite_tuning_falls_back_to_the_default():
+    dev = _device(
+        command_ack_timeout_seconds=math.inf,
+        confirmation_timeout_seconds=math.nan,
+        confirmation_tolerance_w=math.nan,
+        safety_preempt_margin_w=math.inf,
+    )
+    assert dev._command_ack_timeout_s == DEFAULT_COMMAND_ACK_TIMEOUT_SECONDS
+    assert dev._confirmation_timeout_s == DEFAULT_CONFIRMATION_TIMEOUT_SECONDS
+    assert dev._confirmation_tolerance_w is None
+    assert dev._safety_preempt_margin_w == DEFAULT_SAFETY_PREEMPT_MARGIN_W
+
+
+def test_oversized_tolerance_and_margin_are_capped():
+    dev = _device(confirmation_tolerance_w=100000, safety_preempt_margin_w=100000)
+    assert dev._confirmation_tolerance_w == MAX_CONFIRMATION_TOLERANCE_W
+    assert dev._safety_preempt_margin_w == MAX_SAFETY_PREEMPT_MARGIN_W

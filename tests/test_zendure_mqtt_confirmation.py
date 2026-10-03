@@ -172,6 +172,8 @@ def test_acknowledged_never_occupies_the_slot_forever():
     # pending target eventually publishes.
     dev.describe(now_monotonic=rec.acknowledged_monotonic + 6.0)
     assert rec.is_terminal
+    assert dev._active_command is None
+    dev.write_output_limit(300)
     assert len(dev._service.published) == 2
     assert dev._active_command.target_w == 300
 

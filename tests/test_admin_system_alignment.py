@@ -1729,8 +1729,9 @@ def test_retention_runs_only_after_known_good_is_written(tmp_path):
         def __init__(self, store):
             self._store = store
 
-        def run(self):
+        def run(self, *, also_protected=()):
             seen["known_good"] = self._store.current()
+            seen["also_protected"] = set(also_protected)
 
     store = KnownGoodStore(tmp_path / "state")
     service, _, known_good, build, operation_id = _healthcheck_pending_service(
@@ -1744,6 +1745,7 @@ def test_retention_runs_only_after_known_good_is_written(tmp_path):
 
     assert seen["known_good"] is not None, "retention ran before the write"
     assert seen["known_good"]["build_id"] == known_good.current()["build_id"]
+    assert seen["also_protected"] == set()
 
 
 def test_a_failing_retention_never_fails_the_install(tmp_path):
@@ -2092,8 +2094,8 @@ def test_cancelled_transition_is_terminal(tmp_path):
     assert exc.value.code == "not_resumable"
 
 
-def _return_recovery_service(tmp_path, *, running_ems):
-    old = SystemBuild(
+def _return_recovery_service(tmp_path, *, running_ems, old=None):
+    old = old or SystemBuild(
         requested_tag="v0.7.0",
         canonical_tag="v0.7.0",
         channel="stable",
@@ -2109,7 +2111,7 @@ def _return_recovery_service(tmp_path, *, running_ems):
 
     class Resolver:
         def __init__(self):
-            self.builds = {"v0.7.0": old, "v0.8.0": target}
+            self.builds = {old.canonical_tag: old, "v0.8.0": target}
             self.resolved = []
 
         def resolve(self, tag):
@@ -2190,6 +2192,40 @@ def test_return_action_aligns_admin_to_verified_running_known_good_ems(tmp_path)
     assert transitions.read().stage == STAGE_ADMIN_RECONNECT_PENDING
     assert len(launched) == 1
     assert resolver.resolved.count("v0.7.0") == 1
+
+
+def test_return_action_refuses_development_known_good_before_cancelling(tmp_path):
+    dev_tag = "dev-feature-old-1234567890-aaaaaaa-41-1"
+    old = SystemBuild(
+        requested_tag=dev_tag,
+        canonical_tag=dev_tag,
+        channel="development",
+        revision="a" * 40,
+        build_id=dev_tag,
+        admin_image=f"{ADMIN_IMAGE_REPO}:{dev_tag}",
+        admin_digest="sha256:old-admin",
+        ems_image=f"{EMS_IMAGE_REPO}:{dev_tag}",
+        ems_digest="sha256:old-ems",
+        release_tag=dev_tag,
+    )
+    running_old = {
+        "digest": "sha256:old-ems",
+        "revision": "a" * 40,
+        "channel": "development",
+        "build_id": dev_tag,
+        "release_tag": dev_tag,
+    }
+    service, transitions, _, launched, _, _, operation_id = _return_recovery_service(
+        tmp_path, running_ems=running_old, old=old
+    )
+
+    with pytest.raises(SystemAlignmentError) as exc:
+        service.return_to_running_build(operation_id=operation_id, confirm=True)
+
+    assert exc.value.code == "acknowledgement_required"
+    assert transitions.read().operation_id == operation_id
+    assert transitions.read().stage == STAGE_FAILED_RECOVERABLE
+    assert launched == []
 
 
 # --- read-only Guided Upgrade validation (no transition, no resources) -------

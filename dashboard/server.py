@@ -17,9 +17,11 @@ from dashboard.auth import (
     LoginRateLimiter,
     SessionStore,
     auth_configured,
+    auth_file_fingerprint,
     resolve_auth_path,
     verify_password_file,
 )
+from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS, wrap_listening_socket
 from dashboard.runtime_write import (
     RuntimeWriteError,
     apply_device_update,
@@ -62,6 +64,7 @@ MAX_JSON_BODY_BYTES = 16 * 1024
 MAX_SSE_CONNECTIONS = 8
 MAX_SSE_CONNECTIONS_PER_IP = 2
 SSE_MAX_CONNECTION_SECONDS = 30 * 60
+SSE_HEARTBEAT_SECONDS = 15
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -480,6 +483,23 @@ def _replace_external_device_names(value, aliases):
     return value
 
 
+MAX_DEVICE_NAME_LENGTH = 128
+
+
+def _plausible_device_name(name):
+    """A device name a history query may carry: printable and bounded.
+
+    The Flux escape makes any such name a plain string; a renamed or removed
+    device keeps its history, so names are not limited to the current config.
+    """
+
+    return (
+        isinstance(name, str)
+        and 0 < len(name) <= MAX_DEVICE_NAME_LENGTH
+        and not any(ord(ch) < 32 or ord(ch) == 127 for ch in name)
+    )
+
+
 def _resolve_external_device_name(server, browser_name):
     aliases = _external_device_aliases(server)
     return {alias: raw for raw, alias in aliases.items()}.get(
@@ -672,6 +692,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
 
 class DashboardRequestHandler(BaseHTTPRequestHandler):
     server_version = "EMSDashboard/1.0"
+    timeout = HANDSHAKE_TIMEOUT_SECONDS
 
     def end_headers(self):
         if not getattr(self, "_security_headers_sent", False):
@@ -916,7 +937,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "invalid_password"}, status=403)
             return
 
-        if self.server.login_limiter.is_limited(remote):
+        if not self.server.login_limiter.try_attempt(remote):
             self._send_json({"error": "login_rate_limited"}, status=429)
             return
 
@@ -940,12 +961,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.server.auth_file,
             password,
         ):
-            self.server.login_limiter.record_failure(remote)
             self._send_json({"error": "invalid_password"}, status=403)
             return
 
         self.server.login_limiter.reset(remote)
-        session = self.server.sessions.create()
+        session = self.server.sessions.create(
+            credential=auth_file_fingerprint(self.server.auth_file)
+        )
         self._send_json(
             {
                 **self._auth_status_payload(),
@@ -1049,6 +1071,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if parsed is None:
             return
         range_name, start, end, series, devices = parsed
+        if getattr(provider, "name", "") != "sqlite" and not all(
+            _plausible_device_name(name) for name in devices or ()
+        ):
+            self._send_json(
+                {"error": "invalid_device", "message": "A device name is not valid."},
+                status=400,
+            )
+            return
 
         try:
             result = provider.query(start, end, devices=devices, series=series)
@@ -1710,7 +1740,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         return None
 
     def _current_session(self):
-        return self.server.sessions.get(self._session_cookie_value())
+        return self.server.sessions.get(
+            self._session_cookie_value(),
+            credential=auth_file_fingerprint(self.server.auth_file),
+        )
 
     def _session_cookie_value(self):
         raw = self.headers.get("Cookie", "")
@@ -1763,24 +1796,30 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         last_timestamp = None
         started_at = time.monotonic()
+        last_write_at = started_at
 
         try:
             while time.monotonic() - started_at < self.server.sse_max_connection_seconds:
                 snapshot = self.server.store.latest()
                 timestamp = snapshot.get("timestamp")
 
+                message = None
                 if timestamp != last_timestamp:
                     payload = json.dumps(
                         _external_mqtt_status_payload(self.server, snapshot),
                         sort_keys=True,
                     )
                     message = f"event: telemetry\ndata: {payload}\n\n"
+                elif time.monotonic() - last_write_at >= SSE_HEARTBEAT_SECONDS:
+                    message = ": keepalive\n\n"
+                if message is not None:
                     try:
                         self.wfile.write(message.encode("utf-8"))
                         self.wfile.flush()
-                    except (BrokenPipeError, ConnectionResetError):
+                    except (BrokenPipeError, ConnectionResetError, OSError):
                         return
                     last_timestamp = timestamp
+                    last_write_at = time.monotonic()
 
                 time.sleep(1)
         finally:
@@ -1920,7 +1959,7 @@ def start_dashboard_server(
             },
             base_dir or BASE_DIR,
         )
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        server.socket = wrap_listening_socket(context, server.socket)
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

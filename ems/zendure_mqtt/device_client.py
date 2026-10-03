@@ -11,6 +11,7 @@ HTTP state reconciliation (``supports_state_reconciliation = False``).
 
 import json
 import logging
+import math
 import time
 from collections import OrderedDict
 
@@ -93,6 +94,13 @@ DEFAULT_SAFETY_PREEMPT_MARGIN_W = 300
 DEFAULT_COMMAND_EVIDENCE_MAX_RECORDS = 64
 DEFAULT_COMMAND_EVIDENCE_MAX_AGE_SECONDS = 300.0
 
+MAX_COMMAND_ACK_TIMEOUT_SECONDS = 120.0
+MAX_CONFIRMATION_TIMEOUT_SECONDS = 300.0
+MAX_CONFIRMATION_TOLERANCE_W = 200
+MAX_SAFETY_PREEMPT_MARGIN_W = 1000
+MAX_COMMAND_EVIDENCE_RECORDS = 1024
+MAX_COMMAND_EVIDENCE_AGE_SECONDS = 3600.0
+
 
 class _WriteBlocked(Exception):
     """A power write cannot be built and must fail closed (no publish)."""
@@ -115,6 +123,20 @@ def _validate_power_target(value):
     if isinstance(value, bool) or not isinstance(value, int):
         raise _WriteBlocked("outputLimit", "invalid_power_target")
     return value
+
+
+def _bounded_tuning(value, default, low, high, cast=float):
+    """``value`` cast and clamped to ``[low, high]``; ``default`` if unusable."""
+
+    if isinstance(value, bool):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return cast(min(high, max(low, number)))
 
 
 def _coerce_reply(payload):
@@ -219,46 +241,54 @@ class ZendureMqttDeviceClient:
         self._last_command = None
         self._last_command_state = None
         self._command_evidence = OrderedDict()
-        try:
-            self._command_evidence_max_records = max(
-                1, int(command_evidence_max_records)
-            )
-        except (TypeError, ValueError):
-            self._command_evidence_max_records = DEFAULT_COMMAND_EVIDENCE_MAX_RECORDS
-        try:
-            self._command_evidence_max_age_s = max(
-                0.0, float(command_evidence_max_age_seconds)
-            )
-        except (TypeError, ValueError):
-            self._command_evidence_max_age_s = DEFAULT_COMMAND_EVIDENCE_MAX_AGE_SECONDS
+        self._command_evidence_max_records = _bounded_tuning(
+            command_evidence_max_records,
+            DEFAULT_COMMAND_EVIDENCE_MAX_RECORDS,
+            1,
+            MAX_COMMAND_EVIDENCE_RECORDS,
+            int,
+        )
+        self._command_evidence_max_age_s = _bounded_tuning(
+            command_evidence_max_age_seconds,
+            DEFAULT_COMMAND_EVIDENCE_MAX_AGE_SECONDS,
+            0.0,
+            MAX_COMMAND_EVIDENCE_AGE_SECONDS,
+        )
         self._dispatch_observer = None
         self._dispatch_sequence = 0
-        try:
-            self._command_ack_timeout_s = max(0.0, float(command_ack_timeout_seconds))
-        except (TypeError, ValueError):
-            self._command_ack_timeout_s = DEFAULT_COMMAND_ACK_TIMEOUT_SECONDS
-        try:
-            self._confirmation_timeout_s = max(0.0, float(confirmation_timeout_seconds))
-        except (TypeError, ValueError):
-            self._confirmation_timeout_s = DEFAULT_CONFIRMATION_TIMEOUT_SECONDS
+        self._command_ack_timeout_s = _bounded_tuning(
+            command_ack_timeout_seconds,
+            DEFAULT_COMMAND_ACK_TIMEOUT_SECONDS,
+            0.0,
+            MAX_COMMAND_ACK_TIMEOUT_SECONDS,
+        )
+        self._confirmation_timeout_s = _bounded_tuning(
+            confirmation_timeout_seconds,
+            DEFAULT_CONFIRMATION_TIMEOUT_SECONDS,
+            0.0,
+            MAX_CONFIRMATION_TIMEOUT_SECONDS,
+        )
         # None -> use the profile's default confirmation tolerance.
-        try:
-            self._confirmation_tolerance_w = (
-                None
-                if confirmation_tolerance_w is None
-                else max(0, int(confirmation_tolerance_w))
+        self._confirmation_tolerance_w = (
+            None
+            if confirmation_tolerance_w is None
+            else _bounded_tuning(
+                confirmation_tolerance_w, None, 0, MAX_CONFIRMATION_TOLERANCE_W, int
             )
-        except (TypeError, ValueError):
-            self._confirmation_tolerance_w = None
-        try:
-            self._safety_preempt_margin_w = max(0, int(safety_preempt_margin_w))
-        except (TypeError, ValueError):
-            self._safety_preempt_margin_w = DEFAULT_SAFETY_PREEMPT_MARGIN_W
+        )
+        self._safety_preempt_margin_w = _bounded_tuning(
+            safety_preempt_margin_w,
+            DEFAULT_SAFETY_PREEMPT_MARGIN_W,
+            0,
+            MAX_SAFETY_PREEMPT_MARGIN_W,
+            int,
+        )
         # None -> resolve from the write profile; explicit False -> no reliable
         # telemetry confirmation (completed_unconfirmed after publish/ack).
         self._telemetry_confirmation_override = telemetry_confirmation_supported
         self._last_confirmed_target = None
         self._last_confirmed_monotonic = None
+        self._unconfirmed_own_targets = set()
         self._foreign_streak = 0
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
@@ -273,7 +303,7 @@ class ZendureMqttDeviceClient:
         self.max_soc = max_soc
         self.smart_mode = smart_mode
         self.grid_off_mode = grid_off_mode
-        self.max_power = max_power or cfg.MAX_DEVICE_POWER
+        self.max_power = cfg.device_power_ceiling(max_power)
         self.pv_kwp = pv_kwp or 1.0
         self.battery_kwh = battery_kwh or 1.0
         self.pv_priority_factor = pv_priority_factor or 1.0
@@ -372,6 +402,16 @@ class ZendureMqttDeviceClient:
                 )
             )
 
+    def cancel_pending_output_limit(self, reason):
+        """Drop a target queued behind the in-flight command.
+
+        A queued target is the controller's intent for the cycle that asked
+        for it. Once the controller skips this device, flushing it later would
+        command power that no current decision asked for.
+        """
+
+        self._discard_pending_target(reason)
+
     def dispatch_output_limit(self, value):
         """Publish a power write and report the structured dispatch outcome.
 
@@ -390,7 +430,7 @@ class ZendureMqttDeviceClient:
         now = time.monotonic()
         # Settle the in-flight command's deadline first, but do not auto-flush a
         # stale pending target here — a fresh target supersedes any pending one.
-        self._expire_active_command(now, flush=False)
+        self._expire_active_command(now)
         try:
             target = _validate_power_target(value)
         except _WriteBlocked as blocked:
@@ -450,7 +490,13 @@ class ZendureMqttDeviceClient:
             )
 
         # No command in flight: the fresh target is the latest intent and takes the
-        # slot immediately, superseding any pending target left from before.
+        # slot immediately. A pending target it repeats is published under the
+        # correlation it was queued with; any other pending target is superseded.
+        if self._pending_target == target and self._pending_correlation_id:
+            correlation_id = self._pending_correlation_id
+            self._pending_target = None
+            self._pending_correlation_id = None
+            return self._publish_target(target, now, correlation_id=correlation_id)
         self._discard_pending_target("superseded_by_fresh_target")
         return self._publish_target(target, now)
 
@@ -1093,14 +1139,13 @@ class ZendureMqttDeviceClient:
             supported_override=self._telemetry_confirmation_override,
         )
 
-    def _expire_active_command(self, now_monotonic, *, flush=True):
+    def _expire_active_command(self, now_monotonic):
         # A late PUBACK for an already-retired command is settled every cycle,
         # independently of whether a command currently occupies the active slot.
+        # Never publishes the pending target: the controller has not decided this cycle yet.
         self._reconcile_terminal_delivery(now_monotonic)
         record = self._active_command
         if record is None:
-            if flush:
-                self._flush_pending_target(now_monotonic)
             return
         self._settle_broker_delivery(record, now_monotonic)
         supports_ack = self._reply_contract().supports_acknowledgement
@@ -1134,6 +1179,8 @@ class ZendureMqttDeviceClient:
             self._last_command_state = record.state
             self._active_command = None
             self._active_correlation_id = None
+            if record.published_monotonic is not None:
+                self._unconfirmed_own_targets.add(record.target_w)
             if record.state == STATE_CONFIRMATION_TIMED_OUT:
                 log_event(
                     logging.WARNING,
@@ -1146,8 +1193,6 @@ class ZendureMqttDeviceClient:
                     "device_command_ack_timed_out",
                     **self._command_log_fields(record),
                 )
-            if flush:
-                self._flush_pending_target(now_monotonic)
 
     def _confirm_from_snapshot(self, state, snapshot, now_monotonic):
         record = self._active_command
@@ -1228,13 +1273,13 @@ class ZendureMqttDeviceClient:
                 confirmation_metric=policy.confirmation_metric,
                 **self._command_log_fields(record),
             )
-            self._flush_pending_target(now_monotonic)
 
     def _note_local_confirmation(self, record, now_monotonic):
         """A locally confirmed target resets foreign-writer suspicion."""
 
         self._last_confirmed_target = record.target_w
         self._last_confirmed_monotonic = now_monotonic
+        self._unconfirmed_own_targets = set()
         self._foreign_streak = 0
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
@@ -1244,8 +1289,9 @@ class ZendureMqttDeviceClient:
 
         Requires: no local command in flight, a previously *confirmed* local
         target, and at least two successive newer telemetry reports whose
-        ``outputLimit`` is materially away from that target. Reports evidence
-        only — never claims which controller is responsible.
+        ``outputLimit`` is materially away from that target and from every own
+        target released unconfirmed since, which the device may apply late.
+        Reports evidence only — never claims which controller is responsible.
         """
 
         if self._active_command is not None or self._last_confirmed_target is None:
@@ -1272,10 +1318,19 @@ class ZendureMqttDeviceClient:
         ):
             return
         observed = getattr(state, "output_limit", None)
-        if isinstance(observed, bool) or not isinstance(observed, (int, float)):
+        if (
+            isinstance(observed, bool)
+            or not isinstance(observed, (int, float))
+            or not math.isfinite(observed)
+        ):
             return
         tolerance = self._confirmation_policy().confirmation_tolerance_w
-        if abs(float(observed) - float(self._last_confirmed_target)) <= tolerance:
+        own_targets = {self._last_confirmed_target, *self._unconfirmed_own_targets}
+        if any(
+            isinstance(target, (int, float))
+            and abs(float(observed) - float(target)) <= tolerance
+            for target in own_targets
+        ):
             self._foreign_streak = 0
             self._foreign_last_observed_monotonic = observed_time
             return

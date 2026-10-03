@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
 import logging
+import os
+import tempfile
 import time
 from copy import deepcopy
 
@@ -10,6 +12,7 @@ from ems.controller import EMSController
 from ems.logging_utils import log_event
 from ems.models import parse_pack_count
 from ems.runtime_state import RuntimeState, build_runtime_defaults
+from ems.state_store import BatteryFullChargeStateStore
 from ems.target_control import detect_capabilities
 
 
@@ -289,9 +292,20 @@ def run_frames(frames, source_name):
             )
         )
 
+    with tempfile.TemporaryDirectory(prefix="ems-simulation-") as scratch:
+        _run_frames_in(frames, source_name, devices, scratch)
+
+
+def _run_frames_in(frames, source_name, devices, scratch):
+    """Run frames against state kept in ``scratch``.
+
+    The configured runtime-state file and state database belong to the live
+    EMS; a simulation that loaded them would prune the real devices from them.
+    """
+
     shelly = SimulatedShellyClient()
     runtime_state = RuntimeState(
-        cfg.runtime_state_path(),
+        os.path.join(scratch, "runtime-state.json"),
         build_runtime_defaults(devices)
     )
     runtime_state.load_or_create()
@@ -301,7 +315,10 @@ def run_frames(frames, source_name):
         shelly,
         ha=None,
         sleep_enabled=False,
-        runtime_state=runtime_state
+        runtime_state=runtime_state,
+        battery_full_charge_store=BatteryFullChargeStateStore(
+            os.path.join(scratch, "ems_state.sqlite")
+        ),
     )
 
     start_time = time.time()

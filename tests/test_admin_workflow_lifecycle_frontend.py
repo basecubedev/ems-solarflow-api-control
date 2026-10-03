@@ -51,6 +51,8 @@ def _run_node(script):
 
 
 SWITCH_HELPERS = (
+    "const ADMIN_ERROR_MESSAGES",
+    "function humanErrorText",
     "const WORKFLOW_LIFECYCLE_BASE",
     "const WORKFLOW_OWNER_LABELS",
     "const WORKFLOW_BLOCKED_CODES",
@@ -680,5 +682,5 @@ def test_an_unprovable_replacement_is_explained_and_never_forced():
 
     # The backend refusal message is what the operator reads; the console adds
     # no force path of its own.
-    assert "executed.data.message" in run
+    assert "humanErrorText(executed.data" in run
     assert "force" not in run.lower()

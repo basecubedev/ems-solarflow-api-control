@@ -358,7 +358,13 @@ class InfluxTelemetryWriter:
             if not batch:
                 continue
 
-            client = self._client_or_none()
+            try:
+                client = self._client_or_none()
+            except Exception as exc:
+                self._maybe_log_error(
+                    "influx_writer_client_error", error=exc, hint=self._setup_hint()
+                )
+                client = None
             if client is None:
                 self._maybe_log_error(
                     "influx_writer_unconfigured", hint=self._setup_hint()

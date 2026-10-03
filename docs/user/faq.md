@@ -47,7 +47,8 @@ sh install-admin-console.sh --bridge
 ```
 
 Discovery may be less reliable in bridge mode. The UI is published on
-`127.0.0.1:8090`.
+`127.0.0.1:8090` only, which other machines cannot reach. On a headless host
+add `--bind 0.0.0.0` (or the host's LAN address) to open it on the network.
 
 ### Should I choose Setup or Maintenance?
 
@@ -377,8 +378,9 @@ docker compose -f docker-compose.admin.yml ps
 
 Then rerun the scan and, if needed, enter your LAN CIDR (for example
 `192.168.178.0/24`) manually. If you started the Admin Console in bridge mode,
-switch back to the host-networking default (drop `--bridge`) so discovery can see
-the real LAN. See [troubleshooting.md](troubleshooting.md) for more.
+switch back to the host-networking default (run the installer again without
+`--bridge` and with `--force`, which replaces the bridge-mode compose file) so
+discovery can see the real LAN. See [troubleshooting.md](troubleshooting.md) for more.
 
 ### How do I create a support bundle?
 
@@ -390,6 +392,9 @@ For Docker Bootstrap or advanced shell use:
 ```bash
 docker compose exec ems python3 emsctl.py diagnose --support-bundle
 ```
+
+The ZIP is written to `data/support/` next to your config, unless `--output`
+names another path.
 
 ## General
 
@@ -404,8 +409,10 @@ same containers, without asking you to manage Docker yourself.
 
 ### Which grid meters are supported?
 
-Shelly, Shelly 3EM Gen1, EcoTracker, and Tasmota HTTP setups are documented in
-[supported-setups.md](supported-setups.md).
+Shelly Pro 3EM and Gen2/Gen3, Shelly 3EM Gen1, everHome EcoTracker, Tasmota
+HTTP readers, the Zendure Smart Meter 3CT and D0 (local HTTP, or the D0 over
+MQTT), and any meter that publishes its power to an MQTT topic. Their support
+status is listed in [supported-setups.md](supported-setups.md).
 
 ### How does EMS reach my Zendure devices?
 

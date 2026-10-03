@@ -11,6 +11,7 @@ Change a small set of operating values live, from the browser, without editing
 - Take one inverter out of regulation temporarily.
 - Turn winter mode or Home Assistant publishing on or off.
 - Try a different loop interval or PV priority.
+- Switch an inverter to AC charging from the grid, and set its charge power.
 
 For anything structural — adding a device, changing a transport, changing the
 grid meter — use the Admin Console instead:
@@ -57,19 +58,32 @@ the visual cue that these are decision-affecting controls, not read-outs.
 | # | Card | Subtitle | Fields |
 | --- | --- | --- | --- |
 | 01 | **EMS / System** | Global runtime limits and loop control | `EMS enabled`, `Max total power` (W), `Min output limit` (W), `Loop interval` (s) |
-| 02/03 | **Device cards** (`WR1`, `WR2`, …) | Device runtime write values | `Device enabled`, `Max power` (W), `PV priority` (×), `Offgrid socket` |
+| 02/03 | **Device cards** (`WR1`, `WR2`, …) | Device runtime write values | `Device enabled`, `Max power` (W), `PV priority` (×), `Offgrid socket`, `AC role`, `AC charge power` (W) |
 | 04 | **Winter mode** | Seasonal charging behavior | `Winter mode` |
 | 05 | **Home Assistant** | External publishing and helper control | `HA publishing`, `HA helper control` |
 
 Each card has its own apply button: **Save EMS settings**, **Save WR1
 settings**, **Save winter mode**, **Save HA settings**.
 
+**AC role** is the same setting as `emsctl.py device WR1 ac-mode`:
+*Output (EMS regulates)* is normal operation; *AC charging (input)* takes the
+inverter out of output regulation and lets it charge from the grid at the **AC
+charge power**. **Role set by** names the last writer (`dashboard`, `emsctl`).
+A device controlled over MQTT shows *Output only (MQTT)*: the EMS cannot switch
+its AC mode over MQTT.
+
 ### 4 — Apply
 
 **What you select:** the save button on the card you changed.
 
-**What it changes:** the value is written to `data/runtime-state.json` through
-the EMS-owned runtime writer, and the control loop picks it up on its next cycle.
+**What it changes:** only the fields you changed on that card are written to
+`data/runtime-state.json` through the EMS-owned runtime writer, and the control
+loop picks them up on its next cycle. A value someone else changed in the
+meantime (emsctl, Home Assistant, another tab) is left alone. The cards reload
+the current values every 30 seconds while you are not editing.
+
+Turning the EMS or a device off, switching a device to AC charging, and changing
+the offgrid socket ask for confirmation first.
 
 **Expected result:** a confirmation on the card, and the change becomes visible in
 the [Control pipeline](control.md) below within a loop interval.
@@ -167,6 +181,8 @@ decision within one loop interval.
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
 | No forms visible | Not logged in, or no password configured | Log in, or set a password |
+| Header pill shows **Stale** | No new snapshot for three loop intervals (at least 30 s): the control loop or the connection is stuck | Check `docker compose logs ems` |
+| Grid shows **Meter offline** | The grid meter did not answer; the EMS holds its target. The flow views mark the grid **Offline** and draw no grid flow until it answers again | [Troubleshooting](../troubleshooting.md) |
 | Validation error on save | The value is out of range | Nothing was written; correct it |
 | Saved but nothing changed | Wait one loop interval, then check the pipeline | [Control pipeline](control.md) |
 | Value reverts | Something else is writing runtime state | Check `emsctl.py`, HA helpers, a second controller |

@@ -35,6 +35,13 @@ default:
 Deploying a key does not set the flag, and setting the flag does not deploy a
 key.
 
+The console calls the account disabled only when the running daemon agrees:
+status asks `sshd -T -C user=ems-shell,…` and reports `daemon` as `refused`,
+`accepted`, `unknown` or `absent`. With the flag off and `daemon` anything but
+`refused` or `absent` (no sshd at all), `effectively_disabled` is false and the
+card says the policy is not confirmed — an `/etc/ssh/sshd_config` without the
+drop-in's `Include` line refuses nothing the drop-in promises.
+
 A third control is available and is not on by default: setting
 `shell_key_deployment = no` in `/etc/ems-appliance-manager/appliance.conf`
 refuses console-deployed shell keys outright. An appliance administered only
@@ -84,6 +91,10 @@ do the one thing it exists for. The key is the authentication.
 The drop-in is validated with `visudo -cf` before it is installed, because a
 sudoers file that does not parse takes `sudo` away from every account on the
 host — including the rescue account someone would use to repair it.
+
+The drop-in is written only when the package creates the account. An upgrade
+that finds `ems-shell` already there never writes it: that account may be an
+operator's own, or one whose drop-in was removed on purpose.
 
 ## Turning it on
 

@@ -678,6 +678,57 @@ def test_repair_execution_recreates_a_missing_bind_path(tmp_path):
     assert services.operations.get(planned["operation"]["operation_id"]).state == STATE_SUCCEEDED
 
 
+def execute_repair(services):
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "admin.plan_repair"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    return services.operations.get(planned["operation"]["operation_id"])
+
+
+def test_a_recreated_bind_path_belongs_to_the_deployment_not_to_the_agent(tmp_path):
+    """The agent runs as root with UMask=0077; the EMS container must still write there."""
+
+    import os
+    import shutil
+
+    services = healthy_appliance(tmp_path)
+    shutil.rmtree(services.paths.ems_backups_dir)
+    root = services.paths.install_root.stat()
+    previous = os.umask(0o077)
+    try:
+        operation = execute_repair(services)
+    finally:
+        os.umask(previous)
+
+    created = services.paths.ems_backups_dir.stat()
+    assert operation.state == STATE_SUCCEEDED
+    assert created.st_mode & 0o777 == 0o755
+    assert (created.st_uid, created.st_gid) == (root.st_uid, root.st_gid)
+
+
+def test_a_bind_path_the_deployment_does_not_own_is_not_reported_verified(tmp_path, monkeypatch):
+    import os
+    import shutil
+
+    from appliance import admin_lifecycle
+
+    services = healthy_appliance(tmp_path)
+    shutil.rmtree(services.paths.ems_backups_dir)
+    foreign = (os.getuid() + 1, os.getgid() + 1)
+    monkeypatch.setattr(admin_lifecycle, "deployment_owner", lambda root: foreign)
+    monkeypatch.setattr(admin_lifecycle.os, "chown", lambda *args, **kwargs: None)
+
+    operation = execute_repair(services)
+
+    assert operation.state != STATE_SUCCEEDED
+
+
 def test_repair_execution_starts_a_stopped_container(tmp_path):
     services = healthy_appliance(tmp_path)
     services.host.containers[ADMIN_CONTAINER]["State"].update({"Running": False, "Status": "exited"})

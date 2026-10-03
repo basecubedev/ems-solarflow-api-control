@@ -557,3 +557,24 @@ def test_a_permissions_failure_that_is_real_is_still_named(tmp_path):
 
     assert result.returncode == 1, result.stdout + result.stderr
     assert "cannot normalise the permissions" in result.stderr
+
+
+def test_a_link_swapped_in_while_ownership_is_applied_is_never_followed(tmp_path):
+    """Root re-owns trees the web account can write; a link must not redirect it."""
+
+    import os
+
+    from appliance import migration
+
+    victim = tmp_path / "victim"
+    victim.write_text("host file", encoding="utf-8")
+    victim.chmod(0o644)
+    tree = tmp_path / "web"
+    (tree / "sessions").mkdir(parents=True)
+    os.symlink(victim, tree / "sessions" / "planted")
+    os.symlink(tmp_path, tree / "linked-dir")
+
+    migration._apply_ownership(tree, migration.OWNER_WEB)
+
+    assert (victim.stat().st_mode & 0o777) == 0o644
+    assert (tree / "sessions").stat().st_mode & 0o777 == migration.DIRECTORY_MODE

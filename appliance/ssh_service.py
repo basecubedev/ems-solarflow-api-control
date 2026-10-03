@@ -12,7 +12,13 @@ from dataclasses import dataclass
 from appliance import shell_access
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
 from appliance.rescue_account import ACCOUNT as RESCUE_ACCOUNT
-from appliance.ssh_policy import parse_sshd_config, read_password_refusal
+from appliance.ssh_policy import (
+    REFUSAL_ABSENT,
+    REFUSAL_REFUSED,
+    SHELL_REFUSED_METHODS,
+    parse_sshd_config,
+    read_password_refusal,
+)
 from appliance.sshkeys import AuthorizedKeysStore, validate_public_key
 from appliance.systemd import UNIT_SSH, UNIT_SSH_SOCKET
 from appliance.validation import ValidationError
@@ -101,6 +107,33 @@ class SshService:
             return backup_ownership.record_managed_keys(self.paths, blobs)
         return backup_ownership.forget_managed_keys(self.paths, blobs)
 
+    def _admit_backup_key(self, account):
+        """Refuse a backup key that sshd would accept without its confinement.
+
+        A fail-closed disable moves the key file aside and only expires the
+        account when there was a key; a key written after it would be the one
+        file sshd reads, confined or not. Removing a key never needs this.
+        """
+
+        if self.paths is None or account != self.config.backup_user:
+            return
+        from appliance.backup_confinement import build_activation
+
+        activation = build_activation(paths=self.paths, config=self.config, runner=self.runner)
+        disabled = activation.disabled_keys_path()
+        if (disabled is not None and disabled.exists()) or activation.conflicted_key_files():
+            raise SshServiceError(
+                "backup_access_withdrawn",
+                "backup access was disabled because its confinement could not be proven; "
+                "run `ems-appliance backup-access activate` before adding a key",
+            )
+        if not activation.effective_policy()["confirmed"]:
+            raise SshServiceError(
+                "backup_confinement_not_confirmed",
+                "the running sshd does not apply the backup account's confinement, "
+                "so no key is deployed on it",
+            )
+
     # --- read-only -------------------------------------------------------
 
     def account(self, name):
@@ -165,6 +198,13 @@ class SshService:
 
         return read_password_refusal(self.runner, user=RESCUE_ACCOUNT)
 
+    def shell_login_refusal(self):
+        """Whether the running daemon refuses the shell account every method."""
+
+        return read_password_refusal(
+            self.runner, user=shell_access.ACCOUNT, methods=SHELL_REFUSED_METHODS
+        )
+
     def status(self):
         unit = self.systemd.unit_state(UNIT_SSH)
         socket = self._socket_state()
@@ -173,9 +213,14 @@ class SshService:
         for name in self.config.ssh_key_accounts:
             account = self.account(name)
             keys = []
+            refusal = ""
             if account.exists and account.home:
-                keys = [key.to_dict() for key in AuthorizedKeysStore(account.home).list()]
+                try:
+                    keys = [key.to_dict() for key in AuthorizedKeysStore(account.home).list()]
+                except ValidationError as exc:
+                    refusal = exc.code
             entry = account.to_dict()
+            entry["keys_refused"] = refusal
             entry["keys"] = keys
             entry["key_count"] = len(keys)
             accounts.append(entry)
@@ -195,6 +240,9 @@ class SshService:
             "",
         )
 
+        flag = shell_access.enabled(self.paths) if self.paths else False
+        daemon = self.shell_login_refusal()["state"]
+
         return {
             "service": unit,
             "socket": socket,
@@ -211,7 +259,10 @@ class SshService:
             # reading one of them has been told half the answer.
             "shell_access": {
                 "account": shell_access.ACCOUNT,
-                "enabled": shell_access.enabled(self.paths) if self.paths else False,
+                "enabled": flag,
+                "daemon": daemon,
+                "effectively_disabled": not flag
+                and daemon in (REFUSAL_REFUSED, REFUSAL_ABSENT),
                 "key_deployment_allowed": shell_access.ACCOUNT
                 in tuple(self.config.ssh_key_accounts),
                 # Reported next to the gates rather than discovered when a key
@@ -265,6 +316,7 @@ class SshService:
             raise SshServiceError(exc.code, exc.message)
         if any(item.fingerprint == key.fingerprint for item in store.list()):
             raise SshServiceError("duplicate_public_key", "this key is already authorized")
+        self._admit_backup_key(account)
 
         # The public key is stored with the operation so the execution survives
         # an agent restart; ``Operation.to_dict`` truncates the key body before
@@ -380,6 +432,16 @@ class SshService:
         account = operation.requested_target["account"]
         public_key = operation.requested_target["public_key"]
         store = self.keystore(account)
+        try:
+            self._admit_backup_key(account)
+        except SshServiceError as exc:
+            self.operations.finish(
+                operation.operation_id,
+                STATE_FAILED_TERMINAL,
+                stage="key_add_refused",
+                error={"code": exc.code, "message": exc.message},
+            )
+            raise
         self._advance(operation, "writing_authorized_keys")
         try:
             key = store.add(public_key)

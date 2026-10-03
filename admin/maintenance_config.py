@@ -62,6 +62,8 @@ from ems.config import (
     normalize_mqtt_grid_meter_settings,
     resolve_config_write_gate,
     resolve_grid_meter_mqtt_settings,
+    resolve_mqtt_tls_metadata,
+    TLS_INSECURE_WITHOUT_TLS,
 )
 from ems.config_catalog import (
     ZENDURE_MQTT_BROKER_HELP,
@@ -115,6 +117,7 @@ from ems.zendure_mqtt.config_entries import (
     has_runtime_control_device,
     is_control_zendure_mqtt_device_config,
     is_zendure_mqtt_device_config,
+    legacy_default_broker_present,
     normalized_broker_identity,
     validate_zendure_mqtt_control_device_config,
     validate_zendure_mqtt_device_config,
@@ -208,7 +211,7 @@ def _attach_physical_identity_tokens(value, token_key, *, broker_sources=None):
                 for child in node:
                     walk(child, inherited_sources)
             return
-        sources = broker_sources_from_config(node) or inherited_sources or {}
+        sources = {**(inherited_sources or {}), **broker_sources_from_config(node)}
         devices = node.get("devices")
         if isinstance(devices, list):
             for device in devices:
@@ -360,12 +363,28 @@ def _is_maintenance_field(field):
     return is_editable_catalog_field(field, scope="maintenance", allow_secret=False)
 
 
+ZENDURE_MQTT_BROKER_CARD_FIELDS = (
+    "zendure_mqtt.host",
+    "zendure_mqtt.port",
+    "zendure_mqtt.tls",
+)
+
+
 def _maintenance_field_index():
+    """Feature fields Maintenance edits generically.
+
+    The broker card owns ``zendure_mqtt`` host, port and TLS
+    (``_merge_zendure_mqtt_broker``); as feature fields too, every apply sent
+    the old values back and reverted the card's change. The other
+    ``zendure_mqtt`` settings stay feature fields.
+    """
+
     return config_field_index(
         scope="maintenance",
         allow_secret=False,
         exclude_repeated=True,
         exclude_prefixes=("devices", "grid_meter"),
+        exclude_keys=ZENDURE_MQTT_BROKER_CARD_FIELDS,
     )
 
 
@@ -1820,6 +1839,29 @@ def _validate(config, merge_issues=()):
     # it collides with the implicit legacy top-level broker's identity.
     for issue in find_reserved_mqtt_broker_ref_issues(config):
         validation["errors"].append(_issue(issue["code"], issue["message"]))
+    zendure_block = config.get("zendure_mqtt")
+    if isinstance(zendure_block, dict) and legacy_default_broker_present(zendure_block):
+        try:
+            resolve_mqtt_tls_metadata(
+                tls_mode=zendure_block.get("tls_mode"),
+                tls=zendure_block.get("tls"),
+                tls_insecure=zendure_block.get("tls_insecure"),
+            )
+        except ValueError as exc:
+            hint = (
+                "Turn TLS on for this broker, or set zendure_mqtt.tls_insecure "
+                "to false in config.json."
+                if str(exc) == TLS_INSECURE_WITHOUT_TLS
+                else "Correct zendure_mqtt.tls, tls_insecure and tls_mode in "
+                "config.json: true or false without quotes, and no value that "
+                "contradicts tls_mode."
+            )
+            validation["errors"].append(
+                _issue(
+                    "zendure_mqtt_tls_invalid",
+                    f"The Zendure MQTT broker TLS settings are invalid: {exc}. {hint}",
+                )
+            )
     devices = config.get("devices")
     if not isinstance(devices, list) or not devices:
         validation["errors"].append(_issue("no_devices", "At least one inverter is required."))

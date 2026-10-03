@@ -113,16 +113,16 @@ class FakeMqttClient:
         self.published.append((args, kwargs))
 
 
-def test_create_session_configures_retrying_http_adapters():
+def test_create_session_retries_a_read_once_and_never_a_write():
     session = create_session()
 
     retry = session.get_adapter("http://example.test").max_retries
-    assert retry.total == 3
+    assert retry.total == 1
     assert retry.backoff_factor == 0.3
     assert set(retry.status_forcelist) == {500, 502, 503, 504}
-    assert set(retry.allowed_methods) == {"GET", "POST"}
+    assert set(retry.allowed_methods) == {"GET"}
 
-    assert session.get_adapter("https://example.test").max_retries.total == 3
+    assert session.get_adapter("https://example.test").max_retries.total == 1
 
 
 def test_zendure_write_success_handles_success_and_logs_failure(caplog):
@@ -1023,6 +1023,41 @@ def test_parse_mqtt_grid_power_payload_rejects_invalid_values():
         _parse_mqtt_grid_power_payload(b"1", payload_format="xml")
 
 
+@pytest.mark.parametrize("payload", [b"nan", b"inf", b"-Infinity", b"NaN"])
+def test_parse_mqtt_grid_power_payload_rejects_non_finite_number(payload):
+    with pytest.raises(ValueError, match="not numeric"):
+        _parse_mqtt_grid_power_payload(payload)
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+def test_grid_meter_parsers_reject_non_finite_json_values(literal):
+    import json
+
+    def load(text):
+        return json.loads(text)
+
+    with pytest.raises(ValueError):
+        _parse_mqtt_grid_power_payload(
+            ('{"power": %s}' % literal).encode(),
+            payload_format="json",
+            value_path="power",
+        )
+    with pytest.raises(ValueError):
+        _parse_shelly_power(load('{"em:0": {"total_act_power": %s}}' % literal))
+    with pytest.raises(ValueError):
+        _parse_ecotracker_power(load('{"power": %s}' % literal))
+    with pytest.raises(ValueError):
+        _parse_tasmota_http_power(
+            load('{"StatusSNS": {"Power": %s}}' % literal), "StatusSNS.Power"
+        )
+
+
+def test_ha_client_get_float_rejects_non_finite_state():
+    client = HAClient.__new__(HAClient)
+    client.get_state = lambda entity_id: "nan"
+    assert client.get_float("sensor.x", 7.0) == 7.0
+
+
 def test_mqtt_grid_meter_client_subscribes_and_returns_latest_value():
     fake = FakeMqttClient()
     client = MqttGridMeterClient(
@@ -1365,3 +1400,70 @@ def test_zendure_write_transport_error_records_failure_and_reraises():
         )
     assert client.write_health.failure_count == 1
     assert client.write_health.consecutive_failures == 1
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        ResponseStub(status_code=500, payload={"properties": {"electricLevel": 65}}),
+        ResponseStub(payload={"error": "busy"}),
+        ResponseStub(payload={"properties": "n/a"}),
+        ResponseStub(payload=["not", "an", "object"]),
+    ],
+)
+def test_an_error_reply_is_a_failed_read_not_zero_telemetry(response):
+    zendure = ZendureClient(
+        "WR1",
+        "192.0.2.10",
+        "SN",
+        SessionStub(get_response=response),
+        min_soc=10,
+        max_soc=100,
+        smart_mode=1,
+        grid_off_mode=None,
+    )
+
+    assert zendure.fetch() is None
+    assert zendure.read_health.consecutive_failures == 1
+
+
+@pytest.mark.parametrize(
+    "max_power", ["many", -1, float("nan"), float("inf"), 0, None, True, 10**400]
+)
+def test_an_invalid_device_maximum_falls_back_to_the_system_ceiling(
+    monkeypatch, max_power
+):
+    from ems import config as cfg
+
+    monkeypatch.setattr(cfg, "MAX_DEVICE_POWER", 800)
+    zendure = ZendureClient(
+        "WR1",
+        "192.0.2.10",
+        "SN",
+        None,
+        min_soc=10,
+        max_soc=100,
+        smart_mode=1,
+        grid_off_mode=None,
+        max_power=max_power,
+    )
+    assert zendure.max_power == 800
+
+
+@pytest.mark.parametrize("max_power, expected", [("600", 600), (600.0, 600), ("650.5", 650.5)])
+def test_a_numeric_device_maximum_is_the_device_ceiling(monkeypatch, max_power, expected):
+    from ems import config as cfg
+
+    monkeypatch.setattr(cfg, "MAX_DEVICE_POWER", 2400)
+    zendure = ZendureClient(
+        "WR1",
+        "192.0.2.10",
+        "SN",
+        None,
+        min_soc=10,
+        max_soc=100,
+        smart_mode=1,
+        grid_off_mode=None,
+        max_power=max_power,
+    )
+    assert zendure.max_power == expected

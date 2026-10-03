@@ -39,7 +39,18 @@ SUPPORTED_GRID_METER_TYPES = (
     tuple(value for value, _ in GRID_METER_CHOICES) + _LEGACY_GRID_METER_TYPES
 )
 
-SECRET_KEYS = {"token", "password"}
+SECRET_KEYS = {
+    "token",
+    "password",
+    "passwd",
+    "secret",
+    "client_secret",
+    "app_key",
+    "api_key",
+    "apikey",
+    "username",
+    "client_id",
+}
 
 
 class ConfigInitError(ValueError):

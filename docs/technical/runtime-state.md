@@ -86,7 +86,7 @@ further `outputLimit` writes until PV telemetry becomes positive again.
 |---|---|
 | `enabled` | Skip writes for this device when false |
 | `max_power` | Runtime per-device power limit |
-| `offgrid_socket_mode` | Operator intent for Zendure offgrid socket mode |
+| `offgrid_socket_mode` | Operator intent for Zendure offgrid socket mode; the only writer of `gridOffMode`. A legacy config `devices[].grid_off_mode` only seeds it for a new device; when it differs from the runtime value, `event=legacy_grid_off_mode_ignored` names the command that sets it. |
 | `pv_priority_factor` | Runtime PV-first allocation weight override |
 | `identity` | Stable hardware identity (serial) used to track a device across renames; managed by the EMS |
 

@@ -2521,3 +2521,148 @@ def test_an_invalid_loop_interval_does_not_silence_the_telemetry_check():
     )
 
     assert "energy_telemetry_window_far_above_loop_interval" in codes
+
+
+def test_diagnose_hardware_resolves_a_grid_meter_broker_ref(monkeypatch):
+    """The Admin layout names the broker by reference; the probe must follow it."""
+
+    captured = {}
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def fake_create_connection(address, timeout=0):
+        captured["address"] = address
+        return FakeSocket()
+
+    monkeypatch.setattr(diagnostics.socket, "create_connection", fake_create_connection)
+
+    checks = []
+    diagnostics.diagnose_hardware(
+        checks,
+        {
+            "grid_meter": {
+                "type": "mqtt",
+                "mqtt": {"broker_ref": "home", "topic": "meter/power"},
+            },
+            "zendure_mqtt": {
+                "brokers": {
+                    "home": {
+                        "enabled": True,
+                        "source": "local_mqtt",
+                        "host": "broker.local",
+                        "port": 1883,
+                    }
+                }
+            },
+            "devices": [],
+        },
+    )
+
+    assert captured["address"] == ("broker.local", 1883)
+    assert _levels_by_code(checks).get("mqtt_broker_connect_ok") == "ok"
+
+
+def test_diagnose_hardware_probes_a_tasmota_meter(monkeypatch):
+    captured = {}
+
+    def fake_http_json(url, headers=None, timeout=2):
+        captured["url"] = url
+        return 200, {"StatusSNS": {"SML": {"Power": 321}}}
+
+    monkeypatch.setattr(diagnostics, "diagnose_http_json", fake_http_json)
+
+    checks = []
+    diagnostics.diagnose_hardware(
+        checks,
+        {
+            "grid_meter": {
+                "type": "tasmota_http",
+                "ip": "192.0.2.60",
+                "power_path": "StatusSNS.SML.Power",
+            },
+            "devices": [],
+        },
+    )
+
+    assert captured["url"] == "http://192.0.2.60/cm?cmnd=Status%2010"
+    assert _levels_by_code(checks).get("tasmota_read_ok") == "ok"
+
+
+def test_support_bundle_json_stays_parseable_and_redacted(tmp_path, monkeypatch):
+    for renderer in (
+        "diagnose_text",
+        "diagnose_control_text",
+        "diagnose_control_quality_text",
+    ):
+        monkeypatch.setattr(diagnostics, renderer, lambda report: "")
+    report = {
+        "schema_version": 1,
+        "diagnosis": {
+            "warnings": ["Dashboard binds without configured auth"],
+            "session": {"id": "abc"},
+            "auth": ["x"],
+            "note": "token=SECRET123 and http://u:pw@host/x",
+        },
+        "control": {"device_id": "DEV-SECRET", "warnings": ["no auth"]},
+        "control_quality": {"api_key": "KEY-SECRET"},
+    }
+    output = tmp_path / "bundle.zip"
+    diagnostics.diagnose_write_support_bundle(
+        report, SimpleNamespace(output=str(output)), {}, None
+    )
+    with zipfile.ZipFile(output) as bundle:
+        payloads = {
+            name: bundle.read(name).decode()
+            for name in (
+                "diagnosis.json",
+                "control-diagnostics.json",
+                "control-quality.json",
+            )
+        }
+    for raw in payloads.values():
+        json.loads(raw)
+        for secret in ("SECRET123", "DEV-SECRET", "KEY-SECRET", "pw@"):
+            assert secret not in raw
+    diagnosis = json.loads(payloads["diagnosis.json"])["diagnosis"]
+    assert diagnosis["warnings"] == ["Dashboard binds without configured auth"]
+
+
+def _dashboard_exposure_codes(tmp_path, dashboard):
+    checks = []
+    diagnose_config_plausibility(
+        checks,
+        SimpleNamespace(dashboard_auth=str(tmp_path / "no-auth.json")),
+        {"system": {}, "dashboard": dashboard},
+    )
+    return {check["code"] for check in checks}
+
+
+@pytest.mark.parametrize(
+    "dashboard",
+    [
+        {},
+        {"enabled": "true", "ssl_enabled": "false"},
+        {"enabled": True, "host": "0.0.0.0", "ssl_enabled": "off"},
+    ],
+)
+def test_open_dashboard_is_reported_as_the_runtime_would_start_it(tmp_path, dashboard):
+    codes = _dashboard_exposure_codes(tmp_path, dashboard)
+    assert "dashboard_open_without_https_auth" in codes
+
+
+@pytest.mark.parametrize(
+    "dashboard",
+    [
+        {"enabled": "false"},
+        {"enabled": True, "ssl_enabled": "true"},
+        {"enabled": True, "host": "127.0.0.1"},
+    ],
+)
+def test_closed_dashboard_is_not_reported_as_open(tmp_path, dashboard):
+    codes = _dashboard_exposure_codes(tmp_path, dashboard)
+    assert "dashboard_open_without_https_auth" not in codes

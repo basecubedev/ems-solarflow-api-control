@@ -305,3 +305,36 @@ def test_no_password_reaches_the_agent_written_audit_log(live_agent):
     combined += live_agent.agent_output()
     for secret in SECRETS:
         assert secret not in combined, f"{secret!r} leaked into a log"
+
+
+def test_a_symlink_planted_at_the_lock_is_never_followed(tmp_path):
+    """The config directory is writable by the EMS container."""
+
+    import os
+
+    from appliance import auth as appliance_auth
+
+    target = tmp_path / "victim"
+    target.write_text("untouched", encoding="utf-8")
+    config = tmp_path / "config"
+    config.mkdir()
+    store = appliance_auth.AuthStore(config / "dashboard-auth.json")
+    os.symlink(target, appliance_auth.lock_path(store.path))
+
+    with pytest.raises(OSError):
+        store.create("a-shared-secret-1")
+    assert target.read_text(encoding="utf-8") == "untouched"
+    assert oct(target.stat().st_mode & 0o777) != oct(0o600)
+
+
+def test_the_temporary_record_is_written_and_owned_through_its_descriptor(tmp_path):
+    from appliance import auth as appliance_auth
+
+    config = tmp_path / "config"
+    config.mkdir()
+    store = appliance_auth.AuthStore(config / "dashboard-auth.json")
+    store.create("a-shared-secret-1")
+    store.change("a-shared-secret-1", "a-shared-secret-2")
+
+    assert (store.path.stat().st_mode & 0o777) == 0o600
+    assert not list(config.glob(".dashboard-auth.json.*.tmp"))
