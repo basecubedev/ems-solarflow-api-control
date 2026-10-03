@@ -12,6 +12,10 @@ from dataclasses import dataclass, field
 
 from appliance.commands import CommandError
 
+IMAGE_PULL_TIMEOUT = 1800
+UNWATCHED_PULL_TIMEOUT = 600
+PULL_INTERVAL_SECONDS = 30
+
 DAEMON_RUNNING = "running"
 DAEMON_STOPPED = "stopped"
 DAEMON_UNAVAILABLE = "unavailable"
@@ -221,8 +225,38 @@ class DockerBackend:
     def tag_image(self, source, target):
         return self.runner.run("docker", ["tag", source, target], timeout=60)
 
-    def pull_image(self, reference):
-        result = self.runner.run("docker", ["pull", reference], timeout=max(self.timeout, 600))
+    def pull_image(self, reference, *, keep_going=None):
+        """Pull one image, for as long as a slow card needs.
+
+        A Pi 3B+ on a slow card took more than ten minutes for an Admin release
+        whose layers were nearly all new, and was killed at the deadline it had
+        then. With ``keep_going``, it is asked every ``PULL_INTERVAL_SECONDS``
+        whether to go on, and False stops the pull, so it may run for
+        ``IMAGE_PULL_TIMEOUT``. Without, nobody can stop it, and it keeps the
+        shorter ``UNWATCHED_PULL_TIMEOUT``: a recovery waits on it while the
+        Admin is down.
+        """
+
+        if keep_going is None:
+            result = self.runner.run(
+                "docker", ["pull", reference], timeout=UNWATCHED_PULL_TIMEOUT
+            )
+        else:
+            result = self.runner.run_watched(
+                "docker",
+                ["pull", reference],
+                timeout=IMAGE_PULL_TIMEOUT,
+                interval=PULL_INTERVAL_SECONDS,
+                keep_going=keep_going,
+            )
+        if result.stopped:
+            raise DockerError("image_pull_stopped", f"the pull of {reference} was stopped")
+        if result.timed_out:
+            limit = UNWATCHED_PULL_TIMEOUT if keep_going is None else IMAGE_PULL_TIMEOUT
+            raise DockerError(
+                "image_pull_timed_out",
+                f"{reference} did not finish downloading within {limit // 60} minutes",
+            )
         if not result.ok:
             raise DockerError("image_pull_failed", f"cannot pull {reference}")
         return result

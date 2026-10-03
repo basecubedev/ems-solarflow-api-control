@@ -15,9 +15,12 @@ from appliance.validation import ValidationError
 
 # Enough for a read-only call or a plan that only inspects the host.
 DEFAULT_OPERATION_TIMEOUT = 30
-# A plan that pulls and inspects a container image; the Docker pull alone is
-# allowed 600s by the service that runs it.
+# Calls that read release indexes or inspect images; a pull they lead to runs
+# later, in the executor, not inside the call.
 IMAGE_OPERATION_TIMEOUT = 900
+# An Admin install plan watches its pull and lets it run for
+# docker_backend.IMAGE_PULL_TIMEOUT (1800s); a test keeps this above it.
+ADMIN_INSTALL_PLAN_TIMEOUT = 2100
 
 # Operations that shell out to apt or nmcli reach subprocess budgets far past
 # the default: `packages.check()` alone allows 240 s and a wifi rescan 60 s. A
@@ -181,7 +184,7 @@ MUTATING_OPERATIONS = (
             Field("reinstall", KIND_BOOL, required=False, default=False),
         ),
         summary="Plan an Admin installation",
-        timeout_seconds=IMAGE_OPERATION_TIMEOUT,
+        timeout_seconds=ADMIN_INSTALL_PLAN_TIMEOUT,
     ),
     _spec(
         "admin.plan_rollback",

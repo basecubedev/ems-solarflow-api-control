@@ -139,6 +139,9 @@ class FakeHost:
             }
         )
         self.docker_running = True
+        self.watch_ticks = 0
+        self.on_watch_tick = None
+        self.watch_times_out = False
         self.registry = {}
         self.images = {}
         self.containers = {}
@@ -756,6 +759,21 @@ class ScriptedRunner:
         if check and not result.ok:
             raise CommandError("command_failed", f"{tool} failed")
         return result
+
+    def run_watched(self, tool, args=(), *, timeout, interval, keep_going):
+        """A tool that outlasts ``host.watch_ticks`` intervals, or its deadline."""
+
+        self.resolve(tool)
+        for tick in range(1, self.host.watch_ticks + 1):
+            if self.host.on_watch_tick is not None:
+                self.host.on_watch_tick(tick)
+            if not keep_going(float(tick * interval)):
+                self.host.calls.append((tool, tuple(args), None))
+                return CommandResult(tool, tuple(args), 130, "", "", stopped=True)
+        if self.host.watch_times_out:
+            self.host.calls.append((tool, tuple(args), None))
+            return CommandResult(tool, tuple(args), 124, "", "timed out", timed_out=True)
+        return self.host.handle(tool, list(args), None)
 
 
 class FakeHealthChecker:

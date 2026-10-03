@@ -580,3 +580,23 @@ def test_the_agent_is_ordered_after_the_thing_it_asks_to_reconnect():
 
     assert "After=NetworkManager.service" in unit
     assert "Requires=NetworkManager.service" not in unit, "NetworkManager is optional here"
+
+
+def test_a_wifi_plan_cancelled_while_it_is_made_keeps_no_passphrase(tmp_path, monkeypatch):
+    """The root agent held the passphrase until it restarted."""
+
+    services = build_test_services(tmp_path)
+    seal = services.operations.update_target
+
+    def cancel_then_seal(operation_id, values):
+        services.operations.cancel(operation_id)
+        return seal(operation_id, values)
+
+    monkeypatch.setattr(services.operations, "update_target", cancel_then_seal)
+    with pytest.raises(Exception) as refused:
+        handlers_for(services).dispatch(
+            {"operation": "network.wifi.plan", "ssid": "GuestNet", "passphrase": PASSPHRASE}
+        )
+
+    assert refused.value.code == "operation_cancelled"
+    assert services.network._secrets == {}

@@ -159,6 +159,31 @@ Use **Admin → Repair** for a preview of what is wrong. Typical findings:
 The requested version is already installed. Tick **Reinstall the same version**
 if you want to install it again.
 
+## "image_pull_timed_out" / "image_pull_stopped" / "image_pull_failed"
+
+An install plan downloads the target image before it shows you anything, and
+on a Raspberry Pi 3B+ with a slow card that alone can take well over ten
+minutes: an Admin release usually shares little more than its Debian base with
+the one before it, and every layer is written to the card. While it runs, the
+operation reads **pulling image** with the minutes so far.
+
+- `image_pull_timed_out`: the download did not finish within 30 minutes.
+- `image_pull_stopped`: the plan was cancelled; the download stops within half
+  a minute.
+- `image_pull_failed`: docker refused, for example because ghcr.io cannot be
+  reached, or because an exact tag was typed whose images are not published
+  yet; a release's images appear about twenty minutes after its tag, once its
+  tests have run.
+
+A plan that gave up keeps the reason on its cancelled operation, shown on the
+operation in the console and by `ems-appliance operations`; one you cancelled
+yourself stays as you left it.
+
+Firefox gives up on a request after five minutes. If the browser reports a
+network error while the image is still being pulled, the plan goes on; when the
+operation then waits for confirmation, cancel it and plan again: the image is on
+the card by then, and the new plan takes seconds.
+
 ## "image_version_mismatch" / "image_source_mismatch" / "image_labels_missing"
 
 The pulled image is not the release you asked for, or it is not from the

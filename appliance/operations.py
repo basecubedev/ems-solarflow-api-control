@@ -323,18 +323,47 @@ class OperationStore:
 
     def finish(self, operation_id, state, *, result=None, error=None, stage=None):
         with self._lock:
-            operation = self._load(operation_id)
-            self._transition(operation, state)
-            operation.stage = str(stage or state)
-            operation.result = result if result is None else dict(result)
-            operation.error = error if error is None else dict(error)
-            operation.finished_at = self._time()
-            operation.progress.append({"stage": operation.stage, "at": operation.finished_at})
-            del operation.progress[:-MAX_PROGRESS_ENTRIES]
-            return self._save(operation)
+            return self._finish(
+                self._load(operation_id), state, result=result, error=error, stage=stage
+            )
+
+    def _finish(self, operation, state, *, result=None, error=None, stage=None):
+        self._transition(operation, state)
+        operation.stage = str(stage or state)
+        operation.result = result if result is None else dict(result)
+        operation.error = error if error is None else dict(error)
+        operation.finished_at = self._time()
+        operation.progress.append({"stage": operation.stage, "at": operation.finished_at})
+        del operation.progress[:-MAX_PROGRESS_ENTRIES]
+        return self._save(operation)
 
     def cancel(self, operation_id):
         return self.finish(operation_id, STATE_CANCELLED, stage="cancelled")
+
+    def abandon(self, operation_id, *, error=None):
+        """Cancel a plan that could not be made, and keep why.
+
+        An operator may have cancelled it while it was being made; that record
+        stays as it is, so the planner giving up is no second transition.
+        """
+
+        with self._lock:
+            operation = self._load(operation_id)
+            if operation.terminal:
+                return operation
+            return self._finish(operation, STATE_CANCELLED, error=error, stage="cancelled")
+
+    def note(self, operation_id, detail):
+        """Replace the detail of the stage under way; False once the operation has ended."""
+
+        with self._lock:
+            operation = self._load(operation_id)
+            if operation.terminal:
+                return False
+            if operation.progress:
+                operation.progress[-1] = {**operation.progress[-1], "detail": str(detail)}
+            self._save(operation)
+            return True
 
     def acknowledge(self, operation_id):
         with self._lock:

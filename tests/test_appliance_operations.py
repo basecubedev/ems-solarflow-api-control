@@ -320,3 +320,55 @@ def test_an_unexpected_planner_error_still_releases_the_operation_lock(tmp_path)
         handlers.dispatch({"operation": "admin.plan_repair"})
 
     assert services.operations.active() is None
+
+
+# --- a plan given up while it is made ----------------------------------------
+
+
+def test_abandoning_a_plan_keeps_why(tmp_path):
+    store = store_at(tmp_path)
+    operation = store.create("admin.install", {"tag": "v1.0.0"})
+
+    record = store.abandon(
+        operation.operation_id, error={"code": "image_pull_failed", "message": "cannot pull x"}
+    )
+
+    assert record.state == STATE_CANCELLED
+    assert record.error == {"code": "image_pull_failed", "message": "cannot pull x"}
+
+
+def test_abandoning_a_plan_an_operator_cancelled_leaves_the_cancel(tmp_path):
+    """The planner cancelled again and failed on the transition from
+    cancelled to cancelled, which lost the reason the plan ended."""
+
+    store = store_at(tmp_path)
+    operation = store.create("admin.install", {"tag": "v1.0.0"})
+    cancelled = store.cancel(operation.operation_id)
+
+    record = store.abandon(
+        operation.operation_id, error={"code": "image_pull_stopped", "message": "stopped"}
+    )
+
+    assert (record.state, record.error, record.finished_at) == (
+        STATE_CANCELLED,
+        None,
+        cancelled.finished_at,
+    )
+
+
+def test_a_note_replaces_the_detail_of_the_stage_under_way_until_it_ends(tmp_path):
+    store = store_at(tmp_path)
+    operation = store.create("admin.install", {"tag": "v1.0.0"})
+    store.advance(operation.operation_id, "pulling_image", detail="image")
+    before = len(store.get(operation.operation_id).progress)
+
+    assert store.note(operation.operation_id, "image, 1 min so far") is True
+
+    progress = store.get(operation.operation_id).progress
+    assert len(progress) == before
+    assert (progress[-1]["stage"], progress[-1]["detail"]) == ("pulling_image", "image, 1 min so far")
+
+    store.cancel(operation.operation_id)
+
+    assert store.note(operation.operation_id, "image, 2 min so far") is False
+    assert store.get(operation.operation_id).progress[-1]["stage"] == "cancelled"
