@@ -277,6 +277,19 @@ def _observed_pack_count(data, props):
     return packs
 
 
+DEVICE_STATE_PROPERTIES = frozenset(
+    {
+        "electricLevel", "minSoc", "socSet", "solarInputPower", "outputHomePower",
+        "packInputPower", "outputPackPower", "hyperTmp", "BatVolt", "rssi",
+        "remainOutTime", "solarPower1", "solarPower2", "solarPower3", "solarPower4",
+        "outputLimit", "socLimit", "packState", "faultLevel", "smartMode",
+        "gridOffMode", "acMode", "acStatus", "dcStatus", "gridState", "inputLimit",
+        "packNum", "socStatus", "batCalTime", "gridInputPower", "gridReverse",
+        "chargeLimit", "chargeMaxLimit",
+    }
+)
+
+
 def parse_device(data):
     """Extract relevant values from Zendure API response."""
 

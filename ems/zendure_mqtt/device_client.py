@@ -24,7 +24,7 @@ from ems.charge_record import (
     CHARGE_EXIT_TO_OUTPUT,
     ChargeRecord,
 )
-from ems.clients import parse_device
+from ems.clients import DEVICE_STATE_PROPERTIES, parse_device
 from ems.health import CommHealth
 from ems.logging_utils import log_event
 from ems.mqtt_control import dispatch
@@ -68,6 +68,7 @@ from ems.mqtt_control.zendure_profiles import (
 )
 from ems.zendure_mqtt.config_entries import control_gate_for_broker_source
 from ems.zendure_mqtt.service import SNAPSHOT_STALE
+from ems.zendure_mqtt.snapshot import observable_metrics, pack_witness
 from ems.zendure_mqtt.write_protocols import (
     CONTROL_PUBLISH_QOS,
     MqttPublishMessage,
@@ -355,6 +356,8 @@ class ZendureMqttDeviceClient:
         self._last_confirmed_target = None
         self._last_confirmed_monotonic = None
         self._unconfirmed_own_targets = set()
+        self._ignored_report_values = []
+        self._ignored_report_values_named = set()
         self._foreign_streak = 0
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
@@ -444,20 +447,27 @@ class ZendureMqttDeviceClient:
         status = self._service.snapshot_status(self._device_id)
         state = None
         if status.is_fresh:
+            metrics = status.snapshot.metrics or {}
+            observable = observable_metrics(metrics)
+            self._note_ignored_report_values(
+                sorted(
+                    key
+                    for key in DEVICE_STATE_PROPERTIES
+                    if key in metrics and key not in observable
+                )
+            )
             state = parse_device({
-                "properties": status.snapshot.metrics,
+                "properties": observable,
                 # The aggregator holds the pack list separately; without it a
                 # spurious ``packNum: 0`` would latch in the merged metrics.
-                "packData": getattr(status.snapshot, "battery_packs", None),
+                "packData": pack_witness(status.snapshot),
             })
             # Attempt telemetry confirmation from this fresh snapshot BEFORE
             # settling timeouts, so confirming telemetry in the same fetch wins
             # over a confirmation deadline that has just elapsed.
             self._confirm_from_snapshot(state, status.snapshot, now)
-            self._detect_external_control(state, status.snapshot)
-            self._charge.observe(
-                state, setpoint_reported="inputLimit" in status.snapshot.metrics
-            )
+            self._detect_external_control(status.snapshot)
+            self._charge.observe(state, setpoint_reported="inputLimit" in observable)
         else:
             record = self._active_command
             policy = self._confirmation_policy()
@@ -1455,7 +1465,28 @@ class ZendureMqttDeviceClient:
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
 
-    def _detect_external_control(self, state, snapshot):
+    def _note_ignored_report_values(self, names):
+        """Keep which report values were dropped, and name each one once.
+
+        Only fields ``parse_device`` reads are traced: a closed set, so a broker
+        client inventing metric names can neither flood the log nor grow this,
+        and derived or textual metrics nobody reads as numbers are not reported.
+        """
+
+        self._ignored_report_values = names
+        for name in names:
+            if name in self._ignored_report_values_named:
+                continue
+            self._ignored_report_values_named.add(name)
+            log_event(
+                logging.INFO,
+                "mqtt_report_value_ignored",
+                device=self.name,
+                metric=name,
+                reason="not_a_usable_number",
+            )
+
+    def _detect_external_control(self, snapshot):
         """Conservatively flag a foreign writer overwriting a confirmed target.
 
         Requires: no local command in flight, a previously *confirmed* local
@@ -1463,8 +1494,9 @@ class ZendureMqttDeviceClient:
         neither that target nor any own target released unconfirmed since,
         which the device may apply late -- for a discharge its ``outputLimit``,
         for a charge the report a charging device gives (see
-        ``_reports_own_target``). Reports evidence only — never claims which
-        controller is responsible.
+        ``_reports_own_target``). Only a finite number the report carried
+        counts; a missing value is not read as 0 W. Reports evidence only —
+        never claims which controller is responsible.
         """
 
         if self._active_command is not None or self._last_confirmed_target is None:
@@ -1490,7 +1522,7 @@ class ZendureMqttDeviceClient:
             and observed_time <= self._foreign_last_observed_monotonic
         ):
             return
-        observed = getattr(state, "output_limit", None)
+        observed = metrics.get("outputLimit")
         if (
             isinstance(observed, bool)
             or not isinstance(observed, (int, float))
@@ -1728,6 +1760,7 @@ class ZendureMqttDeviceClient:
             "active_command": active.snapshot() if active is not None else None,
             "pending_target": self._pending_target,
             "last_confirmed_target_w": self._last_confirmed_target,
+            "ignored_report_values": list(self._ignored_report_values),
             "external_control_suspected": bool(self._external_control_suspected),
             "external_control_detail": self._external_control_suspected,
             "confirmation_deadline": confirmation_deadline,
