@@ -117,6 +117,7 @@ class EMSController:
         self.last_winter_adjust_date = None
         self._last_winter_active = None
         self.winter_min_soc_targets = {}
+        self.winter_raise_waiting = {}
         self.night_min_soc_idle_active = False
         self.night_min_soc_idle_parked = set()
         self._dashboard_capabilities = []
@@ -2505,7 +2506,41 @@ class EMSController:
             return False
 
     def winter_reconciliation_target(self, dev, state, winter_active, adjust_today):
-        """Return desired winter/summer minSoc target and adjustment context."""
+        """Return desired winter/summer minSoc target and adjustment context.
+
+        Every winter and summer-reset target ends here, so a raise over the
+        device's reported minSoc -- from today's adjustment, a remembered target,
+        the configured floor or the summer reset -- is held back until the
+        battery holds it (``cfg.winter_min_soc_the_battery_holds``).
+        """
+
+        target, adjusted = self.winter_planned_min_soc(
+            dev, state, winter_active, adjust_today
+        )
+        if target is None:
+            if not cfg.winter_feature_enabled(self.runtime_state):
+                self.winter_raise_waiting.pop(dev.name, None)
+            return None, adjusted
+
+        soc = getattr(state, "soc", None)
+        held = cfg.winter_min_soc_the_battery_holds(target, state.min_soc, soc)
+        if held != target and getattr(dev, "supports_state_reconciliation", True):
+            starts = self.winter_raise_waiting.get(dev.name) != target
+            self.winter_raise_waiting[dev.name] = target
+            log_event(
+                logging.INFO if adjusted or starts else logging.DEBUG,
+                "winter_raise_waits_for_battery",
+                device=dev.name,
+                current_soc=soc,
+                current_min_soc=state.min_soc,
+                target_min_soc=target
+            )
+        else:
+            self.winter_raise_waiting.pop(dev.name, None)
+        return held, adjusted
+
+    def winter_planned_min_soc(self, dev, state, winter_active, adjust_today):
+        """The winter/summer minSoc target before the battery is consulted."""
 
         if not cfg.winter_feature_enabled(self.runtime_state):
             return None, False
@@ -2523,8 +2558,11 @@ class EMSController:
             self.winter_min_soc_targets.pop(dev.name, None)
 
             if had_target or int(state.min_soc) != int(summer_min_soc):
+                waits = cfg.winter_min_soc_the_battery_holds(
+                    summer_min_soc, state.min_soc, getattr(state, "soc", None)
+                ) != summer_min_soc
                 log_event(
-                    logging.INFO,
+                    logging.DEBUG if waits and not had_target else logging.INFO,
                     "winter_summer_reset",
                     device=dev.name,
                     current_min_soc=state.min_soc,
@@ -2541,10 +2579,7 @@ class EMSController:
             self.winter_min_soc_targets[dev.name] = held
             return held, False
 
-        effective_min_soc = self.winter_min_soc_targets.get(
-            dev.name,
-            state.min_soc if state.min_soc > 0 else dev.min_soc
-        )
+        effective_min_soc = self.winter_adjustment_base(dev, state)
         target = cfg.calculate_winter_min_soc_target(
             state.soc,
             effective_min_soc,
@@ -2565,6 +2600,19 @@ class EMSController:
         )
 
         return target, True
+
+    def winter_adjustment_base(self, dev, state):
+        """The minSoc the daily adjustment steps up from.
+
+        The remembered target, or the device's reported minSoc when that is
+        lower: a target the battery never reached is not stepped up again. A
+        device that reports no minSoc keeps the remembered target.
+        """
+
+        remembered = self.winter_min_soc_targets.get(dev.name)
+        reported = state.min_soc if state.min_soc > 0 else None
+        known = [value for value in (remembered, reported) if value is not None]
+        return min(known) if known else dev.min_soc
 
     def winter_held_min_soc(self, dev, state):
         """Winter minSoc to keep when no ramp target is known yet.
@@ -3048,7 +3096,7 @@ class EMSController:
             base = p + dev.name.lower() + "_winter_"
             own_min_soc = state.min_soc if state.min_soc > 0 else dev.min_soc
             effective_min_soc = (
-                self.winter_min_soc_targets.get(dev.name, own_min_soc)
+                self.winter_adjustment_base(dev, state)
                 if has_reserve
                 else own_min_soc
             )

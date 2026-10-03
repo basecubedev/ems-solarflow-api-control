@@ -542,7 +542,10 @@ toggle can still enable or disable winter behavior through runtime-state.
 
 `winter.winter_min_soc` is the desired winter `minSoc`.
 
-`winter.ramp_step_percent` limits daily `minSoc` increases.
+`winter.ramp_step_percent` is the step by which the daily adjustment raises
+the `minSoc` target; when the battery is already further above, the target is
+its SoC, up to `winter_min_soc`. A raise is written only once the battery holds
+it.
 
 `winter.adjust_hour` is the hour used for daily winter adjustment.
 
