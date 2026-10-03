@@ -256,6 +256,60 @@ you switch to `data/runtime-state.json`, the old root-level file is no longer
 required and may be removed manually. EMS will automatically create a new
 runtime-state file if the configured file does not exist.
 
+## Time zone
+
+The winter adjustment hour (`winter.adjust_hour`) and the full-charge assist
+`force_time` are local hours, and inside a container local time is whatever
+`TZ` says. The Compose file passes `TZ` from `.env` to the EMS container;
+without it the container runs on UTC. `emsctl.py diagnose` reports the zone in
+effect, judged by the zone file rather than the name, with its offset where it
+reads one, and warns where the hours are likely not the ones meant — among
+them a `TZ` that is set but empty, no `TZ` reaching the container while its
+`/etc/localtime` runs on UTC (a Compose file from before `TZ`), a UTC name that
+reads another zone, a `GMT+N` offset written the POSIX way, and a name the
+image does not know. A `.env` without `TZ` under the current Compose file runs
+on its default and reports UTC.
+
+The installers write the zone into `.env`: a `TZ` exported in the shell that
+runs them first, then a `TZ` already in `.env` (the last one, as Compose reads
+it), then the host's own zone — except inside a container, where they read none
+and the containers stay on UTC until `TZ` is set. A
+name has to be a current IANA name such as `Europe/Berlin`; legacy names like
+`US/Eastern` or `Europe/Kiev` are not installed in the image and would run on
+UTC. Windows PowerShell 5.1 cannot translate a Windows zone name, so on Windows
+the installer asks you to set `TZ` in `.env` yourself unless PowerShell 7.2 or
+later is used.
+
+Compose takes a `TZ` exported in your shell before the one in `.env`. If your
+shell exports one (some systems set `TZ=:/etc/localtime`), unset it or run
+compose with `env -u TZ docker compose up -d`.
+
+Set `TZ` rather than mounting the host's `/etc/localtime` into the container.
+In the image `/etc/localtime` points at `Etc/UTC`, so the mount lands on the
+UTC zone file itself: the container then runs on the host's hours while `TZ`
+reads `UTC`, and so does every zone name that resolves to that file.
+`diagnose` warns when a UTC name reads another zone.
+
+An installation made before the Compose file carried `TZ` runs on UTC, and an
+upgrade does not add the line. Add it to the `ems` service and the zone to
+`.env`, then recreate the container:
+
+```yaml
+    environment:
+      TZ: "${TZ:-UTC}"
+```
+
+```bash
+echo "TZ=Europe/Berlin" >> .env
+docker compose up -d
+```
+
+The Admin Console records the zone when it is installed (as `EMS_TIMEZONE`)
+and writes it into the `.env` of an EMS deployment it prepares when that file
+names no zone: no `TZ`, or an empty last one. The line it
+writes ends in `# written by the Admin Console` and follows the Admin's zone on
+the next prepare; a `TZ` you set there is kept.
+
 ## Verify Non-Root Runtime
 
 Verify the real PID 1 user inside the running container:

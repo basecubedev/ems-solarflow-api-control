@@ -10,18 +10,21 @@ less thing to get wrong.
 What the EMS actually needs is the zone its containers run in, because that is
 what decides when an hour-based control window opens — a winter midday charge
 window set to hour 12 fires at 12:00 local only if the container agrees what
-local means. Set it in the appliance UI under **Network → Timezone**, or in
-`appliance.conf`:
+local means. Set it in the appliance UI under **Network → Change the
+timezone**, or in `appliance.conf`:
 
 ```ini
 timezone = Europe/Berlin
 ```
 
 The value chosen in the UI is written to `/etc/ems-appliance-manager/timezone`,
-which is a shared path, and it outranks the packaged default. It does **not**
-reach the EMS containers yet: they run on UTC, so hour-based control windows
-(the winter adjustment hour, the full-charge assist `force_time`) are UTC
-hours. Translate them when you set them.
+which is a shared path, and it outranks the packaged default. The appliance
+hands it to the Admin Console when it installs it, and the Admin Console passes
+it to the EMS containers it creates, so hour-based control windows (the winter
+adjustment hour, the full-charge assist `force_time`) open in that zone. **Set it
+before the Admin Console is installed.** A change afterwards is saved but does
+not reach the running containers: they keep the zone the Admin Console was
+installed with.
 
 ## Supported platforms
 
@@ -560,7 +563,7 @@ The first start requires:
    Appliance Manager, the Admin console and the dashboard, and changing it from
    any of them changes it for all three.
 2. **Confirm the hostname** (Network section).
-3. **Confirm the timezone** (Overview → system time).
+3. **Confirm the timezone** (Network → Change the timezone).
 4. **Review the network state** (Network section).
 5. **Review the Admin installation state** (Admin section).
 

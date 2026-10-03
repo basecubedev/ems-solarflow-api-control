@@ -7,6 +7,7 @@ generates and validates Compose is gated behind Docker availability.
 """
 
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -211,6 +212,464 @@ def test_admin_installer_generates_admin_update_metadata(tmp_path):
     assert "EMS_ADMIN_IMAGE=" + ADMIN_IMAGE in env_text
     assert "EMS_ADMIN_COMPOSE_SERVICE=ems-solarflow-admin" in env_text
     assert "EMS_ADMIN_CONTAINER_NAME=ems-solarflow-admin" in env_text
+
+
+def test_admin_installer_bakes_the_zone_it_was_given_into_the_admin(tmp_path):
+    """The Admin runs the EMS installer and compose, which take the zone from it."""
+
+    work = tmp_path / "work"
+    work.mkdir()
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--no-start", "--install-dir", str(work)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "TZ": "Europe/Berlin"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = read(work / "docker-compose.admin.yml")
+    environment = text.split("    environment:\n", 1)[1].split("    volumes:", 1)[0]
+    assert '      EMS_TIMEZONE: "Europe/Berlin"\n' in environment
+    assert "\n      TZ:" not in environment
+    assert "TZ=Europe/Berlin" in read(work / ".env.admin").splitlines()
+
+
+def _run_admin_installer(work, shell_zone, *extra, host=None):
+    env = {key: value for key, value in os.environ.items() if key != "TZ"}
+    if shell_zone:
+        env["TZ"] = shell_zone
+    if host is not None:
+        env["PATH"] = f"{host}{os.pathsep}{env.get('PATH', '')}"
+    return subprocess.run(
+        ["sh", str(INSTALLER), "--no-start", "--install-dir", str(work), *extra],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+@pytest.mark.parametrize(
+    ("shell_zone", "kept", "message"),
+    [
+        ("Europe/Berlin", "Europe/Lisbon", "TZ=Europe/Berlin from this shell is used instead of TZ=Europe/Lisbon in .env.admin"),
+        (None, ":Europe/Berlin", "TZ=:Europe/Berlin in .env.admin is not a zone name this installer writes"),
+    ],
+)
+def test_admin_installer_names_a_zone_it_replaces(tmp_path, shell_zone, kept, message):
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".env.admin").write_text(f"TZ={kept}\n", encoding="utf-8")
+
+    result = _run_admin_installer(work, shell_zone, "--force")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert message in result.stderr
+
+
+def _admin_zone(work):
+    return read(work / "docker-compose.admin.yml").split("EMS_TIMEZONE: ", 1)[1].split("\n", 1)[0]
+
+
+_ZONE_LINE = re.compile(r"\s*(export\s+)?TZ\s*[=:]")
+
+
+def _env_admin_zones(work):
+    return [line for line in read(work / ".env.admin").splitlines() if _ZONE_LINE.match(line)]
+
+
+def test_admin_installer_says_a_kept_compose_keeps_its_zone(tmp_path):
+    """Without --force the compose stays, and with it the zone baked into it."""
+
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+
+    result = _run_admin_installer(work, "Europe/Berlin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "TZ=Europe/Berlin from this shell is not used: docker-compose.admin.yml is kept" in result.stderr
+    assert "EMS_TIMEZONE there and TZ in .env.admin" in result.stderr
+    assert "EMS deployments prepared before keep the TZ in their own .env" in result.stderr
+    assert "replaces" not in result.stderr
+    assert "Time zone:     Europe/Lisbon" in result.stdout + result.stderr
+    assert _admin_zone(work) == '"Europe/Lisbon"'
+
+
+@pytest.mark.parametrize(
+    "kept_env",
+    ["TZ=Europe/Lisbon\n", "", "export TZ=Europe/Lisbon\n", "LAST=1"],
+    ids=["with-a-zone", "from-before-zones", "exported", "no-final-newline"],
+)
+def test_admin_installer_recreates_a_missing_compose_with_the_zone_it_was_given(tmp_path, kept_env):
+    """The documented recovery for a missing compose: rerun with TZ set. The kept
+    .env.admin follows, so a later --force does not take the old zone back."""
+
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+    (work / "docker-compose.admin.yml").unlink()
+    env_admin = work / ".env.admin"
+    kept = [line for line in read(env_admin).splitlines() if not line.startswith("TZ")]
+    env_admin.write_text("\n".join(kept) + "\n" + kept_env, encoding="utf-8")
+
+    result = _run_admin_installer(work, "Europe/Berlin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _admin_zone(work) == '"Europe/Berlin"'
+    assert _env_admin_zones(work) == ["TZ=Europe/Berlin"]
+    expected = kept + (["LAST=1"] if kept_env == "LAST=1" else [])
+    assert [line for line in read(env_admin).splitlines() if not _ZONE_LINE.match(line)] == expected
+    assert "is not used" not in result.stderr
+    assert "No time zone could be read here" not in result.stderr
+
+
+def test_admin_installer_keeps_the_mode_of_an_env_it_sets_the_zone_in(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+    (work / "docker-compose.admin.yml").unlink()
+    (work / ".env.admin").chmod(0o640)
+
+    assert _run_admin_installer(work, "Europe/Berlin").returncode == 0
+
+    assert stat.S_IMODE((work / ".env.admin").stat().st_mode) == 0o640
+    assert _env_admin_zones(work) == ["TZ=Europe/Berlin"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes a read-only file anyway")
+def test_admin_installer_finishes_when_it_cannot_set_the_zone_in_a_kept_env(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+    (work / "docker-compose.admin.yml").unlink()
+    (work / ".env.admin").chmod(0o444)
+
+    result = _run_admin_installer(work, "Europe/Berlin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Could not set TZ in .env.admin" in result.stderr
+    assert all(line.startswith("warning: ") for line in result.stderr.splitlines()), result.stderr
+    assert not list(work.glob(".env.admin.tz.*"))
+
+
+def test_admin_installer_leaves_the_zone_in_a_kept_env_alone_when_the_compose_stays(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+    env_admin = work / ".env.admin"
+    env_admin.write_text(read(env_admin).replace("TZ=Europe/Lisbon", "TZ=Asia/Tokyo"), encoding="utf-8")
+
+    assert _run_admin_installer(work, "Europe/Berlin").returncode == 0
+
+    assert _env_admin_zones(work) == ["TZ=Asia/Tokyo"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "      EMS_TIMEZONE: Europe/Lisbon",
+        "      EMS_TIMEZONE: 'Europe/Lisbon'",
+        '      EMS_TIMEZONE: "Europe/Lisbon" # set by hand',
+        '      "EMS_TIMEZONE": "Europe/Lisbon"',
+        "      - EMS_TIMEZONE=Europe/Lisbon",
+        '      - "EMS_TIMEZONE=Europe/Lisbon"',
+        "      - 'EMS_TIMEZONE=Europe/Lisbon' # set by hand",
+        "      'EMS_TIMEZONE': 'Europe/Lisbon'",
+        "      EMS_TIMEZONE : Europe/Lisbon",
+        "      EMS_TIMEZONE: Europe/Lisbon\t# set by hand",
+        '      EMS_TIMEZONE: " Europe/Lisbon"',
+        '      EMS_TIMEZONE: "Europe/Lisbon\t"',
+        '      - "EMS_TIMEZONE=Europe/Lisbon "',
+        "      EMS_TIMEZONE: Europe/Lisbon   ",
+        "      - EMS_TIMEZONE=Europe/Lisbon # set by hand",
+        "      - EMS_TIMEZONE= Europe/Lisbon",
+        "      - 'EMS_TIMEZONE=Europe/Lisbon' # set by 'me'",
+        '      - "EMS_TIMEZONE=Europe/Lisbon" # was "UTC"',
+    ],
+)
+def test_admin_installer_reads_the_zone_of_a_kept_compose_in_any_form_compose_reads(tmp_path, line):
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+    compose = work / "docker-compose.admin.yml"
+    compose.write_text(
+        "\n".join(
+            line if text.strip().startswith("EMS_TIMEZONE:") else text
+            for text in read(compose).splitlines()
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (work / ".env.admin").unlink()
+
+    result = _run_admin_installer(work, None)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _env_admin_zones(work) == ["TZ=Europe/Lisbon"]
+    assert "records no time zone" not in result.stderr
+
+
+def test_admin_installer_reads_the_zone_of_a_kept_compose_with_windows_line_endings(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+    compose = work / "docker-compose.admin.yml"
+    compose.write_bytes(read(compose).replace("\n", "\r\n").encode("utf-8"))
+    (work / ".env.admin").unlink()
+
+    result = _run_admin_installer(work, None)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _env_admin_zones(work) == ["TZ=Europe/Lisbon"]
+
+
+def test_admin_installer_help_lists_every_option_before_its_environment():
+    result = subprocess.run(["sh", str(INSTALLER), "--help"], capture_output=True, text=True)
+
+    options, _, environment = result.stdout.partition("Environment:")
+    assert "--help" in options
+    assert "--help" not in environment
+    assert "TZ" in environment
+
+
+def test_admin_installer_recreates_a_missing_env_with_the_zone_the_compose_keeps(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+    (work / ".env.admin").unlink()
+
+    result = _run_admin_installer(work, "Europe/Berlin")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _env_admin_zones(work) == ["TZ=Europe/Lisbon"]
+    assert "Time zone:     Europe/Lisbon" in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("baked", ['"Europe\\\\Berlin"', '"${HOME}"'])
+def test_admin_installer_takes_no_zone_from_a_compose_that_holds_none(tmp_path, baked):
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+    compose = work / "docker-compose.admin.yml"
+    compose.write_text(read(compose).replace('"Europe/Lisbon"', baked), encoding="utf-8")
+    (work / ".env.admin").unlink()
+
+    result = _run_admin_installer(work, None)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _env_admin_zones(work) == []
+    assert "records no time zone" in result.stderr
+    assert "To record one, set EMS_TIMEZONE there and TZ in .env.admin" in result.stderr
+
+
+def test_admin_installer_leaves_a_kept_env_untouched_when_it_already_names_the_zone(tmp_path):
+    """Rewritten anyway, the TZ line moved to the end and the file's hash changed,
+    and the appliance's Admin plans carry that hash."""
+
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+    (work / "docker-compose.admin.yml").unlink()
+    env_admin = work / ".env.admin"
+    lines = read(env_admin).splitlines()
+    env_admin.write_text("\n".join(["TZ=Europe/Lisbon"] + [line for line in lines if not line.startswith("TZ=")]) + "\n", encoding="utf-8")
+    before = env_admin.read_bytes()
+
+    result = _run_admin_installer(work, "Europe/Lisbon")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert env_admin.read_bytes() == before
+    assert "Set TZ in" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '      EMS_TIMEZONE: Europe/Lisbon"',
+        "      - EMS_TIMEZONE=Europe/Lisbon'",
+        '      - EMS_TIMEZONE="Europe/Lisbon"',
+        "      - EMS_TIMEZONE='Europe/Lisbon'",
+        "      - EMS_TIMEZONE = Europe/Lisbon",
+        "      EMS_TIMEZONE: /Europe/Lisbon",
+        "      EMS_TIMEZONE: \"'Europe/Lisbon'\"",
+        "      EMS_TIMEZONE: null",
+        "      EMS_TIMEZONE: NULL",
+    ],
+)
+def test_admin_installer_reads_no_zone_where_compose_reads_none(tmp_path, line):
+    """Compose keeps these quotes, names another key, passes a path or no
+    value at all: what the Admin gets is no zone name, and saying
+    Europe/Lisbon, or writing TZ=null, would hide that."""
+
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+    compose = work / "docker-compose.admin.yml"
+    compose.write_text(
+        "\n".join(
+            line if text.strip().startswith("EMS_TIMEZONE:") else text
+            for text in read(compose).splitlines()
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (work / ".env.admin").unlink()
+
+    result = _run_admin_installer(work, None)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _env_admin_zones(work) == []
+    assert "records no time zone" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("compose_kept", "shell_zone"),
+    [(False, ":/etc/localtime"), (True, ":/etc/localtime"), (True, "/usr/share/zoneinfo/Europe/Berlin")],
+    ids=["fresh", "kept-compose", "kept-compose-path"],
+)
+def test_admin_installer_says_a_shell_tz_that_names_no_zone_is_not_used(tmp_path, compose_kept, shell_zone):
+    work = tmp_path / "work"
+    work.mkdir()
+    if compose_kept:
+        assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+
+    result = _run_admin_installer(work, shell_zone)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"TZ={shell_zone} does not name a time zone; it is not used." in result.stderr
+    assert "To change the zone" not in result.stderr
+
+
+def test_admin_installer_says_when_force_replaces_the_zone_of_the_compose(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+
+    result = _run_admin_installer(work, "Europe/Berlin", "--force")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        "--force replaces EMS_TIMEZONE=Europe/Lisbon in docker-compose.admin.yml with Europe/Berlin."
+        in result.stderr
+    )
+    assert _admin_zone(work) == '"Europe/Berlin"'
+
+
+@pytest.mark.parametrize("compose_before", [True, False], ids=["same-zone", "no-compose"])
+def test_admin_installer_says_nothing_when_force_replaces_no_zone(tmp_path, compose_before):
+    work = tmp_path / "work"
+    work.mkdir()
+    if compose_before:
+        assert _run_admin_installer(work, "Europe/Lisbon").returncode == 0
+
+    result = _run_admin_installer(work, "Europe/Lisbon", "--force")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--force replaces" not in result.stderr
+
+
+def _host(tmp_path, *, timezone_file=None, localtime=None):
+    """PATH stubs for a host whose zone sources answer as given, or not at all."""
+
+    bin_dir = tmp_path / "host-bin"
+    bin_dir.mkdir()
+
+    def tool(name, path, answer):
+        reply = f"echo {answer}; exit 0" if answer else "exit 1"
+        script = (
+            "#!/bin/sh\n"
+            f'for a in "$@"; do [ "$a" = {path} ] && {{ {reply}; }}; done\n'
+            f'exec {shutil.which(name)} "$@"\n'
+        )
+        (bin_dir / name).write_text(script, encoding="utf-8")
+        (bin_dir / name).chmod(0o755)
+
+    (bin_dir / "timedatectl").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    (bin_dir / "timedatectl").chmod(0o755)
+    tool("head", "/etc/timezone", timezone_file)
+    tool("readlink", "/etc/localtime", localtime)
+    return bin_dir
+
+
+@pytest.mark.parametrize(
+    ("timezone_file", "localtime", "zone"),
+    [
+        ("Asia/Tokyo", "/usr/share/zoneinfo/America/New_York", "Asia/Tokyo"),
+        (None, "/usr/share/zoneinfo/America/New_York", "America/New_York"),
+    ],
+    ids=["etc-timezone", "localtime-link"],
+)
+@pytest.mark.skipif(
+    os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"),
+    reason="inside a container the installer reads no host zone by design",
+)
+def test_admin_installer_reads_the_host_zone_from_its_files(tmp_path, timezone_file, localtime, zone):
+    work = tmp_path / "work"
+    work.mkdir()
+
+    result = _run_admin_installer(
+        work, None, host=_host(tmp_path, timezone_file=timezone_file, localtime=localtime)
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _admin_zone(work) == f'"{zone}"'
+
+
+def test_admin_installer_on_a_host_without_a_zone_writes_none(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+
+    result = _run_admin_installer(work, None, host=_host(tmp_path))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "No time zone could be read here" in result.stderr
+    assert _admin_zone(work) == '""'
+    assert _env_admin_zones(work) == []
+
+
+def test_admin_installer_on_a_host_without_a_zone_says_force_leaves_none(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    host = _host(tmp_path)
+    assert _run_admin_installer(work, "Europe/Lisbon", host=host).returncode == 0
+    (work / ".env.admin").unlink()
+
+    result = _run_admin_installer(work, None, "--force", host=host)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        "--force replaces EMS_TIMEZONE=Europe/Lisbon in docker-compose.admin.yml with no zone."
+        in result.stderr
+    )
+
+
+def test_admin_installer_on_a_host_without_a_zone_removes_one_it_cannot_write(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    host = _host(tmp_path)
+    assert _run_admin_installer(work, "Europe/Lisbon", host=host).returncode == 0
+    (work / "docker-compose.admin.yml").unlink()
+    env_admin = work / ".env.admin"
+    env_admin.write_text(read(env_admin).replace("TZ=Europe/Lisbon", "TZ=:bad"), encoding="utf-8")
+
+    result = _run_admin_installer(work, None, host=host)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "TZ=:bad in .env.admin is not a zone name this installer writes; it is removed." in result.stderr
+    assert "Removed TZ from .env.admin: docker-compose.admin.yml records none." in result.stdout
+    assert _env_admin_zones(work) == []
+
+
+def test_admin_runtime_compose_files_pass_the_zone_on():
+    """As EMS_TIMEZONE: a TZ in the Admin's environment would win every compose call.
+
+    Without a zone they pass none: a UTC fallback written into an EMS .env
+    looked like a zone someone chose.
+    """
+
+    for compose in (RUNTIME_COMPOSE, RUNTIME_BRIDGE, RUNTIME_DISCOVERY):
+        text = read(compose)
+        assert 'EMS_TIMEZONE: "${TZ:-}"' in text, compose.name
+        assert "\n      TZ:" not in text, compose.name
 
 
 def test_admin_installer_https_dry_run_mentions_browser_warning(tmp_path):

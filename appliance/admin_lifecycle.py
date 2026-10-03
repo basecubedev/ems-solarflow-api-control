@@ -662,7 +662,8 @@ class AdminLifecycleService:
                 detail=f"Compose file {deployment.compose_file}",
                 suggestion=""
                 if deployment.compose_exists
-                else "Recreate the Admin compose file with install-admin-console.sh",
+                else "Recreate the Admin compose file with install-admin-console.sh, run with "
+                "TZ set to the appliance's zone",
                 manual=not deployment.compose_exists,
             )
         )

@@ -25,7 +25,20 @@ def test_a_changed_timezone_can_be_changed_back_and_is_reported(tmp_path):
 
 
 def test_the_plan_does_not_promise_a_container_restart(tmp_path):
+    """Only an Admin Console installed after the change carries the new zone."""
+
     services = build_test_services(tmp_path)
     _, plan = plan_and_execute(services, "system.timezone.plan", timezone="Europe/Berlin")
     assert "restarted" not in plan["warning"]
-    assert "UTC" in plan["warning"]
+    assert "when it is installed" in plan["warning"]
+    assert "does not reach the running containers" in plan["warning"]
+
+
+def test_the_result_says_the_zone_applies_to_the_next_admin_deployment(tmp_path):
+    """The bootstrap is the only path that hands the zone on, and it runs only
+    for a deployment that does not exist yet."""
+
+    services = build_test_services(tmp_path)
+    changed, _ = plan_and_execute(services, "system.timezone.plan", timezone="Europe/Berlin")
+
+    assert changed.result["applies_after"] == "the next time the Admin deployment is created"

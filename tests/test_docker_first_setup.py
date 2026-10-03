@@ -6,6 +6,7 @@ real hardware or a running Docker daemon. The one test that does touch Docker is
 gated behind availability.
 """
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,9 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = ROOT / "install-docker.sh"
 INSTALL_PS1 = ROOT / "install-docker.ps1"
 COMPOSE = ROOT / "docker-compose.yml"
+EXAMPLE_COMPOSE = ROOT / "docker-compose.example.yml"
+ADMIN_INSTALLER = ROOT / "deploy" / "admin" / "install-admin-console.sh"
+ZONE_LINE = 'TZ: "${TZ:-UTC}"'
 README = ROOT / "README.md"
 DOCKER_BOOTSTRAP_DOC = ROOT / "docs" / "user" / "docker-bootstrap.md"
 DOCKER_DOC = ROOT / "docs" / "docker.md"
@@ -124,6 +128,252 @@ def test_compose_uses_current_command_style_in_comments():
     compose = read(COMPOSE)
     assert "docker compose up -d" in compose
     assert "docker-compose " not in compose
+
+
+# --- Time zone contract ----------------------------------------------------
+
+
+def _ems_service(text):
+    return text.split("  ems:", 1)[1].split("\n  influxdb:", 1)[0]
+
+
+@pytest.mark.parametrize("path", [COMPOSE, EXAMPLE_COMPOSE, INSTALL_SH, INSTALL_PS1])
+def test_the_ems_container_runs_in_the_zone_the_installation_names(path):
+    """Winter adjust_hour and full-charge force_time are local hours.
+
+    No container received a zone, so every Docker install opened them on UTC.
+    """
+
+    assert ZONE_LINE in _ems_service(read(path)), path
+
+
+def _shell_function(path, name):
+    text = read(path)
+    start = text.index(f"{name}() {{")
+    return text[start:text.index("\n}\n", start) + 2]
+
+
+def test_both_installers_resolve_the_zone_the_same_way():
+    """Two standalone scripts that must agree; one copy, compared."""
+
+    for name in ("env_file_zone", "resolve_timezone"):
+        assert _shell_function(INSTALL_SH, name) == _shell_function(ADMIN_INSTALLER, name)
+
+
+def _fake_docker(tmp_path, *, timedatectl=None):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(
+        '#!/bin/sh\n[ "$1 $2" = "compose version" ] && echo 2.30.0\n'
+        f'case "$1 $2" in "compose run"|"compose up"|"compose exec") '
+        f'echo "${{TZ:-}}" >> {tmp_path / "compose-tz"} ;; esac\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    if timedatectl is not None:
+        tool = bin_dir / "timedatectl"
+        tool.write_text(f"#!/bin/sh\necho {timedatectl}\n", encoding="utf-8")
+        tool.chmod(0o755)
+    return bin_dir
+
+
+IN_CONTAINER = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+host_detection = pytest.mark.skipif(
+    IN_CONTAINER,
+    reason="the installers read no host zone inside a container; "
+    "test_the_installer_reads_no_host_zone_inside_a_container covers that case",
+)
+
+
+def _install_env(tmp_path, *, tz=None, timedatectl=None, args=("--no-start",), prepare=None):
+    bin_dir = _fake_docker(tmp_path, timedatectl=timedatectl)
+    work = tmp_path / "work"
+    work.mkdir()
+    if prepare:
+        prepare(work)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path)}
+    if tz is not None:
+        env["TZ"] = tz
+    result = subprocess.run(
+        ["sh", str(INSTALL_SH), *args],
+        cwd=str(work),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return result, (work / ".env").read_text(encoding="utf-8").splitlines()
+
+
+@pytest.mark.parametrize("zone", ["Europe/Berlin", "America/Port-au-Prince", "Etc/GMT+1"])
+def test_the_installer_records_the_zone_it_was_given(tmp_path, zone):
+    _, env_lines = _install_env(tmp_path, tz=zone, timedatectl="Asia/Tokyo")
+
+    assert f"TZ={zone}" in env_lines
+
+
+@host_detection
+def test_the_installer_records_the_host_zone_when_none_was_given(tmp_path):
+    _, env_lines = _install_env(tmp_path, timedatectl="Asia/Tokyo")
+
+    assert "TZ=Asia/Tokyo" in env_lines
+
+
+@host_detection
+@pytest.mark.parametrize("zone", ["CET-1CEST,M3.5.0,M10.5.0/3", ":/etc/localtime", "../../etc/passwd"])
+def test_a_tz_that_names_no_zone_is_not_written_into_the_compose_environment(tmp_path, zone):
+    result, env_lines = _install_env(tmp_path, tz=zone, timedatectl="Asia/Tokyo")
+
+    assert "TZ=Asia/Tokyo" in env_lines
+    assert f"TZ={zone}" not in env_lines
+    assert "does not name a time zone" in result.stderr
+
+
+def test_a_zone_already_in_env_outranks_the_host(tmp_path):
+    """A re-run must not replace the zone an operator wrote into .env."""
+
+    _, env_lines = _install_env(
+        tmp_path,
+        timedatectl="Asia/Tokyo",
+        prepare=lambda work: (work / ".env").write_text("TZ=Europe/Lisbon\n", encoding="utf-8"),
+    )
+
+    assert "TZ=Europe/Lisbon" in env_lines
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'TZ="America/New_York"',
+        "TZ='America/New_York'",
+        "export TZ=America/New_York",
+        "TZ = America/New_York",
+        "TZ=America/New_York # set by hand",
+        "TZ=America/New_York\r",
+        "\tTZ=America/New_York",
+        "TZ=America/Denver\nTZ=America/New_York",
+        "TZ: America/New_York",
+        "\ufeffTZ=America/New_York",
+    ],
+)
+def test_a_zone_written_by_hand_in_any_compose_form_survives_a_rerun(tmp_path, line):
+    _, env_lines = _install_env(
+        tmp_path,
+        timedatectl="Asia/Tokyo",
+        prepare=lambda work: (work / ".env").write_bytes((line + "\n").encode()),
+    )
+
+    assert "TZ=America/New_York" in env_lines
+
+
+def test_a_zone_ending_in_r_keeps_its_last_letter(tmp_path):
+    """A carriage-return strip spelled for one sed ate a trailing r in another."""
+
+    _, env_lines = _install_env(
+        tmp_path,
+        timedatectl="Asia/Tokyo",
+        prepare=lambda work: (work / ".env").write_text("TZ=America/Denver\n", encoding="utf-8"),
+    )
+
+    assert "TZ=America/Denver" in env_lines
+
+
+def test_a_tz_in_env_the_installer_cannot_keep_is_named_when_replaced(tmp_path):
+    result, _ = _install_env(
+        tmp_path,
+        timedatectl="Asia/Tokyo",
+        prepare=lambda work: (work / ".env").write_text("TZ=:Europe/Berlin\n", encoding="utf-8"),
+    )
+
+    assert "TZ=:Europe/Berlin in .env is not a zone name this installer writes" in result.stderr
+
+
+def test_a_shell_zone_over_a_valid_env_zone_is_named_as_such(tmp_path):
+    """Compose order, not a bad value: the warning must not call the .env zone invalid."""
+
+    result, env_lines = _install_env(
+        tmp_path,
+        tz="Europe/Berlin",
+        prepare=lambda work: (work / ".env").write_text("TZ=Europe/Lisbon\n", encoding="utf-8"),
+    )
+
+    assert "TZ=Europe/Berlin" in env_lines
+    assert "TZ=Europe/Berlin from this shell replaces TZ=Europe/Lisbon in .env" in result.stderr
+    assert "is not a zone name this installer writes" not in result.stderr
+
+
+def test_no_installer_depends_on_gnu_escapes():
+    """BSD sed and tr read \\r and \\t as the letters; a CR strip spelled so ate a trailing r.
+
+    Checked over the whole script: an expression on a continuation line is no
+    less a sed expression.
+    """
+
+    for script in (INSTALL_SH, ADMIN_INSTALLER):
+        for number, line in enumerate(read(script).splitlines(), 1):
+            assert not re.search(r"\\[rt]", line), f"{script.name}:{number}: {line.strip()}"
+
+
+def test_the_windows_installer_reads_and_keeps_env_files_as_compose_does():
+    """Not run here (no PowerShell); held to the forms the shell installer reads."""
+
+    text = read(INSTALL_PS1)
+    write_env = text[text.index("function Write-Env"):text.index("function Enable-AnalyticsProfile")]
+    analytics = text[text.index("function Enable-AnalyticsProfile"):text.index("function Invoke-Compose")]
+    assert "TZ\\s*[=:]" in text[text.index("function Get-EnvFileZone"):text.index("function Resolve-TimeZone")]
+    assert "TZ\\s*[=:]" in write_env
+    for body in (write_env, analytics):
+        assert "-Encoding ascii" not in body
+    assert "{ return }" not in analytics.split("DRY-RUN", 1)[1].split("\n", 1)[1]
+
+
+@host_detection
+def test_the_installers_own_compose_calls_run_in_the_zone_it_wrote(tmp_path):
+    """Compose takes an exported TZ before .env; the installer exports its own."""
+
+    _install_env(tmp_path, tz=":/etc/localtime", timedatectl="Asia/Tokyo", args=("--analytics",))
+
+    used = (tmp_path / "compose-tz").read_text(encoding="utf-8").split()
+    assert used and set(used) == {"Asia/Tokyo"}
+
+
+def test_a_kept_compose_file_without_a_zone_says_so(tmp_path):
+    result, _ = _install_env(
+        tmp_path,
+        tz="Europe/Berlin",
+        prepare=lambda work: (work / "docker-compose.yml").write_text(
+            "services:\n  ems:\n    image: x\n", encoding="utf-8"
+        ),
+    )
+
+    assert "passes no TZ to the containers" in result.stderr
+    assert "run in the time zone" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        '      TZ: "${TZ:-UTC}"',
+        '      "TZ": "${TZ:-UTC}"',
+        "      - TZ=${TZ:-UTC}",
+        "      'TZ': '${TZ:-UTC}'",
+        "      - 'TZ=${TZ:-UTC}'",
+        "      TZ : Europe/Berlin",
+    ],
+)
+def test_a_kept_compose_file_that_passes_a_zone_says_where_it_runs(tmp_path, line):
+    result, _ = _install_env(
+        tmp_path,
+        tz="Europe/Berlin",
+        prepare=lambda work: (work / "docker-compose.yml").write_text(
+            f"services:\n  ems:\n    image: x\n    environment:\n{line}\n", encoding="utf-8"
+        ),
+    )
+
+    assert "passes no TZ to the containers" not in result.stderr
+    assert "run in the time zone Europe/Berlin" in result.stdout + result.stderr
 
 
 # --- Config contract -------------------------------------------------------

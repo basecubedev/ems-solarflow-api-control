@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
+import os
+import struct
 import subprocess
+import threading
 import zipfile
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -2766,3 +2769,219 @@ def test_open_dashboard_is_reported_as_the_runtime_would_start_it(tmp_path, dash
 def test_closed_dashboard_is_not_reported_as_open(tmp_path, dashboard):
     codes = _dashboard_exposure_codes(tmp_path, dashboard)
     assert "dashboard_open_without_https_auth" not in codes
+
+
+def _tzif(offset):
+    """A minimal zone file with one fixed UTC offset, as glibc and zoneinfo read it."""
+
+    chars = b"ZZZ\0"
+    block = b"TZif2" + b"\0" * 15 + struct.pack(">6l", 0, 0, 0, 0, 1, len(chars))
+    block += struct.pack(">lBB", offset, 0, 0) + chars
+    return block + block + b"\n<ZZZ>%d\n" % (-offset // 3600)
+
+
+BERLIN = 3600
+
+
+def _timezone_checks(mode, environ, *, zoneinfo_dir="/none", localtime="/none"):
+    checks = []
+    diagnostics.diagnose_timezone(
+        checks, mode, environ=environ, zoneinfo_dir=str(zoneinfo_dir), localtime=str(localtime)
+    )
+    assert [check["code"] for check in checks] == ["timezone"]
+    return checks[0]
+
+
+@pytest.mark.parametrize(
+    ("mode", "environ", "known", "level"),
+    [
+        ("container", {}, (), "warning"),
+        ("native", {}, (), "ok"),
+        ("container", {"TZ": "Europe/Berlin"}, ("Europe/Berlin",), "ok"),
+        ("container", {"TZ": "Europe/Berln"}, ("Europe/Berlin",), "warning"),
+        ("container", {"TZ": "US/Eastern"}, ("America/New_York",), "warning"),
+        ("container", {"TZ": "UTC"}, ("UTC",), "ok"),
+        ("container", {"TZ": ":Europe/Berlin"}, ("Europe/Berlin",), "ok"),
+        ("container", {"TZ": "CET-1CEST,M3.5.0,M10.5.0/3"}, (), "ok"),
+        ("container", {"TZ": "UTC0"}, (), "ok"),
+        ("container", {"TZ": "CET"}, (), "warning"),
+        ("container", {"TZ": "Japan"}, (), "warning"),
+    ],
+)
+def test_diagnose_says_which_zone_the_local_hour_windows_open_in(
+    tmp_path, mode, environ, known, level
+):
+    """A zone the image has no file for runs on UTC without a word from glibc."""
+
+    for name in known:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_bytes(_tzif(0 if name == "UTC" else BERLIN))
+
+    assert _timezone_checks(mode, environ, zoneinfo_dir=tmp_path)["level"] == level
+
+
+@pytest.mark.parametrize(
+    ("mode", "content", "level"),
+    [
+        ("native", _tzif(BERLIN), "ok"),
+        ("native", None, "warning"),
+        ("container", _tzif(0), "warning"),
+        ("container", _tzif(BERLIN), "ok"),
+    ],
+)
+def test_diagnose_follows_a_tz_that_names_a_file(tmp_path, mode, content, level):
+    """A file on UTC hours is, in a container, the image's own zone rather than the host's.
+
+    A real zone named by its path, or the host's `/etc/localtime` mounted into the
+    container, is judged by what the file holds and not by the name.
+    """
+
+    zone_file = tmp_path / "localtime"
+    if content is not None:
+        zone_file.write_bytes(content)
+
+    assert _timezone_checks(mode, {"TZ": f":{zone_file}"})["level"] == level
+
+
+@pytest.mark.parametrize("zone", ["GMT+1", "UTC+2", "UTC-3", "gmt+1", "utc-01"])
+def test_diagnose_warns_that_posix_offsets_count_the_other_way(zone):
+    check = _timezone_checks("container", {"TZ": zone})
+
+    assert check["level"] == "warning"
+    assert "Etc/GMT" in check["hint"]
+
+
+@pytest.mark.parametrize("zone", ["GMT+0", "GMT-0", "UTC+0", "UTC-00", "EST+5EDT,M3.2.0/2,M11.1.0/2", "PST+8PDT"])
+def test_a_zero_offset_has_no_sign_to_get_wrong(zone):
+    """Nor does a western POSIX string that writes its offset with a plus, as glibc's manual does."""
+
+    assert _timezone_checks("container", {"TZ": zone})["level"] == "ok"
+
+
+@pytest.mark.parametrize("content", [b"TZif", b"# not a zone\n"])
+def test_diagnose_does_not_take_any_file_for_a_zone(tmp_path, content):
+    (tmp_path / "zone.tab").write_bytes(content)
+
+    check = _timezone_checks("container", {"TZ": "zone.tab"}, zoneinfo_dir=tmp_path)
+
+    assert check["level"] == "warning"
+
+
+@pytest.mark.parametrize(("content", "level"), [(_tzif(BERLIN), "ok"), (_tzif(0), "warning"), (None, "warning")])
+def test_a_container_without_tz_is_judged_by_its_localtime(tmp_path, content, level):
+    """An older Compose file passes no TZ, but the host's /etc/localtime may be mounted."""
+
+    localtime = tmp_path / "localtime"
+    if content is not None:
+        localtime.write_bytes(content)
+
+    assert _timezone_checks("container", {}, localtime=localtime)["level"] == level
+
+
+def test_tz_on_utc_hours_over_a_mounted_host_zone_says_which_wins(tmp_path):
+    """A UTC zone file of its own, such as Etc/GMT, wins over a mounted /etc/localtime."""
+
+    (tmp_path / "UTC").write_bytes(_tzif(0))
+    localtime = tmp_path / "localtime"
+    localtime.write_bytes(_tzif(BERLIN))
+
+    check = _timezone_checks("container", {"TZ": "UTC"}, zoneinfo_dir=tmp_path, localtime=localtime)
+
+    assert check["level"] == "warning"
+    assert "localtime" in check["message"]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs a FIFO")
+@pytest.mark.parametrize("prefix", [":", ""])
+def test_a_tz_naming_a_fifo_does_not_stall_diagnose(tmp_path, prefix):
+    """/api/diagnose runs this in a dashboard request thread; open() on a FIFO waits for a writer."""
+
+    fifo = tmp_path / "zone.fifo"
+    os.mkfifo(fifo)
+    environ = {"TZ": f"{prefix}{fifo}"} if prefix else {"TZ": "zone.fifo"}
+    result = []
+    worker = threading.Thread(
+        target=lambda: result.append(_timezone_checks("container", environ, zoneinfo_dir=tmp_path)),
+        daemon=True,
+    )
+
+    worker.start()
+    worker.join(timeout=10)
+
+    assert not worker.is_alive(), "diagnose blocked on the FIFO"
+    assert result[0]["level"] == "warning"
+
+
+@pytest.mark.parametrize("mode", ["container", "native"])
+def test_an_empty_tz_is_utc_whatever_localtime_holds(tmp_path, mode):
+    """glibc reads TZ= as UTC; it is not the absence of TZ."""
+
+    localtime = tmp_path / "localtime"
+    localtime.write_bytes(_tzif(BERLIN))
+
+    check = _timezone_checks(mode, {"TZ": ""}, localtime=localtime)
+
+    assert check["level"] == "warning"
+    assert "empty" in check["message"]
+
+
+@pytest.mark.parametrize("zone", ["UTC", "Etc/UTC", ":UTC"])
+def test_a_utc_name_that_reads_another_zone_says_so(tmp_path, zone):
+    """In the image /etc/localtime points at Etc/UTC, so a mounted host file
+    lands on the UTC zone file itself: TZ=UTC then runs on the host's hours."""
+
+    for name in ("UTC", "Etc/UTC"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_bytes(_tzif(BERLIN))
+
+    check = _timezone_checks("container", {"TZ": zone}, zoneinfo_dir=tmp_path)
+
+    assert check["level"] == "warning"
+    assert "UTC" in check["message"]
+
+
+@pytest.mark.parametrize("cut", [1, 2, 8, 9, 10, 11, 20])
+def test_a_zone_file_cut_short_is_no_zone_and_never_stalls(tmp_path, cut):
+    """A zone file cut anywhere in its footer is no zone file to diagnose.
+
+    glibc may still run such a file on its transitions, so this errs towards a
+    warning, never towards a zone glibc does not read. zoneinfo looked through
+    it for a newline forever before Python 3.14, and a newline added behind it
+    had it read a footer glibc drops.
+    """
+
+    zone_file = tmp_path / "cut"
+    zone_file.write_bytes(_tzif(BERLIN)[:-cut])
+    result = []
+    worker = threading.Thread(
+        target=lambda: result.append(diagnostics.diagnose_zone_offsets(str(zone_file))), daemon=True
+    )
+
+    worker.start()
+    worker.join(timeout=10)
+
+    assert not worker.is_alive(), "reading the zone file never returned"
+    assert result == [None]
+
+
+def test_a_utc_path_that_reads_another_zone_says_so(tmp_path):
+    zone_file = tmp_path / "Etc" / "UTC"
+    zone_file.parent.mkdir()
+    zone_file.write_bytes(_tzif(BERLIN))
+
+    check = _timezone_checks("container", {"TZ": f":{zone_file}"})
+
+    assert check["level"] == "warning"
+    assert "UTC" in check["message"]
+
+
+def test_the_zone_in_effect_is_named_with_its_offset(tmp_path):
+    """Etc/GMT+1 is one hour behind UTC; the report says so rather than leave the sign to a guess."""
+
+    (tmp_path / "Etc").mkdir()
+    (tmp_path / "Etc" / "GMT+1").write_bytes(_tzif(-3600))
+
+    check = _timezone_checks("container", {"TZ": "Etc/GMT+1"}, zoneinfo_dir=tmp_path)
+
+    assert check["level"] == "ok"
+    assert "UTC-01:00" in check["message"]

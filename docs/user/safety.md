@@ -41,8 +41,9 @@ Two features are enabled in the template and act without an operator:
   it, and sets a winter AC charge `inputLimit` of 200 W.
 - **Battery full-charge assist** (`battery_full_charge_assist.enabled: true`)
   raises `socSet` to 100 % every 28 days; with `enable_ac_charge_mode: true`
-  it switches the inverter to AC input at `force_time` (14:00, UTC in Docker)
-  on the due day and charges from the grid at 600 W.
+  it switches the inverter to AC input at `force_time` (14:00 local time; in
+  Docker the container's [time zone](../docker.md#time-zone)) on the due day
+  and charges from the grid at 600 W.
 
 Turn either off in the config if you do not want it.
 

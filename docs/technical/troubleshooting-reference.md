@@ -1006,7 +1006,8 @@ If no winter event appears, check:
 - runtime `winter.enabled`
 - current month versus `winter.months`
 - `soc_reconcile_interval`
-- current hour versus `winter.adjust_hour`
+- current hour versus `winter.adjust_hour`, in the zone the EMS runs in
+  (`emsctl.py diagnose` reports it; see [Time zone](../docker.md#time-zone))
 - `allow_state_reconciliation_writes`
 
 Winter logic runs through SOC reconciliation. It is not a per-cycle output

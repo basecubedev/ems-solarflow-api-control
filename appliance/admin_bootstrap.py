@@ -23,6 +23,7 @@ import subprocess
 from pathlib import PurePosixPath
 
 from appliance.auth import lock_path
+from appliance.config import effective_timezone
 from appliance.paths import package_helper
 
 INSTALLER_NAME = "install-admin-console.sh"
@@ -254,8 +255,8 @@ class DeploymentBootstrap:
         environment["PGID"] = str(gid)
         # The host stays on a deterministic UTC; the containers are what run
         # the EMS's local-hour control windows, so the zone is carried into
-        # them instead.
-        environment["TZ"] = str(getattr(self.config, "timezone", "UTC") or "UTC")
+        # them instead -- the one in force now, not the one read at start.
+        environment["TZ"] = effective_timezone(self.paths, self.config)
         try:
             completed = self._run(  # noqa: S603 - fixed packaged path, no caller input
                 command,

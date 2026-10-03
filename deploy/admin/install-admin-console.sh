@@ -81,6 +81,12 @@ Options:
   --force              Overwrite an existing docker-compose.admin.yml / env.
   --help               Show this help.
 
+Environment:
+  TZ                   Time zone recorded for EMS deployments. Without it the
+                       zone in an existing .env.admin, else this host's zone;
+                       inside a container no host zone is read. An existing
+                       docker-compose.admin.yml keeps the zone written into it.
+
 Examples:
   sh install-admin-console.sh
   sh install-admin-console.sh --bridge
@@ -212,6 +218,75 @@ resolve_ids() {
     warn "Non-root PUID/PGID are required before starting; run as a normal user before 'docker compose up'."
 }
 
+env_file_zone() {
+    bom=$(printf '\357\273\277')
+    LC_ALL=C tr -d '\015' 2>/dev/null < "${1:-/dev/null}" \
+        | LC_ALL=C sed -n -e "1s/^$bom//" -e 's/^[[:space:]]*//' -e 's/^export[[:space:]][[:space:]]*//' \
+            -e 's/^TZ[[:space:]]*[=:][[:space:]]*//p' \
+        | LC_ALL=C sed -e 's/ #.*$//' -e 's/[[:space:]]*$//' \
+            -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" \
+        | LC_ALL=C sed -n '$p'
+}
+
+resolve_timezone() {
+    host=1
+    if [ -e /.dockerenv ] || [ -e /run/.containerenv ]; then
+        host=0
+    fi
+    for candidate in \
+        "${TZ:-}" \
+        "$(env_file_zone "${1:-}")" \
+        "$( { [ "$host" -eq 1 ] && timedatectl show --property=Timezone --value; } 2>/dev/null || true)" \
+        "$( { [ "$host" -eq 1 ] && head -n 1 /etc/timezone; } 2>/dev/null || true)" \
+        "$( { [ "$host" -eq 1 ] && readlink /etc/localtime; } 2>/dev/null | sed -n 's|^.*/zoneinfo/||p')"; do
+        case "$candidate" in
+            ""|/*|*[!A-Za-z0-9_+/-]*) continue ;;
+        esac
+        printf '%s\n' "$candidate"
+        return 0
+    done
+    return 0
+}
+
+# The zone a kept compose bakes into the Admin, when it is one a zone name can
+# be, read as Compose reads each form and trimmed as the Admin trims it: a
+# mapping value loses its YAML quotes, a list item quoted as a whole is the text
+# inside, and an unquoted list item keeps whatever quotes follow "=".
+compose_zone() {
+    zone="$(LC_ALL=C sed -n \
+            -e 's/^[[:space:]]*-[[:space:]]*\(["'"'"']\)EMS_TIMEZONE=\([^"'"'"']*\)\1[[:space:]]*\(#.*\)\{0,1\}$/Q:\2/p' \
+            -e 's/^[[:space:]]*-[[:space:]]*EMS_TIMEZONE=\(.*\)$/L:\1/p' \
+            -e 's/^[[:space:]]*\(["'"'"']\{0,1\}\)EMS_TIMEZONE\1[[:space:]]*:[[:space:]]*\(.*\)$/M:\2/p' \
+            "${1:-/dev/null}" 2>/dev/null \
+        | LC_ALL=C sed -e '/^[LM]:/s/[[:space:]]#.*$//' -e '/^[LM]:/s/[[:space:]]*$//' \
+            -e 's/^M:"\([^"'"'"']*\)"$/M:\1/' -e "s/^M:'\([^\"']*\)'\$/M:\1/" -e 's/^[QLM]://' \
+            -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+        | LC_ALL=C sed -n '$p')"
+    case "$zone" in
+        ""|/*|null|Null|NULL|*[!A-Za-z0-9_+/-]*) return 0 ;;
+    esac
+    printf '%s\n' "$zone"
+}
+
+# A kept env file follows a rewritten compose, so a later --force or a
+# recreated compose does not take the old zone back from it.
+sync_env_zone() {
+    [ "$(env_file_zone "$1")" = "$ZONE" ] && return 0
+    tmp="$1.tz.$$"
+    if { LC_ALL=C awk '!/^[[:space:]]*(export[[:space:]]+)?TZ[[:space:]]*[=:]/' "$1" > "$tmp"; } 2>/dev/null \
+        && { [ -z "$ZONE" ] || printf 'TZ=%s\n' "$ZONE" >> "$tmp"; } 2>/dev/null \
+        && { cat "$tmp" > "$1"; } 2>/dev/null; then
+        if [ -n "$ZONE" ]; then
+            log "Set TZ in $1 to the zone written into $COMPOSE_FILE."
+        else
+            log "Removed TZ from $1: $COMPOSE_FILE records none."
+        fi
+    else
+        warn "Could not set TZ in $1; it still names the zone it had."
+    fi
+    rm -f "$tmp"
+}
+
 # Deployment mode joins the host Docker socket group; discovery-only never
 # touches the socket, so DOCKER_GID stays unset there.
 resolve_docker_gid() {
@@ -329,6 +404,7 @@ EOF
       EMS_ADMIN_DATA_DIR: "${admin_data_dir}"
       PUID: "${PUID}"
       PGID: "${PGID}"
+      EMS_TIMEZONE: "${ZONE}"
       # Non-secret Admin identity so the Admin Console can update itself before a
       # Guided EMS Upgrade (target image derived from a trusted release tag).
       EMS_ADMIN_IMAGE: "${IMAGE}"
@@ -401,6 +477,9 @@ write_env() {
     fi
     if [ -f "$ENV_FILE" ] && [ "$FORCE" -ne 1 ]; then
         log "Keeping existing $ENV_FILE (use --force to overwrite)."
+        if [ "$COMPOSE_KEPT" -eq 0 ]; then
+            sync_env_zone "$ENV_FILE"
+        fi
         return 0
     fi
     {
@@ -413,6 +492,9 @@ write_env() {
         printf 'EMS_ADMIN_CONTAINER_NAME=%s\n' "$CONTAINER_NAME"
         printf 'PUID=%s\n' "$PUID"
         printf 'PGID=%s\n' "$PGID"
+        if [ -n "$ZONE" ]; then
+            printf 'TZ=%s\n' "$ZONE"
+        fi
         if [ "$MODE" = "deployment" ]; then
             printf 'DOCKER_GID=%s\n' "$DOCKER_GID"
         fi
@@ -529,6 +611,46 @@ main() {
 
     require_docker
     resolve_ids
+    COMPOSE_KEPT=0
+    if [ -f "$install_dir/$COMPOSE_FILE" ] && [ "$FORCE" -ne 1 ]; then
+        COMPOSE_KEPT=1
+        ZONE="$(compose_zone "$install_dir/$COMPOSE_FILE")"
+        if [ -n "${TZ:-}" ] && [ "$TZ" != "$ZONE" ]; then
+            case "$TZ" in
+                /*|*[!A-Za-z0-9_+/-]*)
+                    warn "TZ=$TZ does not name a time zone; it is not used." ;;
+                *)
+                    warn "TZ=$TZ from this shell is not used: $COMPOSE_FILE is kept. To change the zone, set EMS_TIMEZONE there and TZ in $ENV_FILE, then recreate the Admin container; EMS deployments prepared before keep the TZ in their own .env." ;;
+            esac
+        fi
+        if [ -z "$ZONE" ]; then
+            warn "The kept $COMPOSE_FILE records no time zone; EMS deployments use UTC until TZ is set in their .env. To record one, set EMS_TIMEZONE there and TZ in $ENV_FILE, then recreate the Admin container."
+        fi
+    else
+        ZONE="$(resolve_timezone "$install_dir/$ENV_FILE")"
+        if [ -n "${TZ:-}" ] && [ "$TZ" != "$ZONE" ]; then
+            warn "TZ=$TZ does not name a time zone; it is not used."
+        fi
+        baked="$(compose_zone "$install_dir/$COMPOSE_FILE")"
+        if [ -n "$baked" ] && [ "$baked" != "$ZONE" ]; then
+            warn "--force replaces EMS_TIMEZONE=$baked in $COMPOSE_FILE with ${ZONE:-no zone}."
+        fi
+        kept="$(env_file_zone "$install_dir/$ENV_FILE")"
+        if [ -n "$kept" ] && [ "$kept" != "$ZONE" ]; then
+            if [ -n "${TZ:-}" ] && [ "$TZ" = "$ZONE" ]; then
+                warn "TZ=$TZ from this shell is used instead of TZ=$kept in $ENV_FILE."
+            else
+                if [ -n "$ZONE" ]; then
+                    warn "TZ=$kept in $ENV_FILE is not a zone name this installer writes; it is replaced."
+                else
+                    warn "TZ=$kept in $ENV_FILE is not a zone name this installer writes; it is removed."
+                fi
+            fi
+        fi
+        if [ -z "$ZONE" ]; then
+            warn "No time zone could be read here; EMS deployments use UTC until TZ is set in their .env. To record one, set EMS_TIMEZONE in $COMPOSE_FILE and TZ in $ENV_FILE, then recreate the Admin container."
+        fi
+    fi
     if [ "$MODE" = "deployment" ]; then
         resolve_docker_gid
     fi
@@ -543,6 +665,7 @@ main() {
     log "Admin data:    $admin_data_dir"
     log "Image:         ${IMAGE}:${TAG}"
     log "Mode:          $MODE"
+    log "Time zone:     ${ZONE:-none recorded (UTC)}"
     log "Networking:    $NETWORK$( [ "$NETWORK" = "bridge" ] && printf ' (%s:%s)' "$BIND" "$PORT" || true )"
     if [ "$HTTPS" -eq 1 ]; then
         log "HTTPS:         enabled (port ${HTTPS_PORT})"

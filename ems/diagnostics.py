@@ -11,6 +11,7 @@ bumping DIAGNOSE_SCHEMA_VERSION / SUPPORT_BUNDLE_VERSION.
 """
 
 import argparse
+import io
 import json
 import math
 import os
@@ -19,11 +20,13 @@ import re
 import shutil
 import socket
 import sqlite3
+import stat
 import statistics
 import subprocess
 import sys
 import time
 import zipfile
+import zoneinfo
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
@@ -504,6 +507,136 @@ def diagnose_container_mode():
     if sources:
         return "container", sources
     return "native", []
+
+
+_POSIX_TZ_SPEC = re.compile(r"^(?:[A-Za-z]{3,}|<[A-Za-z0-9+-]{3,}>)[+-]?\d")
+_INVERTED_OFFSET = re.compile(r"^(?:GMT|UTC)[+-]0*[1-9]", re.IGNORECASE)
+_UTC_NAMES = frozenset(
+    ("UTC", "UCT", "Universal", "Zulu", "Etc/UTC", "Etc/UCT", "Etc/Universal", "Etc/Zulu")
+)
+_ZONE_FILE_LIMIT = 1 << 20
+
+
+class _ExactReads(io.BytesIO):
+    """A zone file in memory that ends a read short of its size with an error.
+
+    zoneinfo reads the footer byte by byte until a newline; at the end of a
+    file that has none it would read nothing forever.
+    """
+
+    def read(self, size=-1):
+        data = super().read(size)
+        if size is not None and size >= 0 and len(data) < size:
+            raise EOFError("the zone file ends early")
+        return data
+
+
+def diagnose_zone_offsets(path):
+    """The UTC offsets a zone file gives in January and July, or None for no zone file.
+
+    Opened without blocking and judged only as a regular file, so a FIFO or a
+    device named by TZ cannot stall a dashboard request thread. The file's
+    content decides, not its name: a host /etc/localtime mounted into the
+    container is the host's zone, whatever path it was mounted over. A footer
+    that does not end in a newline loses its last byte, as glibc drops it, and
+    a file cut short is no zone file here; glibc may still run such a file on
+    its transitions, so the answer errs towards a warning.
+    """
+
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(path, flags)
+    except (OSError, ValueError):
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(os.dup(fd), "rb") as handle:
+            data = handle.read(_ZONE_FILE_LIMIT)
+        if not data.startswith(b"TZif"):
+            return None
+        if data[4:5] not in (b"", b"\0") and not data.endswith(b"\n"):
+            data = data[:-1] + b"\n"
+        zone = zoneinfo.ZoneInfo.from_file(_ExactReads(data))
+        year = datetime.now().year
+        return {zone.utcoffset(datetime(year, month, 15)) for month in (1, 7)}
+    except Exception:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _names_utc(name):
+    return any(name == utc or name.endswith("/" + utc) for utc in _UTC_NAMES)
+
+
+def _offset_text(offsets):
+    def one(offset):
+        minutes = int(offset.total_seconds()) // 60
+        sign = "+" if minutes >= 0 else "-"
+        return f"UTC{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+
+    return " / ".join(one(offset) for offset in sorted(offsets))
+
+
+def _on_utc_hours(offsets):
+    return offsets == {timedelta(0)}
+
+
+def diagnose_timezone(checks, mode, *, environ=None, zoneinfo_dir=None, localtime="/etc/localtime"):
+    """Which zone the local-hour control windows open in, judged as glibc reads TZ.
+
+    A name glibc finds no zone file for, and that is no POSIX zone
+    specification, runs on UTC without a word.
+    """
+
+    environ = os.environ if environ is None else environ
+    zone = str(environ.get("TZ") or "")
+    windows = "hour-based control windows (winter adjust_hour, full-charge force_time)"
+    docs = "docs/docker.md#time-zone"
+    if not zone and "TZ" in environ:
+        diagnose_add(checks, "environment", "warning", "timezone", f"TZ is set but empty, so {windows} open on UTC hours", hint="Set TZ in .env to a zone name such as Europe/Berlin; see docs/docker.md#time-zone.", docs=docs, timezone="")
+        return
+    if not zone:
+        mounted = diagnose_zone_offsets(localtime) if mode == "container" else None
+        if mode != "container":
+            diagnose_add(checks, "environment", "ok", "timezone", f"Local time zone: {time.strftime('%Z')}")
+        elif mounted is not None and not _on_utc_hours(mounted):
+            diagnose_add(checks, "environment", "ok", "timezone", f"Local time zone: the one {localtime} holds")
+        else:
+            diagnose_add(checks, "environment", "warning", "timezone", f"No TZ reaches this container, so {windows} open on UTC hours", hint="Set TZ in .env and pass it to the ems service; see docs/docker.md#time-zone.", docs=docs)
+        return
+    name = zone[1:] if zone.startswith(":") else zone
+    if _INVERTED_OFFSET.match(name):
+        diagnose_add(checks, "environment", "warning", "timezone", f"TZ={zone} counts its offset the POSIX way, west of UTC as positive, so {windows} open hours away from what it reads like", hint="In a POSIX zone string the sign counts west of UTC, so GMT+1 is one hour behind it. Use a city zone such as Europe/Berlin, or Etc/GMT-1 for one hour ahead.", docs=docs, timezone=zone)
+        return
+    if name.startswith("/"):
+        offsets = diagnose_zone_offsets(name)
+        if offsets is not None and _names_utc(name) and not _on_utc_hours(offsets):
+            diagnose_add(checks, "environment", "warning", "timezone", f"TZ={zone} names UTC, but its zone file holds another zone, so {windows} open on that zone's hours", hint="A host /etc/localtime mounted into the container lands on the image's UTC file. Set TZ in .env to the zone you mean and drop the mount; see docs/docker.md#time-zone.", docs=docs, timezone=zone)
+            return
+        if offsets is None:
+            diagnose_add(checks, "environment", "warning", "timezone", f"TZ={zone} names no zone file, so {windows} open on UTC hours", docs=docs, timezone=zone)
+        elif mode == "container" and _on_utc_hours(offsets):
+            diagnose_add(checks, "environment", "warning", "timezone", f"TZ={zone} names a zone file on UTC hours, in a container the image's own rather than the host's", hint="Set TZ to the zone name itself, such as Europe/Berlin; see docs/docker.md#time-zone.", docs=docs, timezone=zone)
+        else:
+            diagnose_add(checks, "environment", "ok", "timezone", f"Local time zone: {zone} ({_offset_text(offsets)})", timezone=zone)
+        return
+    directory = zoneinfo_dir or environ.get("TZDIR") or "/usr/share/zoneinfo"
+    offsets = diagnose_zone_offsets(os.path.join(directory, name))
+    if offsets is None and not _POSIX_TZ_SPEC.match(name):
+        diagnose_add(checks, "environment", "warning", "timezone", f"TZ={zone} is not a time zone this system knows, so {windows} open on UTC hours", hint="Use a current IANA name such as Europe/Berlin; legacy names like US/Eastern are not installed.", docs=docs, timezone=zone)
+        return
+    if _names_utc(name) and offsets is not None and not _on_utc_hours(offsets):
+        diagnose_add(checks, "environment", "warning", "timezone", f"TZ={zone} names UTC, but its zone file holds another zone, so {windows} open on that zone's hours", hint="A host /etc/localtime mounted into the container lands on the image's UTC file. Set TZ in .env to the zone you mean and drop the mount; see docs/docker.md#time-zone.", docs=docs, timezone=zone)
+        return
+    if mode == "container" and offsets is not None and _on_utc_hours(offsets):
+        mounted = diagnose_zone_offsets(localtime)
+        if mounted is not None and not _on_utc_hours(mounted):
+            diagnose_add(checks, "environment", "warning", "timezone", f"TZ={zone} wins over the zone mounted at {localtime}, so {windows} open on UTC hours", hint="Set TZ in .env to the host's zone, such as Europe/Berlin; see docs/docker.md#time-zone.", docs=docs, timezone=zone)
+            return
+    label = f"{zone} ({_offset_text(offsets)})" if offsets else zone
+    diagnose_add(checks, "environment", "ok", "timezone", f"Local time zone: {label}", timezone=zone)
 
 
 def diagnose_path_within(path, parent):
@@ -3527,6 +3660,7 @@ def diagnose_collect(args):
         system=platform.system(),
         release=platform.release(),
     )
+    diagnose_timezone(checks, mode)
     cwd = os.getcwd()
     diagnose_add(checks, "environment", "ok", "current_working_directory", f"Current working directory: {cwd}", cwd=cwd)
     if diagnose_path_within(cwd, BASE_DIR):

@@ -40,8 +40,9 @@ It adjusts once daily during this window:
 adjust_hour <= now.hour < adjust_hour + 1
 ```
 
-If the process starts after the window, the next adjustment waits until the next
-day.
+`now.hour` is the local hour of the EMS process; in Docker that is the
+container's [time zone](docker.md#time-zone). If the process starts after the
+window, the next adjustment waits until the next day.
 
 Outside configured winter months, the EMS resets `minSoc` to `summer_min_soc`.
 

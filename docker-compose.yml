@@ -15,6 +15,7 @@ services:
     environment:
       PUID: "${PUID:-}"
       PGID: "${PGID:-}"
+      TZ: "${TZ:-UTC}"
       EMS_IN_CONTAINER: "1"
     env_file:
       - path: ./config/influxdb.env
