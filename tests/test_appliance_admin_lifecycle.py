@@ -174,6 +174,127 @@ def test_failed_target_image_pull_is_reported(tmp_path):
     assert services.host.containers[ADMIN_CONTAINER]["State"]["Running"] is True
 
 
+def test_a_refused_plan_keeps_its_reason_on_the_operation(tmp_path):
+    """The record read "cancelled" and nothing else, so a pull that ran out of
+    time looked like an operator who had changed their mind."""
+
+    services = healthy_appliance(tmp_path)
+
+    assert refused(services, channel="exact", tag="v9.9.9") == "image_pull_failed"
+
+    (operation,) = services.operations.list()
+    assert operation.state == "cancelled"
+    assert operation.error["code"] == "image_pull_failed"
+
+
+def test_a_slow_pull_says_it_is_still_running(tmp_path):
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    services.host.watch_ticks = 5
+
+    operation, _ = plan_and_execute(services, channel="exact", tag="v1.1.0")
+
+    (pulling,) = [entry for entry in operation.progress if entry["stage"] == "pulling_image"]
+    assert pulling["detail"] == f"{ADMIN_REPOSITORY}:v1.1.0, 2 min so far"
+    assert operation.state == STATE_SUCCEEDED
+
+
+def test_a_pull_past_its_deadline_says_so(tmp_path):
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    services.host.watch_times_out = True
+
+    assert refused(services, channel="exact", tag="v1.1.0") == "image_pull_timed_out"
+
+    (operation,) = services.operations.list()
+    assert "within 30 minutes" in operation.error["message"]
+
+
+def test_cancelling_a_plan_stops_its_pull_and_keeps_the_cancel(tmp_path):
+    """The pull went on to its deadline after an operator cancelled, and the
+    planner then cancelled the cancelled record again and failed on that."""
+
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    services.host.watch_ticks = 5
+    ticks = []
+
+    def cancel_on_the_second_tick(tick):
+        ticks.append(tick)
+        if tick == 2:
+            (pending,) = services.operations.list()
+            services.operations.cancel(pending.operation_id)
+
+    services.host.on_watch_tick = cancel_on_the_second_tick
+
+    assert refused(services, channel="exact", tag="v1.1.0") == "image_pull_stopped"
+
+    assert ticks == [1, 2]
+    (operation,) = services.operations.list()
+    assert operation.state == "cancelled"
+    assert operation.error is None
+    assert services.host.containers[ADMIN_CONTAINER]["State"]["Running"] is True
+
+
+def _cancel_pending(services):
+    for pending in services.operations.list():
+        if not pending.terminal:
+            services.operations.cancel(pending.operation_id)
+
+
+def test_a_plan_cancelled_before_its_pull_pulls_nothing(tmp_path, monkeypatch):
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    check = services.admin._require_no_admin_transition
+
+    def cancel_then_check():
+        _cancel_pending(services)
+        return check()
+
+    monkeypatch.setattr(services.admin, "_require_no_admin_transition", cancel_then_check)
+
+    assert refused(services, channel="exact", tag="v1.1.0") == "operation_cancelled"
+
+    pulls = [call for call in services.host.calls if call[0] == "docker" and call[1][:1] == ("pull",)]
+    assert pulls == []
+    (operation,) = services.operations.list()
+    assert operation.state == "cancelled"
+
+
+def test_a_plan_cancelled_after_its_pull_ends_as_cancelled(tmp_path, monkeypatch):
+    """The plan went on to wait for confirmation and failed on "cannot move an
+    operation from cancelled to awaiting_confirmation", shown as an alert."""
+
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    inspect = services.admin.docker.inspect_image
+
+    def cancel_then_inspect(reference):
+        _cancel_pending(services)
+        return inspect(reference)
+
+    monkeypatch.setattr(services.admin.docker, "inspect_image", cancel_then_inspect)
+
+    assert refused(services, channel="exact", tag="v1.1.0") == "operation_cancelled"
+
+    (operation,) = services.operations.list()
+    assert operation.state == "cancelled"
+    assert "awaiting_confirmation" not in [entry["stage"] for entry in operation.progress]
+    audited = [(entry["action"], entry["result"]) for entry in services.audit.tail()]
+    assert audited.count(audited[-1]) == 1 and audited[-1][1] == "failure"
+
+
+def test_the_first_progress_note_says_under_a_minute(tmp_path):
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    services.host.watch_ticks = 1
+
+    operation, _ = plan_and_execute(services, channel="exact", tag="v1.1.0")
+
+    (pulling,) = [entry for entry in operation.progress if entry["stage"] == "pulling_image"]
+    assert pulling["detail"] == f"{ADMIN_REPOSITORY}:v1.1.0, under a minute so far"
+
+
 def test_identical_target_is_refused_unless_reinstall_was_requested(tmp_path):
     services = healthy_appliance(tmp_path)
     assert refused(services, channel="exact", tag="v1.0.0") == "target_identical"
@@ -1061,3 +1182,24 @@ def test_a_container_matching_neither_the_record_nor_the_deployment_is_still_a_f
 
     assert findings["admin_identity"].ok is False
     assert findings["admin_identity"].action == "recreate_admin"
+
+
+def test_a_plan_that_fails_while_it_is_sealed_releases_the_lock(tmp_path, monkeypatch):
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+
+    from appliance import agent
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("card full")
+
+    monkeypatch.setattr(agent.operation_schema, "seal", broken)
+    with pytest.raises(RuntimeError):
+        AgentHandlers(services, executor=lambda target: target()).dispatch(
+            {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"}
+        )
+
+    (operation,) = services.operations.list()
+    assert operation.state == "cancelled"
+    assert services.operations.active() is None
+    assert [entry["result"] for entry in services.audit.tail()].count("failure") == 1

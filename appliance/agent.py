@@ -293,8 +293,12 @@ class AgentHandlers:
             ValidationError,
             OperationError,
         ) as exc:
-            self._abandon_plan(operation, operation_type, actor, source_ip)
-            raise AgentError(getattr(exc, "code", "plan_failed"), str(getattr(exc, "message", exc)))
+            code = getattr(exc, "code", "plan_failed")
+            message = str(getattr(exc, "message", exc))
+            self._abandon_plan(
+                operation, operation_type, actor, source_ip, error={"code": code, "message": message}
+            )
+            raise AgentError(code, message)
         except BaseException:
             # The lock this planner took outlives the exception unless it is
             # released here, and a lock nobody releases blocks every later
@@ -306,24 +310,46 @@ class AgentHandlers:
         # moment the record and the plan describe the same thing. Sealing them
         # together is what lets confirmation and execution prove they are still
         # acting on the plan the operator was shown.
-        operation = self.services.operations.get(operation.operation_id)
-        authority = operation_schema.seal(operation, plan)
-        self.services.operations.update_target(operation.operation_id, authority)
-        plan = dict(plan) | {operation_schema.AUTHORITY_FIELD: authority[
-            operation_schema.AUTHORITY_FIELD
-        ]}
-
-        record = self.services.operations.await_confirmation(operation.operation_id, plan)
+        try:
+            operation = self.services.operations.get(operation.operation_id)
+            if operation.terminal:
+                raise OperationError("operation_cancelled", "the plan was cancelled")
+            authority = operation_schema.seal(operation, plan)
+            self.services.operations.update_target(operation.operation_id, authority)
+            plan = dict(plan) | {operation_schema.AUTHORITY_FIELD: authority[
+                operation_schema.AUTHORITY_FIELD
+            ]}
+            record = self.services.operations.await_confirmation(operation.operation_id, plan)
+        except OperationError as exc:
+            if not self.services.operations.get(operation.operation_id).terminal:
+                self._abandon_plan(
+                    operation, operation_type, actor, source_ip,
+                    error={"code": exc.code, "message": exc.message},
+                )
+                raise
+            self._abandon_plan(operation, operation_type, actor, source_ip)
+            raise AgentError(
+                "operation_cancelled", "the plan was cancelled while it was being made"
+            )
+        except BaseException:
+            # Same as for the planner above: a plan left in planned holds the
+            # lock until the agent restarts.
+            self._abandon_plan(operation, operation_type, actor, source_ip)
+            raise
         return {
             "operation": record.to_dict(),
             "plan": plan,
             "confirmation_token": record.confirmation_token,
         }
 
-    def _abandon_plan(self, operation, operation_type, actor, source_ip):
-        self.services.operations.cancel(operation.operation_id)
+    def _abandon_plan(self, operation, operation_type, actor, source_ip, error=None):
+        """Give a plan up: the secret first, so a record that cannot be saved keeps none."""
+
         self.services.network.discard_secret(operation.operation_id)
-        self._audit(operation_type, actor, source_ip, RESULT_FAILURE, operation.operation_id)
+        try:
+            self.services.operations.abandon(operation.operation_id, error=error)
+        finally:
+            self._audit(operation_type, actor, source_ip, RESULT_FAILURE, operation.operation_id)
 
     def _build_plan(self, name, operation, args):
         services = self.services

@@ -635,6 +635,68 @@ def test_a_planner_that_pulls_an_image_may_take_longer_than_the_default():
         assert operation_timeout(name) > DEFAULT_TIMEOUT, name
 
 
+def test_a_planner_that_pulls_waits_longer_than_the_pull_may_take():
+    """A caller that gives up before the pull does leaves the plan running with
+    nobody to show its outcome to; the pull was 600s and the caller 900s, and
+    the pull was the part that ran out on a Pi 3B+."""
+
+    from appliance.agent_client import operation_timeout
+    from appliance.docker_backend import IMAGE_PULL_TIMEOUT
+    from appliance.protocol import IMAGE_OPERATION_TIMEOUT
+
+    assert operation_timeout("admin.plan_install") >= IMAGE_PULL_TIMEOUT + 120
+    for name in ("manager.sources", "manager.plan_update", "manager.plan_revert", "admin.plan_rollback"):
+        assert operation_timeout(name) == IMAGE_OPERATION_TIMEOUT, name
+
+
+def test_a_pull_gets_the_deadline_of_its_kind():
+    """A watched pull can be stopped, so it may run long; an unwatched one is
+    what a recovery waits on while the Admin is down."""
+
+    from appliance.commands import CommandResult
+    from appliance.docker_backend import (
+        IMAGE_PULL_TIMEOUT,
+        UNWATCHED_PULL_TIMEOUT,
+        DockerBackend,
+    )
+
+    class Recorder:
+        timeouts = []
+
+        def run(self, tool, args=(), *, timeout=None, **_):
+            self.timeouts.append(("run", timeout))
+            return CommandResult(tool, tuple(args), 0, "", "")
+
+        def run_watched(self, tool, args=(), *, timeout, interval, keep_going):
+            self.timeouts.append(("watched", timeout))
+            return CommandResult(tool, tuple(args), 0, "", "")
+
+    runner = Recorder()
+    backend = DockerBackend(runner)
+    backend.pull_image("image:1")
+    backend.pull_image("image:1", keep_going=lambda elapsed: True)
+
+    assert runner.timeouts == [("run", UNWATCHED_PULL_TIMEOUT), ("watched", IMAGE_PULL_TIMEOUT)]
+
+
+def test_a_pull_past_its_deadline_names_the_deadline_it_had():
+    from appliance.commands import CommandResult
+    from appliance.docker_backend import DockerBackend, DockerError
+
+    class Late:
+        def run(self, tool, args=(), *, timeout=None, **_):
+            return CommandResult(tool, tuple(args), 124, "", "timed out", timed_out=True)
+
+        def run_watched(self, tool, args=(), **_):
+            return CommandResult(tool, tuple(args), 124, "", "timed out", timed_out=True)
+
+    backend = DockerBackend(Late())
+    with pytest.raises(DockerError, match="within 10 minutes"):
+        backend.pull_image("image:1")
+    with pytest.raises(DockerError, match="within 30 minutes"):
+        backend.pull_image("image:1", keep_going=lambda elapsed: True)
+
+
 def test_a_cheap_read_only_call_keeps_the_short_timeout():
     """Cheap is the rule; the exceptions are the calls that shell out to apt or
     nmcli, and those declare their own budget rather than inheriting this one."""

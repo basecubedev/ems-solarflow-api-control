@@ -9,7 +9,9 @@ or a shell metacharacter into the host.
 
 import os
 import shutil
+import signal
 import subprocess
+import time
 from dataclasses import dataclass
 
 DEFAULT_TIMEOUT = 60
@@ -64,10 +66,11 @@ class CommandResult:
     stdout: str
     stderr: str
     timed_out: bool = False
+    stopped: bool = False
 
     @property
     def ok(self):
-        return self.returncode == 0 and not self.timed_out
+        return self.returncode == 0 and not self.timed_out and not self.stopped
 
 
 def validated_arguments(args):
@@ -191,6 +194,103 @@ class CommandRunner:
         if check and not result.ok:
             raise CommandError("command_failed", f"{tool} exited with {result.returncode}")
         return result
+
+    def run_watched(self, tool, args=(), *, timeout, interval, keep_going):
+        """Run a long tool and ask ``keep_going(elapsed)`` every ``interval`` seconds.
+
+        For a step an operator waits on: the callback can say the step is still
+        running, and a False answer stops the tool the way its deadline does.
+        The tool runs in a process group of its own, so stopping it stops
+        anything it started, and nothing outlives a callback that raises.
+        """
+
+        arguments = validated_arguments(args)
+        executable = self.resolve(tool)
+        try:
+            process = subprocess.Popen(
+                [executable, *arguments],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self.env,
+                shell=False,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            raise CommandError("command_failed", f"{tool} could not be started: {exc}")
+        started = time.monotonic()
+        try:
+            while True:
+                remaining = timeout - (time.monotonic() - started)
+                try:
+                    stdout, stderr = process.communicate(
+                        timeout=max(0.0, min(interval, remaining))
+                    )
+                    return CommandResult(
+                        tool, tuple(args), process.returncode, stdout or "", stderr or ""
+                    )
+                except subprocess.TimeoutExpired:
+                    pass
+                if process.poll() is not None:
+                    stdout, stderr = _collected(process, kill=False)
+                    return CommandResult(tool, tuple(args), process.returncode, stdout, stderr)
+                elapsed = time.monotonic() - started
+                if elapsed >= timeout:
+                    stdout, stderr = _collected(process, kill=True)
+                    return CommandResult(
+                        tool,
+                        tuple(args),
+                        124,
+                        stdout,
+                        f"{stderr.rstrip()}\ntimed out" if stderr.strip() else "timed out",
+                        timed_out=True,
+                    )
+                if not keep_going(elapsed):
+                    stdout, stderr = _collected(process, kill=True)
+                    return CommandResult(tool, tuple(args), 130, stdout, stderr, stopped=True)
+        except BaseException:
+            if process.returncode is None:
+                _collected(process, kill=True)
+            raise
+
+
+_DRAIN_SECONDS = 10
+
+
+def _collected(process, *, kill):
+    """Read what the tool wrote, stopping its process group first if asked.
+
+    A process the tool left behind still holds the pipes, so reading waits
+    for it only so long before the group is stopped after all; one that left
+    the group is not waited for: the pipes are closed and what was read stays
+    unread.
+    """
+
+    if kill:
+        _kill_group(process)
+    try:
+        stdout, stderr = process.communicate(timeout=_DRAIN_SECONDS)
+    except subprocess.TimeoutExpired:
+        _kill_group(process)
+        try:
+            stdout, stderr = process.communicate(timeout=_DRAIN_SECONDS)
+        except subprocess.TimeoutExpired:
+            for pipe in (process.stdout, process.stderr):
+                if pipe is not None:
+                    pipe.close()
+            process.wait()
+            stdout, stderr = "", ""
+    return stdout or "", stderr or ""
+
+
+def _kill_group(process):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    if process.poll() is None:
+        process.kill()
 
 
 class RecordingRunner(CommandRunner):

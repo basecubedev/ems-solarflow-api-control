@@ -139,6 +139,14 @@ def command_failure_detail(result):
     return lines[-1] if lines else "no output"
 
 
+def pull_progress_note(image_ref, elapsed):
+    """The pulling stage's detail: the image and how long it has run."""
+
+    minutes = int(elapsed // 60)
+    so_far = f"{minutes} min so far" if minutes else "under a minute so far"
+    return f"{image_ref}, {so_far}"
+
+
 def restart_policy_state(deployment, container):
     """Whether Docker will bring this Admin back after a reboot, and what to change.
 
@@ -448,9 +456,18 @@ class AdminLifecycleService:
         repository = self.config.images.admin_repository
         image_ref = build_image_ref(repository, target.tag)
 
+        if self.operations.get(operation.operation_id).terminal:
+            raise AdminLifecycleError(
+                "operation_cancelled", "the plan was cancelled before its image was pulled"
+            )
         self._advance(operation, "pulling_image", detail=image_ref)
         try:
-            self.docker.pull_image(image_ref)
+            self.docker.pull_image(
+                image_ref,
+                keep_going=lambda elapsed: self.operations.note(
+                    operation.operation_id, pull_progress_note(image_ref, elapsed)
+                ),
+            )
         except DockerError as exc:
             raise AdminLifecycleError(exc.code, exc.message)
 
