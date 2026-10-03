@@ -60,6 +60,39 @@ if current_soc > effective_min_soc + ramp_step:
 return min(effective_min_soc + ramp_step, winter_min_soc)
 ```
 
+`effective_min_soc` is the remembered target, or the device's own `minSoc` when
+that is lower -- a target the battery never reached is not stepped up again. A
+device that reports no `minSoc` keeps the remembered target. After a restart
+nothing is remembered: outside the adjustment hour the device's `minSoc` is kept
+within the configured floor (the device's `min_soc`, or `summer_min_soc` when
+that is 0) and `winter_min_soc`, and that value is remembered; inside it the
+adjustment steps up from the device's `minSoc`, or from the device's `min_soc`
+when it reports none.
+
+## A Raise Waits for the Battery
+
+Winter mode writes a raise of `minSoc` only once the battery's SoC has reached
+it. Until then the device keeps its current `minSoc`, and the raise follows when
+PV has charged the battery that far. This applies to every raise winter mode
+writes: the daily adjustment, a target remembered while winter mode was switched
+off or after a failed write, the configured floor after a restart, and the
+summer reset of a device found below `summer_min_soc`. A device that reports no
+`minSoc` -- a missing value reads as 0 -- gets no raise the battery does not
+already hold, and without a usable SoC reading nothing rises.
+
+On 2026-10-03 an adjustment raised `minSoc` from 25 to 30 at a SoC of 25, and
+both inverters charged from the grid at their full AC power, 1.2 to 1.4 kW each,
+for five minutes until they had reached it; the 200 W `inputLimit` below does
+not limit that while the inverter is in output mode. In the same field data a
+`minSoc` that had stood two or three points above the SoC overnight caused no
+grid charging, so the threshold lies somewhere in between; the rule above does
+not depend on it.
+
+The rule only holds raises back. It does not bring a `minSoc` that is already
+above the SoC down to it. Winter mode still lowers `minSoc` where it did before:
+to the remembered target or `winter_min_soc` when a device holds more, and to
+`summer_min_soc` outside the winter months.
+
 ## AC Charge Limit
 
 During a winter adjustment, the EMS may write a conservative AC input limit:
@@ -93,6 +126,7 @@ allow_state_reconciliation_writes=true
 ```text
 winter_mode_state
 winter_ramp
+winter_raise_waits_for_battery
 winter_summer_reset
 dry_run_winter_ac_charge_limit
 write_winter_ac_charge_limit
@@ -101,7 +135,11 @@ write_winter_ac_charge_limit_error
 
 `winter_mode_state` is logged at `info` only when the active state changes or an
 adjustment is due; otherwise it is a `debug` trace, so the per-reconcile state
-no longer floods the default log. Actual writes and ramps stay at `info`. Set
+no longer floods the default log. Actual writes and ramps stay at `info`.
+`winter_raise_waits_for_battery` is `info` at the adjustment and when a raise
+starts waiting, and `debug` while it waits. `winter_summer_reset` is `debug`
+while its raise waits for the battery, except the first one that drops a target
+remembered in winter, which is `info`; otherwise it is `info`. Set
 `system.log_level=debug` to see every reconcile interval.
 
 ## Home Assistant

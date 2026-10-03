@@ -34,8 +34,8 @@ So:
 Two features are enabled in the template and act without an operator:
 
 - **Winter mode** (`winter.enabled: true`, months 10 to 3) raises `minSoc` step
-  by step up to `winter_min_soc` (40 %) and sets a winter AC charge
-  `inputLimit` of 200 W.
+  by step up to `winter_min_soc` (40 %), each step only once the battery holds
+  it, and sets a winter AC charge `inputLimit` of 200 W.
 - **Battery full-charge assist** (`battery_full_charge_assist.enabled: true`)
   raises `socSet` to 100 % every 28 days; with `enable_ac_charge_mode: true`
   it switches the inverter to AC input at `force_time` (14:00, UTC in Docker)

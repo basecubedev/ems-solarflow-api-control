@@ -994,6 +994,7 @@ Relevant events:
 ```text
 winter_mode_state
 winter_ramp
+winter_raise_waits_for_battery
 winter_summer_reset
 dry_run_winter_ac_charge_limit
 write_winter_ac_charge_limit
@@ -1012,9 +1013,14 @@ Winter logic runs through SOC reconciliation. It is not a per-cycle output
 control mechanism.
 
 `winter_mode_state` is logged at `info` only when the active state changes or an
-adjustment is due; otherwise it is a `debug` trace. Actual winter writes
-(`write_winter_ac_charge_limit`, `winter_ramp`, `winter_summer_reset`) stay
-visible at `info`. Enable `system.log_level=debug` to see every reconcile.
+adjustment is due; otherwise it is a `debug` trace.
+`write_winter_ac_charge_limit` and `winter_ramp` stay visible at `info`,
+`winter_ramp` also when the raise it plans waits for the battery and nothing is
+written yet. `winter_summer_reset` is `debug` while its raise waits for the
+battery, except the first one that drops a target remembered in winter, which
+is `info`; otherwise it is `info`. `winter_raise_waits_for_battery` is `info`
+at the daily adjustment and when a raise starts waiting, and `debug` while it
+waits. Enable `system.log_level=debug` to see every reconcile.
 
 ### Home Assistant entities missing
 

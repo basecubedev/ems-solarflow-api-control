@@ -3136,6 +3136,33 @@ def calculate_winter_min_soc_target(
     return min(effective_min_soc + ramp_step, winter_min_soc)
 
 
+def winter_min_soc_the_battery_holds(target, current_min_soc, soc):
+    """The winter minSoc to write: a raise only once the battery holds it.
+
+    Raised five points above the SoC, minSoc made the firmware charge from the
+    grid at full AC power, whatever ``inputLimit`` said. A raise therefore
+    waits until the SoC has reached it. A target that is no raise passes
+    unchanged, and without a usable SoC reading nothing is raised.
+    """
+
+    current = safe_int(current_min_soc, 0, minimum=0)
+    if target <= current:
+        return target
+
+    try:
+        usable = (
+            not isinstance(soc, bool)
+            and isinstance(soc, (int, float))
+            and math.isfinite(soc)
+        )
+    except OverflowError:
+        usable = False
+    if not usable or soc < target:
+        return current
+
+    return target
+
+
 def estimate_winter_ramp_days(current_min_soc):
     """Estimate remaining daily adjustments until winter minSoc is reached."""
 
