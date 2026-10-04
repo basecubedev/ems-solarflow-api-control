@@ -13,17 +13,31 @@ own.
 The update check is read-only: it never modifies a package or a package index.
 
 That has a consequence worth stating plainly: **an empty list is only as old as
-the last refresh.** Nothing on this appliance refreshes the package index on a
-schedule, so "0 security updates" means "none had been published when somebody
-last ran `apt-get update` here" — which may have been weeks ago. A live Pi 3B+
-was found reporting an empty list against an index nobody had touched for
-twenty-three days.
+the last refresh.** "0 security updates" means "none had been published when
+the index was last refreshed". A live Pi 3B+ was found reporting an empty list
+against an index nobody had touched for twenty-three days, and on another the
+OS security patches could not be installed because its index was too old.
+
+So the index is refreshed where something is about to be done with it: **every
+update plan refreshes an index older than twenty hours first** (the stage reads
+*refreshing index*), from the console and from the daily automatic security
+updates alike. Nothing else refreshes it on a schedule: with the automatic
+updates off, which is the default, the index ages until someone plans an update
+or uses **Refresh package indexes**. The status check itself stays read-only.
+
+The refresh is strict. A plan whose index cannot be refreshed is refused with
+`index_refresh_failed` and apt's first error line rather than made from the old
+one, and one failing source out of several is enough: while the Docker
+repository does not answer, no security update is planned either, and the
+daily run tries again the next day. A refresh that reached nothing leaves the
+index as old as it was, so the warning below stays. A plan that a blocker
+(see [Install security updates](#install-security-updates)) refuses anyway is
+not refreshed for: a read-only root, a held lock or too little room on `/var`
+stop apt here as they stop the install.
 
 The index age is shown beside the counts, and an index older than seven days
-raises a warning that names the number of days. Refreshing it is the
-**Refresh package indexes** action below; it is an operator's decision, because
-a status poll that changed the machine it reports on would not be read-only any
-more.
+raises a warning that names the number of days. **Refresh package indexes**
+below refreshes it at any time.
 
 | Item | Meaning |
 |---|---|
@@ -104,7 +118,7 @@ Three strictly defined actions:
 |---|---|
 | Complete pending package configuration | `dpkg --configure -a` |
 | Repair package dependencies | `apt-get -y -f install` |
-| Refresh package indexes | `apt-get update` |
+| Refresh package indexes | `apt-get update --error-on=any` |
 
 There are no free-form apt arguments. **A real active package-manager lock is
 never removed** — the operation refuses with `package_lock_held` and asks you to

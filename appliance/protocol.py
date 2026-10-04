@@ -29,6 +29,10 @@ ADMIN_INSTALL_PLAN_TIMEOUT = 2100
 # strands the operation lock behind it.
 SLOW_PROBE_TIMEOUT = 300
 WIFI_OPERATION_TIMEOUT = 120
+# An update plan refreshes an index a day old first: packages.INDEX_REFRESH_TIMEOUT
+# (900s) for apt-get update, the blockers' 60s before it and the check's 240s
+# after it; a test keeps this above all three.
+UPDATE_PLAN_TIMEOUT = 1320
 
 KIND_RELEASE_CHANNEL = "release_channel"
 KIND_RELEASE_TAG = "release_tag"
@@ -213,6 +217,7 @@ MUTATING_OPERATIONS = (
         takes_lock=True,
         fields=(Field("scope", KIND_UPDATE_SCOPE),),
         summary="Plan an OS package installation",
+        timeout_seconds=UPDATE_PLAN_TIMEOUT,
     ),
     _spec(
         "updates.plan_repair",

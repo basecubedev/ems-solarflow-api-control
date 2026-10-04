@@ -697,6 +697,18 @@ def test_a_pull_past_its_deadline_names_the_deadline_it_had():
         backend.pull_image("image:1", keep_going=lambda elapsed: True)
 
 
+def test_an_update_plan_waits_for_the_index_it_refreshes():
+    """A plan reads its blockers, refreshes an index a day old and then checks;
+    a caller that gave up first would strand the plan's lock behind it."""
+
+    from appliance.agent_client import operation_timeout
+    from appliance.packages import APT_SIMULATE_TIMEOUT, DPKG_QUERY_TIMEOUT, INDEX_REFRESH_TIMEOUT
+
+    gates = DPKG_QUERY_TIMEOUT
+    check = APT_SIMULATE_TIMEOUT + 2 * DPKG_QUERY_TIMEOUT
+    assert operation_timeout("updates.plan") > gates + INDEX_REFRESH_TIMEOUT + check
+
+
 def test_a_cheap_read_only_call_keeps_the_short_timeout():
     """Cheap is the rule; the exceptions are the calls that shell out to apt or
     nmcli, and those declare their own budget rather than inheriting this one."""

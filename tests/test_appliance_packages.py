@@ -5,6 +5,8 @@ The package manager is driven through a controlled fake backend: no apt process
 runs, and the check path must never modify a package or an index.
 """
 
+import os
+
 import pytest
 
 from appliance.agent import AgentHandlers
@@ -639,3 +641,159 @@ def test_the_schedule_never_reboots_on_its_own(tmp_path):
     reboots = [args for tool, args, _ in services.host.calls if tool == "systemctl" and "reboot" in args]
     assert reboots == []
     assert "reboot_required" in result
+
+
+# --- an index a day old ------------------------------------------------------
+
+
+def _index_aged(services, tmp_path, seconds):
+    lists = tmp_path / "var" / "lib" / "apt" / "lists"
+    stamp = services.clock.now - seconds
+    os.utime(lists, (stamp, stamp))
+    return lists
+
+
+def _apt_updates(services):
+    return [args for tool, args, _ in services.host.calls if tool == "apt-get" and "update" in args]
+
+
+def test_a_plan_from_an_index_a_day_old_refreshes_it_first(tmp_path):
+    """Field report: a Pi could not install security patches from an index
+    nobody refreshed, and the daily timer only ever planned from it."""
+
+    services = appliance(tmp_path)
+    lists = _index_aged(services, tmp_path, 25 * 60 * 60)
+
+    planned = handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
+
+    assert len(_apt_updates(services)) == 1
+    stages = [entry["stage"] for entry in services.operations.get(planned["operation"]["operation_id"]).progress]
+    assert "refreshing_index" in stages
+    assert services.clock.now - lists.stat().st_mtime < 60
+
+
+def test_the_plan_is_made_from_the_refreshed_index(tmp_path):
+    from tests.helpers.appliance import APT_SIMULATION
+
+    services = appliance(tmp_path)
+    _index_aged(services, tmp_path, 25 * 60 * 60)
+    services.host.apt_published = APT_SIMULATION + (
+        "Inst libssl3t64 [3.0.11-1] (3.0.15-1 Debian-Security:12/stable-security [arm64])\n"
+    )
+
+    planned = handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
+
+    assert "libssl3t64" in [item["name"] for item in planned["plan"]["packages"]]
+
+
+def test_a_plan_from_a_fresh_index_does_not_refresh_it(tmp_path):
+    services = appliance(tmp_path)
+    _index_aged(services, tmp_path, 60 * 60)
+
+    handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
+
+    assert _apt_updates(services) == []
+
+
+def test_a_plan_whose_mirror_cannot_be_reached_is_refused_with_apts_reason(tmp_path):
+    """apt only warns about an unreachable mirror and exits 0; that run
+    refreshed nothing, so the plan is refused and the index keeps its age."""
+
+    services = appliance(tmp_path)
+    lists = _index_aged(services, tmp_path, 25 * 60 * 60)
+    aged = lists.stat().st_mtime
+    services.host.apt_mirror_unreachable = True
+
+    with pytest.raises(Exception) as refused:
+        handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
+
+    assert refused.value.code == "index_refresh_failed"
+    assert refused.value.message.startswith(
+        "apt could not refresh the package index: E: Failed to fetch"
+    )
+    assert lists.stat().st_mtime == aged
+
+
+def test_a_refresh_from_an_unreachable_mirror_leaves_the_index_old(tmp_path):
+    """The stale-index warning is what told the owner the list was not to be
+    trusted; a refresh that reached nothing must not silence it."""
+
+    services = appliance(tmp_path)
+    lists = _index_aged(services, tmp_path, 10 * 24 * 60 * 60)
+    aged = lists.stat().st_mtime
+    services.host.apt_mirror_unreachable = True
+
+    operation, _ = plan_and_execute(services, "updates.plan_repair", action="refresh_index")
+
+    assert operation.state == STATE_FAILED_TERMINAL
+    assert operation.error["code"] == "package_repair_failed"
+    assert lists.stat().st_mtime == aged
+
+
+def test_a_plan_the_blockers_refuse_does_not_refresh_the_index(tmp_path):
+    import fcntl
+
+    services = appliance(tmp_path)
+    _index_aged(services, tmp_path, 25 * 60 * 60)
+    lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
+    handle = os.open(str(lock), os.O_RDWR)
+    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        planned = handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
+    finally:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        os.close(handle)
+
+    assert _apt_updates(services) == []
+    assert [b["code"] for b in planned["plan"]["blockers"]] == ["package_lock_held"]
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "reason"),
+    [
+        (
+            "Err:1 http://deb.debian.org/debian trixie InRelease\nReading package lists...\n",
+            "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 42\n"
+            "E: Unable to lock directory /var/lib/apt/lists/\n",
+            "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 42",
+        ),
+        ("Reading package lists...\n", "W: something odd\ntimed out\n", "timed out"),
+        ("Reading package lists...\n", "", "Reading package lists..."),
+        ("", "", "no output"),
+    ],
+)
+def test_apts_reason_is_its_first_error_not_its_progress_line(stdout, stderr, reason):
+    from types import SimpleNamespace
+
+    from appliance.packages import apt_failure_line
+
+    assert apt_failure_line(SimpleNamespace(stdout=stdout, stderr=stderr)) == reason
+
+
+def test_apts_reason_is_redacted_before_it_is_shown():
+    from types import SimpleNamespace
+
+    from appliance.packages import apt_failure_line
+
+    reason = apt_failure_line(
+        SimpleNamespace(
+            stdout="Reading package lists...\n",
+            stderr="E: Failed to fetch http://mirror:s3cret@apt.example/debian/dists/trixie/InRelease"
+            "  401  Unauthorized\n",
+        )
+    )
+
+    assert reason.startswith("E: Failed to fetch http://mirror:")
+    assert "s3cret" not in reason
+
+
+def test_a_refresh_that_finds_nothing_new_still_counts_as_fresh(tmp_path):
+    """apt leaves its lists alone when the mirror has nothing new."""
+
+    services = appliance(tmp_path)
+    lists = _index_aged(services, tmp_path, 10 * 24 * 60 * 60)
+
+    operation, _ = plan_and_execute(services, "updates.plan_repair", action="refresh_index")
+
+    assert operation.state == STATE_SUCCEEDED
+    assert services.clock.now - lists.stat().st_mtime < 60

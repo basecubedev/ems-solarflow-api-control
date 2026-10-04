@@ -29,6 +29,11 @@ from appliance.validation import (
     UPDATE_SCOPE_SECURITY,
 )
 
+INDEX_MAX_AGE_SECONDS = 20 * 60 * 60
+INDEX_REFRESH_TIMEOUT = 900
+APT_SIMULATE_TIMEOUT = 120
+DPKG_QUERY_TIMEOUT = 60
+
 TYPE_UPDATE_INSTALL = "updates.install"
 TYPE_UPDATE_REPAIR = "updates.repair"
 
@@ -191,6 +196,26 @@ def parse_dpkg_audit(text):
     return issues
 
 
+def apt_failure_line(result):
+    """apt's own reason for a failed run: its first ``E:`` line.
+
+    apt ends stdout with a progress line ("Reading package lists...") and puts
+    every error before it, so the last line of the output is never the reason.
+    Without an ``E:`` line (a timeout, a missing binary) stderr's last line is.
+    """
+
+    def lines(text):
+        redacted = bounded_redacted_log(text or "")["text"]
+        return [line.strip() for line in redacted.splitlines() if line.strip()]
+
+    stderr = lines(result.stderr)
+    errors = [line for line in stderr if line.startswith("E:")]
+    if errors:
+        return errors[0]
+    rest = stderr or lines(result.stdout)
+    return rest[-1] if rest else "no output"
+
+
 class PackageService:
     def __init__(self, *, runner, probe, paths, config, operations, time_fn=None, operation_log=None):
         self.runner = runner
@@ -234,40 +259,95 @@ class PackageService:
             return state
 
         simulated = self.runner.run(
-            "apt-get", ["-s", "-o", "Debug::NoLocking=1", "upgrade"], timeout=120
+            "apt-get", ["-s", "-o", "Debug::NoLocking=1", "upgrade"], timeout=APT_SIMULATE_TIMEOUT
         )
         if simulated.ok:
             state.updates = parse_simulated_upgrade(simulated.stdout)
         else:
             state.error = UPDATE_CHECK_FAILED
 
-        selections = self.runner.run("dpkg", ["--get-selections"], timeout=60)
+        selections = self.runner.run("dpkg", ["--get-selections"], timeout=DPKG_QUERY_TIMEOUT)
         state.held = parse_held_packages(selections.stdout if selections.ok else "")
 
-        audit = self.runner.run("dpkg", ["--audit"], timeout=60)
-        state.dpkg_issues = parse_dpkg_audit(audit.stdout if audit.ok else audit.stderr)
-
-        state.lock_state = self.lock_state()
+        self._read_gates(state)
 
         reboot = self.probe.reboot_required()
         state.reboot_required = reboot["required"]
         state.reboot_packages = reboot["packages"]
 
+        state.index_age_seconds = self._index_age()
+        return state
+
+    def _read_gates(self, state):
+        """Fill in what ``_blockers`` decides on: dpkg's audit, the lock, /var."""
+
+        audit = self.runner.run("dpkg", ["--audit"], timeout=DPKG_QUERY_TIMEOUT)
+        state.dpkg_issues = parse_dpkg_audit(audit.stdout if audit.ok else audit.stderr)
+
+        state.lock_state = self.lock_state()
+
         filesystem = self.probe.filesystem("/var")
         state.free_space_known = bool(filesystem.get("available"))
         state.free_megabytes = int(filesystem.get("free_mb", 0)) if state.free_space_known else 0
-
-        lists_dir = self.probe.root / "var/lib/apt/lists"
-        try:
-            state.index_age_seconds = int(self._time() - lists_dir.stat().st_mtime)
-        except OSError:
-            state.index_age_seconds = None
-
         return state
+
+    def _index_age(self):
+        try:
+            return int(self._time() - self._lists_dir().stat().st_mtime)
+        except OSError:
+            return None
+
+    def _lists_dir(self):
+        return self.probe.root / "var/lib/apt/lists"
+
+    def _refresh_index(self):
+        """Run ``apt-get update`` and mark the lists as refreshed now.
+
+        apt leaves its lists directory alone when the mirror has nothing new,
+        so its age would go on reading as stale after a refresh that found
+        nothing to change. Without ``--error-on=any`` an unreachable mirror is
+        only a warning and apt exits 0; that run refreshed nothing and must not
+        reset the age either.
+        """
+
+        result = self.runner.run(
+            "apt-get", ["update", "--error-on=any"], timeout=INDEX_REFRESH_TIMEOUT
+        )
+        if result.ok:
+            now = self._time()
+            try:
+                os.utime(self._lists_dir(), (now, now))
+            except OSError:
+                pass
+        return result
+
+    def _refresh_stale_index(self, operation):
+        """Refresh an index a day old before a plan is made from it.
+
+        A plan from an old index lists what was published then: the daily
+        timer found nothing to install for as long as nobody refreshed it, and
+        an install names versions the mirror may no longer carry. A plan the
+        blockers refuse anyway is not refreshed for: a read-only root, a held
+        lock or a full /var stop apt here exactly as they stop the install.
+        """
+
+        age = self._index_age()
+        if age is not None and age < INDEX_MAX_AGE_SECONDS:
+            return
+        if self._blockers(self._read_gates(PackageState())):
+            return
+        self._advance(operation, "refreshing_index")
+        result = self._refresh_index()
+        if not result.ok:
+            raise PackageError(
+                "index_refresh_failed",
+                "apt could not refresh the package index: " + apt_failure_line(result),
+            )
 
     # --- planning --------------------------------------------------------
 
     def plan_install(self, operation, scope):
+        self._refresh_stale_index(operation)
         state = self.check()
         targets = state.security_updates if scope == UPDATE_SCOPE_SECURITY else state.updates
         blockers = self._blockers(state)
@@ -461,7 +541,7 @@ class PackageService:
         elif action == PACKAGE_REPAIR_FIX_BROKEN:
             result = self.runner.run("apt-get", ["-y", "-f", "install"], timeout=1800)
         elif action == PACKAGE_REPAIR_REFRESH_INDEX:
-            result = self.runner.run("apt-get", ["update"], timeout=900)
+            result = self._refresh_index()
         else:
             raise PackageError("invalid_repair_action", f"{action} is not a repair action")
 
