@@ -585,7 +585,14 @@ queued → published┤─→ telemetry_confirmed                      (no-ack, 
   newer than or equal to the publish. Missing command or property time provenance
   fails closed. `acMode` and `outputLimit` are
   required; `smartMode`/`inputLimit` are checked when telemetry reports them, but a
-  *present* optional value must also match and be fresh. Because freshness is
+  *present* optional value must also match and be fresh. A **charge** inverts the
+  split: its commanded `outputLimit` is 0, which an idle device reports too, so
+  `acMode` and `inputLimit` are required and `outputLimit` is checked when
+  reported. A device that reports no `inputLimit` at all proves the charge with
+  the AC input it measures, `gridInputPower`, at the commanded power instead. A
+  legacy `function/invoke` charge (Hyper 2000) carries the same expectation —
+  without it a charging device's `outputLimit` 0 never matched the negative
+  target, and every charge ended in `confirmation_timed_out`. Because freshness is
   per-property, a stale-but-matching `acMode`/`smartMode`/`inputLimit` — a merged
   snapshot's cached value or a superseded command's late echo — can never confirm
   a fresh command, even when `outputLimit` is fresh. An **ack profile** confirms
@@ -703,12 +710,13 @@ device:
 - a *changed* non-safety target while an **ack-capable** command is in flight →
   store the single **`pending_latest_target`** (never an unbounded queue); its
   acknowledgement window is short and bounded;
-- a **safety reduction** while active → **preempt**: a full stop to 0 W, or a
-  reduction of at least `safety_preempt_margin_w` (default 300 W), retires the
-  in-flight command as terminal `superseded` and publishes the safer target
-  **within the same cycle**, so a safety stop never waits for the old command's
-  timeout. Correlation stays strict — the retired command can never confirm the
-  replacement;
+- a **safety reduction** while active → **preempt**: a full stop to 0 W, a
+  change of direction into or out of a charge, or a reduction of at least
+  `safety_preempt_margin_w` (default 300 W), retires the in-flight command as
+  terminal `superseded` and publishes the new target **within the same cycle**,
+  so a safety stop never waits for the old command's timeout and the way back
+  from a charge never queues behind the charge it ends. Correlation stays
+  strict — the retired command can never confirm the replacement;
 - once the active command reaches a terminal state on a broker reply
   (rejection, supersession, acknowledgement completion) → publish the latest
   pending target **once**. When the slot is freed by a timeout or by telemetry

@@ -284,3 +284,106 @@ def test_write_output_limit_wrapper_stays_boolean():
     dev = _zensdk_device("solarflow_800")
     assert dev.write_output_limit(600) is True
     assert dev.write_output_limit(-500) is False
+
+
+# --- direction changes -------------------------------------------------------
+
+
+def test_leaving_a_charge_preempts_the_in_flight_charge():
+    """The way back may not wait behind the charge it ends.
+
+    On an ack profile only a 0 W target preempted, so an exit to the standby
+    floor queued behind the in-flight charge: the device drew for another
+    thirty seconds, until the charge command timed out.
+    """
+
+    dev = _ack_device()
+    dev.write_output_limit(-600)
+    old = dev._active_command
+
+    result = dev.dispatch_output_limit(35)
+
+    assert result.status is WriteDispatchStatus.PUBLISHED
+    assert old.state == "superseded"
+    assert dev._active_command.target_w == 35
+
+
+def test_entering_a_charge_preempts_an_in_flight_discharge():
+    dev = _ack_device()
+    dev.write_output_limit(600)
+
+    result = dev.dispatch_output_limit(-500)
+
+    assert result.status is WriteDispatchStatus.PUBLISHED
+    assert dev._active_command.target_w == -500
+
+
+def test_a_power_change_inside_the_charge_still_waits():
+    """Only a direction change jumps the queue; anything else would spam."""
+
+    dev = _ack_device()
+    dev.write_output_limit(-600)
+
+    result = dev.dispatch_output_limit(-400)
+
+    assert result.status is WriteDispatchStatus.QUEUED_LATEST
+    assert dev._pending_target == -400
+
+
+# --- a charge on an invoke profile is confirmable ----------------------------
+
+
+def _acknowledged_charge(watts=600):
+    dev = _ack_device()
+    dev.write_output_limit(-watts)
+    record = dev._active_command
+    dev.handle_reply(_reply(record))
+    assert record.state == "acknowledged"
+    return dev, record
+
+
+def _report(dev, record, metrics):
+    dev._service.set_snapshot(
+        metrics, last_seen_monotonic=record.published_monotonic + 1.0
+    )
+    dev.fetch()
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [
+        {"outputLimit": 0, "acMode": 1, "inputLimit": 600},
+        {"outputLimit": 0, "acMode": 1, "gridInputPower": 590},
+    ],
+)
+def test_an_invoke_charge_confirms_from_what_the_device_reports_charging(metrics):
+    """A charging Hyper reports outputLimit 0, never the negative target.
+
+    Confirming against outputLimit therefore never succeeded, and every charge
+    command ended in confirmation_timed_out. The charge proves itself in the
+    AC-input direction and its power: the limit where the device reports one,
+    else the AC input it measures.
+    """
+
+    dev, record = _acknowledged_charge()
+
+    _report(dev, record, metrics)
+
+    assert record.state == "telemetry_confirmed"
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [
+        {"outputLimit": 0},
+        {"outputLimit": 0, "acMode": 1},
+        {"outputLimit": 0, "acMode": 2, "gridInputPower": 0},
+        {"outputLimit": 0, "acMode": 1, "gridInputPower": 0},
+    ],
+)
+def test_an_invoke_charge_is_not_confirmed_without_a_charge(metrics):
+    dev, record = _acknowledged_charge()
+
+    _report(dev, record, metrics)
+
+    assert record.state == "acknowledged"

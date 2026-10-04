@@ -281,11 +281,12 @@ def _report(product=None, **properties):
 
 
 def test_http_discharge_dispatch_stays_the_bare_output_limit_write():
-    """The working discharge path must not change shape.
+    """Inside the output direction the working path must not change shape.
 
     The atomic set would also carry smartMode on every five-second cycle, and
     that is a flash-persistent operating mode. Nothing measured says writing it
-    repeatedly is free, so a non-negative target keeps the single-property write.
+    repeatedly is free, so a non-negative target for a device that is neither
+    charging nor was told to keeps the single-property write.
     """
 
     session = SessionStub()
@@ -295,6 +296,78 @@ def test_http_discharge_dispatch_stays_the_bare_output_limit_write():
 
     assert bool(result) is True
     assert _posted(session) == [{"sn": "SN", "properties": {"outputLimit": 300}}]
+
+
+def _atomic(output_w):
+    return {
+        "sn": "SN",
+        "properties": {
+            "smartMode": 1,
+            "acMode": 2,
+            "outputLimit": output_w,
+            "inputLimit": 0,
+        },
+    }
+
+
+@pytest.mark.parametrize("target", [0, 35, 600])
+def test_http_leaving_a_charge_is_one_atomic_command(target):
+    """A bare outputLimit is ignored by a device sitting in acMode 1.
+
+    The exit used to be exactly that, so the charge only ended a cycle later
+    when the state reconciler wrote acMode back -- and never, with
+    allow_state_reconciliation_writes off, or on a shutdown release that writes
+    once and exits. The way back carries the direction with its setpoint.
+    """
+
+    session = SessionStub()
+    dev = _zendure(session, hardware_profile="solarflow_800_pro_2")
+    dev.dispatch_output_limit(-600)
+
+    result = dev.dispatch_output_limit(target)
+
+    assert bool(result) is True
+    assert _posted(session)[-1] == _atomic(target)
+
+
+def test_http_a_device_found_charging_is_left_with_the_atomic_command():
+    """A charge this process never commanded -- a restart, the vendor app --
+    is in acMode 1 just the same, and ignores a bare outputLimit just the same."""
+
+    session = SessionStub(get_response=_report(acMode=1, acStatus=2, inputLimit=800))
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.fetch()
+
+    dev.dispatch_output_limit(0)
+
+    assert _posted(session) == [_atomic(0)]
+
+
+def test_http_back_in_the_output_direction_the_bare_write_returns():
+    session = SessionStub(get_response=_report(acMode=2, acStatus=1))
+    dev = _zendure(session, hardware_profile="solarflow_800_pro_2")
+    dev.dispatch_output_limit(-600)
+    dev.dispatch_output_limit(0)
+    dev.fetch()
+
+    dev.dispatch_output_limit(300)
+
+    assert _posted(session)[-1] == {"sn": "SN", "properties": {"outputLimit": 300}}
+
+
+def test_http_an_exit_that_failed_is_sent_whole_again():
+    """Only an exit the device accepted ends the record of the charge."""
+
+    session = SessionStub(post_response=ResponseStub(status_code=500))
+    dev = _zendure(session, hardware_profile="solarflow_800_pro_2")
+    dev.dispatch_output_limit(-600)
+
+    assert bool(dev.dispatch_output_limit(0)) is False
+
+    session.post_response = ResponseStub()
+    dev.dispatch_output_limit(0)
+
+    assert _posted(session)[-1] == _atomic(0)
 
 
 def test_http_charge_dispatch_writes_the_measured_atomic_set():
@@ -315,6 +388,80 @@ def test_http_charge_dispatch_writes_the_measured_atomic_set():
             },
         }
     ]
+
+
+def _charge_set(input_w):
+    return {
+        "sn": "SN",
+        "properties": {
+            "smartMode": 1,
+            "acMode": 1,
+            "outputLimit": 0,
+            "inputLimit": input_w,
+        },
+    }
+
+
+def test_http_a_running_charge_changes_power_with_one_value():
+    """Inside an accepted charge only the power moves.
+
+    The hardware probe of 2026-09-13 established that a bare ``inputLimit`` is
+    honoured once the charge direction stands, and ``smartMode`` is the
+    flash-persistent mode the discharge side already refuses to rewrite every
+    loop. Sending the whole set for every power change under a noisy surplus
+    rewrote it hundreds of times an hour.
+    """
+
+    session = SessionStub(
+        get_response=_report(acMode=1, acStatus=2, smartMode=1, inputLimit=600)
+    )
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.dispatch_output_limit(-600)
+    dev.fetch()
+
+    dev.dispatch_output_limit(-450)
+    dev.dispatch_output_limit(-500)
+
+    assert _posted(session) == [
+        _charge_set(600),
+        {"sn": "SN", "properties": {"inputLimit": 450}},
+        {"sn": "SN", "properties": {"inputLimit": 500}},
+    ]
+
+
+@pytest.mark.parametrize(
+    "observed",
+    [
+        {"acMode": 2, "acStatus": 2, "smartMode": 1},
+        {"acMode": 1, "acStatus": 2, "smartMode": 0},
+        {"acMode": 2, "acStatus": 1, "smartMode": 1},
+    ],
+)
+def test_http_a_charge_the_device_does_not_show_is_sent_whole_again(observed):
+    """Only a device seen in the charge mode the EMS set gets the one value."""
+
+    session = SessionStub(get_response=_report(**observed))
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.dispatch_output_limit(-600)
+    dev.fetch()
+
+    dev.dispatch_output_limit(-450)
+
+    assert _posted(session)[-1] == _charge_set(450)
+
+
+def test_http_a_charge_the_ems_did_not_start_is_entered_whole():
+    """Found charging after a restart: the EMS has no charge of its own yet."""
+
+    session = SessionStub(
+        get_response=_report(acMode=1, acStatus=2, smartMode=1, inputLimit=800)
+    )
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.fetch()
+
+    dev.dispatch_output_limit(-450)
+
+    assert _posted(session) == [_charge_set(450)]
 
 
 def test_http_charge_is_refused_for_a_model_without_a_charge_path():

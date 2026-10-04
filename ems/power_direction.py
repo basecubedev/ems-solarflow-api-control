@@ -35,6 +35,26 @@ def operation_for_target(target_w: int) -> str:
     return OPERATION_IDLE
 
 
+def in_ac_input_direction(state) -> bool:
+    """Whether telemetry shows the device written to, or running in, AC input.
+
+    Either value is enough. The written ``acMode`` decides how the next command
+    is read -- a bare ``outputLimit`` is ignored in ``acMode = 1`` -- and the
+    status covers the settling window in which the two still disagree.
+    """
+
+    def reported(name):
+        value = getattr(state, name, None)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return value
+
+    return (
+        reported("ac_mode") == AC_MODE_INPUT
+        or reported("ac_status") == AC_STATUS_CHARGING
+    )
+
+
 def derive_house_load_w(inverter_output_w, grid_power_w, inverter_charge_w=0):
     """Net both directions against the meter to get what the house draws.
 
@@ -60,5 +80,6 @@ __all__ = [
     "OPERATION_IDLE",
     "OPERATION_CHARGE",
     "derive_house_load_w",
+    "in_ac_input_direction",
     "operation_for_target",
 ]

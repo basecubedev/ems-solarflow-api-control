@@ -14,6 +14,7 @@ from ems import config as cfg
 from ems.health import CommHealth, redact_error, redact_url_credentials
 from ems.logging_utils import log_event
 from ems.models import DeviceState, parse_pack_count
+from ems.power_direction import AC_MODE_INPUT, in_ac_input_direction
 
 
 def zendure_write_succeeded(error_event, dev, response, **fields):
@@ -412,6 +413,9 @@ class ZendureClient:
         self.ac_charge_enabled = bool(ac_charge_enabled)
         self.max_charge_power_w = max_charge_power_w or 0
         self.observed_product = None
+        self.charge_commanded = False
+        self.observed_in_ac_input = False
+        self.observed_in_charge_mode = False
         self.read_health = CommHealth(name, kind="read")
         self.write_health = CommHealth(name, kind="write")
 
@@ -435,6 +439,10 @@ class ZendureClient:
             if data.get("product"):
                 self.observed_product = str(data["product"])
             state = parse_device(data)
+            self.observed_in_ac_input = in_ac_input_direction(state)
+            self.observed_in_charge_mode = (
+                state.ac_mode == AC_MODE_INPUT and state.smart_mode == 1
+            )
             self.read_health.record_success((time.monotonic() - start) * 1000.0)
             return state
 
@@ -486,14 +494,24 @@ class ZendureClient:
     def dispatch_output_limit(self, value):
         """Dispatch a signed power target over the local HTTP API.
 
-        A non-negative target keeps the historic single-property write: the
-        atomic set would also carry ``smartMode`` on every loop, and that is a
-        flash-persistent operating mode nothing measured says is free to rewrite
-        at five-second cadence.
+        Inside the output direction a non-negative target keeps the historic
+        single-property write: the atomic set would also carry ``smartMode`` on
+        every loop, and that is a flash-persistent operating mode nothing
+        measured says is free to rewrite at five-second cadence.
 
-        A charge needs the atomic set, and it needs a model whose AC charge path
-        is established — the command shape is shared across the ZenSDK family,
-        the capability is not.
+        Leaving the charge direction is a direction change, and a bare
+        ``outputLimit`` is ignored by a device in ``acMode = 1``. So while this
+        client last commanded a charge, or last saw the device in the AC-input
+        direction, a non-negative target is the atomic set -- the same command
+        MQTT sends. Only an exit the device accepted ends that.
+
+        A charge needs a model whose AC charge path is established — the
+        command shape is shared across the ZenSDK family, the capability is
+        not. Entering one is the atomic set; inside a charge this client
+        started and the device shows in ``acMode = 1`` with ``smartMode = 1``,
+        a power change is the bare ``inputLimit`` the device honours there, so
+        ``smartMode`` is not rewritten on every change either. Whenever the
+        device shows anything else, the set is sent whole again.
         """
 
         from ems.mqtt_control import dispatch
@@ -508,8 +526,24 @@ class ZendureClient:
         from ems.power_command import build_zensdk_power_operation
 
         target = int(value)
-        if target >= 0:
+        if target >= 0 and not (self.charge_commanded or self.observed_in_ac_input):
             ok = self.write_output_limit(target)
+            return (
+                dispatch.published(target)
+                if ok
+                else dispatch.failed(target, reason="http_write_failed")
+            )
+
+        if target >= 0:
+            ok = zendure_write(
+                self,
+                "outputLimit",
+                build_zensdk_power_operation(target).properties,
+                "write_output_limit_error",
+                target_w=target,
+            )
+            if ok:
+                self.charge_commanded = False
             return (
                 dispatch.published(target)
                 if ok
@@ -528,10 +562,16 @@ class ZendureClient:
             )
 
         operation = build_zensdk_power_operation(target)
+        properties = (
+            {"inputLimit": operation.properties["inputLimit"]}
+            if self.charge_commanded and self.observed_in_charge_mode
+            else operation.properties
+        )
+        self.charge_commanded = True
         ok = zendure_write(
             self,
             "inputLimit",
-            operation.properties,
+            properties,
             "write_charge_limit_error",
             target_w=target,
         )

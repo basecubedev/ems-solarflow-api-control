@@ -96,7 +96,15 @@ reconciliation writer. That flag means "no separate reconciliation path", not
 carrying `smartMode`, `acMode`, `outputLimit` and `inputLimit` together, because
 a bare setpoint is ignored by a device sitting in an inactive mode. The mode
 therefore travels with the power command, on the transport's own gate, in both
-directions.
+directions. The local API does the same wherever the direction changes: inside
+the output direction it keeps the single-property `outputLimit` write, but while
+the device was last commanded to charge or reports the AC-input direction, a
+non-negative target is sent as the atomic set (`smartMode=1`, `acMode=2`,
+`outputLimit`, `inputLimit=0`). Leaving a charge never waits for state
+reconciliation, and a shutdown release that writes once and exits is one
+complete command. Inside the charge direction the local API sends only
+`inputLimit` while the device shows the charge mode this EMS set (`acMode=1`,
+`smartMode=1`), and the atomic set again whenever it shows anything else.
 
 A charge is not gated separately from a discharge. What decides whether a
 charge may happen at all is the permission set — the feature switch, the

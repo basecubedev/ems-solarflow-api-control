@@ -655,18 +655,23 @@ class ZendureMqttDeviceClient:
         """Whether a changed target must preempt the in-flight command for safety.
 
         A full stop (0 W) always preempts any active command — including an active
-        charge. Otherwise only a substantial reduction of commanded discharge
-        output preempts; a rise, or any charge-side (negative) target, waits as the
-        pending target instead (no broker spam). The reduction must be at least the
-        safety margin AND strictly exceed the confirmation tolerance, so a
-        preempting command can never be cross-confirmed by stale telemetry still
-        reporting the old (superseded) target within tolerance — this holds even if
-        the margin is misconfigured below the tolerance.
+        charge. So does a change of direction into or out of a charge: the way
+        back from a charge must not queue behind the charge it ends, which on an
+        ack profile held the device drawing until the charge command timed out.
+        Otherwise only a substantial reduction of commanded discharge output
+        preempts; a rise, or a power change inside the charge direction, waits as
+        the pending target instead (no broker spam). The reduction must be at
+        least the safety margin AND strictly exceed the confirmation tolerance, so
+        a preempting command can never be cross-confirmed by stale telemetry still
+        reporting the old (superseded) target within tolerance — this holds even
+        if the margin is misconfigured below the tolerance.
         """
 
         if new_target == active_target:
             return False
         if new_target == 0:
+            return True
+        if (new_target < 0) != (active_target < 0):
             return True
         if new_target < 0 or new_target >= active_target:
             return False
@@ -939,7 +944,12 @@ class ZendureMqttDeviceClient:
                     qos=CONTROL_PUBLISH_QOS,
                     retain=False,
                 )
-                return message, message_id, command.operation, None
+                return (
+                    message,
+                    message_id,
+                    command.operation,
+                    command.expected_properties,
+                )
             # ZenSDK: atomic mode+power contract; a bare outputLimit is ignored
             # by a device in an inactive mode.
             try:

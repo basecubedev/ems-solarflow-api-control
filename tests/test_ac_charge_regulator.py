@@ -537,30 +537,85 @@ def test_a_charge_the_ems_itself_commanded_is_not_rewritten_every_cycle():
     assert len(writes) == before, writes[before:]
 
 
+class _HttpReply:
+    status_code = 200
+
+    def __init__(self, payload):
+        self._payload = payload
+        self.text = ""
+
+    def json(self):
+        return self._payload
+
+
 class FollowingHardware:
     """Telemetry that follows the command, the way a device does.
 
     Every other test here holds the state fixed, which hides anything that only
     goes wrong once the device actually reports what it was told.
+
+    The device is told property writes, not targets. A target travels through
+    the device's real transport -- the local-API client for a config device, the
+    device's own client where it is one -- which decides what goes on the wire,
+    and the device honours the contract that wire format is written against: a
+    write carrying ``acMode`` changes direction together with its setpoints,
+    and without it an ``outputLimit`` is ignored in ``acMode = 1`` and an
+    ``inputLimit`` in ``acMode = 2``. The first version switched direction on
+    any target, and so hid an exit from a charge that was a bare
+    ``outputLimit``: on hardware only the state reconciler, behind its own
+    gate, ever ended that charge.
     """
 
     def __init__(self, item):
         self.state = item
+        self.writes = []
+        self._transports = {}
 
     def __call__(self, dev, value):
-        target = int(value)
-        if target < 0:
-            self.state.ac_mode = 1
-            self.state.ac_status = 2
-            self.state.input_limit_w = -target
-            self.state.grid_input = -target
-            self.state.output_limit = 0
-        else:
-            self.state.ac_mode = 2
-            self.state.ac_status = 1
-            self.state.input_limit_w = 0
-            self.state.grid_input = 0
-            self.state.output_limit = target
+        from ems.clients import ZendureClient
+
+        transport = self._transports.get(dev.name)
+        if transport is None:
+            if callable(getattr(dev, "dispatch_output_limit", None)):
+                transport = dev
+            else:
+                transport = ZendureClient(
+                    dev.name, dev.ip, dev.sn, self, dev.min_soc, dev.max_soc,
+                    dev.smart_mode, dev.grid_off_mode, dev.max_power,
+                    hardware_profile=getattr(dev, "hardware_profile", None),
+                )
+            self._transports[dev.name] = transport
+        if isinstance(transport, ZendureClient):
+            transport.fetch()
+        return bool(transport.dispatch_output_limit(int(value)))
+
+    def get(self, url, **_kwargs):
+        item = self.state
+        return _HttpReply({"properties": {
+            "acMode": item.ac_mode,
+            "acStatus": item.ac_status,
+            "outputLimit": item.output_limit,
+            "inputLimit": item.input_limit_w,
+            "gridInputPower": item.grid_input,
+        }})
+
+    def post(self, url, json=None, **_kwargs):
+        self.apply(json["properties"])
+        return _HttpReply({"success": True})
+
+    def apply(self, properties):
+        self.writes.append(dict(properties))
+        item = self.state
+        switches = "acMode" in properties
+        if switches:
+            item.ac_mode = int(properties["acMode"])
+        charging = item.ac_mode == 1
+        if "inputLimit" in properties and (switches or charging):
+            item.input_limit_w = int(properties["inputLimit"])
+        if "outputLimit" in properties and (switches or not charging):
+            item.output_limit = int(properties["outputLimit"])
+        item.ac_status = 2 if charging else 1
+        item.grid_input = item.input_limit_w if charging else 0
 
 
 def test_the_state_reconciler_does_not_fight_the_regulator_over_ac_mode():
@@ -911,6 +966,66 @@ def test_the_per_device_runtime_switch_stops_a_charge_in_one_cycle():
     assert item.grid_input == 0
 
 
+def idle_output_state():
+    item = surplus_state()
+    item.ac_mode = 2
+    item.ac_status = 1
+    item.output_limit = 0
+    item.input_limit_w = 0
+    item.grid_input = 0
+    return item
+
+
+def charge_on_following_hardware(**harness_kwargs):
+    item = idle_output_state()
+    harness = Harness([charging_device()], load=-900, **harness_kwargs)
+    hardware = FollowingHardware(item)
+    harness.controller.set_output_limit = hardware
+    harness.run(cycles=20, states=[item])
+    assert harness.controller.charge_direction.charging is True
+    assert item.ac_mode == 1
+    return harness, hardware, item
+
+
+def test_the_way_back_needs_no_state_reconciliation():
+    """Leaving a charge is the power command's job, on the power command's gate.
+
+    The local-API exit was a bare outputLimit, which a device in acMode 1
+    ignores. The charge then ended only when the state reconciler wrote acMode
+    back -- and with allow_state_reconciliation_writes off it never ended: the
+    EMS wrote outputLimit 800 into a device that went on drawing from the grid.
+    """
+
+    harness, hardware, item = charge_on_following_hardware()
+    harness.controller.device_state_writes_allowed = lambda dev: False
+
+    harness.run(cycles=1, states=[item], load=1200)
+
+    assert harness.controller.charge_direction.charging is False
+    assert item.ac_mode == 2
+    assert item.grid_input == 0
+    assert hardware.writes[-1]["acMode"] == 2
+    assert hardware.writes[-1]["inputLimit"] == 0
+
+
+def test_a_shutdown_release_actually_releases():
+    """The release writes once and the process exits; nothing comes after it.
+
+    `ac_charge_released_on_shutdown` was logged over a bare outputLimit 0, so a
+    device left by --once, --max-cycles or an unhandled error kept charging.
+    """
+
+    harness, hardware, item = charge_on_following_hardware()
+
+    harness.controller.release_charging_devices()
+
+    assert item.ac_mode == 2
+    assert item.grid_input == 0
+    assert hardware.writes[-1] == {
+        "smartMode": 1, "acMode": 2, "outputLimit": 0, "inputLimit": 0,
+    }
+
+
 def test_an_mqtt_control_device_charges_through_the_same_loop():
     """A whole transport that had no loop-level coverage.
 
@@ -928,21 +1043,35 @@ def test_an_mqtt_control_device_charges_through_the_same_loop():
     the charge the test user never saw.
     """
 
+    import json
+
     from ems.mqtt_control.zendure_profiles import WRITE_PROFILE_ZENSDK_PROPERTIES
     from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
+    from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
+
+    item = surplus_state()
+    item.ac_mode = 2
+    item.ac_status = 1
+    item.output_limit = 0
+    item.input_limit_w = 0
+    item.grid_input = 0
+    item.charge_max_limit_w = 2400
+    hardware = FollowingHardware(item)
 
     class ServiceStub:
-        def publish(self, *args, **kwargs):
+        def publish_message(self, message):
+            hardware.apply(json.loads(message.payload)["properties"])
             return True
 
-        def snapshot(self, *args, **kwargs):
+        def snapshot_status(self, *args, **kwargs):
             return None
 
     dev = ZendureMqttDeviceClient(
         name="WR1",
         service=ServiceStub(),
         device_id="ABC123",
-        topic_family="zensdk_ha_scalar",
+        topic_family=FAMILY_LEGACY_JSON,
+        product_key="PK",
         source="zendure_cloud_mqtt",
         hardware_profile="solarflow_2400_ac",
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
@@ -957,16 +1086,8 @@ def test_an_mqtt_control_device_charges_through_the_same_loop():
     assert dev.supports_state_reconciliation is False
     assert not hasattr(dev, "resolved_hardware_profile")
 
-    item = surplus_state()
-    item.ac_mode = 2
-    item.ac_status = 1
-    item.output_limit = 0
-    item.input_limit_w = 0
-    item.grid_input = 0
-    item.charge_max_limit_w = 2400
-
     harness = Harness([dev], load=-900)
-    harness.controller.set_output_limit = FollowingHardware(item)
+    harness.controller.set_output_limit = hardware
     harness.run(cycles=20, states=[item])
 
     assert harness.controller.charge_direction.charging is True

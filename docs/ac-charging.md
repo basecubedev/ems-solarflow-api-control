@@ -208,6 +208,28 @@ meaning "the power command owns this". An operator park (150) or maintenance
 (200) still takes the device away mid-charge, and a device found charging that
 the EMS did not command stays a leftover the reconciler may reclaim.
 
+**Leaving a charge is one command, on every transport.** A device in
+`acMode = 1` ignores a bare `outputLimit`, so the way back carries the direction
+with its setpoint: `smartMode=1`, `acMode=2`, the new `outputLimit` and
+`inputLimit=0` in one write. MQTT always sends that set. The local API keeps its
+single-property `outputLimit` write inside the output direction, and sends the
+set whenever the device was last commanded to charge or reports the AC-input
+direction, until the device has accepted it. The exit therefore needs no state
+reconciliation — with `allow_state_reconciliation_writes` off it used to never
+arrive — and the shutdown release is a complete command rather than an
+`outputLimit` the charging device ignored. On an MQTT device whose commands are
+acknowledged (Hyper 2000), a change of direction does not queue behind the
+command it replaces.
+
+**Inside a running charge the local API changes the power with one value.**
+Entering a charge is the atomic set. Once the device shows the charge mode the
+EMS set — `acMode = 1` with `smartMode = 1`, after a charge this EMS started — a
+new charge power is a bare `inputLimit`, which the device honours inside the
+charge direction (measured on an 800 Pro 2, 2026-09-13). `smartMode` is a
+flash-persistent mode, and the full set on every power change rewrote it several
+hundred times an hour under a noisy surplus. Whenever the device shows anything
+else, the set is sent whole again. MQTT keeps sending the set.
+
 **A running charge is stopped even when the new target is zero.** The write
 deadband suppresses a command that would change nothing, and it decides that by
 comparing the target against what the device is doing. A charging device reports
