@@ -388,16 +388,19 @@ def test_http_back_in_the_output_direction_the_bare_write_returns():
 def test_http_an_exit_that_failed_is_sent_whole_again():
     """An exit the transport could not deliver was never sent, so it is due at once."""
 
-    session = SessionStub(post_response=ResponseStub(status_code=500))
+    session = SessionStub()
     dev = _zendure(session, hardware_profile="solarflow_800_pro_2")
     dev.dispatch_output_limit(-600)
 
-    assert bool(dev.dispatch_output_limit(0)) is False
+    session.post_response = ConnectionError("unreachable")
+    with pytest.raises(ConnectionError):
+        dev.dispatch_output_limit(0)
+    assert dev.charge_exit_due() is True
 
     session.post_response = ResponseStub()
     dev.dispatch_output_limit(0)
 
-    assert _posted(session)[-1] == _atomic(0)
+    assert _posted(session)[-2:] == [_atomic(0), _atomic(0)]
 
 
 class _Clock:
@@ -449,6 +452,123 @@ def test_http_an_exit_the_device_did_not_apply_keeps_the_charge_on_record():
         dev.fetch()
 
     assert dev.charge_commanded is False
+
+
+def test_http_an_exit_the_device_rejected_keeps_the_charge_and_is_asked_again_later():
+    """A device that answers the exit with an error has been asked.
+
+    Only an exit the device accepted counted as sent, so one it rejected --
+    HTTP 400 -- was due again at once and went out every cycle for as long as
+    the device kept rejecting it, to a disabled device as well. It now counts
+    from the answer, as an exit an MQTT device rejects does, and is asked
+    again once the resend window has passed.
+    """
+
+    session = SessionStub(get_response=_charging_report())
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    clock = _Clock()
+    with patch("time.monotonic", clock):
+        dev.dispatch_output_limit(-600)
+        dev.fetch()
+
+        session.post_response = ResponseStub(status_code=400)
+        assert bool(dev.dispatch_output_limit(0)) is False
+        assert dev.charge_commanded is True
+        posted = len(_posted(session))
+
+        for _ in range(5):
+            clock.now += 5
+            assert not dev.dispatch_output_limit(0).published
+        assert len(_posted(session)) == posted
+        assert dev.charge_exit_due() is False
+
+        clock.now += 5
+        assert dev.charge_exit_due() is True
+        dev.dispatch_output_limit(0)
+        assert len(_posted(session)) == posted + 1
+
+
+def test_http_the_exit_to_a_charge_found_at_start_waits_for_the_window_once_answered():
+    """The one exit after a start keeps the window the record's exit keeps.
+
+    It is not on record, so nothing held it back: a device that answered it
+    with an error was sent it again every cycle, and one that accepted it
+    counted as done whether or not it left AC input. Accepted or refused, an
+    answered exit is one attempt and holds the next back until the window has
+    passed; one the transport could not deliver is neither, and is due again
+    at once. Only a report of the device out of the charge, or charging at a
+    setpoint it did not have when the exit went out, says it was taken.
+    """
+
+    from ems.charge_record import CHARGE_EXIT_TO_OUTPUT
+
+    session = SessionStub(
+        get_response=_charging_report(800),
+        post_response=ResponseStub(status_code=400),
+    )
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    clock = _Clock()
+    with patch("time.monotonic", clock):
+        dev.fetch()
+        assert not dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT)
+        for _ in range(5):
+            clock.now += 5
+            dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT)
+        assert _posted(session) == [_atomic(0)]
+        assert dev.found_exit_due() is False
+        assert dev.found_exit_attempts == 1
+
+        clock.now += 5
+        session.post_response = ConnectionError("unreachable")
+        with pytest.raises(ConnectionError):
+            dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT)
+        assert dev.found_exit_due() is True
+        assert dev.found_exit_attempts == 1
+
+        session.post_response = ResponseStub()
+        assert dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT).published
+        assert dev.found_exit_due() is False
+        assert dev.found_exit_attempts == 2
+        dev.fetch()
+        assert dev.found_charge_left is False
+        assert dev.charge_commanded is False
+
+        clock.now += 5
+        assert not dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT).published
+        assert len(_posted(session)) == 3
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        {"acMode": 2, "acStatus": 1, "smartMode": 1, "inputLimit": 0},
+        {"acMode": 1, "acStatus": 1, "smartMode": 1, "inputLimit": 0},
+        {"acMode": 1, "acStatus": 2, "smartMode": 1, "inputLimit": 300},
+    ],
+    ids=["out_of_ac_input", "no_setpoint_nothing_drawn", "another_setpoint"],
+)
+def test_http_a_report_after_the_exit_to_a_found_charge_says_it_was_taken(report):
+    """The same evidence as the record of the EMS's own charge.
+
+    Out of the AC-input direction, its exit's ``inputLimit = 0`` with nothing
+    drawn, or a charge at a setpoint the device did not show when the exit
+    went out -- someone put it back after the exit was carried out.
+    """
+
+    from ems.charge_record import CHARGE_EXIT_TO_OUTPUT
+
+    session = SessionStub(get_response=_charging_report(800))
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.fetch()
+    assert dev.found_charge_left is False
+    dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT)
+    dev.fetch()
+    assert dev.found_charge_left is False
+
+    session.get_response = _report(**report)
+    dev.fetch()
+
+    assert dev.found_charge_left is True
 
 
 @pytest.mark.parametrize(

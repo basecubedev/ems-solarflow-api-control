@@ -151,7 +151,7 @@ def test_the_kept_across_stop_line_names_what_is_still_drawing():
     assert "commanded_device_targets" not in block
 
 
-def test_a_charge_kept_across_a_stop_is_named_by_the_ems_s_own_record():
+def test_a_charge_kept_across_a_stop_is_named_by_the_ems_s_own_record(monkeypatch):
     """The regulator's target is not the only record of a running charge.
 
     Switching control back on resets the targets, and an unreachable device is
@@ -179,5 +179,41 @@ def test_a_charge_kept_across_a_stop_is_named_by_the_ems_s_own_record():
 
     assert ems.charges_held_by_ems() == {"RESET": 640, "GONE": 0}
 
+    _open_the_write_gate(monkeypatch)
     ems.commanded_device_targets["IDLE"] = -300
     assert ems.charges_held_by_ems()["IDLE"] == 300
+
+
+def test_a_dry_run_names_no_charge_kept_across_a_stop(monkeypatch):
+    """With the write gate shut nothing was put on the wire to keep.
+
+    The regulator still holds a charge target in a dry run, and the line after
+    a signal stop named it as drawing although no device was ever told to.
+    """
+
+    from ems import config as cfg
+    from ems.controller import EMSController
+    from tests.test_write_gates import ShellyStub, device
+
+    dry = device("DRY")
+    dry.charge_commanded = False
+    ems = EMSController(devices=[dry], shelly=ShellyStub(0), sleep_enabled=False)
+    ems.commanded_device_targets = {"DRY": -300}
+
+    _open_the_write_gate(monkeypatch)
+    monkeypatch.setattr(cfg, "DRY_RUN", True)
+    assert ems.charges_held_by_ems() == {}
+
+    monkeypatch.setattr(cfg, "DRY_RUN", False)
+    assert ems.charges_held_by_ems() == {"DRY": 300}
+
+
+def _open_the_write_gate(monkeypatch):
+    from types import SimpleNamespace
+
+    from ems import config as cfg
+
+    monkeypatch.setattr(cfg, "DRY_RUN", False)
+    monkeypatch.setattr(cfg, "SIMULATION_MODE", False)
+    monkeypatch.setattr(cfg, "ALLOW_HARDWARE_WRITES", True)
+    monkeypatch.setattr(cfg, "ARGS", SimpleNamespace(replay=False))

@@ -71,8 +71,12 @@ class WinterMorning(datetime):
         return cls(2026, 1, 15, 9, 0, 0, tzinfo=tz)
 
 
-def run_cycles(item, *, cycles=1, load=0, clock=WinterMorning):
-    """Run the real loop and return (property writes, outputLimit writes)."""
+def run_cycles(item, *, cycles=1, load=0, clock=WinterMorning, drift=None):
+    """Run the real loop and return (property writes, outputLimit writes).
+
+    ``drift`` changes the telemetry after one cycle against the settled device,
+    so the EMS has seen it agree before a field drifts.
+    """
 
     controller = EMSController(
         devices=[settled_device()],
@@ -83,7 +87,9 @@ def run_cycles(item, *, cycles=1, load=0, clock=WinterMorning):
     controller.device_state_writes_allowed = lambda dev: True
     properties = []
     outputs = []
-    controller.set_output_limit = lambda dev, value: outputs.append(int(value))
+    controller.set_output_limit = (
+        lambda dev, value, **_kwargs: outputs.append(int(value)) or True
+    )
 
     with patch("ems.controller.datetime", clock), patch(
         "ems.controller.fetch_all_devices", return_value=[item]
@@ -101,6 +107,9 @@ def run_cycles(item, *, cycles=1, load=0, clock=WinterMorning):
     ), patch("ems.controller.cfg.SOC_RECONCILE_INTERVAL", 1), patch.object(
         cfg, "AC_CHARGE_CONTROL_CONFIG", {**AC_CHARGE_CONTROL_DEFAULTS, "enabled": True}
     ):
+        if drift is not None:
+            controller.run_once()
+            drift()
         for _ in range(cycles):
             controller.run_once()
 
@@ -130,12 +139,29 @@ def test_a_settled_device_is_written_to_at_all():
 )
 def test_only_the_field_that_drifted_is_written(field, value, expected):
     item = settled_state()
-    setattr(item, field, value)
 
-    written, outputs = run_cycles(item)
+    written, outputs = run_cycles(item, drift=lambda: setattr(item, field, value))
 
     assert written == expected
     assert outputs == []
+
+
+def test_ac_input_found_at_start_is_left_to_the_one_exit():
+    """Owner decision (3) 2026-10-04: the power command ends it, once.
+
+    A device the EMS could have charged that it finds in AC input at start may
+    hold the charge of the process before. The state reconciler stands down for
+    it and the power command writes the exit -- the whole set, on its own gate,
+    so it arrives with state reconciliation off too.
+    """
+
+    item = settled_state()
+    item.ac_mode = 1
+
+    written, outputs = run_cycles(item)
+
+    assert written == []
+    assert outputs == [0]
 
 
 def test_a_load_moves_the_output_limit_and_nothing_else():

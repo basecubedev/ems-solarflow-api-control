@@ -75,16 +75,18 @@ smartMode=1, acMode=1, outputLimit=0, inputLimit      entering a charge
 inputLimit                                            a new power inside a charge this EMS
                                                       started, the device showing its mode (local API)
 smartMode=1, acMode=2, outputLimit, inputLimit=0      leaving a charge this EMS commanded, until the
-                                                      device reports it left; and the one exit to an
-                                                      unattributed charge at the battery floor of a
-                                                      device the EMS could have charged
+                                                      device reports it left; and once per start the
+                                                      one exit to AC input found on a device the EMS
+                                                      could have charged, above the floor or at it,
+                                                      until the device takes it (three attempts at most)
 inputLimit=0                                          ending the EMS's charge on a device a claim
                                                       holds in AC input (local API)
 smartMode, acMode, outputLimit, inputLimit            every power command over MQTT (ZenSDK)
 ```
 
-A device the EMS never charged gets only `outputLimit` from the local API,
-whatever direction it reports; its modes are the state reconciler's, behind the
+A device the EMS could never have charged gets only `outputLimit` from the
+local API, whatever direction it reports, and so does one someone else holds in
+AC input after that one exit; their modes are the state reconciler's, behind the
 reconciler's own gate.
 
 State reconciliation may write:
@@ -115,11 +117,11 @@ directions. The local API does the same where it changes a direction it set:
 otherwise it keeps the single-property `outputLimit` write, but while its record
 of the EMS's own charge holds, a non-negative target is sent as the atomic set
 (`smartMode=1`, `acMode=2`, `outputLimit`, `inputLimit=0`), and so is the one
-exit the controller decides for an unattributed charge at the battery floor. A
-device reporting the AC-input direction for any other reason keeps the bare
+exit the controller decides, once per start, for AC input it cannot attribute.
+A device reporting the AC-input direction for any other reason keeps the bare
 `outputLimit`. Leaving a charge never waits for state
 reconciliation, and a shutdown release that writes once and exits is one
-complete command. Inside the charge direction the local API sends only
+complete command, sent whatever the resend window says. Inside the charge direction the local API sends only
 `inputLimit` while the device shows the charge mode this EMS set (`acMode=1`,
 `smartMode=1`), and the atomic set again whenever it shows anything else.
 

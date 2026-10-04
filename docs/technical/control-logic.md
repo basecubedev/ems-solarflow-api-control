@@ -126,6 +126,15 @@ A running charge always holds the idle off. Its way back belongs to the charge
 decision, which stops the devices and logs why — including
 `ac_charge_stopped_stale_meter` — and an idle entered mid-charge would skip it.
 
+The idle parks only devices that may supply the house, and it ends the cycle
+before any other write path. A device forbidden to discharge
+(`ac_discharge_enabled = false`) is therefore never parked, but it is still
+sent the exit it is owed while the idle holds: the exit to idle
+(`outputLimit = 0`) to the EMS's own charge it has not left, again once per
+resend window, and the one exit to an AC input found at start. Each is logged as
+`night_min_soc_idle_charge_exit_write`; nothing else is written to such a
+device.
+
 ## No Export Capacity Hold
 
 If house load is positive but no active online device currently has export
@@ -324,32 +333,63 @@ firmware's. It ends only when the device reports that it left the charge after
 an exit (out of the AC-input direction, the exit's `inputLimit = 0`, or a charge
 at a setpoint the EMS never wrote), not when the device answered the exit: a
 device still charging at the EMS's setpoint after an exit it did not carry out is
-the EMS's own, and is sent the exit again once per resend window (30 s).
+the EMS's own, and is sent the exit again once per resend window (30 s). The
+exit counts as sent once the device answered it, accepted or rejected with an
+error, and the one exit to AC input found after a start (below) keeps the same
+window whether the device accepted or rejected it; only an exit the transport
+could not deliver is due again at once. Over
+MQTT a changed target still replaces an exit in flight at once; every MQTT
+command carries the direction, so that is an exit too. The shutdown release is
+the last command and is sent whatever the window says.
 
-Telemetry alone cannot say who started a charge at the floor, so the EMS also
-asks whether it can tell. It can when it saw the device not charging (or
-charging by its own command) before the charge began; then the charge is the
-firmware's from the first cycle. A failed read or an offline spell does not
-change that, because the transport's record of the EMS's own charge survives the
-gap. It cannot tell after a restart: the charge may be its own, left drawing
-from the grid by the process before. Then the device stays with the power
-command for one cycle, which writes the exit once (`acMode = 2`,
-`inputLimit = 0`) — the regular
-write and the night idle's park write alike, whatever `outputLimit` the device
-still shows. A device that is still or again charging after that exit is the
-firmware's protection charge and is respected, with nothing written, until it
-leaves that state. The provenance is process memory and never written to
-runtime-state (owner decision 2026-10-04). A device the EMS could never have
-charged — the feature or the device's switch off, or a model without an AC
-charge path — gets no such exit: no charge on it can be the EMS's own, so its
-floor charge is the firmware's from the first cycle.
+Telemetry alone cannot say who put a device into AC input, so the EMS also asks
+whether it can tell. It can when it saw the device out of AC input (or in its
+own charge) since the process started, when a claim that outranks the unproven
+one holds it there — an operator's AC-input role, a maintenance routine —
+and once the device took the exit (below); then a
+charge at the floor is the firmware's from the first cycle. A failed read or an
+offline spell does not change that, because the transport's record of the EMS's
+own charge survives the gap. It cannot tell after a restart: a stop by signal
+leaves the EMS's charge running on purpose, so the process before may have left
+it drawing from the grid. A device found in AC input — above the floor as at
+it, charging or not — therefore stays with the power command until the device
+takes the exit (`smartMode = 1`, `acMode = 2`, `inputLimit = 0`, the target as
+`outputLimit`): until a report after it shows the device out of the charge, or
+charging at a setpoint it did not show when the exit went out. Answered and not
+taken, the exit goes out again once per resend window (on MQTT not while a
+command is still in flight), three times in all, a count the transport keeps
+and never sends past; then, once the last window has passed, the AC input is
+its holder's, logged once as `ac_charge_start_exit_unconfirmed`, because a firmware
+that puts its protection charge straight back at the same setpoint cannot be
+told from a device that ignores the exit. The exit travels on the transport's
+own write gate and not behind
+`allow_state_reconciliation_writes`: the regular write, the night idle's park
+write, and the night idle's exit to a device it does not park alike, whatever
+`outputLimit` the device still shows and inside the write deadband too. A
+disabled device, and every device while control is switched off, gets it as
+its final command (`ac_charge_ended_on_disable`, `charge=unproven_charge`):
+the claim stands the state reconciler down until that exit is taken, so
+waiting for the device to be enabled again left it with neither. With its write
+gate shut — dry run, simulation — the EMS cannot write the exit at all, and the
+AC input is its holder's from that cycle on. A device in AC input again after
+it took that exit, or still after the third attempt, is someone else's: at the
+floor the
+firmware's protection charge, respected with nothing written until it leaves
+that state; above the
+floor an app's or a schedule's, which gets what it got before charging existed
+(below). The provenance is process memory and never written to runtime-state
+(owner decisions 2026-10-04). A device the EMS could never have charged — the
+feature or the device's switch off, or a model without an AC charge path — gets
+no such exit: no charge on it can be the EMS's own, so its floor charge is the
+firmware's from the first cycle, and above the floor nothing changes.
 
-Above the floor, a charge nobody is commanding is a leftover from an EMS that
-stopped mid-charge, or one started from the vendor app, and the normal acMode
-reconcile takes it back. The power command does not: on the local API it writes
-such a device the bare `outputLimit` it ignores, measured against that
-`outputLimit` rather than against a charge the write cannot end, so the value is
-not repeated every cycle.
+Above the floor, AC input the EMS can attribute to someone else — an app, a
+schedule — is taken back by the normal acMode reconcile where state
+reconciliation is allowed, and over MQTT by the next power command, which
+carries the direction. The local-API power command does not: it writes such a
+device the bare `outputLimit` it ignores, measured against that `outputLimit`
+rather than against a charge the write cannot end, so the value is not repeated
+every cycle.
 
 ### Who owns a device's AC direction
 
@@ -366,7 +406,7 @@ device's direction*, and the reconciler skips it. Three claims do that:
 |---|---:|---|
 | `regulator_charge_intent` | 100 | the EMS commanded this device a charge last cycle |
 | `firmware_charge_intent` | 50 | the firmware charges an empty pack by itself |
-| `firmware_charge_intent` (`unproven_floor_charge`) | 50 | a charge at the floor nobody can attribute; the power command writes its exit once |
+| `firmware_charge_intent` (`unproven_charge`) | 50 | AC input nobody can attribute, found after a start, above the floor or at it; the power command writes its exit until the device takes it, three attempts at most |
 
 An operator park (150) and maintenance (200) outrank all three, so either still
 takes a device away mid-charge.
@@ -382,7 +422,7 @@ it as idle — and "switch this device off" would then compare 0 against 0 and
 skip the write that stops the charge.
 
 The measured AC input is that reference only where a non-negative write can end
-the charge: the EMS's own charge, the one exit to a floor charge nobody can
+the charge: the EMS's own charge, the one exit to an AC input nobody can
 attribute, and every command on a transport that carries the modes with it
 (MQTT). On the local API a device someone else holds in AC input gets a bare
 `outputLimit` that cannot end that charge, so it is compared by its
@@ -392,7 +432,10 @@ charge setpoint has taken the exit; the current it still shows for about two
 seconds is the tail of a charge it left, not one to end, so the exit is not sent
 a second time.
 
-Small changes below `deadband` are skipped.
+Small changes below `deadband` are skipped, except the one exit to an AC input
+nobody can attribute: a device held in AC input with nothing drawn shows no
+change against an idle target, and skipping it would leave the device there
+with the state reconciler stood down for that exit.
 
 ## Offline Devices
 

@@ -247,11 +247,32 @@ def test_a_floor_charge_the_ems_watched_begin_is_the_firmware_s():
     assert intent.output_control_allowed is False
 
 
-def test_only_a_charge_at_the_floor_is_ever_in_question():
-    assert firmware_charge_intent("WR1", healthy(), watched=False) is None
+def test_an_ac_input_nobody_can_attribute_is_in_question_above_the_floor_too():
+    """Owner decision (3) 2026-10-04: once per start, wherever the battery stands.
+
+    A stop by signal leaves the EMS's own charge running above the floor, and
+    the next process cannot tell it from an app's. A device found in AC input,
+    charging or not, is left to the power command for the one exit until the
+    EMS has watched it; one settling out of an exit it took is not in AC input.
+    """
+
+    for found in (healthy(), healthy(ac_mode=1, ac_status=1)):
+        intent = firmware_charge_intent("WR1", found, watched=False)
+        assert intent.reason == UNPROVEN_CHARGE_REASON
+        assert intent.desired_ac_mode is None
+        assert intent.output_control_allowed is True
+
+    settling = healthy(ac_mode=2, ac_status=2)
+    settling.input_limit_w = 0
+    assert firmware_charge_intent("WR1", settling, watched=False) is None
+    assert firmware_charge_intent("WR1", healthy(2, 1), watched=False) is None
     assert (
-        firmware_charge_intent(
-            "WR1", telemetry(1, 2), ems_commanded_charge=True, watched=False
-        )
+        firmware_charge_intent("WR1", healthy(), ems_commanded_charge=True, watched=False)
         is None
     )
+
+
+def test_above_the_floor_a_watched_ac_input_is_not_claimed():
+    """Once watched, AC input above the floor is whoever holds it, as on main."""
+
+    assert firmware_charge_intent("WR1", healthy(), watched=True) is None

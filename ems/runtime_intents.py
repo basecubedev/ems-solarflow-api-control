@@ -20,7 +20,12 @@ from dataclasses import dataclass
 from enum import Enum
 
 from ems.config import safe_int
-from ems.power_direction import AC_MODE_INPUT, AC_MODE_OUTPUT, AC_STATUS_CHARGING
+from ems.power_direction import (
+    AC_MODE_INPUT,
+    AC_MODE_OUTPUT,
+    AC_STATUS_CHARGING,
+    found_in_ac_input,
+)
 from ems.target_control import derive_soc_runtime_state
 
 PRIORITY_DEFAULT = 0
@@ -30,7 +35,7 @@ PRIORITY_OPERATOR_PARK = 150
 PRIORITY_MAINTENANCE = 200
 
 FIRMWARE_CHARGE_REASON = "firmware_owned_charge"
-UNPROVEN_CHARGE_REASON = "unproven_floor_charge"
+UNPROVEN_CHARGE_REASON = "unproven_charge"
 REGULATOR_CHARGE_REASON = "ac_charge_regulator"
 
 
@@ -125,37 +130,53 @@ def is_floor_charge(state):
 def firmware_charge_intent(
     device_name, state, *, ems_commanded_charge=False, watched=True
 ):
-    """Claim a device charging at its floor that the EMS did not command, or None.
+    """Claim an AC input the EMS did not command, or None.
 
     The EMS must not have asked for this charge itself — without that, the
     regulator's own charge would be read back as firmware-owned, the device
     would be marked uncommandable, and the regulator would shut itself down two
     cycles after starting.
 
-    ``watched`` says whether the EMS can tell who started it: it saw the device
-    not charging since it last commanded one, or it already wrote the exit to
-    this charge and the device charges still or again. That is the firmware's
-    protection charge, and it is respected -- nothing is written until it ends.
-    When the EMS cannot tell -- a restart, a device back from offline, its own
-    record of the charge gone -- the charge may be its own, left drawing from
-    the grid with nobody watching. The claim then stands the state reconciler
-    down and leaves the device to the power command, which writes the exit once
-    (owner decision 2026-10-04).
+    ``watched`` says whether the EMS can tell who put the device there: it saw
+    the device out of AC input, or in its own charge, since this process
+    started, or held there by a claim that outranks this one, or the device
+    took the exit, or was asked for it often enough. Unwatched, a device found
+    in AC input -- above the floor as at it, charging or not -- may hold the
+    charge of the process before this one, which a stop by signal leaves
+    running. The claim then stands the state reconciler down and leaves the
+    device to the power command, which writes the exit until the device takes
+    it, three attempts at most (owner decisions 2026-10-04).
 
-    Above the floor and uncommanded, a charging device is a leftover — an EMS
-    that died mid-charge, or an app-initiated one — and the normal acMode
-    reconcile is allowed to take it back.
+    Watched, a charge at the floor is the firmware's protection charge, and it
+    is respected -- nothing is written until it ends. Above the floor, AC input
+    the EMS can attribute to someone else is no claim of its own: the device
+    gets what it got before charging existed.
     """
 
-    if ems_commanded_charge or not is_floor_charge(state):
+    if ems_commanded_charge:
+        return None
+
+    if not watched:
+        if not found_in_ac_input(state):
+            return None
+        return DeviceRuntimeIntent(
+            device=device_name,
+            role=DeviceRuntimeRole.AC_INPUT,
+            reason=UNPROVEN_CHARGE_REASON,
+            desired_ac_mode=None,
+            output_control_allowed=True,
+            priority=PRIORITY_FIRMWARE_OBSERVED,
+        )
+
+    if not is_floor_charge(state):
         return None
 
     return DeviceRuntimeIntent(
         device=device_name,
         role=DeviceRuntimeRole.AC_INPUT,
-        reason=FIRMWARE_CHARGE_REASON if watched else UNPROVEN_CHARGE_REASON,
+        reason=FIRMWARE_CHARGE_REASON,
         desired_ac_mode=None,
-        output_control_allowed=not watched,
+        output_control_allowed=False,
         priority=PRIORITY_FIRMWARE_OBSERVED,
     )
 

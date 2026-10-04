@@ -23,14 +23,16 @@ class WriteDispatchStatus(Enum):
     SUPERSEDED = "superseded"
     REJECTED = "rejected"
     FAILED = "failed"
+    WITHHELD = "withheld"
 
 
-# Statuses that accepted the request (the controller's legacy truthy return).
+# Statuses accepted, or withheld by the write gate (the controller's legacy truthy return).
 _ACCEPTED = frozenset(
     {
         WriteDispatchStatus.PUBLISHED,
         WriteDispatchStatus.COALESCED_ACTIVE,
         WriteDispatchStatus.QUEUED_LATEST,
+        WriteDispatchStatus.WITHHELD,
     }
 )
 
@@ -128,6 +130,16 @@ def failed(
     )
 
 
+def withheld(target_w, *, reason="write_gate_closed") -> WriteDispatchResult:
+    """A write the controller's gate kept from the transport: nothing was sent."""
+
+    return WriteDispatchResult(
+        WriteDispatchStatus.WITHHELD,
+        target_w=target_w,
+        reason=reason,
+    )
+
+
 def normalize_bool_dispatch(ok, *, target_w) -> WriteDispatchResult:
     """Adapt a legacy boolean write result to a structured dispatch result.
 
@@ -173,6 +185,7 @@ __all__ = [
     "superseded",
     "rejected",
     "failed",
+    "withheld",
     "normalize_bool_dispatch",
     "dispatch_device_write",
 ]

@@ -395,12 +395,17 @@ no_discharge_capacity
 night_min_soc_idle_enter
 night_min_soc_idle_hold_skip_write
 night_min_soc_idle_park_write
+night_min_soc_idle_charge_exit_write
 min_output_limit_applied
 ```
 
 Night/min-SOC idle entry and exit (`night_min_soc_idle_enter`,
 `night_min_soc_idle_exit`) and the parking write (`night_min_soc_idle_park_write`)
 are real transitions/writes and stay at `info`.
+`night_min_soc_idle_charge_exit_write` is the exit to idle the idle still sends
+a device it does not park — one forbidden to discharge — that is owed it: the
+resend to the EMS's own charge (`reason=ems_charge_on_record`) or the one exit
+after a start (`reason=unproven_charge`).
 `night_min_soc_idle_exit` carries a `reason`: `pv_returned`, `state_changed`,
 `control_unavailable`, or `ac_charge_surplus` when a confirmed surplus is about
 to be charged from AC.
@@ -811,6 +816,7 @@ control_disabled_skip_write
 device_disabled_skip_write
 ac_charge_ended_on_disable
 ac_charge_handed_to_claim
+ac_charge_start_exit_unconfirmed
 offline_skip_write
 deadband_skip_write
 write_output_limit_error

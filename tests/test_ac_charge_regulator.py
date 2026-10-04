@@ -56,6 +56,36 @@ class SteppedClock:
         return self.now
 
 
+class TickingClock(SteppedClock):
+    """A stepped clock that also moves on every read, as a live cycle's clock does.
+
+    Each cycle still starts on the loop interval, but no two reads in it
+    agree: the controller's intent phase reads an earlier time than its write
+    phase. One time for the whole cycle hid a resend window that ended
+    between the two.
+    """
+
+    def __init__(self, start=10_000.0, tick=0.0001):
+        self.tick = tick
+        super().__init__(start)
+
+    @property
+    def now(self):
+        return self._now
+
+    @now.setter
+    def now(self, value):
+        self._now = value
+        self._reads = 0
+
+    def __call__(self):
+        self._reads += 1
+        return self._now + self._reads * self.tick
+
+
+CLOCKS = {"stepped": SteppedClock, "ticking": TickingClock}
+
+
 class Harness:
     """Runs the real control loop for N cycles against a fixed load.
 
@@ -63,7 +93,8 @@ class Harness:
     through that client every cycle, as the live loop fetches it, so what the
     client remembers follows what the device reports. ``seconds_per_cycle``
     runs the loop on a stepped clock instead of the wall clock, for whatever is
-    bounded by time rather than by cycles.
+    bounded by time rather than by cycles; ``clock`` is another such clock, one
+    that also moves within a cycle.
     """
 
     def __init__(
@@ -74,6 +105,7 @@ class Harness:
         feature=True,
         min_output_limit=0,
         seconds_per_cycle=None,
+        clock=None,
     ):
         self.devices = devices
         self.min_output_limit = min_output_limit
@@ -87,7 +119,7 @@ class Harness:
         self.controller.set_output_limit = Mock()
         self.feature = {**AC_CHARGE_CONTROL_DEFAULTS, "enabled": feature}
         self.seconds_per_cycle = seconds_per_cycle
-        self.clock = SteppedClock()
+        self.clock = clock or SteppedClock()
 
     def fetch(self, states):
         for dev, item in zip(self.devices, states):
@@ -541,7 +573,7 @@ def test_a_running_charge_is_stopped_even_when_the_target_is_zero():
     harness = Harness([device_config], load=0)
     harness.controller.run_startup_ac_mode_reconcile_once = Mock()
     writes = []
-    harness.controller.set_output_limit = lambda dev, value: writes.append(int(value))
+    harness.controller.set_output_limit = lambda dev, value, **_kwargs: writes.append(int(value))
 
     harness.run(cycles=3, states=[charging_hardware_state()])
 
@@ -1309,9 +1341,9 @@ def test_a_charge_found_at_the_floor_after_a_restart_is_ended_once(standby_floor
     A process that starts and finds a device charging at its floor cannot tell
     the firmware's protection charge from its own predecessor's charge, left
     drawing from the grid. Claiming it for the firmware left the second running
-    unsupervised. The exit is written once; a device that charges on after it is
-    the firmware's, and nothing more is written until that charge ends. The
-    night idle's park write is that exit too.
+    unsupervised. The exit is written once; a device that charges again after
+    it reported the exit taken is the firmware's, and nothing more is written
+    until that charge ends. The night idle's park write is that exit too.
     """
 
     item = pv_less_state(soc=15)
@@ -1323,6 +1355,7 @@ def test_a_charge_found_at_the_floor_after_a_restart_is_ended_once(standby_floor
     assert hardware.writes == [{**IDLE_EXIT, "outputLimit": standby_floor}]
     assert item.ac_mode == 2
 
+    harness.run(cycles=1, states=[item])
     start_charging(item)
     harness.run(cycles=5, states=[item])
 
@@ -1393,7 +1426,458 @@ def test_a_floor_charge_the_ems_could_not_have_started_is_the_firmware_s(refused
     assert harness.controller.runtime_intents["WR1"].reason == "firmware_owned_charge"
 
 
-def test_a_device_someone_else_holds_in_ac_input_gets_no_mode_writes():
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+@pytest.mark.parametrize("unreported", [(), ("inputLimit", "acStatus")], ids=["full", "partial"])
+def test_a_charge_found_above_the_floor_after_a_restart_is_ended_once(
+    transport, unreported
+):
+    """Owner decision (3) 2026-10-04: once per start, above the floor as at it.
+
+    A stop by signal leaves the EMS's charge running on purpose, and the next
+    process has no record of it. On the local API with state reconciliation
+    off nothing ended it: the exit went out only for a charge on the client's
+    record or for one at the floor, so the device drew 1200 W for good. A
+    device the EMS could have charged that is found in AC input gets the exit
+    once, on the power command's own gate, whatever it reports of its setpoint.
+    """
+
+    build = following_http_device if transport == "http" else following_mqtt_device
+    item = pv_less_state(soc=50)
+    start_charging(item)
+    dev, hardware = build(item, unreported=unreported)
+    harness = Harness([dev], load=300)
+    harness.controller.set_output_limit = hardware
+    harness.controller.device_state_writes_allowed = lambda _dev: False
+
+    harness.run(cycles=6, states=[item])
+
+    first, *rest = hardware.writes
+    assert first == {**IDLE_EXIT, "outputLimit": first["outputLimit"]}, hardware.writes
+    assert item.ac_mode == 2
+    assert item.grid_input == 0
+    if transport == "http":
+        assert all(set(write) == {"outputLimit"} for write in rest), rest
+
+
+def test_an_ac_input_held_again_after_the_restart_exit_is_left_to_its_holder():
+    """After the one exit, AC input is whoever put the device there.
+
+    The power command does not send the exit again: on the local API it is
+    back to the bare ``outputLimit`` a device in AC input ignores, and taking
+    the device back is the state reconciler's, behind its own gate.
+    """
+
+    item = pv_less_state(soc=50)
+    start_charging(item)
+    harness, hardware = floor_harness(item, load=300)
+    harness.controller.device_state_writes_allowed = lambda _dev: False
+    harness.run(cycles=2, states=[item])
+    assert item.ac_mode == 2, "the restart exit was not written"
+    before = len(hardware.writes)
+
+    start_charging(item)
+    harness.run(cycles=6, states=[item])
+
+    assert all("acMode" not in write for write in hardware.writes[before:])
+    assert item.ac_mode == 1
+    assert item.grid_input == 800
+
+
+OPEN_API_GATE = cfg.WriteGateDecision(
+    allowed=True,
+    transport="api",
+    gate_name="allow_hardware_writes",
+    gate_enabled=True,
+    blocked_by=(),
+)
+
+RESTART_EXIT_PATHS = {
+    "regulated": {"soc": 50, "min_output_limit": 0, "enabled": True},
+    "night_idle": {"soc": 15, "min_output_limit": 35, "enabled": True},
+    "device_disabled": {"soc": 50, "min_output_limit": 0, "enabled": False},
+}
+
+
+@pytest.mark.parametrize("path", sorted(RESTART_EXIT_PATHS))
+@pytest.mark.parametrize("answer", ["accepted_not_applied", "refused", "undeliverable"])
+def test_a_restart_exit_the_device_did_not_take_waits_for_the_resend_window(path, answer):
+    """A restart exit the device did not take is asked again after the window.
+
+    The one exit to an AC input found after a start settles only once the
+    device reports that it left AC input. It counted as settled when the device
+    accepted it, so one the device answered and did not carry out left it
+    drawing from the grid for good. On the local API a device that answered it
+    with an error -- HTTP 400 -- was sent it again at once, every cycle for as
+    long as it refused, a disabled device as well. Accepted or refused, it
+    waits for the window the exit to the EMS's own charge keeps; only an exit
+    the transport could not deliver at all is due again at once. The real
+    write path runs, so an undeliverable write is caught where the live loop
+    catches it.
+    """
+
+    setup = RESTART_EXIT_PATHS[path]
+    item = pv_less_state(soc=setup["soc"])
+    start_charging(item)
+    dev, hardware = following_http_device(item)
+    runtime = RuntimeStateStub(devices={"WR1": {"enabled": setup["enabled"]}})
+    harness = Harness(
+        [dev],
+        load=300,
+        runtime_state=runtime,
+        min_output_limit=setup["min_output_limit"],
+        seconds_per_cycle=5,
+    )
+    harness.controller.set_output_limit = EMSController.set_output_limit.__get__(
+        harness.controller
+    )
+    harness.controller.device_state_writes_allowed = lambda _dev: False
+    refusing = [True]
+    attempts = []
+    deliver = hardware.post
+
+    def post(url, json=None, **kwargs):
+        if "acMode" not in json["properties"]:
+            return deliver(url, json=json, **kwargs)
+        attempts.append(harness.clock.now)
+        if not refusing[0]:
+            return deliver(url, json=json, **kwargs)
+        if answer == "accepted_not_applied":
+            return _HttpReply({"success": True})
+        if answer == "undeliverable":
+            raise ConnectionError("unreachable")
+        reply = _HttpReply({"success": False})
+        reply.status_code = 400
+        return reply
+
+    hardware.post = post
+    with patch(
+        "ems.controller.cfg.resolve_device_write_gate", return_value=OPEN_API_GATE
+    ):
+        harness.run(cycles=7, states=[item])
+        start = attempts[0]
+        sent = [moment - start for moment in attempts]
+        assert sent == ([0, 30] if answer != "undeliverable" else list(range(0, 35, 5)))
+        assert item.ac_mode == 1
+
+        refusing[0] = False
+        harness.run(cycles=8, states=[item])
+
+    taken = 60 if answer != "undeliverable" else 35
+    assert [moment - start for moment in attempts] == sent + [taken]
+    applied = [write for write in hardware.writes if "acMode" in write]
+    assert applied == [{**IDLE_EXIT, "outputLimit": applied[0]["outputLimit"]}], applied
+    assert item.ac_mode == 2
+    assert item.grid_input == 0
+    assert harness.controller.runtime_intents["WR1"].reason != "unproven_charge"
+
+
+NEVER_TAKEN_PATHS = {
+    "at_the_floor": {"soc": 15, "min_output_limit": 0, "enabled": True},
+    "above_it": RESTART_EXIT_PATHS["regulated"],
+    "night_idle": RESTART_EXIT_PATHS["night_idle"],
+    "device_disabled": RESTART_EXIT_PATHS["device_disabled"],
+}
+
+NEVER_TAKEN_DEVICES = {
+    "ignores_it": {},
+    "puts_its_charge_back": {"firmware_charge_w": 800, "firmware_reentry_polls": 0},
+}
+
+
+def restart_exits_and_reasons(harness, hardware, item, cycles=30, before_cycle=None):
+    """The moments the exit went on the wire, and the claim on WR1 after each cycle."""
+
+    exits = []
+    reasons = []
+    for cycle in range(cycles):
+        if before_cycle is not None:
+            before_cycle(cycle)
+        sent = len(hardware.writes)
+        harness.run(cycles=1, states=[item])
+        if any(leaves_the_charge(write) for write in hardware.writes[sent:]):
+            exits.append(cycle * 5)
+        reasons.append(harness.controller.runtime_intents["WR1"].reason)
+    return exits, reasons
+
+
+def assert_asked_three_times_then_left_to(holder, exits, reasons):
+    """Three exits a resend window apart, then the holder's once the last window ended.
+
+    A cycle starts every 5 s, so an exit goes out again in the first cycle
+    after its window, and the AC input is the holder's in the first cycle
+    after the last one: within one cycle, not on the window's second.
+    """
+
+    given_up = reasons.index(holder)
+    assert reasons[:given_up] == ["unproven_charge"] * given_up, reasons
+    assert set(reasons[given_up:]) == {holder}, reasons
+    assert len(exits) == 3 and exits[0] == 0, exits
+    assert all(30 <= later - earlier <= 35 for earlier, later in zip(exits, exits[1:])), exits
+    assert exits[-1] + 30 <= given_up * 5 <= exits[-1] + 35, (exits, reasons)
+
+
+@pytest.mark.parametrize("clock", sorted(CLOCKS))
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+@pytest.mark.parametrize(
+    "path, device_behaviour",
+    [
+        ("at_the_floor", "ignores_it"),
+        ("at_the_floor", "puts_its_charge_back"),
+        ("above_it", "ignores_it"),
+        ("night_idle", "ignores_it"),
+        ("night_idle", "puts_its_charge_back"),
+        ("device_disabled", "ignores_it"),
+    ],
+)
+def test_a_restart_exit_the_device_never_takes_is_given_up_after_three_attempts(
+    path, device_behaviour, transport, clock, caplog
+):
+    """Owner decisions (1) and (3): asked three times, then the holder's.
+
+    The restart exit counted as settled when the transport took it, so a device
+    that answered it and stayed in AC input -- above the floor, or at it with
+    the firmware putting its protection charge straight back at the same
+    setpoint -- drew 800 W from the first cycle on, at the floor under the
+    firmware's name. The exit now settles when the device reports it left AC
+    input. Until then it goes out again once per resend window, three times in
+    all, so a firmware that re-asserts its charge each time is not fought every
+    30 s for good: after the third, the AC input is its holder's, and a warning
+    says so once. On every path that writes it.
+
+    On a clock that moves within a cycle, as a live one does, the window
+    ended between the controller's reading of it, which saw it open and did
+    not give up, and the transport's, which saw it over and sent a fourth:
+    then one every window, with no warning, against the firmware's charge
+    as well (review E-1).
+    """
+
+    setup = NEVER_TAKEN_PATHS[path]
+    build = following_http_device if transport == "http" else following_mqtt_device
+    item = pv_less_state(soc=setup["soc"])
+    start_charging(item)
+    dev, hardware = build(item, **NEVER_TAKEN_DEVICES[device_behaviour])
+    if device_behaviour == "ignores_it":
+        hardware.ignore(leaves_the_charge, times=100)
+    harness = Harness(
+        [dev],
+        load=300,
+        runtime_state=RuntimeStateStub(devices={"WR1": {"enabled": setup["enabled"]}}),
+        min_output_limit=setup["min_output_limit"],
+        seconds_per_cycle=5,
+        clock=CLOCKS[clock](),
+    )
+    harness.controller.set_output_limit = hardware
+    harness.controller.device_state_writes_allowed = lambda _dev: False
+
+    with caplog.at_level(logging.INFO):
+        exits, reasons = restart_exits_and_reasons(harness, hardware, item)
+
+    holder = "firmware_owned_charge" if setup["soc"] == 15 else "ac_output"
+    if transport == "mqtt" and path == "above_it":
+        given_up = reasons.index(holder)
+        assert reasons[:given_up] == ["unproven_charge"] * given_up, reasons
+        assert set(reasons[given_up:]) == {holder}, reasons
+        assert exits[0] == 0 and given_up >= 18, (exits, reasons)
+    else:
+        assert_asked_three_times_then_left_to(holder, exits, reasons)
+        if clock == "stepped":
+            assert exits == [0, 30, 60], exits
+            assert reasons.index(holder) == 18, reasons
+    assert dev.found_exit_attempts == 3
+    assert caplog.text.count("event=ac_charge_start_exit_unconfirmed") == 1
+    assert item.ac_mode == 1
+    assert item.grid_input == 800
+
+
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+def test_the_transport_sends_no_fourth_restart_exit_whatever_the_clock_says(transport):
+    """The bound on the restart exit is the transport's own.
+
+    The controller stopped asking after the third attempt only when it read the
+    last window as over before the write phase read it again; a window that
+    ended between the two reads let a fourth through, and one every window
+    after it (review E-1). However long after the third answer the exit is
+    asked for, the transport holds it back.
+    """
+
+    from ems.charge_record import CHARGE_EXIT_PENDING, CHARGE_EXIT_TO_OUTPUT
+
+    build = following_http_device if transport == "http" else following_mqtt_device
+    item = pv_less_state(soc=50)
+    start_charging(item)
+    dev, hardware = build(item)
+    hardware.ignore(leaves_the_charge, times=100)
+    clock = SteppedClock()
+
+    results = []
+    with patch("time.monotonic", clock):
+        dev.fetch()
+        for _ in range(6):
+            results.append(dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT))
+            clock.now += 60
+            dev.fetch()
+
+    assert [write for write in hardware.writes if leaves_the_charge(write)] == [IDLE_EXIT] * 3
+    assert [result.published for result in results] == [True] * 3 + [False] * 3
+    assert {result.command_state for result in results[3:]} == {CHARGE_EXIT_PENDING}
+    assert dev.found_exit_attempts == 3
+
+
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+def test_a_restart_exit_held_back_by_its_window_is_not_taken_for_one_the_gate_kept(
+    transport, caplog
+):
+    """A window that ends between the transport's reading and the controller's.
+
+    Interleaving: the cycle in which the first resend window ends starts a
+    millisecond early, so the transport reads the window still open and holds
+    the exit back, and every read after the transport's in that cycle sees the
+    window over. The controller told an exit the transport held back from one
+    the write gate kept by reading the window again, took this one for the
+    gate's, and left the AC input to its holder after a single attempt: no
+    further exit, no warning (review E-2). What the transport did is what the
+    write returned. The real write path runs, behind an open gate.
+    """
+
+    build = following_http_device if transport == "http" else following_mqtt_device
+    item = pv_less_state(soc=15)
+    start_charging(item)
+    dev, hardware = build(item)
+    hardware.ignore(leaves_the_charge, times=100)
+    harness = Harness([dev], load=300, seconds_per_cycle=5)
+    harness.controller.set_output_limit = EMSController.set_output_limit.__get__(
+        harness.controller
+    )
+    harness.controller.device_state_writes_allowed = lambda _dev: False
+    window_ends = harness.clock.now + 30
+    early = 0.001
+    dispatch = dev.dispatch_output_limit
+
+    def dispatch_as_the_window_ends(value, charge_exit=None):
+        result = (
+            dispatch(value)
+            if charge_exit is None
+            else dispatch(value, charge_exit=charge_exit)
+        )
+        if harness.clock.now == window_ends - early:
+            harness.clock.now = window_ends + early
+        return result
+
+    def start_early(cycle):
+        if cycle == 6:
+            harness.clock.now = window_ends - early
+
+    dev.dispatch_output_limit = dispatch_as_the_window_ends
+    with patch(
+        "ems.controller.cfg.resolve_device_write_gate", return_value=OPEN_API_GATE
+    ), caplog.at_level(logging.INFO):
+        exits, reasons = restart_exits_and_reasons(
+            harness, hardware, item, before_cycle=start_early
+        )
+
+    assert reasons[6:8] == ["unproven_charge"] * 2, reasons
+    assert_asked_three_times_then_left_to("firmware_owned_charge", exits, reasons)
+    assert dev.found_exit_attempts == 3
+    assert caplog.text.count("event=ac_charge_start_exit_unconfirmed") == 1
+    assert item.grid_input == 800
+
+
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+def test_with_the_write_gate_shut_a_charge_found_after_a_restart_is_its_holder_s_at_once(
+    transport, caplog
+):
+    """Nothing reaches a device behind a shut gate, so there is no exit to wait for.
+
+    The write says the gate withheld it, and from the next cycle the AC input
+    is its holder's, as before charging existed: no attempt counted, nothing
+    written, no warning. The real write path runs.
+    """
+
+    build = following_http_device if transport == "http" else following_mqtt_device
+    item = pv_less_state(soc=15)
+    start_charging(item)
+    dev, hardware = build(item)
+    harness = Harness([dev], load=300, seconds_per_cycle=5)
+    harness.controller.set_output_limit = EMSController.set_output_limit.__get__(
+        harness.controller
+    )
+
+    with patch("ems.controller.cfg.DRY_RUN", True), caplog.at_level(logging.INFO):
+        _exits, reasons = restart_exits_and_reasons(harness, hardware, item, cycles=8)
+
+    assert reasons == ["unproven_charge"] + ["firmware_owned_charge"] * 7, reasons
+    assert hardware.writes == []
+    assert dev.found_exit_attempts == 0
+    assert "event=ac_charge_start_exit_unconfirmed" not in caplog.text
+
+
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+def test_a_firmware_charge_back_at_its_own_setpoint_after_the_restart_exit_is_left_alone(
+    transport, caplog
+):
+    """A charge at a setpoint the exit did not leave is someone else's.
+
+    The device took the exit, and the firmware put its protection charge back
+    before the next report. What the EMS sees is a charge again, but at a
+    setpoint nobody had before the exit: the exit was carried out, and the
+    charge after it is the firmware's from that report on, with nothing more
+    written and no warning.
+    """
+
+    build = following_http_device if transport == "http" else following_mqtt_device
+    item = pv_less_state(soc=15)
+    start_charging(item)
+    dev, hardware = build(item, firmware_charge_w=300, firmware_reentry_polls=0)
+    harness = Harness([dev], load=300, seconds_per_cycle=5)
+    harness.controller.set_output_limit = hardware
+    harness.controller.device_state_writes_allowed = lambda _dev: False
+
+    with caplog.at_level(logging.INFO):
+        harness.run(cycles=2, states=[item])
+        assert item.ac_mode == 1 and item.grid_input == 300, "no charge came back"
+        harness.run(cycles=20, states=[item])
+
+    assert [write for write in hardware.writes if leaves_the_charge(write)] == [IDLE_EXIT]
+    assert harness.controller.runtime_intents["WR1"].reason == "firmware_owned_charge"
+    assert "event=ac_charge_start_exit_unconfirmed" not in caplog.text
+    assert item.grid_input == 300
+
+
+def app_holds_in_ac_input(item):
+    item.ac_mode = 1
+    item.input_limit_w = 400
+    item.grid_input = 400
+    item.ac_status = 2
+
+
+def someone_else_s_ac_input(held):
+    """A device the vendor app holds in AC input, on the local API.
+
+    Either the EMS saw the device in the output direction before the app took
+    it, or it is one the EMS could never have charged, found that way at start.
+    """
+
+    item = pv_less_state(soc=50)
+    if held != "after_the_ems_saw_it_in_output":
+        app_holds_in_ac_input(item)
+    harness, hardware = floor_harness(item, load=300, feature=held != "feature")
+    dev = harness.devices[0]
+    if held == "device_switch":
+        dev.ac_charge_enabled = False
+    if held == "model":
+        dev.hardware_profile = "solarflow_800"
+    harness.controller.device_state_writes_allowed = lambda _dev: False
+    harness.run(cycles=2, states=[item])
+    if held == "after_the_ems_saw_it_in_output":
+        app_holds_in_ac_input(item)
+    return harness, hardware, item
+
+
+SOMEONE_ELSE_S = ["after_the_ems_saw_it_in_output", "feature", "device_switch", "model"]
+
+
+@pytest.mark.parametrize("held", SOMEONE_ELSE_S)
+def test_a_device_someone_else_holds_in_ac_input_gets_no_mode_writes(held):
     """A fleet the EMS never charged keeps main's writes.
 
     The vendor app holds a device in AC input above the floor, the EMS has never
@@ -1401,20 +1885,132 @@ def test_a_device_someone_else_holds_in_ac_input_gets_no_mode_writes():
     to go out as the whole set -- smartMode and acMode under the power gate
     alone, the writes the operator had switched off. Only ``outputLimit`` is the
     power command's to write there; taking the device back is the reconciler's.
+    The one exit at start is for a device the EMS could have charged and has
+    not yet seen out of AC input; neither applies here.
     """
 
-    item = pv_less_state(soc=50)
-    item.ac_mode = 1
-    item.input_limit_w = 400
-    item.grid_input = 400
-    item.ac_status = 2
-    harness, hardware = floor_harness(item, load=300)
-    harness.controller.device_state_writes_allowed = lambda _dev: False
+    harness, hardware, item = someone_else_s_ac_input(held)
 
     harness.run(cycles=6, states=[item])
 
     assert hardware.writes, "the power command wrote nothing at all"
     assert all(set(write) == {"outputLimit"} for write in hardware.writes), hardware.writes
+    assert item.ac_mode == 1
+
+
+OPERATOR_AC_INPUT = {
+    "runtime_role": "ac_input",
+    "runtime_role_reason": "operator_park",
+    "ac_charge_power_w": 400,
+}
+
+SUPERVISION = {
+    "enabled": ({}, {}),
+    "device_disabled": ({}, {"enabled": False}),
+    "control_off": ({"enabled": False}, {}),
+}
+
+
+def release_the_operator_role(runtime):
+    runtime.devices["WR1"]["runtime_role"] = "ac_output"
+    runtime.devices["WR1"]["runtime_role_reason"] = "ac_output"
+    runtime.devices["WR1"].pop("ac_charge_power_w", None)
+
+
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+@pytest.mark.parametrize("supervision", sorted(SUPERVISION))
+@pytest.mark.parametrize("held_since", ["before_the_start", "mid_run"])
+def test_an_ac_input_an_operator_holds_is_the_operator_s_restart_or_not(
+    transport, supervision, held_since
+):
+    """An AC input held under an operator's claim is attributed.
+
+    The claim outranks the one that marks an AC input found after a start, so
+    while it held, the EMS never counted the device as watched. Held across a
+    restart, releasing the role fired the once-per-start exit mid-run: the
+    whole set where main writes a bare ``outputLimit``, and to a disabled
+    device, or with control off, an ``outputLimit = 0`` logged as the final
+    command for an unproven charge. Held only since the EMS saw the device in
+    output, the same release got main's writes. Whether the process restarted
+    while the role held no longer decides which.
+    """
+
+    build = following_http_device if transport == "http" else following_mqtt_device
+    item = pv_less_state(soc=50)
+    if held_since == "before_the_start":
+        app_holds_in_ac_input(item)
+    dev, hardware = build(item)
+    system, device_flags = SUPERVISION[supervision]
+    runtime = RuntimeStateStub(system=dict(system), devices={"WR1": dict(device_flags)})
+    if held_since == "before_the_start":
+        runtime.devices["WR1"].update(OPERATOR_AC_INPUT)
+    harness = Harness([dev], load=300, runtime_state=runtime)
+    harness.controller.set_output_limit = hardware
+    harness.controller.device_state_writes_allowed = lambda _dev: False
+    harness.run(cycles=3, states=[item])
+    if held_since == "mid_run":
+        runtime.devices["WR1"].update(OPERATOR_AC_INPUT)
+        app_holds_in_ac_input(item)
+    harness.run(cycles=3, states=[item])
+    before = len(hardware.writes)
+
+    release_the_operator_role(runtime)
+    reasons = []
+    for _ in range(6):
+        harness.run(cycles=1, states=[item])
+        reasons.append(harness.controller.runtime_intents["WR1"].reason)
+
+    released = hardware.writes[before:]
+    assert "unproven_charge" not in reasons, reasons
+    if supervision != "enabled":
+        assert released == []
+        assert item.ac_mode == 1
+    elif transport == "http":
+        assert released, "the power command wrote nothing at all"
+        assert all(set(write) == {"outputLimit"} for write in released), released
+        assert item.ac_mode == 1
+
+
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+@pytest.mark.parametrize("switched_on", ["feature", "device_switch"])
+def test_switching_charging_on_mid_run_sends_no_start_exit(transport, switched_on):
+    """The one exit after a start is for the start, not for a switch.
+
+    With the feature or the device's AC charging switch off, no charge on the
+    device can be the EMS's own, so an AC input it shows is attributed from the
+    first cycle the EMS sees it. Switching charging on later does not make
+    that AC input unproven again: the device keeps main's writes.
+    """
+
+    build = following_http_device if transport == "http" else following_mqtt_device
+    item = pv_less_state(soc=50)
+    app_holds_in_ac_input(item)
+    dev, hardware = build(item)
+    runtime = RuntimeStateStub(
+        devices={"WR1": {"ac_charge_enabled": switched_on != "device_switch"}}
+    )
+    harness = Harness(
+        [dev], load=300, runtime_state=runtime, feature=switched_on != "feature"
+    )
+    harness.controller.set_output_limit = hardware
+    harness.controller.device_state_writes_allowed = lambda _dev: False
+    harness.run(cycles=3, states=[item])
+    before = len(hardware.writes)
+
+    if switched_on == "feature":
+        harness.feature["enabled"] = True
+    else:
+        runtime.devices["WR1"]["ac_charge_enabled"] = True
+    reasons = []
+    for _ in range(6):
+        harness.run(cycles=1, states=[item])
+        reasons.append(harness.controller.runtime_intents["WR1"].reason)
+
+    assert "unproven_charge" not in reasons, reasons
+    if transport == "http":
+        switched = hardware.writes[before:]
+        assert all(set(write) == {"outputLimit"} for write in switched), switched
+        assert item.ac_mode == 1
 
 
 class KeepsIgnoredSettings(FollowingHardware):
@@ -1439,21 +2035,21 @@ def test_a_bare_write_is_not_repeated_against_a_charge_it_cannot_end():
     """
 
     item = pv_less_state(soc=50)
-    item.ac_mode = 1
-    item.input_limit_w = 400
-    item.grid_input = 400
-    item.ac_status = 2
     dev, _ = following_http_device(item)
     hardware = KeepsIgnoredSettings(item)
     dev.session = hardware
     harness = Harness([dev], load=300)
     harness.controller.set_output_limit = hardware
     harness.controller.device_state_writes_allowed = lambda _dev: False
+    harness.run(cycles=2, states=[item])
+    app_holds_in_ac_input(item)
+    before = len(hardware.writes)
 
     harness.run(cycles=8, states=[item])
 
-    values = [write["outputLimit"] for write in hardware.writes]
+    values = [write["outputLimit"] for write in hardware.writes[before:]]
     assert values and len(values) == len(set(values)), values
+    assert all(set(write) == {"outputLimit"} for write in hardware.writes)
 
 
 def test_a_floor_charge_the_ems_saw_begin_is_left_to_the_firmware():
@@ -1620,25 +2216,80 @@ def test_disabling_a_charging_device_ends_its_charge_once(transport, switch):
     assert item.grid_input == 0
 
 
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+@pytest.mark.parametrize("switch", ["system", "device"])
+@pytest.mark.parametrize("state_writes", [True, False], ids=["reconciler_on", "reconciler_off"])
+def test_a_charge_found_after_a_restart_on_a_disabled_device_gets_its_one_exit(
+    transport, switch, state_writes
+):
+    """Owner decisions (2) and (3) 2026-10-04: the restart exit is its final command.
+
+    A device found in AC input after a start is claimed as ``unproven_charge``,
+    which stands the state reconciler down until the power command has written
+    the exit. The power command skips a disabled device, and every device while
+    control is off, so such a device got neither the exit nor the reconciler
+    that takes it back on main: it drew from the grid until it was enabled
+    again. It gets the exit once, as a charge of the EMS's own on record does,
+    and no power command after it.
+    """
+
+    build = following_http_device if transport == "http" else following_mqtt_device
+    item = pv_less_state(soc=50)
+    start_charging(item)
+    dev, hardware = build(item)
+    runtime = RuntimeStateStub(devices={})
+    if switch == "system":
+        runtime.system["enabled"] = False
+    else:
+        runtime.devices["WR1"] = {"enabled": False}
+    harness = Harness([dev], load=300, runtime_state=runtime)
+    harness.controller.set_output_limit = hardware
+    harness.controller.device_state_writes_allowed = lambda _dev: state_writes
+
+    harness.run(cycles=6, states=[item])
+
+    assert hardware.writes == [IDLE_EXIT]
+    assert item.ac_mode == 2
+    assert item.grid_input == 0
+    assert harness.controller.runtime_intents["WR1"].reason != "unproven_charge"
+
+    start_charging(item)
+    harness.run(cycles=4, states=[item])
+
+    assert [write for write in hardware.writes[1:] if "outputLimit" in write] == []
+
+
 def leaves_the_charge(properties):
     return properties.get("acMode") == 2
 
 
+DEVICE_REPORTS = {
+    "full_report": {},
+    "no_setpoint_or_status": {"unreported": ("inputLimit", "acStatus")},
+    "clamps_the_setpoint": {"input_ceiling_w": 500},
+}
+
+
 @pytest.mark.parametrize("transport", ["http", "mqtt"])
 @pytest.mark.parametrize("switch", ["system", "device"])
-def test_a_final_command_the_device_did_not_apply_is_sent_again(transport, switch):
+@pytest.mark.parametrize("reports", sorted(DEVICE_REPORTS))
+def test_a_final_command_the_device_did_not_apply_is_sent_again(
+    transport, switch, reports
+):
     """The one final command counts when the device leaves the charge.
 
     It counted when the transport accepted it: a device that answered and did
     not apply it went on drawing 800-1200 W with nobody watching, the MQTT
     client logging the acMode mismatch it would never act on. The exit goes out
     again once the resend window has passed -- not every cycle -- and once the
-    device reports it out of the charge, nothing more is written.
+    device reports it out of the charge, nothing more is written. That holds
+    for a device that reports neither its setpoint nor its status, and for one
+    that charges at less than the EMS wrote: its own value is the EMS's charge.
     """
 
     build = following_http_device if transport == "http" else following_mqtt_device
     item = pv_less_state(soc=50)
-    dev, hardware = build(item, switch_polls=1)
+    dev, hardware = build(item, switch_polls=1, **DEVICE_REPORTS[reports])
     runtime = RuntimeStateStub(devices={})
     harness = Harness([dev], load=-900, runtime_state=runtime, seconds_per_cycle=5)
     harness.controller.set_output_limit = hardware
@@ -1667,6 +2318,112 @@ def test_a_final_command_the_device_did_not_apply_is_sent_again(transport, switc
     assert item.ac_mode == 2
     assert item.grid_input == 0
     assert dev.charge_commanded is False
+
+
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+def test_a_stop_inside_the_resend_window_still_sends_its_release(transport, caplog):
+    """The shutdown release is the last command, so no window holds it back.
+
+    It asked for the exit like every other caller and was coalesced inside
+    the resend window: a stop by ``--once``, ``--max-cycles`` or an unhandled
+    error within 30 s of an exit the device had ignored wrote nothing, logged
+    ``ac_charge_released_on_shutdown``, and left the device charging with no
+    process left to ask again.
+    """
+
+    build = following_http_device if transport == "http" else following_mqtt_device
+    item = pv_less_state(soc=50)
+    dev, hardware = build(item)
+    runtime = RuntimeStateStub(devices={})
+    harness = Harness([dev], load=-900, runtime_state=runtime, seconds_per_cycle=5)
+    harness.controller.set_output_limit = hardware
+    harness.run(cycles=20, states=[item])
+    assert item.ac_mode == 1, "the regulator never charged the device"
+    before = len(hardware.writes)
+    hardware.ignore(leaves_the_charge)
+    runtime.system["enabled"] = False
+    harness.run(cycles=2, states=[item])
+    assert hardware.writes[before:] == [IDLE_EXIT]
+
+    with patch("time.monotonic", harness.clock), caplog.at_level(logging.INFO):
+        assert dev.charge_exit_due() is False
+        harness.controller.release_charging_devices()
+
+    assert hardware.writes[before:] == [IDLE_EXIT, IDLE_EXIT]
+    assert item.ac_mode == 2
+    assert item.grid_input == 0
+    assert "event=ac_charge_released_on_shutdown" in caplog.text
+    assert "charge=ems_charge_on_record" in caplog.text
+
+
+@pytest.mark.parametrize("answer", ["refused", "undeliverable", "raised_past_the_write"])
+def test_a_release_that_was_not_written_is_not_logged_as_one(answer, caplog):
+    """The release event says what reached the device, not what was asked for.
+
+    The release goes through the controller's own write, behind the write
+    gate, as in the live loop: a device that answers it with an error and one
+    the transport cannot reach are a ``False`` from that write, not an
+    exception. A transport that raises past the write is covered as well.
+    """
+
+    harness, hardware, item = charge_on_following_hardware()
+    if answer != "raised_past_the_write":
+        harness.controller.set_output_limit = EMSController.set_output_limit.__get__(
+            harness.controller
+        )
+
+    def post(url, json=None, **_kwargs):
+        if answer == "refused":
+            reply = _HttpReply({"success": False})
+            reply.status_code = 400
+            return reply
+        raise ConnectionError("unreachable")
+
+    hardware.post = post
+    with patch(
+        "ems.controller.cfg.resolve_device_write_gate", return_value=OPEN_API_GATE
+    ), caplog.at_level(logging.INFO):
+        harness.controller.release_charging_devices()
+
+    assert item.ac_mode == 1
+    assert "event=ac_charge_released_on_shutdown" not in caplog.text
+    assert "event=ac_charge_release_failed" in caplog.text
+
+
+def test_a_release_the_write_gate_withheld_is_logged_as_withheld(caplog):
+    """Live test 2026-10-04, dry run: the release said it released what it never wrote.
+
+    With the gate shut nothing reaches the transport, so no charge is ever on
+    its record and the release runs for the regulator's target alone. The
+    gate's write returns ``withheld``, which is truthy, and
+    ``ac_charge_released_on_shutdown`` was logged over it.
+    """
+
+    item = idle_output_state()
+    dev, hardware = following_device(item)
+    harness = Harness([dev], load=-900)
+    harness.controller.set_output_limit = EMSController.set_output_limit.__get__(
+        harness.controller
+    )
+
+    with patch("ems.controller.cfg.DRY_RUN", True):
+        harness.run(cycles=20, states=[item])
+        assert harness.controller.charge_direction.charging is True
+        assert harness.controller.charge_commanded_by_ems(dev) is True
+        assert dev.charge_commanded is False
+        with caplog.at_level(logging.INFO):
+            harness.controller.release_charging_devices()
+
+    assert hardware.writes == []
+    assert "event=ac_charge_released_on_shutdown" not in caplog.text
+    assert "event=ac_charge_release_failed" not in caplog.text
+    withheld = [
+        line for line in caplog.text.splitlines()
+        if "event=ac_charge_release_withheld" in line
+    ]
+    assert len(withheld) == 1, caplog.text
+    assert "blocked_by=dry_run" in withheld[0]
+    assert "charge=regulator_target" in withheld[0]
 
 
 @pytest.mark.parametrize("transport", ["http", "mqtt"])
@@ -1711,6 +2468,44 @@ def test_the_ems_s_own_charge_at_the_floor_is_not_the_firmware_s_while_it_runs_o
     assert item.ac_mode == 2
     assert item.grid_input == 0
     assert dev.charge_commanded is False
+
+
+def test_an_mqtt_target_that_changes_while_the_exit_travels_is_an_exit_too():
+    """What the resend window holds back over MQTT, and what it does not.
+
+    On a ZenSDK model, which sends no acknowledgement, the exit stays in
+    flight until telemetry confirms it, and the next changed target replaces
+    it at once -- under a moving load one command per cycle while the device
+    is still charging, the cadence main's MQTT path always had. Every one of
+    them carries the direction, so each is an exit, and one the device lost is
+    followed by the next within a cycle. Holding them to the window would
+    have left a lost exit drawing from the grid for the whole window. The
+    broker double delivered every publish at once, so nothing could be in
+    flight long enough to show either.
+    """
+
+    item = pv_less_state(soc=50)
+    dev, hardware = following_mqtt_device(item, apply_after_polls=2)
+    broker = dev._service
+    harness = Harness([dev], load=-900, seconds_per_cycle=5)
+    harness.controller.set_output_limit = hardware
+    harness.run(cycles=25, states=[item])
+    assert item.ac_mode == 1, "the regulator never charged the device"
+
+    into_the_charge = []
+    for load in (1200, 1250, 1180, 1300, 1220):
+        sent = len(broker.published)
+        harness.run(cycles=1, states=[item], load=load)
+        if item.ac_mode == 1:
+            into_the_charge += broker.published[sent:]
+
+    assert len(into_the_charge) == 2, into_the_charge
+    assert all(
+        command == {**IDLE_EXIT, "outputLimit": command["outputLimit"]}
+        for command in into_the_charge
+    ), into_the_charge
+    assert item.ac_mode == 2
+    assert item.grid_input == 0
 
 
 @pytest.mark.parametrize("transport", ["http", "mqtt"])
@@ -1949,6 +2744,93 @@ def test_a_disabled_device_s_charge_ends_while_the_rest_idles_at_night():
 
     assert harness.controller.night_min_soc_idle_active is True
     assert hardware.writes[before:] == [IDLE_EXIT]
+
+
+def night_fleet_with_a_charge_only_device(transport, item, **harness_options):
+    """A supplier idle at its floor, and a device forbidden to discharge.
+
+    The night idle parks only devices that may supply the house, so the second
+    one is never among the devices it writes.
+    """
+
+    floor = state(
+        soc=15, min_soc=15, solar=0, output=0, output_limit=35, pack_in=0,
+        pack_out=0, soc_limit=2, dc_status=0, ac_status=0, pack_state=0,
+    )
+    build = following_http_device if transport == "http" else following_mqtt_device
+    charge_only, hardware = build(item, name="B")
+    charge_only.ac_discharge_enabled = False
+    supplier = charging_device("A", ac_charge_enabled=False)
+    harness = Harness([supplier, charge_only], min_output_limit=35, **harness_options)
+    harness.controller.set_output_limit = (
+        lambda dev, value, **kwargs: hardware(dev, value, **kwargs)
+        if dev.name == "B"
+        else True
+    )
+    return harness, hardware, charge_only, floor
+
+
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+def test_the_night_idle_asks_a_device_it_does_not_park_again_for_its_exit(transport):
+    """A device forbidden to discharge is not parked, and its exit is still owed.
+
+    The night idle writes only the devices it parks and ends the cycle before
+    any other write path. A device that may only charge, ignoring the exit its
+    charge got as the surplus ended, therefore went on drawing from the grid
+    all night with the EMS's own record of the charge open.
+    """
+
+    item = pv_less_state(soc=50)
+    harness, hardware, charge_only, floor = night_fleet_with_a_charge_only_device(
+        transport, item, load=-900, seconds_per_cycle=5
+    )
+    harness.run(cycles=20, states=[floor, item])
+    assert item.ac_mode == 1, "the regulator never charged the device"
+    before = len(hardware.writes)
+    hardware.ignore(leaves_the_charge)
+
+    idle = []
+    for _ in range(12):
+        harness.run(cycles=1, states=[floor, item], load=300)
+        idle.append(harness.controller.night_min_soc_idle_active)
+
+    assert idle[-1] is True
+    assert [write for write in hardware.writes[before:] if leaves_the_charge(write)] == [
+        IDLE_EXIT,
+        IDLE_EXIT,
+    ]
+    assert item.grid_input == 0
+    assert charge_only.charge_commanded is False
+
+
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+@pytest.mark.parametrize("soc", [15, 50], ids=["at_the_floor", "above_it"])
+def test_a_device_the_night_idle_does_not_park_gets_its_restart_exit(transport, soc):
+    """The one exit at start reaches a device the night idle never writes.
+
+    A restart at night found a device forbidden to discharge charging while the
+    rest idled at their floor. Its exit was owed to the night idle's park write,
+    which never reaches such a device, so the claim that stands the state
+    reconciler down for that exit held forever and the charge ran on.
+    """
+
+    item = pv_less_state(soc=soc)
+    start_charging(item)
+    harness, hardware, _charge_only, floor = night_fleet_with_a_charge_only_device(
+        transport, item, load=300
+    )
+
+    harness.run(cycles=1, states=[floor, item])
+
+    assert harness.controller.night_min_soc_idle_active is True
+    assert hardware.writes == [IDLE_EXIT]
+    assert item.ac_mode == 2
+
+    start_charging(item)
+    harness.run(cycles=5, states=[floor, item])
+
+    assert hardware.writes == [IDLE_EXIT]
+    assert item.ac_mode == 1
 
 
 def test_disabling_a_device_that_is_not_charging_writes_nothing():

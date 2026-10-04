@@ -94,6 +94,16 @@ def settling_out_of_charge(state) -> bool:
     return isinstance(setpoint, bool) or not isinstance(setpoint, (int, float)) or setpoint == 0
 
 
+def found_in_ac_input(state) -> bool:
+    """Whether telemetry shows a device held in AC input, charging or not.
+
+    The AC-input direction, less the settling window of an exit the device has
+    already taken: that current is the tail of a charge it left.
+    """
+
+    return in_ac_input_direction(state) and not settling_out_of_charge(state)
+
+
 def derive_house_load_w(inverter_output_w, grid_power_w, inverter_charge_w=0):
     """Net both directions against the meter to get what the house draws.
 
@@ -119,6 +129,7 @@ __all__ = [
     "OPERATION_IDLE",
     "OPERATION_CHARGE",
     "derive_house_load_w",
+    "found_in_ac_input",
     "in_ac_input_direction",
     "operation_for_target",
     "out_of_charge",

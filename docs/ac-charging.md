@@ -232,20 +232,43 @@ with `acMode = 2` once per loop, against the power command putting it back. The
 regulator therefore claims the device at priority 100 with *no* desired mode,
 meaning "the power command owns this". An operator park (150) or maintenance
 (200) still takes the device away mid-charge — and ends the EMS's charge with
-one command, see above — and a device found charging that the EMS did not
-command stays a leftover the reconciler may reclaim.
+one command, see above — and a device found in AC input after a start gets the
+one exit described next.
 
-**At the battery floor a charge is the firmware's only when the EMS can tell.**
-There the firmware may charge an empty pack by itself, and that is respected.
-But after a restart a charge at the floor may be the EMS's own, left drawing
-from the grid by the process before. The EMS then writes the exit once; a device that charges
-on after it is the firmware's, and nothing more is written until that charge
-ends. That exit is only for a device the EMS could have charged: with the
+**After a start, AC input gets one exit; after that it is whoever holds it.**
+A stop you asked for leaves the EMS's charge running on purpose, and the next
+process has no record of it: telemetry cannot tell that charge from an app's
+or, at the battery floor, from the firmware's protection charge. So once per
+process start, a device the EMS could have charged that it finds in AC input —
+above the floor as at it, charging or not — gets the exit, on the power
+command's own gate; `allow_state_reconciliation_writes` does not have to allow
+it. The exit counts once the device reports that it took it: out of the charge,
+or charging at a setpoint it did not show when the exit went out. A device that
+answers it and stays in AC input gets it again once per resend window, three
+times in all; a firmware that puts its protection charge straight back at the
+same setpoint looks exactly like that, so after the third the AC input is its
+holder's all the same, said once as `ac_charge_start_exit_unconfirmed`. A
+disabled device, and every device while control is switched off,
+gets it as its final command, logged as `ac_charge_ended_on_disable` with
+`charge=unproven_charge`: the state reconciler stands down for the device
+until that exit is taken, so waiting for the device to be enabled again left
+it with neither. A device in AC input again after it took that exit, or still
+after the third, is someone else's. At the floor that is the firmware charging
+an empty pack by itself, and nothing is written until
+that charge ends. Above it, an app or a schedule holds the device, and it gets
+what it got before charging existed: the bare `outputLimit` on the local API,
+which it ignores in AC input, with the state reconciler taking it back only
+where its gate allows; over MQTT the next power command, which carries the
+direction. The exit is only for a device the EMS could have charged: with the
 feature or the device's **AC charging** switch off, or on a model without an AC
-charge path, no charge can be the EMS's own, so it is the firmware's from the
-first cycle and nothing is written. The EMS's own record survives a reset of its regulation memory and a
-device's absence, because the transport keeps it: it opens with a charge
-command and ends only when the device reports that it left the charge. A device
+charge path, no charge can be the EMS's own, so a floor charge is the
+firmware's from the first cycle and nothing above the floor changes. Nor is it
+for AC input held under an operator's AC-input role or a maintenance routine:
+that is the claim's, and releasing the role later sends no exit, whether or
+not the EMS restarted while the role held. The EMS's
+own record survives a reset of its regulation memory and a device's absence,
+because the transport keeps it: it opens with a charge command and ends only
+when the device reports that it left the charge. A device
 still charging after an exit it answered and did not carry out is therefore
 still the EMS's own, and is sent the exit again, never handed to the firmware.
 For the same reason a failed read or a device that is unreachable for a while
@@ -253,7 +276,10 @@ does not make a floor charge unattributable: whatever charges there when it
 answers again is the firmware's, and no exit is written into it. A
 firmware charge counts from the moment the device shows the charge mode with a
 setpoint, before current flows, so the state reconciler leaves its first two
-seconds alone too. See
+seconds alone too. The night idle, which writes only the devices it parks, still
+sends a device forbidden to discharge the exit it is owed — the one after a
+start, and the resend to the EMS's own charge — logged as
+`night_min_soc_idle_charge_exit_write`. See
 [technical/control-logic.md](technical/control-logic.md#firmware-owned-charging).
 
 **Leaving a charge is one command, on every transport.** A device in
@@ -261,15 +287,31 @@ seconds alone too. See
 with its setpoint: `smartMode=1`, `acMode=2`, the new `outputLimit` and
 `inputLimit=0` in one write. MQTT always sends that set. The local API keeps its
 single-property `outputLimit` write, and sends the set while a charge the EMS
-commanded is on record, until the device reports that it left the charge. A
-device someone else holds in AC input — the vendor app, a schedule — gets the
-bare `outputLimit` the EMS always wrote; taking it back is the state
-reconciler's, behind its own gate. An exit the device
-answered and did not carry out goes out again once per resend window (30 s),
-never once per cycle. The exit therefore needs no state
-reconciliation — with `allow_state_reconciliation_writes` off it used to never
-arrive — and the shutdown release is a complete command rather than an
-`outputLimit` the charging device ignored. On an MQTT device whose commands are
+commanded is on record, until the device reports that it left the charge, and
+for the one exit after a start. A device someone else holds in AC input — the
+vendor app, a schedule — gets the bare `outputLimit` the EMS always wrote once
+that exit is behind it; taking it back is the state reconciler's, behind its
+own gate. An exit the device did not carry out, whether it accepted it or
+answered with an error, goes out again once per resend window (30 s), and on
+the local API nothing is written in between. Over MQTT the window holds back
+the same target, but a changed one replaces an exit still on its way to the
+device at once: every MQTT command carries the direction, so each is an exit
+itself, and under a moving load a device that keeps charging gets one per
+cycle, as it always did. The one exit after a start waits for the same
+window once the device answered it, accepted or with an error, and on MQTT
+while a command is still on its way. Only an exit the transport could not
+deliver at all is due again at once, and it counts as none of the three
+attempts. The exit therefore
+needs no state reconciliation — with `allow_state_reconciliation_writes` off it
+used to never arrive — and the shutdown release is a complete command rather
+than an `outputLimit` the charging device ignored. That release is the last
+command the process writes, so it is sent whatever the resend window says, and
+`ac_charge_released_on_shutdown` is logged only when the transport took it —
+`ac_charge_release_failed` when it did not, and `ac_charge_release_withheld`
+when the write gate kept it back (dry run, simulation). A dry run never puts a
+charge on a device, so its release is for the regulator's target only; each
+release event names the record it acted on, `charge=ems_charge_on_record` or
+`charge=regulator_target`. On an MQTT device whose commands are
 acknowledged (Hyper 2000), a change of direction does not queue behind the
 command it replaces.
 
@@ -438,7 +480,15 @@ ac_charge_stopped_stale_meter
 ac_charge_kept_across_stop
 ac_charge_released_on_shutdown
 ac_charge_release_failed
+ac_charge_release_withheld
+ac_charge_start_exit_unconfirmed
 ```
+
+`ac_charge_start_exit_unconfirmed` is a `warning`, said once per device and
+start: the one exit to AC input found after a start went out three times and
+the device stayed in AC input. `left_to=firmware` is a charge at the battery
+floor, left to the firmware's protection charge; `left_to=holder` is AC input
+above it, which gets what it got before charging existed.
 
 `ac_charge_direction` is `info` when the direction changes and `debug`
 otherwise. `ac_charge_entry_rate_limited` is a `warning`: reaching the hourly

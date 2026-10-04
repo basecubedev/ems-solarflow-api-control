@@ -12,6 +12,7 @@ from urllib3.util.retry import Retry
 
 from ems import config as cfg
 from ems.charge_record import (
+    CHARGE_EXIT_FINAL,
     CHARGE_EXIT_IN_INPUT,
     CHARGE_EXIT_PENDING,
     CHARGE_EXIT_TO_OUTPUT,
@@ -438,6 +439,20 @@ class ZendureClient:
     def charge_exit_due(self):
         return self._charge.exit_due(time.monotonic())
 
+    def found_exit_due(self):
+        return self._charge.found_exit_due(time.monotonic())
+
+    def found_exit_exhausted(self):
+        return self._charge.found_exit_exhausted(time.monotonic())
+
+    @property
+    def found_exit_attempts(self):
+        return self._charge.found_exit_attempts
+
+    @property
+    def found_charge_left(self):
+        return self._charge.found_charge_left
+
     def release_charge_record(self):
         """The charge is someone else's from here: a claim that writes its own."""
 
@@ -536,10 +551,16 @@ class ZendureClient:
         the AC-input role a claim gave it. The record ends when the device
         reports it left the charge, not when it answered the exit; until then
         the exit goes out again once per resend window, and in between nothing
-        is written.
+        is written. An exit the device answered with an error counts as sent:
+        it is asked again after the window, not every cycle.
         ``charge_exit=CHARGE_EXIT_TO_OUTPUT`` sends the atomic exit for a charge
-        that is not on record -- the one exit the controller decides for a
-        charge at the battery floor it cannot attribute.
+        that is not on record -- the one exit the controller decides for an AC
+        input it cannot attribute. One the device answered, accepted or
+        refused, is held back the same way until the resend window has passed,
+        and for good once it was answered ``FOUND_EXIT_ATTEMPTS`` times;
+        whether the device took it is the next report's to say.
+        ``charge_exit=CHARGE_EXIT_FINAL`` is the shutdown release: the atomic
+        exit, whatever the window says.
 
         A charge needs a model whose AC charge path is established — the
         command shape is shared across the ZenSDK family, the capability is
@@ -563,7 +584,9 @@ class ZendureClient:
 
         target = int(value)
         record = self._charge
-        if target >= 0 and not (record.open or charge_exit == CHARGE_EXIT_TO_OUTPUT):
+        final = charge_exit == CHARGE_EXIT_FINAL
+        found_exit = charge_exit == CHARGE_EXIT_TO_OUTPUT
+        if target >= 0 and not (record.open or final or found_exit):
             ok = self.write_output_limit(target)
             return (
                 dispatch.published(target)
@@ -573,7 +596,12 @@ class ZendureClient:
 
         if target >= 0:
             now = time.monotonic()
-            if record.open and not record.exit_due(now):
+            held = (
+                not record.exit_due(now)
+                if record.open
+                else found_exit and not record.found_exit_due(now)
+            )
+            if held and not final:
                 return dispatch.coalesced(target, command_state=CHARGE_EXIT_PENDING)
             field, properties = (
                 ("inputLimit", {"inputLimit": 0})
@@ -587,8 +615,9 @@ class ZendureClient:
                 "write_output_limit_error",
                 target_w=target,
             )
-            if ok:
-                record.exit_sent(now)
+            record.exit_sent(now)
+            if found_exit:
+                record.found_exit_sent(now)
             return (
                 dispatch.published(target)
                 if ok

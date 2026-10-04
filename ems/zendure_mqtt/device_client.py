@@ -16,7 +16,12 @@ import time
 from collections import OrderedDict
 
 from ems import config as cfg
-from ems.charge_record import CHARGE_EXIT_PENDING, ChargeRecord
+from ems.charge_record import (
+    CHARGE_EXIT_FINAL,
+    CHARGE_EXIT_PENDING,
+    CHARGE_EXIT_TO_OUTPUT,
+    ChargeRecord,
+)
 from ems.clients import parse_device
 from ems.health import CommHealth
 from ems.logging_utils import log_event
@@ -358,6 +363,34 @@ class ZendureMqttDeviceClient:
     def charge_exit_due(self):
         return self._charge.exit_due(time.monotonic())
 
+    def found_exit_due(self):
+        """Whether the one exit to AC input found after a start may go out now.
+
+        Not while a command is in flight: every command here carries the
+        direction, so that command is the exit still on its way.
+        """
+
+        active = self._active_command
+        if active is not None and active.is_active:
+            return False
+        return self._charge.found_exit_due(time.monotonic())
+
+    def found_exit_exhausted(self):
+        """Whether that exit is spent, and no command of it is still in flight."""
+
+        active = self._active_command
+        if active is not None and active.is_active:
+            return False
+        return self._charge.found_exit_exhausted(time.monotonic())
+
+    @property
+    def found_exit_attempts(self):
+        return self._charge.found_exit_attempts
+
+    @property
+    def found_charge_left(self):
+        return self._charge.found_charge_left
+
     def release_charge_record(self):
         """The charge is someone else's from here: a claim that writes its own."""
 
@@ -471,9 +504,14 @@ class ZendureMqttDeviceClient:
     def dispatch_output_limit(self, value, charge_exit=None):
         """Publish a power write and report the structured dispatch outcome.
 
-        ``charge_exit`` is accepted for parity with the local API and changes
-        nothing here: every ZenSDK power command already carries its modes, and
-        an invoke command is one operation.
+        Every ZenSDK power command already carries its modes and an invoke
+        command is one operation, so ``charge_exit`` names no shape here.
+        ``CHARGE_EXIT_FINAL``, the shutdown release, is published whatever
+        command is in flight and whatever the resend window says, because it is
+        the last command this process writes. ``CHARGE_EXIT_TO_OUTPUT``, the
+        one exit to AC input found after a start, keeps its own resend window
+        and counts its attempts, ``FOUND_EXIT_ATTEMPTS`` at most, as the local
+        API does.
 
         Every attempted write builds one :class:`CommandRecord` (queued ->
         published/rejected) — a broker publish is transport-level only, never
@@ -484,6 +522,11 @@ class ZendureMqttDeviceClient:
         device: a repeat of the in-flight target is coalesced (no republish); a
         changed non-safety target is queued as the single latest pending target; a
         safety reduction preempts the in-flight command and publishes immediately.
+        With no command in flight, a non-negative target is held back while an
+        exit from the EMS's own charge, or the one exit to AC input found after
+        a start, is out and its resend window open. A
+        changed target replacing an exit still in flight is not: every command
+        here carries the direction, so it is an exit itself.
         The controller and its write gates are unchanged.
         """
 
@@ -507,9 +550,11 @@ class ZendureMqttDeviceClient:
                 error=blocked.error, latency_ms=0.0, field=blocked.field
             )
             return dispatch.rejected(target, reason=blocked.error)
+        final = charge_exit == CHARGE_EXIT_FINAL
+        found_exit = charge_exit == CHARGE_EXIT_TO_OUTPUT
         active = self._active_command
         if active is not None and active.is_active:
-            if active.target_w == target:
+            if active.target_w == target and not final:
                 # The in-flight target is already committed; drop any stale pending.
                 self._discard_pending_target("superseded_by_active_target")
                 return dispatch.coalesced(
@@ -518,7 +563,7 @@ class ZendureMqttDeviceClient:
                     command_state=active.state,
                     correlation_id=self._active_correlation_id,
                 )
-            if self._should_preempt(active.target_w, target):
+            if final or self._should_preempt(active.target_w, target):
                 # Safety preemption: retire the in-flight command out of the slot
                 # and publish the safer target now, never waiting behind it. The
                 # retired command is terminal, so its late reply/telemetry can
@@ -528,14 +573,14 @@ class ZendureMqttDeviceClient:
                 self._active_command = None
                 self._active_correlation_id = None
                 self._discard_pending_target("superseded_by_safety_target")
-                return self._publish_target(target, now)
+                return self._publish_target(target, now, found_exit=found_exit)
             if self._should_supersede_latest(active):
                 mark_superseded(active, now_monotonic=now)
                 self._last_command_state = active.state
                 self._active_command = None
                 self._active_correlation_id = None
                 self._discard_pending_target("superseded_by_latest_target")
-                return self._publish_target(target, now)
+                return self._publish_target(target, now, found_exit=found_exit)
             if self._pending_target == target and self._pending_correlation_id:
                 correlation_id = self._pending_correlation_id
             else:
@@ -549,7 +594,7 @@ class ZendureMqttDeviceClient:
                 correlation_id=correlation_id,
             )
 
-        if target >= 0 and self._charge.open and not self._charge.exit_due(now):
+        if target >= 0 and not final and self._exit_held(now, found_exit):
             self._discard_pending_target("superseded_by_pending_charge_exit")
             return dispatch.coalesced(target, command_state=CHARGE_EXIT_PENDING)
 
@@ -560,9 +605,18 @@ class ZendureMqttDeviceClient:
             correlation_id = self._pending_correlation_id
             self._pending_target = None
             self._pending_correlation_id = None
-            return self._publish_target(target, now, correlation_id=correlation_id)
+            return self._publish_target(
+                target, now, correlation_id=correlation_id, found_exit=found_exit
+            )
         self._discard_pending_target("superseded_by_fresh_target")
-        return self._publish_target(target, now)
+        return self._publish_target(target, now, found_exit=found_exit)
+
+    def _exit_held(self, now, found_exit):
+        """Whether an exit is out and its resend window still open."""
+
+        if self._charge.open:
+            return not self._charge.exit_due(now)
+        return found_exit and not self._charge.found_exit_due(now)
 
     def write_properties(
         self, properties, *, reason, field=None, error_event=None, log_fields=None
@@ -734,7 +788,7 @@ class ZendureMqttDeviceClient:
         tolerance = self._confirmation_policy().confirmation_tolerance_w
         return reduction >= self._safety_preempt_margin_w and reduction > tolerance
 
-    def _publish_target(self, target, now, *, correlation_id=None):
+    def _publish_target(self, target, now, *, correlation_id=None, found_exit=False):
         """Build and publish one correlated command; return a dispatch result."""
 
         correlation_id = correlation_id or self._next_dispatch_correlation_id()
@@ -807,6 +861,8 @@ class ZendureMqttDeviceClient:
                 self._charge.charge_sent(abs(target))
             else:
                 self._charge.exit_sent(publish_completed)
+                if found_exit:
+                    self._charge.found_exit_sent(publish_completed)
             self._remember_command_evidence(record, publish_completed)
             return dispatch.published(
                 target,

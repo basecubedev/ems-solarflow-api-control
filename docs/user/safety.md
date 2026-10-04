@@ -169,39 +169,42 @@ The EMS says so when it happens: `event=ac_charge_kept_across_stop` names the
 signal that stopped it and the device it left charging.
 
 A **charging** device therefore keeps drawing while the EMS is away. That is
-bounded — the charge ends at the device's own maximum SoC — but an update that
-never comes back leaves it drawing until then. If a restart does not complete,
-check the device and stop it in the Zendure app or with
+bounded — the charge ends at the device's configured maximum SoC — but it still
+costs whatever that energy costs, and an update that never comes back leaves it
+drawing until then. If a restart does not complete, or once the EMS is back
+after an abrupt stop, check the device and stop it in the Zendure app or with
 `emsctl.py device WR1 ac-mode output`.
 
 The EMS **does** return a charging device when it stops by itself: `--once`,
 `--max-cycles`, `--duration`, or an unhandled error. Nothing is coming back to
-supervise the charge in those cases.
-
-An unstoppable kill — power loss, `kill -9`, a container removed rather than
-stopped — writes nothing either way. Nothing in the device times the command
-out.
-
-That is bounded, not unlimited: the charge ends at the device's configured
-maximum SoC. It still costs whatever that energy costs. If the EMS is stopped
-abruptly while charging, check the device and stop it in the Zendure app or with
-`emsctl.py device WR1 ac-mode output` once the EMS is back.
+supervise the charge in those cases. An unstoppable kill — power loss,
+`kill -9`, a container removed rather than stopped — writes nothing either way,
+and nothing in the device times the command out.
 
 The same applies to a device that drops off the network mid-charge: the EMS
 cannot write to a device it cannot reach, so that one keeps charging until it is
 reachable again. The remaining devices adapt in the same cycle.
 
-The EMS itself recovers on the next start: a device found charging with a
-healthy battery is taken back into output mode. A device found charging at its
-discharge floor gets one exit command if the EMS could have charged it, because
-the EMS cannot tell its predecessor's charge from the firmware's protection
-charge; with AC charging off for it, or on a model that cannot charge from AC,
-the charge is the firmware's from the start. If the device goes on charging
-after the exit command, that is the firmware recovering an empty battery, and
-the EMS leaves it alone until it is done. A device that comes back from the network
-charging at its floor is not a new start: the charge is either the EMS's own,
-which it regulates or ends as before, or the firmware's, which it leaves alone.
-Being unreachable for a while earns it no exit command.
+The EMS itself recovers on the next start. A device it finds in AC input —
+charging or not, above its discharge floor or at it — gets one exit command
+(`acMode=2`, `inputLimit=0`) if the EMS could have charged it: AC charging on,
+the device's own AC charging switch on, a model that can charge from AC. The
+EMS cannot tell its predecessor's charge from an app's or from the firmware's
+protection charge, so it ends it, on the normal power write gate, also with
+`allow_state_reconciliation_writes` off; a disabled device, or any device while
+the EMS is switched off, gets it as its final command. A device that answers it
+and charges on gets it again every 30 seconds, three times at most, then
+`ac_charge_start_exit_unconfirmed` is logged. A device in AC input again after
+it took that command, or still after the third, is left to whoever put it
+there: at the floor the firmware recovering an empty battery, which the EMS
+leaves alone until it is done; above the floor the state reconciler takes it
+back only where it is allowed to, and an MQTT device with the next power
+command. A device the EMS could never have charged gets no exit command: above
+the floor the same holds, and at the floor its charge is the firmware's from
+the start. Neither does a device you parked in AC input, across a restart as
+well. A device that comes back from the network charging at its floor is not a
+new start and earns no exit command: the charge is either the EMS's own, which
+it regulates or ends as before, or the firmware's, which it leaves alone.
 
 ## During the first live run
 
