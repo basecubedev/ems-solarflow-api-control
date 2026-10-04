@@ -191,12 +191,14 @@ class WriteGateTest(unittest.TestCase):
         self.assertNotIn("WR1", written_devices)
         self.assertIn("WR2", written_devices)
 
-    def test_a_device_forbidden_to_discharge_receives_no_write(self):
+    def test_a_device_forbidden_to_discharge_is_never_given_output(self):
         """The operator's standing permission is its own axis.
 
         It is not a claim on the device and does not join the intent priority
         ladder: a higher-priority claim must never be able to re-enable output
-        on a device the operator forbade.
+        on a device the operator forbade. It forbids output only -- a running
+        discharge is ended by a written zero, not left running behind a skipped
+        write, and the device may still be charged.
         """
 
         forbidden = device("WR1", ac_discharge_enabled=False)
@@ -204,15 +206,15 @@ class WriteGateTest(unittest.TestCase):
 
         controller = self.run_controller_once(
             [forbidden, allowed],
-            [state(), state()],
+            [state(output_limit=300, output=300), state()],
         )
 
-        written = [
-            write.args[0].name
+        written = {
+            write.args[0].name: write.args[1]
             for write in controller.set_output_limit.call_args_list
-        ]
-        self.assertNotIn("WR1", written)
-        self.assertIn("WR2", written)
+        }
+        self.assertEqual(written.get("WR1"), 0)
+        self.assertGreater(written.get("WR2", 0), 0)
 
     def test_runtime_disabled_device_receives_no_write(self):
         disabled = device("WR1")

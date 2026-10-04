@@ -118,7 +118,13 @@ drawing from the grid.
 `outputLimit` is the normal per-cycle control write. The calculated target can
 be filtered, ramped, clamped, deadbanded, and rate-limited before an
 `outputLimit` write is attempted. Writes are suppressed for disabled or offline
-devices and while inside the configured deadband.
+devices and while inside the configured deadband. One exception: when control
+(`system.enabled`) or a single device (runtime `enabled`) is switched off while
+the EMS is charging that device, it gets one final command that ends the charge
+— the exit to idle, `acMode=2`, `inputLimit=0`, `outputLimit=0`, on its
+transport's own gate — and then nothing more. Which device is charging is read
+from what its transport last put on the wire; an unreachable device gets the
+command when it answers again (owner decision 2026-10-04).
 
 Expected events:
 
@@ -135,6 +141,7 @@ Other relevant events:
 ```text
 control_disabled_skip_write
 device_disabled_skip_write
+ac_charge_ended_on_disable
 offline_skip_write
 deadband_skip_write
 write_output_limit_error

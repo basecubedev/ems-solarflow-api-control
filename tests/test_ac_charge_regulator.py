@@ -1170,6 +1170,200 @@ def test_switching_control_back_on_does_not_end_a_running_charge(soc):
     assert [p for p in reconciled if "acMode" in p] == []
 
 
+def following_mqtt_device(item, name="WR1"):
+    """A real MQTT control client whose broker delivers to the hardware double."""
+
+    import json
+
+    from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
+    from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
+
+    hardware = FollowingHardware(item)
+
+    class Broker:
+        def publish_message(self, message):
+            hardware.apply(json.loads(message.payload)["properties"])
+            return True
+
+        def snapshot_status(self, *args, **kwargs):
+            return None
+
+    dev = ZendureMqttDeviceClient(
+        name=name,
+        service=Broker(),
+        device_id="DEV1",
+        topic_family=FAMILY_LEGACY_JSON,
+        product_key="PK",
+        source="local_mqtt",
+        hardware_profile="solarflow_2400_ac",
+        max_power=800,
+        min_soc=15,
+        max_soc=100,
+        smart_mode=1,
+    )
+    return dev, hardware
+
+
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+@pytest.mark.parametrize("switch", ["system", "device"])
+def test_disabling_a_charging_device_ends_its_charge_once(transport, switch):
+    """Owner decision 2026-10-04: one final command, then nothing.
+
+    Disabling means the EMS writes nothing more, and a device it had put into
+    charge then went on drawing from the grid: an MQTT device indefinitely, a
+    local-API device only until the state reconciler happened to write acMode
+    back, and on `system.enabled = false` nothing was written at all. The one
+    command that ends the charge is the exit to idle; after it, nothing.
+    """
+
+    build = following_http_device if transport == "http" else following_mqtt_device
+    item = pv_less_state(soc=50)
+    dev, hardware = build(item)
+    runtime = RuntimeStateStub(devices={})
+    harness = Harness([dev], load=-900, runtime_state=runtime)
+    harness.controller.set_output_limit = hardware
+    harness.run(cycles=20, states=[item])
+    assert item.ac_mode == 1, "the regulator never charged the device"
+    before = len(hardware.writes)
+
+    if switch == "system":
+        runtime.system["enabled"] = False
+    else:
+        runtime.devices["WR1"] = {"enabled": False}
+    harness.run(cycles=6, states=[item])
+
+    assert hardware.writes[before:] == [IDLE_EXIT]
+    assert item.ac_mode == 2
+    assert item.grid_input == 0
+
+
+def test_a_disabled_device_s_charge_ends_while_the_rest_idles_at_night():
+    """The night idle ends the cycle before any write path is reached.
+
+    A disabled device no longer counts among the controllable ones. When it was
+    unreachable as it was disabled, the others enter the idle meanwhile, and the
+    final command it is still owed falls into a cycle the idle ends early.
+    """
+
+    floor = state(
+        soc=15, min_soc=15, solar=0, output=0, output_limit=35, pack_in=0,
+        pack_out=0, soc_limit=2, dc_status=0, ac_status=0, pack_state=0,
+    )
+    item = pv_less_state(soc=50)
+    charging, hardware = following_http_device(item, name="B")
+    parked = charging_device("A", ac_charge_enabled=False)
+    runtime = RuntimeStateStub(devices={})
+    harness = Harness(
+        [parked, charging], load=-900, runtime_state=runtime, min_output_limit=35
+    )
+    harness.controller.set_output_limit = (
+        lambda dev, value: hardware(dev, value) if dev.name == "B" else True
+    )
+    harness.run(cycles=20, states=[floor, item])
+    assert item.ac_mode == 1, "the regulator never charged the device"
+    before = len(hardware.writes)
+
+    runtime.devices["B"] = {"enabled": False}
+    harness.run(cycles=3, states=[floor, None], load=300)
+    assert harness.controller.night_min_soc_idle_active is True
+    assert hardware.writes[before:] == []
+
+    harness.run(cycles=2, states=[floor, item], load=300)
+
+    assert harness.controller.night_min_soc_idle_active is True
+    assert hardware.writes[before:] == [IDLE_EXIT]
+
+
+def test_disabling_a_device_that_is_not_charging_writes_nothing():
+    item = pv_less_state(soc=50)
+    dev, hardware = following_http_device(item)
+    runtime = RuntimeStateStub(devices={})
+    harness = Harness([dev], load=300, runtime_state=runtime)
+    harness.controller.set_output_limit = hardware
+    harness.run(cycles=3, states=[item])
+    before = len(hardware.writes)
+
+    runtime.system["enabled"] = False
+    harness.run(cycles=3, states=[item])
+
+    assert hardware.writes[before:] == []
+
+
+def discharge_forbidden(item, name="WR1"):
+    dev, hardware = following_http_device(item, name=name)
+    dev.ac_discharge_enabled = False
+    return dev, hardware
+
+
+def test_a_device_forbidden_to_discharge_still_charges():
+    """`ac_discharge_enabled` forbids one direction, not both.
+
+    It blocked every power write while the device still counted as chargeable:
+    the direction entered, the total wound down to the charge floor, and nothing
+    was ever written -- with `ac_charge_not_delivered` silent, because the ramp
+    had zeroed the very target it watches.
+    """
+
+    item = pv_less_state(soc=50)
+    dev, hardware = discharge_forbidden(item)
+    harness = Harness([dev], load=-900, min_output_limit=35)
+    harness.controller.set_output_limit = hardware
+    harness.run(cycles=20, states=[item])
+
+    assert harness.controller.charge_direction.charging is True
+    assert item.ac_mode == 1
+    assert all(write.get("outputLimit", 0) <= 0 for write in hardware.writes)
+
+
+def test_forbidding_discharge_ends_a_running_discharge():
+    """A positive target becomes zero, and zero is written.
+
+    Blocking the write instead left a discharge that was running when the flag
+    was set running for good.
+    """
+
+    item = pv_less_state(soc=50)
+    item.output_limit = 300
+    item.output = 300
+    dev, hardware = discharge_forbidden(item)
+    harness = Harness([dev], load=300, min_output_limit=35)
+    harness.controller.set_output_limit = hardware
+    harness.run(cycles=3, states=[item])
+
+    assert hardware.writes, "the running discharge was never ended"
+    assert all(write == {"outputLimit": 0} for write in hardware.writes)
+    assert item.output_limit == 0
+
+
+def test_a_fleet_keeps_the_charge_share_of_a_device_forbidden_to_discharge():
+    items = [pv_less_state(soc=50), pv_less_state(soc=50)]
+    forbidden, forbidden_hardware = discharge_forbidden(items[0], name="A")
+    allowed, allowed_hardware = following_http_device(items[1], name="B")
+    harness = Harness([forbidden, allowed], load=-1200)
+    harness.controller.set_output_limit = lambda dev, value: (
+        forbidden_hardware if dev.name == "A" else allowed_hardware
+    )(dev, value)
+    harness.run(cycles=20, states=items)
+
+    assert items[0].ac_mode == 1, "the forbidden device's share was lost"
+    assert items[1].ac_mode == 1
+
+
+def test_a_device_forbidden_to_discharge_is_never_parked_at_the_standby_floor():
+    """The night idle parks devices at min_output_limit -- an output."""
+
+    floor = state(
+        soc=15, min_soc=15, solar=0, output=0, output_limit=0, pack_in=0,
+        pack_out=0, soc_limit=2, dc_status=0, ac_status=0, pack_state=0,
+    )
+    dev, hardware = discharge_forbidden(floor)
+    harness = Harness([dev], load=300, min_output_limit=35)
+    harness.controller.set_output_limit = hardware
+    harness.run(cycles=5, states=[floor])
+
+    assert all(write.get("outputLimit", 0) <= 0 for write in hardware.writes)
+
+
 def test_an_mqtt_control_device_charges_through_the_same_loop():
     """A whole transport that had no loop-level coverage.
 

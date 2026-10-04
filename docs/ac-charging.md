@@ -35,6 +35,10 @@ Per device:
 }
 ```
 
+`ac_discharge_enabled: false` forbids output only. The device takes no share of
+the output and is never parked at the standby floor; a discharge that was
+running is ended with a written zero; it may still be charged.
+
 See [technical/configuration.md](technical/configuration.md) for every key.
 
 ## What has to agree before a device charges
@@ -176,6 +180,12 @@ python3 emsctl.py device WR1 ac-charge off     # one device
 or from the dashboard's Control tab in [write mode](dashboard.md#dashboard-write-mode)
 — **AC charging** as its own card for the installation, and a per-device toggle
 next to each device's enabled flag.
+
+Switching the EMS off (`system.enabled`) or a single device (its runtime
+`enabled`) is not one of these switches, but it also ends a charge: a device the
+EMS is charging gets one final command — the exit to idle — and then nothing
+more, logged as `ac_charge_ended_on_disable`. Without it a disabled device kept
+drawing from the grid with nobody watching.
 
 Both switches live in [runtime-state](technical/runtime-state.md), which the
 EMS seeds from `config.json` when it loads it. The Dashboard therefore shows
@@ -385,6 +395,7 @@ ac_charge_band_collapsed
 ac_charge_capacity_below_stop
 ac_charge_ceiling_unknown
 ac_charge_direction
+ac_charge_ended_on_disable
 ac_charge_entry_rate_limited
 ac_charge_not_delivered
 ac_charge_stopped_stale_meter

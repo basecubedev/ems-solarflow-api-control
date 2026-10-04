@@ -142,7 +142,9 @@ python3 emsctl.py device WR1 ac-charge off     # one device
 
 Either switch stops a running charge in the same cycle. Stopping a device that
 is drawing from the grid is the one action that must never wait for a threshold,
-a counter or a restart.
+a counter or a restart. Disabling the EMS (`system.enabled`) or one device does
+too: a charging device gets one final command that ends the charge, and then the
+EMS writes nothing more to it.
 
 So does losing the grid meter. A meter client that cannot reach its hardware
 keeps returning its last reading, and "still exporting" is indistinguishable

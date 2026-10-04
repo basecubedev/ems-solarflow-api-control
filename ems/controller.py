@@ -514,7 +514,7 @@ class EMSController:
         collapse the allocation the preview exists to show.
         """
 
-        commandable = [self.device_commandable(dev) for dev in self.devices]
+        commandable = [self.device_may_supply(dev) for dev in self.devices]
 
         if (
             cfg.DRY_RUN
@@ -561,12 +561,12 @@ class EMSController:
         return True if intent is None else intent.output_control_allowed
 
     def active_online_device_indexes(self):
-        """Return indexes for devices currently eligible for EMS control."""
+        """Return indexes for devices that may supply the house this cycle."""
 
         return [
             index
             for index, dev in enumerate(self.devices)
-            if self.device_commandable(dev)
+            if self.device_may_supply(dev)
         ]
 
     def state_has_positive_pv(self, state):
@@ -615,11 +615,13 @@ class EMSController:
         filtered = []
 
         for dev, capability in zip(self.devices, capabilities):
-            if self.device_output_control_allowed(dev):
+            if not self.device_output_control_allowed(dev):
+                reason = self.runtime_role_block_reason(dev.name)
+            elif not self.device_may_discharge(dev):
+                reason = "ac_discharge_disabled"
+            else:
                 filtered.append(capability)
                 continue
-
-            reason = self.runtime_role_block_reason(dev.name)
 
             filtered.append(DeviceCapabilities(
                 can_charge=capability.can_charge,
@@ -986,12 +988,12 @@ class EMSController:
         self.commanded_device_targets = {}
 
     def night_min_soc_controllable_indices(self):
-        """Return device indexes controlled by EMS in the current cycle."""
+        """Return device indexes the night idle may park at the standby floor."""
 
         return [
             index
             for index, dev in enumerate(self.devices)
-            if self.device_commandable(dev)
+            if self.device_may_supply(dev)
         ]
 
     def state_is_strict_night_min_soc_idle(self, state):
@@ -1298,6 +1300,10 @@ class EMSController:
                 effective_targets.append(max(charge_floor, target))
                 continue
 
+            if not self.device_may_discharge(dev):
+                effective_targets.append(0)
+                continue
+
             if min_output_limit > 0:
                 target = max(target, min_output_limit)
 
@@ -1548,6 +1554,41 @@ class EMSController:
             and intent.reason == UNPROVEN_CHARGE_REASON
         ):
             self.floor_charge_watched.add(dev.name)
+
+    def end_charges_on_disable(self, control_enabled):
+        """Write the one command that ends a charge on a disabled device.
+
+        Disabling control, or a single device, means the EMS writes nothing
+        more to it. A device this EMS had put into charge then went on drawing
+        from the grid with nobody watching: on MQTT until its SoC ceiling, on
+        the local API until the state reconciler happened to write acMode back,
+        and after ``system.enabled = false`` without any write at all. The
+        owner's decision of 2026-10-04 is one final command -- the exit to
+        idle -- and then nothing.
+
+        Keyed on what the transport last put on the wire, not on the
+        regulator's target, which keeps being computed while control is off;
+        an exit the device accepted clears it, so the command is not repeated.
+        An unreachable device gets it when it answers again, and one that did
+        not take it gets it once more. Runs before the night idle decides, which
+        otherwise ends the cycle before any write path is reached.
+        """
+
+        for dev in self.devices:
+            if control_enabled and self.runtime_device_bool(dev.name, "enabled", True):
+                continue
+            if getattr(dev, "charge_commanded", False) is not True:
+                continue
+            if not self.device_online.get(dev.name, True):
+                continue
+
+            log_event(
+                logging.INFO,
+                "ac_charge_ended_on_disable",
+                device=dev.name,
+                reason="control_disabled" if not control_enabled else "device_disabled",
+            )
+            self.set_output_limit(dev, 0)
 
     def device_charge_floor_w(self, dev):
         """How far negative one device's target may go right now.
@@ -1968,19 +2009,35 @@ class EMSController:
         ]
 
     def device_output_control_allowed(self, dev):
-        """Whether the EMS may command output on ``dev`` this cycle.
+        """Whether the EMS may command ``dev`` this cycle, in either direction.
 
-        Two independent noes, deliberately not one. The operator's standing
-        permission is a property of the device; whoever owns its AC mode right
-        now is a property of the cycle. Folding the permission into the intent
+        Whoever owns its AC mode right now decides that. The operator's
+        standing ``ac_discharge_enabled`` is not part of it: it forbids one
+        direction, which :meth:`device_may_discharge` answers.
+        """
+
+        return self.device_intent_allows_command(dev)
+
+    def device_may_discharge(self, dev):
+        """The operator's standing permission to supply the house.
+
+        It forbids output only. A positive target becomes zero -- and is
+        written, so a discharge that was running is ended -- the device takes
+        no share of the output and is never parked at the standby floor, and it
+        may still be charged. Blocking every write instead kept such a device
+        out of a charge it was counted in, and left a running discharge running.
+
+        A property of the device, deliberately not a claim: joining the intent
         ladder would let a higher-priority claim re-enable output on a device
         the operator forbade.
         """
 
-        if not getattr(dev, "ac_discharge_enabled", True):
-            return False
+        return bool(getattr(dev, "ac_discharge_enabled", True))
 
-        return self.device_intent_allows_command(dev)
+    def device_may_supply(self, dev):
+        """Commandable, and permitted to supply the house."""
+
+        return self.device_commandable(dev) and self.device_may_discharge(dev)
 
     def state_reconciliation_supported(self, dev, path):
         """Whether ``dev`` supports state reconciliation; skip explicitly if not.
@@ -4408,6 +4465,8 @@ class EMSController:
                     dev,
                     state
                 )
+
+        self.end_charges_on_disable(enabled)
 
         chargeable = self.resolve_charge_eligibility(states, capabilities)
         meter_fresh = self.grid_meter_reading_is_fresh()

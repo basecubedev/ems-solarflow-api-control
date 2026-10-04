@@ -808,6 +808,7 @@ Other relevant events:
 ```text
 control_disabled_skip_write
 device_disabled_skip_write
+ac_charge_ended_on_disable
 offline_skip_write
 deadband_skip_write
 write_output_limit_error

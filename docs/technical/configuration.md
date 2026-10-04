@@ -589,7 +589,7 @@ See [control-logic.md](control-logic.md) for the direction rules and
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ac_discharge_enabled` | `true` | Whether the EMS may command this device to supply the house. Today's behaviour, written down. |
+| `ac_discharge_enabled` | `true` | Whether the EMS may command this device to supply the house. `false` forbids output only: a positive target becomes `0` and is written, so a running discharge ends; the device takes no output share and is never parked at the standby floor; it may still be charged. |
 | `ac_charge_enabled` | `true` | Whether this device may be charged from surplus. Whether the *model* can is decided separately by the hardware catalogue. Also runtime-toggleable. |
 | `max_charge_power_w` | `0` | Highest charging power for this device. `0` uses the ceiling the device reports for itself, or its model's rated charge power when it reports none. |
 

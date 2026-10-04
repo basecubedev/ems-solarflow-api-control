@@ -78,7 +78,7 @@ flowchart TD
 
 | Parameter | Control Block | What It Changes | Details |
 |---|---|---|---|
-| `system.enabled` | Runtime state / effective target | Enables or disables EMS output control. When disabled, effective targets become `0` and output writes are skipped. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
+| `system.enabled` | Runtime state / effective target | Enables or disables EMS output control. When disabled, effective targets become `0` and output writes are skipped, except for one final command that ends a charge the EMS is running. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
 | `system.dry_run` | Safety gates | Blocks real Zendure writes while still calculating targets and logging intended writes. The template value is `false` after placeholders are replaced; set `true` for manual no-write validation. | [configuration.md](configuration.md), [safety.md](../user/safety.md) |
 | `system.allow_hardware_writes` | Safety gates | Allows Zendure `/properties/write` calls only when dry-run, simulation/replay, and placeholder safe-mode gates also allow them. The template value is `true` for normal live output control after real local values are configured. | [configuration.md](configuration.md), [safety.md](../user/safety.md) |
 | `system.allow_state_reconciliation_writes` | SOC / mode reconciliation | Allows SOC, mode, runtime device state, and winter reconciliation writes after hardware writes are also allowed. The template value is `true` for the normal regulation profile after local limits have been reviewed and placeholders are replaced. | [configuration.md](configuration.md), [safety.md](../user/safety.md) |
@@ -93,7 +93,7 @@ flowchart TD
 | `ac_charge_control.entry_window_cycles` | Charge direction | How many recent loops those observations are counted within. | [control-logic.md](control-logic.md) |
 | `ac_charge_control.max_charge_entries_per_hour` | Charge direction | Caps how often a device may enter charging. Reaching it is logged as a warning. | [control-logic.md](control-logic.md) |
 | `ac_charge_control.max_total_charge_power_w` | Total target calculation / limits | Lower bound of the signed total while charging. | [control-logic.md](control-logic.md) |
-| `devices[].ac_discharge_enabled` | Effective target and write gating | Whether the EMS may command this device to supply the house. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
+| `devices[].ac_discharge_enabled` | Allocation and effective target | Whether the EMS may command this device to supply the house. `false` makes a positive target `0` (written, so a running discharge ends) and leaves charging allowed. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `devices[].ac_charge_enabled` | Charge allocation | Whether this device may be charged from surplus. Runtime state can override it. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
 | `devices[].max_charge_power_w` | Charge allocation and device ramp | Per-device charging cap; `0` derives it from the output limit. | [configuration.md](configuration.md) |
 | `system.loop_interval` | Loop timing | Sets the time between EMS cycles, which also controls how often per-cycle ramps can step. Runtime state can override it. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
