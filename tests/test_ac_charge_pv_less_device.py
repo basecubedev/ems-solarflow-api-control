@@ -306,6 +306,101 @@ def test_a_device_with_no_ceiling_at_all_is_named_once_and_never_enters(
     assert all(target >= 0 for target in harness.targets)
 
 
+def refusals(caplog):
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if "event=ac_charge_refused" in record.getMessage()
+    ]
+
+
+@pytest.mark.parametrize(
+    "silent_field, reason",
+    [
+        ({"pack_num": None}, "reason=pack_count_unreported"),
+        ({"max_soc": 0}, "reason=max_soc_unreported"),
+    ],
+)
+def test_a_device_that_leaves_out_what_charging_needs_is_named_once(
+    caplog, silent_field, reason
+):
+    """Silence is not a refusal by the device, and it must not look like one.
+
+    A report without ``packNum`` -- even beside a populated ``packData`` -- or
+    without ``socSet`` leaves the device without headroom to weigh, so it is
+    never charged, and nothing said why.
+    """
+
+    silent = replace(no_pv_state(soc=50), **silent_field)
+    harness = Harness([ac_device()], load=-900)
+
+    with caplog.at_level(logging.WARNING):
+        harness.run(cycles=15, states=[silent])
+
+    said = refusals(caplog)
+    assert len(said) == 1, said
+    assert "device=AC2400" in said[0] and reason in said[0]
+    assert harness.controller.charge_direction.charging is False
+
+
+@pytest.mark.parametrize(
+    "pinned, product",
+    [(None, None), (None, "solarFlowSomethingNew"), ("solarflow_9000", None)],
+)
+def test_a_device_whose_model_cannot_be_identified_is_named_once(
+    caplog, pinned, product
+):
+    device = charging_device("AC2400", hardware_profile=pinned)
+    device.observed_product = product
+    device.resolved_hardware_profile = lambda: None
+    harness = Harness([device], load=-900)
+
+    with caplog.at_level(logging.WARNING):
+        harness.run(cycles=15, states=[no_pv_state(soc=50)])
+
+    said = refusals(caplog)
+    assert len(said) == 1, said
+    assert "reason=model_unidentified" in said[0]
+    assert f"pinned_profile={pinned}" in said[0]
+    assert f"reported_product={product}" in said[0]
+    assert harness.controller.charge_direction.charging is False
+
+
+def test_a_refusal_is_said_again_only_after_it_had_cleared(caplog):
+    harness = Harness([ac_device()], load=120)
+    silent = replace(no_pv_state(soc=50), pack_num=None)
+    reported = no_pv_state(soc=50)
+
+    with caplog.at_level(logging.WARNING):
+        harness.run(cycles=3, states=[silent])
+        harness.run(cycles=1, states=[reported])
+        harness.run(cycles=3, states=[silent])
+
+    assert len(refusals(caplog)) == 2
+
+
+@pytest.mark.parametrize(
+    "silenced",
+    [
+        {"feature": False},
+        {"device": {"ac_charge_enabled": False}},
+    ],
+)
+def test_nothing_is_said_for_a_device_the_operator_does_not_let_charge(
+    caplog, silenced
+):
+    harness = Harness(
+        [ac_device(**silenced.get("device", {}))],
+        load=-900,
+        feature=silenced.get("feature", True),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        harness.run(cycles=5, states=[replace(no_pv_state(soc=50), pack_num=None)])
+
+    assert refusals(caplog) == []
+
+
 def test_a_device_reporting_a_zero_ceiling_is_not_charged_at_its_rating():
     """Zero is the device refusing a charge, not the device saying nothing."""
 

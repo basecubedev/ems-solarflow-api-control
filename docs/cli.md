@@ -261,8 +261,12 @@ config.json nested too deeply to check is reported as
 
 `diagnose --control` also reports what AC charging is configured to do: whether
 it is enabled (runtime state winning over config, the way the loop resolves it),
-the derived entry/exit band, the installation limit, and which devices are
-permitted to charge. The *current direction* is not there — the regulator never
+the derived entry/exit band, the installation limit, which devices are
+permitted to charge, and which are refused by what config alone can tell — a
+pinned model without an AC charge path, an MQTT device whose pin names no known
+model, a telemetry-only device. What a device's own report leaves out is only
+seen by the running EMS, so the block points at `event=ac_charge_refused` for
+it. The *current direction* is not there — the regulator never
 writes its decision to runtime state, so the block points at
 `event=ac_charge_direction` instead of leaving a reader to conclude that nothing
 is happening.

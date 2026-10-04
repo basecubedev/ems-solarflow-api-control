@@ -586,11 +586,7 @@ def main():
             # Name the devices, or the line says a restart is coming without
             # saying what is still drawing while it does. Silent when nothing
             # was charging, which is the normal case.
-            charging = {
-                name: watts
-                for name, watts in ems.commanded_device_targets.items()
-                if watts < 0
-            }
+            charging = ems.charges_held_by_ems()
             if charging:
                 log_event(
                     logging.INFO,
@@ -598,7 +594,7 @@ def main():
                     signal=stopped_by["signal"],
                     reason="operator_stop_preserves_device_state",
                     devices=",".join(sorted(charging)),
-                    charging_w=sum(abs(watts) for watts in charging.values()),
+                    charging_w=sum(charging.values()),
                 )
         else:
             ems.release_charging_devices()

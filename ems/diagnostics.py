@@ -2619,7 +2619,11 @@ def diagnose_ac_charging_snapshot(config_data, runtime_data, runtime_devices):
     if "enabled" in section:
         enabled = bool(section.get("enabled"))
     else:
-        enabled = bool(configured.get("enabled", False))
+        enabled = bool(
+            configured.get(
+                "enabled", config_mod.AC_CHARGE_CONTROL_DEFAULTS["enabled"]
+            )
+        )
 
     start = diagnose_float(section.get("charge_start_w", configured.get("charge_start_w")))
     hysteresis = diagnose_float(
@@ -2630,6 +2634,7 @@ def diagnose_ac_charging_snapshot(config_data, runtime_data, runtime_devices):
         stop = max(0.0, start - hysteresis)
 
     permitted = []
+    refused = []
     for item in config_data.get("devices") or []:
         if not isinstance(item, dict):
             continue
@@ -2642,7 +2647,12 @@ def diagnose_ac_charging_snapshot(config_data, runtime_data, runtime_devices):
             allowed = bool(runtime_device.get("ac_charge_enabled"))
         else:
             allowed = bool(item.get("ac_charge_enabled", True))
-        if allowed:
+        if not allowed:
+            continue
+        refusal = diagnose_ac_charge_model_refusal(item)
+        if refusal:
+            refused.append({"device": name, "reason": refusal})
+        else:
             permitted.append(name)
 
     return {
@@ -2656,7 +2666,38 @@ def diagnose_ac_charging_snapshot(config_data, runtime_data, runtime_devices):
             )
         ),
         "ac_charge_permitted_devices": permitted,
+        "ac_charge_refused_devices": refused,
     }
+
+
+def diagnose_ac_charge_model_refusal(item):
+    """Why a device's configured model refuses every charge, when config can tell.
+
+    Config can tell for a pinned model and for an MQTT entry, whose pin is the
+    only model it has. A local-API device without a pin is identified by its
+    own report, which only the running EMS sees; what that report leaves out
+    is logged as ``ac_charge_refused``.
+    """
+
+    from ems.mqtt_control.zendure_profiles import (
+        OPERATION_CHARGE,
+        hardware_profile_by_name,
+    )
+
+    mqtt = zendure_mqtt_entries.is_zendure_mqtt_device_config(item)
+    if mqtt and not zendure_mqtt_entries.is_control_zendure_mqtt_device_config(item):
+        return "telemetry_only"
+    pinned = (
+        zendure_mqtt_entries.zendure_mqtt_hardware_profile(item)
+        if mqtt
+        else item.get("hardware_profile")
+    )
+    profile = hardware_profile_by_name(pinned) if pinned else None
+    if profile is None:
+        return "model_unidentified" if mqtt else None
+    if not profile.supports_operation(OPERATION_CHARGE):
+        return "model_cannot_charge"
+    return None
 
 
 def diagnose_control_samples(runtime_path, runtime_data, sample_seconds):
@@ -3029,6 +3070,10 @@ def diagnose_ac_charging_text(snapshot):
         return ["AC Charging:          disabled", ""]
 
     devices = snapshot.get("ac_charge_permitted_devices") or []
+    refused = ", ".join(
+        f"{item.get('device')} ({item.get('reason')})"
+        for item in snapshot.get("ac_charge_refused_devices") or []
+    )
     band = "unknown"
     start = snapshot.get("ac_charge_start_w")
     stop = snapshot.get("ac_charge_stop_w")
@@ -3043,6 +3088,8 @@ def diagnose_ac_charging_text(snapshot):
         f"  Band:               {band}",
         f"  Installation limit: {diagnose_format_threshold_watts(snapshot.get('ac_charge_system_limit_w'))}",
         f"  Permitted devices:  {', '.join(devices) if devices else 'none'}",
+        f"  Refused devices:    {refused or 'none'}",
+        "  Refused at runtime: see event=ac_charge_refused for what a device does not report",
         "  Direction now:      see event=ac_charge_direction; not in runtime state",
         "",
     ]

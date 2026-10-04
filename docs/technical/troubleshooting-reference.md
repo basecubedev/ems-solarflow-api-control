@@ -419,6 +419,7 @@ A surplus is exported but no device charges. The full walkthrough is in
 |---|---|
 | `ac_charge_direction` (debug level) never shows `charging=true`; `reason` stays `direction_held` or `entry_confirming` | the export does not stay above `charge_start_w` for `entry_confirm_cycles` of `entry_window_cycles` |
 | `ac_charge_ceiling_unknown` | the device has no usable charge limit: it reports 0, or reports none and its model carries no rating |
+| `ac_charge_refused` | the device leaves out what a charge needs: no `packNum`, no `socSet`, or no model the EMS can identify from the pin or the reported product |
 | `ac_charge_capacity_below_stop` | the chargeable devices, or `max_total_charge_power_w`, allow no more than the band's lower edge, so a charge would leave on the next cycle |
 | `ac_charge_entry_rate_limited` | `max_charge_entries_per_hour` is used up; the thresholds do not fit the installation |
 | `ac_charge_stopped_stale_meter` | a running charge stopped because the grid meter reading is older than `telemetry_max_age_seconds`; a stale meter also prevents a start, silently |

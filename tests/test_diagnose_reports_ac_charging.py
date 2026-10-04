@@ -91,6 +91,56 @@ def test_a_device_without_the_key_is_permitted_like_the_loop_permits_it():
     assert diagnose_ac_charging_snapshot(minimal, {}, {})["ac_charge_permitted_devices"] == ["WR1"]
 
 
+def test_a_config_silent_on_the_feature_reports_it_as_the_loop_applies_it():
+    """The EMS charges by default; a report that defaults to "disabled" is false."""
+
+    silent = {"devices": [{"name": "WR1"}]}
+
+    assert diagnose_ac_charging_snapshot(silent, {}, {})["ac_charging_enabled"] is True
+
+
+def mqtt_control(name, profile=None):
+    item = {
+        "type": "zendure_mqtt",
+        "name": name,
+        "capabilities": {"write_output_limit": True},
+        "mqtt": {"device_id": name, "product_key": "PK1"},
+    }
+    if profile is not None:
+        item["hardware_profile"] = profile
+    return item
+
+
+def test_a_device_whose_configured_model_refuses_is_not_listed_as_permitted():
+    """The operator switch is on by default, so "permitted" alone named every
+    device -- one that can never charge among them."""
+
+    configured = {
+        "ac_charge_control": {"enabled": True},
+        "devices": [
+            {"name": "LOCAL", "ip": "10.0.0.11"},
+            {"name": "OLD", "ip": "10.0.0.12", "hardware_profile": "solarflow_800"},
+            mqtt_control("PINNED", "solarflow_2400_ac"),
+            mqtt_control("TYPO", "solarflow_9000"),
+            {"type": "zendure_mqtt", "name": "WATCHED", "mqtt": {"device_id": "W"}},
+        ],
+    }
+
+    snapshot = diagnose_ac_charging_snapshot(configured, {}, {})
+
+    assert snapshot["ac_charge_permitted_devices"] == ["LOCAL", "PINNED"]
+    assert snapshot["ac_charge_refused_devices"] == [
+        {"device": "OLD", "reason": "model_cannot_charge"},
+        {"device": "TYPO", "reason": "model_unidentified"},
+        {"device": "WATCHED", "reason": "telemetry_only"},
+    ]
+
+    text = "\n".join(diagnose_ac_charging_text(snapshot))
+    assert "Refused devices:    OLD (model_cannot_charge)" in text
+    assert "TYPO (model_unidentified)" in text
+    assert "ac_charge_refused" in text
+
+
 def test_a_threshold_is_not_labelled_as_an_import():
     """`diagnose_format_watts` labels a sign because a meter reading has a
     direction. A threshold does not -- calling a 150 W surplus threshold

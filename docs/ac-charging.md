@@ -362,7 +362,7 @@ carried alongside the output and surfaces in four places:
 | Dashboard flow / snapshot total | `inverter_charge_w` |
 | Analytics | the **AC Charge** series and overlay |
 | Home Assistant | `sensor.ems_solarflow_<device>_ac_charge` |
-| `emsctl diagnose --control` | the configured band, limit and permitted devices |
+| `emsctl diagnose --control` | the configured band, limit, permitted devices and those the configured model refuses |
 | InfluxDB | `zendure_device.grid_input` |
 
 This is the measured value, not the commanded charge target. The two differ by
@@ -398,6 +398,7 @@ ac_charge_direction
 ac_charge_ended_on_disable
 ac_charge_entry_rate_limited
 ac_charge_not_delivered
+ac_charge_refused
 ac_charge_stopped_stale_meter
 ac_charge_kept_across_stop
 ac_charge_released_on_shutdown
@@ -417,8 +418,10 @@ once at startup.
 
 `ac_charge_kept_across_stop` is an `info` and the counterpart of
 `ac_charge_released_on_shutdown`: a stop you asked for leaves a charging device
-as it is, because a restart is coming. It names the signal that ended the run,
-so a device still drawing after `docker compose down` is explained rather than
+as it is, because a restart is coming. It names the signal that ended the run
+and every device the EMS last put into charge — by the same record the release
+uses, so a charge whose regulator target was reset or zeroed is named too — so
+a device still drawing after `docker compose down` is explained rather than
 surprising. The release event is what you see when the EMS stopped by itself.
 
 `ac_charge_capacity_below_stop` is a `warning`, said once until the capacity is
@@ -440,6 +443,22 @@ may charge by every other rule, but has no usable ceiling. With
 the EMS respects even over `max_charge_power_w`; check the charge limit in the
 Zendure app. While another device charges, the Control view names such a device
 with `ac_charge_no_ceiling`.
+
+`ac_charge_refused` is a `warning`, said once per device and reason, and again
+only if the reason clears and returns. The device may charge by the operator's
+switches and answers, but leaves out something a charge cannot do without, so
+it is never charged: `reason=pack_count_unreported` — the report carries no
+`packNum`, even beside a populated `packData`; `reason=max_soc_unreported` — no
+`socSet`; `reason=model_unidentified` — neither a pinned `hardware_profile` nor
+the reported `product` names a known model, and the line carries both as
+`pinned_profile` and `reported_product`. None of these is the device refusing:
+a confirmed zero packs, a reported zero charge limit and a full pack are, and
+say nothing. A pinned model wins over a reported product that names another
+one, so that is not a refusal either. `diagnose --control` lists what config
+alone can tell — a pinned model without an AC charge path
+(`model_cannot_charge`), an MQTT device whose pin names no known model
+(`model_unidentified`), a telemetry-only device (`telemetry_only`) — under
+**Refused devices**.
 
 `ac_charge_stopped_stale_meter` is a `warning`: the load reading the charge
 rests on stopped being a measurement. It means the grid meter is unreachable,

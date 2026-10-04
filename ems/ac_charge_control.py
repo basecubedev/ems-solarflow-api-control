@@ -38,9 +38,14 @@ far.
 
 from dataclasses import dataclass, replace
 
-from ems.config import safe_int
+from ems.config import safe_float, safe_int
+from ems.models import BATTERY_UNKNOWN
 from ems.power_direction import AC_STATUS_CHARGING
-from ems.target_control import get_device_battery_kwh, weighted_limited_allocation
+from ems.target_control import (
+    battery_presence,
+    get_device_battery_kwh,
+    weighted_limited_allocation,
+)
 
 # Why a direction decision came out the way it did. Stable, machine-readable.
 REASON_NOT_POSSIBLE = "charging_not_possible"
@@ -51,6 +56,10 @@ REASON_LEFT_BELOW_STOP = "surplus_below_stop"
 REASON_ENTRY_RATE_LIMITED = "entry_rate_limited"
 
 SECONDS_PER_HOUR = 3600.0
+
+REFUSAL_PACK_COUNT_UNREPORTED = "pack_count_unreported"
+REFUSAL_MAX_SOC_UNREPORTED = "max_soc_unreported"
+REFUSAL_MODEL_UNIDENTIFIED = "model_unidentified"
 
 
 @dataclass(frozen=True)
@@ -321,6 +330,27 @@ def charge_headroom_weight(state, device_config, capability):
     return max(0, get_device_battery_kwh(device_config) * headroom_percent / 100)
 
 
+def unreported_charge_inputs(state, profile):
+    """What a device leaves unsaid that a charge cannot do without.
+
+    Each one refuses every charge for as long as it lasts, and none of them is
+    the device saying no: a report without ``packNum`` has not reported an
+    absent battery, one without ``socSet`` has not reported a full one, and a
+    product nobody can identify is not a model without an AC charge path. A
+    refusal the device does make -- a confirmed zero packs, a reported zero
+    charge limit, a full pack -- is not listed here.
+    """
+
+    missing = []
+    if battery_presence(state) == BATTERY_UNKNOWN:
+        missing.append(REFUSAL_PACK_COUNT_UNREPORTED)
+    if safe_float(getattr(state, "max_soc", 0), 0.0) <= 0:
+        missing.append(REFUSAL_MAX_SOC_UNREPORTED)
+    if profile is None:
+        missing.append(REFUSAL_MODEL_UNIDENTIFIED)
+    return tuple(missing)
+
+
 # How much more a pack may deliver than the device feeds out before the
 # difference is someone else's. The standby floor runs the inverter at a few
 # dozen watts, where its own consumption is of the same order as the output. A
@@ -423,6 +453,10 @@ __all__ = [
     "REASON_ENTERED",
     "REASON_LEFT_BELOW_STOP",
     "REASON_ENTRY_RATE_LIMITED",
+    "REFUSAL_PACK_COUNT_UNREPORTED",
+    "REFUSAL_MAX_SOC_UNREPORTED",
+    "REFUSAL_MODEL_UNIDENTIFIED",
+    "unreported_charge_inputs",
     "ChargeDirectionSettings",
     "ChargeDirectionState",
     "ChargeDirectionDecision",

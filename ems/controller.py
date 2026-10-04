@@ -11,6 +11,7 @@ from ems import config as cfg
 from ems.ac_charge_control import (
     CHARGE_SILENCE_CYCLES,
     OWN_DRAIN_MARGIN_W,
+    REFUSAL_MODEL_UNIDENTIFIED,
     ChargeDirectionSettings,
     ChargeDirectionState,
     allocate_charge_targets,
@@ -18,6 +19,7 @@ from ems.ac_charge_control import (
     count_silent_charge_cycles,
     decide_charge_direction,
     resolve_max_charge_power_w,
+    unreported_charge_inputs,
 )
 from ems.clients import (
     fetch_all_devices,
@@ -158,6 +160,7 @@ class EMSController:
         self.silent_charge_cycles = {}
         self.charge_entry_rate_limited = False
         self.charge_ceiling_unknown = set()
+        self.charge_refusals_said = {}
         self.charge_blocked_by_ceiling = set()
         self.charge_capacity_below_stop = False
         for device in self.devices:
@@ -1507,6 +1510,28 @@ class EMSController:
         self.charge_capacity_w = 0
         self.device_charge_limits = {}
 
+    def charges_held_by_ems(self):
+        """The devices this EMS is charging, with the watts each is drawing.
+
+        Named by :meth:`charge_commanded_by_ems`, the record the shutdown
+        release uses too. The draw is the commanded charge where the regulator
+        still holds one, else what the device last reported drawing.
+        """
+
+        held = {}
+        for dev in self.devices:
+            if not self.charge_commanded_by_ems(dev):
+                continue
+            target = self.commanded_device_targets.get(dev.name, 0)
+            if target < 0:
+                held[dev.name] = abs(target)
+                continue
+            last = self.last_states.get(dev.name)
+            held[dev.name] = cfg.safe_int(
+                getattr(last, "grid_input", 0), 0, minimum=0
+            )
+        return held
+
     def charge_commanded_by_ems(self, dev):
         """Whether this EMS is charging ``dev``, by its own record.
 
@@ -1727,6 +1752,7 @@ class EMSController:
         non-chargeable, for the same reason.
         """
 
+        self.name_charge_refusals(states)
         allowed = self.chargeable_device_flags(states, capabilities)
         chargeable = []
         limits = {}
@@ -1762,6 +1788,48 @@ class EMSController:
         if any(chargeable) and not self.charge_capacity_outlasts_the_exit():
             return [False] * len(chargeable)
         return chargeable
+
+    def name_charge_refusals(self, states):
+        """Say once why a device the operator lets charge never can.
+
+        Only for what the device leaves unsaid -- see
+        :func:`unreported_charge_inputs` -- and only while the operator's
+        switches let it charge and it answers, so a feature that is off or a
+        device that is unreachable says nothing. Said once per device and
+        reason; a reason that clears is said again if it returns.
+        """
+
+        if not cfg.ac_charge_control_enabled(self.runtime_state):
+            return
+
+        for dev, state in zip(self.devices, states):
+            if not self.device_active(dev) or not self.runtime_device_bool(
+                dev.name, "ac_charge_enabled", getattr(dev, "ac_charge_enabled", True)
+            ):
+                continue
+
+            refused = unreported_charge_inputs(state, self.device_charge_profile(dev))
+            said = self.charge_refusals_said.get(dev.name, set()) & set(refused)
+            for reason in refused:
+                if reason in said:
+                    continue
+                said.add(reason)
+                model = (
+                    {
+                        "pinned_profile": getattr(dev, "hardware_profile", None),
+                        "reported_product": getattr(dev, "observed_product", None),
+                    }
+                    if reason == REFUSAL_MODEL_UNIDENTIFIED
+                    else {}
+                )
+                log_event(
+                    logging.WARNING,
+                    "ac_charge_refused",
+                    device=dev.name,
+                    reason=reason,
+                    **model,
+                )
+            self.charge_refusals_said[dev.name] = said
 
     def charge_capacity_outlasts_the_exit(self):
         """Whether the chargeable devices can hold a charge past the exit.

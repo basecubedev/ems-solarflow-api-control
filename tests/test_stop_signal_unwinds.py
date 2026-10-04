@@ -147,3 +147,37 @@ def test_the_kept_across_stop_line_names_what_is_still_drawing():
     assert "charging_w=" in block
     # Silent when nothing was charging: the normal stop must not gain a line.
     assert "if charging:" in block
+    assert "ems.charges_held_by_ems()" in block
+    assert "commanded_device_targets" not in block
+
+
+def test_a_charge_kept_across_a_stop_is_named_by_the_ems_s_own_record():
+    """The regulator's target is not the only record of a running charge.
+
+    Switching control back on resets the targets, and an unreachable device is
+    given zero, while the transport still knows it last put a charge on the
+    wire. Naming devices by the target alone left such a charge out of the line
+    that says what is still drawing after the stop.
+    """
+
+    from types import SimpleNamespace
+
+    from ems.controller import EMSController
+    from tests.test_write_gates import ShellyStub, device, state
+
+    reset, unreachable, idle = device("RESET"), device("GONE"), device("IDLE")
+    reset.charge_commanded = True
+    unreachable.charge_commanded = True
+    idle.charge_commanded = False
+    ems = EMSController(
+        devices=[reset, unreachable, idle], shelly=ShellyStub(0), sleep_enabled=False
+    )
+    ems.commanded_device_targets = {"RESET": 0, "GONE": 0, "IDLE": 0}
+    drawing = state(solar=0)
+    drawing.grid_input = 640
+    ems.last_states = {"RESET": drawing, "GONE": SimpleNamespace(), "IDLE": drawing}
+
+    assert ems.charges_held_by_ems() == {"RESET": 640, "GONE": 0}
+
+    ems.commanded_device_targets["IDLE"] = -300
+    assert ems.charges_held_by_ems()["IDLE"] == 300
