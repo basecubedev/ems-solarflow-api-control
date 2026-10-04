@@ -1277,7 +1277,11 @@ def start_charging(item):
 
 
 def following_http_device(
-    item, name="WR1", hardware_profile="solarflow_2400_ac", **hardware_options
+    item,
+    name="WR1",
+    hardware_profile="solarflow_2400_ac",
+    double=FollowingHardware,
+    **hardware_options,
 ):
     """A real local-API client whose device is the hardware double.
 
@@ -1287,7 +1291,7 @@ def following_http_device(
 
     from ems.clients import ZendureClient
 
-    hardware = FollowingHardware(item, **hardware_options)
+    hardware = double(item, **hardware_options)
     dev = ZendureClient(
         name, "192.0.2.10", f"{name}-SN", hardware, 15, 100, 1, None, 800,
         hardware_profile=hardware_profile,
@@ -2159,13 +2163,15 @@ def test_switching_control_back_on_does_not_end_a_running_charge(soc):
     assert [p for p in reconciled if "acMode" in p] == []
 
 
-def following_mqtt_device(item, name="WR1", **hardware_options):
+def following_mqtt_device(
+    item, name="WR1", double=FollowingHardware, **hardware_options
+):
     """A real MQTT control client whose broker delivers to the hardware double."""
 
     from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
     from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
 
-    hardware = FollowingHardware(item, **hardware_options)
+    hardware = double(item, **hardware_options)
 
     dev = ZendureMqttDeviceClient(
         name=name,
@@ -2538,6 +2544,191 @@ def test_a_device_settling_out_of_a_charge_it_left_is_not_written_again(transpor
     harness.run(cycles=3, states=[item])
     assert hardware.writes[before:] == [IDLE_EXIT]
     assert item.ac_status == 1 and item.grid_input == 0
+
+
+class MeteredHardware(FollowingHardware):
+    """A device that also feeds out what it is told, behind the meter that sees it.
+
+    The meter reads ``house - surplus - fed out + AC input``, the meter of the
+    live test on an 800 Pro 2 on 2026-10-04. Reading it is the telemetry
+    period: the device moves on by one poll there and nowhere else, so the
+    meter and the device's report describe the same moment. In the output
+    direction the device feeds out its ``outputLimit``; settling out of a
+    charge (``switch_polls``) it still draws and feeds out nothing.
+    ``hides_discharge_while_charging`` reports no DC activity while it
+    charges, so nothing shows it can discharge until it does.
+    """
+
+    def __init__(
+        self,
+        item,
+        *,
+        house_w,
+        surplus_w=0,
+        hides_discharge_while_charging=False,
+        **options,
+    ):
+        super().__init__(item, **options)
+        self.house_w = house_w
+        self.surplus_w = surplus_w
+        self.hides_discharge_while_charging = hides_discharge_while_charging
+        self.readings = []
+        self._polled = False
+
+    def poll(self):
+        if self._polled:
+            return
+        self._polled = True
+        super().poll()
+
+    def get_power(self):
+        self._polled = False
+        self.poll()
+        item = self.state
+        reading = self.house_w - self.surplus_w - item.output + item.grid_input
+        self.readings.append(reading)
+        return reading
+
+    def _settle(self):
+        super()._settle()
+        item = self.state
+        item.output = item.output_limit if item.ac_mode == 2 else 0
+        if self.hides_discharge_while_charging:
+            item.dc_status = 0 if item.grid_input else 1
+
+
+HOUSE_W = 100
+HOUSE_TOLERANCE_W = 20
+EXIT_LAG = {
+    "http": {"switch_polls": 1},
+    "mqtt": {"switch_polls": 1, "apply_after_polls": 1},
+}
+
+
+def metered_loop(item, transport, **hardware_options):
+    """The real loop over a device whose meter includes what it draws and feeds out.
+
+    Returns the harness, the double, and every target the loop commanded.
+    """
+
+    build = following_http_device if transport == "http" else following_mqtt_device
+    dev, hardware = build(
+        item,
+        double=MeteredHardware,
+        house_w=HOUSE_W,
+        **EXIT_LAG[transport],
+        **hardware_options,
+    )
+    harness = Harness([dev], load=0, seconds_per_cycle=5)
+    harness.controller.shelly = hardware
+    targets = []
+
+    def command(dev, value, **kwargs):
+        targets.append(int(value))
+        return hardware(dev, value, **kwargs)
+
+    harness.controller.set_output_limit = command
+    return harness, hardware, targets
+
+
+@pytest.mark.parametrize(
+    ("transport", "charge_w"),
+    [("http", 300), ("mqtt", 300), ("http", 1000), ("mqtt", 800)],
+    ids=["live_300w-http", "live_300w-mqtt", "large_1000w-http", "large_800w-mqtt"],
+)
+def test_the_first_discharge_after_a_charge_is_what_the_house_draws(
+    transport, charge_w
+):
+    """Live test 2026-10-04: leaving a charge exported what the charge had drawn.
+
+    With a 100 W house and the surplus gone, the EMS left a 243 W charge with
+    ``outputLimit`` 82 and wrote 284, 244, 99 after it: about 180 W of export
+    for ten seconds. The grid import the leaving charge causes is not the
+    house's. It vanishes when the device switches, but the meter shows it until
+    then, and the filter remembered it for cycles after. Here the device draws
+    for a poll or two after the exit and the meter includes it. A large charge
+    also took the device ramp: measured from the charge it left, the first
+    discharge was held at zero and the integrator wound up the difference.
+    """
+
+    item = pv_less_state(soc=50)
+    harness, hardware, targets = metered_loop(
+        item, transport, surplus_w=HOUSE_W + charge_w + 150
+    )
+    harness.feature["max_total_charge_power_w"] = charge_w
+    harness.run(cycles=30, states=[item])
+    assert item.ac_mode == 1 and item.grid_input == charge_w, "no steady charge"
+
+    hardware.surplus_w = 0
+    charged = len(targets)
+    harness.run(cycles=10, states=[item])
+    after = targets[charged:]
+    first_discharge = next(i for i, target in enumerate(after) if target >= 0)
+
+    assert harness.controller.charge_direction.charging is False
+    assert item.ac_mode == 2 and item.grid_input == 0
+    assert all(
+        abs(target - HOUSE_W) <= HOUSE_TOLERANCE_W
+        for target in after[first_discharge:]
+    ), after
+    assert min(hardware.readings[-10:]) >= -HOUSE_TOLERANCE_W, hardware.readings[-10:]
+
+
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+def test_a_charge_found_after_a_restart_is_left_for_what_the_house_draws(transport):
+    """Live test 2026-10-04: the restart exit sized the house by the charge's import.
+
+    Restarted over a running 300 W charge with a 100 W house, the EMS sent the
+    exit with ``outputLimit`` 400 -- the meter's 400 W, of which 300 W was the
+    charge -- then 200: about 300 W of export once the device switched.
+    """
+
+    item = pv_less_state(soc=50)
+    item.ac_mode = 1
+    item.ac_status = 2
+    item.input_limit_w = 300
+    item.grid_input = 300
+    harness, hardware, targets = metered_loop(item, transport)
+
+    harness.run(cycles=8, states=[item])
+
+    assert item.ac_mode == 2 and item.grid_input == 0
+    assert targets, "the restart exit was never sent"
+    assert all(abs(target - HOUSE_W) <= HOUSE_TOLERANCE_W for target in targets), targets
+    assert min(hardware.readings) >= -HOUSE_TOLERANCE_W, hardware.readings
+
+
+@pytest.mark.parametrize("transport", ["http", "mqtt"])
+def test_a_charge_left_with_no_sign_of_discharge_steps_up_to_the_house_once(
+    transport,
+):
+    """The step the regulator owes after an exit held at the standby floor.
+
+    A charging device that shows nothing it could discharge with keeps the
+    total at the standby floor while it leaves, as the integrator holds it.
+    Once it is out, the regulator steps up to the house in one move; the
+    filter remembered the reading before that step and integrated it again --
+    in the closed-loop probe 300 W, then 452 W into a 300 W house.
+    """
+
+    item = pv_less_state(soc=50)
+    item.ac_mode = 1
+    item.ac_status = 2
+    item.input_limit_w = 300
+    item.grid_input = 300
+    item.dc_status = 0
+    harness, hardware, targets = metered_loop(
+        item, transport, hides_discharge_while_charging=True
+    )
+
+    harness.run(cycles=8, states=[item])
+
+    assert item.ac_mode == 2 and item.grid_input == 0
+    stepped = next(i for i, target in enumerate(targets) if target > 0)
+    assert all(
+        abs(target - HOUSE_W) <= HOUSE_TOLERANCE_W for target in targets[stepped:]
+    ), targets
+    assert min(hardware.readings) >= -HOUSE_TOLERANCE_W, hardware.readings
 
 
 def maintenance_claim_without_a_charge(dev):

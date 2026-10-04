@@ -156,6 +156,15 @@ the moment it switches to charging, so they are not counted.
 Charging stops **immediately** when the house needs the power back. The exit is
 never delayed by a threshold, a confirmation count or the rate limit.
 
+The first discharge after a charge is what the house draws. Until the device
+has switched — on an 800 Pro 2 about three seconds for the direction and five
+for the discharge — the meter still shows the AC input it draws, and that
+import is not the house's. So while a device leaves the EMS's charge, or takes
+the one exit after a start, its AC input is left out and the discharge is sized
+from the house, then regulated from there. Before, a 243 W charge left into a
+100 W house was followed by about 180 W of export for ten seconds. See
+[technical/control-logic.md](technical/control-logic.md#leaving-a-charge).
+
 The lower edge of the band is derived, never configured:
 
 ```text

@@ -42,6 +42,7 @@ from ems.charge_record import (
 from ems.power_direction import (
     AC_MODE_INPUT,
     AC_MODE_OUTPUT,
+    derive_house_load_w,
     found_in_ac_input,
     settling_out_of_charge,
 )
@@ -166,6 +167,7 @@ class EMSController:
         self.last_control_explanation = None
         self.runtime_intents = {}
         self.ac_input_watched = set()
+        self.charges_being_left = set()
         self.charge_direction = ChargeDirectionState()
         # What the devices that may charge could actually take, from the cycle
         # that last decided the direction, and each device's resolved ceiling.
@@ -855,6 +857,15 @@ class EMSController:
         return ramped
 
     def apply_device_ramp(self, targets, raw_load):
+        """Limit how far each device's target moves in one cycle.
+
+        Out of the charge direction a device's discharge ramps from zero, not
+        from the charge it left: the exit itself is immediate (see
+        :meth:`device_charge_floor_w`), and counting the charge against the
+        ramp held the first discharge after a 1000 W charge at zero while the
+        total said what the house draws, which the integrator then wound up.
+        """
+
         if not self.output_control_bool("device_ramp_enabled", True):
             adjusted_targets = []
             for dev, target in zip(self.devices, targets):
@@ -904,6 +915,9 @@ class EMSController:
                 self.commanded_device_targets[dev.name] = target
                 ramped_targets.append(target)
                 continue
+
+            if previous < 0 and not self.charge_direction.charging:
+                previous = 0
 
             delta = target - previous
             limit = up_limit if delta > 0 else down_limit
@@ -2239,6 +2253,92 @@ class EMSController:
         )
         self.charge_direction = decision.state
         return decision
+
+    def devices_leaving_a_charge(self, states):
+        """The online devices on their way out of a charge the EMS ends, and who just left.
+
+        A device is leaving from the cycle the EMS ends its own charge -- on
+        its record until the device reports that it left -- or owes it the one
+        exit to an AC input found after a start, until the current of that
+        charge has run down: a device that reports the exit taken still draws
+        for about two seconds (:func:`ems.power_direction.settling_out_of_charge`).
+        Returns their states and whether a device stopped leaving this cycle.
+        """
+
+        leaving = []
+        left = False
+        for dev, state in zip(self.devices, states):
+            if not self.device_online.get(dev.name, True):
+                continue
+            if (
+                self.charge_commanded_by_ems(dev)
+                or self.unproven_charge_exit(dev) is not None
+            ):
+                self.charges_being_left.add(dev.name)
+            elif dev.name in self.charges_being_left and not (
+                settling_out_of_charge(state)
+                and cfg.safe_int(getattr(state, "grid_input", 0), 0) > 0
+            ):
+                self.charges_being_left.discard(dev.name)
+                left = True
+            if dev.name in self.charges_being_left:
+                leaving.append(state)
+        return leaving, left
+
+    def discharge_total_leaving_a_charge(
+        self,
+        load,
+        states,
+        total,
+        max_power,
+        has_export_capacity=True,
+        standby_total_w=0,
+    ):
+        """Size the discharge total by what the house draws while a charge is left.
+
+        The integrator adds the meter to the total it commanded, and a device
+        leaving a charge breaks both halves: the meter carries its AC input
+        until the current stops, and it feeds out none of the discharge
+        commanded to it before then. The filter kept that import for cycles
+        after: on an 800 Pro 2 (2026-10-04) a 243 W charge left into a 100 W
+        house was followed by 284 W and 244 W, and a restart over a 300 W
+        charge sent its exit with 400 W. So while a device is leaving a
+        charge, and on the cycle the last one is first seen out of it, the
+        total is what the devices feed out plus the meter, less the AC input
+        of the devices leaving -- the mirror of the entry, which adds back
+        the output that stops when the devices switch -- and the filter starts
+        again from there. Without export capacity it is held to the standby
+        total, as the integrator holds it. A held meter reading sizes nothing.
+        """
+
+        if self.grid_meter_holding:
+            return total
+        leaving, left = self.devices_leaving_a_charge(states)
+        if not leaving and not left:
+            return total
+        draw_w = sum(
+            cfg.safe_int(getattr(state, "grid_input", 0), 0, minimum=0)
+            for state in leaving
+        )
+        house_w = derive_house_load_w(
+            sum(state.output for state in states), load, draw_w
+        )
+        sized = house_w if has_export_capacity else min(house_w, standby_total_w)
+        self.commanded_total_w = min(max_power, sized)
+        self.load_history.clear()
+        self.filtered_load_w = None
+        log_event(
+            logging.DEBUG,
+            "output_control_sized_by_house_load",
+            reason="leaving_ac_charge" if leaving else "left_ac_charge",
+            leaving_devices=len(leaving),
+            leaving_ac_input_w=draw_w,
+            raw_load_w=round(load, 1),
+            house_load_w=round(house_w, 1),
+            commanded_total_w=round(self.commanded_total_w, 1),
+            integrated_total_w=round(total, 1),
+        )
+        return self.commanded_total_w
 
     def observe_charge_delivery(self, states):
         """Report a commanded charge that never produced any AC input.
@@ -5001,6 +5101,16 @@ class EMSController:
             chargeable=chargeable,
             releasable_output_w=releasable_output_w,
         )
+
+        if not charge_decision.charging:
+            stabilized_total = self.discharge_total_leaving_a_charge(
+                load,
+                states,
+                stabilized_total,
+                max_power,
+                has_export_capacity=has_export_capacity,
+                standby_total_w=standby_total_w,
+            )
 
         # The discharge allocator never sees a negative request: charging is a
         # different weighting of the same allocation primitive, not a sign the

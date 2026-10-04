@@ -56,6 +56,10 @@ Then it applies:
 
 This makes short loop intervals usable without large alternating target swings.
 
+The one exception is a device leaving an AC charge: for those cycles the total
+is sized from what the house draws instead of integrated, see
+[Leaving a charge](#leaving-a-charge).
+
 The sign-change fast response only adjusts the filtered load value inside the
 median/EMA stage. It does not bypass total ramping, per-device ramping, write
 deadbands, write gates, or state reconciliation safeguards.
@@ -280,6 +284,43 @@ meant to be immediate wait for the ramp.
 Exit is immediate and unconditional. It is never gated by a threshold, a
 confirmation counter or the rate limit, because failing closed on the way *back*
 would leave hardware drawing from the grid.
+
+### Leaving a charge
+
+The first discharge after a charge is what the house draws. Until a device has
+switched, the meter still carries the AC input it draws, and the device feeds
+out none of the discharge commanded to it; both stop the moment it switches.
+Integrating that reading counted the charge as house load, and the filter kept
+it for cycles after. Measured on an 800 Pro 2 on 2026-10-04 with a 100 W house:
+a 243 W charge was left with 82 W and followed by 284 W and 244 W, about 180 W
+exported for ten seconds, and a restart over a 300 W charge sent its exit with
+400 W.
+
+So while the system is out of the charge direction and a device is leaving a
+charge, the discharge total is not integrated but sized:
+
+```text
+commanded_total_w = device output + grid - AC input of the devices leaving
+```
+
+held to `max_total_power`, and to the standby total while no device has export
+capacity, as the integrator holds it. A device is leaving from the cycle the
+EMS ends its own charge — the regulator's exit, the exit on disable or to a
+claim, all of which keep the EMS's charge on record until the device reports
+that it left — or owes it the one exit to an AC input found after a start, and
+until the current of that charge has run down: a device that reports the exit
+taken (`acMode = 2`, no `inputLimit`) still draws for about two seconds. The
+cycle the last of them is first seen out of the charge is sized the same way,
+so the filter does not carry the step into the cycles after it. The filter
+starts again from the sized total each time, and regulation integrates from
+there once the devices have left. This is the mirror of the entry, which adds
+back the output that stops when the devices switch. A held meter reading sizes
+nothing.
+
+A device's discharge ramps from zero, not from the charge it left. The exit
+itself is immediate, and measuring the per-device ramp from the charge held the
+first discharge after a 1000 W charge at zero while the total said what the
+house draws, a difference the integrator then wound up into export.
 
 ### Why the zero crossing is quiet
 
