@@ -11,10 +11,16 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from ems import config as cfg
+from ems.charge_record import (
+    CHARGE_EXIT_IN_INPUT,
+    CHARGE_EXIT_PENDING,
+    CHARGE_EXIT_TO_OUTPUT,
+    ChargeRecord,
+)
 from ems.health import CommHealth, redact_error, redact_url_credentials
 from ems.logging_utils import log_event
 from ems.models import DeviceState, parse_pack_count
-from ems.power_direction import AC_MODE_INPUT, in_ac_input_direction
+from ems.power_direction import AC_MODE_INPUT
 
 
 def zendure_write_succeeded(error_event, dev, response, **fields):
@@ -374,10 +380,11 @@ def zero_device_state():
 class ZendureClient:
     """Client for a single Zendure device.
 
-    ``charge_commanded`` is true from a charge command until the device has
-    accepted a non-negative one. It decides the shape of the next write, and the
-    controller reads it as its own record of a charge, the one that outlives a
-    reset of its regulation memory or the device's absence.
+    ``charge_commanded`` is true from a charge command until the device reports
+    that it left the charge after an exit (see :class:`ChargeRecord`). It
+    decides the shape of the next write, and the controller reads it as its own
+    record of a charge, the one that outlives a reset of its regulation memory
+    or the device's absence.
     """
 
     control_gate = "api"
@@ -419,11 +426,22 @@ class ZendureClient:
         self.ac_charge_enabled = bool(ac_charge_enabled)
         self.max_charge_power_w = max_charge_power_w or 0
         self.observed_product = None
-        self.charge_commanded = False
-        self.observed_in_ac_input = False
+        self._charge = ChargeRecord()
         self.observed_in_charge_mode = False
         self.read_health = CommHealth(name, kind="read")
         self.write_health = CommHealth(name, kind="write")
+
+    @property
+    def charge_commanded(self):
+        return self._charge.open
+
+    def charge_exit_due(self):
+        return self._charge.exit_due(time.monotonic())
+
+    def release_charge_record(self):
+        """The charge is someone else's from here: a claim that writes its own."""
+
+        self._charge.release()
 
     def fetch(self):
         """Fetch current device state."""
@@ -445,14 +463,17 @@ class ZendureClient:
             if data.get("product"):
                 self.observed_product = str(data["product"])
             state = parse_device(data)
-            self.observed_in_ac_input = in_ac_input_direction(state)
             self.observed_in_charge_mode = (
                 state.ac_mode == AC_MODE_INPUT and state.smart_mode == 1
+            )
+            self._charge.observe(
+                state, setpoint_reported="inputLimit" in data["properties"]
             )
             self.read_health.record_success((time.monotonic() - start) * 1000.0)
             return state
 
         except Exception as e:
+            self.observed_in_charge_mode = False
             self.read_health.record_failure(
                 error=e,
                 latency_ms=(time.monotonic() - start) * 1000.0,
@@ -497,19 +518,28 @@ class ZendureClient:
             ]
         ).profile_id
 
-    def dispatch_output_limit(self, value):
+    def dispatch_output_limit(self, value, charge_exit=None):
         """Dispatch a signed power target over the local HTTP API.
 
-        Inside the output direction a non-negative target keeps the historic
-        single-property write: the atomic set would also carry ``smartMode`` on
-        every loop, and that is a flash-persistent operating mode nothing
-        measured says is free to rewrite at five-second cadence.
+        A non-negative target keeps the historic single-property write: the
+        atomic set would also carry ``smartMode`` on every loop, and that is a
+        flash-persistent operating mode nothing measured says is free to
+        rewrite at five-second cadence. A device someone else holds in AC input
+        gets that write too; taking it back is the state reconciler's, behind
+        its own gate.
 
-        Leaving the charge direction is a direction change, and a bare
-        ``outputLimit`` is ignored by a device in ``acMode = 1``. So while this
-        client last commanded a charge, or last saw the device in the AC-input
-        direction, a non-negative target is the atomic set -- the same command
-        MQTT sends. Only an exit the device accepted ends that.
+        Leaving a charge is a direction change, and a bare ``outputLimit`` is
+        ignored by a device in ``acMode = 1``. So while this client's charge is
+        on record, a non-negative target is the exit: the atomic set, the same
+        command MQTT sends, or with ``charge_exit=CHARGE_EXIT_IN_INPUT`` the
+        bare ``inputLimit = 0`` that ends the charge and leaves the device in
+        the AC-input role a claim gave it. The record ends when the device
+        reports it left the charge, not when it answered the exit; until then
+        the exit goes out again once per resend window, and in between nothing
+        is written.
+        ``charge_exit=CHARGE_EXIT_TO_OUTPUT`` sends the atomic exit for a charge
+        that is not on record -- the one exit the controller decides for a
+        charge at the battery floor it cannot attribute.
 
         A charge needs a model whose AC charge path is established — the
         command shape is shared across the ZenSDK family, the capability is
@@ -532,7 +562,8 @@ class ZendureClient:
         from ems.power_command import build_zensdk_power_operation
 
         target = int(value)
-        if target >= 0 and not (self.charge_commanded or self.observed_in_ac_input):
+        record = self._charge
+        if target >= 0 and not (record.open or charge_exit == CHARGE_EXIT_TO_OUTPUT):
             ok = self.write_output_limit(target)
             return (
                 dispatch.published(target)
@@ -541,15 +572,23 @@ class ZendureClient:
             )
 
         if target >= 0:
+            now = time.monotonic()
+            if record.open and not record.exit_due(now):
+                return dispatch.coalesced(target, command_state=CHARGE_EXIT_PENDING)
+            field, properties = (
+                ("inputLimit", {"inputLimit": 0})
+                if record.open and charge_exit == CHARGE_EXIT_IN_INPUT
+                else ("outputLimit", build_zensdk_power_operation(target).properties)
+            )
             ok = zendure_write(
                 self,
-                "outputLimit",
-                build_zensdk_power_operation(target).properties,
+                field,
+                properties,
                 "write_output_limit_error",
                 target_w=target,
             )
             if ok:
-                self.charge_commanded = False
+                record.exit_sent(now)
             return (
                 dispatch.published(target)
                 if ok
@@ -570,10 +609,10 @@ class ZendureClient:
         operation = build_zensdk_power_operation(target)
         properties = (
             {"inputLimit": operation.properties["inputLimit"]}
-            if self.charge_commanded and self.observed_in_charge_mode
+            if record.open and self.observed_in_charge_mode
             else operation.properties
         )
-        self.charge_commanded = True
+        record.charge_sent(operation.properties["inputLimit"])
         ok = zendure_write(
             self,
             "inputLimit",

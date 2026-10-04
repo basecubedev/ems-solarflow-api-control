@@ -16,6 +16,7 @@ import time
 from collections import OrderedDict
 
 from ems import config as cfg
+from ems.charge_record import CHARGE_EXIT_PENDING, ChargeRecord
 from ems.clients import parse_device
 from ems.health import CommHealth
 from ems.logging_utils import log_event
@@ -186,10 +187,12 @@ def _coerce_reply(payload):
 class ZendureMqttDeviceClient:
     """A Zendure inverter controlled over MQTT rather than the local HTTP API.
 
-    ``charge_commanded`` says what this client last published: a charge, until
-    a non-negative command goes out. A queued target has not been published and
-    changes nothing. The controller reads it as its own record of a charge, the
-    one that outlives a reset of its regulation memory or the device's absence.
+    ``charge_commanded`` says whether the EMS's own charge is on the device: from
+    a charge this client published until a fresh report shows the device left
+    it after an exit (see :class:`ChargeRecord`). A queued target has not been
+    published and changes nothing, and neither does the broker accepting the
+    exit. The controller reads it as its own record of a charge, the one that
+    outlives a reset of its regulation memory or the device's absence.
     """
 
     ip = "mqtt"
@@ -326,7 +329,7 @@ class ZendureMqttDeviceClient:
         self._foreign_streak = 0
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
-        self.charge_commanded = False
+        self._charge = ChargeRecord(resend_after_s=self._confirmation_timeout_s)
         self.sn = serial_number or device_id
         # The trusted physical serial when one is configured, else None. ``sn``
         # falls back to the route/device id for a serial-less device, so it is not
@@ -347,6 +350,18 @@ class ZendureMqttDeviceClient:
         self.pv_priority_factor = pv_priority_factor or 1.0
         self.read_health = CommHealth(name, kind="read")
         self.write_health = CommHealth(name, kind="write")
+
+    @property
+    def charge_commanded(self):
+        return self._charge.open
+
+    def charge_exit_due(self):
+        return self._charge.exit_due(time.monotonic())
+
+    def release_charge_record(self):
+        """The charge is someone else's from here: a claim that writes its own."""
+
+        self._charge.release()
 
     def fetch(self):
         """Map a fresh broker snapshot to a DeviceState, else signal read failure.
@@ -375,6 +390,9 @@ class ZendureMqttDeviceClient:
             # over a confirmation deadline that has just elapsed.
             self._confirm_from_snapshot(state, status.snapshot, now)
             self._detect_external_control(state, status.snapshot)
+            self._charge.observe(
+                state, setpoint_reported="inputLimit" in status.snapshot.metrics
+            )
         else:
             record = self._active_command
             policy = self._confirmation_policy()
@@ -450,8 +468,12 @@ class ZendureMqttDeviceClient:
 
         self._discard_pending_target(reason)
 
-    def dispatch_output_limit(self, value):
+    def dispatch_output_limit(self, value, charge_exit=None):
         """Publish a power write and report the structured dispatch outcome.
+
+        ``charge_exit`` is accepted for parity with the local API and changes
+        nothing here: every ZenSDK power command already carries its modes, and
+        an invoke command is one operation.
 
         Every attempted write builds one :class:`CommandRecord` (queued ->
         published/rejected) — a broker publish is transport-level only, never
@@ -526,6 +548,10 @@ class ZendureMqttDeviceClient:
                 command_state=active.state,
                 correlation_id=correlation_id,
             )
+
+        if target >= 0 and self._charge.open and not self._charge.exit_due(now):
+            self._discard_pending_target("superseded_by_pending_charge_exit")
+            return dispatch.coalesced(target, command_state=CHARGE_EXIT_PENDING)
 
         # No command in flight: the fresh target is the latest intent and takes the
         # slot immediately. A pending target it repeats is published under the
@@ -777,7 +803,10 @@ class ZendureMqttDeviceClient:
         self._last_command = record
         self._last_command_state = record.state
         if ok:
-            self.charge_commanded = target < 0
+            if target < 0:
+                self._charge.charge_sent(abs(target))
+            else:
+                self._charge.exit_sent(publish_completed)
             self._remember_command_evidence(record, publish_completed)
             return dispatch.published(
                 target,

@@ -66,11 +66,26 @@ a no-write validation run.
 
 ## Runtime write types
 
-Runtime control may write:
+Runtime control — the power command, on the transport's own write gate — may
+write:
 
 ```text
-outputLimit
+outputLimit                                           every non-negative target (local API)
+smartMode=1, acMode=1, outputLimit=0, inputLimit      entering a charge
+inputLimit                                            a new power inside a charge this EMS
+                                                      started, the device showing its mode (local API)
+smartMode=1, acMode=2, outputLimit, inputLimit=0      leaving a charge this EMS commanded, until the
+                                                      device reports it left; and the one exit to an
+                                                      unattributed charge at the battery floor of a
+                                                      device the EMS could have charged
+inputLimit=0                                          ending the EMS's charge on a device a claim
+                                                      holds in AC input (local API)
+smartMode, acMode, outputLimit, inputLimit            every power command over MQTT (ZenSDK)
 ```
+
+A device the EMS never charged gets only `outputLimit` from the local API,
+whatever direction it reports; its modes are the state reconciler's, behind the
+reconciler's own gate.
 
 State reconciliation may write:
 
@@ -96,11 +111,13 @@ reconciliation writer. That flag means "no separate reconciliation path", not
 carrying `smartMode`, `acMode`, `outputLimit` and `inputLimit` together, because
 a bare setpoint is ignored by a device sitting in an inactive mode. The mode
 therefore travels with the power command, on the transport's own gate, in both
-directions. The local API does the same wherever the direction changes: inside
-the output direction it keeps the single-property `outputLimit` write, but while
-the device was last commanded to charge or reports the AC-input direction, a
-non-negative target is sent as the atomic set (`smartMode=1`, `acMode=2`,
-`outputLimit`, `inputLimit=0`). Leaving a charge never waits for state
+directions. The local API does the same where it changes a direction it set:
+otherwise it keeps the single-property `outputLimit` write, but while its record
+of the EMS's own charge holds, a non-negative target is sent as the atomic set
+(`smartMode=1`, `acMode=2`, `outputLimit`, `inputLimit=0`), and so is the one
+exit the controller decides for an unattributed charge at the battery floor. A
+device reporting the AC-input direction for any other reason keeps the bare
+`outputLimit`. Leaving a charge never waits for state
 reconciliation, and a shutdown release that writes once and exits is one
 complete command. Inside the charge direction the local API sends only
 `inputLimit` while the device shows the charge mode this EMS set (`acMode=1`,
@@ -123,8 +140,19 @@ devices and while inside the configured deadband. One exception: when control
 the EMS is charging that device, it gets one final command that ends the charge
 — the exit to idle, `acMode=2`, `inputLimit=0`, `outputLimit=0`, on its
 transport's own gate — and then nothing more. Which device is charging is read
-from what its transport last put on the wire; an unreachable device gets the
-command when it answers again (owner decision 2026-10-04).
+from its transport's record of the EMS's own charge, which ends when the device
+reports that it left the charge, not when it answered the command: a device that
+did not carry the command out is sent it again once the resend window (30 s) has
+passed, and an unreachable device gets it when it answers again (owner decision
+2026-10-04). An operator park or a
+maintenance claim that takes the charging device from the regulator gets the
+same single command — on the local API, for a claim that holds the device in AC
+input, as `inputLimit=0` alone, so the reconciler does not move the relay back
+for the role — unless the claim commands a charge power of its own that reaches
+the device — an AC-input role with `ac_charge_power_w`, on a transport with
+state reconciliation and its gate open. That claim takes the charge over: the
+EMS's record of it is released, and neither a disable nor a stop of the EMS
+ends the claim's charge.
 
 Expected events:
 
@@ -142,6 +170,7 @@ Other relevant events:
 control_disabled_skip_write
 device_disabled_skip_write
 ac_charge_ended_on_disable
+ac_charge_handed_to_claim
 offline_skip_write
 deadband_skip_write
 write_output_limit_error

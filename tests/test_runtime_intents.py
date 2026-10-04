@@ -181,10 +181,26 @@ def test_a_deliberate_claim_outranks_the_firmware_observation():
 
 
 def test_mode_and_status_must_agree():
-    # acMode written but the device has not followed yet (~2 s settling window).
+    # acMode written but the device has not followed yet (~2 s settling window),
+    # and nothing set up to charge: no charge to own.
     assert firmware_charge_intent("WR1", telemetry(ac_mode=1, ac_status=1)) is None
     # Mode already restored while the status still lags behind.
     assert firmware_charge_intent("WR1", telemetry(ac_mode=2, ac_status=2)) is None
+
+
+def test_a_floor_charge_settling_in_with_its_setpoint_is_already_a_floor_charge():
+    """The firmware writes mode and setpoint, and current follows ~2 s later.
+
+    Without this the state reconciler judged that window on its own and wrote
+    ``acMode = 2`` into the charge.
+    """
+
+    settling = telemetry(ac_mode=1, ac_status=1)
+    settling.input_limit_w = 800
+
+    assert firmware_charge_intent("WR1", settling).reason == "firmware_owned_charge"
+    assert firmware_charge_intent("WR1", settling).desired_ac_mode is None
+    assert firmware_charge_intent("WR1", settling, ems_commanded_charge=True) is None
 
 
 def test_an_unreachable_device_never_claims_a_firmware_charge():

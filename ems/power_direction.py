@@ -55,6 +55,45 @@ def in_ac_input_direction(state) -> bool:
     )
 
 
+def out_of_charge(state) -> bool:
+    """Whether telemetry shows a device that is not in an AC charge.
+
+    Out of the AC-input direction, or still in its mode with no setpoint and
+    nothing flowing -- how a charge looks once it was ended by its setpoint
+    alone, which keeps the device in the role a claim gave it.
+    """
+
+    if not in_ac_input_direction(state):
+        return True
+
+    def reported(name):
+        value = getattr(state, name, None)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return 0
+        return value
+
+    return (
+        reported("ac_status") != AC_STATUS_CHARGING
+        and reported("input_limit_w") == 0
+        and reported("grid_input") == 0
+    )
+
+
+def settling_out_of_charge(state) -> bool:
+    """Whether a device shows an exit taken while its charge current still runs down.
+
+    The output direction is written and no charge setpoint stands, but the
+    status and the measured input lag by about two seconds. The current is the
+    tail of a charge the device has already left, not one to be ended.
+    """
+
+    ac_mode = getattr(state, "ac_mode", None)
+    setpoint = getattr(state, "input_limit_w", 0)
+    if isinstance(ac_mode, bool) or ac_mode != AC_MODE_OUTPUT:
+        return False
+    return isinstance(setpoint, bool) or not isinstance(setpoint, (int, float)) or setpoint == 0
+
+
 def derive_house_load_w(inverter_output_w, grid_power_w, inverter_charge_w=0):
     """Net both directions against the meter to get what the house draws.
 
@@ -82,4 +121,6 @@ __all__ = [
     "derive_house_load_w",
     "in_ac_input_direction",
     "operation_for_target",
+    "out_of_charge",
+    "settling_out_of_charge",
 ]

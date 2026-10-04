@@ -99,19 +99,24 @@ def runtime_intent_from_role(device_name, role, reason: str | None = None):
 def is_floor_charge(state):
     """Whether telemetry shows an AC charge at the battery's floor.
 
-    Three observations, no prediction. The firmware decides when to recover an
-    empty battery from AC; reimplementing that trigger here would be a second
+    Observations, no prediction. The firmware decides when to recover an empty
+    battery from AC; reimplementing that trigger here would be a second
     authority for someone else's threshold and would drift the first time a
     firmware or a model moves it.
 
-    The written mode and the observed status must agree, which keeps the ~2 s
-    settling window after a command from being mistaken for the firmware acting
-    on its own. The battery must be at its floor, which is where the firmware
-    acts.
+    The written mode must be the charge mode, and the charge must be visible:
+    either the status says charging, or a charge setpoint stands while current
+    has yet to follow -- the ~2 s settling window. A mode with nothing set up to
+    charge is not a charge. Judging the settling window here rather than
+    leaving it to the state reconciler is what keeps that reconciler from
+    writing ``acMode = 2`` into a charge the firmware is starting. The battery
+    must be at its floor, which is where the firmware acts.
     """
 
+    charging = safe_int(getattr(state, "ac_status", 0)) == AC_STATUS_CHARGING
+    settling = safe_int(getattr(state, "input_limit_w", 0), 0) > 0
     return (
-        safe_int(getattr(state, "ac_status", 0)) == AC_STATUS_CHARGING
+        (charging or settling)
         and safe_int(getattr(state, "ac_mode", 0)) == AC_MODE_INPUT
         and derive_soc_runtime_state(state) == "soc_empty"
     )

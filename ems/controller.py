@@ -29,7 +29,16 @@ from ems.logging_utils import log_event
 from ems.mqtt_control.dispatch import WriteDispatchStatus, dispatch_device_write
 from ems.property_writes import write_device_properties
 from ems.models import BATTERY_ABSENT, BATTERY_PRESENT, DeviceCapabilities
-from ems.power_direction import AC_MODE_INPUT, AC_MODE_OUTPUT
+from ems.charge_record import (
+    CHARGE_EXIT_IN_INPUT,
+    CHARGE_EXIT_PENDING,
+    CHARGE_EXIT_TO_OUTPUT,
+)
+from ems.power_direction import (
+    AC_MODE_INPUT,
+    AC_MODE_OUTPUT,
+    settling_out_of_charge,
+)
 from ems.runtime_intents import (
     regulator_charge_intent,
     PRIORITY_MAINTENANCE,
@@ -1130,13 +1139,34 @@ class EMSController:
         indexes,
         min_output_limit
     ):
-        """Park devices once and suppress further outputLimit writes."""
+        """Park devices once and suppress further outputLimit writes.
+
+        A device with the EMS's own charge still on record is not parked until
+        it reports out of that charge: its park write is the exit, and one it
+        did not apply is sent again once the transport's resend window passes.
+        A charge at the floor the EMS cannot attribute gets its one exit here
+        too, whatever ``outputLimit`` the device still shows.
+        """
 
         for i in indexes:
             dev = self.devices[i]
             state = states[i]
+            charge_on_record = getattr(dev, "charge_commanded", False) is True
+            charge_exit = self.floor_charge_exit(dev)
+            exit_owed = charge_on_record or charge_exit is not None
 
-            if dev.name in self.night_min_soc_idle_parked:
+            if charge_on_record and self.charge_exit_pending(dev):
+                log_event(
+                    logging.DEBUG,
+                    "night_min_soc_idle_hold_skip_write",
+                    device=dev.name,
+                    output_limit_w=state.output_limit,
+                    min_output_limit_w=min_output_limit,
+                    reason=CHARGE_EXIT_PENDING
+                )
+                continue
+
+            if not exit_owed and dev.name in self.night_min_soc_idle_parked:
                 log_event(
                     logging.DEBUG,
                     "night_min_soc_idle_hold_skip_write",
@@ -1147,7 +1177,7 @@ class EMSController:
                 )
                 continue
 
-            if state.output_limit == min_output_limit:
+            if not exit_owed and state.output_limit == min_output_limit:
                 log_event(
                     logging.DEBUG,
                     "night_min_soc_idle_hold_skip_write",
@@ -1166,7 +1196,9 @@ class EMSController:
                 current_output_limit_w=state.output_limit,
                 target_w=min_output_limit
             )
-            if self.set_output_limit(dev, min_output_limit):
+            written = self.write_target(dev, min_output_limit, charge_exit)
+            self.note_floor_charge_exit(dev, min_output_limit, written)
+            if written and not charge_on_record:
                 self.night_min_soc_idle_parked.add(dev.name)
 
     def build_night_min_soc_idle_explanation(
@@ -1548,20 +1580,62 @@ class EMSController:
             or getattr(dev, "charge_commanded", False) is True
         )
 
+    def floor_charge_attributable(self, dev):
+        """Whether the EMS can tell that a floor charge on ``dev`` is not its own.
+
+        It can once it has watched the device, and for a device it could never
+        have charged -- the feature or the device's switch off, or a model
+        without an AC charge path -- no charge can be the EMS's own at all.
+        """
+
+        return dev.name in self.floor_charge_watched or not self.charge_permitted(dev)
+
     def note_floor_charge_provenance(self, dev_name, floor_charge):
         """Remember whether the EMS can tell who started a charge at the floor.
 
         It can once it has seen the device not charging, or charging by its own
         command, and once it has written the exit to a charge it could not
-        attribute. It cannot after a restart, while the device is unreachable,
-        or while such an exit is still to be written. Process memory only: a
-        regulator decision never goes to runtime-state.
+        attribute. It cannot after a restart, or while such an exit is still to
+        be written. A failed read or an offline spell changes nothing: the
+        transport's record of the EMS's own charge survives it, so no charge of
+        the EMS's can begin in the gap unseen. Process memory only: a regulator
+        decision never goes to runtime-state.
         """
 
-        if floor_charge is not None and floor_charge.reason == UNPROVEN_CHARGE_REASON:
-            self.floor_charge_watched.discard(dev_name)
-        else:
+        if floor_charge is None or floor_charge.reason != UNPROVEN_CHARGE_REASON:
             self.floor_charge_watched.add(dev_name)
+
+    def write_can_end_a_charge(self, dev):
+        """Whether a non-negative write to ``dev`` would end a charge it shows.
+
+        Only then is the AC input a charging device draws the reference a target
+        is measured against. A transport without state reconciliation carries
+        the modes in every power command; the local API does so only for the
+        EMS's own charge and for the one exit to a floor charge nobody can
+        attribute. Anywhere else its write is the bare ``outputLimit`` a device
+        in AC input ignores, and measuring it against that device's charge
+        rewrote the same value every cycle.
+        """
+
+        return (
+            not getattr(dev, "supports_state_reconciliation", True)
+            or self.charge_commanded_by_ems(dev)
+            or self.floor_charge_exit(dev) is not None
+        )
+
+    def floor_charge_exit(self, dev):
+        """The exit for a floor charge nobody can attribute, or None.
+
+        Owner decision 2026-10-04: such a charge may be the EMS's own, left
+        running by a process before this one, and gets the exit written once.
+        The transport sends that exit only when asked to, so a device someone
+        else holds in AC input keeps the plain ``outputLimit`` write.
+        """
+
+        intent = self.runtime_intents.get(dev.name)
+        if intent is not None and intent.reason == UNPROVEN_CHARGE_REASON:
+            return CHARGE_EXIT_TO_OUTPUT
+        return None
 
     def note_floor_charge_exit(self, dev, target, written):
         """An exit written to an unattributed floor charge settles who owns it.
@@ -1581,7 +1655,7 @@ class EMSController:
             self.floor_charge_watched.add(dev.name)
 
     def end_charges_on_disable(self, control_enabled):
-        """Write the one command that ends a charge on a disabled device.
+        """Write the one command that ends a charge the EMS stops supervising.
 
         Disabling control, or a single device, means the EMS writes nothing
         more to it. A device this EMS had put into charge then went on drawing
@@ -1591,29 +1665,111 @@ class EMSController:
         owner's decision of 2026-10-04 is one final command -- the exit to
         idle -- and then nothing.
 
-        Keyed on what the transport last put on the wire, not on the
-        regulator's target, which keeps being computed while control is off;
-        an exit the device accepted clears it, so the command is not repeated.
-        An unreachable device gets it when it answers again, and one that did
-        not take it gets it once more. Runs before the night idle decides, which
-        otherwise ends the cycle before any write path is reached.
+        An operator park or a maintenance claim takes the device from the
+        regulator the same way and is held to the same decision. A claim that
+        holds the device in AC input has the charge ended by its setpoint
+        alone where the transport keeps that role, so the relay is not moved
+        out and back. A claim that commands a charge of its own and can write
+        it takes the charge over instead: the EMS's record of it is released,
+        and neither this nor a stop of the EMS ends the claim's charge.
+
+        Keyed on the transport's record of the EMS's own charge, not on the
+        regulator's target, which keeps being computed while control is off.
+        The record ends when the device reports it left the charge, not when it
+        answered the command, so a device that took the command and went on
+        charging is sent it again once the transport's resend window has
+        passed, and one that left is sent nothing more. An unreachable device
+        gets it when it answers again. Runs before the night idle decides,
+        which otherwise ends the cycle before any write path is reached.
         """
 
         for dev in self.devices:
-            if control_enabled and self.runtime_device_bool(dev.name, "enabled", True):
-                continue
             if getattr(dev, "charge_commanded", False) is not True:
                 continue
             if not self.device_online.get(dev.name, True):
+                continue
+            intent = self.runtime_intents.get(dev.name)
+            if self.claim_takes_the_charge(dev, intent):
+                self.hand_charge_to_claim(dev, intent)
+                continue
+            ended_by = self.charge_supervision_ended_by(dev, control_enabled)
+            if ended_by is None or self.charge_exit_pending(dev):
                 continue
 
             log_event(
                 logging.INFO,
                 "ac_charge_ended_on_disable",
                 device=dev.name,
-                reason="control_disabled" if not control_enabled else "device_disabled",
+                **ended_by,
             )
-            self.set_output_limit(dev, 0)
+            self.write_target(dev, 0, self.claim_charge_exit(dev, intent))
+
+    def charge_exit_pending(self, dev):
+        """Whether the exit to the EMS's own charge is out and its window still open."""
+
+        due = getattr(dev, "charge_exit_due", None)
+        return callable(due) and not due()
+
+    def charge_supervision_ended_by(self, dev, control_enabled):
+        """Who took ``dev`` from the regulator this cycle, as log fields, or None."""
+
+        if not control_enabled:
+            return {"reason": "control_disabled"}
+        if not self.runtime_device_bool(dev.name, "enabled", True):
+            return {"reason": "device_disabled"}
+        intent = self.runtime_intents.get(dev.name)
+        if intent is None or intent.output_control_allowed:
+            return None
+        return {"reason": "claimed", "claim": intent.reason}
+
+    def claim_takes_the_charge(self, dev, intent):
+        """Whether the claim holding ``dev`` takes over the charge running on it."""
+
+        return (
+            intent is not None
+            and not intent.output_control_allowed
+            and self.claim_writes_its_own_charge(dev, intent)
+        )
+
+    def hand_charge_to_claim(self, dev, intent):
+        """Release the EMS's record of its charge to the claim that writes its own."""
+
+        release = getattr(dev, "release_charge_record", None)
+        if callable(release):
+            release()
+        log_event(
+            logging.INFO,
+            "ac_charge_handed_to_claim",
+            device=dev.name,
+            claim=intent.reason,
+            setpoint_w=intent.setpoint_w,
+        )
+
+    def claim_charge_exit(self, dev, intent):
+        """The exit for a claim that keeps the device in AC input, or None.
+
+        Ending the EMS's charge by its setpoint leaves the device in the role
+        the claim gave it. Only where the transport keeps that role: over MQTT
+        nothing does, and the power command's own exit stands.
+        """
+
+        if (
+            intent is not None
+            and not intent.output_control_allowed
+            and intent.role is DeviceRuntimeRole.AC_INPUT
+            and getattr(dev, "supports_state_reconciliation", True)
+        ):
+            return CHARGE_EXIT_IN_INPUT
+        return None
+
+    def claim_writes_its_own_charge(self, dev, intent):
+        """Whether the claim holding ``dev`` commands a charge power and can write it."""
+
+        return (
+            intent.setpoint_w is not None
+            and getattr(dev, "supports_state_reconciliation", True)
+            and self.device_state_writes_allowed(dev)
+        )
 
     def device_charge_floor_w(self, dev):
         """How far negative one device's target may go right now.
@@ -1666,12 +1822,7 @@ class EMSController:
         happens.
         """
 
-        if not cfg.ac_charge_control_enabled(self.runtime_state):
-            return False
-
-        if not self.runtime_device_bool(
-            dev.name, "ac_charge_enabled", getattr(dev, "ac_charge_enabled", True)
-        ):
+        if not self.charge_permitted(dev):
             return False
 
         if not self.device_active(dev):
@@ -1693,10 +1844,18 @@ class EMSController:
         # a running charge ended it on a single noisy sample, and re-entry then
         # costs a full confirmation window.
         already_charging = self.charge_commanded_by_ems(dev)
-        if not already_charging and self.pack_drained_from_outside(state):
-            return False
+        return already_charging or not self.pack_drained_from_outside(state)
 
-        return self.device_model_supports_charge(dev)
+    def charge_permitted(self, dev):
+        """Whether the feature, the device's own switch and its model let it charge."""
+
+        return bool(
+            cfg.ac_charge_control_enabled(self.runtime_state)
+            and self.runtime_device_bool(
+                dev.name, "ac_charge_enabled", getattr(dev, "ac_charge_enabled", True)
+            )
+            and self.device_model_supports_charge(dev)
+        )
 
     def pack_drained_from_outside(self, state):
         """Whether the pack discharges for a reason other than this EMS.
@@ -3085,6 +3244,13 @@ class EMSController:
         if changed:
             self.runtime_state.save_atomic()
 
+    def write_target(self, dev, value, charge_exit=None):
+        """``set_output_limit``, naming an exit's shape only where one was decided."""
+
+        if charge_exit is None:
+            return self.set_output_limit(dev, value)
+        return self.set_output_limit(dev, value, charge_exit=charge_exit)
+
     def retire_pending_output_limit(self, dev, reason):
         """Tell a transport with a queued target that this cycle skips it."""
 
@@ -3092,11 +3258,13 @@ class EMSController:
         if callable(cancel):
             cancel(reason)
 
-    def set_output_limit(self, dev, value):
+    def set_output_limit(self, dev, value, charge_exit=None):
         """Write output limit to the device via its transport, behind its gate.
 
         Returns False only when the write was attempted and not accepted, so a
         caller that writes once (night/minSoC park) knows to try again.
+        ``charge_exit`` names the shape of an exit from a charge the controller
+        decided on (see :mod:`ems.charge_record`).
         """
 
         gate = cfg.resolve_device_write_gate(dev)
@@ -3115,7 +3283,7 @@ class EMSController:
             return True
 
         try:
-            result = dispatch_device_write(dev, int(value))
+            result = dispatch_device_write(dev, int(value), charge_exit=charge_exit)
         except Exception as e:
             log_event(
                 logging.WARNING,
@@ -4403,7 +4571,6 @@ class EMSController:
             raw_states
         ):
             if not state:
-                self.floor_charge_watched.discard(dev.name)
                 continue
 
             ems_commanded_charge = self.charge_commanded_by_ems(dev)
@@ -4411,7 +4578,7 @@ class EMSController:
                 dev.name,
                 state,
                 ems_commanded_charge=ems_commanded_charge,
-                watched=dev.name in self.floor_charge_watched,
+                watched=self.floor_charge_attributable(dev),
             )
             intent = resolve_device_intent([
                 self.get_device_runtime_intent(dev, state),
@@ -4881,10 +5048,15 @@ class EMSController:
             # write, and leave the hardware charging from the grid with the EMS
             # running and content. Local-HTTP devices are saved by the startup
             # acMode reconcile; MQTT control devices have no such path.
-            charge_reference = cfg.safe_int(
-                getattr(states[i], "grid_input", 0), 0, minimum=0
+            ends_a_charge = self.write_can_end_a_charge(
+                dev
+            ) and not settling_out_of_charge(states[i])
+            charge_reference = (
+                cfg.safe_int(getattr(states[i], "grid_input", 0), 0, minimum=0)
+                if ends_a_charge
+                else 0
             )
-            if not charge_reference and cfg.safe_int(
+            if ends_a_charge and not charge_reference and cfg.safe_int(
                 getattr(states[i], "ac_mode", 0), 0
             ) == AC_MODE_INPUT:
                 # Commanded into charge but not yet drawing: the probe measured
@@ -4916,7 +5088,7 @@ class EMSController:
                 self.retire_pending_output_limit(dev, "deadband_skip_write")
                 continue
 
-            written = self.set_output_limit(dev, target)
+            written = self.write_target(dev, target, self.floor_charge_exit(dev))
             self.note_floor_charge_exit(dev, target, written)
 
         # =====================

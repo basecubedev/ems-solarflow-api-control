@@ -392,11 +392,12 @@ def test_an_invoke_charge_is_not_confirmed_without_a_charge(metrics):
 # --- what the client last put on the wire ------------------------------------
 
 
-def test_the_client_remembers_a_charge_it_published_until_the_way_back():
+def test_the_client_remembers_a_charge_it_published_until_the_device_leaves_it():
     """The controller's record of its own charge, the one a reset cannot erase.
 
-    A queued target was not published and changes nothing; only a non-negative
-    command that went out ends the record.
+    A queued target was not published and changes nothing. Neither does the
+    way back going out: the broker accepting it says nothing about the device.
+    Only a report that shows the device out of the charge ends the record.
     """
 
     dev = _ack_device()
@@ -409,5 +410,56 @@ def test_the_client_remembers_a_charge_it_published_until_the_way_back():
     assert dev._pending_target == -400
     assert dev.charge_commanded is True
 
-    dev.dispatch_output_limit(35)
+    exit_command = dev.dispatch_output_limit(35)
+    assert exit_command.published
+    assert dev.charge_commanded is True
+
+    record = dev._last_command
+    _report(dev, record, {"outputLimit": 0, "acMode": 1, "inputLimit": 600})
+    assert dev.charge_commanded is True
+
+    _report(dev, record, {"outputLimit": 35, "acMode": 2, "inputLimit": 0})
     assert dev.charge_commanded is False
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 1_000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_an_exit_the_device_rejected_keeps_the_charge_and_is_asked_again_later():
+    """A rejected exit leaves the device charging, and the EMS knowing it.
+
+    The record ended when the exit was published, so a Hyper that rejected it
+    went on drawing from the grid with the EMS's record clear. A rejection also
+    frees the command slot at once, so the exit is held to the resend window
+    rather than published again every cycle.
+    """
+
+    from unittest.mock import patch
+
+    clock = _Clock()
+    with patch("time.monotonic", clock):
+        dev = _ack_device()
+        dev.write_output_limit(-600)
+        dev.handle_reply(_reply(dev._active_command))
+
+        dev.dispatch_output_limit(0)
+        exit_record = dev._active_command
+        dev.handle_reply(_reply(exit_record, success=0, output="failed"))
+        assert exit_record.state == "rejected"
+        assert dev.charge_commanded is True
+        published = len(dev._service.published)
+
+        clock.now += 10
+        assert not dev.dispatch_output_limit(0).published
+        assert dev.charge_exit_due() is False
+        assert len(dev._service.published) == published
+
+        clock.now += 20
+        assert dev.charge_exit_due() is True
+        assert dev.dispatch_output_limit(0).published
+        assert len(dev._service.published) == published + 1

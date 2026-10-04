@@ -140,17 +140,23 @@ def normalize_bool_dispatch(ok, *, target_w) -> WriteDispatchResult:
     return failed(target_w)
 
 
-def dispatch_device_write(device, value) -> WriteDispatchResult:
+def dispatch_device_write(device, value, charge_exit=None) -> WriteDispatchResult:
     """Dispatch a power write to any device, returning one structured result.
 
     Uses the device's ``dispatch_output_limit`` when present (MQTT control
     devices), otherwise falls back to the boolean ``write_output_limit`` and
     normalizes it — keeping transport-specific handling out of the controller.
+    ``charge_exit`` names the shape of an exit from a charge the controller
+    decided on; it reaches only a device that dispatches structurally.
     """
 
     dispatch = getattr(device, "dispatch_output_limit", None)
     if callable(dispatch):
-        result = dispatch(value)
+        result = (
+            dispatch(value)
+            if charge_exit is None
+            else dispatch(value, charge_exit=charge_exit)
+        )
         if isinstance(result, WriteDispatchResult):
             return result
         return normalize_bool_dispatch(result, target_w=value)

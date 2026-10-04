@@ -810,6 +810,7 @@ Other relevant events:
 control_disabled_skip_write
 device_disabled_skip_write
 ac_charge_ended_on_disable
+ac_charge_handed_to_claim
 offline_skip_write
 deadband_skip_write
 write_output_limit_error

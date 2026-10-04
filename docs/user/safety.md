@@ -144,7 +144,10 @@ Either switch stops a running charge in the same cycle. Stopping a device that
 is drawing from the grid is the one action that must never wait for a threshold,
 a counter or a restart. Disabling the EMS (`system.enabled`) or one device does
 too: a charging device gets one final command that ends the charge, and then the
-EMS writes nothing more to it.
+EMS writes nothing more to it. Parking a charging device, or a maintenance
+routine taking it over, ends the EMS's charge the same way — unless that claim
+sets a charge power of its own, which then takes the charge over for good:
+switching the EMS off or stopping it does not end it.
 
 So does losing the grid meter. A meter client that cannot reach its hardware
 keeps returning its last reading, and "still exporting" is indistinguishable
@@ -190,12 +193,15 @@ reachable again. The remaining devices adapt in the same cycle.
 
 The EMS itself recovers on the next start: a device found charging with a
 healthy battery is taken back into output mode. A device found charging at its
-discharge floor gets one exit command, because the EMS cannot tell its
-predecessor's charge from the firmware's protection charge; if the device goes
-on charging after it, that is the firmware recovering an empty battery, and the
-EMS leaves it alone until it is done. The same holds for a device that comes
-back from the network charging at its floor, unless the EMS knows the charge as
-its own — then it simply regulates it.
+discharge floor gets one exit command if the EMS could have charged it, because
+the EMS cannot tell its predecessor's charge from the firmware's protection
+charge; with AC charging off for it, or on a model that cannot charge from AC,
+the charge is the firmware's from the start. If the device goes on charging
+after the exit command, that is the firmware recovering an empty battery, and
+the EMS leaves it alone until it is done. A device that comes back from the network
+charging at its floor is not a new start: the charge is either the EMS's own,
+which it regulates or ends as before, or the firmware's, which it leaves alone.
+Being unreachable for a while earns it no exit command.
 
 ## During the first live run
 

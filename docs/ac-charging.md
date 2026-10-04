@@ -185,7 +185,23 @@ Switching the EMS off (`system.enabled`) or a single device (its runtime
 `enabled`) is not one of these switches, but it also ends a charge: a device the
 EMS is charging gets one final command — the exit to idle — and then nothing
 more, logged as `ac_charge_ended_on_disable`. Without it a disabled device kept
-drawing from the grid with nobody watching.
+drawing from the grid with nobody watching. The command has done its job when
+the device reports that it left the charge, not when it answered: a device that
+took it and charged on is sent it again once the resend window has passed (30 s,
+the MQTT confirmation window), and nothing in between.
+
+A claim that takes a charging device from the regulator — an operator park
+(`runtime_role` `ac_input`) or a maintenance routine such as the full-charge
+assist — is held to the same rule, logged with `reason=claimed` and the claim's
+own reason as `claim`. The exception is a claim that commands a charge of its
+own and can write it: an AC-input role with `ac_charge_power_w` on the local API
+with state reconciliation allowed takes the charge over. The EMS releases its
+record of it (`ac_charge_handed_to_claim`) and writes nothing, and neither
+switching control off nor stopping the EMS ends the claim's charge. A park as AC
+input without a power ends the EMS's charge by its setpoint alone on the local
+API — `inputLimit = 0`, the device staying in `acMode = 1` for the role, so the
+relay is not moved out and back; over MQTT, where nothing keeps that role, it is
+the exit to idle.
 
 Both switches live in [runtime-state](technical/runtime-state.md), which the
 EMS seeds from `config.json` when it loads it. The Dashboard therefore shows
@@ -215,26 +231,42 @@ without a claim of its own the regulator's `acMode = 1` would be overwritten
 with `acMode = 2` once per loop, against the power command putting it back. The
 regulator therefore claims the device at priority 100 with *no* desired mode,
 meaning "the power command owns this". An operator park (150) or maintenance
-(200) still takes the device away mid-charge, and a device found charging that
-the EMS did not command stays a leftover the reconciler may reclaim.
+(200) still takes the device away mid-charge — and ends the EMS's charge with
+one command, see above — and a device found charging that the EMS did not
+command stays a leftover the reconciler may reclaim.
 
 **At the battery floor a charge is the firmware's only when the EMS can tell.**
 There the firmware may charge an empty pack by itself, and that is respected.
-But after a restart, after a device was unreachable, or with the EMS's own
-record of a charge gone, a charge at the floor may be the EMS's own, left
-drawing from the grid. The EMS then writes the exit once; a device that charges
+But after a restart a charge at the floor may be the EMS's own, left drawing
+from the grid by the process before. The EMS then writes the exit once; a device that charges
 on after it is the firmware's, and nothing more is written until that charge
-ends. The EMS's own record survives a reset of its regulation memory and a
-device's absence, because it is what the transport last put on the wire. See
+ends. That exit is only for a device the EMS could have charged: with the
+feature or the device's **AC charging** switch off, or on a model without an AC
+charge path, no charge can be the EMS's own, so it is the firmware's from the
+first cycle and nothing is written. The EMS's own record survives a reset of its regulation memory and a
+device's absence, because the transport keeps it: it opens with a charge
+command and ends only when the device reports that it left the charge. A device
+still charging after an exit it answered and did not carry out is therefore
+still the EMS's own, and is sent the exit again, never handed to the firmware.
+For the same reason a failed read or a device that is unreachable for a while
+does not make a floor charge unattributable: whatever charges there when it
+answers again is the firmware's, and no exit is written into it. A
+firmware charge counts from the moment the device shows the charge mode with a
+setpoint, before current flows, so the state reconciler leaves its first two
+seconds alone too. See
 [technical/control-logic.md](technical/control-logic.md#firmware-owned-charging).
 
 **Leaving a charge is one command, on every transport.** A device in
 `acMode = 1` ignores a bare `outputLimit`, so the way back carries the direction
 with its setpoint: `smartMode=1`, `acMode=2`, the new `outputLimit` and
 `inputLimit=0` in one write. MQTT always sends that set. The local API keeps its
-single-property `outputLimit` write inside the output direction, and sends the
-set whenever the device was last commanded to charge or reports the AC-input
-direction, until the device has accepted it. The exit therefore needs no state
+single-property `outputLimit` write, and sends the set while a charge the EMS
+commanded is on record, until the device reports that it left the charge. A
+device someone else holds in AC input — the vendor app, a schedule — gets the
+bare `outputLimit` the EMS always wrote; taking it back is the state
+reconciler's, behind its own gate. An exit the device
+answered and did not carry out goes out again once per resend window (30 s),
+never once per cycle. The exit therefore needs no state
 reconciliation — with `allow_state_reconciliation_writes` off it used to never
 arrive — and the shutdown release is a complete command rather than an
 `outputLimit` the charging device ignored. On an MQTT device whose commands are
@@ -256,7 +288,9 @@ comparing the target against what the device is doing. A charging device reports
 `outputLimit` 0 and `outputHomePower` 0 while drawing hundreds of watts, so the
 reference is taken from the measured AC input instead — otherwise "switch this
 device off" would compare 0 against 0, skip the write, and leave the hardware
-charging. Local-API devices are also covered by the startup `acMode` reconcile;
+charging. A device that already shows the exit written (`acMode = 2`, no
+`inputLimit`) while its current runs down for about two seconds is not sent the
+exit again. Local-API devices are also covered by the startup `acMode` reconcile;
 MQTT control devices have no state reconciliation and so no such path.
 
 **A charge does not outlive the meter that justifies it.** A grid-meter client
@@ -397,6 +431,7 @@ ac_charge_ceiling_unknown
 ac_charge_direction
 ac_charge_ended_on_disable
 ac_charge_entry_rate_limited
+ac_charge_handed_to_claim
 ac_charge_not_delivered
 ac_charge_refused
 ac_charge_stopped_stale_meter
