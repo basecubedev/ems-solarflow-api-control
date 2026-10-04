@@ -10,6 +10,7 @@ from ems.runtime_intents import (
     PRIORITY_FIRMWARE_OBSERVED,
     PRIORITY_MAINTENANCE,
     PRIORITY_OPERATOR_PARK,
+    UNPROVEN_CHARGE_REASON,
     DeviceRuntimeRole,
     ac_input_intent,
     ac_output_intent,
@@ -200,4 +201,41 @@ def test_the_firmware_observation_sits_just_above_the_default():
     assert PRIORITY_DEFAULT < PRIORITY_FIRMWARE_OBSERVED < PRIORITY_OPERATOR_PARK
     assert firmware_charge_intent("WR1", telemetry(1, 2)).priority == (
         PRIORITY_FIRMWARE_OBSERVED
+    )
+
+
+def test_a_floor_charge_nobody_can_attribute_is_left_to_the_power_command():
+    """Owner decision 2026-10-04: an unattributable floor charge is exited once.
+
+    After a restart, a device back from offline, or with the EMS's own record of
+    its charge gone, a charge at the floor may be the EMS's own -- left drawing
+    from the grid -- or the firmware's protection charge, and telemetry looks the
+    same. Claiming every such charge for the firmware let the EMS's own charge
+    run unsupervised. The claim instead stands the state reconciler down and
+    leaves the device to the power command, which writes the exit once; a device
+    that charges on after that is the firmware's.
+    """
+
+    intent = firmware_charge_intent("WR1", telemetry(1, 2), watched=False)
+
+    assert intent.reason == UNPROVEN_CHARGE_REASON
+    assert intent.priority == PRIORITY_FIRMWARE_OBSERVED
+    assert intent.desired_ac_mode is None
+    assert intent.output_control_allowed is True
+
+
+def test_a_floor_charge_the_ems_watched_begin_is_the_firmware_s():
+    intent = firmware_charge_intent("WR1", telemetry(1, 2), watched=True)
+
+    assert intent.reason == FIRMWARE_CHARGE_REASON
+    assert intent.output_control_allowed is False
+
+
+def test_only_a_charge_at_the_floor_is_ever_in_question():
+    assert firmware_charge_intent("WR1", healthy(), watched=False) is None
+    assert (
+        firmware_charge_intent(
+            "WR1", telemetry(1, 2), ems_commanded_charge=True, watched=False
+        )
+        is None
     )

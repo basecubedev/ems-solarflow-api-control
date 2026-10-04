@@ -1026,6 +1026,150 @@ def test_a_shutdown_release_actually_releases():
     }
 
 
+IDLE_EXIT = {"smartMode": 1, "acMode": 2, "outputLimit": 0, "inputLimit": 0}
+
+
+def pv_less_state(soc):
+    """A device with no PV of its own, idle in the output direction."""
+
+    item = state(soc=soc, min_soc=15, solar=0, output=0, soc_limit=0, pack_num=2)
+    item.ac_mode = 2
+    item.ac_status = 1
+    item.output_limit = 0
+    item.input_limit_w = 0
+    item.grid_input = 0
+    return item
+
+
+def start_charging(item):
+    item.ac_mode = 1
+    item.ac_status = 2
+    item.input_limit_w = 800
+    item.grid_input = 800
+
+
+def following_http_device(item, name="WR1"):
+    """A real local-API client whose device is the hardware double.
+
+    What the client last put on the wire stays with the client, as on a live
+    system, so a test sees the same record the controller reads.
+    """
+
+    from ems.clients import ZendureClient
+
+    hardware = FollowingHardware(item)
+    dev = ZendureClient(
+        name, "192.0.2.10", f"{name}-SN", hardware, 15, 100, 1, None, 800,
+        hardware_profile="solarflow_2400_ac",
+    )
+    return dev, hardware
+
+
+def floor_harness(item, load):
+    dev, hardware = following_http_device(item)
+    harness = Harness([dev], load=load)
+    harness.controller.set_output_limit = hardware
+    return harness, hardware
+
+
+def test_a_charge_found_at_the_floor_after_a_restart_is_ended_once():
+    """Owner decision 2026-10-04, the restart case.
+
+    A process that starts and finds a device charging at its floor cannot tell
+    the firmware's protection charge from its own predecessor's charge, left
+    drawing from the grid. Claiming it for the firmware left the second running
+    unsupervised. The exit is written once; a device that charges on after it is
+    the firmware's, and nothing more is written until that charge ends.
+    """
+
+    item = pv_less_state(soc=15)
+    start_charging(item)
+    harness, hardware = floor_harness(item, load=300)
+
+    harness.run(cycles=1, states=[item])
+
+    assert hardware.writes == [IDLE_EXIT]
+    assert item.ac_mode == 2
+
+    start_charging(item)
+    harness.run(cycles=5, states=[item])
+
+    assert hardware.writes == [IDLE_EXIT]
+    assert harness.controller.runtime_intents["WR1"].reason == "firmware_owned_charge"
+
+
+def test_a_floor_charge_the_ems_saw_begin_is_left_to_the_firmware():
+    """Where the EMS can tell, it does not touch the firmware's charge at all."""
+
+    item = pv_less_state(soc=15)
+    harness, hardware = floor_harness(item, load=300)
+    harness.run(cycles=2, states=[item])
+    before = list(hardware.writes)
+
+    start_charging(item)
+    harness.run(cycles=5, states=[item])
+
+    assert hardware.writes == before
+    assert harness.controller.runtime_intents["WR1"].reason == "firmware_owned_charge"
+
+
+def test_the_ems_own_charge_at_the_floor_is_still_its_own_after_an_absence():
+    """A device back from offline mid-charge is not the firmware's to keep.
+
+    While it was unreachable the regulator's target for it fell to zero, which
+    was the only record of the charge: on its return the charge read as the
+    firmware's and the EMS left it drawing with nobody watching. What the
+    transport last put on the wire survives an absence.
+    """
+
+    item = pv_less_state(soc=15)
+    harness, hardware = floor_harness(item, load=-900)
+    harness.run(cycles=20, states=[item])
+    assert item.ac_mode == 1, "the regulator never charged the device"
+
+    harness.run(cycles=4, states=[None], load=300)
+    harness.run(cycles=1, states=[item], load=300)
+
+    assert item.ac_mode == 2
+    assert item.grid_input == 0
+    assert hardware.writes[-1]["acMode"] == 2
+
+
+@pytest.mark.parametrize("soc", [50, 15])
+def test_switching_control_back_on_does_not_end_a_running_charge(soc):
+    """Re-enabling control resets the output memory, not the charge.
+
+    The reset cleared the regulator's only record of its own charge and seeded
+    the total from the devices' output, which is zero for a charging device.
+    The next cycle read the balanced meter as no surplus and ended the charge
+    -- a relay round trip above min SoC -- and at min SoC handed it to the
+    firmware claim, drawing unsupervised.
+    """
+
+    item = pv_less_state(soc=soc)
+    harness, hardware = floor_harness(item, load=-900)
+    harness.run(cycles=20, states=[item])
+    assert item.ac_mode == 1, "the regulator never charged the device"
+    controller = harness.controller
+    controller.device_state_writes_allowed = lambda dev: True
+    before = len(hardware.writes)
+
+    controller.note_control_enabled(False)
+    controller.note_control_enabled(True)
+    reconciled = []
+    with patch(
+        "ems.controller.write_device_properties",
+        side_effect=lambda dev, properties, **kw: reconciled.append(properties) or True,
+    ):
+        harness.run(cycles=2, states=[item], load=0)
+
+    assert controller.charge_direction.charging is True
+    assert controller.runtime_intents["WR1"].reason == REGULATOR_CHARGE_REASON
+    assert item.ac_mode == 1
+    assert all(write["acMode"] == 1 for write in hardware.writes[before:])
+    assert [p for p in reconciled if "acMode" in p] == []
+
+
 def test_an_mqtt_control_device_charges_through_the_same_loop():
     """A whole transport that had no loop-level coverage.
 

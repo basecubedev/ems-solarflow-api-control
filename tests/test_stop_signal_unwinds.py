@@ -123,7 +123,7 @@ def test_the_shutdown_release_only_ever_touched_charging_devices():
     from ems.controller import EMSController
 
     source = inspect.getsource(EMSController.release_charging_devices)
-    assert 'self.commanded_device_targets.get(dev.name, 0) >= 0' in source
+    assert "if not self.charge_commanded_by_ems(dev):" in source
     assert "continue" in source
 
 

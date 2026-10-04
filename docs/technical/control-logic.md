@@ -311,6 +311,24 @@ mode and the observed status agree, the battery is at its floor, and the EMS did
 not ask for the charge — rather than by reimplementing the firmware's trigger,
 which is a threshold the EMS does not own.
 
+"Did not ask for it" is read from two records of the EMS's own charge: the
+regulator's last target, and what the device's transport last put on the wire.
+The second outlives what the first does not — the reset of the output memory
+when control is switched back on, and the zero a device is given while it cannot
+be reached — so the EMS's own charge is never read back as the firmware's.
+
+Telemetry alone cannot say who started a charge at the floor, so the EMS also
+asks whether it can tell. It can when it saw the device not charging (or
+charging by its own command) before the charge began; then the charge is the
+firmware's from the first cycle. It cannot after a restart, after the device was
+unreachable, or once its own record is gone: the charge may be its own, left
+drawing from the grid. Then the device stays with the power command for one
+cycle, which writes the exit once (`acMode = 2`, `inputLimit = 0`). A device
+that is still or again charging after that exit is the firmware's protection
+charge and is respected, with nothing written, until it leaves that state. The
+provenance is process memory and never written to runtime-state (owner decision
+2026-10-04).
+
 Above the floor, a charge nobody is commanding is a leftover from an EMS that
 stopped mid-charge, or one started from the vendor app, and the normal acMode
 reconcile takes it back.
@@ -324,15 +342,16 @@ needs a claim of its own, or the reconciler writes `acMode = 2` once per loop
 against the power command writing `acMode = 1`.
 
 A claim whose `desired_ac_mode` is `None` means *the power command owns this
-device's direction*, and the reconciler skips it. Two claims do that:
+device's direction*, and the reconciler skips it. Three claims do that:
 
 | Claim | Priority | Raised when |
 |---|---:|---|
 | `regulator_charge_intent` | 100 | the EMS commanded this device a charge last cycle |
 | `firmware_charge_intent` | 50 | the firmware charges an empty pack by itself |
+| `firmware_charge_intent` (`unproven_floor_charge`) | 50 | a charge at the floor nobody can attribute; the power command writes its exit once |
 
-An operator park (150) and maintenance (200) outrank both, so either still takes
-a device away mid-charge.
+An operator park (150) and maintenance (200) outrank all three, so either still
+takes a device away mid-charge.
 
 ## Deadband
 

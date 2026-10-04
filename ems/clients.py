@@ -372,7 +372,13 @@ def zero_device_state():
     )
 
 class ZendureClient:
-    """Client for a single Zendure device."""
+    """Client for a single Zendure device.
+
+    ``charge_commanded`` is true from a charge command until the device has
+    accepted a non-negative one. It decides the shape of the next write, and the
+    controller reads it as its own record of a charge, the one that outlives a
+    reset of its regulation memory or the device's absence.
+    """
 
     control_gate = "api"
 

@@ -139,6 +139,28 @@ def _bounded_tuning(value, default, low, high, cast=float):
     return cast(min(high, max(low, number)))
 
 
+def _reports_own_target(metrics, observed_output_limit, target, tolerance):
+    """Whether a report shows ``target`` -- one of this client's own -- applied.
+
+    A discharge or an idle shows as its ``outputLimit``. A charge does not: the
+    device reports ``outputLimit`` 0 while it charges, never the negative
+    target, so comparing the two read every steady charge of the EMS's own as a
+    foreign writer. A charge shows as an ``outputLimit`` of 0 and, where the
+    device reports one, an ``inputLimit`` at the charge power.
+    """
+
+    if isinstance(target, bool) or not isinstance(target, (int, float)):
+        return False
+    if target >= 0:
+        return abs(float(observed_output_limit) - float(target)) <= tolerance
+    if abs(float(observed_output_limit)) > tolerance:
+        return False
+    input_limit = metrics.get("inputLimit")
+    if isinstance(input_limit, bool) or not isinstance(input_limit, (int, float)):
+        return True
+    return abs(float(input_limit) - abs(float(target))) <= tolerance
+
+
 def _coerce_reply(payload):
     """Parse a reply payload (bytes/str/mapping) into a dict, or ``None``.
 
@@ -162,7 +184,13 @@ def _coerce_reply(payload):
 
 
 class ZendureMqttDeviceClient:
-    """A Zendure inverter controlled over MQTT rather than the local HTTP API."""
+    """A Zendure inverter controlled over MQTT rather than the local HTTP API.
+
+    ``charge_commanded`` says what this client last published: a charge, until
+    a non-negative command goes out. A queued target has not been published and
+    changes nothing. The controller reads it as its own record of a charge, the
+    one that outlives a reset of its regulation memory or the device's absence.
+    """
 
     ip = "mqtt"
     supports_state_reconciliation = False
@@ -298,6 +326,7 @@ class ZendureMqttDeviceClient:
         self._foreign_streak = 0
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
+        self.charge_commanded = False
         self.sn = serial_number or device_id
         # The trusted physical serial when one is configured, else None. ``sn``
         # falls back to the route/device id for a serial-less device, so it is not
@@ -748,6 +777,7 @@ class ZendureMqttDeviceClient:
         self._last_command = record
         self._last_command_state = record.state
         if ok:
+            self.charge_commanded = target < 0
             self._remember_command_evidence(record, publish_completed)
             return dispatch.published(
                 target,
@@ -1307,10 +1337,12 @@ class ZendureMqttDeviceClient:
         """Conservatively flag a foreign writer overwriting a confirmed target.
 
         Requires: no local command in flight, a previously *confirmed* local
-        target, and at least two successive newer telemetry reports whose
-        ``outputLimit`` is materially away from that target and from every own
-        target released unconfirmed since, which the device may apply late.
-        Reports evidence only — never claims which controller is responsible.
+        target, and at least two successive newer telemetry reports that show
+        neither that target nor any own target released unconfirmed since,
+        which the device may apply late -- for a discharge its ``outputLimit``,
+        for a charge the report a charging device gives (see
+        ``_reports_own_target``). Reports evidence only — never claims which
+        controller is responsible.
         """
 
         if self._active_command is not None or self._last_confirmed_target is None:
@@ -1346,8 +1378,7 @@ class ZendureMqttDeviceClient:
         tolerance = self._confirmation_policy().confirmation_tolerance_w
         own_targets = {self._last_confirmed_target, *self._unconfirmed_own_targets}
         if any(
-            isinstance(target, (int, float))
-            and abs(float(observed) - float(target)) <= tolerance
+            _reports_own_target(metrics, observed, target, tolerance)
             for target in own_targets
         ):
             self._foreign_streak = 0

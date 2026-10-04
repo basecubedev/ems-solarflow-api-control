@@ -35,6 +35,7 @@ from ems.runtime_intents import (
     DeviceRuntimeRole,
     ac_input_intent,
     ac_output_intent,
+    UNPROVEN_CHARGE_REASON,
     firmware_charge_intent,
     resolve_device_intent,
     runtime_intent_from_role,
@@ -146,6 +147,7 @@ class EMSController:
         self._last_influx_publish = 0
         self.last_control_explanation = None
         self.runtime_intents = {}
+        self.floor_charge_watched = set()
         self.charge_direction = ChargeDirectionState()
         # What the devices that may charge could actually take, from the cycle
         # that last decided the direction, and each device's resolved ceiling.
@@ -318,6 +320,12 @@ class EMSController:
         still reports that limit while delivering nothing, and seeding from it
         adds a floor that does not exist to the first desired total -- enough
         to read a marginal surplus as none and end a charge just entered.
+
+        And less what the devices this EMS charges draw, held to the charge
+        floor. A charging device feeds out nothing, so a seed of its output
+        alone is zero, and the next cycle read a meter the charge itself had
+        balanced as no surplus and ended the charge -- every time something
+        reset the output memory, switching control back on among them.
         """
 
         limit_total = sum(
@@ -327,8 +335,12 @@ class EMSController:
         )
 
         if self.charge_direction.charging:
-            initial = sum(state.output for state in states)
-            source = "output_while_charging"
+            initial = sum(state.output for state in states) - sum(
+                cfg.safe_int(getattr(state, "grid_input", 0), 0, minimum=0)
+                for dev, state in zip(self.devices, states)
+                if self.charge_commanded_by_ems(dev)
+            )
+            source = "measured_while_charging"
         elif limit_total > 0:
             initial = limit_total
             source = "output_limit"
@@ -336,7 +348,9 @@ class EMSController:
             initial = sum(state.output for state in states)
             source = "output"
 
-        self.commanded_total_w = max(0, min(max_power, initial))
+        self.commanded_total_w = max(
+            self.commanded_total_floor_w(), min(max_power, initial)
+        )
 
         log_event(
             logging.INFO,
@@ -1463,7 +1477,7 @@ class EMSController:
         """
 
         for dev in self.devices:
-            if self.commanded_device_targets.get(dev.name, 0) >= 0:
+            if not self.charge_commanded_by_ems(dev):
                 continue
 
             log_event(
@@ -1486,6 +1500,54 @@ class EMSController:
         self.charge_direction = ChargeDirectionState()
         self.charge_capacity_w = 0
         self.device_charge_limits = {}
+
+    def charge_commanded_by_ems(self, dev):
+        """Whether this EMS is charging ``dev``, by its own record.
+
+        Two records, either is enough. The regulator steers by its last target;
+        the transport knows what it last put on the wire, and that outlives
+        what the target does not -- the reset of the output memory when control
+        is switched back on, and the zero a device is given while it cannot be
+        reached. Reading the target alone handed the EMS's own charge at the
+        battery floor to the firmware claim in both cases, drawing unsupervised.
+        """
+
+        return (
+            self.commanded_device_targets.get(dev.name, 0) < 0
+            or getattr(dev, "charge_commanded", False) is True
+        )
+
+    def note_floor_charge_provenance(self, dev_name, floor_charge):
+        """Remember whether the EMS can tell who started a charge at the floor.
+
+        It can once it has seen the device not charging, or charging by its own
+        command, and once it has written the exit to a charge it could not
+        attribute. It cannot after a restart, while the device is unreachable,
+        or while such an exit is still to be written. Process memory only: a
+        regulator decision never goes to runtime-state.
+        """
+
+        if floor_charge is not None and floor_charge.reason == UNPROVEN_CHARGE_REASON:
+            self.floor_charge_watched.discard(dev_name)
+        else:
+            self.floor_charge_watched.add(dev_name)
+
+    def note_floor_charge_exit(self, dev, target, written):
+        """An exit written to an unattributed floor charge settles who owns it.
+
+        From here a device that charges on is the firmware's: the owner's
+        decision of 2026-10-04 is one exit, not one per cycle against the
+        firmware's protection charge.
+        """
+
+        intent = self.runtime_intents.get(dev.name)
+        if (
+            written
+            and target >= 0
+            and intent is not None
+            and intent.reason == UNPROVEN_CHARGE_REASON
+        ):
+            self.floor_charge_watched.add(dev.name)
 
     def device_charge_floor_w(self, dev):
         """How far negative one device's target may go right now.
@@ -1564,7 +1626,7 @@ class EMSController:
         # charge we are not already running is refused for it: applying this to
         # a running charge ended it on a single noisy sample, and re-entry then
         # costs a full confirmation window.
-        already_charging = self.commanded_device_targets.get(dev.name, 0) < 0
+        already_charging = self.charge_commanded_by_ems(dev)
         if not already_charging and self.pack_drained_from_outside(state):
             return False
 
@@ -4216,14 +4278,15 @@ class EMSController:
             raw_states
         ):
             if not state:
+                self.floor_charge_watched.discard(dev.name)
                 continue
 
-            # Last cycle's command. A charge this EMS asked for is not the
-            # firmware's and must not be read back as such; it is also the
-            # regulator's claim on the device's AC direction, which is what
-            # keeps the state reconciler from writing acMode back every cycle.
-            ems_commanded_charge = (
-                self.commanded_device_targets.get(dev.name, 0) < 0
+            ems_commanded_charge = self.charge_commanded_by_ems(dev)
+            floor_charge = firmware_charge_intent(
+                dev.name,
+                state,
+                ems_commanded_charge=ems_commanded_charge,
+                watched=dev.name in self.floor_charge_watched,
             )
             intent = resolve_device_intent([
                 self.get_device_runtime_intent(dev, state),
@@ -4231,12 +4294,9 @@ class EMSController:
                 regulator_charge_intent(
                     dev.name, ems_commanded_charge=ems_commanded_charge
                 ),
-                firmware_charge_intent(
-                    dev.name,
-                    state,
-                    ems_commanded_charge=ems_commanded_charge,
-                ),
+                floor_charge,
             ])
+            self.note_floor_charge_provenance(dev.name, floor_charge)
             self.runtime_intents[dev.name] = intent
             ac_mode_write_ok = self.reconcile_ac_mode_intent(dev, state, intent)
             self.update_full_charge_assist_ac_pending(
@@ -4509,7 +4569,7 @@ class EMSController:
                     for dev in self.devices
                 ],
                 charging_now=[
-                    self.commanded_device_targets.get(dev.name, 0) < 0
+                    self.charge_commanded_by_ems(dev)
                     for dev in self.devices
                 ],
             )
@@ -4729,7 +4789,8 @@ class EMSController:
                 self.retire_pending_output_limit(dev, "deadband_skip_write")
                 continue
 
-            self.set_output_limit(dev, target)
+            written = self.set_output_limit(dev, target)
+            self.note_floor_charge_exit(dev, target, written)
 
         # =====================
         # LOOP TIMING

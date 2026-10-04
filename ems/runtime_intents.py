@@ -30,6 +30,7 @@ PRIORITY_OPERATOR_PARK = 150
 PRIORITY_MAINTENANCE = 200
 
 FIRMWARE_CHARGE_REASON = "firmware_owned_charge"
+UNPROVEN_CHARGE_REASON = "unproven_floor_charge"
 REGULATOR_CHARGE_REASON = "ac_charge_regulator"
 
 
@@ -95,8 +96,8 @@ def runtime_intent_from_role(device_name, role, reason: str | None = None):
     return None
 
 
-def firmware_charge_intent(device_name, state, *, ems_commanded_charge=False):
-    """Claim a device the firmware put into AC charge by itself, or None.
+def is_floor_charge(state):
+    """Whether telemetry shows an AC charge at the battery's floor.
 
     Three observations, no prediction. The firmware decides when to recover an
     empty battery from AC; reimplementing that trigger here would be a second
@@ -106,34 +107,50 @@ def firmware_charge_intent(device_name, state, *, ems_commanded_charge=False):
     The written mode and the observed status must agree, which keeps the ~2 s
     settling window after a command from being mistaken for the firmware acting
     on its own. The battery must be at its floor, which is where the firmware
-    acts and an EMS surplus charge does not. And the EMS must not have asked for
-    this charge itself — without that, the regulator's own charge would be read
-    back as firmware-owned, the device would be marked uncommandable, and the
-    regulator would shut itself down two cycles after starting.
+    acts.
+    """
+
+    return (
+        safe_int(getattr(state, "ac_status", 0)) == AC_STATUS_CHARGING
+        and safe_int(getattr(state, "ac_mode", 0)) == AC_MODE_INPUT
+        and derive_soc_runtime_state(state) == "soc_empty"
+    )
+
+
+def firmware_charge_intent(
+    device_name, state, *, ems_commanded_charge=False, watched=True
+):
+    """Claim a device charging at its floor that the EMS did not command, or None.
+
+    The EMS must not have asked for this charge itself — without that, the
+    regulator's own charge would be read back as firmware-owned, the device
+    would be marked uncommandable, and the regulator would shut itself down two
+    cycles after starting.
+
+    ``watched`` says whether the EMS can tell who started it: it saw the device
+    not charging since it last commanded one, or it already wrote the exit to
+    this charge and the device charges still or again. That is the firmware's
+    protection charge, and it is respected -- nothing is written until it ends.
+    When the EMS cannot tell -- a restart, a device back from offline, its own
+    record of the charge gone -- the charge may be its own, left drawing from
+    the grid with nobody watching. The claim then stands the state reconciler
+    down and leaves the device to the power command, which writes the exit once
+    (owner decision 2026-10-04).
 
     Above the floor and uncommanded, a charging device is a leftover — an EMS
     that died mid-charge, or an app-initiated one — and the normal acMode
     reconcile is allowed to take it back.
     """
 
-    if ems_commanded_charge:
-        return None
-
-    if safe_int(getattr(state, "ac_status", 0)) != AC_STATUS_CHARGING:
-        return None
-
-    if safe_int(getattr(state, "ac_mode", 0)) != AC_MODE_INPUT:
-        return None
-
-    if derive_soc_runtime_state(state) != "soc_empty":
+    if ems_commanded_charge or not is_floor_charge(state):
         return None
 
     return DeviceRuntimeIntent(
         device=device_name,
         role=DeviceRuntimeRole.AC_INPUT,
-        reason=FIRMWARE_CHARGE_REASON,
+        reason=FIRMWARE_CHARGE_REASON if watched else UNPROVEN_CHARGE_REASON,
         desired_ac_mode=None,
-        output_control_allowed=False,
+        output_control_allowed=not watched,
         priority=PRIORITY_FIRMWARE_OBSERVED,
     )
 
@@ -209,6 +226,8 @@ __all__ = [
     "REGULATOR_CHARGE_REASON",
     "regulator_charge_intent",
     "FIRMWARE_CHARGE_REASON",
+    "UNPROVEN_CHARGE_REASON",
+    "is_floor_charge",
     "DeviceRuntimeRole",
     "DeviceRuntimeIntent",
     "ac_output_intent",

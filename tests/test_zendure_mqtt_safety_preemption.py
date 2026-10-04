@@ -387,3 +387,27 @@ def test_an_invoke_charge_is_not_confirmed_without_a_charge(metrics):
     _report(dev, record, metrics)
 
     assert record.state == "acknowledged"
+
+
+# --- what the client last put on the wire ------------------------------------
+
+
+def test_the_client_remembers_a_charge_it_published_until_the_way_back():
+    """The controller's record of its own charge, the one a reset cannot erase.
+
+    A queued target was not published and changes nothing; only a non-negative
+    command that went out ends the record.
+    """
+
+    dev = _ack_device()
+    assert dev.charge_commanded is False
+
+    dev.write_output_limit(-600)
+    assert dev.charge_commanded is True
+
+    dev.dispatch_output_limit(-400)
+    assert dev._pending_target == -400
+    assert dev.charge_commanded is True
+
+    dev.dispatch_output_limit(35)
+    assert dev.charge_commanded is False

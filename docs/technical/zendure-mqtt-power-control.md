@@ -775,7 +775,11 @@ reports whose `outputLimit` is materially away from it — with no local command
 in flight — raise a conservative `external_control_suspected` WARNING and set
 the flag (with expected/observed watts) in `describe()`. The report names
 evidence only, never a specific controller; a matching report resets the streak
-and a new local confirmation clears the flag. Operators running Cloud MQTT
+and a new local confirmation clears the flag. A charge of the EMS's own matches
+as a charging device reports it — `outputLimit` 0 and, where reported, an
+`inputLimit` at the charge power — never as the negative target, which no
+device reports; comparing against that once flagged every steady charge as a
+foreign writer. Operators running Cloud MQTT
 control must disable Zendure HEMS, Smart Matching, Zendure schedules and any
 other simultaneous controller (the Admin preview/apply and `diagnose` surface
 this advisory as `zendure_cloud_mqtt_single_controller`).

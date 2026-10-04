@@ -208,6 +208,16 @@ meaning "the power command owns this". An operator park (150) or maintenance
 (200) still takes the device away mid-charge, and a device found charging that
 the EMS did not command stays a leftover the reconciler may reclaim.
 
+**At the battery floor a charge is the firmware's only when the EMS can tell.**
+There the firmware may charge an empty pack by itself, and that is respected.
+But after a restart, after a device was unreachable, or with the EMS's own
+record of a charge gone, a charge at the floor may be the EMS's own, left
+drawing from the grid. The EMS then writes the exit once; a device that charges
+on after it is the firmware's, and nothing more is written until that charge
+ends. The EMS's own record survives a reset of its regulation memory and a
+device's absence, because it is what the transport last put on the wire. See
+[technical/control-logic.md](technical/control-logic.md#firmware-owned-charging).
+
 **Leaving a charge is one command, on every transport.** A device in
 `acMode = 1` ignores a bare `outputLimit`, so the way back carries the direction
 with its setpoint: `smartMode=1`, `acMode=2`, the new `outputLimit` and

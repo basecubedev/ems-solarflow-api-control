@@ -188,7 +188,12 @@ reachable again. The remaining devices adapt in the same cycle.
 
 The EMS itself recovers on the next start: a device found charging with a
 healthy battery is taken back into output mode. A device found charging at its
-discharge floor is left alone, because there the firmware is recovering it.
+discharge floor gets one exit command, because the EMS cannot tell its
+predecessor's charge from the firmware's protection charge; if the device goes
+on charging after it, that is the firmware recovering an empty battery, and the
+EMS leaves it alone until it is done. The same holds for a device that comes
+back from the network charging at its floor, unless the EMS knows the charge as
+its own — then it simply regulates it.
 
 ## During the first live run
 
