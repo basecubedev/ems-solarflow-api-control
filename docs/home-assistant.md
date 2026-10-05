@@ -161,6 +161,13 @@ sensor.ems_solarflow_wr1_winter_min_soc_target
 sensor.ems_solarflow_wr1_winter_estimated_ramp_days
 ```
 
+`winter_adjust_window` is on during `winter.adjust_hour`, the hour the
+`noon_step` policy steps from; `winter_ramp_step` is the daily step (at most
+3); `winter_last_adjust_date` is
+the latest day any device took a step; and `<device>_winter_min_soc_target` is
+the `minSoc` the EMS holds for the device, with its winter policy in the
+`policy` attribute. See [winter-mode.md](winter-mode.md).
+
 ## Home Assistant Dashboard Example
 
 The repository contains an optional Home Assistant dashboard example:

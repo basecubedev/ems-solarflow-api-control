@@ -80,6 +80,7 @@ class DeviceCapabilities:
     can_export: bool
     can_ac_charge: bool
     reason: str
+    export_held: bool = False
 
 # =====================
 # DEVICE PARSING

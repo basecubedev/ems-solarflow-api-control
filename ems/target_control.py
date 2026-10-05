@@ -117,6 +117,16 @@ def battery_presence(state):
     return BATTERY_PRESENT if packs > 0 else BATTERY_ABSENT
 
 
+def pv_power(state):
+    """PV power the device reports, whichever field its firmware fills."""
+
+    strings = sum(
+        max(0, getattr(state, field, 0) or 0)
+        for field in ("solar1", "solar2", "solar3", "solar4")
+    )
+    return max(getattr(state, "solar", 0) or 0, strings)
+
+
 def detect_capabilities(state):
     """Derive runtime capabilities from firmware telemetry."""
 

@@ -110,6 +110,7 @@ from ems.external_status import (
     mask_mqtt_topic,
     sanitize_external_mqtt_status,
 )
+from ems.winter_policies import find_winter_policy_issues
 from ems.zendure_mqtt.config_entries import (
     SOURCE_LOCAL_MQTT,
     find_duplicate_zendure_device_identities,
@@ -1981,6 +1982,8 @@ def _validate(config, merge_issues=()):
             devices, broker_sources=broker_sources_from_config(config)
         ):
             validation["errors"].append(_issue(issue["code"], issue["message"]))
+        for issue in find_winter_policy_issues(config):
+            validation["errors"].append(_issue(issue["code"], f"{issue['message']}."))
         for issue in find_zendure_mqtt_broker_profile_issues(config):
             validation["errors"].append(_issue(issue["code"], issue["message"]))
 

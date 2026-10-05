@@ -36,9 +36,14 @@ So:
 
 Two features are enabled in the template and act without an operator:
 
-- **Winter mode** (`winter.enabled: true`, months 10 to 3) raises `minSoc` step
-  by step up to `winter_min_soc` (40 %), each step only once the battery holds
-  it, and sets a winter AC charge `inputLimit` of 200 W.
+- **Winter mode** (`winter.enabled: true`, months 10 to 3) raises `minSoc`
+  once a day up to `winter_min_soc` (40 %) and sets a winter AC charge
+  `inputLimit` of 200 W. On a device with PV, `minSoc` leads the SoC by at
+  most 3 points, and while the battery is below it the device exports at most
+  `min_output_limit` for up to three hours so PV charges the battery first. On a battery without PV
+  of its own (`pv_kwp: 0`) the noon step may lead the SoC by up to two steps,
+  and the firmware may then charge it from the grid at full AC power. See
+  [winter-mode.md](../winter-mode.md#device-types-and-policies).
 - **Battery full-charge assist** (`battery_full_charge_assist.enabled: true`)
   raises `socSet` to 100 % every 28 days; with `enable_ac_charge_mode: true`
   it switches the inverter to AC input at `force_time` (14:00 local time; in

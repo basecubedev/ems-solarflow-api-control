@@ -1981,3 +1981,19 @@ def test_plain_stays_plain():
     profile = result["config"]["zendure_mqtt"]["brokers"]["local_mqtt"]
     assert profile["tls"] is False
     assert profile.get("tls_insecure") in (None, False)
+
+
+def test_setup_refuses_a_winter_policy_the_device_type_cannot_run():
+    """EMS owns the policy semantics; Setup asks it rather than guessing."""
+
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [
+            _device(1, config_values={"pv_kwp": "0", "winter_policy": "solar_morning_step"}),
+            _meter(),
+        ],
+        1,
+    )
+
+    codes = [issue["code"] for issue in result["validation"]["errors"]]
+    assert result["ready"] is False
+    assert "winter_policy_device_class" in codes

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from ems.paths import resolve_config_path, resolve_template_path
+from ems.winter_policies import MAX_RAISE_ABOVE_SOC, configurable_class_defaults
 
 LATEST_CONFIG_SCHEMA_VERSION = 3
 CURRENT_CONFIG_SCHEMA_VERSION = LATEST_CONFIG_SCHEMA_VERSION
@@ -46,9 +47,10 @@ WINTER_DEFAULTS = {
     "months": [10, 11, 12, 1, 2, 3],
     "summer_min_soc": 15,
     "winter_min_soc": 40,
-    "ramp_step_percent": 5,
+    "ramp_step_percent": 3,
     "adjust_hour": 12,
-    "ac_charge_power": 200
+    "ac_charge_power": 200,
+    "policies": configurable_class_defaults()
 }
 
 DASHBOARD_DEFAULTS = {
@@ -3194,55 +3196,8 @@ def winter_mode_active(now, runtime_state=None):
     return winter_feature_enabled(runtime_state) and winter_month_active(now)
 
 
-def calculate_winter_min_soc_target(
-    current_soc,
-    effective_min_soc,
-    winter_active,
-    summer_min_soc=None,
-    winter_min_soc=None,
-    ramp_step=None
-):
-    """Calculate the next minSoc target for winter/summer reconciliation."""
-
-    if summer_min_soc is None:
-        summer_min_soc = winter_config_int("summer_min_soc", 15, minimum=0)
-    else:
-        summer_min_soc = safe_int(summer_min_soc, 15, minimum=0)
-
-    if winter_min_soc is None:
-        winter_min_soc = winter_config_int("winter_min_soc", 40, minimum=0)
-    else:
-        winter_min_soc = safe_int(winter_min_soc, 40, minimum=0)
-
-    if ramp_step is None:
-        ramp_step = winter_config_int("ramp_step_percent", 5, minimum=1)
-    else:
-        ramp_step = safe_int(ramp_step, 5, minimum=1)
-
-    if not winter_active:
-        return summer_min_soc
-
-    if current_soc >= winter_min_soc:
-        return winter_min_soc
-
-    if current_soc > effective_min_soc + ramp_step:
-        return min(current_soc, winter_min_soc)
-
-    return min(effective_min_soc + ramp_step, winter_min_soc)
-
-
-def winter_min_soc_the_battery_holds(target, current_min_soc, soc):
-    """The winter minSoc to write: a raise only once the battery holds it.
-
-    Raised five points above the SoC, minSoc made the firmware charge from the
-    grid at full AC power, whatever ``inputLimit`` said. A raise therefore
-    waits until the SoC has reached it. A target that is no raise passes
-    unchanged, and without a usable SoC reading nothing is raised.
-    """
-
-    current = safe_int(current_min_soc, 0, minimum=0)
-    if target <= current:
-        return target
+def winter_soc_reading(soc):
+    """Return ``soc`` when it is a usable finite SoC reading, else ``None``."""
 
     try:
         usable = (
@@ -3252,25 +3207,170 @@ def winter_min_soc_the_battery_holds(target, current_min_soc, soc):
         )
     except OverflowError:
         usable = False
-    if not usable or soc < target:
+
+    return soc if usable else None
+
+
+def winter_step_percent():
+    """The daily winter step, never more than ``MAX_RAISE_ABOVE_SOC``.
+
+    Configs from before the step was 3 carry 5; a noon step of 5 could lead
+    the SoC by ten points.
+    """
+
+    step = winter_config_int(
+        "ramp_step_percent",
+        WINTER_DEFAULTS["ramp_step_percent"],
+        minimum=1
+    )
+    return min(step, MAX_RAISE_ABOVE_SOC)
+
+
+def winter_min_soc_percent():
+    """The configured winter reserve ceiling."""
+
+    return winter_config_int(
+        "winter_min_soc", WINTER_DEFAULTS["winter_min_soc"], minimum=0
+    )
+
+
+def winter_summer_min_soc():
+    """The configured reserve outside the winter months."""
+
+    return winter_config_int(
+        "summer_min_soc", WINTER_DEFAULTS["summer_min_soc"], minimum=0
+    )
+
+
+def winter_adjust_hour():
+    """The local hour a timed winter step is due from."""
+
+    return winter_config_int(
+        "adjust_hour", WINTER_DEFAULTS["adjust_hour"], minimum=0
+    ) % 24
+
+
+def winter_policy_class_defaults():
+    """The configured default policy per device energy class."""
+
+    policies = WINTER_CONFIG.get("policies")
+    return policies if isinstance(policies, dict) else {}
+
+
+def device_config_entry(name):
+    """The one enabled ``devices[]`` entry named ``name``, or ``None``.
+
+    Admin keeps names unique; a hand-edited config that does not is ambiguous,
+    and an ambiguous entry is no source for a device's settings.
+    """
+
+    from ems.zendure_mqtt.config_entries import config_entry_enabled
+
+    devices = ZENDURE_CONFIG if isinstance(ZENDURE_CONFIG, list) else []
+    matches = [
+        entry for entry in devices
+        if isinstance(entry, dict)
+        and entry.get("name") == name
+        and config_entry_enabled(entry)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def winter_step_within_ceiling(current, raised, winter_min_soc):
+    """A step's minSoc: no lower than the current one, never above the ceiling.
+
+    A minSoc already above ``winter_min_soc`` -- set in the app, or left by a
+    higher ceiling -- comes down to it.
+    """
+
+    return min(winter_min_soc, max(current, raised))
+
+
+def winter_timed_step_target(soc, current_min_soc, winter_min_soc, step):
+    """The minSoc of a timed step: the current minSoc plus ``step``.
+
+    It steps only while the battery is at most ``step`` below its minSoc, so
+    minSoc leads the SoC by at most two steps: far enough for the firmware to
+    charge it from the grid, never a ramp that runs away from a battery that
+    does not charge. Without a SoC reading it does not step.
+    """
+
+    reading = winter_soc_reading(soc)
+    current = safe_int(current_min_soc, 0, minimum=0)
+
+    if reading is None or reading < current - step:
+        return None
+
+    return winter_step_within_ceiling(current, current + step, winter_min_soc)
+
+
+def winter_morning_step_target(soc, current_min_soc, winter_min_soc, step):
+    """The minSoc of the morning step, or ``None`` while the battery is well below minSoc.
+
+    The step starts from the SoC, not from minSoc. A battery one point below
+    its minSoc -- drift, rounding -- still steps: it is too close for the
+    export hold to start, so waiting for it would stall the ramp.
+    """
+
+    reading = winter_soc_reading(soc)
+    current = safe_int(current_min_soc, 0, minimum=0)
+
+    if reading is None or reading < current - 1:
+        return None
+
+    return winter_step_within_ceiling(current, int(reading) + step, winter_min_soc)
+
+
+def winter_daytime_follow_target(soc, current_min_soc, winter_min_soc):
+    """A minSoc raised to the SoC PV has reached, or ``None`` when it is no raise."""
+
+    reading = winter_soc_reading(soc)
+
+    if reading is None:
+        return None
+
+    target = min(int(reading), winter_min_soc)
+
+    return target if target > current_min_soc else None
+
+
+def winter_min_soc_raise_limit(target, current_min_soc, soc, max_raise_above_soc):
+    """The winter minSoc to write: a raise only while it leads the SoC by little.
+
+    Raised five points above the SoC, minSoc made the firmware charge from the
+    grid at full AC power, whatever ``inputLimit`` said; three points above it
+    did not. A raise is therefore written once it leads the SoC by at most
+    ``max_raise_above_soc`` -- never cut to a part of itself, which written
+    again each reconcile would climb with the SoC all day. A target that is no raise passes
+    unchanged, and without a usable SoC reading nothing is raised. A device
+    that reports no minSoc gets no raise above what the battery already holds.
+    """
+
+    current = safe_int(current_min_soc, 0, minimum=0)
+    if target <= current:
+        return target
+
+    reading = winter_soc_reading(soc)
+    if reading is None:
         return current
 
-    return target
+    if current == 0:
+        return target if reading >= target else current
+
+    if target <= int(reading) + max_raise_above_soc:
+        return target
+
+    return current
 
 
 def estimate_winter_ramp_days(current_min_soc):
-    """Estimate remaining daily adjustments until winter minSoc is reached."""
+    """Estimate the remaining daily steps until winter minSoc is reached."""
 
-    winter_min_soc = winter_config_int("winter_min_soc", 40, minimum=0)
-    ramp_step = winter_config_int("ramp_step_percent", 5, minimum=1)
+    winter_min_soc = winter_min_soc_percent()
+    step = winter_step_percent()
     remaining = max(0, winter_min_soc - current_min_soc)
 
-    return int((remaining + ramp_step - 1) / ramp_step)
-
-
-def winter_adjustment_window_active(now):
-    adjust_hour = winter_config_int("adjust_hour", 12, minimum=0) % 24
-    return adjust_hour <= now.hour < adjust_hour + 1
+    return int((remaining + step - 1) / step)
 
 
 def build_winter_ac_charge_limit_payload():

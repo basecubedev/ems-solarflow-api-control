@@ -543,14 +543,17 @@ toggle can still enable or disable winter behavior through runtime-state.
 
 `winter.winter_min_soc` is the desired winter `minSoc`.
 
-`winter.ramp_step_percent` is the step by which the daily adjustment raises
-the `minSoc` target; when the battery is already further above, the target is
-its SoC, up to `winter_min_soc`. A raise is written only once the battery holds
-it.
+`winter.ramp_step_percent` is the daily winter step, at most 3.
 
-`winter.adjust_hour` is the hour used for daily winter adjustment, in the
-zone the EMS runs in; in Docker that is `TZ` (see
+`winter.adjust_hour` is the local hour from which the `noon_step` policy takes
+its daily step, in the zone the EMS runs in; in Docker that is `TZ` (see
 [Time zone](../docker.md#time-zone)).
+
+`winter.policies` names the default winter policy for `pv_battery` and
+`battery_only` devices; a PV-only device has no plan. `devices[].winter_policy`
+overrides it for one device; `auto` keeps the type default. A battery device
+with `pv_kwp: 0` is battery-only. See
+[winter-mode.md](../winter-mode.md#device-types-and-policies).
 
 `winter.ac_charge_power` is the conservative `inputLimit` used only during the
 winter/SOC reconciliation context.

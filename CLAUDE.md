@@ -141,6 +141,8 @@ construction, controller startup, main loop. All real implementation lives in `e
 - `runtime_intents.py` — runtime AC mode intent (`ac_output`/`ac_input`) reconciliation
 - `target_control.py` — capability detection and target/output calculation (core control math)
 - `controller.py` — main EMS control loop, ties everything together (largest module)
+- `winter_policies.py` — winter policy registry and device energy classes; import-side-effect-free, read by catalog, Admin and controller
+- `winter_reserve.py` — per-device winter decisions (daily minSoc step, follow, PV-first export hold)
 - `state_store.py` — SQLite store backing battery full-charge assist (and dashboard stats)
 - `simulation.py` — simulation, replay, preflight, self-test helpers
 - `diagnostics.py` — read-only `diagnose` service layer (versioned contract); imported by both `emsctl.py` and the dashboard

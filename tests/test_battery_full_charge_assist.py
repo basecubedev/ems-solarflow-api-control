@@ -275,7 +275,7 @@ def test_disabled_feature_tracks_passively_but_does_not_write(tmp_path):
 
 
 def test_the_scenarios_do_not_depend_on_the_hour_they_run_at(tmp_path):
-    """Run at noon from October to March, the default winter window wrote minSoc."""
+    """Run from October to March, the winter reconcile must not write in the scenario."""
 
     dev = device()
     dev.session.post.return_value = SimpleNamespace(status_code=200)
@@ -284,7 +284,7 @@ def test_the_scenarios_do_not_depend_on_the_hour_they_run_at(tmp_path):
 
     with configure_assist(enabled=False), patch.object(
         cfg, "winter_month_active", return_value=True
-    ), patch.object(cfg, "winter_adjustment_window_active", return_value=True):
+    ):
         run_controller_once(controller, state(soc=95, soc_limit=1), writes_allowed=True)
 
     dev.session.post.assert_not_called()

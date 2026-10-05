@@ -12,6 +12,14 @@ from datetime import datetime, timedelta
 from ems.models import parse_pack_count
 
 
+def ensure_database_directory(path):
+    """Create the directory of the core EMS state database when it is missing."""
+
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
 BATTERY_FULL_CHARGE_STATE_COLUMNS = (
     "device",
     "has_battery",
@@ -46,9 +54,7 @@ class BatteryFullChargeStateStore:
         return sqlite3.connect(self.path)
 
     def initialize(self):
-        parent = os.path.dirname(self.path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
+        ensure_database_directory(self.path)
 
         with self.connect() as conn:
             conn.execute(
@@ -516,3 +522,80 @@ def describe_full_charge_assist_status(config, enabled, has_battery, record, now
         ),
         "message": message,
     }
+
+
+class WinterReserveStore:
+    """Each device's winter step and target, in the core EMS state database.
+
+    Kept so a restart neither repeats a day's step nor loses it; one table of
+    its own beside the full-charge assist tables.
+    """
+
+    COLUMNS = ("step_date", "step_at", "step_target", "target", "pv_ever")
+
+    def __init__(self, path):
+        self.path = path
+        self.initialize()
+
+    def connect(self):
+        return sqlite3.connect(self.path)
+
+    def initialize(self):
+        ensure_database_directory(self.path)
+
+        with self.connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS winter_reserve_state (
+                    device TEXT PRIMARY KEY,
+                    step_date TEXT,
+                    step_at TEXT,
+                    step_target INTEGER,
+                    target INTEGER,
+                    pv_ever INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+
+    def load(self, device):
+        """Return the stored record for ``device``, or ``None``."""
+
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT step_date, step_at, step_target, target, pv_ever "
+                "FROM winter_reserve_state WHERE device = ?",
+                (device,),
+            ).fetchone()
+        if row is None:
+            return None
+        record = dict(zip(self.COLUMNS, row))
+        record["step_at"] = datetime.fromisoformat(record["step_at"]) if record["step_at"] else None
+        record["pv_ever"] = bool(record["pv_ever"])
+        return record
+
+    def save(self, device, now, *, step_date, step_at, step_target, target, pv_ever):
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO winter_reserve_state
+                    (device, step_date, step_at, step_target, target, pv_ever, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(device) DO UPDATE SET
+                    step_date = excluded.step_date,
+                    step_at = excluded.step_at,
+                    step_target = excluded.step_target,
+                    target = excluded.target,
+                    pv_ever = excluded.pv_ever,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    device,
+                    step_date,
+                    step_at.isoformat() if step_at else None,
+                    step_target,
+                    target,
+                    int(bool(pv_ever)),
+                    now.isoformat(),
+                ),
+            )

@@ -23,6 +23,7 @@ from ems.runtime_intents import (
     runtime_intent_from_role,
 )
 from ems.state_store import BatteryFullChargeStateStore
+from ems.winter_reserve import WinterReserve
 from ems.target_control import (
     ControlExplanation,
     ControlLimitExplanation,
@@ -34,6 +35,7 @@ from ems.target_control import (
     detect_capabilities,
     derive_soc_runtime_state,
     firmware_recovery_or_ac_charge_active,
+    pv_power,
     startup_ac_mode_initialization_blocker,
 )
 
@@ -72,6 +74,7 @@ class EMSController:
         runtime_state=None,
         dashboard_store=None,
         battery_full_charge_store=None,
+        winter_store=None,
         influx_writer=None,
         zendure_mqtt_runtime=None
     ):
@@ -114,10 +117,8 @@ class EMSController:
             )
         )
         self.commanded_device_targets = {}
-        self.last_winter_adjust_date = None
         self._last_winter_active = None
-        self.winter_min_soc_targets = {}
-        self.winter_raise_waiting = {}
+        self.winter = WinterReserve(lambda: self.runtime_state, store=winter_store)
         self.night_min_soc_idle_active = False
         self.night_min_soc_idle_parked = set()
         self._dashboard_capabilities = []
@@ -489,13 +490,7 @@ class EMSController:
     def state_has_positive_pv(self, state):
         """Return true when any PV telemetry field is positive."""
 
-        return (
-            state.solar > 0
-            or state.solar1 > 0
-            or state.solar2 > 0
-            or state.solar3 > 0
-            or state.solar4 > 0
-        )
+        return pv_power(state) > 0
 
     def has_output_control_export_capacity(
         self,
@@ -508,6 +503,9 @@ class EMSController:
         for i in active_indexes:
             state = states[i]
             capability = capabilities[i]
+
+            if capability.export_held:
+                continue
 
             if self.state_has_positive_pv(state):
                 return True
@@ -550,6 +548,17 @@ class EMSController:
             ))
 
         return filtered
+
+    def winter_filtered_capabilities(self, states, capabilities, now=None):
+        """Return capabilities with devices in a winter solar charge kept from export."""
+
+        return self.winter.filtered_capabilities(
+            self.devices,
+            states,
+            capabilities,
+            now or datetime.now(),
+            online=self.device_online,
+        )
 
     def update_grid_meter_holding(self, load):
         """Hold the commanded total while the meter serves its last value.
@@ -1922,9 +1931,7 @@ class EMSController:
             return 100
         return None
 
-    def reconcile_device_state_limits(
-        self, dev, state, winter_active, winter_adjust_today
-    ):
+    def reconcile_device_state_limits(self, dev, state, winter_active, now):
         """Periodic SoC/mode reconcile for one device.
 
         An active full-charge assist owns ``socSet``; writing the configured
@@ -1932,11 +1939,11 @@ class EMSController:
         ``socLimit == 1`` below 100 %, which completed the assist early.
         """
 
-        desired_min_soc, winter_adjustment = self.winter_reconciliation_target(
+        desired_min_soc, winter_step = self.winter.reconciliation_target(
             dev,
             state,
             winter_active,
-            winter_adjust_today
+            now
         )
 
         self.apply_soc_limits(
@@ -1948,7 +1955,7 @@ class EMSController:
 
         self.apply_device_modes(dev, state)
 
-        if winter_adjustment:
+        if winter_step:
             self.apply_winter_ac_charge_limit(dev)
 
     def confirm_full_charge_assist_ac_restore(self, dev, state, intent, now):
@@ -2505,131 +2512,6 @@ class EMSController:
             )
             return False
 
-    def winter_reconciliation_target(self, dev, state, winter_active, adjust_today):
-        """Return desired winter/summer minSoc target and adjustment context.
-
-        Every winter and summer-reset target ends here, so a raise over the
-        device's reported minSoc -- from today's adjustment, a remembered target,
-        the configured floor or the summer reset -- is held back until the
-        battery holds it (``cfg.winter_min_soc_the_battery_holds``).
-        """
-
-        target, adjusted = self.winter_planned_min_soc(
-            dev, state, winter_active, adjust_today
-        )
-        if target is None:
-            if not cfg.winter_feature_enabled(self.runtime_state):
-                self.winter_raise_waiting.pop(dev.name, None)
-            return None, adjusted
-
-        soc = getattr(state, "soc", None)
-        held = cfg.winter_min_soc_the_battery_holds(target, state.min_soc, soc)
-        if held != target and getattr(dev, "supports_state_reconciliation", True):
-            starts = self.winter_raise_waiting.get(dev.name) != target
-            self.winter_raise_waiting[dev.name] = target
-            log_event(
-                logging.INFO if adjusted or starts else logging.DEBUG,
-                "winter_raise_waits_for_battery",
-                device=dev.name,
-                current_soc=soc,
-                current_min_soc=state.min_soc,
-                target_min_soc=target
-            )
-        else:
-            self.winter_raise_waiting.pop(dev.name, None)
-        return held, adjusted
-
-    def winter_planned_min_soc(self, dev, state, winter_active, adjust_today):
-        """The winter/summer minSoc target before the battery is consulted."""
-
-        if not cfg.winter_feature_enabled(self.runtime_state):
-            return None, False
-
-        # Left in place deliberately: a single transient `packNum: 0` would
-        # otherwise drop the ramp target, and the next cycle would write the
-        # configured minimum over it.
-        if battery_presence(state) == BATTERY_ABSENT:
-            return None, False
-
-        summer_min_soc = cfg.winter_config_int("summer_min_soc", 15, minimum=0)
-
-        if not winter_active:
-            had_target = dev.name in self.winter_min_soc_targets
-            self.winter_min_soc_targets.pop(dev.name, None)
-
-            if had_target or int(state.min_soc) != int(summer_min_soc):
-                waits = cfg.winter_min_soc_the_battery_holds(
-                    summer_min_soc, state.min_soc, getattr(state, "soc", None)
-                ) != summer_min_soc
-                log_event(
-                    logging.DEBUG if waits and not had_target else logging.INFO,
-                    "winter_summer_reset",
-                    device=dev.name,
-                    current_min_soc=state.min_soc,
-                    target_min_soc=summer_min_soc
-                )
-
-            return summer_min_soc, False
-
-        if dev.name in self.winter_min_soc_targets and not adjust_today:
-            return self.winter_min_soc_targets[dev.name], False
-
-        if not adjust_today:
-            held = self.winter_held_min_soc(dev, state)
-            self.winter_min_soc_targets[dev.name] = held
-            return held, False
-
-        effective_min_soc = self.winter_adjustment_base(dev, state)
-        target = cfg.calculate_winter_min_soc_target(
-            state.soc,
-            effective_min_soc,
-            winter_active
-        )
-        self.winter_min_soc_targets[dev.name] = target
-
-        log_event(
-            logging.INFO,
-            "winter_ramp",
-            device=dev.name,
-            current_soc=state.soc,
-            current_min_soc=state.min_soc,
-            effective_min_soc=effective_min_soc,
-            target_min_soc=target,
-            winter_min_soc=cfg.winter_config_int("winter_min_soc", 40, minimum=0),
-            estimated_days_remaining=cfg.estimate_winter_ramp_days(target)
-        )
-
-        return target, True
-
-    def winter_adjustment_base(self, dev, state):
-        """The minSoc the daily adjustment steps up from.
-
-        The remembered target, or the device's reported minSoc when that is
-        lower: a target the battery never reached is not stepped up again. A
-        device that reports no minSoc keeps the remembered target.
-        """
-
-        remembered = self.winter_min_soc_targets.get(dev.name)
-        reported = state.min_soc if state.min_soc > 0 else None
-        known = [value for value in (remembered, reported) if value is not None]
-        return min(known) if known else dev.min_soc
-
-    def winter_held_min_soc(self, dev, state):
-        """Winter minSoc to keep when no ramp target is known yet.
-
-        The ramp target lives in memory only. After a restart the device still
-        carries it, so it is adopted within the configured floor and the winter
-        ceiling instead of being written back down to the summer value.
-        """
-
-        floor = dev.min_soc if dev.min_soc > 0 else cfg.winter_config_int(
-            "summer_min_soc", 15, minimum=0
-        )
-        ceiling = max(
-            floor, cfg.winter_config_int("winter_min_soc", 40, minimum=0)
-        )
-        return max(floor, min(ceiling, int(state.min_soc)))
-
     def apply_winter_ac_charge_limit(self, dev):
         """Apply conservative winter AC charge input limit."""
 
@@ -3017,7 +2899,6 @@ class EMSController:
         now = datetime.now()
         enabled = cfg.winter_feature_enabled(self.runtime_state)
         active = cfg.winter_mode_active(now, self.runtime_state)
-        adjust_window = cfg.winter_adjustment_window_active(now)
         p = "sensor.ems_solarflow_"
 
         self.ha.set_state(
@@ -3038,13 +2919,9 @@ class EMSController:
 
         self.ha.set_state(
             "binary_sensor.ems_solarflow_winter_adjust_window",
-            "on" if adjust_window else "off",
+            "on" if now.hour == cfg.winter_adjust_hour() else "off",
             extra_attributes={
-                "adjust_hour": cfg.winter_config_int(
-                    "adjust_hour",
-                    12,
-                    minimum=0
-                ) % 24
+                "adjust_hour": cfg.winter_adjust_hour()
             }
         )
 
@@ -3064,7 +2941,7 @@ class EMSController:
 
         self.publish_sensor(
             p + "winter_ramp_step",
-            cfg.winter_config_int("ramp_step_percent", 5, minimum=1),
+            cfg.winter_step_percent(),
             "%",
             None
         )
@@ -3078,7 +2955,7 @@ class EMSController:
 
         self.publish_sensor(
             p + "winter_last_adjust_date",
-            self.last_winter_adjust_date or "never",
+            self.winter.last_step_date() or "never",
             state_class=None,
             icon="mdi:calendar-clock"
         )
@@ -3095,20 +2972,7 @@ class EMSController:
 
             base = p + dev.name.lower() + "_winter_"
             own_min_soc = state.min_soc if state.min_soc > 0 else dev.min_soc
-            effective_min_soc = (
-                self.winter_adjustment_base(dev, state)
-                if has_reserve
-                else own_min_soc
-            )
-            target = (
-                cfg.calculate_winter_min_soc_target(
-                    state.soc,
-                    effective_min_soc,
-                    active
-                )
-                if has_reserve
-                else own_min_soc
-            )
+            target, policy = self.winter.ha_target(dev, state, active)
 
             self.publish_sensor(
                 base + "min_soc_target",
@@ -3118,16 +2982,21 @@ class EMSController:
                 extra=self.device_ha_extra(
                     dev,
                     {
-                        "effective_min_soc": effective_min_soc,
+                        "effective_min_soc": own_min_soc,
                         "current_soc": state.soc,
-                        "winter_active": active and has_reserve
+                        "winter_active": active and has_reserve and policy.step is not None,
+                        "policy": policy.name
                     }
                 )
             )
 
             self.publish_sensor(
                 base + "estimated_ramp_days",
-                cfg.estimate_winter_ramp_days(target) if has_reserve else 0,
+                (
+                    cfg.estimate_winter_ramp_days(target)
+                    if has_reserve and policy.step is not None
+                    else 0
+                ),
                 "d",
                 None,
                 icon="mdi:calendar-range",
@@ -3743,6 +3612,7 @@ class EMSController:
             self.reconcile_runtime_ac_charge_power(dev, state, intent)
 
         capabilities = self.intent_filtered_capabilities(capabilities)
+        capabilities = self.winter_filtered_capabilities(states, capabilities)
         self._dashboard_capabilities = capabilities
         active_indexes = self.active_online_device_indexes()
 
@@ -3792,13 +3662,6 @@ class EMSController:
                 self.soc_reconcile_counter = 0
                 now = datetime.now()
                 winter_active = cfg.winter_mode_active(now, self.runtime_state)
-                winter_window_active = cfg.winter_adjustment_window_active(now)
-                today = now.date().isoformat()
-                winter_adjust_today = (
-                    winter_active
-                    and winter_window_active
-                    and self.last_winter_adjust_date != today
-                )
 
                 if cfg.winter_feature_enabled(self.runtime_state):
                     winter_state_changed = (
@@ -3807,24 +3670,13 @@ class EMSController:
                     self._last_winter_active = winter_active
                     log_event(
                         logging.INFO
-                        if winter_state_changed or winter_adjust_today
+                        if winter_state_changed
                         else logging.DEBUG,
                         "winter_mode_state",
                         active=winter_active,
                         month=now.month,
-                        adjust_window=winter_window_active,
-                        adjust_today=winter_adjust_today,
-                        last_adjust_date=self.last_winter_adjust_date,
-                        summer_min_soc=cfg.winter_config_int(
-                            "summer_min_soc",
-                            15,
-                            minimum=0
-                        ),
-                        winter_min_soc=cfg.winter_config_int(
-                            "winter_min_soc",
-                            40,
-                            minimum=0
-                        )
+                        summer_min_soc=cfg.winter_summer_min_soc(),
+                        winter_min_soc=cfg.winter_min_soc_percent()
                     )
 
                 for dev, state in zip(
@@ -3837,11 +3689,8 @@ class EMSController:
                             dev,
                             state,
                             winter_active,
-                            winter_adjust_today
+                            now
                         )
-
-                if winter_adjust_today:
-                    self.last_winter_adjust_date = today
 
         for dev, state in zip(
             self.devices,
@@ -3986,6 +3835,8 @@ class EMSController:
             device_explanation = control_explanation.devices.get(dev.name)
             if not device_explanation:
                 continue
+            if capabilities[i].export_held:
+                device_explanation.limiting_reason = capabilities[i].reason
             if i < len(targets):
                 device_explanation.allocated_target_w = targets[i]
             if i < len(effective_targets):

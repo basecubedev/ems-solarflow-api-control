@@ -194,8 +194,8 @@ The template default is standalone operation, so both HA runtime fields start as
 |---|---|
 | `enabled` | Enables or disables winter mode at runtime |
 
-Winter months, SOC limits, ramp step, adjustment hour, and AC charge power stay
-static in `config.json`.
+Winter months, SOC limits, ramp step, step hour, policies, and AC charge power
+stay static in `config.json`.
 
 ## Home Assistant Sync
 
