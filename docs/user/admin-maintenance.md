@@ -293,10 +293,16 @@ This path edits an existing installation.
 
   Every new inverter — manual or discovered, Local API or Zendure MQTT — starts
   with the same central default values (smart mode, output limit, PV size,
-  PV priority, battery size, SoC limits) from the config template/catalog, and
-  both transports edit the identical common field set on their cards. Another
+  PV priority, battery size, SoC limits, winter policy `auto`) from the config
+  template/catalog, and both transports edit the identical common field set on
+  their cards. Another
   configured inverter's values are never used as a template for a new one, and
   the values you see on a new card are exactly what preview and apply write.
+  Under **Advanced settings** each inverter card offers its **Winter policy**:
+  `auto` follows the plan for the device's type (PV with battery, battery only
+  with PV size 0, PV only), the other entries pick one plan for this inverter.
+  The plans and their defaults are described in
+  [winter-mode.md](../winter-mode.md#device-types-and-policies).
   The default output limit is the generic central default (800 W), not a
   model-specific value — review it for your hardware. PV size is a
   configurable estimate for power sharing; discovery cannot measure the

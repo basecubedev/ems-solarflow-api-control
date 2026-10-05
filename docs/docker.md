@@ -258,9 +258,9 @@ runtime-state file if the configured file does not exist.
 
 ## Time zone
 
-The winter adjustment hour (`winter.adjust_hour`) and the full-charge assist
-`force_time` are local hours, and inside a container local time is whatever
-`TZ` says. The Compose file passes `TZ` from `.env` to the EMS container;
+The winter step hour (`winter.adjust_hour`, used by the `noon_step` policy)
+and the full-charge assist `force_time` are local hours, and inside a container
+local time is whatever `TZ` says. The Compose file passes `TZ` from `.env` to the EMS container;
 without it the container runs on UTC. `emsctl.py diagnose` reports the zone in
 effect, judged by the zone file rather than the name, with its offset where it
 reads one, and warns where the hours are likely not the ones meant — among

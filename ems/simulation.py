@@ -469,23 +469,20 @@ def run_self_tests():
 
     original_output_control = deepcopy(cfg.OUTPUT_CONTROL_CONFIG)
     cases = [
-        (15, 18, True, 20),
-        (15, 22, True, 22),
-        (15, 13, True, 20),
-        (15, 45, True, 40),
-        (40, 30, False, 15),
-        (38, 39, True, 40)
+        (18, 15, 40, 3, 21),
+        (22, 15, 40, 3, 25),
+        (13, 15, 40, 3, None),
+        (45, 15, 40, 3, 40),
+        (39, 38, 40, 3, 40)
     ]
     ok = True
 
-    for current_min, current_soc, winter_active, expected in cases:
-        actual = cfg.calculate_winter_min_soc_target(
+    for current_soc, current_min, winter_min, step, expected in cases:
+        actual = cfg.winter_morning_step_target(
             current_soc,
             current_min,
-            winter_active,
-            summer_min_soc=15,
-            winter_min_soc=40,
-            ramp_step=5
+            winter_min,
+            step
         )
 
         if actual != expected:
@@ -493,10 +490,9 @@ def run_self_tests():
             log_event(
                 logging.ERROR,
                 "self_test_failed",
-                test="cfg.calculate_winter_min_soc_target",
+                test="cfg.winter_morning_step_target",
                 current_min_soc=current_min,
                 current_soc=current_soc,
-                winter_active=winter_active,
                 expected=expected,
                 actual=actual
             )

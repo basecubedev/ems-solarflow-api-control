@@ -62,6 +62,8 @@ COPY dashboard/static_files.py ./dashboard/static_files.py
 COPY ems/__init__.py ./ems/__init__.py
 COPY ems/paths.py ./ems/paths.py
 COPY ems/config_catalog.py ./ems/config_catalog.py
+# The winter policy registry the catalog offers its policy options from.
+COPY ems/winter_policies.py ./ems/winter_policies.py
 COPY ems/config.py ./ems/config.py
 # The canonical config mutation semantics both Admin workflows apply changes
 # through; Core-owned and client-free.

@@ -75,7 +75,7 @@ Use this for standalone EMS operation without Home Assistant.
     "months": [10, 11, 12, 1, 2, 3],
     "summer_min_soc": 15,
     "winter_min_soc": 40,
-    "ramp_step_percent": 5,
+    "ramp_step_percent": 3,
     "adjust_hour": 12,
     "ac_charge_power": 200
   },
@@ -614,7 +614,7 @@ control.
     "months": [10, 11, 12, 1, 2, 3],
     "summer_min_soc": 15,
     "winter_min_soc": 40,
-    "ramp_step_percent": 5,
+    "ramp_step_percent": 3,
     "adjust_hour": 12,
     "ac_charge_power": 200
   }

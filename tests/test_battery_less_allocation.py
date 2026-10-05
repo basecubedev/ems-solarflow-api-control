@@ -18,6 +18,7 @@ belongs to any device that cannot absorb its own PV -- which a full battery
 already is, and a missing battery permanently is.
 """
 
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -330,11 +331,15 @@ def _winter_target(pack_num):
     controller = EMSController(
         devices=[dev], shelly=ShellyStub(0), sleep_enabled=False, runtime_state=None
     )
+    morning = datetime(2026, 11, 2, 9, 0)
     with patch("ems.controller.cfg.winter_feature_enabled", return_value=True), patch(
         "ems.controller.cfg.winter_config_int", return_value=40
-    ):
-        return controller.winter_reconciliation_target(
-            dev, state(soc=50, solar=0, pack_num=pack_num), True, True
+    ), patch("ems.controller.cfg.ZENDURE_CONFIG", []):
+        controller.winter.reconciliation_target(
+            dev, state(soc=50, solar=0, pack_num=pack_num), True, morning
+        )
+        return controller.winter.reconciliation_target(
+            dev, state(soc=50, solar=300, pack_num=pack_num), True, morning
         )
 
 
@@ -342,7 +347,8 @@ def test_winter_reserve_is_not_applied_without_a_battery():
     """Raising a minimum SoC on a device with no pack commands nothing.
 
     It also pulled a winter AC charge input limit along behind it, which is a
-    charge setting for a battery that is not there.
+    charge setting for a battery that is not there. The morning step is the
+    one place that can still take one.
     """
 
     assert _winter_target(0) == (None, False)
@@ -399,14 +405,14 @@ def test_a_transient_missing_pack_does_not_destroy_the_winter_ramp():
     controller = EMSController(
         devices=[dev], shelly=ShellyStub(0), sleep_enabled=False, runtime_state=None
     )
-    controller.winter_min_soc_targets["WR1"] = 40
+    controller.winter.device("WR1").target = 40
 
     with patch("ems.controller.cfg.winter_feature_enabled", return_value=True):
-        controller.winter_reconciliation_target(
-            dev, state(soc=50, solar=0, pack_num=0), True, True
+        controller.winter.reconciliation_target(
+            dev, state(soc=50, solar=0, pack_num=0), True, datetime(2026, 11, 2, 9, 0)
         )
 
-    assert controller.winter_min_soc_targets["WR1"] == 40
+    assert controller.winter.device("WR1").target == 40
 
 
 # --- the claim is announced when it moves, not every cycle ------------------

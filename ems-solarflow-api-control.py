@@ -25,6 +25,7 @@ from ems.simulation import (
     run_live_preflight,
     run_self_tests,
 )
+from ems.winter_reserve import build_winter_store
 from ems.zendure_mqtt.config_entries import (
     duplicate_device_name_startup_error,
     duplicate_zendure_identity_startup_error,
@@ -461,7 +462,8 @@ def main():
         runtime_state=runtime_state,
         dashboard_store=dashboard_store,
         influx_writer=influx_writer,
-        zendure_mqtt_runtime=zendure_mqtt_runtime
+        zendure_mqtt_runtime=zendure_mqtt_runtime,
+        winter_store=None if cfg.SIMULATION_MODE else build_winter_store()
     )
 
     log_event(logging.INFO, "ems_started")

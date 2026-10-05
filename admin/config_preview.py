@@ -50,6 +50,7 @@ from ems.config_catalog import (
 from ems.config_mutation import strip_incompatible_grid_meter_fields
 from ems.device_identity import broker_sources_from_config
 from ems.influx_setup import DOCKER_FIRST_SECRET_FILE
+from ems.winter_policies import find_winter_policy_issues
 from ems.zendure_mqtt.config_entries import (
     SOURCE_LOCAL_MQTT,
     SOURCE_ZENDURE_CLOUD_MQTT,
@@ -1233,6 +1234,8 @@ class ConfigPreviewGenerator:
                     f"Config names must be unique: {', '.join(duplicate_names)}.",
                 )
             )
+        for issue in find_winter_policy_issues(preview):
+            validation["errors"].append(_issue(issue["code"], f"{issue['message']}."))
 
         for issue in find_duplicate_zendure_device_identities(
             preview.get("devices"),

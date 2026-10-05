@@ -993,7 +993,11 @@ Relevant events:
 
 ```text
 winter_mode_state
-winter_ramp
+winter_policy_invalid
+winter_step
+winter_step_waits_for_pv
+winter_pv_kwp_zero_but_pv_reported
+winter_follow_soc
 winter_raise_waits_for_battery
 winter_summer_reset
 dry_run_winter_ac_charge_limit
@@ -1006,22 +1010,34 @@ If no winter event appears, check:
 - runtime `winter.enabled`
 - current month versus `winter.months`
 - `soc_reconcile_interval`
-- current hour versus `winter.adjust_hour`, in the zone the EMS runs in
-  (`emsctl.py diagnose` reports it; see [Time zone](../docker.md#time-zone))
+- the device's winter policy (`policy` on `winter_step`, or
+  `winter_policy_invalid`); see [winter-mode.md](../winter-mode.md#device-types-and-policies)
+- for `solar_morning_step`: the step is due at the day's first PV of 50 W or
+  more; `winter_step_waits_for_pv` means no PV (at least 10 W) arrived by
+  `winter.adjust_hour`; a battery without PV needs `pv_kwp: 0`
+- for a battery-only device: `winter_pv_kwp_zero_but_pv_reported` means it has
+  reported PV and takes no noon step
+- for `noon_step`: current hour versus `winter.adjust_hour`, in the zone the EMS
+  runs in (`emsctl.py diagnose` reports it; see [Time zone](../docker.md#time-zone)),
+  and whether the battery is more than one step below its `minSoc`
+- the step record in the `winter_reserve_state` table of the core state
+  database; without a current record a start in daylight takes no step that day
 - `allow_state_reconciliation_writes`
 
-Winter logic runs through SOC reconciliation. It is not a per-cycle output
-control mechanism.
+Winter `minSoc` changes run through SOC reconciliation. Each cycle, a device on
+the `solar_morning_step` policy two or more points below its `minSoc` with PV,
+within three hours of the day's first PV or of its step, exports at most
+`min_output_limit`, so PV charges it; the control explanation shows the
+capability reason `winter_solar_charge`.
 
-`winter_mode_state` is logged at `info` only when the active state changes or an
-adjustment is due; otherwise it is a `debug` trace.
-`write_winter_ac_charge_limit` and `winter_ramp` stay visible at `info`,
-`winter_ramp` also when the raise it plans waits for the battery and nothing is
-written yet. `winter_summer_reset` is `debug` while its raise waits for the
-battery, except the first one that drops a target remembered in winter, which
-is `info`; otherwise it is `info`. `winter_raise_waits_for_battery` is `info`
-at the daily adjustment and when a raise starts waiting, and `debug` while it
-waits. Enable `system.log_level=debug` to see every reconcile.
+`winter_mode_state` is logged at `info` only when the active state changes;
+otherwise it is a `debug` trace. `winter_step`, `winter_follow_soc` and
+`write_winter_ac_charge_limit` stay visible at `info`. `winter_summer_reset` is
+`debug` while its raise waits for the battery, except the first one that drops
+a target remembered in winter, which is `info`; otherwise it is `info`.
+`winter_raise_waits_for_battery` is `info` at the step and when a waiting raise
+starts, and `debug` while it lasts. Enable `system.log_level=debug` to see every
+reconcile.
 
 ### Home Assistant entities missing
 

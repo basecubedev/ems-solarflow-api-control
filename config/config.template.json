@@ -120,7 +120,8 @@
         "Use 0 to leave a value unmanaged."
       ],
       "min_soc": 15,
-      "max_soc": 100
+      "max_soc": 100,
+      "winter_policy": "auto"
     },
     {
       "name": "INV_2",
@@ -142,7 +143,8 @@
         "Use 0 to leave a value unmanaged."
       ],
       "min_soc": 15,
-      "max_soc": 100
+      "max_soc": 100,
+      "winter_policy": "auto"
     }
   ],
 
@@ -173,16 +175,22 @@
   "winter": {
     "_comment": [
       "Seasonal minimum-SOC strategy, enabled by default.",
-      "In the listed months it raises minSoc towards winter_min_soc and writes inputLimit.",
+      "In the listed months it raises minSoc once a day towards winter_min_soc.",
+      "policies picks the plan per device type: PV with battery, battery only;",
+      "a device can override it with its own winter_policy.",
       "See docs/configuration-examples.md before changing advanced values."
     ],
     "enabled": true,
     "months": [10, 11, 12, 1, 2, 3],
     "summer_min_soc": 15,
     "winter_min_soc": 40,
-    "ramp_step_percent": 5,
+    "ramp_step_percent": 3,
     "adjust_hour": 12,
-    "ac_charge_power": 200
+    "ac_charge_power": 200,
+    "policies": {
+      "pv_battery": "solar_morning_step",
+      "battery_only": "noon_step"
+    }
   },
 
   "battery_full_charge_assist": {
