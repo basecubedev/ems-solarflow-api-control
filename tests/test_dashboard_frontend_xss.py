@@ -1300,7 +1300,38 @@ console.log(JSON.stringify({{
     assert 'name="ac_charge_power_w" value="600"' in output["api"]
     assert "Role set by" in output["api"] and "emsctl" in output["api"]
     assert 'name="runtime_role"' not in output["mqtt"]
-    assert "Output only (MQTT)" in output["mqtt"]
+    assert 'name="ac_charge_power_w"' not in output["mqtt"]
+
+
+@pytest.mark.parametrize("ac_charge_enabled", [True, False])
+def test_an_mqtt_device_card_says_only_what_holds_for_every_mqtt_device(
+    ac_charge_enabled,
+):
+    """Over MQTT the manual AC role is missing, and nothing else is implied.
+
+    "Output only" told the operator a device could not charge while the EMS
+    charged it from surplus. "Surplus charging only" was false the other way:
+    every MQTT control device also discharges, and one whose model has no AC
+    charge path, or whose switch is off, never charges at all. The card says
+    the one thing true of every MQTT device -- the role cannot be set there.
+    """
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const device = {{
+  enabled: true, max_power: 800, offgrid_socket_mode: "off", pv_priority_factor: 1,
+  ac_charge_enabled: {json.dumps(ac_charge_enabled)},
+}};
+console.log(JSON.stringify({{
+  mqtt: app.runtimeDeviceForm("WR2", device, 800, 3, {{ supported: false, maxChargePower: 5000 }}),
+}}));
+"""
+    output = run_node(script)
+
+    assert "Output only" not in output["mqtt"]
+    assert "charging only" not in output["mqtt"].lower()
+    assert "Not settable over MQTT" in output["mqtt"]
+    assert 'name="ac_charge_enabled"' in output["mqtt"]
 
 
 def test_a_frozen_snapshot_reads_stale_and_a_dead_meter_reads_offline():

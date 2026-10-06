@@ -16,6 +16,12 @@ import time
 from collections import OrderedDict
 
 from ems import config as cfg
+from ems.charge_record import (
+    CHARGE_EXIT_FINAL,
+    CHARGE_EXIT_PENDING,
+    CHARGE_EXIT_TO_OUTPUT,
+    ChargeRecord,
+)
 from ems.clients import parse_device
 from ems.health import CommHealth
 from ems.logging_utils import log_event
@@ -45,7 +51,7 @@ from ems.mqtt_control.zendure_commands import (
     build_power_command,
     next_power_message_id,
 )
-from ems.mqtt_control.zensdk_operations import (
+from ems.power_command import (
     ZenSdkOperationError,
     build_zensdk_power_operation,
 )
@@ -139,6 +145,28 @@ def _bounded_tuning(value, default, low, high, cast=float):
     return cast(min(high, max(low, number)))
 
 
+def _reports_own_target(metrics, observed_output_limit, target, tolerance):
+    """Whether a report shows ``target`` -- one of this client's own -- applied.
+
+    A discharge or an idle shows as its ``outputLimit``. A charge does not: the
+    device reports ``outputLimit`` 0 while it charges, never the negative
+    target, so comparing the two read every steady charge of the EMS's own as a
+    foreign writer. A charge shows as an ``outputLimit`` of 0 and, where the
+    device reports one, an ``inputLimit`` at the charge power.
+    """
+
+    if isinstance(target, bool) or not isinstance(target, (int, float)):
+        return False
+    if target >= 0:
+        return abs(float(observed_output_limit) - float(target)) <= tolerance
+    if abs(float(observed_output_limit)) > tolerance:
+        return False
+    input_limit = metrics.get("inputLimit")
+    if isinstance(input_limit, bool) or not isinstance(input_limit, (int, float)):
+        return True
+    return abs(float(input_limit) - abs(float(target))) <= tolerance
+
+
 def _coerce_reply(payload):
     """Parse a reply payload (bytes/str/mapping) into a dict, or ``None``.
 
@@ -162,10 +190,21 @@ def _coerce_reply(payload):
 
 
 class ZendureMqttDeviceClient:
-    """A Zendure inverter controlled over MQTT rather than the local HTTP API."""
+    """A Zendure inverter controlled over MQTT rather than the local HTTP API.
+
+    ``charge_commanded`` says whether the EMS's own charge is on the device: from
+    a charge this client published until a fresh report shows the device left
+    it after an exit (see :class:`ChargeRecord`). A queued target has not been
+    published and changes nothing, and neither does the broker accepting the
+    exit. The controller reads it as its own record of a charge, the one that
+    outlives a reset of its regulation memory or the device's absence.
+    """
 
     ip = "mqtt"
     supports_state_reconciliation = False
+    # ``_enforce_power_limit`` refuses a charge above ``max_power``; the
+    # regulator reads this so it never allocates a charge the transport drops.
+    charge_bounded_by_max_power = True
 
     def __init__(
         self,
@@ -184,6 +223,9 @@ class ZendureMqttDeviceClient:
         serial_number=None,
         min_soc=0,
         max_soc=0,
+        ac_discharge_enabled=True,
+        ac_charge_enabled=True,
+        max_charge_power_w=0,
         smart_mode=1,
         grid_off_mode=None,
         max_power=None,
@@ -292,6 +334,7 @@ class ZendureMqttDeviceClient:
         self._foreign_streak = 0
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
+        self._charge = ChargeRecord(resend_after_s=self._confirmation_timeout_s)
         self.sn = serial_number or device_id
         # The trusted physical serial when one is configured, else None. ``sn``
         # falls back to the route/device id for a serial-less device, so it is not
@@ -301,6 +344,9 @@ class ZendureMqttDeviceClient:
         self.control_gate = control_gate_for_broker_source(source)
         self.min_soc = min_soc
         self.max_soc = max_soc
+        self.ac_discharge_enabled = bool(ac_discharge_enabled)
+        self.ac_charge_enabled = bool(ac_charge_enabled)
+        self.max_charge_power_w = max_charge_power_w or 0
         self.smart_mode = smart_mode
         self.grid_off_mode = grid_off_mode
         self.max_power = cfg.device_power_ceiling(max_power)
@@ -309,6 +355,46 @@ class ZendureMqttDeviceClient:
         self.pv_priority_factor = pv_priority_factor or 1.0
         self.read_health = CommHealth(name, kind="read")
         self.write_health = CommHealth(name, kind="write")
+
+    @property
+    def charge_commanded(self):
+        return self._charge.open
+
+    def charge_exit_due(self):
+        return self._charge.exit_due(time.monotonic())
+
+    def found_exit_due(self):
+        """Whether the one exit to AC input found after a start may go out now.
+
+        Not while a command is in flight: every command here carries the
+        direction, so that command is the exit still on its way.
+        """
+
+        active = self._active_command
+        if active is not None and active.is_active:
+            return False
+        return self._charge.found_exit_due(time.monotonic())
+
+    def found_exit_exhausted(self):
+        """Whether that exit is spent, and no command of it is still in flight."""
+
+        active = self._active_command
+        if active is not None and active.is_active:
+            return False
+        return self._charge.found_exit_exhausted(time.monotonic())
+
+    @property
+    def found_exit_attempts(self):
+        return self._charge.found_exit_attempts
+
+    @property
+    def found_charge_left(self):
+        return self._charge.found_charge_left
+
+    def release_charge_record(self):
+        """The charge is someone else's from here: a claim that writes its own."""
+
+        self._charge.release()
 
     def fetch(self):
         """Map a fresh broker snapshot to a DeviceState, else signal read failure.
@@ -337,6 +423,9 @@ class ZendureMqttDeviceClient:
             # over a confirmation deadline that has just elapsed.
             self._confirm_from_snapshot(state, status.snapshot, now)
             self._detect_external_control(state, status.snapshot)
+            self._charge.observe(
+                state, setpoint_reported="inputLimit" in status.snapshot.metrics
+            )
         else:
             record = self._active_command
             policy = self._confirmation_policy()
@@ -412,8 +501,17 @@ class ZendureMqttDeviceClient:
 
         self._discard_pending_target(reason)
 
-    def dispatch_output_limit(self, value):
+    def dispatch_output_limit(self, value, charge_exit=None):
         """Publish a power write and report the structured dispatch outcome.
+
+        Every ZenSDK power command already carries its modes and an invoke
+        command is one operation, so ``charge_exit`` names no shape here.
+        ``CHARGE_EXIT_FINAL``, the shutdown release, is published whatever
+        command is in flight and whatever the resend window says, because it is
+        the last command this process writes. ``CHARGE_EXIT_TO_OUTPUT``, the
+        one exit to AC input found after a start, keeps its own resend window
+        and counts its attempts, ``FOUND_EXIT_ATTEMPTS`` at most, as the local
+        API does.
 
         Every attempted write builds one :class:`CommandRecord` (queued ->
         published/rejected) — a broker publish is transport-level only, never
@@ -424,6 +522,11 @@ class ZendureMqttDeviceClient:
         device: a repeat of the in-flight target is coalesced (no republish); a
         changed non-safety target is queued as the single latest pending target; a
         safety reduction preempts the in-flight command and publishes immediately.
+        With no command in flight, a non-negative target is held back while an
+        exit from the EMS's own charge, or the one exit to AC input found after
+        a start, is out and its resend window open. A
+        changed target replacing an exit still in flight is not: every command
+        here carries the direction, so it is an exit itself.
         The controller and its write gates are unchanged.
         """
 
@@ -447,9 +550,11 @@ class ZendureMqttDeviceClient:
                 error=blocked.error, latency_ms=0.0, field=blocked.field
             )
             return dispatch.rejected(target, reason=blocked.error)
+        final = charge_exit == CHARGE_EXIT_FINAL
+        found_exit = charge_exit == CHARGE_EXIT_TO_OUTPUT
         active = self._active_command
         if active is not None and active.is_active:
-            if active.target_w == target:
+            if active.target_w == target and not final:
                 # The in-flight target is already committed; drop any stale pending.
                 self._discard_pending_target("superseded_by_active_target")
                 return dispatch.coalesced(
@@ -458,7 +563,7 @@ class ZendureMqttDeviceClient:
                     command_state=active.state,
                     correlation_id=self._active_correlation_id,
                 )
-            if self._should_preempt(active.target_w, target):
+            if final or self._should_preempt(active.target_w, target):
                 # Safety preemption: retire the in-flight command out of the slot
                 # and publish the safer target now, never waiting behind it. The
                 # retired command is terminal, so its late reply/telemetry can
@@ -468,14 +573,14 @@ class ZendureMqttDeviceClient:
                 self._active_command = None
                 self._active_correlation_id = None
                 self._discard_pending_target("superseded_by_safety_target")
-                return self._publish_target(target, now)
+                return self._publish_target(target, now, found_exit=found_exit)
             if self._should_supersede_latest(active):
                 mark_superseded(active, now_monotonic=now)
                 self._last_command_state = active.state
                 self._active_command = None
                 self._active_correlation_id = None
                 self._discard_pending_target("superseded_by_latest_target")
-                return self._publish_target(target, now)
+                return self._publish_target(target, now, found_exit=found_exit)
             if self._pending_target == target and self._pending_correlation_id:
                 correlation_id = self._pending_correlation_id
             else:
@@ -489,6 +594,10 @@ class ZendureMqttDeviceClient:
                 correlation_id=correlation_id,
             )
 
+        if target >= 0 and not final and self._exit_held(now, found_exit):
+            self._discard_pending_target("superseded_by_pending_charge_exit")
+            return dispatch.coalesced(target, command_state=CHARGE_EXIT_PENDING)
+
         # No command in flight: the fresh target is the latest intent and takes the
         # slot immediately. A pending target it repeats is published under the
         # correlation it was queued with; any other pending target is superseded.
@@ -496,9 +605,18 @@ class ZendureMqttDeviceClient:
             correlation_id = self._pending_correlation_id
             self._pending_target = None
             self._pending_correlation_id = None
-            return self._publish_target(target, now, correlation_id=correlation_id)
+            return self._publish_target(
+                target, now, correlation_id=correlation_id, found_exit=found_exit
+            )
         self._discard_pending_target("superseded_by_fresh_target")
-        return self._publish_target(target, now)
+        return self._publish_target(target, now, found_exit=found_exit)
+
+    def _exit_held(self, now, found_exit):
+        """Whether an exit is out and its resend window still open."""
+
+        if self._charge.open:
+            return not self._charge.exit_due(now)
+        return found_exit and not self._charge.found_exit_due(now)
 
     def write_properties(
         self, properties, *, reason, field=None, error_event=None, log_fields=None
@@ -646,18 +764,23 @@ class ZendureMqttDeviceClient:
         """Whether a changed target must preempt the in-flight command for safety.
 
         A full stop (0 W) always preempts any active command — including an active
-        charge. Otherwise only a substantial reduction of commanded discharge
-        output preempts; a rise, or any charge-side (negative) target, waits as the
-        pending target instead (no broker spam). The reduction must be at least the
-        safety margin AND strictly exceed the confirmation tolerance, so a
-        preempting command can never be cross-confirmed by stale telemetry still
-        reporting the old (superseded) target within tolerance — this holds even if
-        the margin is misconfigured below the tolerance.
+        charge. So does a change of direction into or out of a charge: the way
+        back from a charge must not queue behind the charge it ends, which on an
+        ack profile held the device drawing until the charge command timed out.
+        Otherwise only a substantial reduction of commanded discharge output
+        preempts; a rise, or a power change inside the charge direction, waits as
+        the pending target instead (no broker spam). The reduction must be at
+        least the safety margin AND strictly exceed the confirmation tolerance, so
+        a preempting command can never be cross-confirmed by stale telemetry still
+        reporting the old (superseded) target within tolerance — this holds even
+        if the margin is misconfigured below the tolerance.
         """
 
         if new_target == active_target:
             return False
         if new_target == 0:
+            return True
+        if (new_target < 0) != (active_target < 0):
             return True
         if new_target < 0 or new_target >= active_target:
             return False
@@ -665,7 +788,7 @@ class ZendureMqttDeviceClient:
         tolerance = self._confirmation_policy().confirmation_tolerance_w
         return reduction >= self._safety_preempt_margin_w and reduction > tolerance
 
-    def _publish_target(self, target, now, *, correlation_id=None):
+    def _publish_target(self, target, now, *, correlation_id=None, found_exit=False):
         """Build and publish one correlated command; return a dispatch result."""
 
         correlation_id = correlation_id or self._next_dispatch_correlation_id()
@@ -734,6 +857,12 @@ class ZendureMqttDeviceClient:
         self._last_command = record
         self._last_command_state = record.state
         if ok:
+            if target < 0:
+                self._charge.charge_sent(abs(target))
+            else:
+                self._charge.exit_sent(publish_completed)
+                if found_exit:
+                    self._charge.found_exit_sent(publish_completed)
             self._remember_command_evidence(record, publish_completed)
             return dispatch.published(
                 target,
@@ -930,7 +1059,12 @@ class ZendureMqttDeviceClient:
                     qos=CONTROL_PUBLISH_QOS,
                     retain=False,
                 )
-                return message, message_id, command.operation, None
+                return (
+                    message,
+                    message_id,
+                    command.operation,
+                    command.expected_properties,
+                )
             # ZenSDK: atomic mode+power contract; a bare outputLimit is ignored
             # by a device in an inactive mode.
             try:
@@ -1288,10 +1422,12 @@ class ZendureMqttDeviceClient:
         """Conservatively flag a foreign writer overwriting a confirmed target.
 
         Requires: no local command in flight, a previously *confirmed* local
-        target, and at least two successive newer telemetry reports whose
-        ``outputLimit`` is materially away from that target and from every own
-        target released unconfirmed since, which the device may apply late.
-        Reports evidence only — never claims which controller is responsible.
+        target, and at least two successive newer telemetry reports that show
+        neither that target nor any own target released unconfirmed since,
+        which the device may apply late -- for a discharge its ``outputLimit``,
+        for a charge the report a charging device gives (see
+        ``_reports_own_target``). Reports evidence only — never claims which
+        controller is responsible.
         """
 
         if self._active_command is not None or self._last_confirmed_target is None:
@@ -1327,8 +1463,7 @@ class ZendureMqttDeviceClient:
         tolerance = self._confirmation_policy().confirmation_tolerance_w
         own_targets = {self._last_confirmed_target, *self._unconfirmed_own_targets}
         if any(
-            isinstance(target, (int, float))
-            and abs(float(observed) - float(target)) <= tolerance
+            _reports_own_target(metrics, observed, target, tolerance)
             for target in own_targets
         ):
             self._foreign_streak = 0

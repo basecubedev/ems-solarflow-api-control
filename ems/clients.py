@@ -11,9 +11,17 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from ems import config as cfg
+from ems.charge_record import (
+    CHARGE_EXIT_FINAL,
+    CHARGE_EXIT_IN_INPUT,
+    CHARGE_EXIT_PENDING,
+    CHARGE_EXIT_TO_OUTPUT,
+    ChargeRecord,
+)
 from ems.health import CommHealth, redact_error, redact_url_credentials
 from ems.logging_utils import log_event
 from ems.models import DeviceState, parse_pack_count
+from ems.power_direction import AC_MODE_INPUT
 
 
 def zendure_write_succeeded(error_event, dev, response, **fields):
@@ -310,10 +318,26 @@ def parse_device(data):
         dc_status=props.get("dcStatus") or 0,
         grid_state=props.get("gridState") or 0,
         input_limit_w=props.get("inputLimit") or 0,
+        charge_max_limit_w=_reported_charge_ceiling(props),
+        grid_input=props.get("gridInputPower") or 0,
+        grid_reverse=props.get("gridReverse") or 0,
         pack_num=_observed_pack_count(data, props),
         soc_status=props.get("socStatus") or 0,
         battery_calibration_time=props.get("batCalTime"),
     )
+
+
+def _reported_charge_ceiling(props):
+    """The charge ceiling the device reports, or None when it reports none.
+
+    Absent and zero are different answers: a device that says 0 has refused a
+    charge, and only one that says nothing may fall back to its model rating.
+    """
+
+    for key in ("chargeMaxLimit", "chargeLimit"):
+        if props.get(key) is not None:
+            return props[key]
+    return None
 
 
 def zero_device_state():
@@ -346,13 +370,23 @@ def zero_device_state():
         dc_status=0,
         grid_state=0,
         input_limit_w=0,
+        charge_max_limit_w=None,
+        grid_input=0,
+        grid_reverse=0,
         pack_num=None,
         soc_status=0,
         battery_calibration_time=None,
     )
 
 class ZendureClient:
-    """Client for a single Zendure device."""
+    """Client for a single Zendure device.
+
+    ``charge_commanded`` is true from a charge command until the device reports
+    that it left the charge after an exit (see :class:`ChargeRecord`). It
+    decides the shape of the next write, and the controller reads it as its own
+    record of a charge, the one that outlives a reset of its regulation memory
+    or the device's absence.
+    """
 
     control_gate = "api"
 
@@ -369,7 +403,12 @@ class ZendureClient:
         max_power=None,
         pv_kwp=1.0,
         battery_kwh=1.0,
-        pv_priority_factor=1.0
+        pv_priority_factor=1.0,
+        *,
+        hardware_profile=None,
+        ac_discharge_enabled=True,
+        ac_charge_enabled=True,
+        max_charge_power_w=0
     ):
         self.name = name
         self.ip = ip
@@ -383,8 +422,41 @@ class ZendureClient:
         self.pv_kwp = pv_kwp or 1.0
         self.battery_kwh = battery_kwh or 1.0
         self.pv_priority_factor = pv_priority_factor or 1.0
+        self.hardware_profile = hardware_profile or None
+        self.ac_discharge_enabled = bool(ac_discharge_enabled)
+        self.ac_charge_enabled = bool(ac_charge_enabled)
+        self.max_charge_power_w = max_charge_power_w or 0
+        self.observed_product = None
+        self._charge = ChargeRecord()
+        self.observed_in_charge_mode = False
         self.read_health = CommHealth(name, kind="read")
         self.write_health = CommHealth(name, kind="write")
+
+    @property
+    def charge_commanded(self):
+        return self._charge.open
+
+    def charge_exit_due(self):
+        return self._charge.exit_due(time.monotonic())
+
+    def found_exit_due(self):
+        return self._charge.found_exit_due(time.monotonic())
+
+    def found_exit_exhausted(self):
+        return self._charge.found_exit_exhausted(time.monotonic())
+
+    @property
+    def found_exit_attempts(self):
+        return self._charge.found_exit_attempts
+
+    @property
+    def found_charge_left(self):
+        return self._charge.found_charge_left
+
+    def release_charge_record(self):
+        """The charge is someone else's from here: a claim that writes its own."""
+
+        self._charge.release()
 
     def fetch(self):
         """Fetch current device state."""
@@ -403,11 +475,20 @@ class ZendureClient:
             ):
                 raise ValueError("report carries no properties object")
 
+            if data.get("product"):
+                self.observed_product = str(data["product"])
             state = parse_device(data)
+            self.observed_in_charge_mode = (
+                state.ac_mode == AC_MODE_INPUT and state.smart_mode == 1
+            )
+            self._charge.observe(
+                state, setpoint_reported="inputLimit" in data["properties"]
+            )
             self.read_health.record_success((time.monotonic() - start) * 1000.0)
             return state
 
         except Exception as e:
+            self.observed_in_charge_mode = False
             self.read_health.record_failure(
                 error=e,
                 latency_ms=(time.monotonic() - start) * 1000.0,
@@ -424,6 +505,154 @@ class ZendureClient:
             {"outputLimit": int(value)},
             "write_output_limit_error",
             target_w=value,
+        )
+
+    def resolved_hardware_profile(self):
+        """Resolve this device's model id, or None.
+
+        A config-pinned value is decisive and the device's own ``product`` field
+        corroborates it — the same evidence precedence discovery already uses, so
+        a local HTTP device needs no separate identification rule.
+        """
+
+        from ems.mqtt_control.zendure_profiles import (
+            EVIDENCE_EXISTING_CONFIG,
+            EVIDENCE_FULL_REPORT,
+            make_hardware_profile_evidence,
+            resolve_hardware_profile_evidence,
+        )
+
+        return resolve_hardware_profile_evidence(
+            [
+                make_hardware_profile_evidence(
+                    EVIDENCE_EXISTING_CONFIG, self.hardware_profile
+                ),
+                make_hardware_profile_evidence(
+                    EVIDENCE_FULL_REPORT, self.observed_product
+                ),
+            ]
+        ).profile_id
+
+    def dispatch_output_limit(self, value, charge_exit=None):
+        """Dispatch a signed power target over the local HTTP API.
+
+        A non-negative target keeps the historic single-property write: the
+        atomic set would also carry ``smartMode`` on every loop, and that is a
+        flash-persistent operating mode nothing measured says is free to
+        rewrite at five-second cadence. A device someone else holds in AC input
+        gets that write too; taking it back is the state reconciler's, behind
+        its own gate.
+
+        Leaving a charge is a direction change, and a bare ``outputLimit`` is
+        ignored by a device in ``acMode = 1``. So while this client's charge is
+        on record, a non-negative target is the exit: the atomic set, the same
+        command MQTT sends, or with ``charge_exit=CHARGE_EXIT_IN_INPUT`` the
+        bare ``inputLimit = 0`` that ends the charge and leaves the device in
+        the AC-input role a claim gave it. The record ends when the device
+        reports it left the charge, not when it answered the exit; until then
+        the exit goes out again once per resend window, and in between nothing
+        is written. An exit the device answered with an error counts as sent:
+        it is asked again after the window, not every cycle.
+        ``charge_exit=CHARGE_EXIT_TO_OUTPUT`` sends the atomic exit for a charge
+        that is not on record -- the one exit the controller decides for an AC
+        input it cannot attribute. One the device answered, accepted or
+        refused, is held back the same way until the resend window has passed,
+        and for good once it was answered ``FOUND_EXIT_ATTEMPTS`` times;
+        whether the device took it is the next report's to say.
+        ``charge_exit=CHARGE_EXIT_FINAL`` is the shutdown release: the atomic
+        exit, whatever the window says.
+
+        A charge needs a model whose AC charge path is established — the
+        command shape is shared across the ZenSDK family, the capability is
+        not. Entering one is the atomic set; inside a charge this client
+        started and the device shows in ``acMode = 1`` with ``smartMode = 1``,
+        a power change is the bare ``inputLimit`` the device honours there, so
+        ``smartMode`` is not rewritten on every change either. Whenever the
+        device shows anything else, the set is sent whole again.
+        """
+
+        from ems.mqtt_control import dispatch
+        from ems.mqtt_control.power_capability import (
+            BLOCK_TRANSPORT_WRITE_NOT_IMPLEMENTED,
+            WRITE_PROFILE_ZENSDK_PROPERTIES,
+        )
+        from ems.mqtt_control.zendure_profiles import (
+            OPERATION_CHARGE,
+            hardware_profile_by_name,
+        )
+        from ems.power_command import build_zensdk_power_operation
+
+        target = int(value)
+        record = self._charge
+        final = charge_exit == CHARGE_EXIT_FINAL
+        found_exit = charge_exit == CHARGE_EXIT_TO_OUTPUT
+        if target >= 0 and not (record.open or final or found_exit):
+            ok = self.write_output_limit(target)
+            return (
+                dispatch.published(target)
+                if ok
+                else dispatch.failed(target, reason="http_write_failed")
+            )
+
+        if target >= 0:
+            now = time.monotonic()
+            held = (
+                not record.exit_due(now)
+                if record.open
+                else found_exit and not record.found_exit_due(now)
+            )
+            if held and not final:
+                return dispatch.coalesced(target, command_state=CHARGE_EXIT_PENDING)
+            field, properties = (
+                ("inputLimit", {"inputLimit": 0})
+                if record.open and charge_exit == CHARGE_EXIT_IN_INPUT
+                else ("outputLimit", build_zensdk_power_operation(target).properties)
+            )
+            ok = zendure_write(
+                self,
+                field,
+                properties,
+                "write_output_limit_error",
+                target_w=target,
+            )
+            record.exit_sent(now)
+            if found_exit:
+                record.found_exit_sent(now)
+            return (
+                dispatch.published(target)
+                if ok
+                else dispatch.failed(target, reason="http_write_failed")
+            )
+
+        profile_id = self.resolved_hardware_profile()
+        profile = hardware_profile_by_name(profile_id) if profile_id else None
+        if profile is None:
+            return dispatch.rejected(target, reason="unknown_hardware_profile")
+        if not profile.supports_operation(OPERATION_CHARGE):
+            return dispatch.rejected(target, reason="charge_target_unsupported")
+        if profile.power_write_profile != WRITE_PROFILE_ZENSDK_PROPERTIES:
+            return dispatch.rejected(
+                target, reason=BLOCK_TRANSPORT_WRITE_NOT_IMPLEMENTED
+            )
+
+        operation = build_zensdk_power_operation(target)
+        properties = (
+            {"inputLimit": operation.properties["inputLimit"]}
+            if record.open and self.observed_in_charge_mode
+            else operation.properties
+        )
+        record.charge_sent(operation.properties["inputLimit"])
+        ok = zendure_write(
+            self,
+            "inputLimit",
+            properties,
+            "write_charge_limit_error",
+            target_w=target,
+        )
+        return (
+            dispatch.published(target)
+            if ok
+            else dispatch.failed(target, reason="http_write_failed")
         )
 
     def write_properties(

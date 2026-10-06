@@ -74,12 +74,15 @@ dashboard tells you about it:
 | Transport | Typical behaviour on this card |
 | --- | --- |
 | **Local API** | Lowest latency; full state reconciliation available |
-| **Local MQTT** | Low latency, no cloud dependency; output control only |
-| **Zendure MQTT (cloud)** | Higher, less predictable latency; output control only |
+| **Local MQTT** | Low latency, no cloud dependency; power control only |
+| **Zendure MQTT (cloud)** | Higher, less predictable latency; power control only |
 
-**MQTT control devices are output-only.** State reconciliation (`minSoc`,
-`socSet`, `smartMode`, `gridOffMode`, winter `inputLimit`, full-charge assist) is
-API-only, so those fields do not change for an MQTT-controlled device.
+**MQTT control devices take the power command only** — output, and a charge from
+surplus where the model and its **AC charging** switch allow it (see
+[AC charging from surplus](../../ac-charging.md)). State reconciliation
+(`minSoc`, `socSet`, `smartMode`, `gridOffMode`, winter `inputLimit`,
+full-charge assist) and the manual AC role are API-only, so those fields do not
+change for an MQTT-controlled device.
 
 ## Read-only and write-blocked devices
 

@@ -9,7 +9,8 @@ Change a small set of operating values live, from the browser, without editing
 
 - Cap or raise total output for a while.
 - Take one inverter out of regulation temporarily.
-- Turn winter mode or Home Assistant publishing on or off.
+- Turn winter mode, AC charging from surplus or Home Assistant publishing on
+  or off.
 - Try a different loop interval or PV priority.
 - Switch an inverter to AC charging from the grid, and set its charge power.
 
@@ -58,19 +59,29 @@ the visual cue that these are decision-affecting controls, not read-outs.
 | # | Card | Subtitle | Fields |
 | --- | --- | --- | --- |
 | 01 | **EMS / System** | Global runtime limits and loop control | `EMS enabled`, `Max total power` (W), `Min output limit` (W), `Loop interval` (s) |
-| 02/03 | **Device cards** (`WR1`, `WR2`, …) | Device runtime write values | `Device enabled`, `Max power` (W), `PV priority` (×), `Offgrid socket`, `AC role`, `AC charge power` (W) |
+| 02/03 | **Device cards** (`WR1`, `WR2`, …) | Device runtime write values | `Device enabled`, `AC charging`, `Max power` (W), `PV priority` (×), `Offgrid socket`, `AC role`, `AC charge power` (W) |
 | 04 | **Winter mode** | Seasonal charging behavior | `Winter mode` |
-| 05 | **Home Assistant** | External publishing and helper control | `HA publishing`, `HA helper control` |
+| 05 | **AC Charging** | Charge the batteries from grid surplus | `AC charging` |
+| 06 | **Home Assistant** | External publishing and helper control | `HA publishing`, `HA helper control` |
 
 Each card has its own apply button: **Save EMS settings**, **Save WR1
-settings**, **Save winter mode**, **Save HA settings**.
+settings**, **Save winter mode**, **Save AC charging**, **Save HA settings**.
+
+**AC charging** on the **AC Charging** card switches charging from surplus on or
+off for the whole installation; the **AC charging** switch on a device card
+allows or forbids it for that device. A device charges from surplus only while
+both are on and its model can charge from AC — see
+[AC charging from surplus](../../ac-charging.md).
 
 **AC role** is the same setting as `emsctl.py device WR1 ac-mode`:
 *Output (EMS regulates)* is normal operation; *AC charging (input)* takes the
 inverter out of output regulation and lets it charge from the grid at the **AC
 charge power**. **Role set by** names the last writer (`dashboard`, `emsctl`).
-A device controlled over MQTT shows *Output only (MQTT)*: the EMS cannot switch
-its AC mode over MQTT.
+A device controlled over MQTT shows *Not settable over MQTT* instead of the role
+and the charge power: the manual role is not available over MQTT. That is all it
+says. The EMS still regulates such a device through its power command — its
+output, and a charge from surplus where its model can charge from AC and its
+**AC charging** switch allows it.
 
 ### 4 — Apply
 
@@ -113,6 +124,7 @@ Do not take the form's word for it. Scroll down to the pipeline:
 | PV priority | Yes | Yes | No |
 | Offgrid socket | Yes | Yes | No |
 | Winter mode | Yes | Yes | No |
+| AC charging (installation and device) | Yes | Yes | No |
 | HA publishing / helper control | Yes | Yes | No |
 | Adding or removing a device | — | — | **Admin Console + restart** |
 | Grid meter type or address | — | — | **Admin Console + restart** |

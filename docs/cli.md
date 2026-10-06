@@ -108,6 +108,9 @@ Modes:
   `redacted-config.json`, `runtime-state.json`, and `bundle-metadata.json`.
   Without `--output` it is written to `data/support/ems-diagnose-<time>.zip`,
   the directory Docker keeps on the host.
+  It collects the control and control-quality sections whether or not you also
+  pass their flags, so the bundle is complete on its own — the point of one is
+  not needing a second round trip.
 
 Control interpretation:
 
@@ -227,7 +230,24 @@ the current runtime role. The controller applies it as Zendure `inputLimit` on
 the next EMS loop only while the device role is `ac_input`, and only when
 telemetry reports a different current `inputLimit`. While the role is
 `ac_output`, the stored charge power is ignored for hardware writes so it can
-be prepared before switching to input mode.
+be prepared before switching to input mode. Setting it never starts a charge on
+its own.
+
+**Not to be confused with `max_charge_power_w`**, whose name is one word away
+and whose job is unrelated:
+
+| | `ac_charge_power_w` | `max_charge_power_w` |
+|---|---|---|
+| Where | runtime-state, per device | `config.json`, per device |
+| Set with | `emsctl device WR1 ac-charge-power N` | the config file or Admin |
+| What it is | the exact `inputLimit` to hold | an upper bound on surplus charging |
+| Who reads it | the runtime AC-mode reconciler, while the role is `ac_input` | the surplus charge regulator |
+| Effect of setting it | none until the role is `ac_input` | caps the share this device may take |
+
+If the aim is "this device may charge from surplus, but never above N watts",
+the one to set is `max_charge_power_w`. `0` there means "ask the device for its
+own ceiling", which is what `chargeMaxLimit` reports, or the model's rated
+charge power when it reports none — never "no charging".
 
 A config that still holds template placeholders is reported as a warning,
 `template_placeholders_safe_mode`, with every field that keeps EMS in safe mode
@@ -238,6 +258,18 @@ likely cause. A warning rather than an error, because safe mode is a state EMS
 chose: the exit code stays 0, and a Guided Upgrade health check still passes. A
 config.json nested too deeply to check is reported as
 `template_placeholders_unknown`.
+
+`diagnose --control` also reports what AC charging is configured to do: whether
+it is enabled (runtime state winning over config, the way the loop resolves it),
+the derived entry/exit band, the installation limit, which devices are
+permitted to charge, and which are refused by what config alone can tell — a
+pinned model without an AC charge path, an MQTT device whose pin names no known
+model, a telemetry-only device. What a device's own report leaves out is only
+seen by the running EMS, so the block points at `event=ac_charge_refused` for
+it. The *current direction* is not there — the regulator never
+writes its decision to runtime state, so the block points at
+`event=ac_charge_direction` instead of leaving a reader to conclude that nothing
+is happening.
 
 Control quality interpretation:
 
@@ -287,6 +319,33 @@ Machine-readable root causes always use this shape:
   "suggested_next_check": "Review the related diagnose section for details."
 }
 ```
+
+## AC charging
+
+AC charging from surplus is off until it is switched on, and can be switched off
+again without restarting the EMS.
+
+```bash
+python3 emsctl.py ac-charge status
+python3 emsctl.py ac-charge enable
+python3 emsctl.py ac-charge disable
+
+python3 emsctl.py device WR1 ac-charge on
+python3 emsctl.py device WR1 ac-charge off
+```
+
+`ac-charge disable` stops the whole feature; the per-device switch takes a
+single device out of it and leaves the rest charging. Both write runtime state,
+which the EMS resolves ahead of `config.json`, so neither needs a restart.
+
+Turning it off never leaves a device charging: the direction returns on the next
+cycle, and a clean EMS shutdown returns any device it put into charge. See
+[user/safety.md](user/safety.md) for what happens if the process is killed
+instead.
+
+Charging also requires the device's hardware model to have an established AC
+charge path — a property of the model, not of the installation. A device that
+refuses reports a stable reason rather than failing silently.
 
 ## Config Discovery
 

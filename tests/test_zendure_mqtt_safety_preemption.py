@@ -57,7 +57,7 @@ class _FakeService:
         return True
 
 
-def _zensdk_device(**kwargs):
+def _zensdk_device(hardware_profile="solarflow_800_pro_2", **kwargs):
     """No-ack ZenSDK device (worst case: holds the slot until confirmation)."""
 
     return ZendureMqttDeviceClient(
@@ -67,7 +67,7 @@ def _zensdk_device(**kwargs):
         topic_family=FAMILY_LEGACY_JSON,
         source="local_mqtt",
         product_key="PK",
-        hardware_profile="solarflow_800_pro_2",
+        hardware_profile=hardware_profile,
         max_power=2000,
         confirmation_timeout_seconds=30.0,
         **kwargs,
@@ -272,8 +272,8 @@ def test_dispatch_queued_result():
 
 
 def test_dispatch_rejected_result_is_falsey():
-    dev = _zensdk_device()
-    # ZenSDK does not support charge; a negative target is rejected.
+    # A model whose AC charge path has not been measured rejects a charge.
+    dev = _zensdk_device("solarflow_800")
     result = dev.dispatch_output_limit(-500)
     assert result.status is WriteDispatchStatus.REJECTED
     assert result.reason
@@ -281,6 +281,185 @@ def test_dispatch_rejected_result_is_falsey():
 
 
 def test_write_output_limit_wrapper_stays_boolean():
-    dev = _zensdk_device()
+    dev = _zensdk_device("solarflow_800")
     assert dev.write_output_limit(600) is True
     assert dev.write_output_limit(-500) is False
+
+
+# --- direction changes -------------------------------------------------------
+
+
+def test_leaving_a_charge_preempts_the_in_flight_charge():
+    """The way back may not wait behind the charge it ends.
+
+    On an ack profile only a 0 W target preempted, so an exit to the standby
+    floor queued behind the in-flight charge: the device drew for another
+    thirty seconds, until the charge command timed out.
+    """
+
+    dev = _ack_device()
+    dev.write_output_limit(-600)
+    old = dev._active_command
+
+    result = dev.dispatch_output_limit(35)
+
+    assert result.status is WriteDispatchStatus.PUBLISHED
+    assert old.state == "superseded"
+    assert dev._active_command.target_w == 35
+
+
+def test_entering_a_charge_preempts_an_in_flight_discharge():
+    dev = _ack_device()
+    dev.write_output_limit(600)
+
+    result = dev.dispatch_output_limit(-500)
+
+    assert result.status is WriteDispatchStatus.PUBLISHED
+    assert dev._active_command.target_w == -500
+
+
+def test_a_power_change_inside_the_charge_still_waits():
+    """Only a direction change jumps the queue; anything else would spam."""
+
+    dev = _ack_device()
+    dev.write_output_limit(-600)
+
+    result = dev.dispatch_output_limit(-400)
+
+    assert result.status is WriteDispatchStatus.QUEUED_LATEST
+    assert dev._pending_target == -400
+
+
+# --- a charge on an invoke profile is confirmable ----------------------------
+
+
+def _acknowledged_charge(watts=600):
+    dev = _ack_device()
+    dev.write_output_limit(-watts)
+    record = dev._active_command
+    dev.handle_reply(_reply(record))
+    assert record.state == "acknowledged"
+    return dev, record
+
+
+def _report(dev, record, metrics):
+    dev._service.set_snapshot(
+        metrics, last_seen_monotonic=record.published_monotonic + 1.0
+    )
+    dev.fetch()
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [
+        {"outputLimit": 0, "acMode": 1, "inputLimit": 600},
+        {"outputLimit": 0, "acMode": 1, "gridInputPower": 590},
+    ],
+)
+def test_an_invoke_charge_confirms_from_what_the_device_reports_charging(metrics):
+    """A charging Hyper reports outputLimit 0, never the negative target.
+
+    Confirming against outputLimit therefore never succeeded, and every charge
+    command ended in confirmation_timed_out. The charge proves itself in the
+    AC-input direction and its power: the limit where the device reports one,
+    else the AC input it measures.
+    """
+
+    dev, record = _acknowledged_charge()
+
+    _report(dev, record, metrics)
+
+    assert record.state == "telemetry_confirmed"
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [
+        {"outputLimit": 0},
+        {"outputLimit": 0, "acMode": 1},
+        {"outputLimit": 0, "acMode": 2, "gridInputPower": 0},
+        {"outputLimit": 0, "acMode": 1, "gridInputPower": 0},
+    ],
+)
+def test_an_invoke_charge_is_not_confirmed_without_a_charge(metrics):
+    dev, record = _acknowledged_charge()
+
+    _report(dev, record, metrics)
+
+    assert record.state == "acknowledged"
+
+
+# --- what the client last put on the wire ------------------------------------
+
+
+def test_the_client_remembers_a_charge_it_published_until_the_device_leaves_it():
+    """The controller's record of its own charge, the one a reset cannot erase.
+
+    A queued target was not published and changes nothing. Neither does the
+    way back going out: the broker accepting it says nothing about the device.
+    Only a report that shows the device out of the charge ends the record.
+    """
+
+    dev = _ack_device()
+    assert dev.charge_commanded is False
+
+    dev.write_output_limit(-600)
+    assert dev.charge_commanded is True
+
+    dev.dispatch_output_limit(-400)
+    assert dev._pending_target == -400
+    assert dev.charge_commanded is True
+
+    exit_command = dev.dispatch_output_limit(35)
+    assert exit_command.published
+    assert dev.charge_commanded is True
+
+    record = dev._last_command
+    _report(dev, record, {"outputLimit": 0, "acMode": 1, "inputLimit": 600})
+    assert dev.charge_commanded is True
+
+    _report(dev, record, {"outputLimit": 35, "acMode": 2, "inputLimit": 0})
+    assert dev.charge_commanded is False
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 1_000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_an_exit_the_device_rejected_keeps_the_charge_and_is_asked_again_later():
+    """A rejected exit leaves the device charging, and the EMS knowing it.
+
+    The record ended when the exit was published, so a Hyper that rejected it
+    went on drawing from the grid with the EMS's record clear. A rejection also
+    frees the command slot at once, so the exit is held to the resend window
+    rather than published again every cycle.
+    """
+
+    from unittest.mock import patch
+
+    clock = _Clock()
+    with patch("time.monotonic", clock):
+        dev = _ack_device()
+        dev.write_output_limit(-600)
+        dev.handle_reply(_reply(dev._active_command))
+
+        dev.dispatch_output_limit(0)
+        exit_record = dev._active_command
+        dev.handle_reply(_reply(exit_record, success=0, output="failed"))
+        assert exit_record.state == "rejected"
+        assert dev.charge_commanded is True
+        published = len(dev._service.published)
+
+        clock.now += 10
+        assert not dev.dispatch_output_limit(0).published
+        assert dev.charge_exit_due() is False
+        assert len(dev._service.published) == published
+
+        clock.now += 20
+        assert dev.charge_exit_due() is True
+        assert dev.dispatch_output_limit(0).published
+        assert len(dev._service.published) == published + 1

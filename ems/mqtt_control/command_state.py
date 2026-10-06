@@ -14,6 +14,8 @@ from collections.abc import Mapping
 import math
 from dataclasses import dataclass
 
+from ems.power_direction import OPERATION_CHARGE
+
 STATE_QUEUED = "queued"
 STATE_PUBLISHED = "published"
 STATE_ACKNOWLEDGED = "acknowledged"
@@ -302,10 +304,47 @@ def confirm_from_telemetry(
 
 # Watt-like properties compare within a tolerance; every other expected
 # property is a mode/enum and must match exactly.
-WATT_PROPERTY_KEYS = frozenset({"outputLimit", "inputLimit"})
+WATT_PROPERTY_KEYS = frozenset({"outputLimit", "inputLimit", "gridInputPower"})
 
 # acMode and outputLimit are required; optional fields are checked when reported.
 OPTIONAL_EXPECTED_KEYS = frozenset({"smartMode", "inputLimit"})
+
+# A charge inverts which value carries the proof. Its commanded outputLimit is
+# zero, and zero is also what an idle device reports, so it cannot show that
+# anything happened; inputLimit is the value that does. Leaving the discharge
+# split in place here would confirm a charge from telemetry that never saw one.
+CHARGE_OPTIONAL_EXPECTED_KEYS = frozenset({"smartMode", "outputLimit"})
+
+
+def optional_expected_keys(operation):
+    """Expected properties that are verified only when telemetry reports them."""
+
+    if operation == OPERATION_CHARGE:
+        return CHARGE_OPTIONAL_EXPECTED_KEYS
+    return OPTIONAL_EXPECTED_KEYS
+
+
+MEASURED_CHARGE_POWER_KEY = "gridInputPower"
+
+
+def evidence_key_for(operation, key, metrics):
+    """The telemetry key that answers for ``key`` in this report.
+
+    A charge's power is proven by the ``inputLimit`` the device echoes. A model
+    that reports no such limit -- the Hyper's legacy telemetry need not -- still
+    reports the AC input it measures, and that power arriving at the commanded
+    value is the charge having happened. It stands in only where the limit is
+    absent, never against a limit the device does report.
+    """
+
+    if (
+        operation == OPERATION_CHARGE
+        and key == "inputLimit"
+        and _observed_number(metrics, key) is None
+        and _observed_number(metrics, MEASURED_CHARGE_POWER_KEY) is not None
+    ):
+        return MEASURED_CHARGE_POWER_KEY
+    return key
 
 FRESHNESS_FRESH = "fresh"
 FRESHNESS_STALE = "stale"
@@ -474,9 +513,12 @@ def evaluate_expected_properties_confirmation(
         if isinstance(snapshot_observed_keys, (set, frozenset, list, tuple))
         else set()
     )
+    operation = getattr(record, "operation", None)
+    optional_keys = optional_expected_keys(operation)
     evidence = []
-    for key, target in expected.items():
-        required = key not in OPTIONAL_EXPECTED_KEYS
+    for expected_key, target in expected.items():
+        required = expected_key not in optional_keys
+        key = evidence_key_for(operation, expected_key, metrics)
         observed = metrics.get(key)
         numeric_observed = _observed_number(metrics, key)
         if numeric_observed is None:

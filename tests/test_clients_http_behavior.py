@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import logging
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -253,6 +254,510 @@ def test_zendure_and_shelly_clients_parse_and_preserve_http_values():
 
     shelly.session = SessionStub(get_response=ValueError("offline"))
     assert shelly.get_power() == 123.5
+
+
+def _zendure(session, **kwargs):
+    return ZendureClient(
+        "WR1",
+        "192.0.2.10",
+        "SN",
+        session,
+        min_soc=10,
+        max_soc=100,
+        smart_mode=1,
+        grid_off_mode=None,
+        **kwargs,
+    )
+
+
+def _posted(session):
+    return [kwargs["json"] for _verb, _url, kwargs in session.calls if _verb == "post"]
+
+
+def _report(product=None, **properties):
+    payload = {"properties": {"outputLimit": 0, **properties}}
+    if product is not None:
+        payload["product"] = product
+    return ResponseStub(payload=payload)
+
+
+def test_http_discharge_dispatch_stays_the_bare_output_limit_write():
+    """Inside the output direction the working path must not change shape.
+
+    The atomic set would also carry smartMode on every five-second cycle, and
+    that is a flash-persistent operating mode. Nothing measured says writing it
+    repeatedly is free, so a non-negative target for a device that is neither
+    charging nor was told to keeps the single-property write.
+    """
+
+    session = SessionStub()
+    dev = _zendure(session, hardware_profile="solarflow_800_pro_2")
+
+    result = dev.dispatch_output_limit(300)
+
+    assert bool(result) is True
+    assert _posted(session) == [{"sn": "SN", "properties": {"outputLimit": 300}}]
+
+
+def _atomic(output_w):
+    return {
+        "sn": "SN",
+        "properties": {
+            "smartMode": 1,
+            "acMode": 2,
+            "outputLimit": output_w,
+            "inputLimit": 0,
+        },
+    }
+
+
+@pytest.mark.parametrize("target", [0, 35, 600])
+def test_http_leaving_a_charge_is_one_atomic_command(target):
+    """A bare outputLimit is ignored by a device sitting in acMode 1.
+
+    The exit used to be exactly that, so the charge only ended a cycle later
+    when the state reconciler wrote acMode back -- and never, with
+    allow_state_reconciliation_writes off, or on a shutdown release that writes
+    once and exits. The way back carries the direction with its setpoint.
+    """
+
+    session = SessionStub()
+    dev = _zendure(session, hardware_profile="solarflow_800_pro_2")
+    dev.dispatch_output_limit(-600)
+
+    result = dev.dispatch_output_limit(target)
+
+    assert bool(result) is True
+    assert _posted(session)[-1] == _atomic(target)
+
+
+@pytest.mark.parametrize(
+    "observed",
+    [
+        {"acMode": 1, "acStatus": 2, "inputLimit": 800},
+        {"acMode": 2, "acStatus": 2, "inputLimit": 0},
+    ],
+    ids=["someone_else_s_charge", "settling_out_of_a_charge"],
+)
+def test_http_a_charge_the_ems_did_not_command_keeps_the_bare_write(observed):
+    """What the device shows is not licence to rewrite its modes.
+
+    A device seen in the AC-input direction -- held there by the vendor app, or
+    still settling out of a charge -- got the whole set on every non-negative
+    target, under the power gate alone: smartMode and acMode writes the state
+    reconciler would only make behind its own gate, on a fleet the EMS never
+    charged. Its modes stay the reconciler's.
+    """
+
+    session = SessionStub(get_response=_report(**observed))
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.fetch()
+
+    dev.dispatch_output_limit(0)
+
+    assert _posted(session) == [{"sn": "SN", "properties": {"outputLimit": 0}}]
+
+
+def test_http_the_controller_s_one_exit_to_a_floor_charge_is_the_atomic_command():
+    """The exit the controller decides for a charge it cannot attribute."""
+
+    from ems.charge_record import CHARGE_EXIT_TO_OUTPUT
+
+    session = SessionStub(get_response=_report(acMode=1, acStatus=2, inputLimit=800))
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.fetch()
+
+    dev.dispatch_output_limit(35, charge_exit=CHARGE_EXIT_TO_OUTPUT)
+
+    assert _posted(session) == [_atomic(35)]
+    assert dev.charge_commanded is False
+
+
+def test_http_back_in_the_output_direction_the_bare_write_returns():
+    session = SessionStub(get_response=_report(acMode=2, acStatus=1))
+    dev = _zendure(session, hardware_profile="solarflow_800_pro_2")
+    dev.dispatch_output_limit(-600)
+    dev.dispatch_output_limit(0)
+    dev.fetch()
+
+    dev.dispatch_output_limit(300)
+
+    assert _posted(session)[-1] == {"sn": "SN", "properties": {"outputLimit": 300}}
+
+
+def test_http_an_exit_that_failed_is_sent_whole_again():
+    """An exit the transport could not deliver was never sent, so it is due at once."""
+
+    session = SessionStub()
+    dev = _zendure(session, hardware_profile="solarflow_800_pro_2")
+    dev.dispatch_output_limit(-600)
+
+    session.post_response = ConnectionError("unreachable")
+    with pytest.raises(ConnectionError):
+        dev.dispatch_output_limit(0)
+    assert dev.charge_exit_due() is True
+
+    session.post_response = ResponseStub()
+    dev.dispatch_output_limit(0)
+
+    assert _posted(session)[-2:] == [_atomic(0), _atomic(0)]
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 1_000.0
+
+    def __call__(self):
+        return self.now
+
+
+def _charging_report(input_w=600):
+    return _report(acMode=1, acStatus=2, smartMode=1, inputLimit=input_w)
+
+
+def test_http_an_exit_the_device_did_not_apply_keeps_the_charge_on_record():
+    """A 200 says the device took the write, not that it left the charge.
+
+    The record of the EMS's own charge ended on any accepted exit, so a device
+    that answered 200 and went on charging at the EMS's setpoint was nobody's
+    any more: after a disable it drew from the grid for good, and at the battery
+    floor its charge was handed to the firmware claim. The record now ends only
+    when the device reports it left the charge, and until then the exit is due
+    again once per resend window -- never once per cycle.
+    """
+
+    session = SessionStub(get_response=_charging_report())
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    clock = _Clock()
+    with patch("time.monotonic", clock):
+        dev.dispatch_output_limit(-600)
+        dev.fetch()
+        dev.dispatch_output_limit(0)
+        dev.fetch()
+
+        assert dev.charge_commanded is True
+        assert dev.charge_exit_due() is False
+
+        for _ in range(5):
+            clock.now += 5
+            dev.dispatch_output_limit(0)
+        assert _posted(session).count(_atomic(0)) == 1
+
+        clock.now += 5
+        assert dev.charge_exit_due() is True
+        dev.dispatch_output_limit(0)
+        assert _posted(session).count(_atomic(0)) == 2
+
+        session.get_response = _report(acMode=2, acStatus=1, smartMode=1, inputLimit=0)
+        dev.fetch()
+
+    assert dev.charge_commanded is False
+
+
+def test_http_an_exit_the_device_rejected_keeps_the_charge_and_is_asked_again_later():
+    """A device that answers the exit with an error has been asked.
+
+    Only an exit the device accepted counted as sent, so one it rejected --
+    HTTP 400 -- was due again at once and went out every cycle for as long as
+    the device kept rejecting it, to a disabled device as well. It now counts
+    from the answer, as an exit an MQTT device rejects does, and is asked
+    again once the resend window has passed.
+    """
+
+    session = SessionStub(get_response=_charging_report())
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    clock = _Clock()
+    with patch("time.monotonic", clock):
+        dev.dispatch_output_limit(-600)
+        dev.fetch()
+
+        session.post_response = ResponseStub(status_code=400)
+        assert bool(dev.dispatch_output_limit(0)) is False
+        assert dev.charge_commanded is True
+        posted = len(_posted(session))
+
+        for _ in range(5):
+            clock.now += 5
+            assert not dev.dispatch_output_limit(0).published
+        assert len(_posted(session)) == posted
+        assert dev.charge_exit_due() is False
+
+        clock.now += 5
+        assert dev.charge_exit_due() is True
+        dev.dispatch_output_limit(0)
+        assert len(_posted(session)) == posted + 1
+
+
+def test_http_the_exit_to_a_charge_found_at_start_waits_for_the_window_once_answered():
+    """The one exit after a start keeps the window the record's exit keeps.
+
+    It is not on record, so nothing held it back: a device that answered it
+    with an error was sent it again every cycle, and one that accepted it
+    counted as done whether or not it left AC input. Accepted or refused, an
+    answered exit is one attempt and holds the next back until the window has
+    passed; one the transport could not deliver is neither, and is due again
+    at once. Only a report of the device out of the charge, or charging at a
+    setpoint it did not have when the exit went out, says it was taken.
+    """
+
+    from ems.charge_record import CHARGE_EXIT_TO_OUTPUT
+
+    session = SessionStub(
+        get_response=_charging_report(800),
+        post_response=ResponseStub(status_code=400),
+    )
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    clock = _Clock()
+    with patch("time.monotonic", clock):
+        dev.fetch()
+        assert not dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT)
+        for _ in range(5):
+            clock.now += 5
+            dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT)
+        assert _posted(session) == [_atomic(0)]
+        assert dev.found_exit_due() is False
+        assert dev.found_exit_attempts == 1
+
+        clock.now += 5
+        session.post_response = ConnectionError("unreachable")
+        with pytest.raises(ConnectionError):
+            dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT)
+        assert dev.found_exit_due() is True
+        assert dev.found_exit_attempts == 1
+
+        session.post_response = ResponseStub()
+        assert dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT).published
+        assert dev.found_exit_due() is False
+        assert dev.found_exit_attempts == 2
+        dev.fetch()
+        assert dev.found_charge_left is False
+        assert dev.charge_commanded is False
+
+        clock.now += 5
+        assert not dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT).published
+        assert len(_posted(session)) == 3
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        {"acMode": 2, "acStatus": 1, "smartMode": 1, "inputLimit": 0},
+        {"acMode": 1, "acStatus": 1, "smartMode": 1, "inputLimit": 0},
+        {"acMode": 1, "acStatus": 2, "smartMode": 1, "inputLimit": 300},
+    ],
+    ids=["out_of_ac_input", "no_setpoint_nothing_drawn", "another_setpoint"],
+)
+def test_http_a_report_after_the_exit_to_a_found_charge_says_it_was_taken(report):
+    """The same evidence as the record of the EMS's own charge.
+
+    Out of the AC-input direction, its exit's ``inputLimit = 0`` with nothing
+    drawn, or a charge at a setpoint the device did not show when the exit
+    went out -- someone put it back after the exit was carried out.
+    """
+
+    from ems.charge_record import CHARGE_EXIT_TO_OUTPUT
+
+    session = SessionStub(get_response=_charging_report(800))
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.fetch()
+    assert dev.found_charge_left is False
+    dev.dispatch_output_limit(0, charge_exit=CHARGE_EXIT_TO_OUTPUT)
+    dev.fetch()
+    assert dev.found_charge_left is False
+
+    session.get_response = _report(**report)
+    dev.fetch()
+
+    assert dev.found_charge_left is True
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        {"acMode": 2, "acStatus": 2, "smartMode": 1, "inputLimit": 0},
+        {"acMode": 2, "acStatus": 1, "smartMode": 1},
+        {"acMode": 1, "acStatus": 2, "smartMode": 1, "inputLimit": 300},
+    ],
+    ids=["exit_settling", "out_without_a_setpoint", "someone_else_s_setpoint"],
+)
+def test_http_the_charge_record_ends_on_what_the_device_reports(report):
+    """Out of the charge, its exit written, or charging at a setpoint the EMS never wrote."""
+
+    session = SessionStub(get_response=_charging_report())
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.dispatch_output_limit(-600)
+    dev.fetch()
+    dev.dispatch_output_limit(0)
+
+    session.get_response = _report(**report)
+    dev.fetch()
+
+    assert dev.charge_commanded is False
+
+
+def test_http_a_running_charge_is_not_ended_by_a_report_before_any_exit():
+    """A device that drifts out of the charge is put back, not forgotten."""
+
+    session = SessionStub(get_response=_report(acMode=2, acStatus=1, smartMode=1))
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.dispatch_output_limit(-600)
+    dev.fetch()
+
+    assert dev.charge_commanded is True
+
+
+def test_http_a_failed_read_keeps_the_charge_on_record():
+    session = SessionStub(get_response=_charging_report())
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.dispatch_output_limit(-600)
+    dev.fetch()
+    dev.dispatch_output_limit(0)
+
+    session.get_response = ConnectionError("unreachable")
+    dev.fetch()
+
+    assert dev.charge_commanded is True
+
+
+def test_http_charge_dispatch_writes_the_measured_atomic_set():
+    session = SessionStub()
+    dev = _zendure(session, hardware_profile="solarflow_800_pro_2")
+
+    result = dev.dispatch_output_limit(-300)
+
+    assert bool(result) is True
+    assert _posted(session) == [
+        {
+            "sn": "SN",
+            "properties": {
+                "smartMode": 1,
+                "acMode": 1,
+                "outputLimit": 0,
+                "inputLimit": 300,
+            },
+        }
+    ]
+
+
+def _charge_set(input_w):
+    return {
+        "sn": "SN",
+        "properties": {
+            "smartMode": 1,
+            "acMode": 1,
+            "outputLimit": 0,
+            "inputLimit": input_w,
+        },
+    }
+
+
+def test_http_a_running_charge_changes_power_with_one_value():
+    """Inside an accepted charge only the power moves.
+
+    The hardware probe of 2026-09-13 established that a bare ``inputLimit`` is
+    honoured once the charge direction stands, and ``smartMode`` is the
+    flash-persistent mode the discharge side already refuses to rewrite every
+    loop. Sending the whole set for every power change under a noisy surplus
+    rewrote it hundreds of times an hour.
+    """
+
+    session = SessionStub(
+        get_response=_report(acMode=1, acStatus=2, smartMode=1, inputLimit=600)
+    )
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.dispatch_output_limit(-600)
+    dev.fetch()
+
+    dev.dispatch_output_limit(-450)
+    dev.dispatch_output_limit(-500)
+
+    assert _posted(session) == [
+        _charge_set(600),
+        {"sn": "SN", "properties": {"inputLimit": 450}},
+        {"sn": "SN", "properties": {"inputLimit": 500}},
+    ]
+
+
+@pytest.mark.parametrize(
+    "observed",
+    [
+        {"acMode": 2, "acStatus": 2, "smartMode": 1},
+        {"acMode": 1, "acStatus": 2, "smartMode": 0},
+        {"acMode": 2, "acStatus": 1, "smartMode": 1},
+    ],
+)
+def test_http_a_charge_the_device_does_not_show_is_sent_whole_again(observed):
+    """Only a device seen in the charge mode the EMS set gets the one value."""
+
+    session = SessionStub(get_response=_report(**observed))
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.dispatch_output_limit(-600)
+    dev.fetch()
+
+    dev.dispatch_output_limit(-450)
+
+    assert _posted(session)[-1] == _charge_set(450)
+
+
+def test_http_a_charge_the_ems_did_not_start_is_entered_whole():
+    """Found charging after a restart: the EMS has no charge of its own yet."""
+
+    session = SessionStub(
+        get_response=_report(acMode=1, acStatus=2, smartMode=1, inputLimit=800)
+    )
+    dev = _zendure(session, hardware_profile="solarflow_2400_ac")
+    dev.fetch()
+
+    dev.dispatch_output_limit(-450)
+
+    assert _posted(session) == [_charge_set(450)]
+
+
+def test_http_charge_is_refused_for_a_model_without_a_charge_path():
+    session = SessionStub()
+    dev = _zendure(session, hardware_profile="solarflow_800")
+
+    result = dev.dispatch_output_limit(-300)
+
+    assert bool(result) is False
+    assert result.reason == "charge_target_unsupported"
+    assert _posted(session) == []
+
+
+def test_http_charge_is_refused_without_a_resolvable_model():
+    session = SessionStub()
+    dev = _zendure(session)
+
+    result = dev.dispatch_output_limit(-300)
+
+    assert bool(result) is False
+    assert result.reason == "unknown_hardware_profile"
+    assert _posted(session) == []
+
+
+def test_http_model_resolves_from_the_device_own_report():
+    """The local report names the product; no config key is required for it."""
+
+    session = SessionStub(get_response=_report(product="solarFlow800Pro2"))
+    dev = _zendure(session)
+
+    assert dev.dispatch_output_limit(-300).reason == "unknown_hardware_profile"
+    dev.fetch()
+
+    assert bool(dev.dispatch_output_limit(-300)) is True
+
+
+def test_a_pinned_model_outranks_the_reported_product():
+    """Config is a decisive evidence source; the device report corroborates."""
+
+    session = SessionStub(get_response=_report(product="solarFlow800Pro2"))
+    dev = _zendure(session, hardware_profile="solarflow_800")
+    dev.fetch()
+
+    result = dev.dispatch_output_limit(-300)
+
+    assert bool(result) is False
+    assert result.reason == "charge_target_unsupported"
 
 
 def test_zendure_client_defaults_missing_input_limit_to_zero():

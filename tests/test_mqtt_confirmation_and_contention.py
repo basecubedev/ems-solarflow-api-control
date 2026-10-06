@@ -327,3 +327,52 @@ def test_oversized_tolerance_and_margin_are_capped():
     dev = _device(confirmation_tolerance_w=100000, safety_preempt_margin_w=100000)
     assert dev._confirmation_tolerance_w == MAX_CONFIRMATION_TOLERANCE_W
     assert dev._safety_preempt_margin_w == MAX_SAFETY_PREEMPT_MARGIN_W
+
+
+# --- the EMS's own charge ----------------------------------------------------
+
+CHARGING = {"outputLimit": 0, "acMode": 1, "smartMode": 1, "inputLimit": 800}
+
+
+def _charging_device():
+    dev = _device()
+    rec = _published(dev, -800)
+    dev._service.set_snapshot(dict(CHARGING), rec.published_monotonic + 1.0)
+    dev.fetch()
+    assert rec.state == "telemetry_confirmed"
+    return dev, rec
+
+
+def test_a_steady_charge_of_its_own_is_not_external_control():
+    """A charging device reports outputLimit 0, never the negative target.
+
+    Comparing that 0 with the confirmed -800 W read every steady charge as a
+    foreign writer two reports in, and the flag stayed raised.
+    """
+
+    dev, rec = _charging_device()
+    base = rec.published_monotonic
+    dev._service.set_snapshot(dict(CHARGING), base + 10.0)
+    dev.fetch()
+    dev._service.set_snapshot(dict(CHARGING), base + 20.0)
+    dev.fetch()
+
+    assert dev.describe()["external_control_suspected"] is False
+
+
+@pytest.mark.parametrize(
+    "foreign",
+    [
+        {"inputLimit": 300},
+        {"outputLimit": 600, "acMode": 2, "inputLimit": 0},
+    ],
+)
+def test_a_foreign_change_to_an_own_charge_is_still_detected(foreign):
+    dev, rec = _charging_device()
+    base = rec.published_monotonic
+    dev._service.set_snapshot(dict(CHARGING, **foreign), base + 10.0)
+    dev.fetch()
+    dev._service.set_snapshot(dict(CHARGING, **foreign), base + 20.0)
+    dev.fetch()
+
+    assert dev.describe()["external_control_suspected"] is True

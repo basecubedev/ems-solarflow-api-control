@@ -21,6 +21,7 @@ from ems.mqtt_control.zendure_profiles import (
     hardware_profile_by_name,
     operation_for_target,
 )
+from ems.power_direction import AC_MODE_INPUT
 from ems.zendure_mqtt.write_protocols import next_message_id as next_power_message_id
 
 INVOKE_FUNCTION = "deviceAutomation"
@@ -51,10 +52,19 @@ class PowerCommandError(ValueError):
 
 @dataclass(frozen=True)
 class ZendurePowerCommand:
+    """One invoke command, and the telemetry that proves it applied.
+
+    ``expected_properties`` is set for a charge only. A discharge or an idle is
+    confirmed by the commanded ``outputLimit`` the device echoes; a charging
+    device reports ``outputLimit`` 0, never the negative target, so a charge is
+    proven by the AC-input direction and its power instead.
+    """
+
     topic: str
     payload: dict[str, object]
     operation: str
     target_w: int
+    expected_properties: dict | None = None
 
 
 def _object_value(operation: str, watts: int) -> dict[str, object]:
@@ -141,8 +151,17 @@ def build_power_command(
         "timestamp": timestamp,
     }
     topic = _INVOKE_TOPIC.format(product_key=product_key, device_id=device_id)
+    expected = (
+        {"acMode": AC_MODE_INPUT, "inputLimit": watts}
+        if operation == OPERATION_CHARGE
+        else None
+    )
     return ZendurePowerCommand(
-        topic=topic, payload=payload, operation=operation, target_w=target_w
+        topic=topic,
+        payload=payload,
+        operation=operation,
+        target_w=target_w,
+        expected_properties=expected,
     )
 
 
