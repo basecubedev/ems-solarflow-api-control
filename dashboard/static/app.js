@@ -63,8 +63,10 @@ const state = {
   runtimeEditorDirty: false,
   lastSnapshotTimestamp: null,
   snapshotChangedAt: null,
+  snapshotSequence: 0,
   runtimeEditorFocused: false,
   flowActivity: new Map(),
+  houseLines: new Map(),
   deviceFlowSignature: null,
   diagnose: {
     profile: "install",
@@ -422,6 +424,7 @@ function updateSnapshot(snapshot) {
   if (snapshot.timestamp !== state.lastSnapshotTimestamp) {
     state.lastSnapshotTimestamp = snapshot.timestamp;
     state.snapshotChangedAt = Date.now();
+    state.snapshotSequence += 1;
   }
   const status = state.demoMode
     ? "Demo"
@@ -517,14 +520,13 @@ function renderAggregatedSnapshot(snapshot) {
   const gridPower = gridFlowPowerW(snapshot);
   const pvPower = Number(snapshot.pv_total_w || 0);
   const inverterPower = Number(snapshot.inverter_output_w || 0);
-  const chargePower = Math.abs(Number(snapshot.inverter_charge_w || 0));
+  const chargePower = finiteWatts(snapshot.inverter_charge_w);
   const homeLoad = Number(snapshot.home_load_w || 0);
   const soc = clamp(Number(snapshot.average_soc || 0), 0, 100);
 
   setText("flowPv", watts(snapshot.pv_total_w));
   setText("flowBattery", signedWatts(batteryFlow.valueW));
   setText("flowInverter", watts(snapshot.inverter_output_w));
-  setText("flowInverterState", inverterChargeLabel(chargePower));
   setText("flowHome", watts(snapshot.home_load_w));
   setText("flowGrid", gridPowerText(snapshot));
   setText("flowBatterySoc", pct(soc));
@@ -570,15 +572,16 @@ function renderAggregatedSnapshot(snapshot) {
   // Drawn grid -> inverter, so charging needs no reverse: the power really does
   // travel that way. It is the one flow the diagram could not express, because
   // a charging device reports no output at all.
-  setPipe("pipeGridInverter", chargePower, "forward");
+  const charging = setPipe("pipeGridInverter", chargePower, "forward");
+  setText("flowInverterState", inverterChargeLabel(chargePower, charging));
 }
 
 // In a mixed fleet both directions run at once: one device exports while
 // another charges. The node value therefore stays the output it feeds the house
 // and the inward flow gets its own line, rather than one number standing for
 // two opposite things.
-function inverterChargeLabel(chargePower) {
-  return chargePower > FLOW_THRESHOLD_W ? `Charging ${watts(chargePower)}` : "";
+function inverterChargeLabel(chargePower, charging) {
+  return charging ? `Charging ${watts(chargePower)}` : "";
 }
 
 // What the charger takes off the meter is already drawn on the grid -> inverter
@@ -666,14 +669,15 @@ function applyPipeStyleBucket(el, speedBucket, watts) {
 }
 
 function setPipe(id, value, direction = "forward") {
-  const el = $(id);
-  if (!el) return;
   const wattsValue = Math.abs(Number(value || 0));
   const active = flowActive(`aggregate:${id}`, wattsValue);
+  const el = $(id);
+  if (!el) return active;
   const speedBucket = flowSpeedBucket(wattsValue, active);
 
   applyFlowClasses(el, active, direction, speedBucket);
   applyPipeStyleBucket(el, speedBucket, wattsValue);
+  return active;
 }
 
 // ---------------------------------------------------------------- flow tiles
@@ -2088,6 +2092,9 @@ function renderDeviceFlow(snapshotOrDevices) {
   const viewHeight = Math.max(rowsBottomY, gridY + layout.sharedVisualHeight) + layout.rowBottomPadding;
   const homeLoad = Number(snapshot.home_load_w || 0);
   const signature = deviceFlowSignature(entries, layout, viewHeight);
+  // One scale for the whole view, taken before any pipe is drawn or updated,
+  // so a ribbon in one device's row is comparable with a ribbon in another's.
+  flowScaleReference(deviceFlowWidest(snapshot, entries));
   if (
     state.deviceFlowSignature === signature
     && typeof container.querySelector === "function"
@@ -2229,7 +2236,11 @@ function setSvgClass(el, className) {
 function updateDevicePipeElement(el, key, kind, value, direction = "forward") {
   if (!el) return;
   const wattsValue = Math.abs(Number(value || 0));
-  const active = flowActive(`device:${key}:${kind}`, wattsValue);
+  applyDevicePipeState(el, kind, wattsValue, flowActive(`device:${key}:${kind}`, wattsValue), direction);
+}
+
+function applyDevicePipeState(el, kind, wattsValue, active, direction = "forward") {
+  if (!el) return;
   const speedBucket = flowSpeedBucket(wattsValue, active);
   setSvgClass(el, devicePipeClass(kind, active, direction, speedBucket));
   applyPipeStyleBucket(el, speedBucket, wattsValue);
@@ -2243,38 +2254,28 @@ function updateDeviceFlowSnapshot(container, snapshot, entries) {
   const homeLoad = Number(snapshot.home_load_w || 0);
   const gridPower = gridFlowPowerW(snapshot);
 
-  // One scale for the whole view, taken before any pipe is drawn, so a ribbon
-  // in one device's row is comparable with a ribbon in another's.
-  let widest = Math.abs(gridPower);
-  entries.forEach(([, device]) => {
-    widest = Math.max(
-      widest,
-      Math.abs(devicePvPower(device)),
-      Math.abs(deviceOutputPower(device)),
-      normalizeBatteryPowerForDisplay(device?.battery_power_w).absW
-    );
-  });
-  flowScaleReference(widest);
-
   entries.forEach(([name, device], index) => {
     const key = deviceFlowKey(name, index);
     const pvPower = devicePvPower(device);
     const outputPower = deviceOutputPower(device);
+    const chargePower = deviceChargePower(device);
+    const houseLine = deviceHouseLine(key, outputPower, chargePower);
     const batteryFlow = normalizeBatteryPowerForDisplay(device?.battery_power_w);
     const soc = clamp(deviceSoc(device), 0, 100);
     const fill = fills.get(String(index));
 
     updateDevicePipeElement(pipes.get(`${key}:pv`), key, "pv", pvPower);
     updateDevicePipeElement(pipes.get(`${key}:battery`), key, "battery", batteryFlow.absW, batteryPipeDirection(batteryFlow));
-    updateDevicePipeElement(pipes.get(`${key}:output`), key, "output", outputPower);
+    applyDevicePipeState(pipes.get(`${key}:house`), houseLine.kind, houseLine.watts, houseLine.active, houseLine.direction);
     setSvgClass(visuals.get(`${key}:pv`), deviceVisualClasses("solar-visual", flowActive(`device:${key}:visualPv`, pvPower)));
     setSvgClass(visuals.get(`${key}:battery`), deviceVisualClasses("battery-visual", flowActive(`device:${key}:visualBattery`, batteryFlow.absW), batteryFlow.state));
-    setSvgClass(visuals.get(`${key}:inverter`), deviceVisualClasses("inverter-visual", flowActive(`device:${key}:visualInverter`, outputPower)));
+    setSvgClass(visuals.get(`${key}:inverter`), deviceVisualClasses("inverter-visual", houseLine.active));
 
     setMappedText(texts, `${key}:pv-label`, `${name || "Unknown"} PV`);
     setMappedText(texts, `${key}:pv-value`, watts(pvPower));
     setMappedText(texts, `${key}:inverter-label`, name || "Unknown");
     setMappedText(texts, `${key}:inverter-value`, watts(outputPower));
+    setMappedText(texts, `${key}:inverter-state`, inverterChargeLabel(houseLine.watts, houseLine.charging));
     setMappedText(texts, `${key}:battery-state`, batteryStateLabel(batteryFlow));
     setMappedText(texts, `${key}:battery-value`, signedWatts(batteryFlow.valueW));
     setMappedText(texts, `${key}:battery-soc`, pct(soc));
@@ -3199,6 +3200,8 @@ function deviceFlowRow(name, device, y, layout, homeY, rowIndex = 0, previousBat
   const key = deviceFlowKey(name, rowIndex);
   const pvPower = devicePvPower(device);
   const outputPower = deviceOutputPower(device);
+  const chargePower = deviceChargePower(device);
+  const houseLine = deviceHouseLine(key, outputPower, chargePower);
   const batteryFlow = normalizeBatteryPowerForDisplay(device.battery_power_w);
   const soc = clamp(deviceSoc(device), 0, 100);
   const batteryStateText = batteryStateLabel(batteryFlow);
@@ -3222,10 +3225,10 @@ function deviceFlowRow(name, device, y, layout, homeY, rowIndex = 0, previousBat
     <g class="device-flow-device" data-device="${safeName}" data-device-flow-row="${key}">
       ${devicePipeGroup("pv", pvPower, `M${pvX + 184} ${pvMidY} H${leftJoinX} V${inverterPvPortY} H${inverterX}`, "forward", key)}
       ${devicePipeGroup("battery", batteryFlow.absW, `M${batteryX + 184} ${batteryMidY} H${leftJoinX} V${inverterBatteryPortY} H${inverterX}`, batteryPipeDirection(batteryFlow), key)}
-      ${devicePipeGroup("output", outputPower, `M${inverterX + 196} ${inverterMidY} H${homeJoinX} V${homeMidY} H${sharedX}`, "forward", key)}
+      ${devicePipeMarkup(houseLine.kind, houseLine.watts, houseLine.active, `M${inverterX + 196} ${inverterMidY} H${homeJoinX} V${homeMidY} H${sharedX}`, houseLine.direction, `${key}:house`)}
       ${deviceSolarVisual(pvX, pvY, `${safeName} PV`, watts(pvPower), flowActive(`device:${key}:visualPv`, pvPower), key)}
       ${deviceBatteryVisual(batteryX, batteryY, batteryStateText, signedWatts(batteryFlow.valueW), soc, flowActive(`device:${key}:visualBattery`, batteryFlow.absW), batteryFlow.state, rowIndex, previousBatteryScale, key)}
-      ${deviceInverterVisual(inverterX, inverterY, safeName, watts(outputPower), flowActive(`device:${key}:visualInverter`, outputPower), key)}
+      ${deviceInverterVisual(inverterX, inverterY, safeName, watts(outputPower), houseLine.active, key, inverterChargeLabel(houseLine.watts, houseLine.charging))}
     </g>
   `;
 }
@@ -3247,10 +3250,13 @@ function devicePipeClass(kind, active, direction, speedBucket) {
 function devicePipeGroup(kind, value, path, direction = "forward", key = "") {
   const wattsValue = Math.abs(Number(value || 0));
   const stateKey = key ? `device:${key}:${kind}` : `device:shared:${kind}`;
-  const active = flowActive(stateKey, wattsValue);
+  const pipeKey = key ? `${key}:${kind}` : `shared:${kind}`;
+  return devicePipeMarkup(kind, wattsValue, flowActive(stateKey, wattsValue), path, direction, pipeKey);
+}
+
+function devicePipeMarkup(kind, wattsValue, active, path, direction, pipeKey) {
   const speedBucket = flowSpeedBucket(wattsValue, active);
   const classes = devicePipeClass(kind, active, direction, speedBucket);
-  const pipeKey = key ? `${key}:${kind}` : `shared:${kind}`;
 
   return `
     <g class="${classes}" data-flow-pipe="${pipeKey}" data-flow-speed="${speedBucket}" data-flow-watts="${Math.round(wattsValue)}">
@@ -3287,7 +3293,7 @@ function deviceSolarVisual(x, y, label, value, active, key = "") {
   `;
 }
 
-function deviceInverterVisual(x, y, label, value, active, key = "") {
+function deviceInverterVisual(x, y, label, value, active, key = "", stateText = "") {
   const attrs = key ? ` data-flow-visual="${key}:inverter"` : "";
   return `
     <g class="${deviceVisualClasses("inverter-visual", active)}"${attrs} transform="translate(${x} ${y})">
@@ -3296,8 +3302,9 @@ function deviceInverterVisual(x, y, label, value, active, key = "") {
       <rect class="inverter-body" x="34" y="20" width="38" height="40" rx="10"></rect>
       <path class="inverter-wave" d="M41 41c5-12 10 12 15 0s10 12 15 0"></path>
       <circle class="inverter-led" cx="65" cy="29" r="3"></circle>
-      <text class="visual-label" data-flow-text="${key}:inverter-label" x="174" y="32" text-anchor="end">${label}</text>
-      <text class="visual-value" data-flow-text="${key}:inverter-value" x="174" y="56" text-anchor="end">${value}</text>
+      <text class="visual-state" data-flow-text="${key}:inverter-state" x="178" y="16" text-anchor="end">${stateText}</text>
+      <text class="visual-label" data-flow-text="${key}:inverter-label" x="178" y="32" text-anchor="end">${label}</text>
+      <text class="visual-value" data-flow-text="${key}:inverter-value" x="178" y="56" text-anchor="end">${value}</text>
     </g>
   `;
 }
@@ -3396,6 +3403,54 @@ function deviceName(device, index) {
 
 function devicePvPower(device) {
   return Number(device?.pv_input_w ?? device?.pv_power_w ?? 0);
+}
+
+function finiteWatts(value) {
+  const number = Math.abs(Number(value));
+  return Number.isFinite(number) ? number : 0;
+}
+
+function deviceChargePower(device) {
+  return finiteWatts(device?.ac_charge_w);
+}
+
+function deviceFlowWidest(snapshot, entries) {
+  return entries.reduce((widest, [, device]) => Math.max(
+    widest,
+    finiteWatts(devicePvPower(device)),
+    finiteWatts(deviceOutputPower(device)),
+    normalizeBatteryPowerForDisplay(device?.battery_power_w).absW,
+    deviceChargePower(device),
+  ), finiteWatts(gridFlowPowerW(snapshot)));
+}
+
+const HOUSE_LINE_TAKEOVER_RATIO = 2;
+
+function deviceHouseLine(key, outputPower, chargePower) {
+  const output = finiteWatts(outputPower);
+  const outputActive = flowActive(`device:${key}:house-output`, output);
+  const chargeActive = flowActive(`device:${key}:house-charge`, chargePower);
+  const previous = state.houseLines.get(key);
+  const shown = previous && state.snapshotSequence - previous.sequence <= 1
+    ? previous.direction
+    : "idle";
+  let charging = chargeActive;
+  if (chargeActive && outputActive) {
+    if (shown === "charging") {
+      charging = output < chargePower * HOUSE_LINE_TAKEOVER_RATIO;
+    } else if (shown === "feeding") {
+      charging = chargePower >= output * HOUSE_LINE_TAKEOVER_RATIO;
+    } else {
+      charging = chargePower > output;
+    }
+  }
+  state.houseLines.set(key, {
+    direction: charging ? "charging" : outputActive ? "feeding" : "idle",
+    sequence: state.snapshotSequence,
+  });
+  return charging
+    ? { kind: "grid", watts: chargePower, direction: "reverse", active: true, charging: true }
+    : { kind: "output", watts: output, direction: "forward", active: outputActive, charging: false };
 }
 
 function deviceOutputPower(device) {

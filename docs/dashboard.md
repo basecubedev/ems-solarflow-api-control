@@ -236,7 +236,7 @@ a view (`/preview/aggregated`, `/preview/devices`, `/preview/control`,
 `/preview/energy`, `/preview/diagnose`, `/preview/logs`,
 `/preview/maintenance`). Scenarios cover a healthy system, a fleet where one
 device AC-charges the surplus of another (`ac-charging`, the only state that
-draws the grid → inverter pipe), mixed firmware-status values (including unknown
+draws the grid → inverter pipe and, per device, the house → inverter charge line), mixed firmware-status values (including unknown
 values), an offline device, and read-only/write-mode authentication states. See
 [developer.md](developer/developer.md#local-dashboard-preview) for details.
 

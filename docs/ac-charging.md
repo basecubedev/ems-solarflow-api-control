@@ -465,6 +465,12 @@ the charge is actually covered by a sibling inverter rather than by the grid,
 the grid node still reads the truth (near zero) while the pipe overstates its
 role. Preview it with `serve_dashboard_preview.py --scenario ac-charging`.
 
+The per-device view draws the same flow per row: while a device charges, the
+line between house and inverter turns round and takes the grid colour, and the
+inverter node states `Charging <W>` above the output it shows for as long as
+that line is drawn, so the path grid ↔ house ↔ inverter ↔ battery is complete
+in either direction.
+
 Energy statistics count charged energy separately (**AC Charge**, kWh) and
 deliberately attach no monetary value to it.
 
