@@ -1036,7 +1036,7 @@ def test_emsctl_diagnose_control_disabled_and_dry_run_detection(tmp_path):
 def write_placeholder_config(path):
     write_config(path)
     config = json.loads(path.read_text())
-    config["devices"][0].update({"ip": "192.168.1.100", "sn": "YOUR_SN"})
+    config["devices"][0].update({"ip": "198.51.100.100", "sn": "YOUR_SN"})
     path.write_text(json.dumps(config))
 
 
@@ -1071,7 +1071,7 @@ def test_emsctl_diagnose_judges_the_config_as_ems_loads_it(tmp_path):
     write_config(config_path)
     config = json.loads(config_path.read_text())
     del config["grid_meter"]
-    config["shelly"] = {"ip": "192.168.1.50"}
+    config["shelly"] = {"ip": "198.51.100.50"}
     config_path.write_text(json.dumps(config))
 
     result = run_emsctl(tmp_path, "diagnose", "--json")

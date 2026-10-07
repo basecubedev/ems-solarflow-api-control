@@ -205,10 +205,16 @@ def test_device_count_is_configurable():
     devices = build_default_template(device_count=3)["devices"]
     assert [device["name"] for device in devices] == ["INV_1", "INV_2", "INV_3"]
     assert [device["ip"] for device in devices] == [
-        "192.168.1.100",
-        "192.168.1.101",
-        "192.168.1.102",
+        "198.51.100.100",
+        "198.51.100.101",
+        "198.51.100.102",
     ]
+
+
+def test_a_device_count_the_template_range_cannot_address_is_refused():
+    assert build_default_template(device_count=155)["devices"][-1]["ip"] == "198.51.100.254"
+    with pytest.raises(ValueError):
+        build_default_template(device_count=156)
 
 
 # The core control-tuning knobs are promoted to primary (normal) so operators

@@ -701,7 +701,7 @@ def test_frontend_battery_flow_scenarios_execute_against_app_js():
         const pipeGroups = [...deviceHtml.matchAll(/class="energy-pipe/g)].length;
         assert(deviceRows === 2, "exactly two device SVG groups are rendered for WR1 and WR2");
         assert(sharedHomes === 1, "one shared home/grid module is rendered");
-        assert(pipeGroups === 7, "each device renders PV, battery and output pipes plus one shared grid pipe");
+        assert(pipeGroups === 7, "each device renders PV, battery and one house line pipe plus one shared grid pipe");
         assert(deviceHtml.includes('class="device-flow-svg"'), "device view renders an SVG board");
         assert(deviceHtml.includes("device-visual"), "device modules reuse aggregated visual classes");
         assert(deviceHtml.includes("visual-shell"), "device modules reuse visual shells");

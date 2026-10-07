@@ -1037,7 +1037,8 @@ h2 { display: inline-flex; align-items: center; gap: calc(7px * var(--d)); }
 .battery-fill.low { fill: var(--danger); }
 .battery-fill.full { fill: var(--pv); }
 .battery-soc { fill: var(--text); font-size: 10px; font-weight: 950; letter-spacing: 0; }
-.battery-visual .visual-state { font-size: 9px; letter-spacing: .04em; }
+.battery-visual .visual-state,
+.device-flow-svg .inverter-visual .visual-state { font-size: 9px; letter-spacing: .04em; }
 .battery-visual .visual-label { font-size: 10px; letter-spacing: .06em; }
 .battery-visual .visual-value { font-size: 15px; }
 .battery-visual.charging .battery-fill { animation: fillPulse 2s ease-in-out infinite; }

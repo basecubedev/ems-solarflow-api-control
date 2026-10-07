@@ -47,7 +47,8 @@ def test_default_device_config_separates_identity_common_comments():
         assert not str(key).startswith("_")
         assert key not in DEVICE_IDENTITY_FIELD_KEYS
     # Sample identity values never leak into the common defaults.
-    for sample in ("WR1", "192.168.1.100", "YOUR_SN"):
+    assert parts["identity"]
+    for sample in parts["identity"].values():
         assert sample not in parts["common"].values()
 
 

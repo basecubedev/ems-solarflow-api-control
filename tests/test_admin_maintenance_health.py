@@ -271,7 +271,7 @@ def test_the_overview_reads_safe_mode_from_the_stored_config(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "config.json").write_text(
-        '{"devices": [{"name": "WR1", "ip": "192.168.1.100", "sn": "SN1"}],'
+        '{"devices": [{"name": "WR1", "ip": "198.51.100.100", "sn": "SN1"}],'
         ' "grid_meter": {"type": "shelly", "ip": "192.0.2.50"}}',
         encoding="utf-8",
     )
