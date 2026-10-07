@@ -2,6 +2,7 @@
 import json
 import sys
 import copy
+import ipaddress
 import shutil
 import stat
 from pathlib import Path
@@ -435,6 +436,23 @@ def test_config_template_upgrade_does_not_add_sample_devices():
     result = upgrade(user)
 
     assert result["devices"] == []
+
+
+def test_a_config_upgraded_without_a_meter_is_held_until_one_is_entered():
+    user = minimal_upgrade_config()
+    user.pop("shelly")
+
+    result = upgrade(user)
+
+    assert "grid_meter.ip" in cfg.template_placeholder_paths(result)
+
+
+def test_the_upgrade_keeps_the_meter_address_the_config_names():
+    user = minimal_upgrade_config()
+    user.pop("shelly")
+    user["grid_meter"] = {"type": "shelly", "ip": "192.0.2.30"}
+
+    assert upgrade(user)["grid_meter"]["ip"] == "192.0.2.30"
 
 
 def test_config_template_upgrade_preserves_user_devices():
@@ -1276,6 +1294,18 @@ def test_an_address_nothing_can_parse_is_held_like_a_placeholder(value, expected
     assert cfg.is_template_placeholder_value(value, address=True) is expected
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("[::ffff:198.51.100.100]", True),
+        ("::ffff:198.51.100.50", True),
+        ("::ffff:192.168.1.100", False),
+    ],
+)
+def test_a_template_address_written_as_ipv4_mapped_ipv6_is_still_held(value, expected):
+    assert cfg.is_template_placeholder_value(value, address=True) is expected
+
+
 def test_the_implicit_default_broker_is_named_by_the_key_that_holds_it():
     config = {
         "devices": [{"name": "WR1", "ip": "192.0.2.20", "sn": "SN1"}],
@@ -1283,7 +1313,7 @@ def test_the_implicit_default_broker_is_named_by_the_key_that_holds_it():
             "type": "mqtt",
             "mqtt": {"broker_ref": "default", "topic": "meter/power"},
         },
-        "zendure_mqtt": {"host": "192.168.1.100"},
+        "zendure_mqtt": {"host": "198.51.100.100"},
     }
 
     assert cfg.template_placeholder_paths(config) == ["zendure_mqtt.host"]
@@ -1292,10 +1322,53 @@ def test_the_implicit_default_broker_is_named_by_the_key_that_holds_it():
 def test_a_tasmota_meter_given_by_address_names_the_address_field():
     config = {
         "devices": [{"name": "WR1", "ip": "192.0.2.20", "sn": "SN1"}],
-        "grid_meter": {"type": "tasmota_http", "ip": "192.168.1.50", "power_path": "a.b"},
+        "grid_meter": {"type": "tasmota_http", "ip": "198.51.100.50", "power_path": "a.b"},
     }
 
     assert cfg.template_placeholder_paths(config) == ["grid_meter.ip"]
+
+
+@pytest.mark.parametrize("address", ["192.168.1.50", "192.168.1.100", "192.168.1.101"])
+def test_a_device_on_an_address_the_template_once_used_is_not_held(address):
+    """The first DHCP lease of many routers; the device behind it is real."""
+
+    config = {
+        "devices": [{"name": "WR1", "ip": address, "sn": "SN1"}],
+        "grid_meter": {"type": "shelly", "ip": address},
+    }
+
+    assert cfg.template_placeholder_paths(config) == []
+
+
+def test_every_address_the_template_ships_is_a_documentation_address_and_is_held():
+    from ems.config_catalog import (
+        TEMPLATE_DEVICE_LIMIT,
+        build_default_template,
+        get_config_catalog,
+    )
+
+    documentation = [
+        ipaddress.ip_network(block)
+        for block in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")
+    ]
+    templates = (
+        json.loads((ROOT / "config" / "config.template.json").read_text()),
+        get_config_catalog()["template"],
+        build_default_template(device_count=TEMPLATE_DEVICE_LIMIT),
+    )
+    addresses = [
+        address
+        for template in templates
+        for address in [template["grid_meter"]["ip"]]
+        + [device["ip"] for device in template["devices"]]
+    ]
+
+    for address in addresses:
+        value = ipaddress.ip_address(address)
+        block = next((block for block in documentation if value in block), None)
+        assert block is not None, address
+        assert value not in (block.network_address, block.broadcast_address), address
+        assert cfg.is_template_placeholder_value(address, address=True), address
 
 
 def test_a_blank_tasmota_url_falls_back_to_the_address_as_the_client_does():

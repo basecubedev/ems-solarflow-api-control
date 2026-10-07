@@ -83,7 +83,7 @@ Use this for standalone EMS operation without Home Assistant.
   "devices": [
     {
       "name": "WR1",
-      "ip": "192.168.1.100",
+      "ip": "198.51.100.100",
       "sn": "YOUR_SN",
       "smart_mode": 1,
       "max_power": 800,
@@ -97,7 +97,7 @@ Use this for standalone EMS operation without Home Assistant.
 
   "grid_meter": {
     "type": "shelly",
-    "ip": "192.168.1.50"
+    "ip": "198.51.100.50"
   }
 }
 ```
@@ -160,7 +160,7 @@ single-device template values for a two-inverter installation.
   "devices": [
     {
       "name": "WR1",
-      "ip": "192.168.1.100",
+      "ip": "198.51.100.100",
       "sn": "YOUR_SN",
       "smart_mode": 1,
       "max_power": 800,
@@ -172,7 +172,7 @@ single-device template values for a two-inverter installation.
     },
     {
       "name": "WR2",
-      "ip": "192.168.1.101",
+      "ip": "198.51.100.101",
       "sn": "YOUR_SN",
       "smart_mode": 1,
       "max_power": 800,
@@ -186,7 +186,7 @@ single-device template values for a two-inverter installation.
 
   "grid_meter": {
     "type": "shelly",
-    "ip": "192.168.1.50"
+    "ip": "198.51.100.50"
   }
 }
 ```
@@ -384,7 +384,7 @@ without authentication.
 {
   "grid_meter": {
     "type": "zendure_grid_meter_http",
-    "ip": "192.168.1.50"
+    "ip": "198.51.100.50"
   }
 }
 ```
@@ -497,7 +497,7 @@ such as `["c"]` is valid and reads only clamp C:
 {
   "grid_meter": {
     "type": "shelly",
-    "ip": "192.168.1.50",
+    "ip": "198.51.100.50",
     "channels": ["c"]
   }
 }
@@ -509,7 +509,7 @@ Multiple items such as `["a", "c"]` sum only those selected clamps:
 {
   "grid_meter": {
     "type": "shelly",
-    "ip": "192.168.1.50",
+    "ip": "198.51.100.50",
     "channels": ["a", "c"]
   }
 }
@@ -535,7 +535,7 @@ summing all three `emeters[].power` values:
 {
   "grid_meter": {
     "type": "shelly_3em_gen1",
-    "ip": "192.168.1.50"
+    "ip": "198.51.100.50"
   }
 }
 ```
@@ -549,7 +549,7 @@ phases/clamps. Valid entries are `a`, `b`, `c`, `0`, `1`, `2`, `emeter:0`,
 {
   "grid_meter": {
     "type": "shelly_3em_gen1",
-    "ip": "192.168.1.50",
+    "ip": "198.51.100.50",
     "channels": ["a", "c"]
   }
 }

@@ -91,7 +91,7 @@
       "either mqtt.broker_ref or host/port; payload_format and max_age_seconds."
     ],
     "type": "shelly",
-    "ip": "192.168.1.50"
+    "ip": "198.51.100.50"
   },
 
   "_comment_devices": [
@@ -102,7 +102,7 @@
   "devices": [
     {
       "name": "INV_1",
-      "ip": "192.168.1.100",
+      "ip": "198.51.100.100",
       "sn": "YOUR_SN",
 
       "_comment_smart_mode": [
@@ -135,7 +135,7 @@
     },
     {
       "name": "INV_2",
-      "ip": "192.168.1.101",
+      "ip": "198.51.100.101",
       "sn": "YOUR_SN",
 
       "_comment_smart_mode": [

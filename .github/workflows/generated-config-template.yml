@@ -4,6 +4,7 @@ name: EMS config template
   pull_request:
     paths:
       - "ems/config_catalog.py"
+      - "ems/template_addresses.py"
       - "tools/build_config_template.py"
       - "config/config.template.json"
       - ".github/workflows/generated-config-template.yml"

@@ -9,8 +9,9 @@ There is no separate "enable live writes" switch to flip. The template ships
 with `system.dry_run: false` and every write gate open, and only one thing
 holds writes back: **template placeholders**. While any device IP, the grid
 meter address or a serial still carries a placeholder, EMS runs in safe mode,
-calculates targets and writes nothing. The placeholder values are
-`192.168.1.100`, `192.168.1.101`, `192.168.1.50`, `0.0.0.0`, `localhost`,
+calculates targets and writes nothing. The placeholder values are any address
+in `198.51.100.0/24`, a range reserved for documentation that home routers do
+not hand out (the template uses `.50`, `.100`, `.101`), `0.0.0.0`, `localhost`,
 `example.com` (and any `*.example.com`), `YOUR_SN` and `YOUR_TOKEN_HERE`.
 An address that cannot be parsed at all holds writes back the same way.
 `emsctl.py diagnose` and the Admin Console's Maintenance page name every field
@@ -22,9 +23,9 @@ So:
 
 - Delete the template's second device if you have only one inverter. A
   leftover placeholder device keeps the whole system in safe mode.
-- If an inverter really sits at one of the addresses above (the first DHCP
-  lease on many routers is `192.168.1.100`), give it another address; EMS
-  cannot tell your device from the template.
+- A config copied from an older template may still name `192.168.1.50`,
+  `192.168.1.100` or `192.168.1.101`. These are read as real addresses now, so
+  replace any of them you did not enter yourself.
 - To watch before it acts, set `"dry_run": true` under `system` first, check
   the decisions in the dashboard and with `emsctl.py diagnose --control`, then
   set it back to `false`.

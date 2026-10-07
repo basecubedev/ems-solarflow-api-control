@@ -111,7 +111,9 @@ docker compose exec ems python3 emsctl.py config upgrade
 The upgrade command uses `config.template.json` as the source for missing
 user-facing config defaults and explanatory `_comment*` keys. A dry-run also
 reports how many existing template-managed comments differ from the current
-template.
+template. It never adds a sample device or a device `ip`/`sn`. A config with
+no `grid_meter` block receives the template's, whose address is a placeholder,
+so EMS stays in safe mode until a real meter is entered.
 
 Before writing normal upgrade changes, EMS asks whether to create a normal
 config backup with the existing backup tool. Backups are stored in
@@ -669,7 +671,7 @@ Each Zendure device entry defines static installation data:
 ```json
 {
   "name": "INV_1",
-  "ip": "192.168.1.100",
+  "ip": "198.51.100.100",
   "sn": "YOUR_SN",
   "smart_mode": 1,
   "max_power": 800,
@@ -858,7 +860,7 @@ Example: Zendure grid meter via local HTTP:
 {
   "grid_meter": {
     "type": "zendure_grid_meter_http",
-    "ip": "192.168.1.50"
+    "ip": "198.51.100.50"
   }
 }
 ```

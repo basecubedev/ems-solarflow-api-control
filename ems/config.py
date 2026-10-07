@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 from ems.logging_utils import log_event
 from ems.paths import resolve_config_path, resolve_template_path
+from ems.template_addresses import is_template_address
 from ems.winter_policies import MAX_RAISE_ABOVE_SOC, configurable_class_defaults
 
 LATEST_CONFIG_SCHEMA_VERSION = 3
@@ -925,9 +926,6 @@ CONFIG_MIGRATIONS = {
 }
 
 TEMPLATE_PLACEHOLDER_VALUES = {
-    "192.168.1.100",
-    "192.168.1.101",
-    "192.168.1.50",
     "0.0.0.0",
     "example.com",
     "localhost",
@@ -940,7 +938,11 @@ def _is_template_placeholder_host(host):
     if not host:
         return False
     value = str(host).strip().lower().rstrip(".")
-    return value in TEMPLATE_PLACEHOLDER_VALUES or value.endswith(".example.com")
+    return (
+        value in TEMPLATE_PLACEHOLDER_VALUES
+        or value.endswith(".example.com")
+        or is_template_address(value)
+    )
 
 
 def is_template_placeholder_value(value, *, address=False):
@@ -958,7 +960,7 @@ def is_template_placeholder_value(value, *, address=False):
         return False
 
     lowered = text.lower()
-    if lowered in TEMPLATE_PLACEHOLDER_VALUES:
+    if lowered in TEMPLATE_PLACEHOLDER_VALUES or is_template_address(lowered):
         return True
     if (
         lowered.startswith("your_")

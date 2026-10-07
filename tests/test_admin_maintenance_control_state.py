@@ -138,7 +138,7 @@ def test_dry_run_is_named_as_the_cause_and_never_reads_as_controlling(tmp_path):
 @pytest.mark.parametrize(
     "devices",
     [
-        [_api_device(ip="192.168.1.100")],
+        [_api_device(ip="198.51.100.100")],
         [_api_device(sn="YOUR_SN")],
         [_api_device(), _api_device("WR2", ip="", sn="")],
     ],
@@ -202,7 +202,7 @@ def test_a_legacy_meter_block_is_judged_as_ems_loads_it(tmp_path):
 
     config = _config()
     del config["grid_meter"]
-    config["shelly"] = {"ip": "192.168.1.50"}
+    config["shelly"] = {"ip": "198.51.100.50"}
     control = _control(tmp_path, config)
     assert control["status"] == "safe_mode"
     assert control["placeholder_fields"] == ["grid_meter.ip"]

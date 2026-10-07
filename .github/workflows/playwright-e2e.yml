@@ -8,6 +8,7 @@ on:
       - "ems/mqtt_control/**"
       - "ems/config.py"
       - "ems/config_catalog.py"
+      - "ems/template_addresses.py"
       - "ems/winter_policies.py"
       - "ems/paths.py"
       - "deploy/admin/**"
