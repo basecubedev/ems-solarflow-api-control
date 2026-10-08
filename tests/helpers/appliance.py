@@ -14,10 +14,13 @@ from pathlib import Path
 
 from admin.container_names import DEFAULT_EMS_CONTAINER
 from appliance.admin_deployment import read_service_image
+from appliance.agent import AgentHandlers
+from appliance.auth import record_generation
 from appliance.commands import CommandError, CommandResult
 from appliance.config import ApplianceConfig, AllowedImages
 from appliance.health import HealthResult
 from appliance.paths import AppliancePaths
+from appliance.protocol import ROOT_ACCESS_PLANS, SESSION_GENERATION_FIELD
 from appliance.rescue_account import ACCOUNT as RESCUE_ACCOUNT
 from appliance.services import build_services
 from appliance.shell_access import ACCOUNT as SHELL_ACCOUNT
@@ -941,6 +944,39 @@ def build_test_services(
 
 
 INSTALLED_VERSION = "0.1.0"
+
+SIGNED_IN_PASSWORD = "appliance-secret-1"
+
+
+def confirmed_session_generation(services, password=SIGNED_IN_PASSWORD):
+    """The generation a session signed in with the confirmed password carries.
+
+    Sets the password once, the way the Appliance Manager's first start does,
+    so the shared file and the confirmed record agree.
+    """
+
+    status = services.auth.status()
+    if status["confirmed"]:
+        return status["generation"]
+    services.auth.iterations = 1000
+    return record_generation(services.auth.create(password, password))
+
+
+class SignedInHandlers:
+    """The agent's handlers as the web service calls them for a signed-in session.
+
+    A plan that hands out a shell carries the generation of the password the
+    session signed in with, and here that is the confirmed one.
+    """
+
+    def __init__(self, services):
+        self.handlers = AgentHandlers(services, executor=lambda target: target())
+        self.generation = confirmed_session_generation(services)
+
+    def dispatch(self, payload):
+        if payload.get("operation") in ROOT_ACCESS_PLANS:
+            payload = {SESSION_GENERATION_FIELD: self.generation, **payload}
+        return self.handlers.dispatch(payload)
 
 BACKUP_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH1cQ0kFvL5gLIQ0Q0mV3P6pC5J2Xw5RIu5Hn3fJ0hVb backup\n"

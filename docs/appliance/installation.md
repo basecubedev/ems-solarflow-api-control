@@ -463,6 +463,7 @@ hardware covers first boot, reboot persistence and the update paths.
     support/                         generated support archives
     packages/                        the retained Appliance Manager packages,
                                      the armed reverter and the install deadline
+    confirmed-password.json          the password the Manager last confirmed (0600)
 
 /var/log/ems-appliance-manager/      root:ems-appliance 0750
   web/appliance.log                  ems-appliance-web
@@ -589,7 +590,10 @@ sudo ems-appliance password-reset
 ```
 
 The reset rotates a generation marker, so **every existing browser session is
-signed out immediately**. There is no unauthenticated network reset endpoint.
+signed out immediately**. Run as root it also makes the new password the one
+SSH, shell access and key changes accept; see
+[security-model.md](security-model.md#what-a-rewritten-file-cannot-open).
+There is no unauthenticated network reset endpoint.
 
 ## Host CLI
 

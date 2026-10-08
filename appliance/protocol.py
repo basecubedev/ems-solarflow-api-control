@@ -57,6 +57,13 @@ KIND_AUDIT_EVENT = "audit_event"
 KIND_AUDIT_RESULT = "audit_result"
 KIND_AUDIT_REASON = "audit_reason"
 KIND_RELEASE_ID = "release_id"
+KIND_PASSWORD_GENERATION = "password_generation"
+
+# The generation of the password a web session signed in with. A plan that
+# declares it can hand out a root shell, directly or by replacing the Manager
+# that guards one, and the agent refuses it unless that password is the one the
+# Appliance Manager confirmed.
+SESSION_GENERATION_FIELD = "session_generation"
 
 
 class ProtocolError(Exception):
@@ -106,6 +113,10 @@ def _spec(
         timeout_seconds=timeout_seconds,
     )
 
+
+_SESSION_GENERATION = Field(
+    SESSION_GENERATION_FIELD, KIND_PASSWORD_GENERATION, required=False, default=""
+)
 
 READ_ONLY_OPERATIONS = (
     _spec(
@@ -258,6 +269,15 @@ MUTATING_OPERATIONS = (
         summary="Change the shared password",
     ),
     _spec(
+        "auth.confirm",
+        mutating=True,
+        fields=(
+            Field("password", KIND_SECRET),
+            Field(SESSION_GENERATION_FIELD, KIND_PASSWORD_GENERATION),
+        ),
+        summary="Confirm a password changed outside the Appliance Manager",
+    ),
+    _spec(
         "system.timezone.plan",
         mutating=True,
         takes_lock=True,
@@ -277,21 +297,25 @@ MUTATING_OPERATIONS = (
         "ssh.plan_service",
         mutating=True,
         takes_lock=True,
-        fields=(Field("enabled", KIND_BOOL),),
+        fields=(Field("enabled", KIND_BOOL), _SESSION_GENERATION),
         summary="Plan enabling or disabling SSH",
     ),
     _spec(
         "ssh.plan_shell_access",
         mutating=True,
         takes_lock=True,
-        fields=(Field("enabled", KIND_BOOL),),
+        fields=(Field("enabled", KIND_BOOL), _SESSION_GENERATION),
         summary="Plan enabling or disabling the root-capable shell account",
     ),
     _spec(
         "ssh.plan_key_add",
         mutating=True,
         takes_lock=True,
-        fields=(Field("account", KIND_ACCOUNT), Field("public_key", KIND_PUBLIC_KEY)),
+        fields=(
+            Field("account", KIND_ACCOUNT),
+            Field("public_key", KIND_PUBLIC_KEY),
+            _SESSION_GENERATION,
+        ),
         summary="Plan adding an SSH public key",
     ),
     _spec(
@@ -323,7 +347,7 @@ MUTATING_OPERATIONS = (
         "manager.plan_update",
         mutating=True,
         takes_lock=True,
-        fields=(Field("release_id", KIND_RELEASE_ID),),
+        fields=(Field("release_id", KIND_RELEASE_ID), _SESSION_GENERATION),
         summary="Plan an Appliance Manager package installation",
         timeout_seconds=IMAGE_OPERATION_TIMEOUT,
     ),
@@ -331,6 +355,7 @@ MUTATING_OPERATIONS = (
         "manager.plan_revert",
         mutating=True,
         takes_lock=True,
+        fields=(_SESSION_GENERATION,),
         summary="Plan going back to the kept Appliance Manager package",
         timeout_seconds=IMAGE_OPERATION_TIMEOUT,
     ),
@@ -371,6 +396,10 @@ MUTATING_OPERATIONS = (
 )
 
 OPERATIONS = {spec.name: spec for spec in READ_ONLY_OPERATIONS + MUTATING_OPERATIONS}
+
+ROOT_ACCESS_PLANS = frozenset(
+    spec.name for spec in MUTATING_OPERATIONS if _SESSION_GENERATION in spec.fields
+)
 
 RESERVED_REQUEST_KEYS = frozenset({"operation"})
 
@@ -449,6 +478,8 @@ def _coerce(field, value, context):
         return validation.validate_web_audit_reason(value)
     if kind == KIND_RELEASE_ID:
         return validation.validate_release_id(value)
+    if kind == KIND_PASSWORD_GENERATION:
+        return validation.validate_password_generation(value)
     raise ProtocolError("invalid_field_kind", f"unknown field kind {kind!r}", field=field.name)
 
 

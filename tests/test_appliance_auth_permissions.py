@@ -321,8 +321,10 @@ def test_a_symlink_planted_at_the_lock_is_never_followed(tmp_path):
     store = appliance_auth.AuthStore(config / "dashboard-auth.json")
     os.symlink(target, appliance_auth.lock_path(store.path))
 
-    with pytest.raises(OSError):
+    with pytest.raises(appliance_auth.AuthError) as refused:
         store.create("a-shared-secret-1")
+    assert refused.value.code == "password_store_unavailable"
+    assert "is not a regular file" in str(refused.value)
     assert target.read_text(encoding="utf-8") == "untouched"
     assert oct(target.stat().st_mode & 0o777) != oct(0o600)
 

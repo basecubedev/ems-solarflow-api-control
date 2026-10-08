@@ -55,7 +55,14 @@ from appliance.operations import (
     OperationError,
 )
 from appliance.paths import AGENT_SOCKET_NAME
-from appliance.protocol import OPERATIONS, ProtocolError, ValidationContext, validate_request
+from appliance.protocol import (
+    OPERATIONS,
+    ROOT_ACCESS_PLANS,
+    SESSION_GENERATION_FIELD,
+    ProtocolError,
+    ValidationContext,
+    validate_request,
+)
 from appliance.validation import ValidationError
 
 MAX_REQUEST_BYTES = 64 * 1024
@@ -163,6 +170,35 @@ SERVICE_ERRORS = (
 )
 
 
+AUTH_OPERATIONS = ("auth.state", "auth.verify", "auth.create", "auth.change", "auth.confirm")
+
+
+def answer_auth(store, name, args):
+    """The answer to one of AUTH_OPERATIONS, from ``store``.
+
+    A generation handed back is that of the record the call itself read or
+    wrote, never one read again afterwards: a record swapped in between would
+    otherwise be the one a session gets bound to.
+    """
+
+    if name == "auth.state":
+        return store.status()
+    if name == "auth.verify":
+        generation = store.check(args["password"])
+        return {"ok": bool(generation), "generation": generation}
+    if name == "auth.create":
+        record = store.create(args["password"], args.get("confirmation") or None)
+    elif name == "auth.change":
+        record = store.change(
+            args["current_password"], args["password"], args.get("confirmation") or None
+        )
+    elif name == "auth.confirm":
+        record = store.confirm(args["password"], args[SESSION_GENERATION_FIELD])
+    else:
+        raise AgentError("unknown_operation", f"{name} is not an authentication operation")
+    return {"generation": auth.record_generation(record)}
+
+
 class AgentHandlers:
     """Dispatch a validated request onto the privileged services."""
 
@@ -179,21 +215,8 @@ class AgentHandlers:
             return self._plan(spec, args, actor=actor, source_ip=source_ip)
         if spec.name == "operations.execute":
             return self._execute_operation(args, actor=actor, source_ip=source_ip)
-        if spec.name == "auth.state":
-            store = self.services.auth
-            return {"configured": store.configured(), "generation": store.generation()}
-        if spec.name == "auth.verify":
-            return {"ok": bool(self.services.auth.verify(args["password"]))}
-        if spec.name == "auth.create":
-            self.services.auth.create(args["password"], args.get("confirmation") or None)
-            return {"generation": self.services.auth.generation()}
-        if spec.name == "auth.change":
-            self.services.auth.change(
-                args["current_password"],
-                args["password"],
-                args.get("confirmation") or None,
-            )
-            return {"generation": self.services.auth.generation()}
+        if spec.name in AUTH_OPERATIONS:
+            return answer_auth(self.services.auth, spec.name, args)
         if spec.name == "support.read_archive":
             return self.services.support.read(args["operation_id"])
         if spec.name == "operations.cancel":
@@ -275,6 +298,8 @@ class AgentHandlers:
 
     def _plan(self, spec, args, *, actor, source_ip):
         operation_type = PLAN_TYPES[spec.name]
+        if spec.name in ROOT_ACCESS_PLANS and args.get("enabled", True):
+            self._require_confirmed_password(args, operation_type, actor, source_ip)
         try:
             operation = self.services.operations.create(operation_type, actor=actor)
         except OperationConflictError as exc:
@@ -341,6 +366,24 @@ class AgentHandlers:
             "plan": plan,
             "confirmation_token": record.confirmation_token,
         }
+
+    def _require_confirmed_password(self, args, operation_type, actor, source_ip):
+        """A plan that can hand out a root shell needs the confirmed password.
+
+        The shared file can be rewritten from a container, and a session signed
+        in with whatever it said then must not reach a root shell -- nor install
+        a Manager that does not ask for this one.
+        """
+
+        if self.services.auth.confirms(args[SESSION_GENERATION_FIELD]):
+            return
+        self._audit(operation_type, actor, source_ip, RESULT_DENIED, "")
+        raise auth.AuthError(
+            "password_unconfirmed",
+            "the password was set outside the Appliance Manager; confirm it under Settings "
+            "with the password the Appliance Manager knew before, or reset it with "
+            "'sudo ems-appliance password-reset'",
+        )
 
     def _abandon_plan(self, operation, operation_type, actor, source_ip, error=None):
         """Give a plan up: the secret first, so a record that cannot be saved keeps none."""

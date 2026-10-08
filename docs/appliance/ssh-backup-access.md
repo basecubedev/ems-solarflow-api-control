@@ -15,7 +15,9 @@ PubkeyAuthentication   yes
 
 **Enable SSH** enables and starts the service. It enables nothing else — there
 is no operation in the appliance that can turn on password authentication.
-**Disable SSH** stops and disables it.
+**Disable SSH** stops and disables it. Enabling SSH and adding a key need a
+session that signed in with the password the Appliance Manager confirmed; see
+[security-model.md](security-model.md#what-a-rewritten-file-cannot-open). Disabling it and removing keys do not.
 
 A flashed image ships with the service **off**, so this control is the only way
 it comes on. That is a property of the image rather than of the package:

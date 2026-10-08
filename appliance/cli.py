@@ -144,9 +144,14 @@ def command_repair(args):
 def command_password_reset(args):
     paths = resolve_paths()
     ensure_directories(paths)
-    from appliance.auth import deployment_owner
+    from appliance.auth import ConfirmedPassword, deployment_owner
 
-    store = AuthStore(paths.auth_file, owner=lambda: deployment_owner(paths.install_root))
+    privileged = os.geteuid() == 0
+    store = AuthStore(
+        paths.auth_file,
+        owner=lambda: deployment_owner(paths.install_root),
+        confirmed=ConfirmedPassword(paths.confirmed_password_file) if privileged else None,
+    )
     # The store lives in the EMS deployment root now. Its parent may not exist
     # yet on a box where nothing has been deployed, so writability of a
     # directory is not the question -- being allowed to write there is.
@@ -156,7 +161,7 @@ def command_password_reset(args):
     except OSError:
         pass
     writable = parent.is_dir() and os.access(str(parent), os.W_OK)
-    if os.geteuid() != 0 and not writable:
+    if not privileged and not writable:
         print("error: run this command as root", file=sys.stderr)
         return EXIT_ERROR
 
@@ -167,10 +172,21 @@ def command_password_reset(args):
     try:
         store.reset(password, confirmation)
     except AuthError as exc:
+        if exc.code == "confirmed_password_unwritten":
+            _record_password_reset(paths)
         print(f"error: {exc.message}", file=sys.stderr)
+        return EXIT_ERROR
+    except OSError as exc:
+        print(f"error: the password reset did not complete: {exc}", file=sys.stderr)
         return EXIT_ERROR
     _record_password_reset(paths)
     print("appliance password updated; all existing sessions were invalidated")
+    if not privileged:
+        print(
+            "note: not run as root, so SSH changes stay locked until this password is "
+            "confirmed in the Appliance Manager",
+            file=sys.stderr,
+        )
     return EXIT_OK
 
 
@@ -716,6 +732,7 @@ def command_agent(args):
         print("error: the appliance agent must run as root", file=sys.stderr)
         return EXIT_ERROR
     services = build_services(paths=paths)
+    _adopt_confirmed_password(services)
     recovered = services.operations.recover_interrupted()
     if recovered:
         print(f"recovered {len(recovered)} interrupted operation(s)")
@@ -735,6 +752,28 @@ def command_agent(args):
 
     serve_agent(services, args.socket or paths.agent_socket, after_ready=recover_wifi)
     return EXIT_OK
+
+
+def _adopt_confirmed_password(services):
+    """Take the shared password as the confirmed one where none was ever confirmed.
+
+    Never a reason not to serve: without a confirmed record root access stays
+    refused, and an agent that does not start cannot judge the Manager install
+    that brought this in.
+    """
+
+    try:
+        if not services.auth.adopt():
+            return False
+    except Exception as exc:
+        print(f"could not record the confirmed appliance password: {exc}", file=sys.stderr)
+        return False
+    print("the current appliance password is now the confirmed one")
+    try:
+        services.audit.record("password.confirm", user="root", target="agent_start")
+    except OSError as exc:
+        print(f"could not audit the confirmed appliance password: {exc}", file=sys.stderr)
+    return True
 
 
 def command_web(args):

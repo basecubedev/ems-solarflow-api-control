@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from appliance.agent import AgentHandlers  # noqa: E402
 from appliance.agent_client import InProcessAgentClient  # noqa: E402
-from appliance.auth import AuthStore  # noqa: E402
+from appliance.auth import AuthStore, ConfirmedPassword, hash_password  # noqa: E402
 from appliance.web import ApplianceWebApp, ApplianceWebServer  # noqa: E402
 from appliance.config import AllowedImages  # noqa: E402
 from tests.helpers.appliance import (  # noqa: E402
@@ -289,6 +289,13 @@ def main():
         host.sshd_backup_match = SSHD_BACKUP_MATCH.format(export_root=services.paths.export_root)
         host.ss_exit_code, host.ss_stderr, host.listening_ports = 0, "", ""
         services.paths.export_status_file.unlink(missing_ok=True)
+        services.paths.confirmed_password_file.unlink(missing_ok=True)
+        if options.get("confirmed_password"):
+            ConfirmedPassword(services.paths.confirmed_password_file).store(
+                hash_password(options["confirmed_password"], 1000)
+            )
+        if options.get("shared_password"):
+            AuthStore(services.paths.auth_file, iterations=1000).reset(options["shared_password"])
         if live["app"] is not None:
             live["app"].agent = live["agent"]
             live["app"].audit.agent = live["agent"]
@@ -404,7 +411,11 @@ def main():
 
     agent = InProcessAgentClient(AgentHandlers(services, executor=lambda target: target()))
     app = ApplianceWebApp(paths=services.paths, config=services.config, agent=agent)
-    app.auth = AuthStore(services.paths.auth_file, iterations=1000)
+    app.auth = AuthStore(
+        services.paths.auth_file,
+        iterations=1000,
+        confirmed=ConfirmedPassword(services.paths.confirmed_password_file),
+    )
     app.test_reset_hook = seed_appliance_state
     live["app"], live["agent"] = app, agent
 

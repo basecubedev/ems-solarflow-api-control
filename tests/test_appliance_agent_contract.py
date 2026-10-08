@@ -36,6 +36,7 @@ from appliance.protocol import (
 from tests.helpers.appliance import (
     ADMIN_CONTAINER,
     ADMIN_REPOSITORY,
+    SignedInHandlers,
     appliance_config,
     build_test_services,
 )
@@ -89,7 +90,7 @@ def test_read_only_operations_never_take_the_mutation_lock():
 # password is not one, and must not queue behind one: an operator who cannot set
 # their first password while an OS update runs is locked out of their own box.
 LOCK_EXEMPT_MUTATIONS = frozenset(
-    {"audit.record_web_event", "auth.create", "auth.change"}
+    {"audit.record_web_event", "auth.create", "auth.change", "auth.confirm"}
 )
 
 
@@ -232,7 +233,15 @@ def test_optional_fields_get_their_declared_defaults(context):
 
 
 @pytest.mark.parametrize(
-    "event", ["login.success", "login.failure", "logout", "password.change", "password.reset"]
+    "event",
+    [
+        "login.success",
+        "login.failure",
+        "logout",
+        "password.change",
+        "password.confirm",
+        "password.reset",
+    ],
 )
 def test_every_allowed_web_audit_event_validates(context, event):
     _, args = validate_request(
@@ -947,7 +956,8 @@ def test_every_plannable_mutation_is_audited():
     assert missing == [], f"plannable mutations with no audit action: {missing}"
 
 
-def test_turning_on_the_root_capable_shell_account_is_audited(handlers, services):
+def test_turning_on_the_root_capable_shell_account_is_audited(services):
+    handlers = SignedInHandlers(services)
     planned = handlers.dispatch({"operation": "ssh.plan_shell_access", "enabled": True})
     handlers.dispatch(
         {
@@ -960,7 +970,8 @@ def test_turning_on_the_root_capable_shell_account_is_audited(handlers, services
     assert "ssh.shell_access" in [entry["action"] for entry in services.audit.tail()]
 
 
-def test_turning_on_sshd_is_audited(handlers, services):
+def test_turning_on_sshd_is_audited(services):
+    handlers = SignedInHandlers(services)
     planned = handlers.dispatch({"operation": "ssh.plan_service", "enabled": True})
     handlers.dispatch(
         {

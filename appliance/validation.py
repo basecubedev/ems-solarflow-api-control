@@ -26,6 +26,7 @@ HOSTNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 CONTAINER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 OPERATION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 ACCOUNT_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+PASSWORD_GENERATION_RE = re.compile(r"^[0-9a-f]{32}$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 REVISION_RE = re.compile(r"^[0-9a-f]{7,64}$")
@@ -101,6 +102,7 @@ WEB_AUDIT_EVENTS = (
     "login.failure",
     "logout",
     "password.change",
+    "password.confirm",
     "password.reset",
 )
 
@@ -110,9 +112,12 @@ WEB_AUDIT_REASONS = (
     "",
     "agent_unavailable",
     "busy",
+    "confirmed_password_unavailable",
+    "confirmed_password_unwritten",
     "first_password",
     "invalid_password",
     "password_changed",
+    "password_confirmed",
     "rate_limited",
     "session_ended",
 )
@@ -402,6 +407,18 @@ def validate_release_id(value):
             "invalid_release_id", "a release id may only contain letters, digits, . _ + and -"
         )
     return text
+
+
+def validate_password_generation(value):
+    """The generation of a stored password record, or "" for none."""
+
+    if not isinstance(value, str):
+        raise ValidationError("invalid_password_generation", "value must be a string")
+    if value and not PASSWORD_GENERATION_RE.fullmatch(value):
+        raise ValidationError(
+            "invalid_password_generation", "password generation must be 32 hex characters"
+        )
+    return value
 
 
 def validate_operation_id(value):

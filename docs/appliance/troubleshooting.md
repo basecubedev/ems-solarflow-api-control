@@ -17,6 +17,7 @@
 | Was this host flashed from an appliance image? | `sudo ems-appliance image-check` — it prints the image layer, or fails. |
 | How do I recover access after a WLAN change? | [network-recovery.md](network-recovery.md) |
 | How do I reset the Appliance Manager password locally? | `sudo ems-appliance password-reset` — see [installation.md](installation.md). |
+| SSH, shell access, a new key or a Manager package is refused with "the password was set outside the Appliance Manager" | Confirm it under **Settings** with the previous password — see [below](#ssh-changes-are-refused-after-a-password-change). |
 
 ## The Appliance Manager itself is unreachable
 
@@ -118,6 +119,44 @@ export root is built as soon as one appears.
 
 Every session was invalidated. That happens after a password change or a
 `sudo ems-appliance password-reset`. Sign in again with the new password.
+
+## SSH changes are refused after a password change
+
+The password you signed in with was set where the Appliance Manager could not
+confirm it: with `emsctl dashboard set-password`, in the EMS Admin console, by a
+restored backup, under an older Appliance Manager, in the Appliance Manager from
+a session that signed in with such a password, or written into the shared file
+from inside a container. It signs in, but switching SSH on, turning on shell
+access, adding a key and installing or going back to a Manager package wait
+until it is confirmed. Open **Settings**, enter the password the Appliance
+Manager confirmed last under **Confirm the password**, and the change takes
+effect without signing anyone out. If you do not know that password, or the
+page says this appliance keeps no readable record of one, run
+`sudo ems-appliance password-reset` on the console. If you did not change the
+password, treat it as a sign that something in a container did; see
+[security-model.md](security-model.md#what-a-rewritten-file-cannot-open).
+
+A password change or a reset can fail on the lock beside the shared file
+(`.dashboard-auth.json.lock`), and the message says which way: **held by another
+process** — stop the EMS and Admin containers and try again; **not a regular
+file** — something replaced it with a link, a pipe or a directory, so remove it
+and try again; **cannot be opened; run this as root** — run the reset as root;
+**cannot be opened** with another reason — the reason is the operating
+system's, for example a card that has gone read-only. A reset also refuses a
+directory in place of the shared file itself; remove it and run the reset again.
+
+"The password could not be recorded as the confirmed one" means the agent's
+state could not be written, usually because the disk is full. A password that
+was being set or reset is in force and signs in, but SSH and Manager changes
+still ask for the previous confirmed one. Free space, then confirm it again
+under **Settings** or run `sudo ems-appliance password-reset`. A first password
+has no previous one to confirm with: run the reset, or restart the appliance,
+whose agent then takes the password in force as the confirmed one.
+
+When the sign-in page says the password file is missing, a password was set
+here before and the shared file is gone. The page will not create one again:
+run `sudo ems-appliance password-reset`, or set a password in the EMS Admin
+console and confirm it here afterwards.
 
 ## Login says "too many failed attempts"
 

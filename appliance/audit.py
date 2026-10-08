@@ -24,6 +24,7 @@ AUDITED_ACTIONS = (
     "login.failure",
     "logout",
     "password.change",
+    "password.confirm",
     "password.reset",
     "admin.install",
     "admin.update",

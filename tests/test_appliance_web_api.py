@@ -17,7 +17,7 @@ import pytest
 
 from appliance.agent import AgentHandlers
 from appliance.agent_client import AgentUnavailableError, InProcessAgentClient
-from appliance.auth import SESSION_COOKIE_NAME, AuthStore
+from appliance.auth import SESSION_COOKIE_NAME, AuthStore, ConfirmedPassword
 from appliance.web import AgentAuth, ApplianceWebApp, ApplianceWebServer
 from tests.helpers.appliance import (
     ADMIN_CONTAINER,
@@ -97,7 +97,11 @@ def appliance(tmp_path):
 
     agent = InProcessAgentClient(AgentHandlers(services, executor=lambda target: target()))
     app = ApplianceWebApp(paths=services.paths, config=services.config, agent=agent)
-    app.auth = AuthStore(services.paths.auth_file, iterations=1000)
+    app.auth = AuthStore(
+        services.paths.auth_file,
+        iterations=1000,
+        confirmed=ConfirmedPassword(services.paths.confirmed_password_file),
+    )
     server = ApplianceWebServer(app, ("127.0.0.1", 0))
     # A short poll interval keeps shutdown() from adding half a second per test.
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
@@ -133,7 +137,12 @@ def test_first_run_reports_that_no_password_exists(appliance):
 def test_no_system_information_is_exposed_before_authentication(appliance):
     _, _, client = appliance
     unauthenticated = client.get("/api/session")[1]
-    assert set(unauthenticated) <= {"authenticated", "password_configured", "appliance_version"}
+    assert set(unauthenticated) <= {
+        "authenticated",
+        "password_configured",
+        "password_file_missing",
+        "appliance_version",
+    }
 
     for path in ("/api/status", "/api/system", "/api/admin", "/api/updates", "/api/network",
                  "/api/docker", "/api/ssh/keys", "/api/logs/audit", "/api/settings"):
@@ -1154,10 +1163,10 @@ def test_concurrent_logins_cannot_spend_more_than_the_documented_budget(applianc
         with counter:
             verifications.append(password)
         assert release.wait(timeout=10), "the test never released the verifications"
-        return False
+        return ""
 
     app.rate_limiter.limited = counting_limited
-    app.auth.verify = blocking_verify
+    app.auth.check = blocking_verify
 
     refused = []
     threads = [
@@ -1198,7 +1207,7 @@ def test_an_attempt_the_agent_could_not_judge_is_still_not_counted(appliance):
     def unavailable(password):
         raise AuthError("agent_unavailable", "the agent is not reachable")
 
-    app.auth.verify = unavailable
+    app.auth.check = unavailable
     for _ in range(app.rate_limiter.max_failures + 2):
         with pytest.raises(AuthError) as excinfo:
             app.login(PASSWORD, source_ip="203.0.113.8")
@@ -1223,13 +1232,13 @@ def test_a_correct_password_clears_what_the_attempt_itself_recorded(appliance):
 
 def _counting_verify(app):
     checks = []
-    real_verify = app.auth.verify
+    real_check = app.auth.check
 
-    def verify(password):
+    def check(password):
         checks.append(password)
-        return real_verify(password)
+        return real_check(password)
 
-    app.auth.verify = verify
+    app.auth.check = check
     return checks
 
 
@@ -1415,9 +1424,9 @@ def _two_password_checks_held(app):
         if held:
             entered.release()
             assert release.wait(timeout=10), "the test never released the held checks"
-        return False
+        return ""
 
-    app.auth.verify = held_verify
+    app.auth.check = held_verify
     holders = [
         threading.Thread(target=_wrong_login, args=(app, f"198.51.100.{n}")) for n in (1, 2)
     ]

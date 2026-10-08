@@ -150,15 +150,18 @@ The appliance manager, the Admin console and the EMS dashboard share one
 password, in the file Admin and the dashboard already shared:
 `<install_root>/config/dashboard-auth.json`. Setting it in the appliance UI on
 first boot sets it for all three; `emsctl dashboard set-password` and
-`ems-appliance password-reset` both change all three.
+`ems-appliance password-reset` both change all three. A password the Appliance
+Manager could not confirm signs in everywhere, but opens no root shell until it
+is confirmed (see below).
 
 This is a deliberate decision, not an accident of implementation. The appliance
 is a local device on a private network, and two passwords reliably produce two
 weak ones rather than one strong one — plus a `set-password` that silently
 changed only half of the system.
 
-**What it costs.** The Admin console sees the plaintext at every login. If that
-container is compromised, the attacker holds the password that also opens the
+**What it costs.** The Admin console and the EMS dashboard see the plaintext at
+every login: the dashboard is served from the EMS container. If either container
+is compromised, the attacker can collect the password that also opens the
 appliance manager, and through it the host agent — which installs packages as
 root, writes OS images to block devices and reboots. Sharing the secret means
 accepting that a compromise of the application tier reaches the host tier. On a
@@ -188,8 +191,94 @@ failure must not spend the rate limiter that would then lock them out once the
 agent returns.
 
 **A missing file is a refusal, not an opening.** Admin and the dashboard answer
-`auth_not_configured`; the appliance offers first-time setup. A host agent that
-opened instead would be the worst of the three to get that wrong.
+`auth_not_configured`; the appliance offers first-time setup only while no
+password was ever confirmed on it. A host agent that opened instead would be the
+worst of the three to get that wrong.
+
+### What a rewritten file cannot open
+
+The shared file sits in `config/`, which the EMS and Admin containers mount
+read-write. Whoever runs code in one of them can write a password of their own
+into it, or delete it, and then sign in to the Appliance Manager -- whose SSH,
+shell-access and key actions hand out a root shell. So the agent keeps a copy of
+the record it last confirmed itself, root-owned in its own state
+(`/var/lib/ems-appliance-manager/agent/confirmed-password.json`, mode 0600, the
+four fields of the shared record and nothing else):
+
+- **Root access asks for the confirmed password.** Switching SSH on, turning on
+  shell access, adding an SSH key, and installing or going back to another
+  Appliance Manager package are refused with `403 password_unconfirmed` and
+  audited as denied, unless the session signed in with the confirmed password.
+  The Manager actions are on the list because an older package does not ask for
+  it. Switching SSH or shell access off, removing a key and revoking keys are
+  not.
+- **A session is bound to the record its password matched.** The agent hands back
+  the generation of the record it verified or wrote in the same step, for a
+  sign-in and for the first password, so a file swapped in between does not lend
+  a foreign password the confirmed generation.
+- **A deleted file does not reopen setup.** While a confirmed record exists the
+  appliance reports the password as set and the file as missing, and refuses
+  first-time setup, in the web service and in the agent.
+- **The file is read as a file.** The agent opens it without following a link and
+  without waiting on a pipe, and refuses anything that is not a regular file of
+  at most 64 KiB that parses, with at most ten times the default PBKDF2
+  iterations. The writers' lock beside it is waited for ten seconds at most: a
+  lock a container holds, a lock entry that is not a regular file and a lock the
+  caller may not open make a password change or a reset fail with
+  `password_store_unavailable` and a message naming the cause, instead of
+  hanging, and so does a directory in place of the password file for a reset.
+  A record that could not be finished is removed again. A password stored but
+  not recorded as the confirmed one, a full disk for instance, fails with
+  `confirmed_password_unwritten`; a first password, a change or a reset that
+  gets that far is audited.
+- **Who confirms.** The first password set in the Appliance Manager, a change
+  made there with the confirmed password, and `sudo ems-appliance password-reset`
+  run as root make the new password the confirmed one. A change made there from a
+  session that signed in with an unconfirmed password changes the shared file
+  only.
+- **A password set elsewhere is confirmed once.** After `emsctl dashboard
+  set-password`, a password set in the Admin console, a restored backup, or a
+  change made under an older Manager, the operator signs in with the new password
+  and confirms it under **Settings** with the one the Appliance Manager confirmed
+  last. A wrong one counts against the sign-in budget. A wrong one, a rate
+  limit, a busy check, an agent that could not be asked, a record that changed
+  under the session or is missing, and the success are audited as
+  `password.confirm`. The record is taken only while it
+  is still the one the session signed in with. Without that password, or when
+  the confirmed record is missing or unreadable (`409
+  confirmed_password_unavailable`), `sudo ems-appliance password-reset` is the
+  way back.
+- **An appliance updated from an older Manager** has no confirmed record yet.
+  The agent takes whatever well-formed record the shared file holds at a start
+  that finds none (audited as `password.confirm` with the target
+  `agent_start`). Until one is taken every start tries again, so a file missing
+  or malformed at the update is taken at a later start, whatever it says then. A
+  file rewritten before that is taken too; nothing on the appliance can tell it
+  apart. A failure to take it is logged and the agent serves anyway, with root
+  access refused.
+
+What it does not cover:
+
+- **A password read at a sign-in.** The dashboard (in the EMS container) and the
+  Admin console see the plaintext every time the operator signs in to them, and
+  that is the confirmed password whenever the two agree. Code running in either
+  container can collect it there and sign in to the Appliance Manager with a
+  confirmed session. Nothing about the file closes that; only a secret for root
+  actions that the containers never see would.
+- The containers can still change the password that Admin, the dashboard and
+  the Appliance Manager sign-in accept. Moving the file out of their reach
+  changes every installation's mounts and is left for a minor release.
+- The Admin container holds the Docker socket, so a compromised Admin container
+  has root on the host without any password. The EMS container can still
+  rewrite the password and sign in to the Admin console, which drives the Docker
+  engine; what that console can be made to do is outside this change, which
+  guards the Appliance Manager's root actions only.
+- An install deadline that is not confirmed in time goes back to the kept
+  package by itself, and that package may not ask for the confirmed password.
+  Anything that can make the new Manager fail its verification can bring that
+  about.
+- An older Manager after a step back knows nothing of the record and opens root
+  access to whatever the shared file says, as before.
 
 ## What the agent accepts
 
@@ -250,8 +339,9 @@ cannot regress silently.
 | Concurrent password checks | at most two at once, sign-ins and the current-password check of a password change together. Each is a PBKDF2 derivation in the root agent; a further one is refused at once with `503 login_busy` and "try again in a moment", not queued, and not counted against its source. A busy refusal costs its source nothing, so a client holding many addresses — dozens of IPv4 addresses claimed on the LAN, fewer the slower each check — can keep both slots full and every sign-in busy, the IPv4 way out included; the physical console stays the way in. Each refusal is audited with the reason `busy` |
 | Expiration | idle timeout plus an absolute maximum lifetime |
 | Logout | destroys the session |
-| Password reset | rotates a generation marker, invalidating **all** sessions |
-| Pre-auth exposure | only the login page and whether a password exists |
+| Password reset | rotates a generation marker, invalidating **all** sessions; run as root it also makes the new password the confirmed one |
+| Password confirmation | confirming a password set elsewhere keeps every session; see "What a rewritten file cannot open" |
+| Pre-auth exposure | only the login page, whether a password exists and whether its file is missing |
 | SSH on/off | covers `ssh.socket` as well as `ssh.service`. On a host whose sshd is socket-activated the socket holds port 22 and starts sshd per connection, so acting on the service alone reported SSH as off over a box that went on accepting keys |
 
 There is no unauthenticated network password-reset endpoint. Recovery is
@@ -288,7 +378,8 @@ Recorded with timestamp, authenticated user, source IP, operation, target,
 result and operation ID:
 
 ```text
-login success and failure, logout, password change, password reset,
+login success and failure, logout, password change, password confirmation,
+password reset,
 admin install / update / rollback / repair, admin start / stop / restart,
 OS update, package recovery,
 SSH enable or disable, root-capable shell access enable or disable,

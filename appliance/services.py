@@ -16,7 +16,7 @@ from appliance.docker_backend import DockerBackend
 from appliance.health import HttpHealthChecker
 from appliance.hostprobe import HostProbe, host_architecture
 from appliance.known_good import KnownGoodStore
-from appliance.auth import AuthStore, deployment_owner
+from appliance.auth import AuthStore, ConfirmedPassword, deployment_owner
 from appliance.network import NetworkService
 from appliance.timezone_config import TimezoneService
 from appliance.operations import OperationStore
@@ -120,7 +120,11 @@ def build_services(
         revert_intent_dir=paths.recovery_dir,
     )
     timezone = TimezoneService(paths=paths, config=config, operations=operations)
-    auth = AuthStore(paths.auth_file, owner=lambda: deployment_owner(paths.install_root))
+    auth = AuthStore(
+        paths.auth_file,
+        owner=lambda: deployment_owner(paths.install_root),
+        confirmed=ConfirmedPassword(paths.confirmed_password_file),
+    )
     ssh = SshService(
         runner=runner,
         systemd=systemd,

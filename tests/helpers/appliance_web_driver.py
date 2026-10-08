@@ -14,8 +14,9 @@ import threading
 import urllib.error
 import urllib.request
 
+from appliance.agent import AUTH_OPERATIONS, answer_auth
 from appliance.agent_client import AgentClient, AgentUnavailableError
-from appliance.auth import AuthStore
+from appliance.auth import AuthStore, ConfirmedPassword
 from appliance.config import load_config
 from appliance.paths import ensure_directories, resolve_paths
 from appliance.web import ApplianceWebApp, ApplianceWebServer
@@ -30,7 +31,7 @@ REPORT_MARKER = "APPLIANCE_REPORT:"
 class ScriptedAgent:
     """Stands in for the agent socket and records every typed call it receives.
 
-    The four auth operations are answered from a real AuthStore, because the
+    The auth operations are answered from a real AuthStore, because the
     shared password moved behind this boundary: the web tier no longer reads
     the file at all, so a stub that only records calls would make every login
     fail for a reason that has nothing to do with what is being tested. The
@@ -44,7 +45,13 @@ class ScriptedAgent:
         self.calls = []
         paths = resolve_paths()
         self.auth_path = auth_path or (paths.web_state_dir / "scripted-auth.json")
-        self.auth = AuthStore(self.auth_path, iterations=1000)
+        self.auth = AuthStore(
+            self.auth_path,
+            iterations=1000,
+            confirmed=ConfirmedPassword(
+                self.auth_path.with_name(f"{self.auth_path.stem}-confirmed.json")
+            ),
+        )
 
     def call(self, operation, *, actor="", source_ip="", timeout=None, **fields):
         entry = {"operation": operation, "actor": actor, "source_ip": source_ip}
@@ -55,22 +62,10 @@ class ScriptedAgent:
         return self._auth(operation, fields)
 
     def _auth(self, operation, fields):
-        """Mirrors appliance/agent.py, which is the only other implementation."""
+        """Answered by the agent's own function, so the two cannot drift apart."""
 
-        if operation == "auth.state":
-            return {"configured": self.auth.configured(), "generation": self.auth.generation()}
-        if operation == "auth.verify":
-            return {"ok": bool(self.auth.verify(fields["password"]))}
-        if operation == "auth.create":
-            self.auth.create(fields["password"], fields.get("confirmation") or None)
-            return {"generation": self.auth.generation()}
-        if operation == "auth.change":
-            self.auth.change(
-                fields["current_password"],
-                fields["password"],
-                fields.get("confirmation") or None,
-            )
-            return {"generation": self.auth.generation()}
+        if operation in AUTH_OPERATIONS:
+            return answer_auth(self.auth, operation, fields)
         return {"recorded": True}
 
     def available(self):

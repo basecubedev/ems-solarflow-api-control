@@ -7,10 +7,9 @@ the appliance configuration lists may be touched.
 
 import pytest
 
-from appliance.agent import AgentHandlers
 from appliance.operations import STATE_SUCCEEDED
 from appliance.ssh_service import parse_passwd_entry, parse_sshd_config
-from tests.helpers.appliance import build_test_services
+from tests.helpers.appliance import SignedInHandlers, build_test_services
 
 pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
@@ -31,7 +30,7 @@ def appliance(tmp_path):
 
 
 def handlers_for(services):
-    return AgentHandlers(services, executor=lambda target: target())
+    return SignedInHandlers(services)
 
 
 def plan_and_execute(services, operation, **fields):
