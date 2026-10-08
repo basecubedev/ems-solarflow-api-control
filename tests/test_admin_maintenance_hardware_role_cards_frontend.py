@@ -61,13 +61,13 @@ def _extract_fn(js, name):
     raise AssertionError(f"unbalanced braces while extracting {name}")
 
 
-def _render(card, payload):
+def _render(card, payload, draft=None):
     node = shutil.which("node")
     if not node:
         pytest.skip("node is required for the maintenance hardware role tests")
     result = subprocess.run(
         [node, RUNNER],
-        input=json.dumps({"card": card, "payload": payload}),
+        input=json.dumps({"card": card, "payload": payload, "draft": draft or {}}),
         text=True,
         capture_output=True,
         check=False,
@@ -252,6 +252,141 @@ def test_maintenance_card_without_a_known_role_stays_neutral():
     card = _hardware_card(role="unknown")
     assert card["classes"] == ["hardware-card"]
     assert "connection" not in card["dataset"]
+
+
+def _external_config(**entry):
+    return {
+        "devices": [
+            {"name": "WR1", "ip": "192.0.2.10", "sn": "SN1"},
+            {
+                "name": "Kostal Piko",
+                "type": "external_mqtt",
+                "mqtt": {
+                    "broker_ref": "house",
+                    "topic_family": "kostal_piko",
+                    "device_id": "EXAMPLE0000001",
+                },
+                **entry,
+            },
+        ],
+    }
+
+
+def _only_name_and_on_off(controls):
+    """The basic edits every device has, and none of a Zendure or Local API editor."""
+
+    return [(control["type"], control["editor"]) for control in controls] == [
+        ("text", ""),
+        ("checkbox", ""),
+    ]
+
+
+def _configured_cards(config):
+    from admin.maintenance_config import build_maintenance_draft
+
+    draft = build_maintenance_draft(config)
+    return _render("configured_devices", {}, draft={"devices": draft["devices"]})
+
+
+def test_an_external_inverter_has_its_own_card_not_a_zendure_editor():
+    """The page has no editor for it, so it must not offer one that saves nothing.
+
+    Rendered as a Local API Zendure inverter it showed an Enabled switch, address
+    and serial fields and "Address missing · Serial missing", and every edit was
+    dropped by the server without a word.
+    """
+    local, external = _configured_cards(_external_config())
+
+    assert local["controls"], "the editable neighbour keeps its editor"
+    assert _only_name_and_on_off(external["controls"])
+    # Removing it is the one change the page makes, through the server's reference.
+    assert [name for name in external["buttons"] if "hardware-card-remove" in name]
+    assert "hardware-card-inverter" in external["classes"]
+    text = external["text"]
+    for wrong in ("Zendure", "Address missing", "Serial missing"):
+        assert wrong not in text
+    assert "never writes to it" in text
+    assert "Kostal Piko · read over MQTT" in text
+    assert "house" in text
+    assert "EXAMPLE0000001" in text
+
+
+def test_an_external_inverter_discovery_found_has_the_same_card():
+    """Adopted in this session, before Apply: still nothing to edit."""
+
+    draft = {
+        "devices": [
+            {
+                "kind": "external_mqtt",
+                "original_name": None,
+                "proposal_id": "zendure-mqtt:opaque:g1",
+                "catalog_label": "Kostal Piko",
+                "display_name": "Kostal Piko EXAMPLE0000001",
+                "name": "INV_2",
+                "enabled": True,
+                "mqtt": {
+                    "broker_ref": "local_mqtt_10_0_0_71",
+                    "topic_family": "kostal_piko",
+                    "device_id": "EXAMPLE0000001",
+                },
+            }
+        ]
+    }
+
+    (card,) = _render("configured_devices", {}, draft=draft)
+
+    assert _only_name_and_on_off(card["controls"])
+    assert "hardware-card-inverter" in card["classes"]
+    assert "Kostal Piko · read over MQTT" in card["text"]
+    assert "added from discovery" in card["text"]
+    assert [name for name in card["buttons"] if "hardware-card-remove" in name]
+    assert "EXAMPLE0000001" in card["text"]
+
+
+def test_an_external_proposal_is_an_inverter_card_that_reads_only():
+    proposal = {
+        "id": "zendure-mqtt:opaque:g1",
+        "broker_ref": "local_mqtt_10_0_0_71",
+        "connection_source": "local_mqtt",
+        "device_id": "EXAMPLE0000001",
+        "topic_family": "kostal_piko",
+        "catalog_label": "Kostal Piko",
+        "display_name": "Kostal Piko EXAMPLE0000001",
+        "role_hint": "telemetry_only_candidate",
+        "target": "device",
+        "output_control_supported": False,
+        "output_control_reason": "external_device_read_only",
+        "control_block_reason": "external_device_read_only",
+        "config_fragment": {
+            "type": "external_mqtt",
+            "enabled": True,
+            "name": "Kostal Piko EXAMPLE0000001",
+            "mqtt": {
+                "broker_ref": "local_mqtt_10_0_0_71",
+                "source": "local_mqtt",
+                "topic_family": "kostal_piko",
+                "device_id": "EXAMPLE0000001",
+            },
+        },
+    }
+
+    card = _proposal_card(proposal)
+
+    assert "hardware-card-inverter" in card["classes"]
+    text = card["text"]
+    assert "Device ID" in text and "EXAMPLE0000001" in text
+    assert "Kostal Piko" in text
+    assert "takes no commands" in text
+    assert "Zendure MQTT" not in text
+    assert "Add inverter" in text
+
+
+def test_an_external_inverter_card_states_the_installed_activation():
+    _local, external = _configured_cards(_external_config(enabled=False))
+
+    assert external["dataset"]["disabled"] == "true"
+    assert "Disabled" in external["text"]
+    assert _only_name_and_on_off(external["controls"])
 
 
 # --- one shared mapping ---------------------------------------------------

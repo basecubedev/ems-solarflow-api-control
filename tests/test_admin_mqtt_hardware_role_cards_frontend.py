@@ -75,6 +75,7 @@ _ROLE_HELPERS = (
     "hardwareCardKindForRole",
     "hardwareCardClass",
     "isMqttGridMeterProposal",
+    "isExternalMqttProposal",
     "mqttProposalHardwareRole",
 )
 

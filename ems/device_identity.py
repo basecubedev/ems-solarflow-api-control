@@ -748,6 +748,27 @@ def opaque_connection_id(coordinates: Any, key: bytes) -> str:
     )
 
 
+def opaque_config_entry_id(components: Any, key: bytes) -> str:
+    """A stable browser-safe reference to one entry of an installed config.
+
+    Names *this entry, at this place, with this content*, so a draft that refers
+    to it resolves only against the config it was loaded from. Keyed, so no
+    value the browser view masks is recoverable or confirmable from it.
+    """
+
+    return _keyed_token(["config-entry-v1", components], "entry:v1", key)
+
+
+def opaque_catalog_device_id(components: Any, key: bytes) -> str:
+    """A browser-safe id for one catalog device, whichever broker carries it.
+
+    Independent of the broker, so an installed device and discovery's offer of
+    the same device compare equal.
+    """
+
+    return _keyed_token(["catalog-device-v1", components], "catalog:v1", key)
+
+
 def opaque_plan_id(components: Any, key: bytes) -> str:
     """A stable browser-safe fingerprint of a computed plan and its inputs.
 
@@ -836,6 +857,8 @@ __all__ = [
     "mqtt_route_conflict",
     "normalize_mqtt_route_segment",
     "normalize_physical_serial",
+    "opaque_catalog_device_id",
+    "opaque_config_entry_id",
     "opaque_connection_id",
     "opaque_identity_token",
     "opaque_observation_id",

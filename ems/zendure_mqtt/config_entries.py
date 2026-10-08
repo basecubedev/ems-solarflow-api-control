@@ -26,8 +26,18 @@ from ems.device_identity import (
     normalize_mqtt_route_segment,
     resolve_inverter_identity,
 )
+from ems.zendure_mqtt.external_catalog import (
+    EXTERNAL_TOPIC_FAMILIES,
+    external_topic_family,
+)
 
 ZENDURE_MQTT_TYPE = "zendure_mqtt"
+
+# A device from the external-device catalog, read over the same MQTT telemetry
+# path as a Zendure device with no write method: read, shown, counted, never
+# commanded. ``mqtt.topic_family`` names its catalog entry, which fixes its
+# topics; nothing about them is configured.
+EXTERNAL_MQTT_TYPE = "external_mqtt"
 
 # Stable identity of the implicit broker used by old single-broker configs. A
 # device without an explicit ``mqtt.broker_ref`` maps to it.
@@ -73,6 +83,175 @@ def is_zendure_mqtt_device_config(item: Any) -> bool:
     """True if ``item`` is a ``devices[]`` entry of type ``zendure_mqtt``."""
 
     return isinstance(item, Mapping) and _entry_type(item) == ZENDURE_MQTT_TYPE
+
+
+def is_external_mqtt_device_config(item: Any) -> bool:
+    """True if ``item`` is a ``devices[]`` entry of type ``external_mqtt``."""
+
+    return isinstance(item, Mapping) and _entry_type(item) == EXTERNAL_MQTT_TYPE
+
+
+def is_mqtt_telemetry_device_config(item: Any) -> bool:
+    """True for any entry read over MQTT and never given a control path here.
+
+    Both kinds reach the telemetry runtime and neither is ever handed an HTTP
+    client, so the question "is this an MQTT entry" has one answer.
+    """
+
+    return is_zendure_mqtt_device_config(item) or is_external_mqtt_device_config(item)
+
+
+def external_device_subscriptions(
+    devices: Any, broker_ref: str, *, broker_source: str | None = None
+) -> tuple[str, ...]:
+    """The topic filter of every active, valid catalog device on ``broker_ref``.
+
+    One answer for the telemetry runtime and for a control runtime whose broker
+    connection the telemetry side borrows: a filter missing from either would
+    leave the device dark with nothing said. ``broker_source`` is the broker
+    profile's: nothing is subscribed on a Zendure cloud session, whose ACL
+    scopes it to the account's own topics.
+    """
+
+    if not isinstance(devices, list):
+        return ()
+    broker_sources = {broker_ref: broker_source} if broker_source else None
+    filters: list[str] = []
+    for item in devices:
+        if not is_external_mqtt_device_config(item) or not config_entry_enabled(item):
+            continue
+        if zendure_mqtt_broker_ref(item) != broker_ref:
+            continue
+        if any(
+            issue["severity"] == "error"
+            for issue in validate_external_mqtt_device_config(
+                item, broker_sources=broker_sources
+            )
+        ):
+            continue
+        entry = external_topic_family(zendure_mqtt_topic_family(item))
+        topic = entry.subscription(zendure_mqtt_route_device_id(item))
+        if topic not in filters:
+            filters.append(topic)
+    return tuple(filters)
+
+
+def validate_mqtt_telemetry_device_config(
+    item: Any,
+    *,
+    known_broker_refs: Any = None,
+    brokers_defined: bool = False,
+    broker_sources: Any = None,
+) -> list[dict[str, Any]]:
+    """Validate any telemetry entry, Zendure or external, through one door.
+
+    Callers that hold a mixed ``devices[]`` list should not have to ask which
+    kind an entry is before they can check it.
+    """
+
+    validator = (
+        validate_external_mqtt_device_config
+        if is_external_mqtt_device_config(item)
+        else validate_zendure_mqtt_device_config
+    )
+    return validator(
+        item,
+        known_broker_refs=known_broker_refs,
+        brokers_defined=brokers_defined,
+        broker_sources=broker_sources,
+    )
+
+
+def validate_external_mqtt_device_config(
+    item: Any,
+    *,
+    known_broker_refs: Any = None,
+    brokers_defined: bool = False,
+    broker_sources: Any = None,
+) -> list[dict[str, Any]]:
+    """Validate an external MQTT entry; an empty list means valid.
+
+    The name, the identifier and the broker reference are checked by the same
+    shared code every MQTT entry goes through. Only the questions unique to this
+    type are asked here: whether the catalog lists its device, and the refusal
+    of anything that would make it more than a reading.
+    """
+
+    if not isinstance(item, Mapping):
+        return [_issue("error", "device_not_object", "device entry must be an object")]
+    if _entry_type(item) != EXTERNAL_MQTT_TYPE:
+        return [
+            _issue(
+                "error",
+                "not_external_mqtt",
+                f"device type must be '{EXTERNAL_MQTT_TYPE}'",
+            )
+        ]
+
+    issues = _structural_issues(
+        item,
+        known_broker_refs=known_broker_refs,
+        brokers_defined=brokers_defined,
+        broker_sources=broker_sources,
+    )
+
+    family = zendure_mqtt_topic_family(item)
+    if family is not None and external_topic_family(family) is None:
+        issues.append(
+            _issue(
+                "error",
+                "external_mqtt_family_unknown",
+                f"mqtt.topic_family '{family}' is not a device the external "
+                "catalog lists; use one of "
+                f"{', '.join(sorted(EXTERNAL_TOPIC_FAMILIES))}",
+            )
+        )
+
+    if zendure_mqtt_route_device_id(item) is None:
+        issues.append(
+            _issue(
+                "error",
+                "external_mqtt_device_id_missing",
+                "mqtt.device_id is required: it is the segment of the device's "
+                "topics that names it",
+            )
+        )
+
+    settings = item.get("mqtt")
+    if isinstance(settings, Mapping) and "topics" in settings:
+        issues.append(
+            _issue(
+                "error",
+                "external_mqtt_topics_unsupported",
+                "mqtt.topics is not read: the catalog entry named by "
+                "mqtt.topic_family fixes the device's topics; remove mqtt.topics",
+            )
+        )
+
+    if _write_output_limit_requested(item):
+        issues.append(
+            _issue(
+                "error",
+                "write_output_limit_unsupported",
+                "an external MQTT device cannot be written to; "
+                "remove capabilities.write_output_limit",
+            )
+        )
+
+    ref = zendure_mqtt_broker_ref(item)
+    if (
+        isinstance(broker_sources, Mapping)
+        and _normalized(broker_sources.get(ref)) == SOURCE_ZENDURE_CLOUD_MQTT
+    ):
+        issues.append(
+            _issue(
+                "error",
+                "external_mqtt_cloud_broker",
+                f"broker profile '{ref}' is the Zendure cloud, which never carries "
+                "an external device; use the local broker it publishes to",
+            )
+        )
+    return issues
 
 
 def _write_output_limit_requested(item: Mapping[str, Any]) -> bool:
@@ -152,7 +331,7 @@ def has_runtime_control_device(config: Any) -> bool:
         isinstance(item, Mapping)
         and config_entry_enabled(item)
         and (
-            not is_zendure_mqtt_device_config(item)
+            not is_mqtt_telemetry_device_config(item)
             or is_control_zendure_mqtt_device_config(item)
         )
         for item in devices
@@ -571,8 +750,10 @@ def find_duplicate_zendure_device_identities(
 
     A physical Zendure device must be configured only once. Entries are matched
     by :func:`zendure_config_device_identity`; ``enabled=false`` entries are
-    ignored (missing ``enabled`` counts as enabled). Messages expose only the
-    device index, never serials, device ids or credentials.
+    ignored (missing ``enabled`` counts as enabled). A catalog device is matched
+    by its family and device id on any broker, since two brokers carrying the
+    same device's topics would count it twice. Messages expose only the device
+    index, never serials, device ids or credentials.
     """
 
     if not isinstance(devices, list):
@@ -582,6 +763,9 @@ def find_duplicate_zendure_device_identities(
     issues: list[dict[str, Any]] = []
     for index, item in enumerate(devices):
         if not isinstance(item, Mapping) or not config_entry_enabled(item):
+            continue
+        if is_external_mqtt_device_config(item):
+            _record_external_duplicate(item, index, seen, issues)
             continue
         identity = zendure_config_device_identity(
             item, broker_sources=broker_sources
@@ -602,6 +786,32 @@ def find_duplicate_zendure_device_identities(
             )
         )
     return issues
+
+
+def _record_external_duplicate(
+    item: Mapping[str, Any],
+    index: int,
+    seen: dict[tuple[str, ...], int],
+    issues: list[dict[str, Any]],
+) -> None:
+    family = zendure_mqtt_topic_family(item)
+    device_id = zendure_mqtt_route_device_id(item)
+    if not family or not device_id:
+        return
+    key = ("catalog_device", family, device_id)
+    first = seen.get(key)
+    if first is None:
+        seen[key] = index
+        return
+    issues.append(
+        _issue(
+            "error",
+            "external_device_duplicate",
+            f"Duplicate external device between devices.{first} and "
+            f"devices.{index}: both read the same device's topics. Configure "
+            "each device only once.",
+        )
+    )
 
 
 def find_duplicate_device_names(devices: Any) -> list[dict[str, Any]]:
@@ -710,7 +920,7 @@ def _structural_issues(
     brokers_defined: bool,
     broker_sources: Any = None,
 ) -> list[dict[str, Any]]:
-    """Shape checks shared by the telemetry and control validators."""
+    """Shape checks shared by every MQTT device validator."""
 
     issues: list[dict[str, Any]] = []
 
@@ -788,6 +998,22 @@ def _structural_issues(
     return issues
 
 
+def _catalog_family_issue(item: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """A Zendure entry naming a catalog device's family reads nothing it names."""
+
+    family = zendure_mqtt_topic_family(item)
+    if family is None or external_topic_family(family) is None:
+        return []
+    return [
+        _issue(
+            "error",
+            "topic_family_external_device",
+            f"mqtt.topic_family '{family}' belongs to a device the external "
+            f"catalog lists; configure it with type '{EXTERNAL_MQTT_TYPE}'",
+        )
+    ]
+
+
 def _entry_type_issue(item: Any) -> list[dict[str, Any]] | None:
     if not isinstance(item, Mapping):
         return [_issue("error", "device_not_object", "device entry must be an object")]
@@ -828,6 +1054,7 @@ def validate_zendure_mqtt_device_config(
         brokers_defined=brokers_defined,
         broker_sources=broker_sources,
     )
+    issues.extend(_catalog_family_issue(item))
 
     if _write_output_limit_requested(item):
         issues.append(
@@ -872,6 +1099,7 @@ def validate_zendure_mqtt_control_device_config(
         brokers_defined=brokers_defined,
         broker_sources=broker_sources,
     )
+    issues.extend(_catalog_family_issue(item))
 
     if not _write_output_limit_requested(item):
         issues.append(
@@ -1444,12 +1672,13 @@ def format_mqtt_endpoint(host: Any, port: Any) -> str | None:
 
 
 def find_zendure_mqtt_broker_profile_issues(config: Any) -> list[dict[str, Any]]:
-    """Report enabled Zendure MQTT devices whose broker profile is unusable.
+    """Report enabled MQTT-read devices whose broker profile is unusable.
 
-    Each issue is ``{"severity", "code", "message"}`` using the sanitized codes
-    ``zendure_mqtt_broker_ref_unknown``/``_disabled``/``_incomplete`` and
-    ``zendure_mqtt_broker_auth_missing``. Messages carry only the device index
-    and the broker ref label; never serials, device ids, hosts or credentials.
+    Each issue is ``{"severity", "code", "message", "device_index"}`` using the
+    sanitized codes ``zendure_mqtt_broker_ref_unknown``/``_disabled``/
+    ``_incomplete`` and ``zendure_mqtt_broker_auth_missing``. Messages carry only
+    the device index and the broker ref label; never serials, device ids, hosts
+    or credentials. ``device_index`` lets a caller say where the fix is made.
     """
 
     if not isinstance(config, Mapping):
@@ -1461,7 +1690,7 @@ def find_zendure_mqtt_broker_profile_issues(config: Any) -> list[dict[str, Any]]
     views = zendure_mqtt_broker_profile_views(config.get("zendure_mqtt"))
     issues: list[dict[str, Any]] = []
     for index, item in enumerate(devices):
-        if not is_zendure_mqtt_device_config(item):
+        if not is_mqtt_telemetry_device_config(item):
             continue
         if not config_entry_enabled(item):
             continue
@@ -1473,20 +1702,19 @@ def find_zendure_mqtt_broker_profile_issues(config: Any) -> list[dict[str, Any]]
             continue
         view = views.get(ref)
         if view is None:
-            issues.append(
-                _issue(
-                    "error",
-                    "zendure_mqtt_broker_ref_unknown",
-                    f"devices.{index} references broker profile '{ref}', "
-                    "which is not configured",
-                )
+            issue = _issue(
+                "error",
+                "zendure_mqtt_broker_ref_unknown",
+                f"devices.{index} references broker profile '{ref}', "
+                "which is not configured",
             )
-            continue
-        code = view.usability_issue()
-        if code is not None:
-            issues.append(
-                _issue("error", code, _broker_issue_message(index, ref, code))
-            )
+        else:
+            code = view.usability_issue()
+            if code is None:
+                continue
+            issue = _issue("error", code, _broker_issue_message(index, ref, code))
+        issue["device_index"] = index
+        issues.append(issue)
     return issues
 
 

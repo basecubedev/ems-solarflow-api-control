@@ -625,9 +625,19 @@ grouped under it. On refresh, Admin infers the endpoint's transport (`1883` →
 plain, `8883` → TLS; an explicit `tls` flag from mDNS/details overrides this) and
 runs an attempt matrix against each reachable broker: **anonymous first, then every
 saved discovery credential**. Each attempt subscribes briefly (`Zendure/#`,
-`iot/+/+/#`, `/+/+/#`) with a bounded timeout and classifies the topics it sees
-into Zendure topic families (`zensdk_ha_scalar`, `legacy_zendure_json`,
-`legacy_zendure_json_write_observed`, `legacy_zendure_json_alt`). A topic
+`iot/+/+/#`, `/+/+/#`, plus one filter per device the external hardware catalog
+lists, such as `KostalPiko/+/+`) with a bounded timeout and classifies the topics
+it sees with the EMS Core classifier the runtime reads telemetry with: into the
+Zendure topic families (`zensdk_ha_scalar`, `legacy_zendure_json`,
+`legacy_zendure_json_alt`, plus the discovery-only
+`legacy_zendure_json_write_observed`) and the catalog's own families
+(`kostal_piko`). A topic of any other shape, a catalog prefix with a key the
+catalog does not list, or a catalog topic whose payload is not a plain number
+is no candidate at all, so a broker carrying only such topics reports "no
+hardware topics". A catalog device becomes a read-only
+`external_mqtt` proposal (see
+[External Inverters over MQTT](configuration.md#external-inverters-over-mqtt-external_mqtt)),
+and only from a local broker. A topic
 family names the observed telemetry schema (which parser reads the payload),
 never the hardware generation: a new ZenSDK device (e.g. a SolarFlow 800 Pro 2
 on the Zendure cloud broker) publishes the leading-slash JSON report that is

@@ -293,6 +293,7 @@ def test_a_configured_http_grid_meter_leaves_the_proposal_selectable():
 
 _ADOPT_HELPERS = (
     "isMqttGridMeterProposal",
+    "isExternalMqttProposal",
     "mqttProposalHardwareRole",
     "mqttGridMeterProposalTopic",
     "mqttProposalBrokerRef",
