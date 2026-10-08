@@ -140,6 +140,11 @@ offer it, because it is not in any Debian archive this appliance trusts, so it
 is updated here and nowhere else.
 
 **Updates → Appliance Manager package** is where it is updated, and only there.
+Installing a package and going back to the kept one both need a session that
+signed in with the password the Appliance Manager confirmed; a password set
+elsewhere is confirmed once under **Settings** first. An older package may not
+ask for it, so installing one is guarded like SSH itself; see
+[security-model.md](security-model.md#what-a-rewritten-file-cannot-open).
 
 Where the packages come from is
 [manager-releases.md](manager-releases.md): each version is published at its own

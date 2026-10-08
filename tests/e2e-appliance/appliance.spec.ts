@@ -60,6 +60,76 @@ test.describe("authentication @smoke", () => {
   });
 });
 
+test.describe("a password set outside the Appliance Manager", () => {
+  const PREVIOUS = "the-previous-manager-password";
+
+  test("signs in, holds SSH changes back and is confirmed with the previous one", async ({
+    page,
+    request,
+  }) => {
+    await resetAppliance(request, { confirmed_password: PREVIOUS, shared_password: PASSWORD });
+    await page.goto("/");
+    await expect(page.locator("#gate-submit")).toHaveText("Sign in");
+    await page.locator("#gate-password").fill(PASSWORD);
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/session/login")),
+      page.locator("#gate-submit").click(),
+    ]);
+    await expect(page.locator("#shell")).toBeVisible();
+    await expect(page.locator('.finding[data-code="password_unconfirmed"]')).toBeVisible();
+
+    await openView(page, "access");
+    await page.locator('[data-test="key-account"]').selectOption("ems-backup");
+    await page.locator('[data-test="key-value"]').fill(PUBLIC_KEY);
+    const refusal = new Promise<string>((resolve) => {
+      page.once("dialog", async (alert) => {
+        const message = alert.message();
+        await alert.dismiss();
+        resolve(message);
+      });
+    });
+    await page.locator('[data-test="key-add"]').click();
+    expect(await refusal).toContain("confirm it under Settings");
+
+    await openView(page, "settings");
+    await page.locator('[data-test="pw-previous"]').fill("not-the-previous-one");
+    await page.locator('[data-test="pw-previous-submit"]').click();
+    await expect(page.locator('[data-test="pw-previous-message"]')).toContainText("knew before");
+
+    await page.locator('[data-test="pw-previous"]').fill(PREVIOUS);
+    await Promise.all([
+      page.waitForResponse(
+        (response) => response.url().includes("/api/settings/password/confirm") && response.ok(),
+      ),
+      page.locator('[data-test="pw-previous-submit"]').click(),
+    ]);
+    await expect(page.locator('[data-test="settings-password-confirm"]')).toHaveCount(0);
+
+    await openView(page, "overview");
+    await expect(page.locator('.finding[data-code="password_unconfirmed"]')).toHaveCount(0);
+    await openView(page, "access");
+    await page.locator('[data-test="key-account"]').selectOption("ems-backup");
+    await page.locator('[data-test="key-value"]').fill(PUBLIC_KEY);
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/ssh/keys")),
+      page.locator('[data-test="key-add"]').click(),
+    ]);
+    await expect(page.locator("#dialog")).toContainText("SHA256:");
+  });
+
+  test("a deleted password file does not offer first-time setup again", async ({
+    page,
+    request,
+  }) => {
+    await resetAppliance(request, { confirmed_password: PREVIOUS });
+    await page.goto("/");
+    await expect(page.locator("#gate-intro")).toContainText("password file");
+    await expect(page.locator("#gate-intro")).toContainText("password-reset");
+    await expect(page.locator("#gate-confirm-field")).toBeHidden();
+    await expect(page.locator("#gate-submit")).toHaveText("Sign in");
+  });
+});
+
 test.describe("overview @smoke", () => {
   test("shows host, Docker, Admin, EMS, updates and network", async ({ page }) => {
     await signIn(page);

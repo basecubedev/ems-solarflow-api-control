@@ -28,10 +28,9 @@ from appliance import (
     artifact_trust,
     persistent_state,
 )
-from appliance.agent import AgentHandlers
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
 from appliance.release_fetch import FetchError
-from tests.helpers.appliance import build_test_services
+from tests.helpers.appliance import SignedInHandlers, build_test_services
 
 pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
@@ -183,7 +182,7 @@ def build(
 
 
 def handlers(services):
-    return AgentHandlers(services, executor=lambda target: target())
+    return SignedInHandlers(services)
 
 
 def plan(services, operation, **fields):

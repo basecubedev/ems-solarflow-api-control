@@ -397,6 +397,16 @@ class AppliancePaths:
         return self.agent_state_dir / "export-access.json"
 
     @property
+    def confirmed_password_file(self):
+        """The record of the password the Appliance Manager last confirmed.
+
+        Root's, beside the other agent state, because the shared file it is
+        compared with sits where the containers can write.
+        """
+
+        return self.agent_state_dir / "confirmed-password.json"
+
+    @property
     def agent_log_dir(self):
         return self.log_dir / "agent"
 

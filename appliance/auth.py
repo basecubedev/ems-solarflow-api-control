@@ -1,16 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Appliance Manager authentication.
 
-Deliberately independent from the EMS Admin password: the Appliance Manager
-must still authenticate when the EMS install root is unreadable or the Admin
-container is gone. The stored record uses the same PBKDF2-SHA256 shape as the
-EMS dashboard so the two never drift apart in strength.
+The password is the one the EMS Admin console and the dashboard share, in their
+file in the EMS deployment root, with the same PBKDF2-SHA256 record. A
+root-owned copy of the record the Appliance Manager last confirmed decides what
+a shared file rewritten from a container can no longer open.
 
 A password reset rotates a generation marker, which invalidates every existing
 session without needing a shared session store.
 """
 
 import base64
+import contextlib
+import errno
 import fcntl
 import hashlib
 import hmac
@@ -18,12 +20,16 @@ import ipaddress
 import json
 import os
 import secrets
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from appliance.paths import atomic_write
+
 ALGORITHM = "pbkdf2-sha256"
 DEFAULT_ITERATIONS = 600000
+MAX_ITERATIONS = 10 * DEFAULT_ITERATIONS
 SESSION_COOKIE_NAME = "ems_appliance_session"
 CSRF_HEADER = "X-Appliance-CSRF"
 
@@ -33,6 +39,9 @@ DEFAULT_MAX_FAILURES = 5
 DEFAULT_MAX_NETWORK_FAILURES = 20
 DEFAULT_FAILURE_WINDOW = 300
 DEFAULT_CONCURRENT_PASSWORD_CHECKS = 2
+DEFAULT_LOCK_WAIT_SECONDS = 10
+LOCK_POLL_SECONDS = 0.05
+MAX_RECORD_BYTES = 64 * 1024
 IPV6_NETWORK_PREFIX = 64
 
 
@@ -90,10 +99,38 @@ def verify_password_record(password, record):
         expected = _b64decode(record.get("hash", ""))
     except Exception:
         return False
-    if iterations <= 0 or not salt or not expected:
+    if not 0 < iterations <= MAX_ITERATIONS or not salt or not expected:
         return False
     actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
     return hmac.compare_digest(actual, expected)
+
+
+RECORD_FIELDS = ("algorithm", "iterations", "salt", "hash")
+
+
+def record_generation(record):
+    """A marker that changes whenever a stored password record changes.
+
+    Derived from the whole record, so any writer moves it without having to
+    know about it, and two records that verify differently never share one.
+    """
+
+    if not isinstance(record, dict) or not (record.get("salt") or record.get("hash")):
+        return ""
+    material = ":".join(str(record.get(name, "")) for name in RECORD_FIELDS)
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
+
+
+def _well_formed_record(record):
+    if not isinstance(record, dict) or record.get("algorithm") != ALGORITHM:
+        return False
+    try:
+        iterations = int(record.get("iterations"))
+        salt = _b64decode(record.get("salt", ""))
+        digest = _b64decode(record.get("hash", ""))
+    except Exception:
+        return False
+    return 0 < iterations <= MAX_ITERATIONS and bool(salt) and bool(digest)
 
 
 def validate_password(password, confirmation=None):
@@ -113,10 +150,84 @@ def validate_password(password, confirmation=None):
     return password
 
 
-class AuthStore:
-    """The appliance password file, owned by the web service account."""
+class ConfirmedPassword:
+    """The password record the Appliance Manager itself last confirmed.
 
-    def __init__(self, path, *, time_fn=None, iterations=DEFAULT_ITERATIONS, owner=None):
+    The shared store lives in the EMS deployment root, which the containers
+    mount read-write, so whoever runs code in one can rewrite or delete it. This
+    copy lives in the agent's root-owned state, and the actions that hand out a
+    shell on the host ask for it rather than for whatever the shared file says
+    now. It has the four fields of the shared record and no version of its own:
+    an older Appliance Manager does not know it and leaves it alone.
+    """
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def exists(self):
+        return os.path.lexists(self.path)
+
+    def load(self):
+        try:
+            record = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError, RecursionError):
+            raise AuthError(
+                "confirmed_password_invalid", "the confirmed password record cannot be read"
+            )
+        if not _well_formed_record(record):
+            raise AuthError(
+                "confirmed_password_invalid", "the confirmed password record is malformed"
+            )
+        return record
+
+    def generation(self):
+        try:
+            return record_generation(self.load())
+        except AuthError:
+            return ""
+
+    def verify(self, password):
+        try:
+            record = self.load()
+        except AuthError:
+            return False
+        return record is not None and verify_password_record(password, record)
+
+    def store(self, record):
+        if not _well_formed_record(record):
+            raise AuthError("auth_file_invalid", "the appliance password file is malformed")
+        kept = {name: record[name] for name in RECORD_FIELDS}
+        atomic_write(
+            self.path,
+            json.dumps(kept, indent=2, sort_keys=True) + "\n",
+            mode=0o600,
+            owner_root=True,
+        )
+        return kept
+
+
+def _lock_refused(lock, reason):
+    return AuthError(
+        "password_store_unavailable",
+        f"the lock beside the password file ({Path(lock).name}) {reason}",
+    )
+
+
+class AuthStore:
+    """The shared password file in the EMS deployment root."""
+
+    def __init__(
+        self,
+        path,
+        *,
+        time_fn=None,
+        iterations=DEFAULT_ITERATIONS,
+        owner=None,
+        confirmed=None,
+        lock_wait=DEFAULT_LOCK_WAIT_SECONDS,
+    ):
         """``owner`` is the (uid, gid) the EMS containers run as.
 
         The store is shared with the Admin console, which reads it from inside a
@@ -132,29 +243,90 @@ class AuthStore:
         stays ``None`` for the rest of its life, and every later password write
         lands root-owned -- locking the Admin console out of the very file it
         authenticates against.
+
+        ``confirmed`` is the :class:`ConfirmedPassword` kept in step where the
+        Appliance Manager sets a password, and ``None`` for a writer that cannot
+        reach root-owned state.
+
+        ``lock_wait`` bounds the wait for the writers' lock, which lives where a
+        container can hold it for ever.
         """
 
         self.path = Path(path)
         self._time = time_fn or time.time
         self.iterations = iterations
         self.owner = owner
+        self.confirmed = confirmed
+        self.lock_wait = lock_wait
 
     def load(self):
+        """The record, read without following a link or waiting on a pipe.
+
+        The file sits where a container can replace it with anything, and the
+        agent reads it as root before it serves anyone.
+        """
+
         try:
-            record = json.loads(self.path.read_text(encoding="utf-8"))
+            handle = os.open(str(self.path), os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
         except FileNotFoundError:
             return None
-        except (OSError, ValueError):
+        except OSError:
+            raise AuthError("auth_file_invalid", "the appliance password file cannot be read")
+        try:
+            if not stat.S_ISREG(os.fstat(handle).st_mode):
+                raise AuthError(
+                    "auth_file_invalid", "the appliance password file is not a regular file"
+                )
+            raw = os.read(handle, MAX_RECORD_BYTES + 1)
+        except OSError:
+            raise AuthError("auth_file_invalid", "the appliance password file cannot be read")
+        finally:
+            os.close(handle)
+        try:
+            if len(raw) > MAX_RECORD_BYTES:
+                raise ValueError("too large")
+            record = json.loads(raw.decode("utf-8"))
+        except (ValueError, RecursionError):
             raise AuthError("auth_file_invalid", "the appliance password file cannot be read")
         if not isinstance(record, dict):
             raise AuthError("auth_file_invalid", "the appliance password file is malformed")
         return record
 
     def configured(self):
+        """A shared file gone from under a confirmed password is still a set one:
+        deleting it from a container must not reopen first-run setup."""
+
         try:
-            return self.load() is not None
+            if self.load() is not None:
+                return True
         except AuthError:
             return True
+        return self._anchored()
+
+    def _anchored(self):
+        return self.confirmed is not None and self.confirmed.exists()
+
+    def status(self):
+        """What the agent answers when asked about the password."""
+
+        try:
+            record = self.load()
+        except AuthError:
+            return {"configured": True, "generation": "", "confirmed": False, "file_missing": False}
+        generation = record_generation(record)
+        return {
+            "configured": record is not None or self._anchored(),
+            "generation": generation,
+            "confirmed": self.confirms(generation),
+            "file_missing": record is None and self._anchored(),
+        }
+
+    def confirms(self, generation):
+        """Whether ``generation`` is that of the password this appliance confirmed."""
+
+        if self.confirmed is None or not generation:
+            return False
+        return hmac.compare_digest(self.confirmed.generation(), str(generation))
 
     def generation(self):
         """A marker that changes whenever the stored password changes.
@@ -168,13 +340,9 @@ class AuthStore:
         """
 
         try:
-            record = self.load() or {}
+            return record_generation(self.load())
         except AuthError:
             return ""
-        material = f"{record.get('salt', '')}:{record.get('hash', '')}"
-        if material == ":":
-            return ""
-        return hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]
 
     def _locked(self):
         """One writer at a time, across processes.
@@ -187,20 +355,56 @@ class AuthStore:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lock = lock_path(self.path)
-        handle = os.open(str(lock), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-        except OSError:
+            handle = os.open(
+                str(lock), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600
+            )
+        except PermissionError:
+            raise _lock_refused(lock, "cannot be opened; run this as root")
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, errno.ENXIO, errno.EISDIR):
+                raise _lock_refused(lock, "is not a regular file; remove it and try again")
+            raise _lock_refused(lock, f"cannot be opened: {exc.strerror}")
+        deadline = time.monotonic() + max(0, self.lock_wait)
+        try:
+            if not stat.S_ISREG(os.fstat(handle).st_mode):
+                raise _lock_refused(lock, "is not a regular file; remove it and try again")
+            while True:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return handle
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise _lock_refused(
+                            lock,
+                            "is held by another process; stop the EMS and Admin containers "
+                            "and try again",
+                        )
+                time.sleep(LOCK_POLL_SECONDS)
+        except BaseException:
             os.close(handle)
             raise
-        return handle
 
-    def _write(self, password, *, exclusive):
-        lock = self._locked()
+    @contextlib.contextmanager
+    def _exclusive(self):
+        handle = self._locked()
         try:
-            return self._write_locked(password, exclusive=exclusive)
+            yield
         finally:
-            os.close(lock)
+            os.close(handle)
+
+    def _confirm_locked(self, record):
+        if self.confirmed is None:
+            return
+        try:
+            self.confirmed.store(record)
+        except OSError as exc:
+            raise AuthError(
+                "confirmed_password_unwritten",
+                "the password could not be recorded as the confirmed one "
+                f"({exc.strerror or exc}); SSH and Manager changes wait until it is: confirm "
+                "it again once there is space, or run 'sudo ems-appliance password-reset'",
+            )
 
     def _write_locked(self, password, *, exclusive):
         # Exactly the four fields the dashboard and the Admin console agree on.
@@ -218,8 +422,18 @@ class AuthStore:
             tmp = self.path.with_name(
                 f".{self.path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
             )
+            if os.path.isdir(self.path) and not os.path.islink(self.path):
+                raise AuthError(
+                    "password_store_unavailable",
+                    f"the password file ({self.path.name}) is a directory; remove it and "
+                    "try again",
+                )
             self._write_new(tmp, flags, payload)
-            os.replace(tmp, self.path)
+            try:
+                os.replace(tmp, self.path)
+            except OSError:
+                tmp.unlink(missing_ok=True)
+                raise
         # The rename is a directory operation: without flushing the parent a
         # power cut can leave no password file at all, and the box would boot
         # into first-run enrolment with a root-capable agent behind it.
@@ -249,13 +463,20 @@ class AuthStore:
         return owner or None
 
     def _write_new(self, path, flags, payload):
+        """A file this call created and could not finish is removed again: a
+        half-written record reads as a set password nobody can sign in with."""
+
         handle = os.open(path, flags, 0o600)
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            os.fchmod(stream.fileno(), 0o600)
-            self._own(stream.fileno())
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                self._own(stream.fileno())
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except BaseException:
+            Path(path).unlink(missing_ok=True)
+            raise
 
     def _own(self, descriptor):
         owner = self._resolved_owner()
@@ -279,32 +500,123 @@ class AuthStore:
 
     def create(self, password, confirmation=None):
         validate_password(password, confirmation)
-        try:
-            return self._write(password, exclusive=True)
-        except FileExistsError:
-            raise AuthError(
-                "password_already_configured", "an appliance password already exists"
-            )
+        with self._exclusive():
+            if self._anchored():
+                raise AuthError(
+                    "password_already_configured",
+                    "a password was already set on this appliance; reset it with "
+                    "'sudo ems-appliance password-reset'",
+                )
+            try:
+                record = self._write_locked(password, exclusive=True)
+            except FileExistsError:
+                raise AuthError(
+                    "password_already_configured", "an appliance password already exists"
+                )
+            self._confirm_locked(record)
+        return record
 
     def reset(self, password, confirmation=None):
         """Replace the password and rotate the generation, killing all sessions."""
 
         validate_password(password, confirmation)
-        return self._write(password, exclusive=False)
+        with self._exclusive():
+            record = self._write_locked(password, exclusive=False)
+            self._confirm_locked(record)
+        return record
 
     def change(self, current_password, new_password, confirmation=None):
-        if not self.verify(current_password):
-            raise AuthError("current_password_invalid", "the current password is not correct")
-        return self.reset(new_password, confirmation)
+        """The confirmed record follows a change made with the confirmed password only.
+
+        Whoever rewrote the shared file can sign in with their own password and
+        change it from there; that must not make theirs the confirmed one. The
+        current password and the generation it is judged by come from one read.
+        """
+
+        with self._exclusive():
+            current = self._load_or_none()
+            if current is None or not verify_password_record(current_password, current):
+                raise AuthError("current_password_invalid", "the current password is not correct")
+            validate_password(new_password, confirmation)
+            follows = self.confirms(record_generation(current))
+            record = self._write_locked(new_password, exclusive=False)
+            if follows:
+                self._confirm_locked(record)
+        return record
+
+    def confirm(self, previous_password, generation):
+        """Make the shared password the confirmed one, given the confirmed one.
+
+        ``generation`` is the one the caller signed in with. The shared record
+        is taken only while it is still that one, so a file swapped in between
+        is not what becomes confirmed.
+        """
+
+        try:
+            confirmed = self.confirmed.load() if self.confirmed is not None else None
+        except AuthError:
+            confirmed = None
+        if confirmed is None:
+            raise AuthError(
+                "confirmed_password_unavailable",
+                "this appliance keeps no readable record of a confirmed password; reset the "
+                "password with 'sudo ems-appliance password-reset'",
+            )
+        if not verify_password_record(previous_password, confirmed):
+            raise AuthError(
+                "previous_password_invalid",
+                "that is not the password the Appliance Manager knew before",
+            )
+        with self._exclusive():
+            current = self._load_or_none()
+            if current is None or not hmac.compare_digest(
+                record_generation(current), str(generation or "")
+            ):
+                raise AuthError(
+                    "password_changed",
+                    "the password changed while it was being confirmed; sign in again",
+                )
+            self._confirm_locked(current)
+        return current
+
+    def adopt(self):
+        """Take the shared password as the confirmed one where none was ever confirmed.
+
+        An appliance updated from a Manager that kept no confirmed record has
+        only the shared file to go by, and whatever it holds at that moment is
+        trusted from then on -- a file rewritten before the update included,
+        which nothing here can tell apart. No lock: this runs before the agent
+        serves anyone, and the lock lives where a container could hold it.
+        """
+
+        if self.confirmed is None or self._anchored():
+            return False
+        record = self._load_or_none()
+        if not _well_formed_record(record):
+            return False
+        self._confirm_locked(record)
+        return True
+
+    def _load_or_none(self):
+        try:
+            return self.load()
+        except AuthError:
+            return None
+
+    def check(self, password):
+        """The generation of the record ``password`` matches, or "" for none.
+
+        One read for both answers: a sign-in bound to a generation read in a
+        second step is bound to whatever record was swapped in between.
+        """
+
+        record = self._load_or_none()
+        if record is None or not verify_password_record(password, record):
+            return ""
+        return record_generation(record)
 
     def verify(self, password):
-        try:
-            record = self.load()
-        except AuthError:
-            return False
-        if record is None:
-            return False
-        return verify_password_record(password, record)
+        return bool(self.check(password))
 
 
 @dataclass

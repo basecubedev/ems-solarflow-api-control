@@ -33,6 +33,8 @@
   var state = {
     authenticated: false,
     passwordConfigured: false,
+    passwordConfirmed: null,
+    passwordFileMissing: false,
     csrf: "",
     mode: "basic",
     view: "overview",
@@ -351,7 +353,9 @@
     document.getElementById("gate-confirm-field").hidden = !firstRun;
     document.getElementById("gate-intro").textContent = firstRun
       ? "No password exists yet. Create one to finish the first-run setup. The EMS Admin console and the dashboard use the same password."
-      : "Sign in to manage this Raspberry Pi appliance.";
+      : state.passwordFileMissing
+        ? "The password file the EMS Admin console and the dashboard share is missing, so nobody can sign in. A password was set here before, so this page cannot create one again: run 'sudo ems-appliance password-reset' on the appliance, or set a password in the EMS Admin console and confirm it here afterwards."
+        : "Sign in to manage this Raspberry Pi appliance.";
     document.getElementById("gate-submit").textContent = firstRun ? "Create password" : "Sign in";
     document.getElementById("gate-password-label").textContent = firstRun
       ? "New appliance password"
@@ -372,6 +376,8 @@
     return api("/api/session").then(function (payload) {
       state.authenticated = !!payload.authenticated;
       state.passwordConfigured = !!payload.password_configured;
+      state.passwordFileMissing = !!payload.password_file_missing;
+      state.passwordConfirmed = payload.password_confirmed === undefined ? null : payload.password_confirmed;
       state.csrf = payload.csrf_token || "";
       state.securityAudit = payload.security_audit || null;
       return payload;
@@ -399,8 +405,22 @@
     };
   }
 
+  /* Only an explicit "no" is a finding: an agent that could not be asked has
+     not said the password is unconfirmed. */
+  function confirmationFinding() {
+    if (state.passwordConfirmed !== false) return null;
+    return {
+      code: "password_unconfirmed",
+      severity: "warning",
+      section: "settings",
+      title: "SSH and Manager changes wait for the previous password",
+      message: "The password was set where the Appliance Manager could not confirm it \u2014 with emsctl, in the EMS Admin console, by a restored backup, under an older Appliance Manager or from a session signed in with such a password \u2014 or rewritten from inside a container. Until it is confirmed, SSH cannot be switched on, shell access cannot be granted, no SSH key can be added and the Appliance Manager cannot be updated or reverted.",
+      next_step: "Open Settings and confirm it with the password the Appliance Manager knew before, or run 'sudo ems-appliance password-reset' on the appliance."
+    };
+  }
+
   function sessionFindings() {
-    return [auditFinding()].filter(Boolean);
+    return [auditFinding(), confirmationFinding()].filter(Boolean);
   }
 
   function submitGate(event) {
@@ -416,6 +436,8 @@
     api(path, { method: "POST", body: body }).then(function (payload) {
       state.authenticated = true;
       state.passwordConfigured = true;
+      state.passwordFileMissing = false;
+      state.passwordConfirmed = payload.password_confirmed === undefined ? null : payload.password_confirmed;
       state.csrf = payload.csrf_token || "";
       state.securityAudit = payload.security_audit || null;
       document.getElementById("gate-form").reset();
@@ -949,6 +971,7 @@
       openDialog(options.title, payload, options.confirmLabel, options.danger);
     }).catch(function (exc) {
       state.busy = false;
+      if (exc.code === "password_unconfirmed") state.passwordConfirmed = false;
       showToastError(exc);
       refresh();
     });
@@ -3158,8 +3181,42 @@
           el("button", { type: "button", class: "ghost-button compact", text: "Use Expert mode", onclick: function () { setMode("expert"); } })
         ])
       ], "settings-mode"),
+      state.passwordConfirmed === false
+        ? actionCard("Confirm the password", "Set where the Appliance Manager could not confirm it; SSH and Manager changes wait until it is", [renderPasswordConfirmForm()], "settings-password-confirm")
+        : null,
       actionCard("Appliance password", "Also the EMS Admin console and dashboard password", [renderPasswordForm()], "settings-password")
-    ]));
+    ].filter(Boolean)));
+  }
+
+  function renderPasswordConfirmForm() {
+    var previous = el("input", { id: "pw-previous", type: "password", autocomplete: "off", "data-test": "pw-previous" });
+    var message = el("p", { class: "control-result", hidden: true, "data-test": "pw-previous-message" });
+
+    return el("form", {
+      class: "inline-form",
+      onsubmit: function (event) {
+        event.preventDefault();
+        api("/api/settings/password/confirm", {
+          method: "POST",
+          body: { password: previous.value }
+        }).then(function (payload) {
+          state.passwordConfirmed = true;
+          state.securityAudit = payload.security_audit || state.securityAudit;
+          announce("Password confirmed");
+          render();
+        }).catch(function (exc) {
+          message.textContent = exc.message;
+          message.hidden = false;
+        });
+      }
+    }, [
+      el("p", { class: "control-stage-subtitle", text: "The password you signed in with stays. Enter the one the Appliance Manager knew before it was changed, to show the change was yours." }),
+      el("div", { class: "field" }, [el("label", { for: "pw-previous", text: "Previous Appliance Manager password" }), previous]),
+      message,
+      el("div", { class: "control-stage-actions" }, [
+        el("button", { type: "submit", class: "primary-button compact", "data-test": "pw-previous-submit", text: "Confirm password" })
+      ])
+    ]);
   }
 
   function renderPasswordForm() {

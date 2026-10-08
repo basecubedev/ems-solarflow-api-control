@@ -214,15 +214,18 @@ def test_a_rolled_back_policy_takes_the_flag_back_with_it(tmp_path, monkeypatch)
 def test_the_operation_is_allowlisted_and_holds_the_lock():
     """The agent executes names, not requests. An operation that is not in the
     allowlist cannot be reached at all, and one that changes a login policy
-    without the lock could interleave with the host-config transaction."""
+    without the lock could interleave with the host-config transaction. The
+    only other field is the generation of the password the session signed in
+    with, which turning the account on is refused without."""
 
-    from appliance.protocol import OPERATIONS
+    from appliance.protocol import OPERATIONS, ROOT_ACCESS_PLANS
 
     spec = OPERATIONS["ssh.plan_shell_access"]
 
     assert spec.mutating is True
     assert spec.takes_lock is True
-    assert [field.name for field in spec.fields] == ["enabled"]
+    assert [field.name for field in spec.fields] == ["enabled", "session_generation"]
+    assert spec.name in ROOT_ACCESS_PLANS
 
 
 def test_the_console_card_posts_only_to_routes_the_web_service_maps():

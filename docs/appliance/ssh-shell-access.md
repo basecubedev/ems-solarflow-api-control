@@ -101,7 +101,9 @@ operator's own, or one whose drop-in was removed on purpose.
 From the Appliance Manager console, **SSH → Root-capable shell access**: one
 button for the flag, and the ordinary *Add public key* form for the key, with
 `ems-shell` as the account. The card states what the account costs before the
-button is pressed.
+button is pressed. Turning it on and adding the key both need a session that
+signed in with the password the Appliance Manager confirmed; see
+[security-model.md](security-model.md#what-a-rewritten-file-cannot-open). Turning it off does not.
 
 From a root shell already on the box:
 

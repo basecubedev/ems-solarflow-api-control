@@ -30,9 +30,11 @@ from appliance.auth import (
     AuthError,
     LoginRateLimiter,
     SessionStore,
+    record_generation,
 )
 from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS, WebLog
 from appliance.config import load_config
+from appliance.protocol import ROOT_ACCESS_PLANS, SESSION_GENERATION_FIELD
 from appliance.paths import ensure_directories, resolve_paths
 from appliance.version import installed_version
 from appliance.web_audit import WebAuditReporter
@@ -66,6 +68,12 @@ STATUS_FOR_CODE = {
     "unknown_operation_id": 404,
     "unknown_operation": 400,
     "timezone_unchanged": 409,
+    "password_unconfirmed": 403,
+    "previous_password_invalid": 403,
+    "password_changed": 409,
+    "confirmed_password_unavailable": 409,
+    "password_store_unavailable": 503,
+    "confirmed_password_unwritten": 503,
 }
 
 _OPERATION_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -91,6 +99,11 @@ class AgentAuth:
             # A password store this cannot reach is not an absent one. Treating
             # it as absent would offer first-time setup on a configured box.
             return {"configured": True, "_unreachable": True}
+
+    def status(self):
+        """What the agent says about the password, or that it could not be asked."""
+
+        return self._state()
 
     def configured(self):
         return bool(self._state().get("configured"))
@@ -122,23 +135,28 @@ class AgentAuth:
         self._last_generation = str(state.get("generation") or "")
         return self._last_generation
 
-    def verify(self, password):
-        """A store this cannot reach has not said the password is wrong.
+    def check(self, password):
+        """The generation of the record the password matched, or "" for none.
 
-        The shared secret is root-owned in the deployment root, so without the
+        A store this cannot reach has not said the password is wrong. The
+        shared secret is root-owned in the deployment root, so without the
         agent the unprivileged web process cannot check it at all. That is the
-        accepted cost of one password for all three interfaces -- but returning
-        False here would report it as a wrong password: an operator hunting a
+        accepted cost of one password for all three interfaces -- but answering
+        "" here would report it as a wrong password: an operator hunting a
         secret that is in fact correct, a rate limiter spent on a transport
         failure, and the one fact that explains the whole page hidden.
         """
 
         try:
-            return bool(self.agent.call("auth.verify", password=password).get("ok"))
+            answer = self.agent.call("auth.verify", password=password)
         except AgentCallError:
-            return False
+            return ""
         except AgentUnavailableError as exc:
             raise AuthError("agent_unavailable", str(getattr(exc, "message", exc)))
+        return str(answer.get("generation") or "") if answer.get("ok") else ""
+
+    def verify(self, password):
+        return bool(self.check(password))
 
     def create(self, password, confirmation=None):
         return self._mutate(
@@ -151,6 +169,13 @@ class AgentAuth:
             current_password=current_password,
             password=new_password,
             confirmation=confirmation or "",
+        )
+
+    def confirm(self, previous_password, generation):
+        return self._mutate(
+            "auth.confirm",
+            password=previous_password,
+            **{SESSION_GENERATION_FIELD: generation},
         )
 
     def _mutate(self, operation, **fields):
@@ -214,6 +239,15 @@ def hostname_cleanup(name):
 
 
 UNCHECKED_PASSWORD_CODES = ("login_busy", "agent_unavailable")
+
+# A confirmation refused although the previous password may have been right:
+# the shared file changed under the session, which is what a container
+# rewriting it looks like, or there is no confirmed record to check against.
+UNCONFIRMABLE_CODES = (
+    "password_changed",
+    "confirmed_password_unavailable",
+    "confirmed_password_unwritten",
+)
 
 _AUDIT_REASON_FOR_CODE = {"login_busy": "busy"}
 
@@ -348,7 +382,7 @@ class ApplianceWebApp:
             raise
 
         try:
-            verified = self._password_check(self.auth.verify, password)
+            generation = self._password_check(self.auth.check, password)
         except AuthError as exc:
             self._take_back(source_ip, attempt)
             self.audit.record(
@@ -359,7 +393,7 @@ class ApplianceWebApp:
             )
             raise
 
-        if not verified:
+        if not generation:
             self.audit.record(
                 "login.failure",
                 source_ip=source_ip,
@@ -370,7 +404,7 @@ class ApplianceWebApp:
 
         with self._lock:
             self._clear(source_ip, attempt)
-            session = self.sessions.create(self.auth.generation())
+            session = self.sessions.create(generation)
         self.audit.record("login.success", source_ip=source_ip, result=RESULT_SUCCESS)
         return session
 
@@ -435,9 +469,24 @@ class ApplianceWebApp:
         )
 
     def create_first_password(self, password, confirmation, *, source_ip):
-        self.auth.create(password, confirmation)
+        """The session is bound to the record this call wrote, not to one read again
+        afterwards. The agent answers with its generation; a store used in place
+        of the agent answers with the record itself."""
+
+        try:
+            created = self.auth.create(password, confirmation)
+        except AuthError as exc:
+            if exc.code == "confirmed_password_unwritten":
+                self.audit.record(
+                    "password.change",
+                    source_ip=source_ip,
+                    result=RESULT_FAILURE,
+                    reason="confirmed_password_unwritten",
+                )
+            raise
+        generation = created.get("generation") or record_generation(created)
         self.audit.record("password.change", source_ip=source_ip, reason="first_password")
-        return self.sessions.create(self.auth.generation())
+        return self.sessions.create(generation)
 
     def change_password(self, current, new_password, confirmation, *, source_ip):
         """The current password is checked the way a sign-in is: against the
@@ -460,7 +509,7 @@ class ApplianceWebApp:
         except AuthError as exc:
             if exc.code != "current_password_invalid":
                 self._take_back(source_ip, attempt)
-                if exc.code in UNCHECKED_PASSWORD_CODES:
+                if exc.code in UNCHECKED_PASSWORD_CODES + ("confirmed_password_unwritten",):
                     self.audit.record(
                         "password.change",
                         source_ip=source_ip,
@@ -483,6 +532,53 @@ class ApplianceWebApp:
             source_ip=source_ip,
             result=RESULT_SUCCESS,
             reason="password_changed",
+        )
+
+    def confirm_password(self, previous, session, *, source_ip):
+        """Confirm the password this session signed in with, given the previous one.
+
+        The previous password is checked the way a sign-in is, against the same
+        budget and in the same slots. Sessions stay: the password is the one
+        they signed in with.
+        """
+
+        try:
+            attempt = self._count_attempt(source_ip)
+        except AuthError:
+            self.audit.record(
+                "password.confirm",
+                source_ip=source_ip,
+                result=RESULT_DENIED,
+                reason="rate_limited",
+            )
+            raise
+        try:
+            self._password_check(self.auth.confirm, previous, session.generation)
+        except AuthError as exc:
+            if exc.code != "previous_password_invalid":
+                self._take_back(source_ip, attempt)
+                if exc.code in UNCHECKED_PASSWORD_CODES + UNCONFIRMABLE_CODES:
+                    self.audit.record(
+                        "password.confirm",
+                        source_ip=source_ip,
+                        result=RESULT_FAILURE,
+                        reason=audit_reason(exc.code),
+                    )
+                raise
+            self.audit.record(
+                "password.confirm",
+                source_ip=source_ip,
+                result=RESULT_FAILURE,
+                reason="invalid_password",
+            )
+            raise
+        with self._lock:
+            self._clear(source_ip, attempt)
+        self.audit.record(
+            "password.confirm",
+            source_ip=source_ip,
+            result=RESULT_SUCCESS,
+            reason="password_confirmed",
         )
 
     def audit_status(self):
@@ -714,14 +810,17 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
 
     def _session_state(self):
         session = self._session()
+        password = self.app.auth.status()
         payload = {
             "authenticated": session is not None,
-            "password_configured": self.app.auth.configured(),
+            "password_configured": bool(password.get("configured")),
+            "password_file_missing": bool(password.get("file_missing")),
             "appliance_version": installed_version(),
         }
         if session is not None:
             payload["csrf_token"] = session.csrf_token
             payload["expires_at"] = session.expires_at
+            payload["password_confirmed"] = password.get("confirmed")
             # Only an authenticated caller learns anything about the host.
             payload["security_audit"] = self.app.audit_status()
         return self._send(200, payload)
@@ -767,6 +866,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 "authenticated": True,
                 "csrf_token": session.csrf_token,
                 "security_audit": self.app.audit_status(),
+                "password_confirmed": self.app.auth.status().get("confirmed"),
             },
             extra_headers=[self._session_cookie(session)],
         )
@@ -782,6 +882,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 "authenticated": True,
                 "csrf_token": session.csrf_token,
                 "security_audit": self.app.audit_status(),
+                "password_confirmed": self.app.auth.status().get("confirmed"),
             },
             extra_headers=[self._session_cookie(session)],
         )
@@ -881,6 +982,17 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         if not self._require_csrf(session):
             return None
 
+        if path == "/api/settings/password/confirm":
+            try:
+                self.app.confirm_password(
+                    body.get("password"), session, source_ip=self._client_ip()
+                )
+            except AuthError as exc:
+                return self._error(STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message)
+            return self._send(
+                200, {"confirmed": True, "security_audit": self.app.audit_status()}
+            )
+
         if path == "/api/settings/password":
             try:
                 self.app.change_password(
@@ -944,7 +1056,10 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
 
         if path in plan_routes:
             operation, builder = plan_routes[path]
-            result = self._agent(operation, session, **builder(body))
+            fields = builder(body)
+            if operation in ROOT_ACCESS_PLANS:
+                fields[SESSION_GENERATION_FIELD] = session.generation
+            result = self._agent(operation, session, **fields)
             return None if result is None else self._send(200, result)
 
         confirm_paths = (
