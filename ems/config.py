@@ -3439,28 +3439,38 @@ def winter_morning_step_target(soc, current_min_soc, winter_min_soc, step):
 
 
 def winter_daytime_follow_target(soc, current_min_soc, winter_min_soc):
-    """A minSoc raised to the SoC PV has reached, or ``None`` when it is no raise."""
+    """A minSoc raised to a point below the SoC PV has reached, or ``None``
+    when it is no raise.
+
+    Not to the SoC itself: a SolarFlow 800 Pro 2 whose minSoc is written up to
+    its SoC enters its SoC protection and draws about 1.2 kW from the grid for a
+    few seconds, even while PV is charging it.
+    """
 
     reading = winter_soc_reading(soc)
 
     if reading is None:
         return None
 
-    target = min(int(reading), winter_min_soc)
+    target = min(int(reading) - 1, winter_min_soc)
 
     return target if target > current_min_soc else None
 
 
 def winter_min_soc_raise_limit(target, current_min_soc, soc, max_raise_above_soc):
-    """The winter minSoc to write: a raise only while it leads the SoC by little.
+    """The winter minSoc to write: a raise only while it leads the SoC by little,
+    and never one that lands on the SoC.
 
     Raised five points above the SoC, minSoc made the firmware charge from the
     grid at full AC power, whatever ``inputLimit`` said; three points above it
     did not. A raise is therefore written once it leads the SoC by at most
     ``max_raise_above_soc`` -- never cut to a part of itself, which written
-    again each reconcile would climb with the SoC all day. A target that is no raise passes
-    unchanged, and without a usable SoC reading nothing is raised. A device
-    that reports no minSoc gets no raise above what the battery already holds.
+    again each reconcile would climb with the SoC all day. Written up to the
+    SoC itself, minSoc puts a SolarFlow 800 Pro 2 into its SoC protection, and
+    it draws about 1.2 kW from the grid for a few seconds; such a raise waits
+    until the SoC has moved. A target that is no raise passes unchanged, and
+    without a usable SoC reading nothing is raised. A device that reports no
+    minSoc gets no raise up to what the battery holds.
     """
 
     current = safe_int(current_min_soc, 0, minimum=0)
@@ -3468,11 +3478,11 @@ def winter_min_soc_raise_limit(target, current_min_soc, soc, max_raise_above_soc
         return target
 
     reading = winter_soc_reading(soc)
-    if reading is None:
+    if reading is None or target == int(reading):
         return current
 
     if current == 0:
-        return target if reading >= target else current
+        return target if reading > target else current
 
     if target <= int(reading) + max_raise_above_soc:
         return target
