@@ -266,16 +266,75 @@ def test_the_step_is_never_more_than_three_points(configured, expected):
     assert _morning(controller, config={"ramp_step_percent": configured}) == (expected, True)
 
 
-def test_min_soc_follows_the_soc_pv_reaches_after_the_step(caplog):
+def test_min_soc_follows_a_point_below_the_soc_pv_reaches_after_the_step(caplog):
     controller = _controller()
     caplog.set_level(logging.INFO)
     _morning(controller)
 
     assert _winter_target(controller, _pv_state(23, soc=22, pv=400)) == (23, False)
-    assert _winter_target(controller, _pv_state(23, soc=27, pv=400)) == (27, False)
-    assert _winter_target(controller, _pv_state(27, soc=26, pv=400)) == (27, False)
-    assert _winter_target(controller, _pv_state(27, soc=55, pv=400)) == (40, False)
+    assert _winter_target(controller, _pv_state(23, soc=27, pv=400)) == (26, False)
+    assert _winter_target(controller, _pv_state(26, soc=26, pv=400)) == (26, False)
+    assert _winter_target(controller, _pv_state(26, soc=55, pv=400)) == (40, False)
     assert _events(caplog, "winter_follow_soc") == [logging.INFO, logging.INFO]
+
+
+@pytest.mark.parametrize(
+    "min_soc, soc, expected",
+    [(23, 24, 23), (23, 25, 24), (38, 40, 39), (38, 41, 40), (39, 40, 39)],
+)
+def test_the_follow_never_writes_a_min_soc_equal_to_the_soc(min_soc, soc, expected):
+    """A 800 Pro 2 whose minSoc is written up to its SoC enters its SoC
+    protection and draws about 1.2 kW from the grid for a few seconds: after
+    each of one inverter's three follows on 2026-10-08, on the firmware
+    installed the day before, 7 and 10 seconds after the two writes the log
+    still held, while PV was charging the battery."""
+
+    controller = _controller()
+    _morning(controller, min_soc=min_soc - 3, soc=min_soc - 3)
+    controller.winter.device("WR1").target = min_soc
+
+    target, _ = _winter_target(controller, _pv_state(min_soc, soc=soc, pv=400))
+
+    assert target == expected
+    assert target < soc
+
+
+def test_a_follow_target_is_not_written_later_onto_a_soc_that_fell_to_it():
+    """The follow remembers its target before the write lands. A write that
+    failed, or a report that still shows the old minSoc, is retried at the next
+    reconcile -- by then the SoC may have fallen onto the target."""
+
+    controller = _controller()
+    dev = _device(15, 0)
+    _morning(controller)
+    assert _winter_target(controller, _pv_state(23, soc=27, pv=400)) == (26, False)
+
+    assert _min_soc_writes(controller, dev, _pv_state(23, soc=26, pv=400, max_soc=0)) == []
+    assert _min_soc_writes(controller, dev, _pv_state(23, soc=27, pv=400, max_soc=0)) == [260]
+
+
+@pytest.mark.parametrize("soc, expected", [(40, (37, True)), (41, (40, True))])
+def test_a_morning_step_onto_the_soc_at_the_ceiling_waits(soc, expected):
+    controller = _controller()
+
+    assert _morning(controller, min_soc=37, soc=soc) == expected
+
+
+@pytest.mark.parametrize(
+    "remembered, min_soc, soc, winter_active",
+    [(None, 10, 15, True), (None, 8, 15, False), (32, 0, 32, True)],
+    ids=["restart-floor", "summer-reset", "no-min-soc-reported"],
+)
+def test_no_raise_is_written_onto_the_soc(remembered, min_soc, soc, winter_active):
+    """Every raise passes the same limit, and none lands on the SoC."""
+
+    controller = _controller()
+    if remembered:
+        _remember(controller, remembered)
+
+    assert _min_soc_writes(
+        controller, _device(15, 0), _pv_state(min_soc, soc=soc, max_soc=0), winter_active=winter_active
+    ) == []
 
 
 def test_min_soc_does_not_follow_the_soc_before_the_step_or_at_night():

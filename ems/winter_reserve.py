@@ -173,7 +173,7 @@ class WinterReserve:
         """The winter/summer minSoc target before the raise limit is applied.
 
         In winter, minSoc rises once a day by the policy's step and, later that
-        day, follows the SoC the battery reaches.
+        day, follows a point below the SoC the battery reaches.
         """
 
         if not cfg.winter_feature_enabled(self._runtime_state()):
@@ -447,7 +447,7 @@ class WinterReserve:
         return target, True
 
     def follow_soc(self, dev, state, policy, item, now):
-        """After today's step, raise the target to the SoC the battery reached."""
+        """After today's step, raise the target to a point below the SoC the battery reached."""
 
         target = cfg.winter_daytime_follow_target(
             state.soc, item.target, cfg.winter_min_soc_percent()
@@ -531,8 +531,8 @@ class WinterReserve:
         """Whether ``dev`` is a battery below its minSoc that receives PV.
 
         The hold starts at two points below minSoc and lasts until the battery
-        holds it, so a one-point dip after minSoc followed the SoC does not
-        switch the output on and off. A SoC of 0 is no reading: a report
+        holds it, so a battery that drifted a point under its minSoc -- standby
+        drain, rounding -- does not switch the output on and off. A SoC of 0 is no reading: a report
         without ``electricLevel`` parses as 0.
         """
 

@@ -211,7 +211,7 @@ def test_an_idle_device_with_pv_only_in_its_string_fields_is_still_export_capaci
     ids=["one-below-not-entered", "two-below-entered", "one-below-kept", "reached-released"],
 )
 def test_the_hold_has_a_one_point_hysteresis(soc, holding, held):
-    """After minSoc followed the SoC, a one-point dip must not flip the output."""
+    """A battery that drifted a point under its minSoc must not flip the output."""
 
     controller = _controller(device("Terasse"))
     controller.winter.device("Terasse").holding = holding

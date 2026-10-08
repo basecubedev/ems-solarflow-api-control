@@ -86,8 +86,8 @@ output-only: they carry the field but get no winter plan.
 
 Both stepping policies cap `minSoc` at `winter_min_soc` -- a `minSoc` set above
 it, in the app or by a higher ceiling, comes down to it -- and after the day's
-step `minSoc` follows the SoC the battery reaches, again up to
-`winter_min_soc`.
+step `minSoc` follows the SoC the battery reaches, one point below it, again up
+to `winter_min_soc`.
 
 ## Behavior
 
@@ -106,10 +106,11 @@ Outside the configured winter months, the EMS resets `minSoc` to
 
    A battery two or more points below its `minSoc` is first refilled from PV
    by the export hold; the step follows once it is at most one point below.
-2. **Follow.** For the rest of that day, when PV has charged the battery above
-   its `minSoc`, `minSoc` follows the SoC. It never follows before the day's
-   step, and never without PV, so a battery charged in the evening keeps its
-   charge available for the night.
+2. **Follow.** For the rest of that day, when PV has charged the battery at
+   least two points above its `minSoc`, `minSoc` follows the SoC, one point
+   below it (see [Why One Point Below the SoC](#why-one-point-below-the-soc)).
+   It never follows before the day's step, and never without PV, so a battery
+   charged in the evening keeps its charge available for the night.
 
 There is one step per calendar day: PV that drops to nothing under cloud takes
 no second step, and a few watts of noise at night are no morning. A device that
@@ -121,15 +122,17 @@ that never comes.
 
 A battery without PV has no source to charge from but the grid. In the hour
 `adjust_hour`, once a day, `minSoc` rises by `ramp_step_percent` above its
-current value, up to `winter_min_soc`; later that day it follows the SoC when
-the battery reaches more. This daily step is **not** limited to three points
+current value, up to `winter_min_soc`; later that day it follows the SoC, one
+point below it, when the battery reaches more. This daily step is **not** limited to three points
 above the SoC: once `minSoc` leads the SoC by about five points, the firmware
 charges the battery from the grid (see [Why Three Points](#why-three-points)),
 and the policy accepts that risk deliberately. It steps only while the battery
 is at most one step below its `minSoc`, so `minSoc` leads the SoC by at most two
 steps; a pack that does not charge stops the ramp instead of being pushed to
 `winter_min_soc`, and a battery too far below at that hour takes no step that
-day. The step keeps its lead until the device reports it, so
+day. A step that would land exactly on the SoC -- a battery sitting a step
+above its `minSoc` -- waits until the SoC has moved (see
+[Why One Point Below the SoC](#why-one-point-below-the-soc)). The step keeps its lead until the device reports it, so
 telemetry that still shows the old `minSoc` does not cut it back.
 
 ### State after a restart
@@ -171,8 +174,8 @@ control explanation names it with the capability reason `winter_solar_charge`,
 and the controller does not count it as export capacity, so the commanded total
 does not wind up while it is held.
 
-The two-point entry keeps a one-point dip after `minSoc` followed the SoC from
-switching the output on and off. The three-hour windows refill a battery the
+The two-point entry keeps a battery that drifted a point under its `minSoc` --
+standby drain, rounding -- from switching the output on and off. The three-hour windows refill a battery the
 night left below its `minSoc` and the gap the step opened, and they bound the
 cost of a pack that cannot take the charge -- a cold pack, a BMS limit: its PV
 is curtailed for no longer than that, and a restart in daylight opens no new
@@ -197,7 +200,9 @@ most three points; only the `noon_step` policy's own step may lead further. A
 raise is never written as a part of itself: cut to three above the SoC and
 written again each reconcile, it would climb with the SoC all day. A device that
 reports no `minSoc` -- a missing value reads as 0 -- gets no raise the battery
-does not already hold, and without a usable SoC reading nothing rises.
+does not already hold, and without a usable SoC reading nothing rises. No raise
+lands on the SoC itself; see
+[Why One Point Below the SoC](#why-one-point-below-the-soc).
 
 On 2026-10-03 an adjustment raised `minSoc` from 25 to 30 at a SoC of 25, and
 both inverters charged from the grid at their full AC power, 1.2 to 1.4 kW each,
@@ -215,6 +220,29 @@ measured.
 The rule only limits raises. It does not bring a `minSoc` that is already above
 the SoC down to it. Winter mode still lowers `minSoc` to `winter_min_soc` when a
 device holds more, and to `summer_min_soc` outside the winter months.
+
+## Why One Point Below the SoC
+
+A SolarFlow 800 Pro 2 whose `minSoc` is written up to its SoC enters its SoC
+protection and draws about 1.2 kW from the grid for three to six seconds, PV
+and output dropping to zero meanwhile. It did so while PV was charging the
+battery: on 2026-10-07 after three follows on the firmware the inverters ran
+then, and on 2026-10-08 after each of one inverter's three follows on the
+firmware installed the day before -- seven and ten seconds after the two writes
+the log still held -- with up to 1.5 kW drawn at the grid meter. The morning
+step, three points above the SoC that day, and a battery the export hold
+refilled up to its `minSoc` showed no such draw. All of it is from one
+installation; another firmware has not been measured.
+
+So the follow keeps `minSoc` one point below the SoC, and any other raise that
+would land exactly on the SoC -- the morning step at `winter_min_soc`, the noon
+step of a battery that sits a step above its `minSoc`, the restart floor, the
+summer reset, a target remembered while its write had not landed -- waits until
+the SoC has moved. A device that reports no
+`minSoc` is raised only to a value below what the battery holds.
+
+What this does not prevent: a battery that discharges down to its `minSoc`
+draws the same burst. After a follow that is one point of discharge away.
 
 ## AC Charge Limit
 

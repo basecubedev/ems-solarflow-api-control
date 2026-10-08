@@ -207,13 +207,24 @@ def test_only_the_noon_step_itself_may_lead_the_soc_further():
     assert _target(controller, _state(10, soc=5), MORNING, entry=BATTERY_ONLY) == (10, False)
 
 
-def test_a_battery_only_device_follows_a_soc_that_rises_after_its_step():
+def test_a_battery_only_device_follows_a_point_below_a_soc_that_rises_after_its_step():
     controller = EMSController(devices=[], shelly=None, sleep_enabled=False)
     _target(controller, _state(20, soc=20), MORNING, entry=BATTERY_ONLY)
     assert _target(controller, _state(20, soc=20), NOON, entry=BATTERY_ONLY) == (23, True)
 
-    assert _target(controller, _state(23, soc=31), AFTERNOON, entry=BATTERY_ONLY) == (31, False)
-    assert _target(controller, _state(31, soc=55), AFTERNOON, entry=BATTERY_ONLY) == (40, False)
+    assert _target(controller, _state(23, soc=31), AFTERNOON, entry=BATTERY_ONLY) == (30, False)
+    assert _target(controller, _state(30, soc=55), AFTERNOON, entry=BATTERY_ONLY) == (40, False)
+
+
+def test_a_noon_step_that_would_land_on_the_soc_waits_for_it_to_move():
+    """minSoc + step equals the SoC whenever the battery sits a step above its
+    minSoc; written there, it would put the battery at its floor."""
+
+    controller = EMSController(devices=[], shelly=None, sleep_enabled=False)
+    _target(controller, _state(20, soc=23), MORNING, entry=BATTERY_ONLY)
+
+    assert _target(controller, _state(20, soc=23), NOON, entry=BATTERY_ONLY) == (20, True)
+    assert _target(controller, _state(20, soc=22), AFTERNOON, entry=BATTERY_ONLY) == (23, False)
 
 
 def test_a_restart_after_noon_takes_no_second_step_that_day():
