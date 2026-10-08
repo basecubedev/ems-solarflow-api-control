@@ -4965,6 +4965,7 @@ def _run_maintenance_discovery_node(setup):
             "mconfigFindInverterMatch",
             "maintenanceMqttProposals",
             "mconfigIsMqttDevice",
+            "mconfigIsExternalDevice",
             "buildMaintenanceDiscoveryReview",
         )
     )
@@ -7377,6 +7378,11 @@ def run_mconfig_add_mqtt_proposal(proposal):
             "mconfigDraftDevicesMatchingCandidate",
             "mconfigPristineHasCandidateConnection",
             "mconfigDraftHasProposal",
+            "isExternalMqttProposal",
+            "mconfigExternalProposalState",
+            "issuedCatalogDeviceId",
+            "issuedCatalogId",
+            "mconfigIsExternalDevice",
             "mconfigMqttProposalState",
             "mqttProposalBrokerRef",
             "mqttProposalBrokerProfile",

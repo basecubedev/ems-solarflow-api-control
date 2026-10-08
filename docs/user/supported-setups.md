@@ -205,6 +205,12 @@ validated for everyone else.
 | Zendure Smart Meter D0 — Local MQTT | `zendure_smartmeter_d0` | Reverse-engineered | Optional alternative for a D0 already connected to a local broker. Subscribes to `Zendure/sensor/<SERIAL>/totalPower`; positive import, negative export. MQTT transport not confirmed on maintainer hardware. |
 | Generic MQTT grid meter | `mqtt` | Reverse-engineered | Requires an existing broker, one topic, and a numeric or JSON power payload. Generic config-driven reader. |
 
+Two of these are generic, config-driven readers: **Tasmota HTTP** (`tasmota_http`,
+you name the JSON `power_path`) and the **Generic MQTT grid meter** (`mqtt`, you
+name the topic and payload format). They are the one exception to the rule that
+EMS only reads hardware whose payload it knows: it cannot know theirs in advance,
+so discovery never offers them and they are only ever added by hand.
+
 Local HTTP is the recommended Zendure D0/3CT grid-meter connection: both models
 provide `total_power` through `/properties/report`, so numeric `total_power`
 alone makes the meter usable — no MQTT setup required. The Admin may label such a
@@ -223,11 +229,28 @@ is never duplicated into the `grid_meter` block. MQTT here is a **grid meter
 input** only — a read-only load signal. EMS never publishes over the grid-meter
 MQTT client and does not control Zendure devices or inverters through it.
 
+## External devices (read only)
+
+Inverters EMS does not control, read over MQTT when something else republishes
+their output. The list is a whitelist: discovery offers, and EMS reads, only the
+devices and topic shapes below, because for anything else nobody can say what
+the payload means. Topics are case-sensitive and must match exactly. See
+[External Inverters over MQTT](../technical/configuration.md#external-inverters-over-mqtt-external_mqtt).
+
+| Device | Topic | Payload | Status | Notes |
+|---|---|---|---|---|
+| Kostal Piko, republished by FHEM | `KostalPiko/<serial>/solarPower` | Whole number of watts | Reverse-engineered | AC output to the house. Topic shape and payload taken from a user's broker; EMS reading it on that installation is not yet confirmed. Read only, never controlled. |
+
 ## Optional Integrations
 
 - Home Assistant is optional.
 - InfluxDB analytics is optional.
 - Native Python is supported for advanced/manual installs.
+- A **second inverter EMS does not control** can be shown and counted if the
+  hardware catalog lists it — see [External devices](#external-devices-read-only)
+  above. EMS reads its topics and never writes to it. This does not make the
+  inverter controllable, and it is not a Zendure connection: EMS control still
+  needs one of the transports below.
 
 At least one supported Zendure connection — Local API, Local MQTT, or Zendure
 cloud MQTT — must be available for EMS control. The Local API is recommended for

@@ -2,18 +2,33 @@
 """Read-only MQTT topic discovery for the Admin Console.
 
 Admin listens briefly to a broker candidate and classifies the topics it sees
-into Zendure hardware candidates. It never publishes, never authenticates
-beyond an anonymous connection, and treats every topic and payload as untrusted
-input. Discovery output is display-only and bounded; it is never promoted into
-the EMS config.
+into hardware candidates: the Zendure families and the devices the external
+catalog lists, with the same classifier EMS Core reads telemetry with, so
+discovery never offers a device the runtime would not read. It never publishes,
+never authenticates beyond an anonymous connection, and treats every topic and
+payload as untrusted input. Discovery output is display-only and bounded; it is
+never promoted into the EMS config.
 """
 
 import json
 import time
-from dataclasses import dataclass
 
 from admin.models import MqttHardwareCandidate
 from ems.config import MQTT_TLS_MODE_PLAIN, mqtt_tls_mode_name
+from ems.mqtt_control.topic_families import (
+    FAMILY_LEGACY_JSON,
+    FAMILY_LEGACY_JSON_ALT,
+    FAMILY_UNKNOWN,
+    FAMILY_ZENDURE_CLOUD_SCALAR,
+    FAMILY_ZENSDK_HA_SCALAR,
+)
+from ems.zendure_mqtt.external_catalog import (
+    EXTERNAL_TOPIC_FAMILIES,
+    catalog_reading,
+    external_discovery_subscriptions,
+)
+from ems.zendure_mqtt.topics import TopicMatch
+from ems.zendure_mqtt.topics import classify_topic as classify_telemetry_topic
 
 
 def _effective_tls_mode(broker):
@@ -29,26 +44,22 @@ def _effective_tls_mode(broker):
         return mode.strip()
     return mqtt_tls_mode_name(tls=broker.get("tls")) or MQTT_TLS_MODE_PLAIN
 
-FAMILY_ZENSDK_HA_SCALAR = "zensdk_ha_scalar"
-FAMILY_LEGACY_JSON = "legacy_zendure_json"
 FAMILY_LEGACY_JSON_WRITE = "legacy_zendure_json_write_observed"
-FAMILY_LEGACY_JSON_ALT = "legacy_zendure_json_alt"
-FAMILY_ZENDURE_CLOUD_SCALAR = "zendure_cloud_scalar"
-FAMILY_UNKNOWN = "unknown"
 
 _JSON_FAMILIES = frozenset(
     {FAMILY_LEGACY_JSON, FAMILY_LEGACY_JSON_WRITE, FAMILY_LEGACY_JSON_ALT}
 )
 
-# Zendure cloud-prefixed scalar components: `<appKey>/<component>/<dev>/<metric>`.
-_CLOUD_SCALAR_COMPONENTS = frozenset(
-    {"sensor", "number", "switch", "select", "binary_sensor"}
-)
-
 # Conservative bounded subscriptions. Deliberately not `#`: only the Zendure
-# HA-scalar tree, the legacy `iot/<pk>/<dev>/...` tree, and the slash-prefixed
-# `/<pk>/<dev>/...` tree (legacy_zendure_json_alt) are observed.
-DEFAULT_SUBSCRIPTIONS = ("Zendure/#", "iot/+/+/#", "/+/+/#")
+# HA-scalar tree, the legacy `iot/<pk>/<dev>/...` tree, the slash-prefixed
+# `/<pk>/<dev>/...` tree (legacy_zendure_json_alt) and the topics of each device
+# the external catalog lists are observed.
+DEFAULT_SUBSCRIPTIONS = (
+    "Zendure/#",
+    "iot/+/+/#",
+    "/+/+/#",
+    *external_discovery_subscriptions(),
+)
 
 DEFAULT_TIMEOUT_S = 8.0
 MAX_TIMEOUT_S = 10.0
@@ -59,70 +70,28 @@ MAX_TOPICS_PER_CANDIDATE = 20
 MAX_PAYLOAD_BYTES = 64 * 1024
 
 
-@dataclass
-class TopicMatch:
-    family: str
-    device_id: str | None = None
-    serial_number: str | None = None
-    metric: str | None = None
-    product_key: str | None = None
-
-
 def classify_topic(topic):
-    """Classify an MQTT topic into a Zendure topic family.
+    """Classify a topic exactly as EMS Core does, plus an overheard write topic.
 
-    Parses device id / metric from the topic path only; payloads are handled
-    separately. Unknown shapes return ``FAMILY_UNKNOWN`` rather than raising.
+    Unknown shapes return ``FAMILY_UNKNOWN`` rather than raising.
     """
 
-    if not isinstance(topic, str) or not topic:
-        return TopicMatch(FAMILY_UNKNOWN)
-    segments = topic.split("/")
-    if len(segments) >= 4 and segments[0] == "Zendure" and segments[2] and segments[3]:
-        device = segments[2]
-        return TopicMatch(
-            FAMILY_ZENSDK_HA_SCALAR,
-            device_id=device,
-            serial_number=device,
-            metric="/".join(segments[3:]),
-        )
-    if len(segments) == 5 and segments[0] == "iot" and segments[3] == "properties":
-        if segments[4] == "report" and segments[1] and segments[2]:
-            return TopicMatch(
-                FAMILY_LEGACY_JSON, device_id=segments[2], product_key=segments[1]
-            )
-        if segments[4] == "write" and segments[1] and segments[2]:
-            return TopicMatch(
-                FAMILY_LEGACY_JSON_WRITE, device_id=segments[2], product_key=segments[1]
-            )
+    match = classify_telemetry_topic(topic)
+    if match.family != FAMILY_UNKNOWN:
+        return match
+    segments = topic.split("/") if isinstance(topic, str) else []
     if (
         len(segments) == 5
-        and segments[0] == ""
+        and segments[0] == "iot"
         and segments[3] == "properties"
-        and segments[4] == "report"
+        and segments[4] == "write"
         and segments[1]
         and segments[2]
     ):
         return TopicMatch(
-            FAMILY_LEGACY_JSON_ALT, device_id=segments[2], product_key=segments[1]
+            FAMILY_LEGACY_JSON_WRITE, device_id=segments[2], product_key=segments[1]
         )
-    # Cloud-prefixed scalar: `<appKey>/<component>/<device>/<metric>`. The
-    # appKey prefix is a secret account scope, so it is never stored on the match.
-    if (
-        len(segments) >= 4
-        and segments[0]
-        and segments[0] not in ("Zendure", "iot")
-        and segments[1] in _CLOUD_SCALAR_COMPONENTS
-        and segments[2]
-        and segments[3]
-    ):
-        return TopicMatch(
-            FAMILY_ZENDURE_CLOUD_SCALAR,
-            device_id=segments[2],
-            serial_number=segments[2],
-            metric="/".join(segments[3:]),
-        )
-    return TopicMatch(FAMILY_UNKNOWN)
+    return match
 
 
 def _coerce_json(payload):
@@ -180,6 +149,7 @@ def _score(candidate, pack_data):
         FAMILY_LEGACY_JSON: 0.55,
         FAMILY_LEGACY_JSON_ALT: 0.5,
         FAMILY_LEGACY_JSON_WRITE: 0.35,
+        **{family: 0.6 for family in EXTERNAL_TOPIC_FAMILIES},
     }.get(candidate.topic_family, 0.3)
     if candidate.serial_number:
         base += 0.15
@@ -232,6 +202,8 @@ class MqttTopicAggregator:
         match = classify_topic(topic)
         if match.family == FAMILY_UNKNOWN:
             return
+        if match.family in EXTERNAL_TOPIC_FAMILIES and catalog_reading(payload) is None:
+            return
         device_key = match.serial_number or match.device_id or "unknown"
         key = (match.family, device_key)
         candidate = self._candidates.get(key)
@@ -248,6 +220,9 @@ class MqttTopicAggregator:
                 tls_mode=self.broker_tls_mode,
                 credentials_ref=self.broker_credentials_ref,
             )
+            external = EXTERNAL_TOPIC_FAMILIES.get(match.family)
+            if external is not None:
+                candidate.display_name = external.label
             self._candidates[key] = candidate
             self._pack_data[key] = False
         if topic not in candidate.topics_seen and (

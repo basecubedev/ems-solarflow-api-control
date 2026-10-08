@@ -415,6 +415,25 @@ This path edits an existing installation.
   change a field or when the draft is loaded, so it always appears in the
   preview diff before it is applied.
 
+  An **external inverter** (`"type": "external_mqtt"`, see
+  [External Inverters over MQTT](../technical/configuration.md#external-inverters-over-mqtt-external_mqtt))
+  is one the hardware catalog lists, such as a Kostal Piko whose output FHEM
+  republishes. Discovery offers it under the local broker it was seen on, and
+  **Add inverter** adds it to the draft as a read-only card; there is nothing to
+  set beyond what every device has, because the catalog fixes its topics and it
+  is never controlled. Like any device it has a **Device name** and an
+  **Enabled** switch; switched off, it stays in the config but EMS neither reads
+  it nor shows or counts its output (the inverter itself is never switched).
+  Discovery shows the installed device as **In config**, whatever the broker
+  profile it sits on is called, and the same device on another broker as an
+  alternative: **Use connection** moves it there on apply, keeping its name and
+  switch. **Remove** takes it out of the config. Its catalog family and device
+  id are not edited on this page, and its broker only through **Use
+  connection**; apart from name, switch and connection, applying writes the
+  installed entry back exactly as it is,
+  whatever the browser sends for it, and a draft that leaves the entry out
+  without its **Remove** is refused rather than applied.
+
   Local API, Local MQTT and Zendure Cloud MQTT are alternative control
   transports of the same logical inverter. Switching between them keeps the
   device's identity, activation state, limits, SoC settings and allocation

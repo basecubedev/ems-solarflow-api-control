@@ -112,6 +112,11 @@ _MSTATE_HELPERS = _IDENTITY_HELPERS + (
     "mconfigDraftDevicesMatchingCandidate",
     "mconfigPristineHasCandidateConnection",
     "mconfigDraftHasProposal",
+    "isExternalMqttProposal",
+    "mconfigExternalProposalState",
+    "issuedCatalogDeviceId",
+    "issuedCatalogId",
+    "mconfigIsExternalDevice",
     "mconfigMqttProposalState",
 )
 
@@ -156,6 +161,78 @@ def _mqtt_candidate(scope, source="local_mqtt", serial="PHYS-1"):
         "broker_ref": scope,
         "config_fragment": {"mqtt": {"broker_ref": scope, "source": source}},
     }
+
+
+# --- A catalog device is compared by the catalog id the backend issued -------
+
+_CATALOG_ID = "catalog:v1:KOSTALDEVICE"
+_ON_FHEM = "catalog:v1:KOSTALONFHEMBROKER"
+_ON_OTHER = "catalog:v1:KOSTALONOTHERBROKER"
+
+
+def _external_installed(catalog_id=_CATALOG_ID, broker_ref="fhem", connection=_ON_FHEM):
+    return {
+        "kind": "external_mqtt",
+        "original_name": "Kostal",
+        "name": "Kostal",
+        "catalog_device_id": catalog_id,
+        "catalog_connection_id": connection,
+        "entry": {
+            "name": "Kostal",
+            "type": "external_mqtt",
+            "mqtt": {"broker_ref": broker_ref, "topic_family": "kostal_piko", "device_id": "SN1"},
+        },
+    }
+
+
+def _external_offer(
+    catalog_id=_CATALOG_ID, broker_ref="local_mqtt_10_0_0_71_abcd1234", connection=_ON_FHEM
+):
+    return {
+        "id": "zendure-mqtt:opaque-token:" + broker_ref,
+        "broker_ref": broker_ref,
+        "catalog_device_id": catalog_id,
+        "catalog_connection_id": connection,
+        "connection_id": "conn:v1:" + broker_ref,
+        "config_fragment": {
+            "type": "external_mqtt",
+            "mqtt": {"broker_ref": broker_ref, "topic_family": "kostal_piko", "device_id": "SN1"},
+        },
+    }
+
+
+def test_an_installed_catalog_device_is_in_config_whatever_its_profile_is_called():
+    installed = _external_installed()
+    assert _mstate([installed], _external_offer(), pristine=[installed]) == "found"
+
+
+def test_a_catalog_device_added_in_this_session_reads_added():
+    adopted = {
+        "kind": "external_mqtt",
+        "original_name": None,
+        "proposal_id": _external_offer()["id"],
+        "catalog_device_id": _CATALOG_ID,
+        "catalog_connection_id": _ON_FHEM,
+    }
+    assert _mstate([adopted], _external_offer(), pristine=[]) == "added"
+
+
+def test_the_same_catalog_device_on_another_broker_is_an_alternative_connection():
+    installed = _external_installed()
+    offer = _external_offer(connection=_ON_OTHER)
+    assert _mstate([installed], offer, pristine=[installed]) == "transport"
+
+
+def test_another_catalog_device_is_still_new():
+    installed = _external_installed(catalog_id="catalog:v1:OTHERDEVICE")
+    assert _mstate([installed], _external_offer(), pristine=[installed]) == "new"
+
+
+def test_an_unissued_catalog_id_never_matches():
+    """Two records without a valid issued id must not compare equal."""
+
+    installed = _external_installed(catalog_id="forged")
+    assert _mstate([installed], _external_offer(catalog_id="forged"), pristine=[installed]) == "new"
 
 
 def test_maintenance_same_broker_scope_is_already_configured():

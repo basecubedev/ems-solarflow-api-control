@@ -218,7 +218,9 @@ def _readiness_error(reason, *, host, port, topic, connect_rc=None, publish_rc=N
     return PublishReadinessError(f"{reason} ({', '.join(details)})")
 
 
-def _await_connack_and_publish(client, *, host, port, topic, payload, timeout):
+def _await_connack_and_publish(
+    client, *, host, port, topic, payload, timeout, retain=False
+):
     """Publish exactly once, but only after a successful CONNACK.
 
     The network loop delivers CONNACK asynchronously, so publishing straight
@@ -258,7 +260,7 @@ def _await_connack_and_publish(client, *, host, port, topic, payload, timeout):
                 "broker disconnected before publish",
                 host=host, port=port, topic=topic, connect_rc=state["connect_rc"],
             )
-        info = client.publish(topic, payload, qos=1)
+        info = client.publish(topic, payload, qos=1, retain=retain)
         if info.rc != mqtt.MQTT_ERR_SUCCESS:
             raise _readiness_error(
                 "client rejected the publish",
@@ -278,11 +280,13 @@ def _await_connack_and_publish(client, *, host, port, topic, payload, timeout):
 
 
 def publish_once(host, port, topic, payload, *, username=None, password=None,
-                 tls_ca=None, tls_insecure=False, timeout=10.0):
-    """Publish a single retained-free message to a broker and disconnect.
+                 tls_ca=None, tls_insecure=False, timeout=10.0, retain=False):
+    """Publish a single message to a broker and disconnect.
 
     Waits for a successful CONNACK before publishing so a publish never races
-    ahead of the connection on a slow runner.
+    ahead of the connection on a slow runner. ``retain`` leaves the message on
+    the broker for every later subscriber, which is how a listener that
+    subscribes after the publish still sees it without a race.
     """
 
     client = _new_paho_client()
@@ -293,7 +297,13 @@ def publish_once(host, port, topic, payload, *, username=None, password=None,
         if tls_insecure:
             client.tls_insecure_set(True)
     _await_connack_and_publish(
-        client, host=host, port=port, topic=topic, payload=payload, timeout=timeout
+        client,
+        host=host,
+        port=port,
+        topic=topic,
+        payload=payload,
+        timeout=timeout,
+        retain=retain,
     )
 
 
