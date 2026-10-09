@@ -1310,6 +1310,11 @@ function afterNextPaint(callback) {
   callback();
 }
 
+function socFillClass(soc) {
+  if (soc === null) return "";
+  return soc < 20 ? " low" : soc >= 90 ? " full" : "";
+}
+
 function normalizeSoc(value) {
   const numericSoc = Number(value);
   return Number.isFinite(numericSoc) ? clamp(numericSoc, 0, 100) : 0;
@@ -1528,21 +1533,26 @@ function deviceCardHtml(name, device, previousSocWidths) {
   const deviceBatteryState = batteryStateLabel(batteryFlow);
   const socClass = soc < 20 ? "low" : soc >= 90 ? "full" : "";
   const readOnly = device.read_only === true;
-  state.deviceSocValues.set(name, soc);
+  const socReported = deviceReportsSoc(device);
+  if (socReported) {
+    state.deviceSocValues.set(name, soc);
+  } else {
+    state.deviceSocValues.delete(name);
+  }
   return `<article class="device-card">
       <div class="device-head">
         <span class="device-name">${escapeHtml(name)}</span>
         ${readOnly ? `<span class="pill muted">${icon("history")}Telemetry only</span>` : ""}
         <span class="pill ${device.online ? "" : "muted"}">${icon(device.online ? "live" : "warning")}${device.online ? "Online" : "Offline"}</span>
       </div>
-      <div class="soc-block ${socClass}" aria-label="Battery state of charge">
+      ${socReported ? `<div class="soc-block ${socClass}" aria-label="Battery state of charge">
         <div class="soc-row">
           <span class="soc-title">${icon("battery")} Battery SOC</span>
           <strong class="soc-percent">${pct(soc)}</strong>
         </div>
         <div class="soc-bar" role="progressbar" aria-label="Battery state of charge" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(soc)}"><div class="soc-fill" data-device-soc-fill="${safeDeviceKey}" data-soc-start="${previousSoc}" data-soc-target="${soc}" data-soc-animate="${shouldAnimateSoc ? "true" : "false"}"></div></div>
         <div class="soc-mode">${deviceBatteryState} ${signedWatts(batteryFlow.valueW)}</div>
-      </div>
+      </div>` : ""}
       <div class="device-values">
         ${deviceValue("PV", watts(devicePvPower(device)), "solar")}
         ${deviceValue("Output", watts(deviceOutputPower(device)), "inverter")}
@@ -2261,6 +2271,7 @@ function updateDeviceFlowSnapshot(container, snapshot, entries) {
     const chargePower = deviceChargePower(device);
     const houseLine = deviceHouseLine(key, outputPower, chargePower);
     const batteryFlow = normalizeBatteryPowerForDisplay(device?.battery_power_w);
+    const socReported = deviceReportsSoc(device);
     const soc = clamp(deviceSoc(device), 0, 100);
     const fill = fills.get(String(index));
 
@@ -2278,12 +2289,12 @@ function updateDeviceFlowSnapshot(container, snapshot, entries) {
     setMappedText(texts, `${key}:inverter-state`, inverterChargeLabel(houseLine.watts, houseLine.charging));
     setMappedText(texts, `${key}:battery-state`, batteryStateLabel(batteryFlow));
     setMappedText(texts, `${key}:battery-value`, signedWatts(batteryFlow.valueW));
-    setMappedText(texts, `${key}:battery-soc`, pct(soc));
+    setMappedText(texts, `${key}:battery-soc`, socReported ? pct(soc) : "--");
 
     if (fill) {
-      const fillScale = soc / 100;
+      const fillScale = socReported ? soc / 100 : 0;
       fill.setAttribute("data-battery-fill-target", String(fillScale));
-      setSvgClass(fill, `battery-fill${soc < 20 ? " low" : soc >= 90 ? " full" : ""}`);
+      setSvgClass(fill, `battery-fill${socFillClass(socReported ? soc : null)}`);
     }
   });
 
@@ -3227,7 +3238,7 @@ function deviceFlowRow(name, device, y, layout, homeY, rowIndex = 0, previousBat
       ${devicePipeGroup("battery", batteryFlow.absW, `M${batteryX + 184} ${batteryMidY} H${leftJoinX} V${inverterBatteryPortY} H${inverterX}`, batteryPipeDirection(batteryFlow), key)}
       ${devicePipeMarkup(houseLine.kind, houseLine.watts, houseLine.active, `M${inverterX + 196} ${inverterMidY} H${homeJoinX} V${homeMidY} H${sharedX}`, houseLine.direction, `${key}:house`)}
       ${deviceSolarVisual(pvX, pvY, `${safeName} PV`, watts(pvPower), flowActive(`device:${key}:visualPv`, pvPower), key)}
-      ${deviceBatteryVisual(batteryX, batteryY, batteryStateText, signedWatts(batteryFlow.valueW), soc, flowActive(`device:${key}:visualBattery`, batteryFlow.absW), batteryFlow.state, rowIndex, previousBatteryScale, key)}
+      ${deviceBatteryVisual(batteryX, batteryY, batteryStateText, signedWatts(batteryFlow.valueW), deviceReportsSoc(device) ? soc : null, flowActive(`device:${key}:visualBattery`, batteryFlow.absW), batteryFlow.state, rowIndex, previousBatteryScale, key)}
       ${deviceInverterVisual(inverterX, inverterY, safeName, watts(outputPower), houseLine.active, key, inverterChargeLabel(houseLine.watts, houseLine.charging))}
     </g>
   `;
@@ -3321,7 +3332,8 @@ function deviceBatteryVisual(
   previousFillScale = null,
   key = ""
 ) {
-  const clampedSoc = normalizeSoc(soc);
+  const socKnown = soc !== null;
+  const clampedSoc = socKnown ? normalizeSoc(soc) : 0;
   const fillScale = clampedSoc / 100;
   const numericPreviousScale = Number(previousFillScale);
   const initialFillScale = previousFillScale !== null && Number.isFinite(numericPreviousScale)
@@ -3331,7 +3343,7 @@ function deviceBatteryVisual(
   const safeRowIndex = Number.isFinite(numericRowIndex)
     ? String(Math.max(0, Math.floor(numericRowIndex)))
     : "0";
-  const fillClass = clampedSoc < 20 ? " low" : clampedSoc >= 90 ? " full" : "";
+  const fillClass = socFillClass(socKnown ? clampedSoc : null);
   const attrs = key ? ` data-flow-visual="${key}:battery"` : "";
   return `
     <g class="${deviceVisualClasses("battery-visual", active, mode)}"${attrs} transform="translate(${x} ${y})">
@@ -3340,7 +3352,7 @@ function deviceBatteryVisual(
       <rect class="battery-case" x="24" y="27" width="52" height="23" rx="7"></rect>
       <rect class="battery-cap" x="76" y="35" width="5" height="8" rx="2"></rect>
       <rect class="battery-fill${fillClass}" x="29" y="32" width="42" height="13" rx="4" data-device-battery-fill="${safeRowIndex}" data-battery-fill-start="${initialFillScale}" data-battery-fill-target="${fillScale}"></rect>
-      <text class="battery-soc" data-flow-text="${key}:battery-soc" x="50" y="43" text-anchor="middle">${pct(clampedSoc)}</text>
+      <text class="battery-soc" data-flow-text="${key}:battery-soc" x="50" y="43" text-anchor="middle">${socKnown ? pct(clampedSoc) : "--"}</text>
       <text class="visual-state" data-flow-text="${key}:battery-state" x="166" y="20" text-anchor="end">${stateText}</text>
       <text class="visual-label" x="166" y="39" text-anchor="end">Battery</text>
       <text class="visual-value" data-flow-text="${key}:battery-value" x="166" y="61" text-anchor="end">${value}</text>
@@ -3455,6 +3467,10 @@ function deviceHouseLine(key, outputPower, chargePower) {
 
 function deviceOutputPower(device) {
   return Number(device?.output_w ?? device?.inverter_output_w ?? 0);
+}
+
+function deviceReportsSoc(device) {
+  return device?.soc_reported !== false;
 }
 
 function deviceSoc(device) {

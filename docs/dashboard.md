@@ -29,7 +29,10 @@ telemetry-only device — one streaming telemetry but not enabled for output
 control — carries a **Telemetry only** badge and omits the **Target** tile,
 because the EMS reads it but never writes an output limit to it. Its live PV,
 output, battery, SOC and limit values still contribute to the aggregate totals,
-so a healthy but uncontrolled inverter is never invisible.
+so a healthy but uncontrolled inverter is never invisible. A telemetry-only
+device that reports no charge level — an inverter without a battery — shows
+none: its card and its row in the live flow draw no SoC, and the average SoC
+leaves it out rather than counting an empty battery.
 
 Each device card carries a compact **Firmware status** block below the main
 power tiles. It translates selected Zendure firmware status values into readable

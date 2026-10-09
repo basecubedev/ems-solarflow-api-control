@@ -65,6 +65,12 @@ def _channel_sums_sql():
     )
 
 
+def _reports_soc(device):
+    """A device that reports no charge level has none to record, not one of zero."""
+
+    return device.get("soc_reported") is not False
+
+
 class DashboardStore:
     """Small SQLite store for live dashboard snapshots."""
 
@@ -259,6 +265,8 @@ class DashboardStore:
                 "target_w",
                 "output_limit_w",
             ):
+                if field == "soc" and not _reports_soc(device):
+                    continue
                 rows.append((timestamp, device_name, field, float(device.get(field, 0) or 0)))
 
         with self._lock, self._connect() as con:
@@ -301,7 +309,7 @@ class DashboardStore:
                     """,
                     (
                         device_name,
-                        device.get("soc", 0),
+                        device.get("soc", 0) if _reports_soc(device) else None,
                         device.get("pv_input_w", 0),
                         device.get("output_w", 0),
                         device.get("battery_power_w", 0),

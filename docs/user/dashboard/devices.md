@@ -35,7 +35,9 @@ write decision.
 ### Battery SoC
 
 A bar with the percentage, and a one-line state underneath — `Charging +600 W`,
-`Discharging −400 W`, or `Idle 0 W`.
+`Discharging −400 W`, or `Idle 0 W`. A read-only device that reports no charge
+level — an external inverter without a battery — shows no bar, and the average
+SoC leaves it out.
 
 ### The measurement row
 
