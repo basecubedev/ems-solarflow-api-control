@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A device from the external catalog, read through the MQTT telemetry path.
 
-The case this was built for: a Kostal Piko, whose only interface is a web page,
-scraped by FHEM and republished as ``KostalPiko/<serial>/solarPower`` -- a whole
-number of watts as plain text.
+The case this was built for: an inverter whose only interface is a web page,
+scraped by a home-automation system and published into the project's own
+namespace as ``ems-solarflow/<id>/inverterPower`` -- a number of watts as plain
+text.
 
 The catalog is a whitelist: it fixes the shape of the device's topics and what
 each known key means. An entry names its catalog family and its device id, and
@@ -36,16 +37,16 @@ pytestmark = [
 ]
 
 
-OUTPUT_TOPIC = "KostalPiko/EXAMPLE0000001/solarPower"
+OUTPUT_TOPIC = "ems-solarflow/EXAMPLE0000001/inverterPower"
 
 
 def _entry(**overrides):
     entry = {
-        "name": "Kostal Piko",
+        "name": "Garage inverter",
         "type": EXTERNAL_MQTT_TYPE,
         "mqtt": {
             "broker_ref": "local_mqtt",
-            "topic_family": "kostal_piko",
+            "topic_family": "ems_solarflow",
             "device_id": "EXAMPLE0000001",
         },
     }
@@ -56,7 +57,7 @@ def _entry(**overrides):
 def _mqtt(**overrides):
     mqtt = {
         "broker_ref": "local_mqtt",
-        "topic_family": "kostal_piko",
+        "topic_family": "ems_solarflow",
         "device_id": "EXAMPLE0000001",
     }
     mqtt.update(overrides)
@@ -93,12 +94,12 @@ def test_neither_the_dashboard_nor_emsctl_offers_it_an_ac_role():
         {"devices": [_entry(), {"name": "WR1", "ip": "192.0.2.10"}]}
     )
 
-    assert not ac_role_supported("Kostal Piko", context)
+    assert not ac_role_supported("Garage inverter", context)
     assert ac_role_supported("WR1", context)
 
 
 def test_the_ac_charge_diagnosis_never_counts_it_as_able_to_charge():
-    """It has no battery and no command path.
+    """It has no command path, whatever battery it reports.
 
     The diagnosis asked only whether an entry was a Zendure MQTT device, so an
     external one fell through to "no refusal" and was listed as permitted.
@@ -147,10 +148,28 @@ def test_an_entry_without_a_device_id_is_refused():
     assert "external_mqtt_device_id_missing" in _codes(issues)
 
 
-def test_a_device_id_carrying_topic_syntax_is_refused():
-    issues = validate_external_mqtt_device_config(_entry(mqtt=_mqtt(device_id="+")))
+@pytest.mark.parametrize("device_id", ["+", "#", "garage/inverter"])
+def test_a_device_id_carrying_topic_syntax_is_refused_once(device_id):
+    issues = validate_external_mqtt_device_config(_entry(mqtt=_mqtt(device_id=device_id)))
 
     assert "mqtt_route_segment_invalid" in _codes(issues)
+    assert "external_mqtt_device_id_invalid" not in _codes(issues)
+
+
+@pytest.mark.parametrize(
+    "device_id", ["garage.inverter", "garage inverter", "Wechselrichter-Süd", "x" * 65]
+)
+def test_a_device_id_the_catalog_would_never_read_is_refused(device_id):
+    """A segment the topic matcher rejects would leave the device dark for good."""
+
+    issues = validate_external_mqtt_device_config(_entry(mqtt=_mqtt(device_id=device_id)))
+
+    assert "external_mqtt_device_id_invalid" in _codes(issues)
+
+
+@pytest.mark.parametrize("device_id", ["garage-inverter", "WR_1", "EXAMPLE0000001", "x" * 64])
+def test_a_device_id_of_letters_digits_dash_and_underscore_is_accepted(device_id):
+    assert validate_external_mqtt_device_config(_entry(mqtt=_mqtt(device_id=device_id))) == []
 
 
 def test_a_configured_topic_list_is_refused_rather_than_read():
@@ -270,7 +289,7 @@ def test_a_zendure_entry_naming_a_catalog_family_is_refused():
         validate_zendure_mqtt_device_config,
     )
 
-    entry = {"name": "Kostal", "type": "zendure_mqtt", "mqtt": _mqtt()}
+    entry = {"name": "Garage", "type": "zendure_mqtt", "mqtt": _mqtt()}
     assert "topic_family_external_device" in _codes(validate_zendure_mqtt_device_config(entry))
     control = {**entry, "capabilities": {"write_output_limit": True}}
     assert "topic_family_external_device" in _codes(
@@ -334,8 +353,8 @@ def test_each_device_subscribes_its_own_topics_and_no_more():
     ]
 
     assert external_device_subscriptions(devices, "local_mqtt") == (
-        "KostalPiko/EXAMPLE0000001/+",
-        "KostalPiko/EXAMPLE0000002/+",
+        "ems-solarflow/EXAMPLE0000001/+",
+        "ems-solarflow/EXAMPLE0000002/+",
     )
 
 
@@ -381,7 +400,7 @@ def test_a_disabled_entry_is_neither_read_nor_shown_nor_counted():
         max_total_power=1600,
         min_output_limit=35,
     )
-    assert "Kostal Piko" not in snapshot["devices"]
+    assert "Garage inverter" not in snapshot["devices"]
     assert snapshot["inverter_output_w"] == 0
 
 
@@ -399,8 +418,8 @@ def test_a_control_broker_shared_with_the_telemetry_side_subscribes_them_too():
     """The telemetry runtime borrows a control device's broker connection.
 
     That connection is built by the control runtime, so if it did not subscribe
-    the catalog device's topics, a Kostal on the same broker as a controlled
-    Zendure device would stay dark.
+    the catalog device's topics, an external device on the same broker as a
+    controlled Zendure device would stay dark.
     """
 
     from ems.zendure_mqtt.control_runtime import build_zendure_mqtt_control_runtime
@@ -434,16 +453,18 @@ def test_a_control_broker_shared_with_the_telemetry_side_subscribes_them_too():
         ],
     }
 
-    build_zendure_mqtt_control_runtime(config, service_factory=factory)
+    control = build_zendure_mqtt_control_runtime(config, service_factory=factory)
 
     assert built, "the control runtime built no broker service"
-    assert "KostalPiko/EXAMPLE0000001/+" in built[0].client_config().resolved_subscriptions()
+    assert "ems-solarflow/EXAMPLE0000001/+" in built[0].client_config().resolved_subscriptions()
+    assert [device.name for device in control.devices] == ["Hyper"]
+    assert control.rejected == []
 
 
 # --- reading through the shared aggregator --------------------------------
 
 
-def _snapshot(aggregator, device_id="EXAMPLE0000001"):
+def _snapshot(aggregator, device_id="ems-solarflow/EXAMPLE0000001"):
     return next(snap for snap in aggregator.snapshots() if snap.device_id == device_id)
 
 
@@ -454,15 +475,15 @@ def test_a_plain_watt_reading_becomes_the_inverter_output():
 
     snapshot = _snapshot(aggregator)
     assert snapshot.metrics["outputHomePower"] == 1234
-    assert snapshot.serial_number == "EXAMPLE0000001"
-    assert snapshot.topic_families == {"kostal_piko"}
+    assert snapshot.serial_number is None
+    assert snapshot.topic_families == {"ems_solarflow"}
 
 
 def test_a_reading_that_cannot_be_read_leaves_the_last_one_standing():
     aggregator = ZendureMqttAggregator()
 
     aggregator.observe(OUTPUT_TOPIC, b"1234")
-    for payload in (b"OFF", b"765 W", b'{"value": 1}', b"765,0", b"true", b""):
+    for payload in (b"OFF", b"765 W", b'{"value": 1}', b"765,0", b"true", b"", b"-5", b"nan"):
         aggregator.observe(OUTPUT_TOPIC, payload)
 
     assert _snapshot(aggregator).metrics["outputHomePower"] == 1234
@@ -491,7 +512,7 @@ def test_a_reading_that_cannot_be_read_is_no_sign_of_life():
 def test_a_key_the_catalog_does_not_list_is_never_read():
     aggregator = ZendureMqttAggregator()
 
-    aggregator.observe("KostalPiko/EXAMPLE0000001/dailyYield", b"5")
+    aggregator.observe("ems-solarflow/EXAMPLE0000001/dailyYield", b"5")
 
     assert aggregator.snapshots() == []
 
@@ -500,11 +521,16 @@ def test_a_topic_of_any_other_shape_is_never_read():
     aggregator = ZendureMqttAggregator()
 
     for topic in (
-        "hallo/EXAMPLE0000001/solarPower",
-        "KostlPiko/EXAMPLE0000001/solarPower",
-        "kostalpiko/EXAMPLE0000001/solarPower",
-        "KostalPiko/EXAMPLE0000001/solarPower/extra",
-        "KostalPiko//solarPower",
+        "hallo/EXAMPLE0000001/inverterPower",
+        "emsSolarflow/EXAMPLE0000001/inverterPower",
+        "EMS-SolarFlow/EXAMPLE0000001/inverterPower",
+        "ems-solarflow/EXAMPLE0000001/InverterPower",
+        "ems-solarflow/EXAMPLE0000001/inverterPower/extra",
+        "ems-solarflow//inverterPower",
+        "ems-solarflow/garage inverter/inverterPower",
+        "ems-solarflow/garage.inverter/inverterPower",
+        "/ems-solarflow/EXAMPLE0000001/inverterPower",
+        "KostalPiko/EXAMPLE0000001/solarPower",
     ):
         aggregator.observe(topic, b"1234")
 

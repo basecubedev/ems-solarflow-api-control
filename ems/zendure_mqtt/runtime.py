@@ -38,6 +38,7 @@ from ems.zendure_mqtt.config_entries import (
     zendure_mqtt_source,
     zendure_mqtt_route_device_id,
 )
+from ems.zendure_mqtt.external_catalog import external_topic_family
 from ems.zendure_mqtt.service import (
     SNAPSHOT_STALE,
     SNAPSHOT_UNSEEN,
@@ -264,7 +265,9 @@ def classify_zendure_mqtt_devices(
         mqtt = item.get("mqtt")
         topic_family = mqtt.get("topic_family") if isinstance(mqtt, dict) else None
         identifier = (
-            zendure_mqtt_route_device_id(item)
+            external_topic_family(topic_family).snapshot_key(
+                zendure_mqtt_route_device_id(item)
+            )
             if external
             else zendure_mqtt_device_identifier(item)
         )

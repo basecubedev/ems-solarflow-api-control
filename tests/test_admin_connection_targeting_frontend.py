@@ -165,22 +165,22 @@ def _mqtt_candidate(scope, source="local_mqtt", serial="PHYS-1"):
 
 # --- A catalog device is compared by the catalog id the backend issued -------
 
-_CATALOG_ID = "catalog:v1:KOSTALDEVICE"
-_ON_FHEM = "catalog:v1:KOSTALONFHEMBROKER"
-_ON_OTHER = "catalog:v1:KOSTALONOTHERBROKER"
+_CATALOG_ID = "catalog:v1:GARAGEDEVICE"
+_ON_FHEM = "catalog:v1:GARAGEONFHEMBROKER"
+_ON_OTHER = "catalog:v1:GARAGEONOTHERBROKER"
 
 
 def _external_installed(catalog_id=_CATALOG_ID, broker_ref="fhem", connection=_ON_FHEM):
     return {
         "kind": "external_mqtt",
-        "original_name": "Kostal",
-        "name": "Kostal",
+        "original_name": "Garage",
+        "name": "Garage",
         "catalog_device_id": catalog_id,
         "catalog_connection_id": connection,
         "entry": {
-            "name": "Kostal",
+            "name": "Garage",
             "type": "external_mqtt",
-            "mqtt": {"broker_ref": broker_ref, "topic_family": "kostal_piko", "device_id": "SN1"},
+            "mqtt": {"broker_ref": broker_ref, "topic_family": "ems_solarflow", "device_id": "SN1"},
         },
     }
 
@@ -196,7 +196,7 @@ def _external_offer(
         "connection_id": "conn:v1:" + broker_ref,
         "config_fragment": {
             "type": "external_mqtt",
-            "mqtt": {"broker_ref": broker_ref, "topic_family": "kostal_piko", "device_id": "SN1"},
+            "mqtt": {"broker_ref": broker_ref, "topic_family": "ems_solarflow", "device_id": "SN1"},
         },
     }
 

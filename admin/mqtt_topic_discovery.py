@@ -24,8 +24,8 @@ from ems.mqtt_control.topic_families import (
 )
 from ems.zendure_mqtt.external_catalog import (
     EXTERNAL_TOPIC_FAMILIES,
-    catalog_reading,
     external_discovery_subscriptions,
+    in_catalog_namespace,
 )
 from ems.zendure_mqtt.topics import TopicMatch
 from ems.zendure_mqtt.topics import classify_topic as classify_telemetry_topic
@@ -188,22 +188,45 @@ class MqttTopicAggregator:
         self._max_topics = max_topics
         self._max_candidates = max_candidates
         self._topic_count = 0
+        self._catalog_topic_count = 0
         self._candidates = {}
         self._pack_data = {}
 
     @property
     def topics_seen_count(self):
-        return self._topic_count
+        return self._topic_count + self._catalog_topic_count
+
+    def _counted(self, catalog):
+        """Spend one message of the budget its kind has, or refuse it.
+
+        The catalog namespace has a budget of its own: on a busy broker the
+        Zendure traffic would otherwise use a shared one up before an external
+        device had published once, and a bridge that publishes more into the
+        namespace than the catalog reads would starve the Zendure devices.
+        """
+
+        if catalog:
+            if self._catalog_topic_count >= self._max_topics:
+                return False
+            self._catalog_topic_count += 1
+            return True
+        if self._topic_count >= self._max_topics:
+            return False
+        self._topic_count += 1
+        return True
 
     def observe(self, topic, payload=None):
-        if self._topic_count >= self._max_topics:
+        if not self._counted(in_catalog_namespace(topic)):
             return
-        self._topic_count += 1
         match = classify_topic(topic)
         if match.family == FAMILY_UNKNOWN:
             return
-        if match.family in EXTERNAL_TOPIC_FAMILIES and catalog_reading(payload) is None:
-            return
+        external = EXTERNAL_TOPIC_FAMILIES.get(match.family)
+        readings = None
+        if external is not None:
+            readings = external.readings(match.metric, payload)
+            if not readings:
+                return
         device_key = match.serial_number or match.device_id or "unknown"
         key = (match.family, device_key)
         candidate = self._candidates.get(key)
@@ -220,7 +243,6 @@ class MqttTopicAggregator:
                 tls_mode=self.broker_tls_mode,
                 credentials_ref=self.broker_credentials_ref,
             )
-            external = EXTERNAL_TOPIC_FAMILIES.get(match.family)
             if external is not None:
                 candidate.display_name = external.label
             self._candidates[key] = candidate
@@ -229,7 +251,10 @@ class MqttTopicAggregator:
             len(candidate.topics_seen) < MAX_TOPICS_PER_CANDIDATE
         ):
             candidate.topics_seen.append(topic)
-        if match.metric:
+        if readings:
+            for metric in readings:
+                self._add_metric(candidate, metric)
+        elif match.metric:
             self._add_metric(candidate, match.metric)
         if payload is not None and match.family in _JSON_FAMILIES:
             parsed = parse_report_payload(payload)
@@ -250,10 +275,21 @@ class MqttTopicAggregator:
             candidate.metrics_seen.append(metric)
 
     def candidates(self):
-        return list(self._candidates.values())
+        return [
+            candidate
+            for candidate in self._candidates.values()
+            if _offerable(candidate)
+        ]
 
     def results(self):
-        return [candidate.to_dict() for candidate in self._candidates.values()]
+        return [candidate.to_dict() for candidate in self.candidates()]
+
+
+def _offerable(candidate):
+    """A catalog device is found only once it has reported its required key."""
+
+    external = EXTERNAL_TOPIC_FAMILIES.get(candidate.topic_family)
+    return external is None or external.offerable(candidate.metrics_seen)
 
 
 class FakeMqttListener:

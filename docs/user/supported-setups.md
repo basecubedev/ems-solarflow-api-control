@@ -231,26 +231,38 @@ MQTT client and does not control Zendure devices or inverters through it.
 
 ## External devices (read only)
 
-Inverters EMS does not control, read over MQTT when something else republishes
-their output. The list is a whitelist: discovery offers, and EMS reads, only the
-devices and topic shapes below, because for anything else nobody can say what
-the payload means. Topics are case-sensitive and must match exactly. See
-[External Inverters over MQTT](../technical/configuration.md#external-inverters-over-mqtt-external_mqtt).
+Inverters and batteries EMS does not control, read over MQTT when something
+else — FHEM, ioBroker, Node-RED or a script — publishes their values into
+this project's own namespace. The list is a whitelist: discovery offers, and EMS
+reads, only the topic shapes below, because for anything else nobody can say
+what the payload means. Topics are case-sensitive and must match exactly.
+Publish retained, at least every 30 seconds, also when nothing changed. How to
+set one up, with examples: [External devices over MQTT](external-devices.md); the
+full payload rules, and why an external battery must not regulate itself to zero
+against the same meter, are in the
+[configuration reference](../technical/configuration.md#external-devices-over-mqtt-external_mqtt).
 
 | Device | Topic | Payload | Status | Notes |
 |---|---|---|---|---|
-| Kostal Piko, republished by FHEM | `KostalPiko/<serial>/solarPower` | Whole number of watts | Reverse-engineered | AC output to the house. Topic shape and payload taken from a user's broker; EMS reading it on that installation is not yet confirmed. Read only, never controlled. |
+| External device | `ems-solarflow/<id>/inverterPower` | Watts, 0 or more | Reverse-engineered | Required: a device is found only once it reports this. AC power delivered to the house. |
+| External device | `ems-solarflow/<id>/solarPower` | Watts, 0 or more | Reverse-engineered | Optional. PV power at the device's input. |
+| External device | `ems-solarflow/<id>/batteryPower` | Watts, positive charging, negative discharging | Reverse-engineered | Optional. Negate a value whose source counts the other way round. |
+| External device | `ems-solarflow/<id>/batterySoc` | Percent, 0 to 100 | Reverse-engineered | Optional. Without it the device counts as having no battery. |
+| External device | `ems-solarflow/<id>/state` | JSON object with any of the keys above | Reverse-engineered | All values at once; mixes with the single topics. |
+
+Read only, never controlled. The namespace has been read end to end against a
+real broker in tests; no installation has run it yet.
 
 ## Optional Integrations
 
 - Home Assistant is optional.
 - InfluxDB analytics is optional.
 - Native Python is supported for advanced/manual installs.
-- A **second inverter EMS does not control** can be shown and counted if the
-  hardware catalog lists it — see [External devices](#external-devices-read-only)
-  above. EMS reads its topics and never writes to it. This does not make the
-  inverter controllable, and it is not a Zendure connection: EMS control still
-  needs one of the transports below.
+- A **second inverter or battery EMS does not control** can be shown and
+  counted if it publishes into the project namespace — see
+  [External devices](#external-devices-read-only) above. EMS reads its topics
+  and never writes to it. This does not make the device controllable, and it is
+  not a Zendure connection: EMS control still needs one of the transports below.
 
 At least one supported Zendure connection — Local API, Local MQTT, or Zendure
 cloud MQTT — must be available for EMS control. The Local API is recommended for

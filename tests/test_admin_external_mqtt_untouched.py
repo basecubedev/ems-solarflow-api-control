@@ -47,17 +47,17 @@ pytestmark = [
 IDENTITY_KEY = b"external-mqtt-identity-key-32byt"
 
 EXTERNAL = {
-    "name": "Kostal Piko",
+    "name": "Garage inverter",
     "type": "external_mqtt",
     "mqtt": {
         "broker_ref": "house",
-        "topic_family": "kostal_piko",
+        "topic_family": "ems_solarflow",
         "device_id": "EXAMPLE0000001",
     },
 }
 
 FORGED_CONTROL_ENTRY = {
-    "name": "Kostal Piko",
+    "name": "Garage inverter",
     "type": "zendure_mqtt",
     "serial_number": "EXAMPLE0000001",
     "hardware_model": "solarflow_800_pro",
@@ -242,7 +242,7 @@ def test_the_external_entry_is_validated_by_its_own_rules_not_as_a_local_api_dev
     about_it = [
         issue
         for issue in validation["errors"] + validation["warnings"]
-        if "Kostal Piko" in issue["message"]
+        if "Garage inverter" in issue["message"]
     ]
     assert about_it == []
     assert validation["ok"] is True
@@ -275,7 +275,7 @@ def test_what_blocks_the_page_says_where_it_is_fixed(tmp_path, breakage):
     about_it = [
         issue["message"]
         for issue in result["validation"]["errors"]
-        if "Kostal Piko" in issue["message"] or "devices.1" in issue["message"]
+        if "Garage inverter" in issue["message"] or "devices.1" in issue["message"]
     ]
     assert about_it, result["validation"]
     assert all("config.json" in message for message in about_it)
@@ -347,7 +347,7 @@ def test_the_name_and_the_on_off_switch_are_the_operators(tmp_path):
     _raw, loaded = _loaded(tmp_path)
     draft = copy.deepcopy(loaded["draft"])
     item = _external_item(draft)
-    item.update(name="Kostal Dach", enabled=False)
+    item.update(name="Garage roof", enabled=False)
 
     prepared = _apply(tmp_path, loaded, draft)
 
@@ -357,7 +357,7 @@ def test_the_name_and_the_on_off_switch_are_the_operators(tmp_path):
         for device in json.loads(prepared["payload"])["devices"]
         if device.get("type") == "external_mqtt"
     ]
-    assert written == {**EXTERNAL, "name": "Kostal Dach", "enabled": False}
+    assert written == {**EXTERNAL, "name": "Garage roof", "enabled": False}
 
 
 def test_an_unchanged_row_writes_the_entry_back_byte_for_byte(tmp_path):
@@ -388,7 +388,7 @@ def test_a_draft_naming_an_external_entry_that_is_not_installed_is_refused(
         {
             "kind": "external_mqtt",
             "original_name": original_name,
-            "name": "Kostal Piko 2",
+            "name": "Garage inverter 2",
             "editable": False,
             "entry": copy.deepcopy(FORGED_CONTROL_ENTRY),
         }
@@ -426,7 +426,7 @@ def test_an_external_entry_cannot_be_rewritten_as_another_kind(tmp_path, replace
     draft = copy.deepcopy(loaded["draft"])
     index = draft["devices"].index(_external_item(draft))
     draft["devices"][index] = dict(
-        replacement, original_name="Kostal Piko", name="Kostal Piko"
+        replacement, original_name="Garage inverter", name="Garage inverter"
     )
 
     prepared = _apply(tmp_path, loaded, draft)
@@ -437,7 +437,7 @@ def test_an_external_entry_cannot_be_rewritten_as_another_kind(tmp_path, replace
     external = [
         _as_configured(device)
         for device in prepared["preview"]["devices"]
-        if device["name"] == "Kostal Piko"
+        if device["name"] == "Garage inverter"
     ]
     assert external == [EXTERNAL]
     assert _write_capable(prepared["preview"]["devices"]) == []
@@ -463,8 +463,8 @@ def _remove_as_another_kind(draft):
     index = draft["devices"].index(_external_item(draft))
     draft["devices"][index] = {
         "kind": "local_api",
-        "original_name": "Kostal Piko",
-        "name": "Kostal Piko",
+        "original_name": "Garage inverter",
+        "name": "Garage inverter",
         "removed": True,
     }
 
@@ -560,15 +560,15 @@ def test_an_apply_that_drops_the_external_entry_is_refused(tmp_path, drop):
 @pytest.mark.parametrize(
     "name, config_factory, hidden",
     [
-        pytest.param(" Kostal Piko ", _config, None, id="surrounding-whitespace"),
+        pytest.param(" Garage inverter ", _config, None, id="surrounding-whitespace"),
         pytest.param(
-            f"Kostal near {CLOUD_ROUTE}",
+            f"Garage near {CLOUD_ROUTE}",
             _config_with_cloud_device,
             CLOUD_ROUTE,
             id="contains-a-cloud-route-id",
         ),
         pytest.param(
-            "Kostal token=abc", _config, "token=abc", id="contains-a-secret-label"
+            "Garage token=abc", _config, "token=abc", id="contains-a-secret-label"
         ),
     ],
 )
@@ -611,11 +611,11 @@ def _issued_under_another_key(tmp_path):
         ),
         pytest.param(lambda item, tmp_path: item.pop("entry_ref"), id="missing"),
         pytest.param(
-            lambda item, tmp_path: item.update(entry_ref="Kostal Piko"),
+            lambda item, tmp_path: item.update(entry_ref="Garage inverter"),
             id="the-name",
         ),
         pytest.param(
-            lambda item, tmp_path: item.update(entry_ref={"name": "Kostal Piko"}),
+            lambda item, tmp_path: item.update(entry_ref={"name": "Garage inverter"}),
             id="not-a-string",
         ),
         pytest.param(
@@ -654,3 +654,31 @@ def test_one_reference_carried_by_two_rows_is_refused(tmp_path):
     assert "payload" not in prepared
     assert _installed_external(prepared["preview"]) == [EXTERNAL]
     assert "external_mqtt_device_not_installed" in _error_codes(prepared)
+
+
+def test_a_zendure_device_sharing_its_id_on_its_broker_previews_without_a_conflict(tmp_path):
+    """Two devices with one id on one broker are two devices, not one seen twice.
+
+    Before an external device's identity named its catalog family, both entries
+    resolved to one anchor and every preview of the page failed with
+    ``device_identity_conflict``.
+    """
+
+    config = _config()
+    config["devices"].append(
+        {
+            "name": "Hyper",
+            "type": "zendure_mqtt",
+            "mqtt": {
+                "broker_ref": EXTERNAL["mqtt"]["broker_ref"],
+                "topic_family": "zensdk_ha_scalar",
+                "device_id": EXTERNAL["mqtt"]["device_id"],
+            },
+        }
+    )
+    _raw, loaded = _loaded(tmp_path, config)
+
+    result = _preview_of(tmp_path, loaded["draft"])
+
+    assert result.get("status") == "ok", result
+    assert result["validation"]["errors"] == [], result["validation"]

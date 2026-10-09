@@ -61,16 +61,23 @@ pytestmark = [
 require_real_broker_environment()
 
 SERIAL = "EXAMPLE0000001"
-KOSTAL_TOPIC = f"KostalPiko/{SERIAL}/solarPower"
+DEVICE_TOPIC = f"ems-solarflow/{SERIAL}/inverterPower"
+STATE_TOPIC = f"ems-solarflow/{SERIAL}/state"
+BATTERY_TOPIC = f"ems-solarflow/{SERIAL}/batteryPower"
+SNAPSHOT_KEY = f"ems-solarflow/{SERIAL}"
+BUNDLE = b'{"inverterPower": 1500, "solarPower": 1800, "batteryPower": 250, "batterySoc": 64}'
 
 # Everything the broker carries before discovery listens, retained so the
 # listener sees it the moment it subscribes.
 RETAINED = (
-    (KOSTAL_TOPIC, b"765"),
-    ("KostalPiko/EXAMPLE0000002/solarPower", b"765 W"),
-    ("KostalPiko/EXAMPLE0000003/dailyYield", b"12"),
-    ("hallo/EXAMPLE0000004/solarPower", b"765"),
-    ("kostalpiko/EXAMPLE0000005/solarPower", b"765"),
+    (DEVICE_TOPIC, b"765"),
+    (f"ems-solarflow/{SERIAL}/batterySoc", b"55"),
+    ("ems-solarflow/EXAMPLE0000002/inverterPower", b"765 W"),
+    ("ems-solarflow/EXAMPLE0000003/dailyYield", b"12"),
+    ("hallo/EXAMPLE0000004/inverterPower", b"765"),
+    ("EMS-SolarFlow/EXAMPLE0000005/inverterPower", b"765"),
+    ("ems-solarflow/EXAMPLE0000006/batterySoc", b"50"),
+    ("ems-solarflow/EXAMPLE0000007/state", b'{"solarPower": 300, "batteryPower": 40}'),
     ("Zendure/sensor/ZENDUREDEV1/electricLevel", b"55"),
     ("Zendure/sensor/ZENDUREDEV1/outputHomePower", b"120"),
 )
@@ -121,9 +128,9 @@ def broker(tmp_path):
         yield running
 
 
-# The same Kostal, republished on a second broker with a reading of its own,
+# The same device, republished on a second broker with a reading of its own,
 # so where a value came from is never in doubt.
-RETAINED_B = ((KOSTAL_TOPIC, b"4321"),)
+RETAINED_B = ((DEVICE_TOPIC, b"4321"),)
 
 
 @pytest.fixture
@@ -209,8 +216,8 @@ def _discover(base, *brokers):
     return brokers, proposals["proposals"]
 
 
-def _kostal(proposals):
-    found = [p for p in proposals if p["topic_family"] == "kostal_piko"]
+def _external(proposals):
+    found = [p for p in proposals if p["topic_family"] == "ems_solarflow"]
     assert len(found) == 1, proposals
     return found[0]
 
@@ -254,22 +261,37 @@ def _assert_the_written_config_is_read_and_never_written(config, broker):
     runtime.start()
     try:
         wait_until(
-            lambda: runtime.snapshots().get(SERIAL)
-            and runtime.snapshots()[SERIAL].metrics.get("outputHomePower") == 765,
-            message="the retained reading never arrived",
+            lambda: runtime.snapshots().get(SNAPSHOT_KEY)
+            and runtime.snapshots()[SNAPSHOT_KEY].metrics.get("outputHomePower") == 765
+            and runtime.snapshots()[SNAPSHOT_KEY].metrics.get("electricLevel") == 55,
+            message="the retained readings never arrived",
         )
         publish_until(
-            lambda: publish_once(broker.host, broker.port, KOSTAL_TOPIC, b"1234"),
-            lambda: runtime.snapshots()[SERIAL].metrics.get("outputHomePower") == 1234,
+            lambda: publish_once(broker.host, broker.port, DEVICE_TOPIC, b"1234"),
+            lambda: runtime.snapshots()[SNAPSHOT_KEY].metrics.get("outputHomePower") == 1234,
             message="a new reading never arrived",
         )
-        publish_once(broker.host, broker.port, KOSTAL_TOPIC, b"OFF")
+        publish_once(broker.host, broker.port, DEVICE_TOPIC, b"OFF")
         publish_until(
-            lambda: publish_once(broker.host, broker.port, KOSTAL_TOPIC, b"1500"),
-            lambda: runtime.snapshots()[SERIAL].metrics.get("outputHomePower") == 1500,
+            lambda: publish_once(broker.host, broker.port, DEVICE_TOPIC, b"1500"),
+            lambda: runtime.snapshots()[SNAPSHOT_KEY].metrics.get("outputHomePower") == 1500,
             message="a reading after an unreadable one never arrived",
         )
-        assert set(runtime.snapshots()) == {SERIAL}
+        publish_until(
+            lambda: publish_once(broker.host, broker.port, STATE_TOPIC, BUNDLE),
+            lambda: runtime.snapshots()[SNAPSHOT_KEY].metrics.get("electricLevel") == 64,
+            message="the bundle never arrived",
+        )
+        metrics = runtime.snapshots()[SNAPSHOT_KEY].metrics
+        assert (metrics["outputHomePower"], metrics["solarInputPower"]) == (1500, 1800)
+        assert (metrics["outputPackPower"], metrics["packInputPower"]) == (250, 0)
+        publish_until(
+            lambda: publish_once(broker.host, broker.port, BATTERY_TOPIC, b"-300"),
+            lambda: runtime.snapshots()[SNAPSHOT_KEY].metrics.get("packInputPower") == 300,
+            message="a discharge on its own topic never arrived",
+        )
+        assert runtime.snapshots()[SNAPSHOT_KEY].metrics["outputPackPower"] == 0
+        assert set(runtime.snapshots()) == {SNAPSHOT_KEY}
         (summary,) = runtime.device_summaries()
         assert (summary["name"], summary["status"]) == (entry["name"], "online")
         assert summary["write_output_limit"] is False
@@ -298,12 +320,22 @@ def _assert_the_written_config_is_read_and_never_written(config, broker):
         tile = snapshot["devices"][entry["name"]]
         assert tile["read_only"] is True
         assert tile["output_w"] == 1500
+        assert tile["pv_input_w"] == 1800
+        assert tile["battery_power_w"] == -300
+        assert (tile["soc"], tile["soc_reported"]) == (64, True)
         assert snapshot["inverter_output_w"] == 1500
+        assert snapshot["pv_total_w"] == 1800
+        assert snapshot["battery_power_w"] == -300
+        assert snapshot["average_soc"] == 64
     finally:
         runtime.stop()
         spy.close()
 
-    ours = set(RETAINED) | {(KOSTAL_TOPIC, value) for value in (b"1234", b"OFF", b"1500")}
+    ours = (
+        set(RETAINED)
+        | {(DEVICE_TOPIC, value) for value in (b"1234", b"OFF", b"1500")}
+        | {(STATE_TOPIC, BUNDLE), (BATTERY_TOPIC, b"-300")}
+    )
     assert [message for message in spy.messages if message not in ours] == [], (
         "the EMS published to the broker"
     )
@@ -321,16 +353,24 @@ def test_discovery_offers_exactly_the_devices_the_catalog_and_zendure_describe(
 
     (found,) = brokers["candidates"]
     families = sorted(device["topic_family"] for device in found["devices"])
-    assert families == ["kostal_piko", "zensdk_ha_scalar"], found["devices"]
+    assert families == ["ems_solarflow", "zensdk_ha_scalar"], found["devices"]
 
-    kostal = _kostal(proposals)
-    assert kostal["device_id"] == SERIAL
-    assert kostal["output_control_supported"] is False
-    assert kostal["config_fragment"]["type"] == "external_mqtt"
-    assert {p["topic_family"] for p in proposals} == {"kostal_piko", "zensdk_ha_scalar"}
+    external = _external(proposals)
+    assert external["device_id"] == SERIAL
+    assert external["output_control_supported"] is False
+    assert external["config_fragment"]["type"] == "external_mqtt"
+    assert {p["topic_family"] for p in proposals} == {"ems_solarflow", "zensdk_ha_scalar"}
     offered = json.dumps(proposals)
-    for absent in ("EXAMPLE0000002", "EXAMPLE0000003", "EXAMPLE0000004", "EXAMPLE0000005"):
+    for absent in (
+        "EXAMPLE0000002",
+        "EXAMPLE0000003",
+        "EXAMPLE0000004",
+        "EXAMPLE0000005",
+        "EXAMPLE0000006",
+        "EXAMPLE0000007",
+    ):
         assert absent not in offered, absent
+        assert absent not in json.dumps(found["devices"]), absent
 
 
 def test_setup_writes_config_json_and_the_runtime_reads_it_from_the_broker(
@@ -340,7 +380,7 @@ def test_setup_writes_config_json_and_the_runtime_reads_it_from_the_broker(
     srv, base = _serve(tmp_path)
     try:
         _brokers, proposals = _discover(base, broker)
-        kostal = _kostal(proposals)
+        external = _external(proposals)
         body = authorize_setup_mutation(
             base,
             _workflow_request,
@@ -348,7 +388,7 @@ def test_setup_writes_config_json_and_the_runtime_reads_it_from_the_broker(
                 "devices": [LOCAL_INVERTER],
                 "supported_grid_meter_count": 0,
                 "zendure_mqtt_proposals": [
-                    {"id": kostal["id"], "broker_ref": kostal["broker_ref"]}
+                    {"id": external["id"], "broker_ref": external["broker_ref"]}
                 ],
             },
         )
@@ -370,19 +410,19 @@ def test_maintenance_writes_config_json_and_the_runtime_reads_it_from_the_broker
     srv, base = _serve(tmp_path)
     try:
         _brokers, proposals = _discover(base, broker)
-        kostal = _kostal(proposals)
+        external = _external(proposals)
         status, loaded = _request(f"{base}/api/admin/maintenance/config")
         assert status == 200 and loaded["status"] == "ok", loaded
         draft = loaded["draft"]
-        mqtt = kostal["config_fragment"]["mqtt"]
+        mqtt = external["config_fragment"]["mqtt"]
         draft["devices"].append(
             {
                 "kind": "external_mqtt",
                 "original_name": None,
-                "proposal_id": kostal["id"],
-                "proposal_broker_ref": kostal["broker_ref"],
-                "catalog_device_id": kostal["catalog_device_id"],
-                "name": "Kostal",
+                "proposal_id": external["id"],
+                "proposal_broker_ref": external["broker_ref"],
+                "catalog_device_id": external["catalog_device_id"],
+                "name": "Garage",
                 "enabled": True,
                 "mqtt": {key: mqtt[key] for key in ("broker_ref", "topic_family", "device_id")},
             }
@@ -454,17 +494,17 @@ def _zendure_read(broker, watts):
     )
 
 
-def _kostal_read(broker, watts):
+def _external_read(broker, watts):
     return (
         broker,
-        KOSTAL_TOPIC,
+        DEVICE_TOPIC,
         str(watts).encode(),
-        lambda snapshots: snapshots.get(SERIAL) is not None
-        and snapshots[SERIAL].metrics.get("outputHomePower") == watts,
+        lambda snapshots: snapshots.get(SNAPSHOT_KEY) is not None
+        and snapshots[SNAPSHOT_KEY].metrics.get("outputHomePower") == watts,
     )
 
 
-def _kostal_row(draft):
+def _external_row(draft):
     (row,) = [d for d in draft["devices"] if d.get("kind") == "external_mqtt"]
     return row
 
@@ -497,12 +537,12 @@ def test_maintenance_edits_devices_across_two_brokers_and_the_runtime_follows(
     spies = [_Spy(broker), _Spy(broker_b)]
     try:
         _brokers, proposals = _discover(base, broker, broker_b)
-        kostal_offers = [p for p in proposals if p["topic_family"] == "kostal_piko"]
-        (on_a,) = [p for p in kostal_offers if p["broker_host"] == broker.host]
-        (on_b,) = [p for p in kostal_offers if p["broker_host"] == broker_b.host]
+        external_offers = [p for p in proposals if p["topic_family"] == "ems_solarflow"]
+        (on_a,) = [p for p in external_offers if p["broker_host"] == broker.host]
+        (on_b,) = [p for p in external_offers if p["broker_host"] == broker_b.host]
         zendure = _zendure(proposals)
 
-        # 1. Add the Kostal and the Zendure device found on broker A.
+        # 1. Add the Garage and the Zendure device found on broker A.
         def add_both(draft):
             mqtt = on_a["config_fragment"]["mqtt"]
             draft["devices"].append(
@@ -511,7 +551,7 @@ def test_maintenance_edits_devices_across_two_brokers_and_the_runtime_follows(
                     "original_name": None,
                     "proposal_id": on_a["id"],
                     "proposal_broker_ref": on_a["broker_ref"],
-                    "name": "Kostal",
+                    "name": "Garage",
                     "enabled": True,
                     "mqtt": {key: mqtt[key] for key in ("broker_ref", "topic_family", "device_id")},
                 }
@@ -522,26 +562,26 @@ def test_maintenance_edits_devices_across_two_brokers_and_the_runtime_follows(
         config = written()
         assert {d["name"]: d.get("type") for d in config["devices"]} == {
             "WR1": None,
-            "Kostal": "external_mqtt",
+            "Garage": "external_mqtt",
             "Zendure": "zendure_mqtt",
         }
-        assert _profile_of(config, "Kostal")["host"] == broker.host
-        readings = _readings(config, _zendure_read(broker, 120), _kostal_read(broker, 765))
-        assert readings[SERIAL]["outputHomePower"] == 765
+        assert _profile_of(config, "Garage")["host"] == broker.host
+        readings = _readings(config, _zendure_read(broker, 120), _external_read(broker, 765))
+        assert readings[SNAPSHOT_KEY]["outputHomePower"] == 765
 
         # 2. Rename it and switch it off: kept in config.json, no longer read.
         def rename_and_switch_off(draft):
-            _kostal_row(draft).update(name="Kostal Dach", enabled=False)
+            _external_row(draft).update(name="Garage roof", enabled=False)
 
         _apply_maintenance(base, rename_and_switch_off)
         config = written()
-        (kostal,) = _external_entries_of(config)
-        assert (kostal["name"], kostal["enabled"]) == ("Kostal Dach", False)
+        (external,) = _external_entries_of(config)
+        assert (external["name"], external["enabled"]) == ("Garage roof", False)
         assert set(_readings(config, _zendure_read(broker, 121))) == {"ZENDUREDEV1"}
 
         # 3. Switch it on and move it to broker B with Use connection.
         def switch_on_and_move(draft):
-            row = _kostal_row(draft)
+            row = _external_row(draft)
             mqtt = on_b["config_fragment"]["mqtt"]
             row.update(
                 enabled=True,
@@ -553,18 +593,18 @@ def test_maintenance_edits_devices_across_two_brokers_and_the_runtime_follows(
 
         _apply_maintenance(base, switch_on_and_move)
         config = written()
-        (kostal,) = _external_entries_of(config)
-        assert (kostal["name"], kostal["enabled"]) == ("Kostal Dach", True)
-        assert _profile_of(config, "Kostal Dach")["host"] == broker_b.host
+        (external,) = _external_entries_of(config)
+        assert (external["name"], external["enabled"]) == ("Garage roof", True)
+        assert _profile_of(config, "Garage roof")["host"] == broker_b.host
         assert _profile_of(config, "Zendure")["host"] == broker.host
         readings = _readings(
-            config, _zendure_read(broker, 122), _kostal_read(broker_b, 4322)
+            config, _zendure_read(broker, 122), _external_read(broker_b, 4322)
         )
-        assert readings[SERIAL]["outputHomePower"] == 4322
+        assert readings[SNAPSHOT_KEY]["outputHomePower"] == 4322
 
         # 4. Remove it with its Remove: gone from config.json and from the runtime.
         def remove_it(draft):
-            row = _kostal_row(draft)
+            row = _external_row(draft)
             draft["devices"].remove(row)
             draft.setdefault("removed_external", []).append(row["entry_ref"])
 
@@ -580,8 +620,8 @@ def test_maintenance_edits_devices_across_two_brokers_and_the_runtime_follows(
 
     for spy, running in zip(spies, (broker, broker_b)):
         ours = set(running.retained) | {
-            (KOSTAL_TOPIC, b"765"),
-            (KOSTAL_TOPIC, b"4322"),
+            (DEVICE_TOPIC, b"765"),
+            (DEVICE_TOPIC, b"4322"),
         } | {
             ("Zendure/sensor/ZENDUREDEV1/outputHomePower", str(watts).encode())
             for watts in (120, 121, 122, 123)

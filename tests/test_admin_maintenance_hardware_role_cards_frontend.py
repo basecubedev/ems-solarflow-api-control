@@ -259,11 +259,11 @@ def _external_config(**entry):
         "devices": [
             {"name": "WR1", "ip": "192.0.2.10", "sn": "SN1"},
             {
-                "name": "Kostal Piko",
+                "name": "Garage inverter",
                 "type": "external_mqtt",
                 "mqtt": {
                     "broker_ref": "house",
-                    "topic_family": "kostal_piko",
+                    "topic_family": "ems_solarflow",
                     "device_id": "EXAMPLE0000001",
                 },
                 **entry,
@@ -306,7 +306,7 @@ def test_an_external_inverter_has_its_own_card_not_a_zendure_editor():
     for wrong in ("Zendure", "Address missing", "Serial missing"):
         assert wrong not in text
     assert "never writes to it" in text
-    assert "Kostal Piko · read over MQTT" in text
+    assert "External device · read over MQTT" in text
     assert "house" in text
     assert "EXAMPLE0000001" in text
 
@@ -320,13 +320,13 @@ def test_an_external_inverter_discovery_found_has_the_same_card():
                 "kind": "external_mqtt",
                 "original_name": None,
                 "proposal_id": "zendure-mqtt:opaque:g1",
-                "catalog_label": "Kostal Piko",
-                "display_name": "Kostal Piko EXAMPLE0000001",
+                "catalog_label": "External device",
+                "display_name": "External device EXAMPLE0000001",
                 "name": "INV_2",
                 "enabled": True,
                 "mqtt": {
                     "broker_ref": "local_mqtt_10_0_0_71",
-                    "topic_family": "kostal_piko",
+                    "topic_family": "ems_solarflow",
                     "device_id": "EXAMPLE0000001",
                 },
             }
@@ -337,7 +337,7 @@ def test_an_external_inverter_discovery_found_has_the_same_card():
 
     assert _only_name_and_on_off(card["controls"])
     assert "hardware-card-inverter" in card["classes"]
-    assert "Kostal Piko · read over MQTT" in card["text"]
+    assert "External device · read over MQTT" in card["text"]
     assert "added from discovery" in card["text"]
     assert [name for name in card["buttons"] if "hardware-card-remove" in name]
     assert "EXAMPLE0000001" in card["text"]
@@ -349,9 +349,9 @@ def test_an_external_proposal_is_an_inverter_card_that_reads_only():
         "broker_ref": "local_mqtt_10_0_0_71",
         "connection_source": "local_mqtt",
         "device_id": "EXAMPLE0000001",
-        "topic_family": "kostal_piko",
-        "catalog_label": "Kostal Piko",
-        "display_name": "Kostal Piko EXAMPLE0000001",
+        "topic_family": "ems_solarflow",
+        "catalog_label": "External device",
+        "display_name": "External device EXAMPLE0000001",
         "role_hint": "telemetry_only_candidate",
         "target": "device",
         "output_control_supported": False,
@@ -360,11 +360,11 @@ def test_an_external_proposal_is_an_inverter_card_that_reads_only():
         "config_fragment": {
             "type": "external_mqtt",
             "enabled": True,
-            "name": "Kostal Piko EXAMPLE0000001",
+            "name": "External device EXAMPLE0000001",
             "mqtt": {
                 "broker_ref": "local_mqtt_10_0_0_71",
                 "source": "local_mqtt",
-                "topic_family": "kostal_piko",
+                "topic_family": "ems_solarflow",
                 "device_id": "EXAMPLE0000001",
             },
         },
@@ -375,7 +375,7 @@ def test_an_external_proposal_is_an_inverter_card_that_reads_only():
     assert "hardware-card-inverter" in card["classes"]
     text = card["text"]
     assert "Device ID" in text and "EXAMPLE0000001" in text
-    assert "Kostal Piko" in text
+    assert "External device" in text
     assert "takes no commands" in text
     assert "Zendure MQTT" not in text
     assert "Add inverter" in text

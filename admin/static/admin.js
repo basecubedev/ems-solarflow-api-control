@@ -2395,7 +2395,7 @@ function mqttControlReasonLabel(reason) {
     hardware_profile_conflict:
       "Conflicting hardware-model evidence — select the exact model to enable control",
     external_device_read_only:
-      "Read only: this device reports its output and takes no commands",
+      "Read only: this device reports its values and takes no commands",
   };
   return labels[String(reason || "")] || "No verified MQTT write method for this device";
 }
@@ -15414,7 +15414,7 @@ function mconfigExternalDeviceSummary(device) {
 function renderMaintenanceExternalDevice(device, index) {
   const installed = !!device.entry;
   const mqtt = device.mqtt || (device.entry && device.entry.mqtt) || {};
-  const label = String(device.catalog_label || device.display_name || "External inverter");
+  const label = String(device.catalog_label || device.display_name || "External device");
   const readOnlyValue = (text) => {
     const value = document.createElement("span");
     value.className = "feature-readonly-value";
@@ -15428,7 +15428,7 @@ function renderMaintenanceExternalDevice(device, index) {
   const note = document.createElement("p");
   note.className = "feature-field-desc";
   note.textContent =
-    "External inverter from the hardware catalog: EMS reads its output from " +
+    "External device from the hardware catalog: EMS reads its values from " +
     "MQTT and never writes to it, and its topics follow from the catalog. " +
     (installed
       ? "Use connection in discovery moves it to another broker that carries it."
@@ -16423,7 +16423,7 @@ function renderMaintenanceMqttProposalCard(item) {
       ? "Supported inverter: EMS regulates its output over MQTT using the same " +
         "control loop as a local API device."
       : external
-      ? "External inverter from the hardware catalog: EMS reads its output " +
+      ? "External device from the hardware catalog: EMS reads its values " +
         "over MQTT and never sends it anything."
       : "Telemetry only: " +
         mqttControlReasonLabel(mqttProposalControlReason(proposal)) +

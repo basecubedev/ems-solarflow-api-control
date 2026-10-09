@@ -415,15 +415,15 @@ This path edits an existing installation.
   change a field or when the draft is loaded, so it always appears in the
   preview diff before it is applied.
 
-  An **external inverter** (`"type": "external_mqtt"`, see
-  [External Inverters over MQTT](../technical/configuration.md#external-inverters-over-mqtt-external_mqtt))
-  is one the hardware catalog lists, such as a Kostal Piko whose output FHEM
-  republishes. Discovery offers it under the local broker it was seen on, and
+  An **external device** (`"type": "external_mqtt"`, see
+  [External Devices over MQTT](../technical/configuration.md#external-devices-over-mqtt-external_mqtt))
+  is an inverter or battery whose values a home-automation system such as FHEM
+  publishes into the project's MQTT namespace. Discovery offers it under the local broker it was seen on, and
   **Add inverter** adds it to the draft as a read-only card; there is nothing to
   set beyond what every device has, because the catalog fixes its topics and it
   is never controlled. Like any device it has a **Device name** and an
   **Enabled** switch; switched off, it stays in the config but EMS neither reads
-  it nor shows or counts its output (the inverter itself is never switched).
+  it nor shows or counts its values (the device itself is never switched).
   Discovery shows the installed device as **In config**, whatever the broker
   profile it sits on is called, and the same device on another broker as an
   alternative: **Use connection** moves it there on apply, keeping its name and

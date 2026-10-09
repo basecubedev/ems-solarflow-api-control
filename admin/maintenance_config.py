@@ -1579,12 +1579,12 @@ def _installed_external_device(item, external_by_ref, kept_ids, issues):
     installed = _referenced_external_device(item, external_by_ref)
     if installed is not None and id(installed) not in kept_ids:
         return installed
-    label = str(item.get("name") or "").strip() or "External inverter"
+    label = str(item.get("name") or "").strip() or "External device"
     issues.append(
         _issue(
             "external_mqtt_device_not_installed",
             f"{label}: this row does not refer to exactly one installed external "
-            "MQTT inverter, nor to one discovery found. Reload the current config "
+            "MQTT device, nor to one discovery found. Reload the current config "
             "and review the draft.",
         )
     )
@@ -1650,7 +1650,7 @@ def _edited_external_device(merged, installed, item, issues):
     if isinstance(enabled, bool) and enabled != config_entry_enabled(installed):
         device["enabled"] = enabled
     if item.get(TRUSTED_CONNECTION_SELECTION_FIELD) is True:
-        label = str(device.get("name") or "External inverter").strip()
+        label = str(device.get("name") or "External device").strip()
         if not _same_catalog_device(installed, item):
             issues.append(
                 _issue(
@@ -1684,7 +1684,7 @@ def _removed_external_devices(refs, external_by_ref, issues):
             issues.append(
                 _issue(
                     "external_mqtt_device_not_installed",
-                    "The draft removes an external MQTT inverter that is not "
+                    "The draft removes an external MQTT device that is not "
                     "installed. Reload the current config and review the draft.",
                 )
             )
@@ -1895,7 +1895,7 @@ def _merge_devices(
         issues.append(
             _issue(
                 "external_mqtt_device_read_only",
-                "The draft both keeps and removes the same external MQTT inverter. "
+                "The draft both keeps and removes the same external MQTT device. "
                 "Reload the current config and review the draft.",
             )
         )

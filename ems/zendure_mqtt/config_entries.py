@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ems.device_identity import (
+    EXTERNAL_MQTT_TYPE,
     broker_sources_from_config,
     normalize_mqtt_route_segment,
     resolve_inverter_identity,
@@ -29,15 +30,10 @@ from ems.device_identity import (
 from ems.zendure_mqtt.external_catalog import (
     EXTERNAL_TOPIC_FAMILIES,
     external_topic_family,
+    valid_device_id,
 )
 
 ZENDURE_MQTT_TYPE = "zendure_mqtt"
-
-# A device from the external-device catalog, read over the same MQTT telemetry
-# path as a Zendure device with no write method: read, shown, counted, never
-# commanded. ``mqtt.topic_family`` names its catalog entry, which fixes its
-# topics; nothing about them is configured.
-EXTERNAL_MQTT_TYPE = "external_mqtt"
 
 # Stable identity of the implicit broker used by old single-broker configs. A
 # device without an explicit ``mqtt.broker_ref`` maps to it.
@@ -207,13 +203,25 @@ def validate_external_mqtt_device_config(
             )
         )
 
-    if zendure_mqtt_route_device_id(item) is None:
+    device_id = zendure_mqtt_route_device_id(item)
+    if device_id is None:
         issues.append(
             _issue(
                 "error",
                 "external_mqtt_device_id_missing",
                 "mqtt.device_id is required: it is the segment of the device's "
                 "topics that names it",
+            )
+        )
+    elif not valid_device_id(device_id) and (
+        "device_id" not in zendure_mqtt_route_segment_invalid_keys(item)
+    ):
+        issues.append(
+            _issue(
+                "error",
+                "external_mqtt_device_id_invalid",
+                "mqtt.device_id must be 1 to 64 letters, digits, '-' or '_': the "
+                "catalog reads no topic whose device segment is anything else",
             )
         )
 

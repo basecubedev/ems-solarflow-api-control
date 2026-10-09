@@ -156,6 +156,8 @@ route, and it fails closed:
 
 - **Unknown / telemetry only**, no model, or conflicting model evidence → the
   device stays read-only.
+- An **external device** (read over MQTT from the `ems-solarflow/<id>/…` topics)
+  is read-only by design — see [External devices over MQTT](../external-devices.md).
 - A hardware *generation* or topic family alone never authorises writes — but it
   never blocks one either.
 - The write route is `iot/<productKey>/<deviceId>/…`. If the **Product key** or

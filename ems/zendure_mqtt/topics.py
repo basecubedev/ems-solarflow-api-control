@@ -106,10 +106,8 @@ def classify_topic(topic):
         )
     external = match_external_topic(segments)
     if external is not None:
-        entry, device, metric = external
-        return TopicMatch(
-            entry.family, device_id=device, serial_number=device, metric=metric
-        )
+        entry, device, key = external
+        return TopicMatch(entry.family, device_id=device, metric=key)
     return TopicMatch(FAMILY_UNKNOWN)
 
 

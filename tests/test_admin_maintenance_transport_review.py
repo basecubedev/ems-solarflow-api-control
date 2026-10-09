@@ -109,8 +109,8 @@ def test_configured_external_device_is_not_a_phantom_missing_inverter():
     stubs = _REVIEW_STUBS.replace(
         '{ kind: "local_api", sn: "H1", ip: "1.2.3.4", name: "http1" },',
         '{ kind: "local_api", sn: "H1", ip: "1.2.3.4", name: "http1" },\n'
-        '      { kind: "external_mqtt", original_name: "Kostal Piko", '
-        'name: "Kostal Piko", editable: false, entry: {} },',
+        '      { kind: "external_mqtt", original_name: "Garage inverter", '
+        'name: "Garage inverter", editable: false, entry: {} },',
     )
     assert "external_mqtt" in stubs
     results = _run(

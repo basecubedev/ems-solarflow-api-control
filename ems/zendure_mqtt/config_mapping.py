@@ -754,15 +754,19 @@ def map_snapshots_to_proposals(
     never mutated.
     """
 
-    grouped = _grouped_snapshot_views(list(snapshots), source, broker_ref)
+    snapshots = list(snapshots)
+    catalog = [snap for snap in snapshots if _seen_in_catalog(snap)]
+    grouped = _grouped_snapshot_views(
+        [snap for snap in snapshots if not _seen_in_catalog(snap)], source, broker_ref
+    )
     external = [
         _build_external_proposal(view, entry, source=source, broker_ref=broker_ref)
-        for view, _conflict in grouped
+        for view, _conflict in _catalog_views(catalog, source, broker_ref)
         if (entry := _external_family(view)) is not None
         and source == SOURCE_LOCAL_MQTT
         and view.device_id
+        and entry.offerable(view.metric_keys)
     ]
-    grouped = [item for item in grouped if _external_family(item[0]) is None]
     for view, _conflict in grouped:
         _seed_view_evidence(view, seed_evidence)
     # Device names are the EMS runtime identity key, so two units of the same
@@ -787,6 +791,34 @@ def map_snapshots_to_proposals(
         )
         for index, (view, conflict) in enumerate(grouped)
     ) + tuple(external)
+
+
+def _seen_in_catalog(snapshot: ZendureMqttSnapshot) -> bool:
+    return bool(set(snapshot.topic_families or ()) & set(EXTERNAL_TOPIC_FAMILIES))
+
+
+def _catalog_views(
+    snapshots: list[ZendureMqttSnapshot],
+    source: str | None,
+    broker_ref: str | None,
+) -> list[tuple["_DeviceView", str | None]]:
+    """Views of catalog observations, one per exact ``(family, device id)``.
+
+    They are grouped apart from the Zendure ones: a catalog id is chosen in a
+    bridge and may equal a Zendure device's id or serial, and neither device may
+    take the other's metrics or topics. Ids are compared exactly, because topic
+    segments are case-sensitive.
+    """
+
+    buckets: dict[tuple, list[ZendureMqttSnapshot]] = {}
+    for snap in snapshots:
+        key = (tuple(sorted(snap.topic_families or ())), snap.device_id)
+        buckets.setdefault(key, []).append(snap)
+    return [
+        item
+        for bucket in buckets.values()
+        for item in _grouped_snapshot_views(bucket, source, broker_ref)
+    ]
 
 
 def _external_family(view: _DeviceView) -> ExternalTopicFamily | None:

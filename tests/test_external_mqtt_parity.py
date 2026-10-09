@@ -17,7 +17,10 @@ import pytest
 
 from dashboard.telemetry import build_dashboard_snapshot
 from ems.external_status import sanitize_external_mqtt_status
-from ems.zendure_mqtt.runtime import build_zendure_mqtt_runtime
+from ems.zendure_mqtt.runtime import (
+    build_zendure_mqtt_runtime,
+    classify_zendure_mqtt_devices,
+)
 from ems.zendure_mqtt.snapshot import ZendureMqttAggregator
 
 pytestmark = [
@@ -26,7 +29,7 @@ pytestmark = [
 ]
 
 
-EXTERNAL_TOPIC = "KostalPiko/EXTERNAL01/solarPower"
+EXTERNAL_TOPIC = "ems-solarflow/EXTERNAL01/inverterPower"
 
 
 def _config(broker_source="local_mqtt"):
@@ -42,7 +45,7 @@ def _config(broker_source="local_mqtt"):
                 "type": "external_mqtt",
                 "mqtt": {
                     "broker_ref": "house",
-                    "topic_family": "kostal_piko",
+                    "topic_family": "ems_solarflow",
                     "device_id": "EXTERNAL01",
                 },
             },
@@ -71,7 +74,7 @@ def test_both_appear_in_the_runtime_status_with_the_same_shape():
     assert set(devices) == {"External", "Zendure"}
     assert devices["External"].keys() == devices["Zendure"].keys()
     # And the one field that must differ, differs the right way.
-    assert devices["External"]["topic_family"] == "kostal_piko"
+    assert devices["External"]["topic_family"] == "ems_solarflow"
     assert devices["External"]["write_output_limit"] is False
     assert devices["Zendure"]["write_output_limit"] is False
 
@@ -109,12 +112,15 @@ def test_both_reach_the_cockpit_as_the_same_kind_of_tile():
     aggregator.observe(EXTERNAL_TOPIC, b"1234")
     aggregator.observe("Zendure/HB/ZENDURE01/outputHomePower", b"1234")
     snapshots = {snap.device_id: snap for snap in aggregator.snapshots()}
+    valid, invalid = classify_zendure_mqtt_devices(_config()["devices"])
+    assert invalid == []
+    identifiers = {device.name: device.identifier for device in valid}
 
     class Runtime:
         def device_summaries(self):
             return [
-                {"name": "External", "identifier": "EXTERNAL01", "status": "online"},
-                {"name": "Zendure", "identifier": "ZENDURE01", "status": "online"},
+                {"name": name, "identifier": identifier, "status": "online"}
+                for name, identifier in identifiers.items()
             ]
 
         def snapshots(self):

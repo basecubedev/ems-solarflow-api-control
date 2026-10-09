@@ -366,6 +366,32 @@ def test_frontend_draws_no_charge_level_for_a_device_that_reports_none():
     )
 
 
+def _namespace_runtime(name, messages, *, device_id="garage-inverter", status="online"):
+    """A telemetry runtime fed through the real aggregator, topic by topic."""
+
+    from ems.zendure_mqtt.runtime import classify_zendure_mqtt_devices
+    from ems.zendure_mqtt.snapshot import ZendureMqttAggregator
+
+    (device,), invalid = classify_zendure_mqtt_devices(
+        [
+            {
+                "name": name,
+                "type": "external_mqtt",
+                "mqtt": {"topic_family": "ems_solarflow", "device_id": device_id},
+            }
+        ]
+    )
+    assert invalid == []
+    aggregator = ZendureMqttAggregator()
+    for key, payload in messages:
+        aggregator.observe(f"ems-solarflow/{device_id}/{key}", payload)
+    snapshots = {snap.device_id: snap for snap in aggregator.snapshots()}
+    return _FakeTelemetryRuntime(
+        summaries=[{"name": name, "identifier": device.identifier, "status": status}],
+        snapshots=snapshots,
+    )
+
+
 def _dashboard(runtime, states=None):
     controller = _controller(["WR1"], {"WR1": True}, runtime=runtime)
     return build_dashboard_snapshot(
@@ -382,6 +408,82 @@ def _dashboard(runtime, states=None):
     )
 
 
+def test_an_external_device_is_a_read_only_tile_like_any_other():
+    """A device with no local API at all -- read over MQTT from whatever a
+    home-automation system publishes -- reaches the cockpit through the very
+    same runtime as a telemetry-only Zendure device. One kind of read-only
+    tile, and one path to it."""
+
+    snapshot = _dashboard(
+        _namespace_runtime("Garage inverter", [("inverterPower", b"1234")])
+    )
+
+    tile = snapshot["devices"]["Garage inverter"]
+    assert tile["read_only"] is True
+    assert tile["online"] is True
+    assert tile["output_w"] == 1234
+    assert tile["target_w"] == 0
+    assert tile["capability"] is None
+    assert snapshot["inverter_output_w"] == 300 + 1234
+
+
+def test_every_key_reaches_its_tile_and_the_totals():
+    """Topic in, tile and totals out, through the real aggregator."""
+
+    snapshot = _dashboard(
+        _namespace_runtime(
+            "Garage battery",
+            [
+                (
+                    "state",
+                    b'{"inverterPower": 400, "solarPower": 520, '
+                    b'"batteryPower": 120, "batterySoc": 40}',
+                ),
+            ],
+        )
+    )
+
+    tile = snapshot["devices"]["Garage battery"]
+    assert tile["output_w"] == 400
+    assert tile["pv_input_w"] == 520
+    assert tile["battery_power_w"] == 120
+    assert (tile["pack_output_w"], tile["pack_input_w"]) == (120, 0)
+    assert tile["soc"] == 40
+    assert tile["soc_reported"] is True
+    assert snapshot["pv_total_w"] == 400 + 520
+    assert snapshot["inverter_output_w"] == 300 + 400
+    assert snapshot["battery_power_w"] == 100 + 120
+    assert snapshot["average_soc"] == (60 + 40) / 2
+
+
+def test_a_discharging_battery_counts_as_discharge():
+    """The namespace's sign is the dashboard's: negative is discharge."""
+
+    snapshot = _dashboard(
+        _namespace_runtime(
+            "Garage battery",
+            [("batteryPower", b"-250"), ("inverterPower", b"250"), ("batterySoc", b"55")],
+        )
+    )
+
+    tile = snapshot["devices"]["Garage battery"]
+    assert tile["battery_power_w"] == -250
+    assert (tile["pack_output_w"], tile["pack_input_w"]) == (0, 250)
+    assert snapshot["battery_power_w"] == 100 - 250
+
+
+def test_a_device_without_a_charge_level_is_left_out_of_the_average():
+    """Counting it at zero would halve the average of a single full battery."""
+
+    snapshot = _dashboard(
+        _namespace_runtime("Garage inverter", [("inverterPower", b"765")])
+    )
+
+    tile = snapshot["devices"]["Garage inverter"]
+    assert tile["soc_reported"] is False
+    assert snapshot["average_soc"] == 60
+
+
 def test_a_telemetry_only_zendure_device_without_a_charge_level_is_left_out_too():
     runtime = _FakeTelemetryRuntime(
         summaries=[{"name": "INV_2", "identifier": "ID2", "status": "online"}],
@@ -394,77 +496,40 @@ def test_a_telemetry_only_zendure_device_without_a_charge_level_is_left_out_too(
     assert snapshot["average_soc"] == 60
 
 
-def test_an_external_inverter_is_a_read_only_tile_like_any_other():
-    """An inverter with no local API at all -- read over MQTT from whatever a
-    home-automation system republishes -- reaches the cockpit through the very
-    same runtime as a telemetry-only Zendure device. One kind of read-only
-    tile, and one path to it."""
-
-    external = _FakeTelemetryRuntime(
-        summaries=[
-            {"name": "Kostal Piko", "identifier": "EXAMPLE0000001", "status": "online"}
-        ],
-        snapshots={"EXAMPLE0000001": _snapshot({"outputHomePower": 1234})},
-    )
-    controller = _controller(["WR1"], {"WR1": True}, runtime=external)
-
-    snapshot = build_dashboard_snapshot(
-        controller,
-        load_w=0,
-        states=[_control_state()],
-        targets=[300],
-        effective_targets=[300],
-        allocated_total_w=300,
-        effective_total_w=300,
-        enabled=True,
-        max_total_power=1600,
-        min_output_limit=35,
+def test_a_charge_level_of_zero_is_a_reading_and_counts():
+    snapshot = _dashboard(
+        _namespace_runtime(
+            "Garage battery", [("inverterPower", b"0"), ("batterySoc", b"0")]
+        )
     )
 
-    tile = snapshot["devices"]["Kostal Piko"]
-    assert tile["read_only"] is True
-    assert tile["online"] is True
-    assert tile["output_w"] == 1234
-    # It is not controlled and never carries a target.
-    assert tile["target_w"] == 0
-    assert tile["capability"] is None
-    # Its output is part of what the house produces.
-    assert snapshot["inverter_output_w"] == 300 + 1234
+    assert snapshot["devices"]["Garage battery"]["soc_reported"] is True
+    assert snapshot["average_soc"] == 30
 
 
 def test_both_kinds_of_read_only_device_can_be_present_at_once():
     # One runtime, two kinds of device: a Zendure device with no write method
-    # and an inverter with no command path at all.
+    # and an external device with no command path at all.
     combined = _FakeTelemetryRuntime(
         summaries=[
             {"name": "INV_2", "identifier": "ID2", "status": "online"},
-            {"name": "Kostal Piko", "identifier": "EXAMPLE0000001", "status": "stale"},
+            {"name": "Garage inverter", "identifier": "EXAMPLE0000001", "status": "stale"},
         ],
         snapshots={
             "ID2": _snapshot({"outputHomePower": 280, "solarInputPower": 315}),
             "EXAMPLE0000001": _snapshot({"outputHomePower": 1234}),
         },
     )
-    controller = _controller(["WR1"], {"WR1": True}, runtime=combined)
 
-    snapshot = build_dashboard_snapshot(
-        controller,
-        load_w=0,
-        states=[_control_state()],
-        targets=[300],
-        effective_targets=[300],
-        allocated_total_w=300,
-        effective_total_w=300,
-        enabled=True,
-        max_total_power=1600,
-        min_output_limit=35,
-    )
+    snapshot = _dashboard(combined)
 
-    assert set(snapshot["devices"]) == {"WR1", "INV_2", "Kostal Piko"}
+    assert set(snapshot["devices"]) == {"WR1", "INV_2", "Garage inverter"}
     # A stale reading is shown as offline but still counted: the power is real,
     # only the reading is old.
-    assert snapshot["devices"]["Kostal Piko"]["online"] is False
+    assert snapshot["devices"]["Garage inverter"]["online"] is False
     assert snapshot["inverter_output_w"] == 300 + 280 + 1234
+    # And it stops the sample from counting as a measurement.
+    assert snapshot["device_power_valid"] is False
 
 
 def test_the_live_flow_draws_no_charge_level_for_a_device_that_reports_none():

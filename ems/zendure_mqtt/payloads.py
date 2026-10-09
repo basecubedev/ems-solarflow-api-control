@@ -73,8 +73,15 @@ def _coerce_json(payload):
         return json.loads(
             payload, parse_constant=_drop_constant, parse_float=_finite_float
         )
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None
+
+
+def parse_json_object(payload):
+    """The JSON object a payload carries, or ``None`` for anything else."""
+
+    data = _coerce_json(payload)
+    return data if isinstance(data, dict) else None
 
 
 def _drop_constant(_name):
