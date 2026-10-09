@@ -1,6 +1,22 @@
 {
   "builds": [
     {
+      "admin_digest": "sha256:788ebd76c0ff02cefec2bb496c119db3bdf1954566b7c1bf7b41ac48d7386484",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-ems-solarflow-mqtt-device-604a2377f5-4a27866-38003712665-1",
+      "admin_test_contract": 1,
+      "build_id": "dev-feat-ems-solarflow-mqtt-device-604a2377f5-4a27866-38003712665-1",
+      "channel": "development",
+      "created_at": "2026-10-09T23:25:38Z",
+      "display_name": "Feature feat-ems-solarflow-mqtt-device",
+      "ems_digest": "sha256:3696bfb4700e5c0092152e8a31fdf88a31730f3173d259910eac25ac90273de8",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-ems-solarflow-mqtt-device-604a2377f5-4a27866-38003712665-1",
+      "installable": true,
+      "revision": "4a27866c777f3533dd52a9e69bf1b6c95096cd1f",
+      "run_attempt": 1,
+      "run_id": "38003712665",
+      "tag": "dev-feat-ems-solarflow-mqtt-device-604a2377f5-4a27866-38003712665-1"
+    },
+    {
       "admin_digest": "sha256:3c4bbbe406224c69967d953ec0a29d8fcc288549c4f1f874555b26079eac062a",
       "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-external-inverter-over-mqtt-3e477fd136-f111863-37891404124-1",
       "admin_test_contract": 1,
