@@ -41,6 +41,7 @@ from ems.zendure_mqtt.runtime import build_zendure_mqtt_runtime
 from tests.admin_auth_helpers import auth_headers, authenticate
 from tests.helpers.mosquitto import (
     _new_paho_client,
+    _wait_for_port,
     mosquitto_broker,
     publish_once,
     publish_until,
@@ -117,6 +118,10 @@ def _running_broker(tmp_path, retained):
             check=True,
         ).stdout.strip()
         assert address, "the broker container has no network address"
+        # The readiness wait saw the published host port, which Docker's proxy
+        # accepts before the broker listens; these publishes use the container
+        # address itself.
+        assert _wait_for_port(address, 1883), "the broker never listened on its address"
         for topic, payload in retained:
             publish_once(address, 1883, topic, payload, retain=True)
         yield SimpleNamespace(host=address, port=1883, retained=tuple(retained))
