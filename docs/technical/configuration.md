@@ -723,6 +723,11 @@ Static device metadata stays in `config.json`, not in runtime-state.
 `pv_priority_factor` is an exception: the config value remains the installation
 default, while runtime-state can override the active weighting.
 
+A device this project cannot control -- no local API, its values published on
+MQTT by something else -- is not a `devices[]` entry of the kind described above
+but one of type `external_mqtt`, for the devices the hardware catalog lists; see
+[External Devices over MQTT](#external-devices-over-mqtt-external_mqtt).
+
 ## Grid Meter Settings
 
 `grid_meter.type` selects the local household/grid power meter implementation.
@@ -1059,6 +1064,206 @@ Legacy configs with only `shelly.ip` still work. New configs should use
 If your meter returns a different JSON structure, please open a GitHub issue
 and include the meter type, relevant config, logs, and an anonymized example
 payload if possible.
+
+## External Devices over MQTT (`external_mqtt`)
+
+A `devices[]` entry for a device this project reads but does not control: an
+inverter or a battery with no local API, whose values something else — a
+home-automation system such as FHEM, ioBroker or Node-RED, or a script —
+publishes on MQTT.
+
+It is the MQTT telemetry path, not a second one. The entry names a broker
+profile like any other MQTT device, reaches the same runtime, and appears in the
+dashboard as the same read-only tile a Zendure MQTT device without a write
+method gets.
+
+**Only devices the hardware catalog lists.** The catalog
+(`ems/zendure_mqtt/external_catalog.py`) is a whitelist: each entry fixes how
+the device's topics are built and what the payload behind each key it names
+means. A device is read, discovered and offered only when the catalog lists it;
+a topic of any other shape is never read and never offered, because nobody can
+say what its payload is. Its one entry is this project's own namespace: the
+bridge publishes into it, so the payload is fixed here rather than by a
+manufacturer, and any device a bridge can read fits.
+
+| Device | `mqtt.topic_family` | Topics |
+|---|---|---|
+| Any device a bridge publishes into the project namespace | `ems_solarflow` | `ems-solarflow/<id>/<key>` for one value, `ems-solarflow/<id>/state` for several |
+
+| Key | Meaning | Unit and range | |
+|---|---|---|---|
+| `inverterPower` | AC power the device delivers to the house | W, 0 or more | Required |
+| `solarPower` | PV power at the device's input | W, 0 or more | Optional |
+| `batteryPower` | Battery power: positive while charging, negative while discharging | W | Optional |
+| `batterySoc` | Battery state of charge | %, 0 to 100 | Optional |
+
+The first segment is the namespace, the second names the device, the third the
+key. Topics are case-sensitive: the bridge has to use exactly the namespace and
+the keys in the table. A key the table does not list —
+`ems-solarflow/<id>/dailyYield`, say — is ignored rather than guessed at.
+
+- **One value per topic.** The payload is a plain number as text: `765`,
+  `765.5`, `-55` — ASCII digits with an optional minus sign and decimal point,
+  at most sixteen digits on either side. `765 W`, `765,0`, `1e3`, `1_000`, JSON
+  or `true` is not a reading.
+- **Several values at once.** `state` carries a JSON object with the same keys,
+  for example `{"inverterPower": 765, "solarPower": 820, "batteryPower": -55,
+  "batterySoc": 42}`. A key it leaves out is simply not reported, a field the
+  table does not list is ignored, and a field that is no number in range — a
+  JSON number, or text that would be read on its own topic — is skipped while
+  the rest of the object is still read.
+- **Both forms may be mixed.** Each key keeps its latest value, from whichever
+  topic it came.
+- **Out of range is not a reading.** A negative `inverterPower` or
+  `solarPower`, a `batterySoc` outside 0 to 100 and any value beyond
+  ±1,000,000 are dropped. Send `0` rather than a small negative standby value:
+  a dropped value is no sign of life either. A device that charges its battery
+  from the house has no key for that yet.
+- **The sign of `batteryPower` is the dashboard's.** Positive charges, negative
+  discharges. Many systems report a battery the other way round; such a value
+  has to be negated before it is published.
+- **Without `batterySoc` the device has no battery** as far as EMS can tell:
+  its tile shows no charge level and the average SoC leaves it out, rather than
+  counting an empty battery.
+
+```json
+{
+  "devices": [
+    {
+      "name": "Garage inverter",
+      "type": "external_mqtt",
+      "mqtt": {
+        "broker_ref": "local_mqtt",
+        "topic_family": "ems_solarflow",
+        "device_id": "garage-inverter"
+      }
+    }
+  ]
+}
+```
+
+`device_id` is the second topic segment, chosen in the bridge: 1 to 64 letters,
+digits, `-` or `_` with at least one letter or digit, case-sensitive; a
+placeholder such as `redacted` or `your_…` counts as no id. It is required, so
+two devices can never
+collapse into one tile. A serial number works as well as a name, but — like the
+Zendure serials elsewhere in this file — a real one does not belong in anything
+you commit or share. The runtime subscribes `ems-solarflow/<device_id>/+` on the
+entry's broker and nothing else.
+
+A message that cannot be read leaves the previous values in place, because a
+zero would look like a real measurement of nothing. It does not count as a sign
+of life either.
+
+**Publish retained, at least every 30 seconds, also when nothing changed.**
+Once no readable value has arrived for `zendure_mqtt.stale_after_seconds` (60
+seconds by default), the device shows as stale. Its last values stay in the
+totals, but the device power stops counting as a measurement, and the energy
+statistics skip every sample until it reports again. A bridge that publishes
+only on change falls silent at night, when the values stop changing; send them
+on a timer instead, the `state` object for instance. Set the retain flag as
+well: Admin discovery listens for a few seconds only and finds a device by its
+retained values, where it would mostly miss one that sends every 30 seconds. EMS
+reads a retained value like any other, so after a restart or a reconnect to the
+broker a bridge that has since died still counts with its last values until the
+device turns stale. A
+device you take away stays on offer in discovery while its retained topics
+remain; clear each with an empty retained message.
+
+Development builds read a Kostal Piko as `KostalPiko/<serial>/solarPower` with
+`topic_family: kostal_piko`. That entry is gone and is refused
+(`external_mqtt_family_unknown`), which blocks every apply until it is removed:
+remove it in Maintenance, publish the same reading as `inverterPower` into the
+namespace and adopt the device again.
+
+**It is never written to.** The type has no control path: an entry carrying
+`capabilities.write_output_limit: true` is refused, and such an entry reaches neither
+the HTTP control list nor the MQTT one; the AC-charge diagnosis lists it as
+refused, telemetry only. Reading a
+device does not make it controllable, and an installation whose only devices
+are of this type has nothing for the control loop to do.
+
+**What it changes, and what it does not.** Its values reach the dashboard tiles
+and totals — PV, inverter output, battery power, average SoC, house load — and
+the energy statistics the dashboard keeps. InfluxDB Analytics records only the
+devices EMS controls, so its house load leaves out what an external device
+delivers. The control loop never sees them: a
+device that is only read is not among the devices the target is distributed
+over, so no PV-first weighting, winter policy, full-charge assist or AC charge
+ever involves it. It changes the control only the way any appliance in the house
+does, through the grid meter. What it feeds in lowers the measured import, and
+EMS supplies that much less; a battery charging from the house raises it, and
+EMS supplies more, so the controlled batteries end up charging the external one.
+**An external battery that regulates itself to zero against the same meter is a
+second controller.** Both react to the same deviation, so the two can overshoot
+or push energy back and forth, and EMS cannot prevent that, because it never
+commands the device. Run such a battery on a schedule, or against a meter of its
+own.
+
+**What is refused, and why.** Each of these fails quietly if it is allowed
+through, so each is an error rather than a warning:
+
+| Refused | Code | Because |
+|---|---|---|
+| A `topic_family` the catalog does not list | `external_mqtt_family_unknown` | Its payload is unknown |
+| A missing `mqtt.device_id`, or a placeholder such as `redacted`, `your_id` or `---` | `external_mqtt_device_id_missing` | It is the topic segment that names the device |
+| An `mqtt.device_id` with `/`, `+`, `#` | `mqtt_route_segment_invalid` | It would widen the subscription |
+| An `mqtt.device_id` with any other character than letters, digits, `-`, `_`, or longer than 64 | `external_mqtt_device_id_invalid` | The catalog reads no topic with such a segment, so the device would stay dark |
+| An `mqtt.topics` list (the shape of earlier development builds) | `external_mqtt_topics_unsupported` | The catalog fixes the topics; a configured list would be read by nothing |
+| A Zendure cloud broker profile | `external_mqtt_cloud_broker` | The cloud never carries such a device, and its sessions only deliver the account's own topics |
+| A `broker_ref` naming no configured profile | `broker_ref_unknown` | The device would end up on no broker at all |
+| The same device twice, on one broker or on two | `external_device_duplicate` | Both entries would read one device and count it twice |
+| A missing `name` | `name_missing` | The name is the runtime identity key |
+| A `zendure_mqtt` entry naming a catalog family | `topic_family_external_device` | It would read nothing it names, and carry battery and control settings a catalog device has no use for |
+
+`python3 emsctl.py diagnose` reports each of them. Its MQTT runtime section
+repeats a code with a `zendure_mqtt_` prefix (`zendure_mqtt_external_mqtt_family_unknown`,
+for example), and its broker-profile check reports an unknown profile as
+`zendure_mqtt_broker_ref_unknown`. A broker profile that is disabled or
+incomplete is refused for such an entry as for any MQTT device, with the same
+message Setup gives for any device. Where an external device's own entry or
+its broker profile blocks a Maintenance apply, the page says what it can change
+there -- name, switch, connection, removal -- and that everything else is
+changed in `config.json`.
+
+**Found by discovery, adopted in Setup and Maintenance.** Admin discovery
+subscribes to each catalog entry's topics on every local broker it finds and
+offers a device once it has seen a readable `inverterPower` from it, on its own
+topic or inside `state`, as a read-only device. One that publishes only the
+optional keys is not offered. The payload rules are the runtime's own, so
+nothing is offered that would then stay dark. Setup
+and Maintenance adopt it like any other discovered device. The entry they write
+holds its name, `"enabled"` (true unless switched off before applying) and the
+`mqtt` block above plus the broker's
+`source`; everything but the name comes from the server's own discovery result
+rather than from the browser, and there are no common device values — no power limit, SoC
+limit or winter policy, which mean nothing for a device that is only read. A
+Maintenance row takes only an offer of its own kind: a Zendure row naming a
+catalog device's offer is refused before anything is merged.
+
+**An installed entry takes the edits every device has, and no others.** The
+maintenance page renames it, switches it on or off (off: kept, but neither read
+nor shown nor counted), moves it to another broker with **Use connection** and
+removes it -- and writes everything else back unchanged rather than treating it
+as the nearest kind it knows. A move is accepted only for a proposal the server
+resolved from current discovery that names the same catalog family and device
+id; the new broker profile is provisioned as for any adopted connection, local
+only. **Remove** names the entry by the server-issued reference described below
+(`removed_external` in the draft), and only that takes it out; a reference that
+names no installed entry is refused (`external_mqtt_device_not_installed`), and
+so is a draft that both keeps and removes it. The browser only says which installed
+entry stays, and says it by a reference the server issued with the draft rather
+than by name, because the browser view masks some names: whatever it sends as
+the entry is ignored. A draft row whose reference names no installed external
+entry and no current discovery offer, or one another row already names
+(`external_mqtt_device_not_installed`), is refused, and so is a draft that leaves
+an installed external entry out without that removal, marks it removed or edits
+it as another kind (`external_mqtt_device_read_only`). The page validates the entry by the rules
+above, not as a Local API device, and a broker profile used only by such a device
+is never pruned. Everything else on that page stays editable beside it.
+
+Staleness, broker profiles, credentials and TLS work exactly as they do for
+every other MQTT device; see the section below.
 
 ## Zendure MQTT Telemetry and Control
 

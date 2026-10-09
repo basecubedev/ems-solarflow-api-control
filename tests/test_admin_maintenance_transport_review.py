@@ -84,7 +84,7 @@ function mconfigMqttProposalState() { return "new"; }
 
 def test_configured_mqtt_device_is_not_a_phantom_missing_inverter():
     results = _run(
-        ("mconfigIsMqttDevice", "buildMaintenanceDiscoveryReview"),
+        ("mconfigIsMqttDevice", "mconfigIsExternalDevice", "buildMaintenanceDiscoveryReview"),
         _REVIEW_STUBS
         + "console.log(JSON.stringify(buildMaintenanceDiscoveryReview([])));",
     )
@@ -97,6 +97,33 @@ def test_configured_mqtt_device_is_not_a_phantom_missing_inverter():
         assert (row.get("configured") or {}).get("kind") != "zendure_mqtt"
     assert any(
         (r.get("configured") or {}).get("sn") == "H1" for r in missing_inverters
+    ), "the Local-API device should still report missing"
+
+
+def test_configured_external_device_is_not_a_phantom_missing_inverter():
+    """Discovery never finds an external inverter, so a scan without it says nothing.
+
+    The draft carries it beside the editable devices; read as a Local API entry
+    it would be reported missing after every scan.
+    """
+    stubs = _REVIEW_STUBS.replace(
+        '{ kind: "local_api", sn: "H1", ip: "1.2.3.4", name: "http1" },',
+        '{ kind: "local_api", sn: "H1", ip: "1.2.3.4", name: "http1" },\n'
+        '      { kind: "external_mqtt", original_name: "Garage inverter", '
+        'name: "Garage inverter", editable: false, entry: {} },',
+    )
+    assert "external_mqtt" in stubs
+    results = _run(
+        ("mconfigIsMqttDevice", "mconfigIsExternalDevice", "buildMaintenanceDiscoveryReview"),
+        stubs + "console.log(JSON.stringify(buildMaintenanceDiscoveryReview([])));",
+    )
+
+    about_it = [
+        row for row in results if (row.get("configured") or {}).get("kind") == "external_mqtt"
+    ]
+    assert about_it == []
+    assert any(
+        (row.get("configured") or {}).get("sn") == "H1" for row in results
     ), "the Local-API device should still report missing"
 
 

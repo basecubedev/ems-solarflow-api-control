@@ -13,6 +13,7 @@ Everything a normal user needs: install, operate, diagnose. You do not need the
 | **Upgrade to a newer version** | [Guided Upgrade](admin/guided-upgrade.md) |
 | **Something is wrong** | [Troubleshooting](troubleshooting.md) → [Diagnostics and recovery](admin/diagnostics-recovery.md) |
 | **Report device compatibility** | [Supported setups](supported-setups.md#help-improve-compatibility) — positive reports are welcome too |
+| **Show an inverter or battery EMS cannot control** | [External devices over MQTT](external-devices.md) |
 
 ## Step-by-step guides
 

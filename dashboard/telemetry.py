@@ -160,13 +160,13 @@ def _state_telemetry_fields(state):
 
 
 def _telemetry_only_tiles(controller):
-    """Read-only tiles for Zendure MQTT telemetry-only devices, if any.
+    """Read-only tiles for every device that streams telemetry but takes no orders.
 
-    These devices stream telemetry but are excluded from the control loop
-    (``capabilities.write_output_limit`` is not set). They are not part of
-    ``controller.devices``; their live state comes from the telemetry runtime's
-    snapshot cache. Returns an empty list when no telemetry runtime is wired
-    (older deployments, test doubles) so the dashboard stays stable.
+    Zendure MQTT devices with no write method and external devices with no
+    command path at all arrive the same way: they are not part of
+    ``controller.devices``, and their live state comes from the telemetry
+    runtime's snapshot cache. Returns an empty list when no telemetry runtime is
+    wired (older deployments, test doubles) so the dashboard stays stable.
     """
 
     runtime = getattr(controller, "zendure_mqtt_runtime", None)
@@ -197,6 +197,7 @@ def _telemetry_only_tiles(controller):
             {
                 "name": name,
                 "online": status == "online",
+                "soc_reported": metrics.get("electricLevel") is not None,
                 "state": parse_device({
                     "properties": metrics,
                     # The same second witness the control path weighs, so two
@@ -363,13 +364,15 @@ def build_dashboard_snapshot(
         inverter_total_w += fields["output_w"]
         inverter_charge_total_w += fields["ac_charge_w"]
         battery_total_w += fields["battery_power_w"]
-        soc_values.append(fields["soc"])
+        if tile["soc_reported"]:
+            soc_values.append(fields["soc"])
 
         devices[name] = {
             "online": online,
             "read_only": True,
             "enabled": True,
             **fields,
+            "soc_reported": tile["soc_reported"],
             "target_w": 0,
             "allocated_target_w": 0,
             "capability": None,

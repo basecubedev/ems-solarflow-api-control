@@ -45,8 +45,15 @@ from admin.zendure_mqtt_broker_profiles import (
     source_is_local,
 )
 from admin.zendure_mqtt_config_draft import (
+    CATALOG_CONNECTION_ID_FIELD,
+    CATALOG_DEVICE_ID_FIELD,
+    EXTERNAL_DEVICE_EDIT_HINT,
     TRUSTED_CONNECTION_SELECTION_FIELD,
     apply_zendure_mqtt_draft_fields,
+    catalog_connection_id,
+    catalog_device_id,
+    concerns_external_device,
+    external_mqtt_fragment,
     generation_catalog,
     zendure_hardware_profile_options,
     zendure_mqtt_connection_switched,
@@ -94,6 +101,7 @@ from ems.device_identity import (
     broker_sources_from_config,
     connection_coordinates,
     identity_evidence_conflict,
+    opaque_config_entry_id,
     opaque_connection_id,
     resolve_inverter_identity,
     resolve_inverter_identity_evidence,
@@ -111,19 +119,27 @@ from ems.external_status import (
     sanitize_external_mqtt_status,
 )
 from ems.winter_policies import find_winter_policy_issues
+from ems.zendure_mqtt.external_catalog import external_topic_family
 from ems.zendure_mqtt.config_entries import (
+    EXTERNAL_MQTT_TYPE,
     SOURCE_LOCAL_MQTT,
+    config_entry_enabled,
     find_duplicate_zendure_device_identities,
     find_reserved_mqtt_broker_ref_issues,
     find_zendure_mqtt_broker_profile_issues,
     has_runtime_control_device,
     is_control_zendure_mqtt_device_config,
+    is_external_mqtt_device_config,
     is_zendure_mqtt_device_config,
     legacy_default_broker_present,
     normalized_broker_identity,
+    validate_external_mqtt_device_config,
     validate_zendure_mqtt_control_device_config,
     validate_zendure_mqtt_device_config,
     zendure_mqtt_broker_profile_views,
+    zendure_mqtt_broker_ref,
+    zendure_mqtt_route_device_id,
+    zendure_mqtt_topic_family,
 )
 
 # HTTP/IP and MQTT grid-meter type sets both come from the central catalog/config
@@ -500,7 +516,7 @@ def load_maintenance_config(base_dir=None, *, identity_token_key=None):
             "message": "The config file is not a JSON object.",
         }
 
-    draft = build_maintenance_draft(config)
+    draft = build_maintenance_draft(config, identity_token_key=identity_token_key)
     overrides = overlap_provenance_for_context(context, config)
     _attach_runtime_override_identity_tokens(
         overrides,
@@ -569,14 +585,27 @@ def _attach_runtime_override_identity_tokens(
                 entry[PHYSICAL_IDENTITY_TOKEN_FIELD] = identity.opaque_token
 
 
-def build_maintenance_draft(config):
+def build_maintenance_draft(config, *, identity_token_key=None):
     """Build an editable in-memory draft from the current config values."""
 
     broker_sources = broker_sources_from_config(config)
+    devices = _config_devices(config)
+    entry_refs = {
+        id(device): ref
+        for ref, device in _external_entry_refs(devices, identity_token_key).items()
+    }
+    broker_views = zendure_mqtt_broker_profile_views(config.get("zendure_mqtt"))
     return {
         "devices": [
-            _device_draft(device, broker_sources)
-            for device in _config_devices(config)
+            _device_draft(
+                device,
+                broker_sources,
+                entry_ref=entry_refs.get(id(device)),
+                catalog_ids=_installed_catalog_ids(
+                    device, broker_views, identity_token_key
+                ),
+            )
+            for device in devices
         ],
         "grid_meter": _grid_meter_draft(config.get("grid_meter")),
         "zendure_mqtt": _zendure_mqtt_broker_draft(config.get("zendure_mqtt")),
@@ -591,7 +620,76 @@ def _config_devices(config):
     return [device for device in devices if isinstance(device, dict)]
 
 
-def _device_draft(device, broker_sources=None):
+_EXTERNAL_ENTRY_REF_FIELD = "entry_ref"
+
+
+def _external_entry_refs(devices, identity_token_key):
+    """Each installed external entry of ``devices`` by its server-issued reference.
+
+    The reference is keyed over the entry's place and content, so it names one
+    entry of the config the draft was loaded from, whatever the entry is called
+    and however the browser view masks that name. No key issues no reference,
+    and a draft without one cannot keep the entry.
+    """
+
+    if identity_token_key is None:
+        return {}
+    return {
+        opaque_config_entry_id(
+            [EXTERNAL_MQTT_TYPE, index, device], identity_token_key
+        ): device
+        for index, device in enumerate(devices)
+        if is_external_mqtt_device_config(device)
+    }
+
+
+def _installed_catalog_ids(device, broker_views, identity_token_key):
+    """The catalog device id, and the id of the connection it is read on."""
+
+    if not is_external_mqtt_device_config(device):
+        return None, None
+    mqtt = device.get("mqtt") if isinstance(device.get("mqtt"), dict) else {}
+    family, device_id = mqtt.get("topic_family"), mqtt.get("device_id")
+    view = broker_views.get(zendure_mqtt_broker_ref(device))
+    return (
+        catalog_device_id(family, device_id, identity_token_key),
+        catalog_connection_id(
+            family,
+            device_id,
+            view.host if view is not None else None,
+            view.port if view is not None else None,
+            identity_token_key,
+        ),
+    )
+
+
+def _external_device_draft(device, entry_ref, catalog_ids=(None, None)):
+    """The browser's view of an entry this page has no editor for.
+
+    It is never classified as the nearest editable kind, and ``entry`` is a copy
+    to display: the merge writes back the installed entry ``entry_ref`` refers
+    to and reads nothing else from this item.
+    """
+
+    name = str(device.get("name") or "").strip()
+    mqtt = device.get("mqtt") if isinstance(device.get("mqtt"), dict) else {}
+    catalog = external_topic_family(mqtt.get("topic_family"))
+    return {
+        "kind": EXTERNAL_MQTT_TYPE,
+        "original_name": name,
+        "name": name,
+        "enabled": config_entry_enabled(device),
+        _EXTERNAL_ENTRY_REF_FIELD: entry_ref,
+        "catalog_label": catalog.label if catalog is not None else None,
+        CATALOG_DEVICE_ID_FIELD: catalog_ids[0],
+        CATALOG_CONNECTION_ID_FIELD: catalog_ids[1],
+        "entry": copy.deepcopy(device),
+    }
+
+
+def _device_draft(device, broker_sources=None, *, entry_ref=None, catalog_ids=(None, None)):
+    if is_external_mqtt_device_config(device):
+        return _external_device_draft(device, entry_ref, catalog_ids)
     if is_zendure_mqtt_device_config(device):
         return zendure_mqtt_device_draft(device, broker_sources=broker_sources)
     name = str(device.get("name") or "").strip()
@@ -1047,6 +1145,7 @@ def _merge_draft(current, draft, issues, *, identity_token_key=None):
         draft.get("devices"),
         issues,
         identity_token_key=identity_token_key,
+        removed_external=draft.get(_REMOVED_EXTERNAL_FIELD),
     )
     _merge_grid_meter(merged, draft.get("grid_meter"), issues)
     _merge_zendure_mqtt_broker(merged, draft.get("zendure_mqtt"))
@@ -1291,6 +1390,8 @@ def trusted_selection_conflicts_with_stored_device(
     )
     if original is None:
         return False
+    if is_external_mqtt_device_config(original):
+        return not _same_catalog_device(original, item)
     return trusted_selection_targets_other_inverter(
         current, original, item, identity_token_key=identity_token_key
     )
@@ -1461,7 +1562,159 @@ def _restore_unchanged_cloud_display_name(original, item, broker_sources):
     return restored
 
 
-def _merge_devices(merged, devices, issues, *, identity_token_key=None):
+def _referenced_external_device(item, external_by_ref):
+    ref = item.get(_EXTERNAL_ENTRY_REF_FIELD) if isinstance(item, dict) else None
+    return external_by_ref.get(ref) if isinstance(ref, str) else None
+
+
+def _installed_external_device(item, external_by_ref, kept_ids, issues):
+    """The installed external entry a draft item refers to, or ``None`` and an issue.
+
+    The browser only says which installed entry stays, by the reference the
+    server issued with the draft, and says it once; the content always comes
+    from the installed config. Anything the item carries itself would otherwise
+    become a device without passing a single check the device path applies.
+    """
+
+    installed = _referenced_external_device(item, external_by_ref)
+    if installed is not None and id(installed) not in kept_ids:
+        return installed
+    label = str(item.get("name") or "").strip() or "External device"
+    issues.append(
+        _issue(
+            "external_mqtt_device_not_installed",
+            f"{label}: this row does not refer to exactly one installed external "
+            "MQTT device, nor to one discovery found. Reload the current config "
+            "and review the draft.",
+        )
+    )
+    return None
+
+
+def _is_adopted_external_device(item):
+    """A new row for a catalog device the server resolved from current discovery."""
+
+    return (
+        item.get(TRUSTED_CONNECTION_SELECTION_FIELD) is True
+        and not str(item.get("original_name") or "").strip()
+        and not item.get(_EXTERNAL_ENTRY_REF_FIELD)
+    )
+
+
+def _adopted_external_device(merged, item, name, issues):
+    """The entry for a catalog device picked from discovery.
+
+    Built from the fields the server took from the trusted proposal, and only
+    those; its broker is provisioned the way every adopted connection's is, and
+    never as a Zendure Cloud profile, which carries no such device.
+    """
+
+    device = external_mqtt_fragment({"name": name, "mqtt": item.get("mqtt")})
+    if item.get("enabled") is False:
+        device["enabled"] = False
+    _resolve_draft_broker_ref(
+        merged, item.get("broker"), device["mqtt"], name, issues, local_only=True
+    )
+    return device
+
+
+def _same_catalog_device(installed, item):
+    """True when a resolved selection names the device ``installed`` reads."""
+
+    mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
+    return (
+        bool(zendure_mqtt_topic_family(installed))
+        and zendure_mqtt_topic_family(installed) == str(mqtt.get("topic_family") or "")
+        and zendure_mqtt_route_device_id(installed) == str(mqtt.get("device_id") or "")
+    )
+
+
+def _edited_external_device(merged, installed, item, issues):
+    """The installed entry with the edits a catalog device allows.
+
+    Its name and whether it is enabled are the operator's; its broker changes
+    only to one the server resolved from current discovery for this very
+    device. Everything else -- type, family, device id, any key the entry
+    carries -- is the installed entry's, whatever the row says.
+    """
+
+    device = copy.deepcopy(installed)
+    name = item.get("name")
+    if (
+        isinstance(name, str)
+        and name.strip()
+        and name != item.get("original_name")
+    ):
+        device["name"] = name.strip()
+    enabled = item.get("enabled")
+    if isinstance(enabled, bool) and enabled != config_entry_enabled(installed):
+        device["enabled"] = enabled
+    if item.get(TRUSTED_CONNECTION_SELECTION_FIELD) is True:
+        label = str(device.get("name") or "External device").strip()
+        if not _same_catalog_device(installed, item):
+            issues.append(
+                _issue(
+                    PROPOSAL_IDENTITY_MISMATCH_CODE,
+                    f"{label}: {PROPOSAL_IDENTITY_MISMATCH_MESSAGE}",
+                )
+            )
+            return device
+        _resolve_draft_broker_ref(
+            merged, item.get("broker"), device.setdefault("mqtt", {}), label, issues,
+            local_only=True,
+        )
+    return device
+
+
+_REMOVED_EXTERNAL_FIELD = "removed_external"
+
+
+def _removed_external_devices(refs, external_by_ref, issues):
+    """The installed external entries the draft removes, by the server's references.
+
+    Removal is a statement the card's Remove makes about one entry it showed,
+    never something read from a row that is merely missing; a reference to no
+    installed entry is refused rather than ignored.
+    """
+
+    removed = set()
+    for ref in refs if isinstance(refs, list) else []:
+        installed = external_by_ref.get(ref) if isinstance(ref, str) else None
+        if installed is None:
+            issues.append(
+                _issue(
+                    "external_mqtt_device_not_installed",
+                    "The draft removes an external MQTT device that is not "
+                    "installed. Reload the current config and review the draft.",
+                )
+            )
+            continue
+        removed.add(id(installed))
+    return removed
+
+
+def _external_devices_not_kept(originals, settled_ids, issues):
+    """Installed external entries the draft neither kept nor removed, kept as installed."""
+
+    dropped = []
+    for device in originals:
+        if not is_external_mqtt_device_config(device) or id(device) in settled_ids:
+            continue
+        issues.append(
+            _issue(
+                "external_mqtt_device_read_only",
+                f"{str(device.get('name') or '').strip()} is an external MQTT "
+                "inverter, and this draft neither keeps it nor removes it with its "
+                "Remove button. Reload the current config and review the draft.",
+            )
+        )
+        dropped.append(copy.deepcopy(device))
+    return dropped
+
+
+def _merge_devices(
+    merged, devices, issues, *, identity_token_key=None, removed_external=None
+):
     if not isinstance(devices, list):
         return
     originals = _config_devices(merged)
@@ -1496,6 +1749,12 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
         for item in devices
         if isinstance(item, dict) and str(item.get("original_name") or "") in by_name
     }
+    external_by_ref = _external_entry_refs(originals, identity_token_key)
+    for item in devices:
+        installed = _referenced_external_device(item, external_by_ref)
+        if installed is not None:
+            claimed_ids.add(id(installed))
+    kept_external_ids = set()
     allocation_names = [str(device.get("name") or "").strip() for device in originals]
     allocation_count = len(originals)
     defaults = device_common_defaults()
@@ -1503,6 +1762,22 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
     result = []
     for item in devices:
         if not isinstance(item, dict) or item.get("removed") is True:
+            continue
+        if item.get("kind") == EXTERNAL_MQTT_TYPE and _is_adopted_external_device(item):
+            name = str(item.get("name") or "").strip() or next_compact_inverter_name(
+                allocation_names, allocation_count
+            )
+            allocation_count += 1
+            allocation_names.append(name)
+            result.append(_adopted_external_device(merged, item, name, issues))
+            continue
+        if item.get("kind") == EXTERNAL_MQTT_TYPE:
+            installed = _installed_external_device(
+                item, external_by_ref, kept_external_ids, issues
+            )
+            if installed is not None:
+                kept_external_ids.add(id(installed))
+                result.append(_edited_external_device(merged, installed, item, issues))
             continue
         original = _resolve_original_device(
             item,
@@ -1515,6 +1790,19 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
             broker_sources=broker_sources,
             identity_token_key=identity_token_key,
         )
+        if is_external_mqtt_device_config(original):
+            issues.append(
+                _issue(
+                    "external_mqtt_device_read_only",
+                    f"{str(original.get('name') or '').strip()} is an external MQTT "
+                    "inverter and cannot be edited as another kind of device. Reload "
+                    "the current config and review the draft.",
+                )
+            )
+            if id(original) not in kept_external_ids:
+                kept_external_ids.add(id(original))
+                result.append(copy.deepcopy(original))
+            continue
         item = _restore_unchanged_cloud_display_name(
             original, item, broker_sources
         )
@@ -1602,6 +1890,19 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
                 defaults=defaults,
             )
         result.append(device)
+    removed_ids = _removed_external_devices(removed_external, external_by_ref, issues)
+    if removed_ids & kept_external_ids:
+        issues.append(
+            _issue(
+                "external_mqtt_device_read_only",
+                "The draft both keeps and removes the same external MQTT device. "
+                "Reload the current config and review the draft.",
+            )
+        )
+        removed_ids -= kept_external_ids
+    result.extend(
+        _external_devices_not_kept(originals, kept_external_ids | removed_ids, issues)
+    )
     merged["devices"] = result
 
 
@@ -1935,6 +2236,22 @@ def _validate(config, merge_issues=()):
                 validation["errors"].append(
                     _issue("device_name_empty", f"Inverter {index} needs a config name.")
                 )
+            if is_external_mqtt_device_config(device):
+                for issue in validate_external_mqtt_device_config(
+                    device,
+                    known_broker_refs=known_refs,
+                    brokers_defined=brokers_defined,
+                    broker_sources=device_broker_sources,
+                ):
+                    if issue.get("severity") == "error":
+                        validation["errors"].append(
+                            _issue(
+                                issue["code"],
+                                f"{label}: {issue['message']}. "
+                                f"{EXTERNAL_DEVICE_EDIT_HINT}",
+                            )
+                        )
+                continue
             if is_zendure_mqtt_device_config(device):
                 # Zendure MQTT devices never carry ip/sn. Pick the Core validator
                 # by capability so an existing control (write-capable) device is
@@ -1985,7 +2302,10 @@ def _validate(config, merge_issues=()):
         for issue in find_winter_policy_issues(config):
             validation["errors"].append(_issue(issue["code"], f"{issue['message']}."))
         for issue in find_zendure_mqtt_broker_profile_issues(config):
-            validation["errors"].append(_issue(issue["code"], issue["message"]))
+            message = issue["message"]
+            if concerns_external_device(config, issue):
+                message = f"{message}. {EXTERNAL_DEVICE_EDIT_HINT}"
+            validation["errors"].append(_issue(issue["code"], message))
 
     grid_meter = config.get("grid_meter")
     if isinstance(grid_meter, dict):

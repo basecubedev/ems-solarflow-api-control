@@ -1028,3 +1028,44 @@ def test_route_ambiguity_does_not_deny_a_shared_serial_identity():
     assert comparison.status == STATUS_CONFIRMED
     assert comparison.identity_conflict is False
     assert comparison.route_ambiguous is True
+
+
+def test_an_external_device_s_route_names_its_catalog_family_wherever_it_appears():
+    """Installed entry, Maintenance row, proposal fragment and whole proposal agree.
+
+    Its id is chosen in a bridge and may equal a Zendure device's on the same
+    broker; the family keeps the two from sharing a connection or an identity.
+    """
+
+    mqtt = {"broker_ref": "house", "topic_family": "ems_solarflow", "device_id": "ABC123"}
+    fragment = {"type": "external_mqtt", "mqtt": {**mqtt, "source": "local_mqtt"}}
+    forms = {
+        "entry": {"name": "Garage", "type": "external_mqtt", "mqtt": dict(mqtt)},
+        "draft row": {"kind": "external_mqtt", "name": "Garage", "mqtt": dict(mqtt)},
+        "fragment": fragment,
+        "proposal": {
+            "broker_ref": "house",
+            "connection_source": "local_mqtt",
+            "device_id": "ABC123",
+            "config_fragment": fragment,
+        },
+    }
+    zendure = {
+        "name": "Hyper",
+        "type": "zendure_mqtt",
+        "mqtt": {"broker_ref": "house", "topic_family": "zensdk_ha_scalar", "device_id": "ABC123"},
+    }
+
+    coordinates = {name: connection_coordinates(form) for name, form in forms.items()}
+    anchors = {
+        name: resolve_inverter_identity_evidence(form, token_key=TOKEN_KEY).primary.opaque_token
+        for name, form in forms.items()
+    }
+
+    assert len(set(coordinates.values())) == 1, coordinates
+    assert len(set(anchors.values())) == 1, anchors
+    assert connection_coordinates(zendure) not in set(coordinates.values())
+    assert (
+        resolve_inverter_identity_evidence(zendure, token_key=TOKEN_KEY).primary.opaque_token
+        not in set(anchors.values())
+    )

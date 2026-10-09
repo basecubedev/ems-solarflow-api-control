@@ -96,6 +96,7 @@ COPY ems/runtime_state.py ./ems/runtime_state.py
 # open a broker connection.
 COPY ems/zendure_mqtt/__init__.py ./ems/zendure_mqtt/__init__.py
 COPY ems/zendure_mqtt/topics.py ./ems/zendure_mqtt/topics.py
+COPY ems/zendure_mqtt/external_catalog.py ./ems/zendure_mqtt/external_catalog.py
 COPY ems/zendure_mqtt/payloads.py ./ems/zendure_mqtt/payloads.py
 COPY ems/zendure_mqtt/snapshot.py ./ems/zendure_mqtt/snapshot.py
 COPY ems/zendure_mqtt/write_protocols.py ./ems/zendure_mqtt/write_protocols.py

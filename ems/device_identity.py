@@ -116,6 +116,9 @@ class InverterIdentityEvidence:
     a *precise route* (source/broker-scope/product_key/device_id) that is the exact
     write address. Two observations that share an anchor but carry different known
     product keys prove two distinct routes and never merge (:meth:`route_conflict`).
+    An external catalog device's anchor and route name its catalog family in
+    place of the transport source, so it never shares an identity or a
+    connection with a Zendure device that has the same id on the same broker.
     """
 
     primary: InverterIdentity
@@ -273,6 +276,32 @@ def _serial_identity(item: Mapping[str, Any], fragment: Mapping[str, Any]):
     return InverterIdentity("physical_serial", (serial,), "trusted")
 
 
+# A device from the external-device catalog, read over the same MQTT telemetry
+# path as a Zendure device with no write method: read, shown, counted, never
+# commanded. ``mqtt.topic_family`` names its catalog entry, which fixes its
+# topics; nothing about them is configured.
+EXTERNAL_MQTT_TYPE = "external_mqtt"
+
+
+def _catalog_family(item: Mapping[str, Any], fragment: Mapping[str, Any]) -> str | None:
+    """The catalog family of an external device entry, draft or proposal.
+
+    Its device id is chosen in a bridge and may equal a Zendure device's id on
+    the same broker; scoping its route by the family keeps the two from ever
+    sharing a connection or an identity.
+    """
+
+    kind = _first(item.get("kind"), item.get("type"), fragment.get("type"), fold_case=True)
+    if kind != EXTERNAL_MQTT_TYPE:
+        return None
+    return _first(
+        _mqtt_view(item).get("topic_family"),
+        item.get("topic_family"),
+        _mapping(fragment.get("mqtt")).get("topic_family"),
+        fold_case=True,
+    ) or ""
+
+
 def _scoped_route_identities(
     item: Mapping[str, Any],
     fragment: Mapping[str, Any],
@@ -283,6 +312,7 @@ def _scoped_route_identities(
     The anchor (``source``/``broker_scope``/``device_id``) is stable across
     product-key and topic-family enrichment; the precise route additionally pins
     the product key so distinct write addresses on one device id stay distinct.
+    For an external catalog device ``source`` is its catalog family.
     """
 
     mqtt = _mqtt_view(item)
@@ -329,6 +359,9 @@ def _scoped_route_identities(
     )
     if device_id is None:
         return []
+    catalog_family = _catalog_family(item, fragment)
+    if catalog_family is not None:
+        source = f"{EXTERNAL_MQTT_TYPE}:{catalog_family}"
     anchor = InverterIdentity(
         "scoped_mqtt_device_anchor",
         (source, broker_scope, device_id),
@@ -748,6 +781,27 @@ def opaque_connection_id(coordinates: Any, key: bytes) -> str:
     )
 
 
+def opaque_config_entry_id(components: Any, key: bytes) -> str:
+    """A stable browser-safe reference to one entry of an installed config.
+
+    Names *this entry, at this place, with this content*, so a draft that refers
+    to it resolves only against the config it was loaded from. Keyed, so no
+    value the browser view masks is recoverable or confirmable from it.
+    """
+
+    return _keyed_token(["config-entry-v1", components], "entry:v1", key)
+
+
+def opaque_catalog_device_id(components: Any, key: bytes) -> str:
+    """A browser-safe id for one catalog device, whichever broker carries it.
+
+    Independent of the broker, so an installed device and discovery's offer of
+    the same device compare equal.
+    """
+
+    return _keyed_token(["catalog-device-v1", components], "catalog:v1", key)
+
+
 def opaque_plan_id(components: Any, key: bytes) -> str:
     """A stable browser-safe fingerprint of a computed plan and its inputs.
 
@@ -812,6 +866,7 @@ __all__ = [
     "DEFAULT_BROKER_REF",
     "DEFAULT_CLOUD_ACCOUNT_SCOPE",
     "EVIDENCE_PRECEDENCE",
+    "EXTERNAL_MQTT_TYPE",
     "PHYSICAL_EVIDENCE_KINDS",
     "PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD",
     "PHYSICAL_IDENTITY_TOKEN_FIELD",
@@ -836,6 +891,8 @@ __all__ = [
     "mqtt_route_conflict",
     "normalize_mqtt_route_segment",
     "normalize_physical_serial",
+    "opaque_catalog_device_id",
+    "opaque_config_entry_id",
     "opaque_connection_id",
     "opaque_identity_token",
     "opaque_observation_id",

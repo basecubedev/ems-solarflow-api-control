@@ -28,7 +28,7 @@ from admin.zendure_mqtt_broker_profiles import (
 from admin.zendure_mqtt_config_draft import (
     build_manual_zendure_mqtt_fragment,
     enforce_zendure_mqtt_output_control_capability,
-    sanitize_zendure_mqtt_fragment,
+    sanitize_mqtt_proposal_fragment,
     validate_zendure_mqtt_fragment,
 )
 from ems.config import (
@@ -60,7 +60,8 @@ from ems.zendure_mqtt.config_entries import (
     find_zendure_mqtt_broker_profile_issues,
     has_runtime_control_device,
     is_control_zendure_mqtt_device_config,
-    is_zendure_mqtt_device_config,
+    is_external_mqtt_device_config,
+    is_mqtt_telemetry_device_config,
     zendure_config_device_identity,
     zendure_mqtt_broker_ref,
 )
@@ -118,8 +119,12 @@ def _upsert_zendure_mqtt_device(
     if existing_index is None:
         # A brand-new device materializes the central common defaults, exactly
         # like a device added through Maintenance; a rebind below never touches
-        # the existing device's stored values.
-        devices.append(materialize_common_device_defaults(entry))
+        # the existing device's stored values. A catalog device has none of
+        # them: it is read, never regulated.
+        if is_external_mqtt_device_config(entry):
+            devices.append(entry)
+        else:
+            devices.append(materialize_common_device_defaults(entry))
         return "added"
 
     device = devices[existing_index]
@@ -149,7 +154,9 @@ def _prune_unreferenced_new_brokers(preview, preexisting_refs):
         return
     referenced = set()
     for device in preview.get("devices", []):
-        if is_zendure_mqtt_device_config(device):
+        # Every entry read over MQTT holds its broker, including one this page
+        # cannot edit: dropping the profile would strand the device.
+        if is_mqtt_telemetry_device_config(device):
             referenced.add(zendure_mqtt_broker_ref(device))
     grid = preview.get("grid_meter")
     if isinstance(grid, dict):
@@ -194,7 +201,7 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
     base_index_by_identity = {}
     disabled_base_identities = set()
     for index, device in enumerate(devices):
-        if not (isinstance(device, dict) and device.get("type") == "zendure_mqtt"):
+        if not is_mqtt_telemetry_device_config(device):
             continue
         identity = zendure_config_device_identity(
             device, broker_sources=broker_sources
@@ -225,7 +232,7 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         # second claim on a physical identity either.
         if proposal.get("enabled") is False:
             continue
-        scan_entry = sanitize_zendure_mqtt_fragment(
+        scan_entry = sanitize_mqtt_proposal_fragment(
             copy.deepcopy(fragment), broker_sources
         )
         if validate_zendure_mqtt_fragment(scan_entry, broker_sources):
@@ -250,6 +257,7 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
     allocation_count = len(devices)
     added = 0
     control_added = 0
+    external_added = 0
     cloud_control_added = 0
     for proposal in proposals[:_MAX_ZENDURE_MQTT_PROPOSALS]:
         if not isinstance(proposal, dict):
@@ -262,7 +270,8 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         # connection switch in both directions.
         if proposal.get("enabled") is False:
             continue
-        entry = sanitize_zendure_mqtt_fragment(copy.deepcopy(fragment), broker_sources)
+        entry = sanitize_mqtt_proposal_fragment(copy.deepcopy(fragment), broker_sources)
+        external = is_external_mqtt_device_config(entry)
         if "config_name" in proposal:
             config_name = str(proposal.get("config_name") or "").strip()
         else:
@@ -284,7 +293,8 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         # Common (transport-independent) device values travel with the logical
         # inverter through the same catalog-filtered writer the Local API draft
         # uses; identity and connection keys stay owned by the fragment.
-        apply_device_config_values(entry, proposal.get("config_values"))
+        if not external:
+            apply_device_config_values(entry, proposal.get("config_values"))
         label = str(entry.get("name") or "Zendure MQTT device").strip()
         identity = zendure_config_device_identity(
             entry, broker_sources=broker_sources
@@ -337,9 +347,10 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         # The broker profile the resolver settled on is the authoritative write
         # carrier — not the source a proposal fragment claimed — so capability is
         # re-enforced against it before the entry is written.
-        enforce_zendure_mqtt_output_control_capability(
-            entry, broker_sources_from_config(preview)
-        )
+        if not external:
+            enforce_zendure_mqtt_output_control_capability(
+                entry, broker_sources_from_config(preview)
+            )
         if _upsert_zendure_mqtt_device(
             devices,
             base_index_by_identity,
@@ -348,7 +359,9 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
             broker_sources=broker_sources_from_config(preview),
         ) == "added":
             added += 1
-            if is_control_zendure_mqtt_device_config(entry):
+            if external:
+                external_added += 1
+            elif is_control_zendure_mqtt_device_config(entry):
                 control_added += 1
                 broker = (preview.get("zendure_mqtt", {}).get("brokers", {})).get(
                     resolved_ref, {}
@@ -362,7 +375,16 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
 
     # The summary reflects each device's actual capability: control devices are
     # announced as controllable, telemetry devices as read-only.
-    telemetry_added = added - control_added
+    telemetry_added = added - control_added - external_added
+    if external_added:
+        noun = "device" if external_added == 1 else "devices"
+        validation["warnings"].append(
+            _issue(
+                "external_mqtt_read_only",
+                f"{external_added} external {noun} will be read over MQTT and "
+                "never controlled.",
+            )
+        )
     if telemetry_added:
         noun = "device" if telemetry_added == 1 else "devices"
         validation["warnings"].append(
@@ -1169,7 +1191,7 @@ class ConfigPreviewGenerator:
         names.extend(
             str(device.get("name") or "")
             for device in (preview.get("devices") or [])
-            if isinstance(device, dict) and device.get("type") == "zendure_mqtt"
+            if is_mqtt_telemetry_device_config(device)
         )
 
         # Silent-HTTP guard: cloud MQTT is connected but no device is selected

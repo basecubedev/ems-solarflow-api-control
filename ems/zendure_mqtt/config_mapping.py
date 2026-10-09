@@ -29,6 +29,11 @@ from ems.zendure_mqtt.capability import (
     mqtt_output_control_capability,
     proposal_output_control,
 )
+from ems.zendure_mqtt.config_entries import EXTERNAL_MQTT_TYPE, SOURCE_LOCAL_MQTT
+from ems.zendure_mqtt.external_catalog import (
+    EXTERNAL_TOPIC_FAMILIES,
+    ExternalTopicFamily,
+)
 from ems.zendure_mqtt.snapshot import ZendureMqttSnapshot
 from ems.zendure_mqtt.topics import (
     FAMILY_LEGACY_JSON,
@@ -117,7 +122,13 @@ TARGET_GRID_METER = "grid_meter"
 # Topic prefixes that are safe to echo back on a proposal. A cloud scalar topic
 # is prefixed with the secret account app key, so it never matches and is never
 # exposed. Only the fixed non-secret local prefixes are carried.
-_SAFE_TOPIC_PREFIXES = ("Zendure/", "iot/")
+_SAFE_TOPIC_PREFIXES = (
+    "Zendure/",
+    "iot/",
+    *(f"{entry.prefix}/" for entry in EXTERNAL_TOPIC_FAMILIES.values()),
+)
+
+EXTERNAL_DEVICE_READ_ONLY = "external_device_read_only"
 
 # Emitted when a grid-power metric is seen but no exact safe local totalPower
 # topic is available, so no auto-applicable D0 grid-meter fragment is produced.
@@ -743,7 +754,19 @@ def map_snapshots_to_proposals(
     never mutated.
     """
 
-    grouped = _grouped_snapshot_views(list(snapshots), source, broker_ref)
+    snapshots = list(snapshots)
+    catalog = [snap for snap in snapshots if _seen_in_catalog(snap)]
+    grouped = _grouped_snapshot_views(
+        [snap for snap in snapshots if not _seen_in_catalog(snap)], source, broker_ref
+    )
+    external = [
+        _build_external_proposal(view, entry, source=source, broker_ref=broker_ref)
+        for view, _conflict in _catalog_views(catalog, source, broker_ref)
+        if (entry := _external_family(view)) is not None
+        and source == SOURCE_LOCAL_MQTT
+        and view.device_id
+        and entry.offerable(view.metric_keys)
+    ]
     for view, _conflict in grouped:
         _seed_view_evidence(view, seed_evidence)
     # Device names are the EMS runtime identity key, so two units of the same
@@ -767,6 +790,94 @@ def map_snapshots_to_proposals(
             conflict_kind=conflict,
         )
         for index, (view, conflict) in enumerate(grouped)
+    ) + tuple(external)
+
+
+def _seen_in_catalog(snapshot: ZendureMqttSnapshot) -> bool:
+    return bool(set(snapshot.topic_families or ()) & set(EXTERNAL_TOPIC_FAMILIES))
+
+
+def _catalog_views(
+    snapshots: list[ZendureMqttSnapshot],
+    source: str | None,
+    broker_ref: str | None,
+) -> list[tuple["_DeviceView", str | None]]:
+    """Views of catalog observations, one per exact ``(family, device id)``.
+
+    They are grouped apart from the Zendure ones: a catalog id is chosen in a
+    bridge and may equal a Zendure device's id or serial, and neither device may
+    take the other's metrics or topics. Ids are compared exactly, because topic
+    segments are case-sensitive.
+    """
+
+    buckets: dict[tuple, list[ZendureMqttSnapshot]] = {}
+    for snap in snapshots:
+        key = (tuple(sorted(snap.topic_families or ())), snap.device_id)
+        buckets.setdefault(key, []).append(snap)
+    return [
+        item
+        for bucket in buckets.values()
+        for item in _grouped_snapshot_views(bucket, source, broker_ref)
+    ]
+
+
+def _external_family(view: _DeviceView) -> ExternalTopicFamily | None:
+    """The catalog entry a device was seen under, when it is nothing else."""
+
+    if len(view.topic_families) != 1:
+        return None
+    (family,) = view.topic_families
+    return EXTERNAL_TOPIC_FAMILIES.get(family)
+
+
+def _build_external_proposal(
+    view: _DeviceView,
+    entry: ExternalTopicFamily,
+    *,
+    source: str | None,
+    broker_ref: str | None,
+) -> ZendureMqttConfigProposal:
+    """A read-only device entry for a device the external catalog lists.
+
+    Everything the entry carries follows from the catalog and the observed
+    device id; there is no model to resolve and no write method to grant.
+    """
+
+    name = f"{entry.label} {view.device_id}"
+    mqtt: dict[str, Any] = {}
+    if broker_ref:
+        mqtt["broker_ref"] = broker_ref
+    if source:
+        mqtt["source"] = source
+    mqtt["topic_family"] = entry.family
+    mqtt["device_id"] = view.device_id
+    has_power = _has_power(view.metric_keys)
+    has_soc = bool(view.metric_keys & _SOC_METRICS)
+    return ZendureMqttConfigProposal(
+        proposal_id=f"external-mqtt:{entry.family}:{view.device_id}",
+        source=EXTERNAL_MQTT_TYPE,
+        device_id=view.device_id,
+        serial_number=None,
+        product_key=None,
+        product=None,
+        topic_family=entry.family,
+        base_topic=None,
+        display_name=name,
+        role_hint=ROLE_TELEMETRY_ONLY,
+        confidence=_confidence(entry.family, ROLE_TELEMETRY_ONLY, has_power, has_soc),
+        capabilities=(),
+        metrics=tuple(sorted(view.metric_keys)),
+        config_fragment={
+            "type": EXTERNAL_MQTT_TYPE,
+            "enabled": True,
+            "name": name,
+            "mqtt": mqtt,
+        },
+        broker_ref=broker_ref,
+        connection_source=source,
+        seen_topics=_safe_seen_topics(view.seen_topics),
+        output_control_reason=EXTERNAL_DEVICE_READ_ONLY,
+        control_block_reason=EXTERNAL_DEVICE_READ_ONLY,
     )
 
 

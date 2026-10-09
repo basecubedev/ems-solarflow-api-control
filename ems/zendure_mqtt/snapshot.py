@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from ems.zendure_mqtt.external_catalog import EXTERNAL_TOPIC_FAMILIES
 from ems.zendure_mqtt.payloads import coerce_scalar, parse_report_payload
 from ems.zendure_mqtt.topics import (
     FAMILY_UNKNOWN,
@@ -131,6 +132,15 @@ class ZendureMqttAggregator:
         device_id = match.device_id or match.serial_number
         if not device_id:
             return
+        readings = None
+        external = EXTERNAL_TOPIC_FAMILIES.get(match.family)
+        if external is not None:
+            # A reading that cannot be read is no sign of life: the last good
+            # one must go stale on schedule rather than look current forever.
+            readings = external.readings(match.metric, payload)
+            if not readings:
+                return
+            device_id = external.snapshot_key(device_id)
         snap = self._devices.get(device_id)
         if snap is None:
             snap = ZendureMqttSnapshot(device_id=device_id)
@@ -151,6 +161,11 @@ class ZendureMqttAggregator:
             snap.observed_metrics.add(match.metric)
         elif match.family in JSON_FAMILIES:
             self._merge_report(snap, payload)
+        elif readings:
+            snap.metrics.update(readings)
+            for metric in readings:
+                snap.metric_monotonic[metric] = snap.last_seen_monotonic
+            snap.observed_metrics.update(readings)
 
     def _merge_report(self, snap, payload):
         report = parse_report_payload(payload)

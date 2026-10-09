@@ -263,6 +263,7 @@ from ems.external_status import (
     mask_route_identifier,
     sanitize_external_mqtt_status,
 )
+from ems.zendure_mqtt.config_entries import EXTERNAL_MQTT_TYPE
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 MAX_JSON_BODY_BYTES = 4 * 1024
@@ -5631,6 +5632,13 @@ class AdminHandler(BaseHTTPRequestHandler):
             trusted_mqtt = fragment.get("mqtt") if isinstance(fragment, dict) else None
             if not isinstance(trusted_mqtt, dict):
                 return None, "The selected MQTT proposal has no usable device configuration."
+            if (fragment.get("type") == EXTERNAL_MQTT_TYPE) != (
+                item.get("kind") == EXTERNAL_MQTT_TYPE
+            ):
+                return None, (
+                    "The selected MQTT proposal is not the kind of device this row "
+                    "adds; refresh discovery and add the device again."
+                )
 
             trusted_serial = str(fragment.get("serial_number") or "").strip()
             submitted_serial = str(item.get("serial_number") or "").strip()
