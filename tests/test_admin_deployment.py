@@ -864,6 +864,22 @@ def test_prepare_writes_no_zone_that_names_no_zone(tmp_path, zone):
     assert "PUID=0" not in _env_lines(service)
 
 
+def test_prepare_refuses_an_env_file_that_is_not_utf8_and_leaves_it_alone(tmp_path):
+    service = _service(tmp_path)
+    service.workspace_dir.mkdir(parents=True)
+    env = service.workspace_dir / ".env"
+    original = b"PUID=1000\nPGID=1000\nTZ=Europe/Z\xfcrich\n"
+    env.write_bytes(original)
+
+    result, job = _run_prepare(service)
+
+    assert job is None
+    assert result["ok"] is False
+    assert result["reason"] == "deployment_env_unreadable"
+    assert str(env) in result["message"]
+    assert env.read_bytes() == original
+
+
 def test_prepare_rejects_missing_non_root_runtime_identity(tmp_path):
     service = _service(tmp_path)
     service._runtime_env = {}

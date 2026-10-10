@@ -1933,6 +1933,9 @@ class DeploymentService:
         rejection = self._generated_config_rejection(config)
         if rejection is not None:
             return rejection
+        rejection = self._deployment_env_rejection()
+        if rejection is not None:
+            return rejection
         identity = self._resolve_runtime_identity()
         if identity is None:
             return _reject(
@@ -2723,6 +2726,27 @@ class DeploymentService:
             (json.dumps(marker, indent=2, sort_keys=True) + "\n").encode("utf-8"),
         )
         return marker
+
+    def _deployment_env_rejection(self):
+        """Refuse a deployment .env this prepare could neither read nor rewrite safely.
+
+        The worker rewrites .env from the values it reads, so a file it cannot
+        decode must stop the prepare before anything is written, with the file
+        left as it is.
+        """
+
+        path = self.workspace_dir / ".env"
+        try:
+            _env_text(path)
+        except UnicodeDecodeError:
+            return _reject(
+                "deployment_env_unreadable",
+                f"{path} is not valid UTF-8 text. Fix or remove the file, then "
+                "prepare the deployment again.",
+            )
+        except OSError:
+            return None
+        return None
 
     def _resolve_runtime_identity(self):
         env_values = _read_env_file(self.workspace_dir / ".env")
