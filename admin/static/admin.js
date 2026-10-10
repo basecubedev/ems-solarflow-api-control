@@ -12915,6 +12915,7 @@ const backupState = {
   selectedType: null,
   selectedDetails: null,
   restorePlan: null,
+  restoreAfterUnlock: false,
   running: false,
   // Bumped per preview request so a slower earlier preview can never overwrite a
   // newer one after restore options changed.
@@ -13082,8 +13083,9 @@ function renderBackupRow(backup) {
   // An invalid archive cannot be restored; the marker keeps the button disabled
   // through the busy-state toggle (see setBackupBusy).
   const restoreDisabled = !backup.valid;
-  const restoreAttrs = restoreDisabled
-    ? ' disabled data-backup-restore-disabled="true"' : "";
+  const restoreAttrs = (restoreDisabled
+    ? ' disabled data-backup-restore-disabled="true"' : "") +
+    (backup.locked ? ' data-backup-locked="true"' : "");
   return (
     '<div class="backup-row" role="listitem">' +
     '<div class="backup-row-main">' +
@@ -13093,7 +13095,7 @@ function renderBackupRow(backup) {
     escapeHtml(backupName) + "</span></div>" +
     '<div class="backup-row-meta" aria-label="Backup metadata">' + facts.join("") + "</div>" +
     '<div class="backup-row-actions">' +
-    '<button type="button" class="secondary-button compact" data-backup-action="details" data-backup-id="' + id + '" data-backup-kind="archive">Details</button>' +
+    '<button type="button" class="secondary-button compact" data-backup-action="details" data-backup-id="' + id + '" data-backup-kind="archive"' + (backup.locked ? ' data-backup-locked="true"' : "") + ">Details</button>" +
     '<button type="button" class="secondary-button compact" data-backup-action="export" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-name="' + escapeHtml(backupName) + '">Download</button>' +
     '<button type="button" class="secondary-button compact" data-backup-action="restore" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-type="' + escapeHtml(backup.backup_type || "config") + '"' + restoreAttrs + ">Restore preview</button>" +
     '<button type="button" class="secondary-button compact" data-backup-action="delete" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-name="' + escapeHtml(backup.name) + '">Delete</button>' +
@@ -13140,12 +13142,17 @@ function renderBackupSetRow(set) {
   );
 }
 
-function selectBackup(id, kind, type) {
+function selectBackup(id, kind, type, locked) {
   backupState.selectedId = id;
   backupState.selectedKind = kind || "archive";
   backupState.selectedType = type || "config";
   backupState.selectedDetails = null;
   backupState.restorePlan = null;
+  backupState.restoreAfterUnlock = false;
+  // A password belongs to one archive: typed for the last one, it must not be
+  // sent with the next.
+  if (backupEls.passwordInput) backupEls.passwordInput.value = "";
+  if (backupEls.passwordForm) backupEls.passwordForm.hidden = !locked;
   // Clear the restore stage content without forcing it open; the restore action
   // opens it, the details action does not.
   backupEls.restoreSummary.innerHTML = "";
@@ -13596,25 +13603,47 @@ if (backupEls.importInput) {
   });
 }
 
+function handleBackupListAction(button) {
+  const id = button.dataset.backupId;
+  const kind = button.dataset.backupKind;
+  const action = button.dataset.backupAction;
+  const locked = button.dataset.backupLocked === "true";
+  if (action === "details") {
+    selectBackup(id, kind, button.dataset.backupType, locked);
+    return inspectSelectedBackup(null);
+  }
+  if (action === "restore") {
+    selectBackup(id, kind, button.dataset.backupType, locked);
+    if (locked) {
+      backupState.restoreAfterUnlock = true;
+      backupEls.detailsStage.hidden = false;
+      renderBackupMessage([
+        { tone: "info", text: "This backup is encrypted. Enter its password to preview the restore." },
+      ]);
+      if (backupEls.passwordInput) backupEls.passwordInput.focus();
+      return undefined;
+    }
+    backupEls.restoreStage.hidden = false;
+    return previewRestore();
+  }
+  if (action === "export") return exportBackup(id, button.dataset.backupName);
+  if (action === "delete") return deleteBackup(id, kind, button.dataset.backupName);
+  return undefined;
+}
+
+async function unlockSelectedBackup() {
+  await inspectSelectedBackup(backupEls.passwordInput.value || null);
+  const details = backupState.selectedDetails;
+  if (!backupState.restoreAfterUnlock || !details || details.locked) return;
+  backupState.restoreAfterUnlock = false;
+  backupEls.restoreStage.hidden = false;
+  await previewRestore();
+}
+
 if (backupEls.list) {
   backupEls.list.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-backup-action]");
-    if (!button) return;
-    const id = button.dataset.backupId;
-    const kind = button.dataset.backupKind;
-    const action = button.dataset.backupAction;
-    if (action === "details") {
-      selectBackup(id, kind, button.dataset.backupType);
-      inspectSelectedBackup(null);
-    } else if (action === "restore") {
-      selectBackup(id, kind, button.dataset.backupType);
-      backupEls.restoreStage.hidden = false;
-      previewRestore();
-    } else if (action === "export") {
-      exportBackup(id, button.dataset.backupName);
-    } else if (action === "delete") {
-      deleteBackup(id, kind, button.dataset.backupName);
-    }
+    if (button) handleBackupListAction(button);
   });
 }
 if (backupEls.refreshBtn) backupEls.refreshBtn.addEventListener("click", loadBackups);
@@ -13625,7 +13654,7 @@ if (backupEls.executeBtn) backupEls.executeBtn.addEventListener("click", execute
 if (backupEls.passwordForm) {
   backupEls.passwordForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    inspectSelectedBackup(backupEls.passwordInput.value || null);
+    unlockSelectedBackup();
   });
 }
 

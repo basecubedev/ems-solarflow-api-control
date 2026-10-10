@@ -12841,6 +12841,64 @@ def test_a_render_during_a_recovery_action_keeps_every_recovery_button_closed():
         assert "actionBusy ||" in block, target
     assert "if (recovery && !actionBusy)" in render
 
+def test_an_encrypted_backup_is_unlocked_before_its_restore_preview():
+    js = _read("admin.js")
+    script = (
+        "\n".join(
+            header + js.split(header, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+            for header in (
+                "function selectBackup",
+                "function handleBackupListAction",
+                "async function unlockSelectedBackup",
+            )
+        )
+        + """
+const calls = [];
+const backupState = { restoreAfterUnlock: false, selectedDetails: null };
+const node = () => ({ hidden: true, innerHTML: "", disabled: false, value: "", focus() { calls.push("focus"); } });
+const backupEls = { passwordInput: node(), passwordForm: node(), detailsStage: node(),
+  restoreStage: node(), restoreSummary: node(), restoreFiles: node(), restoreSteps: node(),
+  rollbackWarning: node(), executeBtn: node() };
+function renderBackupMessage(items) { calls.push("message:" + (items[0] || {}).text); }
+async function previewRestore() { calls.push("preview:" + backupEls.passwordInput.value); }
+async function inspectSelectedBackup(password) {
+  calls.push("inspect:" + password);
+  backupState.selectedDetails = { locked: password !== "right" };
+}
+const button = (action, locked) => ({ dataset: { backupId: "b1", backupKind: "archive",
+  backupAction: action, backupType: "config", backupLocked: locked ? "true" : undefined } });
+
+(async () => {
+  backupEls.passwordInput.value = "typed-for-another-backup";
+  await handleBackupListAction(button("restore", true));
+  const asked = { calls: calls.splice(0), form: backupEls.passwordForm.hidden,
+    details: backupEls.detailsStage.hidden, restore: backupEls.restoreStage.hidden,
+    value: backupEls.passwordInput.value };
+  backupEls.passwordInput.value = "wrong";
+  await unlockSelectedBackup();
+  const wrong = calls.splice(0);
+  backupEls.passwordInput.value = "right";
+  await unlockSelectedBackup();
+  const right = { calls: calls.splice(0), restore: backupEls.restoreStage.hidden };
+  await handleBackupListAction(button("restore", false));
+  const plain = { calls: calls.splice(0), form: backupEls.passwordForm.hidden };
+  console.log(JSON.stringify({ asked, wrong, right, plain }));
+})();
+"""
+    )
+    out = _run_node(script)
+
+    assert out["asked"]["value"] == ""
+    assert out["asked"]["form"] is False
+    assert out["asked"]["details"] is False
+    assert out["asked"]["restore"] is True
+    assert not any(call.startswith("preview") for call in out["asked"]["calls"])
+    assert out["wrong"] == ["inspect:wrong"]
+    assert out["right"]["calls"] == ["inspect:right", "preview:right"]
+    assert out["right"]["restore"] is False
+    assert out["plain"]["calls"] == ["preview:"]
+    assert out["plain"]["form"] is True
+
 
 def test_a_failed_mdns_request_never_reopens_controls_the_server_closed():
     js = _read("admin.js")

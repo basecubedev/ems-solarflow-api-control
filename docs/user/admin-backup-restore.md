@@ -131,7 +131,9 @@ The Admin Console reads encrypted backups. They appear **locked** in the list
 and details until you supply the password. Inspecting or restoring an encrypted
 backup requires the password; it is used for that request only and is never
 logged or persisted. Without the password, an encrypted backup cannot be
-restored.
+restored. **Restore preview** on a locked backup opens its details with the
+password field; once **Unlock** opens the archive, the preview follows. The
+field is cleared whenever you select another backup.
 
 ## Getting a backup off this machine
 
