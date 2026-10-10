@@ -82,6 +82,14 @@ _GRID_TYPES = {
 _GRID_TYPE_CHOICES = grid_meter_types()
 
 
+def _refuse_invalid_values(validation, refused, label=None):
+    """A value the mutation refused blocks the preview instead of vanishing."""
+
+    for issue in refused:
+        message = f"{label}: {issue.message}" if label else issue.message
+        validation["errors"].append(_issue(issue.code, message))
+
+
 def _issue(code, message):
     return {"code": code, "message": message}
 
@@ -284,8 +292,10 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         # Common (transport-independent) device values travel with the logical
         # inverter through the same catalog-filtered writer the Local API draft
         # uses; identity and connection keys stay owned by the fragment.
-        apply_device_config_values(entry, proposal.get("config_values"))
+        refused = []
+        apply_device_config_values(entry, proposal.get("config_values"), issues=refused)
         label = str(entry.get("name") or "Zendure MQTT device").strip()
+        _refuse_invalid_values(validation, refused, label)
         identity = zendure_config_device_identity(
             entry, broker_sources=broker_sources
         )
@@ -1136,7 +1146,9 @@ class ConfigPreviewGenerator:
         # Catalog-driven feature values are applied last so setup choices (winter,
         # dashboard, InfluxDB, grid meter variant, ...) override template/base
         # defaults while device entries stay owned by the draft above.
-        applied_features = apply_setup_features(preview, features)
+        refused = []
+        applied_features = apply_setup_features(preview, features, issues=refused)
+        _refuse_invalid_values(validation, refused)
         if applied_features:
             validation["info"].append(
                 _issue(
@@ -1324,7 +1336,9 @@ class ConfigPreviewGenerator:
                         _issue("device_serial_missing", f"{label} requires a serial number.")
                     )
             _apply_typed_fields(device, item)
-            apply_device_config_values(device, item.get("config_values"))
+            refused = []
+            apply_device_config_values(device, item.get("config_values"), issues=refused)
+            _refuse_invalid_values(validation, refused, label)
             generated_devices.append(device)
         preview["devices"] = generated_devices
 
@@ -1374,7 +1388,9 @@ class ConfigPreviewGenerator:
                 if serial:
                     match["sn"] = serial
                 _apply_typed_fields(match, item)
-                apply_device_config_values(match, item.get("config_values"))
+                refused = []
+                apply_device_config_values(match, item.get("config_values"), issues=refused)
+                _refuse_invalid_values(validation, refused, label)
                 if "sn" in match and not str(match.get("sn") or "").strip():
                     validation["errors"].append(
                         _issue("device_serial_missing", f"{label} requires a serial number.")
@@ -1391,7 +1407,9 @@ class ConfigPreviewGenerator:
                         _issue("device_serial_missing", f"{label} requires a serial number.")
                     )
             _apply_typed_fields(device, item)
-            apply_device_config_values(device, item.get("config_values"))
+            refused = []
+            apply_device_config_values(device, item.get("config_values"), issues=refused)
+            _refuse_invalid_values(validation, refused, label)
             devices.append(device)
 
     def _normalize_grid_meter_variant(self, preview, meters, validation):

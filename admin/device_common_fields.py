@@ -50,12 +50,15 @@ def common_device_value_fields():
     )
 
 
-def apply_common_device_values(device, item, fields=None):
-    """Write coerced common values present in a draft entry onto a device."""
+def apply_common_device_values(device, item, fields=None, *, issues=None):
+    """Write coerced common values present in a draft entry onto a device.
+
+    A value its type cannot hold is not written and is reported into ``issues``.
+    """
 
     if fields is None:
         fields = common_device_value_fields()
-    return apply_common_values(device, item, fields)
+    return apply_common_values(device, item, fields, issues=issues)
 
 
 def common_device_draft_values(device):

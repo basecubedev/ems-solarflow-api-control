@@ -1941,3 +1941,148 @@ def test_a_port_the_ems_accepts_passes(port):
     codes = [issue["code"] for issue in _validate(config)["errors"]]
 
     assert "zendure_mqtt_port_invalid" not in codes
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        ("winter.adjust_hour", "noon"),
+        ("winter.enabled", "perhaps"),
+        ("winter.ramp_step_percent", 9),
+    ],
+)
+def test_a_feature_value_its_type_cannot_hold_blocks_the_apply(path, value):
+    from admin.maintenance_config import _merge_draft, _validate, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "winter": {"enabled": True, "adjust_hour": 12, "ramp_step_percent": 3},
+    }
+    draft = build_maintenance_draft(config)
+    draft["features"][path] = value
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+    errors = _validate(merged, issues)["errors"]
+
+    assert merged["winter"] == {"enabled": True, "adjust_hour": 12, "ramp_step_percent": 3}
+    assert [e["code"] for e in errors if path in e["message"]] == ["config_value_invalid"]
+
+
+def test_a_device_value_its_type_cannot_hold_names_the_device():
+    from admin.maintenance_config import _merge_draft, _validate, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC", "max_power": 800}],
+    }
+    draft = build_maintenance_draft(config)
+    draft["devices"][0]["max_power"] = "lots"
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+    errors = _validate(merged, issues)["errors"]
+
+    assert merged["devices"][0]["max_power"] == 800
+    assert any(
+        e["code"] == "config_value_invalid" and e["message"].startswith("INV_1: max_power")
+        for e in errors
+    )
+
+
+def test_a_stored_value_outside_the_catalog_range_does_not_block_other_edits():
+    from admin.maintenance_config import _merge_draft, _validate, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "winter": {"enabled": True, "ramp_step_percent": 5, "adjust_hour": 12},
+    }
+    draft = build_maintenance_draft(config)
+    draft["features"]["winter.adjust_hour"] = 13
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+    codes = [e["code"] for e in _validate(merged, issues)["errors"]]
+
+    assert "config_value_invalid" not in codes
+    assert merged["winter"]["ramp_step_percent"] == 5
+    assert merged["winter"]["adjust_hour"] == 13
+
+
+def test_a_stored_out_of_range_value_sent_back_as_text_is_still_left_alone():
+    from admin.maintenance_config import _merge_draft, _validate, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "winter": {"enabled": True, "ramp_step_percent": 5},
+    }
+    draft = build_maintenance_draft(config)
+    draft["features"]["winter.ramp_step_percent"] = "5"
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+    codes = [e["code"] for e in _validate(merged, issues)["errors"]]
+
+    assert "config_value_invalid" not in codes
+    assert merged["winter"]["ramp_step_percent"] == 5
+
+
+def _config_with_an_mqtt_device_and_meter():
+    return {
+        "system": {"enabled": True},
+        "devices": [
+            {"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"},
+            {
+                "type": "zendure_mqtt",
+                "name": "INV_2",
+                "enabled": True,
+                "serial_number": "MQTT1",
+                "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": "MQTT1"},
+                "max_power": 800,
+            },
+        ],
+        "grid_meter": {
+            "type": "mqtt",
+            "mqtt": {"host": "10.0.0.9", "topic": "t", "port": 1883},
+        },
+    }
+
+
+def test_an_mqtt_device_value_its_type_cannot_hold_names_the_device():
+    from admin.maintenance_config import _merge_draft, _validate, build_maintenance_draft
+
+    config = _config_with_an_mqtt_device_and_meter()
+    draft = build_maintenance_draft(config)
+    mqtt = next(item for item in draft["devices"] if item["name"] == "INV_2")
+    mqtt["max_power"] = "lots"
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+    errors = _validate(merged, issues)["errors"]
+
+    assert merged["devices"][1]["max_power"] == 800
+    assert any(
+        e["code"] == "config_value_invalid" and e["message"].startswith("INV_2: max_power")
+        for e in errors
+    )
+
+
+def test_a_grid_meter_value_its_type_cannot_hold_blocks_the_apply():
+    from admin.maintenance_config import _merge_draft, _validate, build_maintenance_draft
+
+    config = _config_with_an_mqtt_device_and_meter()
+    draft = build_maintenance_draft(config)
+    draft["grid_meter"]["mqtt"]["port"] = "abc"
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+    errors = _validate(merged, issues)["errors"]
+
+    assert merged["grid_meter"]["mqtt"]["port"] == 1883
+    assert any(
+        e["code"] == "config_value_invalid" and e["message"].startswith("Grid meter:")
+        for e in errors
+    )

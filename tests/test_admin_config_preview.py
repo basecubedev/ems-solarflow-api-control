@@ -1997,3 +1997,63 @@ def test_setup_refuses_a_winter_policy_the_device_type_cannot_run():
     codes = [issue["code"] for issue in result["validation"]["errors"]]
     assert result["ready"] is False
     assert "winter_policy_device_class" in codes
+
+
+@pytest.mark.parametrize(
+    "features",
+    [{"dashboard.port": "not-a-port"}, {"winter.enabled": "perhaps"}],
+)
+def test_a_setup_feature_its_type_cannot_hold_blocks_the_preview(features):
+    preview = _feature_generator().generate([_device(1), _meter()], 1, features=features)
+
+    assert preview["ready"] is False
+    path = next(iter(features))
+    assert any(
+        issue["code"] == "config_value_invalid" and path in issue["message"]
+        for issue in preview["validation"]["errors"]
+    )
+
+
+def test_a_device_value_its_type_cannot_hold_blocks_the_preview_and_names_the_device():
+    preview = _feature_generator().generate(
+        [_device(1, config_values={"max_power": "lots"}), _meter()], 1
+    )
+
+    assert preview["ready"] is False
+    assert any(
+        issue["code"] == "config_value_invalid"
+        and issue["message"].startswith("inverter_1: max_power")
+        for issue in preview["validation"]["errors"]
+    )
+
+
+@pytest.mark.parametrize(
+    "device,name",
+    [
+        (_device(1, config_name="WR1", config_values={"max_power": "lots"}), "WR1"),
+        (
+            _device(
+                3,
+                config_name="WR3",
+                ip="10.0.0.3",
+                serial_number="NEW3",
+                config_values={"max_power": "lots"},
+            ),
+            "WR3",
+        ),
+    ],
+    ids=["a device the config keeps", "a device added to it"],
+)
+def test_a_value_its_type_cannot_hold_blocks_a_preview_on_an_existing_config(
+    tmp_path, device, name
+):
+    path = _write_config(tmp_path, EXISTING_CONFIG)
+
+    result = _existing_generator(path).generate([device])
+
+    assert result["ready"] is False
+    assert any(
+        issue["code"] == "config_value_invalid"
+        and issue["message"].startswith(f"{name}: max_power")
+        for issue in result["validation"]["errors"]
+    )

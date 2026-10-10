@@ -379,3 +379,18 @@ def test_apply_device_config_values_accepts_empty_or_missing():
     assert apply_device_config_values({}, {}) == []
     assert apply_device_config_values(None, {"max_power": 1}) == []
     assert apply_setup_features({}, {}) == []
+
+
+def test_a_grid_meter_feature_its_type_cannot_hold_is_reported_and_not_written():
+    from admin.setup_config import apply_setup_features
+
+    config = {"grid_meter": {"type": "mqtt", "mqtt": {"host": "h", "topic": "t", "port": 1883}}}
+    issues = []
+
+    applied = apply_setup_features(config, {"grid_meter.mqtt.port": "abc"}, issues=issues)
+
+    assert applied == []
+    assert [(issue.code, issue.path) for issue in issues] == [
+        ("config_value_invalid", "grid_meter.mqtt.port")
+    ]
+    assert config["grid_meter"]["mqtt"]["port"] == 1883

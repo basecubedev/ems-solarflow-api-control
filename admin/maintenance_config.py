@@ -1057,8 +1057,16 @@ def _merge_draft(current, draft, issues, *, identity_token_key=None):
     )
     _merge_grid_meter(merged, draft.get("grid_meter"), issues)
     _merge_zendure_mqtt_broker(merged, draft.get("zendure_mqtt"))
-    _merge_features(merged, draft.get("features"))
+    _merge_features(merged, draft.get("features"), issues)
     return merged
+
+
+def _refused_values(issues, refused, label=None):
+    """Report values the mutation refused as merge errors, so no apply passes."""
+
+    for issue in refused:
+        message = f"{label}: {issue.message}" if label else issue.message
+        issues.append(_issue(issue.code, message))
 
 
 def _is_mqtt_draft_item(item):
@@ -1121,6 +1129,7 @@ def materialize_maintenance_device(
     defaults,
     connection_switched=False,
     broker_sources=None,
+    issues=None,
 ):
     """Materialize one maintenance draft entry into a config device.
 
@@ -1148,12 +1157,16 @@ def materialize_maintenance_device(
         device = _strip_stale_connection_keys(copy.deepcopy(existing_device))
     else:
         device = copy.deepcopy(existing_device)
+    refused = []
     if is_mqtt:
         apply_zendure_mqtt_draft_fields(
-            device, draft_item, broker_sources=broker_sources
+            device, draft_item, broker_sources=broker_sources, issues=refused
         )
     else:
-        _apply_device_fields(device, draft_item)
+        _apply_device_fields(device, draft_item, refused)
+    if issues is not None:
+        label = str(device.get("name") or draft_item.get("name") or "Device").strip()
+        _refused_values(issues, refused, label)
     if new_device or switched:
         for key, value in defaults.items():
             if key not in device:
@@ -1589,6 +1602,7 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
                 defaults=defaults,
                 connection_switched=connection_switched,
                 broker_sources=broker_sources,
+                issues=issues,
             )
             # A newly added device, a transport switch and an MQTT device moved
             # to another concrete connection provision their broker; an ordinary
@@ -1607,6 +1621,7 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
                 draft_item=item,
                 transport="local_api",
                 defaults=defaults,
+                issues=issues,
             )
         result.append(device)
     merged["devices"] = result
@@ -1720,11 +1735,11 @@ def _merge_zendure_mqtt_broker(merged, broker):
             target["password"] = password
 
 
-def _apply_device_fields(device, item):
+def _apply_device_fields(device, item, refused=None):
     for key in ("name", "ip", "sn"):
         if key in item:
             device[key] = str(item.get(key) or "").strip()
-    apply_common_device_values(device, item, _DEVICE_VALUE_FIELDS)
+    apply_common_device_values(device, item, _DEVICE_VALUE_FIELDS, issues=refused)
     # Keep unknown (non-catalog) device keys untouched; only surface an
     # explicit enabled flag so a disabled draft device reads as a real change.
     enabled = bool(item.get("enabled", True))
@@ -1784,12 +1799,13 @@ def _merge_grid_meter(merged, grid_meter, issues):
         target = {}
         merged["grid_meter"] = target
 
-    apply_grid_meter_changes(
+    result = apply_grid_meter_changes(
         target,
         _grid_meter_changes(grid_meter),
         MAINTENANCE_POLICY,
         credential=CredentialIntent.from_draft(grid_meter.get("mqtt")),
     )
+    _refused_values(issues, result.errors, "Grid meter")
 
     new_type = str(target.get("type") or "").strip().lower()
     if new_type in _MQTT_GRID_METER_TYPES:
@@ -1818,15 +1834,16 @@ def _grid_meter_mqtt_container(target):
     return nested
 
 
-def _merge_features(merged, features):
+def _merge_features(merged, features, issues):
     if not isinstance(features, dict):
         return
-    apply_config_changes(
+    result = apply_config_changes(
         merged,
         [ConfigChange(path, value) for path, value in features.items()],
         MAINTENANCE_POLICY,
         field_index=_maintenance_field_index(),
     )
+    _refused_values(issues, result.errors)
 
 
 # --- validation ----------------------------------------------------------
