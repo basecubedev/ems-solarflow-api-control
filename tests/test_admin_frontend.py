@@ -12647,3 +12647,80 @@ function setTimeout(fn) { pending.push(fn); }
 """
     result = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
     assert json.loads(result.stdout) == ["[]", "[]"]
+
+
+def test_a_failed_mdns_request_is_transient_and_keeps_the_controls():
+    """A request the browser could not complete says so; the runtime is not unavailable."""
+
+    js = _read("admin.js")
+    script = (
+        "const MDNS_STATE_TEXT = " + js.split("const MDNS_STATE_TEXT = ", 1)[1].split("};", 1)[0] + "};\n"
+        + "let lastMdnsStatus = null;\n"
+        + "\n".join(
+            _extract_fn(js, name)
+            for name in ("mdnsMessageText", "renderMdnsStatus", "renderMdnsRequestFailure")
+        )
+        + """
+function node() { return { textContent: "", className: "", disabled: false, attrs: {},
+  setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; } }; }
+const els = { mdnsState: node(), mdnsMessage: node(), mdnsCount: node(),
+  mdnsToggle: node(), mdnsRefresh: node(), summaryMdns: node() };
+function notifySetupStatus() {}
+function setSummary(el, text) { el.textContent = text; }
+renderMdnsStatus({ state: "running_with_devices", enabled: true, verified_count: 3, message: "Running." });
+renderMdnsRequestFailure(new Error("Failed to fetch"));
+console.log(JSON.stringify({
+  state: els.mdnsState.textContent,
+  message: els.mdnsMessage.textContent,
+  count: els.mdnsCount.textContent,
+  toggleDisabled: els.mdnsToggle.disabled,
+  refreshDisabled: els.mdnsRefresh.disabled,
+  pressed: els.mdnsToggle.attrs["aria-pressed"],
+  summary: els.summaryMdns.textContent,
+}));
+"""
+    )
+    out = _run_node(script)
+
+    assert out["state"] == "no answer"
+    assert "Failed to fetch" in out["message"]
+    assert "unavailable in this runtime" not in out["message"]
+    assert out["count"] == "3 found"
+    assert out["toggleDisabled"] is False
+    assert out["refreshDisabled"] is False
+    assert out["pressed"] == "true"
+    assert out["summary"] == "no answer"
+
+
+def test_every_mdns_request_failure_uses_the_transient_state():
+    js = _read("admin.js")
+    for header in ("async function pollMdns", "async function toggleMdns", "async function refreshMdns"):
+        body = _async_fn_body(js, header)
+        assert "renderMdnsRequestFailure(err)" in body, header
+        assert "unavailable_runtime" not in body, header
+
+
+def test_a_failed_mdns_request_never_reopens_controls_the_server_closed():
+    js = _read("admin.js")
+    script = (
+        "const MDNS_STATE_TEXT = " + js.split("const MDNS_STATE_TEXT = ", 1)[1].split("};", 1)[0] + "};\n"
+        + "let lastMdnsStatus = null;\n"
+        + "\n".join(
+            _extract_fn(js, name)
+            for name in ("mdnsMessageText", "renderMdnsStatus", "renderMdnsRequestFailure")
+        )
+        + """
+function node() { return { textContent: "", className: "", disabled: false, attrs: {},
+  setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; } }; }
+const els = { mdnsState: node(), mdnsMessage: node(), mdnsCount: node(),
+  mdnsToggle: node(), mdnsRefresh: node(), summaryMdns: node() };
+function notifySetupStatus() {}
+function setSummary(el, text) { el.textContent = text; }
+renderMdnsStatus({ state: "unavailable_dependency", enabled: false, message: "zeroconf missing" });
+renderMdnsRequestFailure(new Error("Failed to fetch"));
+console.log(JSON.stringify({ toggle: els.mdnsToggle.disabled, refresh: els.mdnsRefresh.disabled }));
+"""
+    )
+    out = _run_node(script)
+
+    assert out == {"toggle": True, "refresh": True}

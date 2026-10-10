@@ -213,6 +213,7 @@ let gatewayNetworks = [];
 // mDNS is its own source: always merged, never cleared by manual scans.
 const mdnsDevices = new Map();
 const ignoredMdnsDevices = new Map();
+let lastMdnsStatus = null;
 const mqttBrokers = new Map();
 
 function escapeHtml(value) {
@@ -1906,13 +1907,15 @@ const MDNS_STATE_TEXT = {
   disabled: "disabled",
   unavailable_dependency: "unavailable",
   unavailable_runtime: "unavailable",
+  request_failed: "no answer",
 };
 
 function mdnsMessageText(status, state) {
   const message =
     status.message || "Automatic mDNS discovery is unavailable in this runtime.";
   const cause = typeof status.last_error === "string" ? status.last_error.trim() : "";
-  if (!cause || state.indexOf("unavailable_") !== 0) return message;
+  const failed = state.indexOf("unavailable_") === 0 || state === "request_failed";
+  if (!cause || !failed) return message;
   return message + " Cause: " + cause;
 }
 
@@ -1920,6 +1923,7 @@ function renderMdnsStatus(status) {
   const state = String(
     status.state || (status.available ? "disabled" : "unavailable_dependency")
   );
+  if (state !== "request_failed") lastMdnsStatus = status;
   els.mdnsState.textContent = MDNS_STATE_TEXT[state] || state;
   els.mdnsState.className =
     "network-badge " +
@@ -1928,7 +1932,8 @@ function renderMdnsStatus(status) {
   const count = Number(status.verified_count) || 0;
   els.mdnsCount.textContent = count + " found";
   notifySetupStatus();
-  const unavailable = state.indexOf("unavailable_") === 0;
+  const unavailable =
+    state.indexOf("unavailable_") === 0 || status.controls_unavailable === true;
   els.mdnsToggle.disabled = unavailable;
   els.mdnsRefresh.disabled = unavailable;
   els.mdnsToggle.textContent = status.enabled ? "Disable" : "Enable";
@@ -1938,8 +1943,22 @@ function renderMdnsStatus(status) {
       ? "running"
       : state.indexOf("unavailable_") === 0
       ? "unavailable"
-      : state;
+      : MDNS_STATE_TEXT[state] || state;
   setSummary(els.summaryMdns, summary);
+}
+
+function renderMdnsRequestFailure(err) {
+  const previous = lastMdnsStatus || {};
+  const previousState = String(
+    previous.state || (previous.available ? "disabled" : "unavailable_dependency")
+  );
+  renderMdnsStatus({
+    ...previous,
+    controls_unavailable: previousState.indexOf("unavailable_") === 0,
+    state: "request_failed",
+    message: "The Admin Console did not answer the mDNS request. It is asked again on the next refresh.",
+    last_error: err && err.message ? err.message : String(err),
+  });
 }
 
 function renderIgnoredDevices() {
@@ -2006,11 +2025,7 @@ async function pollMdns() {
     renderIgnoredDevices();
     if (!scanning) renderAggregate();
   } catch (err) {
-    renderMdnsStatus({
-      state: "unavailable_runtime",
-      message: "Automatic mDNS discovery is unavailable in this runtime.",
-      last_error: err.message || String(err),
-    });
+    renderMdnsRequestFailure(err);
   }
 }
 
@@ -2029,11 +2044,7 @@ async function toggleMdns() {
     renderMdnsStatus(status);
     await pollMdns();
   } catch (err) {
-    renderMdnsStatus({
-      state: "unavailable_runtime",
-      message: "Automatic mDNS discovery is unavailable in this runtime.",
-      last_error: err.message || String(err),
-    });
+    renderMdnsRequestFailure(err);
   }
 }
 
@@ -2051,11 +2062,7 @@ async function refreshMdns() {
     renderMdnsStatus(status);
     await pollMdns();
   } catch (err) {
-    renderMdnsStatus({
-      state: "unavailable_runtime",
-      message: "Automatic mDNS discovery is unavailable in this runtime.",
-      last_error: err.message || String(err),
-    });
+    renderMdnsRequestFailure(err);
   }
 }
 
