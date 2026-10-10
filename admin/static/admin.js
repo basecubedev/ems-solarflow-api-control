@@ -378,6 +378,7 @@ function createDiscoverySession(mode) {
     scanKeys: new Set(),
     generation: 0,
     progress: { total: 0, done: 0, failed: 0, active: 0 },
+    failureCauses: [],
   };
 }
 
@@ -456,6 +457,7 @@ function resetDiscoverySession(session) {
   session.scanKeys.clear();
   session.mqttProposals = [];
   session.progress = { total: 0, done: 0, failed: 0, active: 0 };
+  session.failureCauses = [];
 }
 
 function validateManualScanInput(raw) {
@@ -16505,13 +16507,32 @@ function maintenanceConfiguredCidrs() {
     .map((result) => result.cidr);
 }
 
-function completeDiscoveryWork(session, failed, generation) {
+function completeDiscoveryWork(session, failed, generation, cause) {
   if (generation !== undefined && generation !== session.generation) return;
   session.progress.active = Math.max(0, session.progress.active - 1);
-  if (failed) session.progress.failed += 1;
-  else session.progress.done += 1;
+  if (failed) {
+    session.progress.failed += 1;
+    if (cause) session.failureCauses.push(cause);
+  } else {
+    session.progress.done += 1;
+  }
   session.active = session.progress.active > 0;
   renderMaintenanceDiscoveryProgress(session);
+}
+
+function discoveryFailureSummary(session) {
+  const causes = (session.failureCauses || []).concat(
+    session.scans
+      .filter((scan) => scan.status === "failed")
+      .map((scan) => scan.cidr + ": " + (scan.error || "scan failed"))
+  );
+  if (!causes.length) return "";
+  const shown = causes.slice(0, 3).join("; ");
+  return causes.length > 3 ? shown + "; and " + (causes.length - 3) + " more" : shown;
+}
+
+function discoveryErrorText(err) {
+  return err && err.message ? err.message : String(err);
 }
 
 async function startMaintenanceDiscovery() {
@@ -16543,15 +16564,18 @@ async function startMaintenanceDiscovery() {
       // failure marks that unit failed but never blocks reading the proposals
       // the remaining sources produced.
       let brokersFailed = false;
+      let brokersCause = null;
       try {
         const refresh = await fetch("/api/discovery/mqtt-brokers/refresh", { method: "POST" });
         if (!refresh.ok) throw new Error("mqtt broker refresh failed");
       } catch (err) {
         brokersFailed = true;
+        brokersCause = "MQTT brokers: " + discoveryErrorText(err);
       }
-      completeDiscoveryWork(session, brokersFailed, generation);
+      completeDiscoveryWork(session, brokersFailed, generation, brokersCause);
 
       let cloudFailed = false;
+      let cloudCause = null;
       try {
         const settingsResponse = await fetch(ZENDURE_CLOUD_BASE + "/settings");
         const settings = await settingsResponse.json();
@@ -16566,10 +16590,12 @@ async function startMaintenanceDiscovery() {
         }
       } catch (err) {
         cloudFailed = true;
+        cloudCause = "Zendure cloud: " + discoveryErrorText(err);
       }
-      completeDiscoveryWork(session, cloudFailed, generation);
+      completeDiscoveryWork(session, cloudFailed, generation, cloudCause);
 
       let failed = false;
+      let cause = null;
       try {
         const response = await fetch("/api/discovery/mqtt-proposals");
         const data = await response.json();
@@ -16578,8 +16604,9 @@ async function startMaintenanceDiscovery() {
         session.mqttProposals = Array.isArray(data.proposals) ? data.proposals : [];
       } catch (err) {
         failed = true;
+        cause = "MQTT proposals: " + discoveryErrorText(err);
       }
-      completeDiscoveryWork(session, failed, generation);
+      completeDiscoveryWork(session, failed, generation, cause);
     })();
 
     const knownScans = queueDiscoveryScans(
@@ -16590,6 +16617,7 @@ async function startMaintenanceDiscovery() {
     );
     const mdnsWork = (async () => {
       let failed = false;
+      let cause = null;
       try {
         const refresh = await fetch("/api/discovery/mdns/refresh", { method: "POST" });
         if (!refresh.ok) throw new Error("mDNS refresh failed");
@@ -16602,11 +16630,13 @@ async function startMaintenanceDiscovery() {
         );
       } catch (err) {
         failed = true;
+        cause = "mDNS: " + discoveryErrorText(err);
       }
-      completeDiscoveryWork(session, failed, generation);
+      completeDiscoveryWork(session, failed, generation, cause);
     })();
     const networkWork = (async () => {
       let failed = false;
+      let cause = null;
       try {
         const response = await fetch("/api/discovery/networks");
         const data = await response.json();
@@ -16617,7 +16647,7 @@ async function startMaintenanceDiscovery() {
           .map((network) => network.cidr)
           .filter(Boolean);
         cidrs.forEach((cidr) => session.networks.set(cidr, { cidr }));
-        completeDiscoveryWork(session, false, generation);
+        completeDiscoveryWork(session, false, generation, null);
         await queueDiscoveryScans(
           session,
           cidrs,
@@ -16627,8 +16657,9 @@ async function startMaintenanceDiscovery() {
         return;
       } catch (err) {
         failed = true;
+        cause = "network discovery: " + discoveryErrorText(err);
       }
-      completeDiscoveryWork(session, failed, generation);
+      completeDiscoveryWork(session, failed, generation, cause);
     })();
     await Promise.all([knownScans, mdnsWork, networkWork, mqttWork]);
     if (generation !== session.generation) return;
@@ -16638,7 +16669,8 @@ async function startMaintenanceDiscovery() {
     );
     renderMaintenanceDiscoveryReview(results);
     mconfigEls.discoveryStatus.textContent = session.progress.failed
-      ? "Discovery completed with warnings. Retained results and the in-memory draft are unchanged."
+      ? "Discovery completed with warnings (" + discoveryFailureSummary(session) +
+        "). Retained results and the in-memory draft are unchanged."
       : "Discovery completed. Results are retained until you reset them.";
     if (cloudSkippedWithoutKey) {
       mconfigEls.discoveryStatus.textContent +=
@@ -16681,7 +16713,9 @@ async function runMaintenanceManualScan(event) {
   if (generation !== discoverySessions.maintenance.generation) return;
   renderMaintenanceDiscoveryProgress(discoverySessions.maintenance);
   mconfigEls.discoveryStatus.textContent = discoverySessions.maintenance.progress.failed
-    ? "Manual scan completed with warnings. Previous results were retained."
+    ? "Manual scan completed with warnings (" +
+      discoveryFailureSummary(discoverySessions.maintenance) +
+      "). Previous results were retained."
     : "Manual scan completed. Previous results were retained.";
 }
 

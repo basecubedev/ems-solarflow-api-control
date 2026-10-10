@@ -12700,6 +12700,54 @@ def test_every_mdns_request_failure_uses_the_transient_state():
         assert "unavailable_runtime" not in body, header
 
 
+def test_a_maintenance_discovery_with_warnings_names_what_failed():
+    js = _read("admin.js")
+    script = "\n".join(
+        _extract_fn(js, name)
+        for name in ("createDiscoverySession", "completeDiscoveryWork", "discoveryFailureSummary")
+    ) + """
+function renderMaintenanceDiscoveryProgress() {}
+const session = createDiscoverySession("maintenance");
+session.progress.active = 3;
+completeDiscoveryWork(session, true, 0, "mDNS: mDNS refresh failed");
+completeDiscoveryWork(session, false, 0);
+completeDiscoveryWork(session, true, 0, "network discovery: timed out");
+session.scans.push({ cidr: "192.168.1.0/24", status: "failed", error: "host unreachable" });
+session.scans.push({ cidr: "192.168.2.0/24", status: "done", error: null });
+const many = createDiscoverySession("maintenance");
+["a", "b", "c", "d", "e"].forEach((cause) => completeDiscoveryWork(many, true, 0, cause));
+console.log(JSON.stringify({
+  failed: session.progress.failed,
+  summary: discoveryFailureSummary(session),
+  clean: discoveryFailureSummary(createDiscoverySession("maintenance")),
+  many: discoveryFailureSummary(many),
+}));
+"""
+    out = _run_node(script)
+
+    assert out["failed"] == 2
+    assert out["summary"] == (
+        "mDNS: mDNS refresh failed; network discovery: timed out; "
+        "192.168.1.0/24: host unreachable"
+    )
+    assert out["clean"] == ""
+    assert out["many"] == "a; b; c; and 2 more"
+
+
+def test_every_maintenance_discovery_failure_carries_its_cause():
+    js = _read("admin.js")
+    start = _async_fn_body(js, "async function startMaintenanceDiscovery")
+    manual = _async_fn_body(js, "async function runMaintenanceManualScan")
+
+    failures = re.findall(r"completeDiscoveryWork\(session, (\w+), generation(, \w+)?\)", start)
+    assert failures, "the maintenance discovery reports its work units"
+    assert all(cause for _, cause in failures), failures
+    assert "discoveryFailureSummary(session)" in start
+    assert "discoveryFailureSummary(" in manual
+    reset = _extract_fn(js, "resetDiscoverySession")
+    assert "failureCauses" in reset
+
+
 def test_a_failed_mdns_request_never_reopens_controls_the_server_closed():
     js = _read("admin.js")
     script = (
