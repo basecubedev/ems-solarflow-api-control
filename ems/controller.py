@@ -3205,9 +3205,10 @@ class EMSController:
         )
 
     def full_charge_assist_ac_charge_power(self):
+        default = cfg.BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["ac_charge_power"]
         return cfg.safe_int(
-            self.full_charge_assist_config().get("ac_charge_power", 200),
-            200,
+            self.full_charge_assist_config().get("ac_charge_power", default),
+            default,
             minimum=0
         )
 

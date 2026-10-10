@@ -53,16 +53,7 @@ from ems.build_info import collect_build_info
 from ems.zendure_mqtt import config_entries as zendure_mqtt_entries
 
 
-BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
-    "enabled": True,
-    "interval_days": 28,
-    "assist_window_days": 7,
-    "assist_start_soc": 80,
-    "force_time": "14:00",
-    "ac_charge_power": 200,
-    "enable_ac_charge_mode": True,
-    "state_database_path": "data/ems_state.sqlite",
-}
+BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = config_mod.BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
 
 
 DIAGNOSE_REDACT_KEYWORDS = (
