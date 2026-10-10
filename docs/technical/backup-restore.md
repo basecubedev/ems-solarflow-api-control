@@ -390,7 +390,8 @@ python3 emsctl.py influx status
 ```
 
 `influx status` is only relevant when you use bundled/local InfluxDB analytics.
-After a config or database restore the CLI also reminds you to run
+After a config or database restore the CLI names the archive it restored, says
+to restart EMS so it reads the restored files, and reminds you to run
 `diagnose --deep`.
 
 ## Common problems

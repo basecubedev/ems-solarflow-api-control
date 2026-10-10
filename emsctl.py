@@ -3565,12 +3565,20 @@ def make_interactive_conflict_resolver(args, config, archive_path, password):
     return resolver
 
 
-def print_restore_done(args, config, *, backup_type="config", influx=None):
+def print_restore_done(args, config, *, backup_type="config", influx=None, archive_path=None):
     print()
     if backup_type == "databases":
         print("Database restore completed.")
     else:
         print("Restore completed.")
+    if archive_path:
+        print(f"Restored from:\n  {os.path.abspath(archive_path)}")
+    print()
+    if backup_mod.running_in_container():
+        print("Restart EMS so it reads the restored files, on the host:")
+        print("  docker compose restart ems")
+    else:
+        print("Restart the EMS process so it reads the restored files.")
     if influx and influx.get("detected"):
         print()
         if influx.get("mode") == "bundled":
@@ -3737,6 +3745,7 @@ def handle_backup_restore(args, config, archive_path, interactive):
         config,
         backup_type=backup_type,
         influx=manifest.get("influxdb"),
+        archive_path=archive_path,
     )
     return 0
 

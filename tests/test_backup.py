@@ -1381,3 +1381,23 @@ def test_a_manifest_path_that_is_not_text_is_a_backup_error(tmp_path):
     _write_manifest_tar(path, manifest, {})
     with pytest.raises(backup.BackupError):
         backup.restore_backup(path, base_dir=str(tmp_path), dry_run=True)
+
+
+@pytest.mark.parametrize(
+    "in_container,hint",
+    [(True, "docker compose restart ems"), (False, "Restart the EMS process")],
+)
+def test_a_finished_restore_names_the_archive_and_says_to_restart(
+    monkeypatch, capsys, tmp_path, in_container, hint
+):
+    import emsctl
+
+    archive = tmp_path / "ems-config-manual-2026-10-10-020000.tar.gz"
+    monkeypatch.setattr(emsctl.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(emsctl.backup_mod, "running_in_container", lambda: in_container)
+
+    emsctl.print_restore_done(emsctl.make_args(), {}, archive_path=str(archive))
+    out = capsys.readouterr().out
+
+    assert f"Restored from:\n  {archive}" in out
+    assert hint in out
