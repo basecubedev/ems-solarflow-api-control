@@ -12900,6 +12900,15 @@ const button = (action, locked) => ({ dataset: { backupId: "b1", backupKind: "ar
     assert out["plain"]["form"] is True
 
 
+def test_a_reloaded_broker_card_keeps_the_operators_tls_choice():
+    js = _read("admin.js")
+    sync = _extract_fn(js, "syncMaintenanceBrokerForm")
+
+    assert "tls_explicit" not in sync
+    assert "Skip TLS verification" not in sync
+    assert "correct zendure_mqtt.tls_insecure in config.json" in sync
+
+
 def test_a_failed_mdns_request_never_reopens_controls_the_server_closed():
     js = _read("admin.js")
     script = (

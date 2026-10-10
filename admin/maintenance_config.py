@@ -611,20 +611,21 @@ def _device_draft(device, broker_sources=None):
     return draft
 
 
-def _stored_broker_uses_tls(broker):
-    """TLS flag for the editable view of a stored legacy broker.
+def _stored_broker_tls(broker):
+    """``(tls, invalid)`` for the editable view of a stored legacy broker.
 
     A view cannot refuse, so an unresolvable stored mode is presented as TLS
     rather than as plaintext: showing it as plain is the one reading that could
     talk an operator into saving a downgrade of a broker EMS Core would have
-    rejected at startup.
+    rejected at startup. ``invalid`` tells the merge that this TLS is the view's
+    and not the config's, so an untouched card leaves the stored keys alone.
     """
 
     try:
         tls, _insecure = broker_tls_metadata(broker)
     except BrokerSecurityError:
-        return True
-    return tls
+        return True, True
+    return tls, False
 
 
 def _has_named_brokers(broker):
@@ -654,6 +655,7 @@ def _zendure_mqtt_broker_draft(broker):
             "host": "",
             "port": None,
             "tls": False,
+            "tls_stored_invalid": False,
             "username": "",
             "has_password": False,
         }
@@ -670,9 +672,11 @@ def _zendure_mqtt_broker_draft(broker):
             "host": "",
             "port": None,
             "tls": False,
+            "tls_stored_invalid": False,
             "username": "",
             "has_password": False,
         }
+    tls, tls_invalid = _stored_broker_tls(broker)
     return {
         "present": True,
         "managed": "legacy",
@@ -681,7 +685,8 @@ def _zendure_mqtt_broker_draft(broker):
         "enabled": bool(top_host),
         "host": top_host,
         "port": broker.get("port"),
-        "tls": _stored_broker_uses_tls(broker),
+        "tls": tls,
+        "tls_stored_invalid": tls_invalid,
         "username": str(broker.get("username") or "").strip(),
         "has_password": bool(broker.get("password")),
     }
@@ -1694,10 +1699,12 @@ def _merge_zendure_mqtt_broker(merged, broker):
         target["port"] = _coerce_number(broker.get("port"))
     elif creating and host:
         target["port"] = 1883
-    if broker.get("tls"):
-        target["tls"] = True
-    elif "tls" in target:
-        target["tls"] = bool(broker.get("tls"))
+    stored_invalid = existing_is_dict and _stored_broker_tls(existing)[1]
+    if broker.get("tls_explicit") is True or not stored_invalid:
+        if broker.get("tls"):
+            target["tls"] = True
+        elif "tls" in target:
+            target["tls"] = bool(broker.get("tls"))
     username = str(broker.get("username") or "").strip()
     if username:
         target["username"] = username

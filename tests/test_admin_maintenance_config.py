@@ -1842,3 +1842,65 @@ def test_the_tls_refusal_names_the_fix_that_applies(block, hint):
 
     assert len(messages) == 1
     assert hint in messages[0]
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"tls": "false"},
+        {"tls": False, "tls_insecure": True},
+    ],
+    ids=["quoted-false", "insecure-without-tls"],
+)
+def test_an_untouched_broker_card_never_rewrites_an_invalid_stored_tls(stored):
+    """The view shows such a broker as TLS so it cannot invite a downgrade; a
+    round trip must not turn that view into a silent `tls: true` either."""
+
+    from admin.maintenance_config import _merge_draft, _validate, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {"host": "10.0.0.1", "port": 1883, **stored},
+    }
+    draft = build_maintenance_draft(config)
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+    codes = [issue["code"] for issue in _validate(merged, issues)["errors"]]
+
+    assert draft["zendure_mqtt"]["tls_stored_invalid"] is True
+    assert {k: merged["zendure_mqtt"].get(k) for k in stored} == stored
+    assert "zendure_mqtt_tls_invalid" in codes
+
+
+def test_an_explicit_security_choice_replaces_an_invalid_stored_tls():
+    from admin.maintenance_config import _merge_draft, _validate, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {"host": "10.0.0.1", "port": 8883, "tls": "false"},
+    }
+    draft = build_maintenance_draft(config)
+    draft["zendure_mqtt"]["tls"] = True
+    draft["zendure_mqtt"]["tls_explicit"] = True
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+    codes = [issue["code"] for issue in _validate(merged, issues)["errors"]]
+
+    assert merged["zendure_mqtt"]["tls"] is True
+    assert "zendure_mqtt_tls_invalid" not in codes
+
+
+def test_a_valid_stored_tls_is_not_marked_invalid():
+    from admin.maintenance_config import build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {"host": "10.0.0.1", "port": 8883, "tls": True},
+    }
+
+    assert build_maintenance_draft(config)["zendure_mqtt"]["tls_stored_invalid"] is False

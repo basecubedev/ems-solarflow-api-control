@@ -14629,7 +14629,12 @@ function syncMaintenanceBrokerForm() {
     mconfigEls.brokerHelp.textContent = named
       ? "This installation uses named MQTT broker profiles managed by Setup. " +
         "Edit broker connections there; they are shown read-only here."
-      : (catalog.zendure_mqtt_broker && catalog.zendure_mqtt_broker.help) || "";
+      : ((catalog.zendure_mqtt_broker && catalog.zendure_mqtt_broker.help) || "") +
+        (broker.tls_stored_invalid
+          ? " The stored TLS settings are invalid. Choosing TLS here keeps a " +
+            "stored tls_insecure: true valid; for Plain, or when tls_insecure is " +
+            "not true or false, correct zendure_mqtt.tls_insecure in config.json."
+          : "");
   }
   [
     mconfigEls.brokerHost,
@@ -14707,21 +14712,26 @@ function wireMaintenanceBrokerForm() {
     const port = (mconfigEls.brokerPort.value || "").trim();
     if (port === "") delete broker.port;
     else broker.port = port;
-    broker.tls = mconfigEls.brokerSecurity
-      ? mconfigEls.brokerSecurity.value === "tls"
-      : false;
     broker.username = (mconfigEls.brokerUsername.value || "").trim();
     broker.present = Boolean(broker.host);
   };
   [
     mconfigEls.brokerHost,
     mconfigEls.brokerPort,
-    mconfigEls.brokerSecurity,
     mconfigEls.brokerUsername,
   ].forEach((el) => {
     if (el) el.addEventListener("input", update);
-    if (el && el.tagName === "SELECT") el.addEventListener("change", update);
   });
+  // The TLS the card shows for an invalid stored value is the view's, not the
+  // config's; only an operator's own choice here may replace the stored keys.
+  if (mconfigEls.brokerSecurity) {
+    mconfigEls.brokerSecurity.addEventListener("change", () => {
+      const broker = mconfigBrokerDraft();
+      if (!broker) return;
+      broker.tls = mconfigEls.brokerSecurity.value === "tls";
+      broker.tls_explicit = true;
+    });
+  }
   if (mconfigEls.brokerPassword) {
     mconfigEls.brokerPassword.addEventListener("input", () => {
       const broker = mconfigBrokerDraft();
