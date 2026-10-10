@@ -627,6 +627,33 @@ def test_emsctl_names_where_a_skipped_outside_file_lives(capsys):
     assert "/etc/ems/a.json" in out
 
 
+# ---------------------------------------------------------------------------
+# A config handed out of the Admin Console is an encrypted config backup
+# ---------------------------------------------------------------------------
+
+def test_a_config_download_is_an_encrypted_config_backup_holding_only_the_config(tmp_path):
+    payload = b'{"devices": [], "zendure_mqtt": {"password": "broker-secret"}}\n'
+
+    name, data = backup.encrypted_config_download(payload, "download-pw")
+    archive = tmp_path / name
+    archive.write_bytes(data)
+
+    assert backup.parse_backup_archive_name(name) is not None
+    assert name.endswith(".tar.gz.enc")
+    assert b"broker-secret" not in data
+    manifest = backup.inspect_backup(str(archive), password="download-pw")["manifest"]
+    assert [f["path"] for f in manifest["files"]] == ["config/config.json"]
+    base = tmp_path / "install"
+    (base / "config").mkdir(parents=True)
+    backup.restore_backup(str(archive), base_dir=str(base), password="download-pw")
+    assert (base / "config" / "config.json").read_bytes() == payload
+
+
+def test_a_config_download_without_a_password_is_refused():
+    with pytest.raises(backup.BackupError):
+        backup.encrypted_config_download(b"{}", "")
+
+
 def test_a_filesystem_that_refuses_the_mode_does_not_stop_the_restore(tmp_path, monkeypatch):
     base, config, config_path = write_project(tmp_path)
     path = create(base, config, config_path)

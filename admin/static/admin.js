@@ -3793,6 +3793,8 @@ const configEls = {
   previewRelease: document.getElementById("config-preview-release"),
   previewBase: document.getElementById("config-preview-base"),
   download: document.getElementById("config-download"),
+  downloadPassword: document.getElementById("config-download-password"),
+  downloadPasswordConfirm: document.getElementById("config-download-password-confirm"),
   exportStatus: document.getElementById("config-export-status"),
   apply: document.getElementById("config-apply"),
   applyStatus: document.getElementById("config-apply-status"),
@@ -7428,15 +7430,43 @@ function configExportError(data, fallback) {
   return errors.length ? errors.join(" ") : (data && data.message) || fallback;
 }
 
+const CONFIG_DOWNLOAD_MIN_PASSWORD = 8;
+
+function configDownloadPassword() {
+  const password = configEls.downloadPassword ? configEls.downloadPassword.value : "";
+  const confirmation = configEls.downloadPasswordConfirm
+    ? configEls.downloadPasswordConfirm.value
+    : "";
+  if (password.length < CONFIG_DOWNLOAD_MIN_PASSWORD) {
+    return {
+      error: "Enter a download password of at least " + CONFIG_DOWNLOAD_MIN_PASSWORD +
+        " characters; the download is encrypted with it.",
+    };
+  }
+  if (password !== confirmation) return { error: "The two download passwords differ." };
+  return { password };
+}
+
+function downloadFileName(res, fallback) {
+  const header = res.headers && res.headers.get ? res.headers.get("Content-Disposition") : "";
+  const match = /filename="([^"]+)"/.exec(header || "");
+  return match ? match[1] : fallback;
+}
+
 async function downloadGeneratedConfig() {
   if (!configEls.download || configEls.download.disabled) return;
+  const secret = configDownloadPassword();
+  if (secret.error) {
+    showConfigExportStatus(secret.error, "error");
+    return;
+  }
   configEls.download.disabled = true;
-  showConfigExportStatus("Preparing validated config.json…", "info");
+  showConfigExportStatus("Preparing the encrypted config…", "info");
   try {
     const res = await fetch("/api/setup/config/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(configExportBody(false)),
+      body: JSON.stringify({ ...configExportBody(false), password: secret.password }),
     });
     if (!res.ok) {
       const data = await res.json();
@@ -7446,12 +7476,14 @@ async function downloadGeneratedConfig() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "config.json";
+    link.download = downloadFileName(res, "ems-config.tar.gz.enc");
     document.body.appendChild(link);
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    showConfigExportStatus("✓ config.json download ready.", "success");
+    configEls.downloadPassword.value = "";
+    configEls.downloadPasswordConfirm.value = "";
+    showConfigExportStatus("✓ Encrypted config download ready.", "success");
   } catch (err) {
     showConfigExportStatus(err.message || String(err), "error");
   } finally {

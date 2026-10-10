@@ -1553,7 +1553,9 @@ def test_config_step_has_no_prominent_download_or_save_actions():
     # The debug-only download stays inside the collapsed preview accordion.
     preview = config.split('id="config-preview-details"', 1)[1]
     assert 'id="config-download"' in preview
-    assert "Download config.json" in preview
+    assert "Download encrypted config" in preview
+    assert 'id="config-download-password"' in preview
+    assert 'id="config-download-password-confirm"' in preview
     assert 'id="config-export-status"' in preview
 
 
@@ -1562,7 +1564,7 @@ def test_config_continue_saves_generated_config_via_write_endpoint():
 
     # The debug download still uses the download endpoint.
     assert "/api/setup/config/download" in js
-    assert 'link.download = "config.json"' in js
+    assert 'link.download = downloadFileName(res, "ems-config.tar.gz.enc")' in js
     # Continue rebuilds/validates and writes the generated config (overwrite),
     # then advances to the deployment step.
     fn = js.split("async function continueFromConfig", 1)[1].split(
@@ -12909,6 +12911,29 @@ def test_returning_to_a_development_build_asks_for_the_risk_and_sends_it():
     assert 'data.error === "acknowledgement_required"' in body
     assert "window.confirm(RETURN_TO_DEVELOPMENT_BUILD_CONFIRM)" in body
     assert body.index("RETURN_TO_DEVELOPMENT_BUILD_CONFIRM") < body.index("request(true)")
+
+
+def test_the_config_download_asks_for_a_password_twice_and_sends_it():
+    js = _read("admin.js")
+    script = _extract_fn(js, "configDownloadPassword") + """
+const CONFIG_DOWNLOAD_MIN_PASSWORD = 8;
+const configEls = { downloadPassword: { value: "" }, downloadPasswordConfirm: { value: "" } };
+const cases = {};
+for (const [name, a, b] of [["empty", "", ""], ["short", "1234567", "1234567"],
+                            ["differs", "12345678", "12345679"], ["ok", "12345678", "12345678"]]) {
+  configEls.downloadPassword.value = a;
+  configEls.downloadPasswordConfirm.value = b;
+  cases[name] = configDownloadPassword();
+}
+console.log(JSON.stringify(cases));
+"""
+    out = _run_node(script)
+
+    assert "error" in out["empty"] and "error" in out["short"] and "error" in out["differs"]
+    assert out["ok"] == {"password": "12345678"}
+    download = _async_fn_body(js, "async function downloadGeneratedConfig")
+    assert "password: secret.password" in download
+    assert download.index("configDownloadPassword()") < download.index("fetch(")
 
 
 def test_a_reloaded_broker_card_keeps_the_operators_tls_choice():

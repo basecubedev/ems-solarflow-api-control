@@ -837,6 +837,51 @@ def create_config_backup(
     )
 
 
+def encrypted_config_download(payload, password, *, now=None):
+    """Wrap a config payload as an encrypted config backup: ``(name, bytes)``.
+
+    A config carries API keys and broker passwords, so the Admin Console hands
+    it out only like this. The archive holds ``config/config.json`` and nothing
+    else, and every restore path that reads a config backup reads it.
+    """
+
+    if not password:
+        raise BackupError("a password is required to download a config")
+    with tempfile.TemporaryDirectory(prefix="ems-config-download-") as work:
+        config_file = os.path.join(work, "config", "config.json")
+        os.makedirs(os.path.dirname(config_file), mode=0o700)
+        with open(config_file, "wb") as handle:
+            handle.write(payload)
+        included = [{
+            "abs_path": config_file,
+            "arcname": "config/config.json",
+            "kind": "config",
+            "sensitive": True,
+        }]
+        manifest = build_manifest(
+            included,
+            [],
+            backup_type="config",
+            backup_purpose="manual",
+            encrypted=True,
+            encryption_method=_encryption_method(None, True),
+            created_at=_utc_now_iso(now if isinstance(now, datetime) else None),
+        )
+        path = _emit_archive(
+            "config",
+            "manual",
+            manifest,
+            included,
+            os.path.join(work, "out"),
+            True,
+            password,
+            DEFAULT_COMPRESSION_LEVEL,
+            now,
+        )
+        with open(path, "rb") as handle:
+            return os.path.basename(path), handle.read()
+
+
 def create_rollback_backup(config, rollback_for, *, password=None, **kwargs):
     """Create a config rollback backup tagged for ``rollback_for``."""
 

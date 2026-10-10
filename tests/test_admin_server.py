@@ -783,22 +783,70 @@ def test_release_prepare_returns_clean_embedded_resource_error(tmp_path):
         srv.server_close()
 
 
-def test_config_download_returns_attachment_from_generated_preview(tmp_path):
+def _downloaded_config(tmp_path, archive, password="download-pw"):
+    from ems import backup as backup_mod
+
+    path = tmp_path / "downloaded.tar.gz.enc"
+    path.write_bytes(archive)
+    install = tmp_path / "downloaded"
+    (install / "config").mkdir(parents=True, exist_ok=True)
+    backup_mod.restore_backup(str(path), base_dir=str(install), password=password)
+    return json.loads((install / "config" / "config.json").read_text())
+
+
+def _raw_post(url, body):
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={**auth_headers(url, "POST"), "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request) as response:
+            return response.status, dict(response.headers), response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers), exc.read()
+
+
+def test_config_download_is_an_encrypted_config_backup_of_the_generated_preview(tmp_path):
+    from ems import backup as backup_mod
+
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     try:
-        status, headers, payload = _request(
+        status, headers, data = _raw_post(
             f"{base}/api/setup/config/download",
-            method="POST",
-            body=_control_export_body(),
+            {**_control_export_body(), "password": "download-pw"},
         )
-        assert status == 200
-        assert headers["Content-Type"].startswith("application/json")
-        assert headers["Content-Disposition"] == 'attachment; filename="config.json"'
-        assert payload["devices"][0]["name"] == "WR1"
-        assert not (tmp_path / "generated" / "config.json").exists()
     finally:
         srv.shutdown()
         srv.server_close()
+
+    assert status == 200
+    assert headers["Content-Type"] == "application/octet-stream"
+    name = headers["Content-Disposition"].split('filename="', 1)[1].rstrip('"')
+    assert backup_mod.parse_backup_archive_name(name) is not None
+    config = _downloaded_config(tmp_path, data)
+    assert config["devices"][0]["name"] == "WR1"
+    assert not (tmp_path / "generated" / "config.json").exists()
+
+
+@pytest.mark.parametrize("password", [None, "", "short"])
+def test_config_download_without_a_real_password_hands_out_nothing(tmp_path, password):
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    body = _control_export_body()
+    if password is not None:
+        body["password"] = password
+    try:
+        status, _, payload = _request(
+            f"{base}/api/setup/config/download", method="POST", body=body
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400
+    assert payload["error"] == "download_password_required"
+    assert "devices" not in payload
 
 
 def test_config_download_is_blocked_when_validation_fails(tmp_path):
@@ -1258,10 +1306,11 @@ def test_config_export_endpoints_include_telemetry_mqtt_alongside_control_device
             base,
             {**_control_export_body(), "zendure_mqtt_proposals": [selection]},
         )
-        status, _, downloaded = _request(
-            f"{base}/api/setup/config/download", method="POST", body=body
+        status, _, archive = _raw_post(
+            f"{base}/api/setup/config/download", {**body, "password": "download-pw"}
         )
         assert status == 200
+        downloaded = _downloaded_config(tmp_path, archive)
         entry = [
             d for d in downloaded["devices"] if d.get("type") == "zendure_mqtt"
         ][0]
