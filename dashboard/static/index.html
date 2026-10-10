@@ -407,9 +407,9 @@
   </main>
 
   <div id="loginModal" class="modal-backdrop" hidden>
-    <form id="loginForm" class="login-modal">
+    <form id="loginForm" class="login-modal" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
       <div class="login-modal-head">
-        <h2>Dashboard Login</h2>
+        <h2 id="loginTitle">Dashboard Login</h2>
         <button id="loginCloseButton" class="icon-button" type="button" aria-label="Close">&times;</button>
       </div>
       <label class="login-field">
@@ -419,7 +419,7 @@
       <div id="loginError" class="form-error" hidden></div>
       <div class="login-actions">
         <button class="secondary-button" id="loginCancelButton" type="button">Cancel</button>
-        <button class="primary-button" type="submit">Login</button>
+        <button class="primary-button" id="loginSubmitButton" type="submit">Login</button>
       </div>
     </form>
   </div>

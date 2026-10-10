@@ -5543,12 +5543,17 @@ function initAuthControls() {
       await login();
     });
   }
+
+  document.addEventListener("keydown", handleLoginModalKeydown);
 }
+
+let loginReturnFocus = null;
 
 function openLoginModal() {
   const modal = $("loginModal");
   const password = $("loginPassword");
   const error = $("loginError");
+  loginReturnFocus = document.activeElement || null;
   if (error) error.hidden = true;
   if (password) password.value = "";
   if (modal) modal.hidden = false;
@@ -5557,7 +5562,43 @@ function openLoginModal() {
 
 function closeLoginModal() {
   const modal = $("loginModal");
+  const wasOpen = Boolean(modal && !modal.hidden);
   if (modal) modal.hidden = true;
+  const target = loginReturnFocus && loginReturnFocus.isConnected ? loginReturnFocus : $("authButton");
+  loginReturnFocus = null;
+  if (wasOpen && target && typeof target.focus === "function") target.focus();
+}
+
+function loginModalFocusables() {
+  const form = $("loginForm");
+  if (!form || typeof form.querySelectorAll !== "function") return [];
+  return Array.from(form.querySelectorAll("button, input, select, textarea, [href]"))
+    .filter((node) => !node.disabled && !node.hidden);
+}
+
+function handleLoginModalKeydown(event) {
+  const modal = $("loginModal");
+  if (!modal || modal.hidden) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeLoginModal();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusables = loginModalFocusables();
+  if (!focusables.length) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  const active = document.activeElement;
+  const form = $("loginForm");
+  const inside = Boolean(form && typeof form.contains === "function" && form.contains(active));
+  if (event.shiftKey && (active === first || !inside)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (active === last || !inside)) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 async function login() {
@@ -7738,6 +7779,9 @@ if (typeof module !== "undefined") {
     logsAuthState,
     setServiceLogLevel,
     renderAuthState,
+    openLoginModal,
+    closeLoginModal,
+    handleLoginModalKeydown,
     logout,
     maintenanceAuthState,
     maintenanceBackupTypeLabel,
