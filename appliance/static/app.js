@@ -968,6 +968,7 @@
     }).then(function (payload) {
       state.busy = false;
       state.pending = payload;
+      state.pendingForget = options.forget || null;
       openDialog(options.title, payload, options.confirmLabel, options.danger);
     }).catch(function (exc) {
       state.busy = false;
@@ -1207,6 +1208,8 @@
       }
     }).then(function (payload) {
       state.operation = payload.operation;
+      if (state.pendingForget) clearChoices(state.pendingForget);
+      state.pendingForget = null;
       closeDialog();
       announce("Operation started");
       var type = (pending.plan || {}).type || "";
@@ -2560,9 +2563,14 @@
     var wrapper = el("div", { class: "inline-form" });
     var scan = state.data.wifi;
 
-    var ssidInput = el("input", { id: "wifi-ssid", type: "text", "data-test": "wifi-ssid" });
+    var ssidInput = rememberInput(
+      el("input", { id: "wifi-ssid", type: "text", "data-test": "wifi-ssid" }), "wifi-form-ssid", "value"
+    );
+    // A passphrase is never kept across a rebuild: it would outlive the form.
     var passInput = el("input", { id: "wifi-pass", type: "password", "data-test": "wifi-pass", autocomplete: "new-password" });
-    var hidden = el("input", { id: "wifi-hidden", type: "checkbox", "data-test": "wifi-hidden" });
+    var hidden = rememberInput(
+      el("input", { id: "wifi-hidden", type: "checkbox", "data-test": "wifi-hidden" }), "wifi-form-hidden", "checked"
+    );
 
     wrapper.appendChild(el("div", { class: "control-stage-actions" }, [
       el("button", {
@@ -2580,7 +2588,11 @@
               text: item.ssid + " · " + (item.signal === null ? "?" : item.signal) + "% · " + item.security
             });
           })));
-      select.addEventListener("change", function () { ssidInput.value = select.value; });
+      rememberChoice(select, "wifi-form-select");
+      select.addEventListener("change", function () {
+        ssidInput.value = select.value;
+        state.choices["wifi-form-ssid"] = select.value;
+      });
       wrapper.appendChild(el("div", { class: "field" }, [
         el("label", { for: "wifi-select", text: "Visible networks" }), select
       ]));
@@ -2600,7 +2612,8 @@
           planOperation({
             endpoint: "/api/network/wifi/plan",
             body: { ssid: ssidInput.value, passphrase: passInput.value, hidden: hidden.checked },
-            title: "Change the WLAN connection", confirmLabel: "Apply", danger: true
+            title: "Change the WLAN connection", confirmLabel: "Apply", danger: true,
+            forget: "wifi-form-"
           });
         }
       })
@@ -2609,7 +2622,10 @@
   }
 
   function renderHostnameForm() {
-    var input = el("input", { id: "hostname-input", type: "text", "data-test": "hostname-input" });
+    var input = rememberInput(
+      el("input", { id: "hostname-input", type: "text", "data-test": "hostname-input" }),
+      "hostname-form-input", "value"
+    );
     return el("div", { class: "inline-form" }, [
       el("div", { class: "field" }, [el("label", { for: "hostname-input", text: "New hostname" }), input]),
       el("div", { class: "control-stage-actions" }, [
@@ -2618,7 +2634,8 @@
           onclick: function () {
             planOperation({
               endpoint: "/api/network/hostname", body: { hostname: input.value.trim() },
-              title: "Change the appliance hostname", confirmLabel: "Apply"
+              title: "Change the appliance hostname", confirmLabel: "Apply",
+              forget: "hostname-form-"
             });
           }
         })
@@ -2628,9 +2645,9 @@
 
   function renderTimezoneForm() {
     var current = ((state.data.status || {}).system || {}).timezone || "UTC";
-    var input = el("input", {
+    var input = rememberInput(el("input", {
       id: "timezone-input", type: "text", "data-test": "timezone-input", value: current
-    });
+    }), "timezone-form-input", "value");
     return el("div", { class: "inline-form" }, [
       el("p", { class: "section-hint", "data-test": "timezone-current",
         text: "The Admin Console receives this zone when it is installed and passes it " +
@@ -2645,7 +2662,8 @@
           onclick: function () {
             planOperation({
               endpoint: "/api/system/timezone", body: { timezone: input.value.trim() },
-              title: "Change the appliance timezone", confirmLabel: "Apply"
+              title: "Change the appliance timezone", confirmLabel: "Apply",
+              forget: "timezone-form-"
             });
           }
         })
@@ -2962,12 +2980,12 @@
 
   function renderKeyForm(ssh) {
     var accounts = (ssh.accounts || []).map(function (item) { return item.name; });
-    var select = el("select", { id: "key-account", "data-test": "key-account" },
-      accounts.map(function (name) { return el("option", { value: name, text: name }); }));
-    var textarea = el("textarea", {
+    var select = rememberChoice(el("select", { id: "key-account", "data-test": "key-account" },
+      accounts.map(function (name) { return el("option", { value: name, text: name }); })), "key-form-account");
+    var textarea = rememberInput(el("textarea", {
       id: "key-value", "data-test": "key-value", rows: "4",
       placeholder: "ssh-ed25519 AAAA... user@laptop"
-    });
+    }), "key-form-value", "value");
     return el("div", { class: "inline-form" }, [
       el("div", { class: "field" }, [el("label", { for: "key-account", text: "Account" }), select]),
       el("div", { class: "field" }, [el("label", { for: "key-value", text: "Public key" }), textarea]),
@@ -2979,7 +2997,8 @@
             planOperation({
               endpoint: "/api/ssh/keys",
               body: { account: select.value, public_key: textarea.value },
-              title: "Add an SSH public key", confirmLabel: "Add key"
+              title: "Add an SSH public key", confirmLabel: "Add key",
+              forget: "key-form-value"
             });
           }
         })
