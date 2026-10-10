@@ -6978,6 +6978,16 @@ function historyChartHeight() {
   return 260;
 }
 
+function renderHistoryRetention(data) {
+  const node = $("historyRetention");
+  if (!node) return;
+  const hours = Number(data && data.meta && data.meta.retention_hours);
+  node.hidden = !(hours > 0);
+  node.textContent = hours > 0
+    ? `History keeps the last ${hours} h (dashboard.history_hours), so this range shows ${hours} h at most.`
+    : "";
+}
+
 function renderHistoryChart() {
   const container = $("historyChart");
   if (!container || typeof uPlot === "undefined") return;
@@ -6986,6 +6996,7 @@ function renderHistoryChart() {
   const time = (data && data.time) || [];
   const empty = $("historyEmpty");
   setSourceBadge("historySource", data && data.source);
+  renderHistoryRetention(data);
 
   // No data: tear the chart down (and drop its signature) so a later refresh
   // with data rebuilds, then show the empty/unavailable state.
