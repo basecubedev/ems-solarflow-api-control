@@ -37,6 +37,19 @@ summary, staleness). It is additive and absent for other modes; consumers must
 treat it as optional. The same snapshot shape is produced at runtime by
 `EMSController.health_snapshot()` for future dashboard/InfluxDB export.
 
+`control` and `control_quality` take their cycle values from the live control
+snapshot the EMS writes beside runtime-state
+([runtime-state.md](../technical/runtime-state.md#live-control-snapshot)), never
+from runtime-state itself. `control.runtime_state` describes that snapshot's
+freshness: `checked`, `stale`, `age_seconds`, `timestamp`, `threshold_seconds`,
+plus `snapshot_status` (`fresh|stale|missing|unreadable`), `snapshot_path` and
+`failed_cycles`. A snapshot that is not fresh adds a warning root cause
+(`live_control_snapshot_missing`, `live_control_snapshot_unreadable` or
+`live_control_snapshot_stale`) to both reports, and the check
+`control_live_snapshot_missing` / `control_live_snapshot_unreadable` /
+`control_runtime_state_stale`; `control_cycles_failing` reports a fresh snapshot
+of failing cycles. The snapshot file carries its own `schema_version`.
+
 The diagnose API `schema_version` is the machine-readable JSON contract
 version. It is independent from the README Diagnose Evolution labels, which
 describe the feature rollout stages V1 through V6.

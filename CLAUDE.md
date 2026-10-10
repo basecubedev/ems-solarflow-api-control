@@ -146,6 +146,7 @@ construction, controller startup, main loop. All real implementation lives in `e
 - `state_store.py` — SQLite store backing battery full-charge assist (and dashboard stats)
 - `simulation.py` — simulation, replay, preflight, self-test helpers
 - `diagnostics.py` — read-only `diagnose` service layer (versioned contract); imported by both `emsctl.py` and the dashboard
+- `control_status.py` — per-cycle live control snapshot (`control-status.json` beside runtime-state) that `diagnose --control` reads; non-authoritative, never raises into the loop
 - `paths.py` — shared project-path resolvers (`BASE_DIR`, `resolve_*_path`); import-side-effect-free
 
 Edit the smallest relevant module rather than the entry script or `controller.py`

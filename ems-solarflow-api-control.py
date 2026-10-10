@@ -15,6 +15,7 @@ from ems.clients import (
     create_grid_meter_client,
     create_session,
 )
+from ems.control_status import ControlStatusWriter
 from ems.controller import EMSController
 from ems.device_identity import broker_sources_from_config
 from ems.logging_utils import log_event, setup_logging
@@ -513,6 +514,9 @@ def main():
         zendure_mqtt_runtime=zendure_mqtt_runtime,
         winter_store=None if cfg.SIMULATION_MODE else build_winter_store()
     )
+    control_status = ControlStatusWriter(
+        paths.resolve_control_status_path(cfg.runtime_state_path())
+    )
 
     stopped_by = install_stop_signal_handlers()
 
@@ -529,6 +533,7 @@ def main():
             else:
                 ems.run_guarded()
             cycles += 1
+            control_status.write(ems)
 
             # Self-heal: re-attempt broker connections that failed at boot.
             # start() is idempotent, never raises on connection failure and

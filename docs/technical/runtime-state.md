@@ -12,6 +12,10 @@ data/runtime-state.json
 
 data/ems_state.sqlite
 = durable core EMS lifecycle state such as battery full-charge assist tracking
+
+data/control-status.json
+= live control snapshot the running EMS rewrites after every cycle; read by
+  diagnose, never by the EMS
 ```
 
 The EMS creates the runtime state file on first start from config defaults. The
@@ -190,6 +194,40 @@ config value vs. live Dashboard override) and a **Put live values back** action
 that writes the installed config values back into runtime-state (it always
 writes the value; it never just clears the override, because the EMS loads
 `config.json` once per process).
+
+## Live control snapshot
+
+`control-status.json` sits beside the runtime-state file
+(`data/control-status.json` in new generated configs) and is not runtime state.
+The running EMS rewrites it atomically after every control cycle, from what the
+controller holds after the cycle, and never reads it back; deleting it changes
+nothing but what diagnose can report until the next cycle. A failure to write it
+never interrupts the control loop: it is logged as
+`event=control_status_write_failed` once until a write succeeds again
+(`event=control_status_write_recovered`). Simulation, replay, self-test and
+preflight runs do not write it.
+
+`emsctl diagnose --control`, `--control-quality` and the dashboard's Diagnose
+tab read it as their only source of cycle values (see [cli.md](../cli.md#diagnose)).
+A snapshot older than three loop intervals, and at least 60 s, is reported as
+stale, and its values are not used.
+
+Shape (`schema_version: 1`):
+
+| Field | Meaning |
+|---|---|
+| `written_at` | When the EMS wrote the snapshot (ISO-8601, UTC) |
+| `loop_interval_s` | Loop interval the EMS applied |
+| `cycle.fetched_at`, `cycle.failed_cycles`, `cycle.mode` | When device telemetry was read, consecutive failed cycles, the controller's allocation mode |
+| `control.grid_power_w`, `control.filtered_load_w` | Grid meter reading the cycle used and its filtered value (positive is import) |
+| `control.commanded_total_w`, `control.allocated_target_total_w`, `control.effective_target_total_w` | The cycle's totals; `effective_target_total_w` is what the EMS commands |
+| `grid_meter.consecutive_read_failures`, `grid_meter.measured_at` | From the meter's health record; `null` for a meter without one |
+| `devices.<name>` | `online`, `last_seen_at`, `max_power_w`, `soc`, `min_soc`, `pv_input_w`, `output_w`, `output_limit_w`, `battery_charge_w`, `battery_discharge_w`, `allocated_target_w`, `effective_target_w`, `limiting_reason`; telemetry fields are `null` for a device that never answered |
+| `grid_samples` | The last 30 cycles' `{cycle_at, grid_power_w, measured_at}` |
+
+When a cycle fails before it decides, the `control` values are `null` rather
+than carried over; device telemetry is the last reading the EMS holds, dated by
+`last_seen_at`.
 
 ## HA Fields
 

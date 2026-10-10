@@ -530,9 +530,15 @@ likely root causes. Common findings:
 - `Minimum SOC protection active`: one or more devices are protected by SOC.
 
 Review `Control Snapshot`, `Decision Explanation`, `Write Path`, and `Likely
-Causes`. Runtime-state file age is not used as proof of stale EMS control
-activity. If no live control timestamp is available, the control staleness check
-is skipped and shown as informational output.
+Causes`. The cycle values come from the live control snapshot the running EMS
+writes after every cycle (`data/control-status.json`, see
+[runtime-state.md](runtime-state.md#live-control-snapshot)); runtime-state holds
+operator settings only. `Live Snapshot:` at the top says whether that snapshot
+is fresh. When it is missing (`No live control snapshot`: the EMS is not
+running, or has not finished a cycle yet), unreadable, or stale (`Live control
+snapshot is stale`: the EMS stopped or its loop is stuck), diagnose reports a
+warning and shows no cycle values rather than old ones. `Control cycles are
+failing` means the EMS runs but its cycles raise; see the next section.
 
 ### A control cycle that fails
 

@@ -16,11 +16,13 @@ from ems import diagnostics
 from ems.state_store import BatteryFullChargeStateStore
 
 from _emsctl_test_helpers import (
+    DEFAULT_LIVE_DEVICE,
     assert_diagnose_help_discovery,
     diagnose_args,
     run_emsctl,
     write_config,
     write_control_runtime,
+    write_live_control_status,
     write_two_device_config,
 )
 
@@ -775,6 +777,7 @@ def test_emsctl_diagnose_support_bundle_redacts_secrets(tmp_path):
 
 def test_emsctl_diagnose_control_json_output(tmp_path):
     write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path)
 
     result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
 
@@ -790,6 +793,7 @@ def test_emsctl_diagnose_control_json_output(tmp_path):
 
 def test_emsctl_diagnose_control_text_explains_decision(tmp_path):
     write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path)
 
     result = run_emsctl(tmp_path, "diagnose", "--control")
 
@@ -801,16 +805,8 @@ def test_emsctl_diagnose_control_text_explains_decision(tmp_path):
 
 
 def test_emsctl_diagnose_control_deadband_detection(tmp_path):
-    write_control_runtime(
-        tmp_path,
-        grid_power_w=4,
-        filtered_load_w=3,
-        controller={
-            "effective_target_total_w": 130,
-            "commanded_total_w": 130,
-            "filtered_load_w": 3,
-        },
-    )
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(4,), filtered_load_w=3)
 
     result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
 
@@ -821,19 +817,10 @@ def test_emsctl_diagnose_control_deadband_detection(tmp_path):
 
 
 def test_emsctl_diagnose_control_noisy_meter_detection(tmp_path):
-    write_control_runtime(
-        tmp_path,
-        control_samples=[-45, 52, -40, 49, -35, 45, -30, 41],
-    )
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(-45, 52, -40, 49, -35, 45, -30, 41))
 
-    result = run_emsctl(
-        tmp_path,
-        "diagnose",
-        "--control",
-        "--sample-seconds",
-        "30",
-        "--json",
-    )
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
@@ -843,12 +830,14 @@ def test_emsctl_diagnose_control_noisy_meter_detection(tmp_path):
 
 
 def test_emsctl_diagnose_control_repeated_meter_values_are_not_stale(tmp_path):
-    write_control_runtime(tmp_path, control_samples=[18, 18, 18, 18])
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(18, 18, 18, 18))
 
     result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
+    assert payload["control"]["meter_quality"]["samples"] == 4
     assert payload["control"]["meter_quality"]["stale"] is False
     assert not any(check["code"] == "meter_signal_stale" for check in payload["checks"])
     assert not any(
@@ -858,34 +847,21 @@ def test_emsctl_diagnose_control_repeated_meter_values_are_not_stale(tmp_path):
 
 
 def test_emsctl_diagnose_control_repeated_meter_values_with_changing_timestamps_are_not_stale(tmp_path):
-    now = datetime.now(timezone.utc)
-    write_control_runtime(
-        tmp_path,
-        control_samples=[
-            {"grid_power_w": 18, "timestamp": (now - timedelta(seconds=3)).isoformat()},
-            {"grid_power_w": 18, "timestamp": (now - timedelta(seconds=2)).isoformat()},
-            {"grid_power_w": 18, "timestamp": (now - timedelta(seconds=1)).isoformat()},
-        ],
-    )
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(18, 18, 18), measured_at="per_cycle")
 
     result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
+    assert payload["control"]["meter_quality"]["samples"] == 3
     assert payload["control"]["meter_quality"]["stale"] is False
     assert not any(check["code"] == "meter_signal_stale" for check in payload["checks"])
 
 
 def test_emsctl_diagnose_control_repeated_meter_values_with_unchanged_timestamp_are_stale(tmp_path):
-    timestamp = datetime.now(timezone.utc).isoformat()
-    write_control_runtime(
-        tmp_path,
-        control_samples=[
-            {"grid_power_w": 18, "timestamp": timestamp},
-            {"grid_power_w": 18, "timestamp": timestamp},
-            {"grid_power_w": 18, "timestamp": timestamp},
-        ],
-    )
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(18, 18, 18), measured_at="frozen")
 
     result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
 
@@ -901,9 +877,10 @@ def test_emsctl_diagnose_control_repeated_meter_values_with_unchanged_timestamp_
 
 
 def test_emsctl_diagnose_control_meter_read_failures_are_stale(tmp_path):
-    runtime = write_control_runtime(tmp_path, control_samples=[18, 19, 18])
-    runtime["grid_meter"] = {"consecutive_read_failures": 3}
-    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+    write_control_runtime(tmp_path)
+    write_live_control_status(
+        tmp_path, grid=(18, 19, 18), measured_at="per_cycle", read_failures=3
+    )
 
     result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
 
@@ -914,31 +891,35 @@ def test_emsctl_diagnose_control_meter_read_failures_are_stale(tmp_path):
     assert any(check["code"] == "meter_signal_stale" for check in payload["checks"])
 
 
-def test_emsctl_diagnose_control_old_runtime_state_without_live_timestamp_is_info(tmp_path):
-    old_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
-    write_control_runtime(tmp_path, timestamp=old_timestamp)
+def test_emsctl_diagnose_control_without_a_live_snapshot_is_a_warning(tmp_path):
+    """No running EMS means nothing to explain, and diagnose says so."""
+
+    write_control_runtime(tmp_path)
 
     result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
+    assert payload["status"] == "warning"
     assert payload["control"]["runtime_state"]["stale"] is False
     assert payload["control"]["runtime_state"]["checked"] is False
-    assert any(
-        check["code"] == "control_staleness_skipped"
+    assert payload["control"]["runtime_state"]["snapshot_status"] == "missing"
+    check = next(
+        check
         for check in payload["checks"]
+        if check["code"] == "control_live_snapshot_missing"
     )
+    assert check["level"] == "warning"
     assert not any(
-        check["code"] == "control_runtime_state_stale"
+        check["code"] in ("control_staleness_skipped", "control_runtime_state_stale")
         for check in payload["checks"]
     )
+    assert payload["control"]["snapshot"]["grid_power_w"] is None
 
 
-def test_emsctl_diagnose_control_old_runtime_state_with_healthy_control_timestamp_is_not_stale(tmp_path):
-    old_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
-    runtime = write_control_runtime(tmp_path, timestamp=old_timestamp)
-    runtime["controller"]["timestamp"] = datetime.now(timezone.utc).isoformat()
-    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+def test_emsctl_diagnose_control_fresh_live_snapshot_is_not_stale(tmp_path):
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path)
 
     result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
 
@@ -953,10 +934,8 @@ def test_emsctl_diagnose_control_old_runtime_state_with_healthy_control_timestam
 
 
 def test_emsctl_diagnose_control_stale_live_control_timestamp_is_warning(tmp_path):
-    old_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
-    runtime = write_control_runtime(tmp_path)
-    runtime["controller"]["timestamp"] = old_timestamp
-    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, age_seconds=600)
 
     result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
 
@@ -970,11 +949,10 @@ def test_emsctl_diagnose_control_stale_live_control_timestamp_is_warning(tmp_pat
         if check["code"] == "control_runtime_state_stale"
     )
     assert stale_check["message"] == "Live control timestamp older than expected"
-    assert any(
-        check["code"] == "control_runtime_state_stale"
-        for check in payload["checks"]
-    )
+    assert stale_check["level"] == "warning"
     assert not any(check["level"] == "error" for check in payload["checks"])
+    assert payload["control"]["snapshot"]["grid_power_w"] is None
+    assert payload["control"]["soc_analysis"]["devices"] == []
 
 
 def test_emsctl_diagnose_control_soc_imbalance_detection(tmp_path):
@@ -990,18 +968,11 @@ def test_emsctl_diagnose_control_soc_imbalance_detection(tmp_path):
         "min_soc": 15,
     })
     config_path.write_text(json.dumps(config))
-    runtime = write_control_runtime(tmp_path)
-    runtime["devices"]["WR1"]["soc"] = 92
-    runtime["devices"]["WR2"] = {
-        "online": True,
-        "enabled": True,
-        "soc": 55,
-        "min_soc": 15,
-        "allocated_target_w": 0,
-        "output_w": 0,
-        "max_power": 800,
-    }
-    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, devices={
+        "WR1": {"soc": 92, "min_soc": 15, "output_w": 130, "allocated_target_w": 130},
+        "WR2": {"soc": 55, "min_soc": 15, "output_w": 0, "allocated_target_w": 0},
+    })
 
     result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
 
@@ -1132,10 +1103,8 @@ def test_emsctl_diagnose_control_reads_dry_run_as_ems_loads_it(tmp_path, stored)
 
 
 def test_emsctl_diagnose_control_root_cause_min_soc(tmp_path):
-    runtime = write_control_runtime(tmp_path)
-    runtime["devices"]["WR1"]["soc"] = 14
-    runtime["devices"]["WR1"]["min_soc"] = 15
-    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, devices={"WR1": {"soc": 14, "min_soc": 15}})
 
     result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
 
@@ -1150,6 +1119,7 @@ def test_emsctl_diagnose_control_root_cause_min_soc(tmp_path):
 
 def test_emsctl_diagnose_control_support_bundle_export(tmp_path):
     write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path)
     output_path = tmp_path / "control-support.zip"
 
     result = run_emsctl(
@@ -1170,7 +1140,8 @@ def test_emsctl_diagnose_control_support_bundle_export(tmp_path):
 
 
 def test_emsctl_diagnose_control_quality_json_structure(tmp_path):
-    write_control_runtime(tmp_path, control_samples=[0, 10, -10, 5])
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(0, 10, -10, 5))
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1190,7 +1161,8 @@ def test_emsctl_diagnose_control_quality_json_structure(tmp_path):
 
 
 def test_emsctl_diagnose_quality_alias(tmp_path):
-    write_control_runtime(tmp_path, control_samples=[0, 10, -10, 5])
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(0, 10, -10, 5))
 
     result = run_emsctl(tmp_path, "diagnose", "--quality", "--json")
 
@@ -1199,7 +1171,8 @@ def test_emsctl_diagnose_quality_alias(tmp_path):
 
 
 def test_emsctl_diagnose_control_quality_no_export_stable_import(tmp_path):
-    write_control_runtime(tmp_path, control_samples=[10, 20, 25, 15])
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(10, 20, 25, 15))
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1211,7 +1184,8 @@ def test_emsctl_diagnose_control_quality_no_export_stable_import(tmp_path):
 
 
 def test_emsctl_diagnose_control_quality_small_export_peaks_only(tmp_path):
-    write_control_runtime(tmp_path, control_samples=[20, -50, 15, 10])
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(20, -50, 15, 10))
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1222,7 +1196,8 @@ def test_emsctl_diagnose_control_quality_small_export_peaks_only(tmp_path):
 
 
 def test_emsctl_diagnose_control_quality_large_export_peaks(tmp_path):
-    write_control_runtime(tmp_path, control_samples=[10, -300, -260, 20])
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(10, -300, -260, 20))
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1233,7 +1208,8 @@ def test_emsctl_diagnose_control_quality_large_export_peaks(tmp_path):
 
 
 def test_emsctl_diagnose_control_quality_long_export_duration(tmp_path):
-    write_control_runtime(tmp_path, control_samples=[-40, -45, -35, 10])
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(-40, -45, -35, 10))
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1245,10 +1221,7 @@ def test_emsctl_diagnose_control_quality_long_export_duration(tmp_path):
 
 def test_emsctl_diagnose_control_quality_missing_samples(tmp_path):
     write_control_runtime(tmp_path)
-    runtime = json.loads((tmp_path / "runtime-state.json").read_text())
-    runtime.pop("grid_power_w")
-    runtime.pop("control_samples", None)
-    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+    write_live_control_status(tmp_path, grid=(None,))
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1271,19 +1244,16 @@ def test_emsctl_diagnose_control_quality_score_classes(tmp_path):
     for index, (samples, expected) in enumerate(cases):
         case_dir = tmp_path / str(index)
         case_dir.mkdir()
-        write_control_runtime(case_dir, control_samples=samples)
+        write_control_runtime(case_dir)
+        write_live_control_status(case_dir, grid=tuple(samples))
         result = run_emsctl(case_dir, "diagnose", "--control-quality", "--json")
         payload = json.loads(result.stdout)
         assert payload["control_quality"]["quality_score"]["classification"] == expected
 
 
 def test_emsctl_diagnose_control_quality_pv_available_and_used(tmp_path):
-    write_control_runtime(
-        tmp_path,
-        pv_total_w=920,
-        inverter_output_w=700,
-        battery_power_w=-180,
-    )
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, devices={"WR1": {**DEFAULT_LIVE_DEVICE, "pv_input_w": 920, "output_w": 700, "battery_charge_w": 180}})
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1295,7 +1265,8 @@ def test_emsctl_diagnose_control_quality_pv_available_and_used(tmp_path):
 
 
 def test_emsctl_diagnose_control_quality_pv_limited_by_system_limit(tmp_path):
-    write_control_runtime(tmp_path, pv_total_w=1200, inverter_output_w=880)
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, devices={"WR1": {**DEFAULT_LIVE_DEVICE, "pv_input_w": 1200, "output_w": 880}})
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1311,7 +1282,8 @@ def test_emsctl_diagnose_control_quality_pv_limited_by_device_limit(tmp_path):
     config["system"]["max_total_power"] = 2000
     config["devices"][0]["max_power"] = 500
     config_path.write_text(json.dumps(config))
-    write_control_runtime(tmp_path, pv_total_w=900, inverter_output_w=490)
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, devices={"WR1": {**DEFAULT_LIVE_DEVICE, "pv_input_w": 900, "output_w": 490}})
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1321,7 +1293,8 @@ def test_emsctl_diagnose_control_quality_pv_limited_by_device_limit(tmp_path):
 
 
 def test_emsctl_diagnose_control_quality_pv_available_but_unused(tmp_path):
-    write_control_runtime(tmp_path, pv_total_w=900, inverter_output_w=50, battery_power_w=-20)
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, devices={"WR1": {**DEFAULT_LIVE_DEVICE, "pv_input_w": 900, "output_w": 50, "battery_charge_w": 20}})
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1332,6 +1305,8 @@ def test_emsctl_diagnose_control_quality_pv_available_but_unused(tmp_path):
 
 
 def test_emsctl_diagnose_control_quality_missing_pv_telemetry(tmp_path):
+    """Without a running EMS there is no PV telemetry to judge."""
+
     write_control_runtime(tmp_path)
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
@@ -1345,10 +1320,11 @@ def test_emsctl_diagnose_control_quality_missing_pv_telemetry(tmp_path):
 def test_emsctl_diagnose_control_quality_soc_balanced_devices(tmp_path):
     config_path = tmp_path / "config.json"
     write_two_device_config(config_path)
-    runtime = write_control_runtime(tmp_path)
-    runtime["devices"]["WR2"] = dict(runtime["devices"]["WR1"], soc=64, output_w=120)
-    runtime["devices"]["WR1"]["soc"] = 62
-    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, devices={
+        "WR1": dict(DEFAULT_LIVE_DEVICE, soc=62),
+        "WR2": dict(DEFAULT_LIVE_DEVICE, soc=64, output_w=120),
+    })
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1361,10 +1337,11 @@ def test_emsctl_diagnose_control_quality_soc_balanced_devices(tmp_path):
 def test_emsctl_diagnose_control_quality_soc_warning_spread(tmp_path):
     config_path = tmp_path / "config.json"
     write_two_device_config(config_path)
-    runtime = write_control_runtime(tmp_path)
-    runtime["devices"]["WR1"]["soc"] = 80
-    runtime["devices"]["WR2"] = dict(runtime["devices"]["WR1"], soc=60, output_w=100)
-    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, devices={
+        "WR1": dict(DEFAULT_LIVE_DEVICE, soc=80),
+        "WR2": dict(DEFAULT_LIVE_DEVICE, soc=60, output_w=100),
+    })
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1377,10 +1354,11 @@ def test_emsctl_diagnose_control_quality_soc_warning_spread(tmp_path):
 def test_emsctl_diagnose_control_quality_soc_error_spread(tmp_path):
     config_path = tmp_path / "config.json"
     write_two_device_config(config_path)
-    runtime = write_control_runtime(tmp_path)
-    runtime["devices"]["WR1"]["soc"] = 90
-    runtime["devices"]["WR2"] = dict(runtime["devices"]["WR1"], soc=55, output_w=100)
-    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, devices={
+        "WR1": dict(DEFAULT_LIVE_DEVICE, soc=90),
+        "WR2": dict(DEFAULT_LIVE_DEVICE, soc=55, output_w=100),
+    })
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1393,11 +1371,11 @@ def test_emsctl_diagnose_control_quality_soc_error_spread(tmp_path):
 def test_emsctl_diagnose_control_quality_lower_soc_device_overused(tmp_path):
     config_path = tmp_path / "config.json"
     write_two_device_config(config_path)
-    runtime = write_control_runtime(tmp_path)
-    runtime["devices"]["WR1"]["soc"] = 80
-    runtime["devices"]["WR1"]["output_w"] = 100
-    runtime["devices"]["WR2"] = dict(runtime["devices"]["WR1"], soc=55, output_w=520)
-    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, devices={
+        "WR1": dict(DEFAULT_LIVE_DEVICE, soc=80, output_w=100),
+        "WR2": dict(DEFAULT_LIVE_DEVICE, soc=55, output_w=520),
+    })
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1407,10 +1385,8 @@ def test_emsctl_diagnose_control_quality_lower_soc_device_overused(tmp_path):
 
 
 def test_emsctl_diagnose_control_quality_min_soc_protected_device(tmp_path):
-    runtime = write_control_runtime(tmp_path)
-    runtime["devices"]["WR1"]["soc"] = 17
-    runtime["devices"]["WR1"]["min_soc"] = 15
-    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, devices={"WR1": dict(DEFAULT_LIVE_DEVICE, soc=17, min_soc=15)})
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1420,9 +1396,8 @@ def test_emsctl_diagnose_control_quality_min_soc_protected_device(tmp_path):
 
 
 def test_emsctl_diagnose_control_quality_missing_soc_data(tmp_path):
-    runtime = write_control_runtime(tmp_path)
-    runtime["devices"]["WR1"].pop("soc")
-    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, devices={"WR1": None})
 
     result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
 
@@ -1433,7 +1408,8 @@ def test_emsctl_diagnose_control_quality_missing_soc_data(tmp_path):
 
 
 def test_emsctl_diagnose_control_quality_support_bundle_export(tmp_path):
-    write_control_runtime(tmp_path, control_samples=[0, 10, -10, 5])
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(0, 10, -10, 5))
     output_path = tmp_path / "quality-support.zip"
 
     result = run_emsctl(
@@ -2985,3 +2961,20 @@ def test_the_zone_in_effect_is_named_with_its_offset(tmp_path):
 
     assert check["level"] == "ok"
     assert "UTC-01:00" in check["message"]
+
+
+def test_emsctl_diagnose_control_names_the_limit_the_cycle_named(tmp_path):
+    write_control_runtime(tmp_path)
+    write_live_control_status(
+        tmp_path, devices={"WR1": {**DEFAULT_LIVE_DEVICE, "limiting_reason": "deadband"}}
+    )
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    reasons = {
+        item["device"]: item["reason"]
+        for item in payload["control"]["device_distribution"]["devices"]
+    }
+    assert reasons["WR1"] == "limited by deadband"
