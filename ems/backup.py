@@ -12,10 +12,12 @@ import difflib
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import shutil
 import sqlite3
+import stat
 import tarfile
 import tempfile
 from contextlib import contextmanager
@@ -1507,6 +1509,7 @@ def _atomic_write(target, data):
         raise BackupError(f"restore could not write {target}: {exc}") from exc
     try:
         with os.fdopen(fd, "wb") as handle:
+            _keep_replaced_file_identity(handle.fileno(), target)
             handle.write(data)
         os.replace(tmp, target)
     except OSError as exc:
@@ -1517,6 +1520,30 @@ def _atomic_write(target, data):
                 os.remove(tmp)
         except OSError:
             pass
+
+
+def _keep_replaced_file_identity(fd, target):
+    """Give the new file the mode and, as root, the owner of the one it replaces.
+
+    A restore puts back content, not permissions: forcing 0600 and the
+    restorer's owner on a config the EMS reads as another user locked the EMS
+    out of its own files. A file that did not exist stays private. A
+    filesystem that refuses either (vfat, a root-squashed share) does not stop
+    the restore; it is logged and the file keeps what the filesystem gives it.
+    """
+
+    try:
+        current = os.stat(target)
+    except FileNotFoundError:
+        return
+    try:
+        os.fchmod(fd, stat.S_IMODE(current.st_mode))
+        if os.geteuid() == 0:
+            os.fchown(fd, current.st_uid, current.st_gid)
+    except OSError as exc:
+        logging.getLogger(__name__).warning(
+            "event=backup_restore_identity_not_kept path=%s error=%s", target, exc
+        )
 
 
 def _restore_sqlite(target, data):

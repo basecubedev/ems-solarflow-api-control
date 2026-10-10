@@ -381,6 +381,10 @@ An interactive restore asks a few questions. In plain language:
 If two rollback passwords do not match, or rollback creation fails, the restore
 aborts and no partial files are written.
 
+A replaced file keeps the permissions it had, and its owner when the restore
+runs as root, where the filesystem allows it (a refusal is logged and does not
+stop the restore); a file the restore creates is readable by its owner only.
+
 ## What should I check after restore?
 
 ```bash

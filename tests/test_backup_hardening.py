@@ -471,3 +471,64 @@ def test_a_directory_that_cannot_be_created_is_reported_as_a_backup_failure(
 
     with pytest.raises(backup.BackupError):
         backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+
+# ---------------------------------------------------------------------------
+# A replaced file keeps the mode and owner it had
+# ---------------------------------------------------------------------------
+
+def test_a_restored_file_keeps_the_mode_of_the_file_it_replaces(tmp_path):
+    base, config, config_path = write_project(tmp_path)
+    path = create(base, config, config_path)
+    with open(config_path, "w") as handle:
+        handle.write('{"changed": true}')
+    os.chmod(config_path, 0o640)
+
+    backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+    assert os.stat(config_path).st_mode & 0o777 == 0o640
+
+
+def test_a_file_the_restore_creates_is_private(tmp_path):
+    base, config, config_path = write_project(tmp_path)
+    path = create(base, config, config_path)
+    os.remove(config_path)
+
+    backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+    assert os.stat(config_path).st_mode & 0o777 == 0o600
+
+
+def test_a_restore_as_root_gives_a_replaced_file_back_to_its_owner(tmp_path, monkeypatch):
+    base, config, config_path = write_project(tmp_path)
+    path = create(base, config, config_path)
+    with open(config_path, "w") as handle:
+        handle.write('{"changed": true}')
+    owner = os.stat(config_path)
+    calls = []
+    monkeypatch.setattr(backup.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(backup.os, "fchown", lambda fd, uid, gid: calls.append((uid, gid)))
+
+    backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+    assert calls == [(owner.st_uid, owner.st_gid)]
+
+
+def test_a_filesystem_that_refuses_the_mode_does_not_stop_the_restore(tmp_path, monkeypatch):
+    base, config, config_path = write_project(tmp_path)
+    path = create(base, config, config_path)
+    with open(config_path, "w") as handle:
+        handle.write('{"changed": true}')
+    open_before = len(os.listdir("/proc/self/fd"))
+
+    def refuse(fd, mode):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(backup.os, "fchmod", refuse)
+    for attempt in range(3):
+        with open(config_path, "w") as handle:
+            handle.write(json.dumps({"attempt": attempt}))
+        backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+    assert json.loads(open(config_path).read()) == config
+    assert len(os.listdir("/proc/self/fd")) <= open_before
