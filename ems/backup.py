@@ -1705,7 +1705,10 @@ def restore_backup(
     when ``conflict_resolver`` is ``None``. ``conflict_resolver(entry)`` may
     return ``keep`` / ``replace`` / ``abort`` for interactive callers.
 
-    Returns a result dict with per-file ``actions``.
+    Returns a result dict with per-file ``actions`` and the files it
+    ``created`` (path, target, sha256), which a caller rolling back may remove.
+    A ``BackupError`` raised while writing carries the files created so far as
+    ``created``.
     """
 
     archive_path = _validated_existing_archive_path(
@@ -1716,6 +1719,7 @@ def restore_backup(
 
     base_dir = base_dir or BASE_DIR
     actions = []
+    created = []
 
     with open_backup_archive(
         archive_path, password=password, allowed_root=allowed_root
@@ -1776,17 +1780,32 @@ def restore_backup(
                     continue
                 # decision == "replace" falls through to write.
 
-            if entry.get("kind") == "sqlite":
-                _restore_sqlite(entry["target"], entry["_data"])
-            else:
-                _atomic_write(entry["target"], entry["_data"])
+            try:
+                if entry.get("kind") == "sqlite":
+                    _restore_sqlite(entry["target"], entry["_data"])
+                else:
+                    _atomic_write(entry["target"], entry["_data"])
+            except BackupError as exc:
+                exc.created = list(created)
+                raise
+            if status == "new":
+                created.append({
+                    "path": entry["path"],
+                    "target": entry["target"],
+                    "sha256": entry["actual_sha256"],
+                })
             actions.append({
                 "path": entry["path"],
                 "action": "restored",
                 "status": status,
             })
 
-    return {"manifest": manifest, "actions": actions, "dry_run": dry_run}
+    return {
+        "manifest": manifest,
+        "actions": actions,
+        "created": created,
+        "dry_run": dry_run,
+    }
 
 
 # ---------------------------------------------------------------------------

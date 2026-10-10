@@ -110,7 +110,10 @@ policies for CLI/advanced workflows.
   restore does not start.
 - **Automatic rollback** (on by default for config/database restores) undoes the
   restore if a post-restore check fails, returning the system to its
-  pre-restore state. If the automatic rollback itself fails, the job reports
+  pre-restore state. Files the restore added are removed again; one that was
+  changed since, or a database that is already in use, is left in place and
+  named in the step with the reason. If
+  the automatic rollback itself fails, the job reports
   that manual recovery is required and names the rollback archive.
 - For **bundled InfluxDB** the rollback is owned by the EMS CLI: Admin passes
   `--rollback`/`--no-rollback` and the EMS CLI creates the InfluxDB rollback and

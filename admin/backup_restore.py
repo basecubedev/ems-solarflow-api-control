@@ -1391,11 +1391,13 @@ class BackupRestoreService:
             rollbacks = [(target, None) for target in plan.targets]
 
         actions = []
+        created = []
         for idx, target in enumerate(plan.targets):
             suffix = f"_{idx}" if len(plan.targets) > 1 else ""
             if target.backup_type == INFLUXDB_BACKUP_TYPE:
                 outcome = self._apply_influx_target(
-                    env, store, plan, target, steps, suffix, rollbacks, idx, actions
+                    env, store, plan, target, steps, suffix, rollbacks, idx, actions,
+                    created,
                 )
                 if outcome is not None:
                     return outcome
@@ -1404,12 +1406,15 @@ class BackupRestoreService:
             try:
                 result = self._apply_archive(env, path, plan, target)
             except backup_mod.BackupError as exc:
+                created.extend(getattr(exc, "created", ()))
                 steps.append(_step(f"apply{suffix}", "error", "Restore",
                                    detail=str(exc)))
                 return self._maybe_auto_rollback(
                     env, plan, steps, rollbacks, applied_index=idx,
-                    message=f"Restore failed: {exc}", actions=actions)
+                    message=f"Restore failed: {exc}", actions=actions,
+                    created=created)
             actions.extend(result.get("actions", []))
+            created.extend(result.get("created", ()))
             steps.append(_step(f"apply{suffix}", "ok", "Restore",
                                detail=target.name))
 
@@ -1419,7 +1424,8 @@ class BackupRestoreService:
                                    "Verify restored files", detail=detail))
                 return self._maybe_auto_rollback(
                     env, plan, steps, rollbacks, applied_index=idx,
-                    message=f"Post-restore check failed: {detail}", actions=actions)
+                    message=f"Post-restore check failed: {detail}", actions=actions,
+                    created=created)
             steps.append(_step(f"postcheck{suffix}", "ok", "Verify restored files",
                                detail=detail))
 
@@ -1429,7 +1435,7 @@ class BackupRestoreService:
                 "actions": actions, "rollback_backup": rollback_name}
 
     def _apply_influx_target(self, env, store, plan, target, steps, suffix,
-                             rollbacks, idx, actions):
+                             rollbacks, idx, actions, created):
         """Restore one bundled InfluxDB member through the EMS CLI."""
 
         ok, message = self._run_influx_restore_cli(
@@ -1446,7 +1452,7 @@ class BackupRestoreService:
         if any(t.backup_type != INFLUXDB_BACKUP_TYPE for t in plan.targets[:idx]):
             return self._maybe_auto_rollback(
                 env, plan, steps, rollbacks, applied_index=idx,
-                message=message, actions=actions)
+                message=message, actions=actions, created=created)
         return {"ok": False, "status": "failed", "message": message,
                 "steps": list(steps), "actions": actions,
                 "rollback_backup": None}
@@ -1488,7 +1494,7 @@ class BackupRestoreService:
         return True, None
 
     def _maybe_auto_rollback(self, env, plan, steps, rollbacks, applied_index,
-                             message, actions=None):
+                             message, actions=None, created=()):
         actions = actions or []
         rollback_name = None
         if rollbacks and rollbacks[0][1]:
@@ -1529,8 +1535,13 @@ class BackupRestoreService:
                 "steps": list(steps), "actions": actions,
                 "rollback_backup": rollback_name,
             }
-        steps.append(_step("done", "ok", "Automatic rollback",
-                           detail="Rolled back to the pre-restore state."))
+        kept = self._remove_created_files(env, created)
+        detail = "Rolled back to the pre-restore state."
+        if kept:
+            detail += " Left in place: " + ", ".join(
+                f"{path} ({reason})" for path, reason in kept
+            ) + "."
+        steps.append(_step("done", "ok", "Automatic rollback", detail=detail))
         return {
             "ok": False, "status": "rolled_back",
             "message": ("Restore failed after applying changes. Rollback was "
@@ -1538,6 +1549,41 @@ class BackupRestoreService:
             "steps": list(steps), "actions": actions,
             "rollback_backup": rollback_name,
         }
+
+    @staticmethod
+    def _remove_created_files(env, created):
+        """Remove what the failed restore created; return the paths left in place.
+
+        A rollback archive holds only files that existed before, so it cannot
+        take back a file the restore added. Only a regular file inside the
+        install, still holding exactly the bytes this restore wrote, is removed.
+        A database with a journal beside it is in use -- in WAL mode its writes
+        leave the main file's bytes as they were -- so it is left alone.
+        Returns ``(path, reason)`` for each file left in place.
+        """
+
+        root = os.path.realpath(env.base_dir)
+        kept = []
+        for item in created:
+            path = item["path"]
+            target = os.path.realpath(item["target"])
+            if os.path.commonpath([root, target]) != root:
+                kept.append((path, "outside the install"))
+                continue
+            if os.path.islink(item["target"]) or not os.path.isfile(target):
+                kept.append((path, "no longer a regular file"))
+                continue
+            if any(os.path.exists(target + suffix) for suffix in ("-wal", "-shm", "-journal")):
+                kept.append((path, "a database in use"))
+                continue
+            if backup_mod._sha256_file(target) != item["sha256"]:
+                kept.append((path, "changed after the restore created it"))
+                continue
+            try:
+                os.remove(target)
+            except OSError as exc:
+                kept.append((path, f"could not be removed: {exc.strerror or exc}"))
+        return kept
 
     def _create_rollback(self, env, target):
         if target.backup_type == "config":
