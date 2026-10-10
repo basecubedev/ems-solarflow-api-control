@@ -12748,6 +12748,40 @@ def test_every_maintenance_discovery_failure_carries_its_cause():
     assert "failureCauses" in reset
 
 
+def test_a_switch_confirmation_names_the_device_it_changes():
+    js = _read("admin.js")
+    script = "\n".join(
+        _extract_fn(js, name)
+        for name in ("configuredDeviceNameForRef", "setupSwitchConfirmationCard")
+    ) + """
+const CONTROL_CONTINUITY_TEXT = { lost: "output control would be lost on this connection" };
+function connectionLabelFor(source) { return source === "local_api" ? "Local API" : "Local MQTT"; }
+function answerSetupSwitch() {}
+function el() { return { children: [], dataset: {}, textContent: "", className: "",
+  appendChild(child) { this.children.push(child); }, addEventListener() {} }; }
+global.document = { createElement: () => el() };
+let configDraftItems = [{ draft_item_id: "draft-1", config_name: "Terrace" }];
+const zendureMqttPreviewProposals = new Map([["mqtt-7", { config_name: " Garage " }]]);
+const entry = (ref) => ({ token: "t", current_ref: ref, current_source: "local_api",
+  candidate_source: "local_mqtt", control_continuity: "lost" });
+console.log(JSON.stringify({
+  draft: setupSwitchConfirmationCard(entry("draft-1")).children[0].textContent,
+  mqtt: setupSwitchConfirmationCard(entry("mqtt-7")).children[0].textContent,
+  unknown: setupSwitchConfirmationCard(entry("gone")).children[0].textContent,
+}));
+"""
+    out = _run_node(script)
+
+    assert out["draft"] == "Change Terrace from Local API to Local MQTT?"
+    assert out["mqtt"] == "Change Garage from Local API to Local MQTT?"
+    assert out["unknown"] == "Change this device from Local API to Local MQTT?"
+
+
+def test_the_candidate_state_reads_the_name_through_the_same_helper():
+    js = _read("admin.js")
+    assert "configuredDeviceNameForRef(ref)" in _extract_fn(js, "inverterCandidateConnectionState")
+
+
 def test_a_failed_mdns_request_never_reopens_controls_the_server_closed():
     js = _read("admin.js")
     script = (

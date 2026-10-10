@@ -5355,7 +5355,9 @@ function setupSwitchConfirmationCard(entry) {
   const title = document.createElement("p");
   title.className = "config-switch-confirmation-title";
   title.textContent =
-    "Change this device from " +
+    "Change " +
+    (configuredDeviceNameForRef(entry.current_ref) || "this device") +
+    " from " +
     connectionLabelFor(entry.current_source) +
     " to " +
     connectionLabelFor(entry.candidate_source) +
@@ -5886,11 +5888,15 @@ function inverterCandidateConnectionState(candidateId) {
   };
   const ref = planned && planned.current_ref;
   if (!ref) return state;
+  state.configuredName = configuredDeviceNameForRef(ref);
+  return state;
+}
+
+function configuredDeviceNameForRef(ref) {
   const item =
     configDraftItems.find((entry) => entry.draft_item_id === ref) ||
     zendureMqttPreviewProposals.get(String(ref));
-  state.configuredName = String((item && item.config_name) || "").trim();
-  return state;
+  return String((item && item.config_name) || "").trim();
 }
 
 // The single contextual action a discovered connection offers. "Use connection"
