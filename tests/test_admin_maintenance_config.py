@@ -1904,3 +1904,40 @@ def test_a_valid_stored_tls_is_not_marked_invalid():
     }
 
     assert build_maintenance_draft(config)["zendure_mqtt"]["tls_stored_invalid"] is False
+
+
+@pytest.mark.parametrize("port", ["abc", 0, 70000, "1.5", True])
+def test_maintenance_refuses_a_top_level_broker_port_the_ems_rejects(port):
+    from admin.maintenance_config import _merge_draft, _validate, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {"host": "10.0.0.1", "port": 1883},
+    }
+    draft = build_maintenance_draft(config)
+    draft["zendure_mqtt"]["port"] = port
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+    codes = [issue["code"] for issue in _validate(merged, issues)["errors"]]
+
+    assert "zendure_mqtt_port_invalid" in codes
+
+
+@pytest.mark.parametrize("port", [1883, "8883", None])
+def test_a_port_the_ems_accepts_passes(port):
+    from admin.maintenance_config import _validate
+
+    block = {"host": "10.0.0.1"}
+    if port is not None:
+        block["port"] = port
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": block,
+    }
+
+    codes = [issue["code"] for issue in _validate(config)["errors"]]
+
+    assert "zendure_mqtt_port_invalid" not in codes

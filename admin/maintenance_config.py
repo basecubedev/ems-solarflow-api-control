@@ -54,12 +54,14 @@ from admin.zendure_mqtt_config_draft import (
     zendure_mqtt_untrusted_connection_block,
 )
 from ems.config import (
+    MQTT_DEFAULT_PORT,
     MQTT_GRID_METER_TYPES,
     MqttBrokerReferenceAmbiguousError,
     config_control_devices_by_gate,
     config_control_flags,
     grid_meter_mqtt_settings,
     normalize_mqtt_grid_meter_settings,
+    parse_mqtt_port,
     resolve_config_write_gate,
     resolve_grid_meter_mqtt_settings,
     resolve_mqtt_tls_metadata,
@@ -1907,6 +1909,16 @@ def _validate(config, merge_issues=()):
                 _issue(
                     "zendure_mqtt_tls_invalid",
                     f"The Zendure MQTT broker TLS settings are invalid: {exc}. {hint}",
+                )
+            )
+        try:
+            parse_mqtt_port(zendure_block.get("port"), default=MQTT_DEFAULT_PORT)
+        except ValueError as exc:
+            validation["errors"].append(
+                _issue(
+                    "zendure_mqtt_port_invalid",
+                    f"The Zendure MQTT broker port is invalid: {exc}. EMS would run "
+                    "without this broker; enter a whole number from 1 to 65535.",
                 )
             )
     devices = config.get("devices")
