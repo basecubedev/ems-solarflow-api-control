@@ -104,7 +104,11 @@ acMode/inputLimit during battery full-charge assist only through runtime intent
 Runtime power writes and persistent state reconciliation writes are separate
 write paths. A power write — discharge, idle or charge — requires the device's
 transport gate to be enabled; state reconciliation writes additionally require
-`allow_state_reconciliation_writes=true`.
+`allow_state_reconciliation_writes=true` and control switched on: with the EMS
+(`system.enabled`) or the device (runtime `enabled`) switched off, no reconciler
+writes, and the withheld write is logged with `control_disabled` or
+`device_disabled` in `blocked_by`. Off is off; the one exception is the final
+command that ends a charge the EMS started, described below.
 
 State reconciliation is API-only: Zendure MQTT control devices carry
 `supports_state_reconciliation=False` and are skipped by every state
@@ -152,9 +156,15 @@ same single command — on the local API, for a claim that holds the device in A
 input, as `inputLimit=0` alone, so the reconciler does not move the relay back
 for the role — unless the claim commands a charge power of its own that reaches
 the device — an AC-input role with `ac_charge_power_w`, on a transport with
-state reconciliation and its gate open. That claim takes the charge over: the
-EMS's record of it is released, and neither a disable nor a stop of the EMS
-ends the claim's charge.
+state reconciliation and its gate open, and control switched on. That claim
+takes the charge over: the EMS's record of it is released, and a stop of the
+EMS does not end the claim's charge. A disable does not end an operator's park
+either, but the full-charge assist's charge, which the EMS started, gets the
+same single exit, on the rules of a transport's own charge record but sent at
+most three times per switch-off (owner decision 2026-10-10; see
+[battery-full-charge-assist.md](../battery-full-charge-assist.md)). A claim set
+while control is off cannot write, so the EMS's charge is ended instead, and
+the claim's own power goes out once control is on again.
 
 Expected events:
 

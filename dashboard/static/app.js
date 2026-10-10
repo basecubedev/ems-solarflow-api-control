@@ -5332,19 +5332,34 @@ function runtimeChangeWarning(form, payload) {
   const device = runtimeFormSubject(form);
   const endpoint = String(form?.dataset?.runtimeEndpoint || "");
   if (endpoint === "/api/runtime/system" && payload.enabled === false) {
-    return "Turn the EMS off? It stops writing to every inverter; each keeps its last output limit until the EMS is on again.";
+    return "Turn the EMS off? It stops writing to every inverter; each keeps its last output limit until the EMS is on again. A charge the EMS started gets one command that ends it.";
   }
   if (!device) return null;
   if (payload.enabled === false) {
-    return `Take ${device} out of EMS control? It keeps its last output limit until you enable it again.`;
+    return `Take ${device} out of EMS control? The EMS writes nothing more to it, and it keeps its last output limit until you enable it again. A charge the EMS started on it gets one command that ends it.`;
   }
+  const offNote = controlOffNote(device);
   if (payload.runtime_role === "ac_input") {
-    return `Switch ${device} to AC charging? The EMS stops regulating its output and lets it charge from the grid at the AC charge power.`;
+    return [`Switch ${device} to AC charging? The EMS stops regulating its output and lets it charge from the grid at the AC charge power.`, offNote].filter(Boolean).join(" ");
+  }
+  if (payload.runtime_role === "ac_output" && offNote) {
+    return `Switch ${device} back to output? ${offNote} To stop a charge meanwhile, use the Zendure app.`;
   }
   if (payload.offgrid_socket_mode !== undefined) {
-    return `Change the offgrid socket of ${device}? The EMS writes the new mode to the inverter.`;
+    return [`Change the offgrid socket of ${device}? The EMS writes the new mode to the inverter.`, offNote].filter(Boolean).join(" ");
   }
   return null;
+}
+
+function controlOffNote(device) {
+  const runtime = state.runtime || {};
+  if (runtime.system?.enabled === false) {
+    return "The EMS is off, so this takes effect once it is on again.";
+  }
+  if (runtime.devices?.[device]?.enabled === false) {
+    return `${device} is out of EMS control, so this takes effect once you enable it again.`;
+  }
+  return "";
 }
 
 function runtimeErrorText(form, message) {

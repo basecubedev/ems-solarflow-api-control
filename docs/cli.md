@@ -225,7 +225,10 @@ controller reconciles the inverter to `acMode=2` during the normal control loop
 and allows normal EMS output allocation. `ac-mode input` writes
 `runtime_role=ac_input`, targets `acMode=1`, and excludes the device from
 normal EMS output allocation. `emsctl` changes runtime-state only and does not
-write raw `acMode` numbers or contact inverter hardware.
+write raw `acMode` numbers or contact inverter hardware. While the EMS or that
+device is switched off, the controller writes nothing to it, so a new role takes
+effect only once control is on again; to stop a charge meanwhile, use the
+Zendure app.
 
 AC charge power is runtime-only:
 

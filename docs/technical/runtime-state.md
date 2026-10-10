@@ -73,7 +73,7 @@ Example:
 
 | Field | Meaning |
 |---|---|
-| `enabled` | Enables or disables EMS output writes. A device the EMS is charging gets one final command that ends the charge, then nothing |
+| `enabled` | Enables or disables every EMS write to the inverters, state reconciliation included. A charge the EMS started (the regulator's or the full-charge assist's) gets one final command that ends it, then nothing |
 | `max_total_power` | Runtime total power limit |
 | `loop_interval` | Runtime loop interval |
 | `min_output_limit` | Runtime guard against very low enabled `outputLimit` writes |
@@ -95,7 +95,7 @@ an AC charge surplus is confirmed (see
 
 | Field | Meaning |
 |---|---|
-| `enabled` | Skip writes for this device when false. If the EMS is charging it, one final command ends the charge first |
+| `enabled` | Skip every write to this device when false, state reconciliation included. If the EMS started a charge on it, one final command ends the charge first |
 | `ac_charge_enabled` | Whether this device may be charged from surplus |
 | `max_power` | Runtime per-device power limit |
 | `offgrid_socket_mode` | Operator intent for Zendure offgrid socket mode; the only writer of `gridOffMode`. A legacy config `devices[].grid_off_mode` only seeds it for a new device; when it differs from the runtime value, `event=legacy_grid_off_mode_ignored` names the command that sets it. |

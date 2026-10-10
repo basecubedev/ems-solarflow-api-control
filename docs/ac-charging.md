@@ -204,9 +204,13 @@ A claim that takes a charging device from the regulator — an operator park
 assist — is held to the same rule, logged with `reason=claimed` and the claim's
 own reason as `claim`. The exception is a claim that commands a charge of its
 own and can write it: an AC-input role with `ac_charge_power_w` on the local API
-with state reconciliation allowed takes the charge over. The EMS releases its
-record of it (`ac_charge_handed_to_claim`) and writes nothing, and neither
-switching control off nor stopping the EMS ends the claim's charge. A park as AC
+with state reconciliation allowed and control switched on takes the charge over.
+The EMS releases its record of it (`ac_charge_handed_to_claim`) and writes
+nothing, and stopping the EMS does not end the claim's charge. Switching control
+off does not end an operator's park either; the full-charge assist's charge,
+which the EMS started, is ended like the regulator's (owner decision
+2026-10-10). A claim set while control is off cannot write, so the EMS's charge
+is ended, and the claim's power goes out once control is on again. A park as AC
 input without a power ends the EMS's charge by its setpoint alone on the local
 API — `inputLimit = 0`, the device staying in `acMode = 1` for the role, so the
 relay is not moved out and back; over MQTT, where nothing keeps that role, it is
@@ -410,7 +414,7 @@ situation as a killed process, except the EMS is running and will command it
 again the moment it answers. See [user/safety.md](user/safety.md).
 
 **The full-charge assist outranks the regulator.** Both want the AC direction of
-the same device, and the claim ladder settles it in one place: the assist (150)
+the same device, and the claim ladder settles it in one place: the assist (200)
 beats the regulator (100), its claim forbids output control, and the regulator
 stops commanding that device in the same cycle rather than both writing a
 direction at it.
@@ -487,6 +491,8 @@ ac_charge_band_collapsed
 ac_charge_capacity_below_stop
 ac_charge_ceiling_unknown
 ac_charge_direction
+ac_charge_end_failed
+ac_charge_end_withheld
 ac_charge_ended_on_disable
 ac_charge_entry_rate_limited
 ac_charge_handed_to_claim

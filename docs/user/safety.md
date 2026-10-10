@@ -145,10 +145,10 @@ Either switch stops a running charge in the same cycle. Stopping a device that
 is drawing from the grid is the one action that must never wait for a threshold,
 a counter or a restart. Disabling the EMS (`system.enabled`) or one device does
 too: a charging device gets one final command that ends the charge, and then the
-EMS writes nothing more to it. Parking a charging device, or a maintenance
-routine taking it over, ends the EMS's charge the same way — unless that claim
-sets a charge power of its own, which then takes the charge over for good:
-switching the EMS off or stopping it does not end it.
+EMS writes nothing more to it, whether the charge was the regulator's or the
+full-charge assist's. Parking a charging device ends the EMS's charge the same
+way, unless the park sets a charge power of its own, which then takes the charge
+over: switching the EMS off or stopping it does not end that one.
 
 So does losing the grid meter. A meter client that cannot reach its hardware
 keeps returning its last reading, and "still exporting" is indistinguishable
