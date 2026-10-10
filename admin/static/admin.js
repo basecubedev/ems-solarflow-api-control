@@ -18963,6 +18963,7 @@ function recoveryActionFor(mode) {
     return {
       owner: "guided_setup",
       label: "Discard setup",
+      busyLabel: "Discarding…",
       endpoint: "/api/setup/abandon",
       confirm: DISCARD_SETUP_CONFIRM,
     };
@@ -18971,6 +18972,7 @@ function recoveryActionFor(mode) {
     return {
       owner: "guided_upgrade",
       label: "Cancel upgrade",
+      busyLabel: "Cancelling…",
       endpoint: "/api/admin/system-alignment/cancel",
       confirm: CANCEL_UPGRADE_CONFIRM,
     };
@@ -20439,12 +20441,20 @@ function renderSystemAlignmentStatus(data) {
                 "temporary files."
               : "Admin is aligned, but EMS has not completed the matching build transition.");
   }
+  // A recovery action waiting for the server marks its button aria-busy; until
+  // it answers no recovery button may be pressed, whatever this render says.
+  const actionBusy = [
+    systemAlignmentEls.resume,
+    systemAlignmentEls.returnToRunning,
+    systemAlignmentEls.abandon,
+  ].some((button) => button && button.getAttribute && button.getAttribute("aria-busy") === "true");
   if (systemAlignmentEls.resume) {
     systemAlignmentEls.resume.disabled =
-      !transition.operation_id || transition.resume_available !== true;
+      actionBusy || !transition.operation_id || transition.resume_available !== true;
   }
   if (systemAlignmentEls.returnToRunning) {
     systemAlignmentEls.returnToRunning.disabled =
+      actionBusy ||
       setupOwned ||
       !transition.operation_id ||
       transition.return_available !== true;
@@ -20456,8 +20466,9 @@ function renderSystemAlignmentStatus(data) {
     // unknown owner offers no destructive action at all.
     const recovery = recoveryActionFor(transition.mode);
     systemAlignmentEls.abandon.hidden = !recovery;
-    if (recovery) systemAlignmentEls.abandon.textContent = recovery.label;
+    if (recovery && !actionBusy) systemAlignmentEls.abandon.textContent = recovery.label;
     systemAlignmentEls.abandon.disabled =
+      actionBusy ||
       !recovery ||
       !transition.operation_id ||
       transition.cancel_available !== true ||
@@ -20529,52 +20540,79 @@ async function loadSystemAlignmentStatus() {
   }
 }
 
+// One recovery action at a time: a second click would send a second request
+// for the same transition, and a status poll in between must not re-enable the
+// buttons. The busy mark is the button's aria-busy, which the renderer reads.
+async function runSystemAlignmentAction(button, busyLabel, action) {
+  const buttons = [
+    systemAlignmentEls.resume,
+    systemAlignmentEls.returnToRunning,
+    systemAlignmentEls.abandon,
+  ].filter(Boolean);
+  if (!button || buttons.some((item) => item.getAttribute("aria-busy") === "true")) return;
+  const label = button.textContent;
+  button.textContent = busyLabel;
+  button.setAttribute("aria-busy", "true");
+  buttons.forEach((item) => {
+    item.disabled = true;
+  });
+  try {
+    await action();
+  } finally {
+    button.textContent = label;
+    button.removeAttribute("aria-busy");
+    if (systemAlignmentState) renderSystemAlignmentStatus(systemAlignmentState);
+  }
+}
+
 async function resumeSystemAlignment() {
   const transition = (systemAlignmentState && systemAlignmentState.transition) || {};
   if (!transition.operation_id) return;
-  const previousAdminInstanceId = authState.adminInstanceId;
-  try {
-    // Resume/reconnect/retry carries only the operation id and tag. The server
-    // authorizes it from the transition's own stored, tag-bound acknowledgement
-    // — a fresh browser acknowledgement is never trusted during recovery.
-    const body = {
-      operation_id: transition.operation_id,
-      tag: transition.system_tag,
-    };
-    const res = await fetch("/api/admin/system-alignment/resume", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    let data = await res.json();
-    if (!res.ok) throw new Error(humanErrorText(data, "Resume failed."));
-    // Render the reconnect/alignment mutation before starting the next durable
-    // resource-verification mutation.
-    renderSystemAlignmentStatus(data);
-    if (resolveSystemAlignmentStage(data) === "admin_aligned") {
-      const verifyRes = await fetch("/api/admin/system-alignment/verify-resources", {
+  await runSystemAlignmentAction(systemAlignmentEls.resume, "Resuming…", async () => {
+    const previousAdminInstanceId = authState.adminInstanceId;
+    try {
+      // Resume/reconnect/retry carries only the operation id and tag. The server
+      // authorizes it from the transition's own stored, tag-bound acknowledgement
+      // — a fresh browser acknowledgement is never trusted during recovery.
+      const body = {
+        operation_id: transition.operation_id,
+        tag: transition.system_tag,
+      };
+      const res = await fetch("/api/admin/system-alignment/resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ operation_id: transition.operation_id }),
+        body: JSON.stringify(body),
       });
-      data = await verifyRes.json();
-      if (!verifyRes.ok) {
-        throw new Error(humanErrorText(data, "Resource verification failed."));
-      }
+      let data = await res.json();
+      if (!res.ok) throw new Error(humanErrorText(data, "Resume failed."));
+      // Render the reconnect/alignment mutation before starting the next durable
+      // resource-verification mutation.
       renderSystemAlignmentStatus(data);
+      if (resolveSystemAlignmentStage(data) === "admin_aligned") {
+        const verifyRes = await fetch("/api/admin/system-alignment/verify-resources", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ operation_id: transition.operation_id }),
+        });
+        data = await verifyRes.json();
+        if (!verifyRes.ok) {
+          throw new Error(humanErrorText(data, "Resource verification failed."));
+        }
+        renderSystemAlignmentStatus(data);
+      }
+      if (data.reconnect || data.status === "admin_alignment_started") {
+        showReconnectOverlay(data.message);
+        waitForAdminReconnect(previousAdminInstanceId, transition.operation_id);
+      } else {
+        loadSystemAlignmentStatus();
+      }
+    } catch (err) {
+      if (systemAlignmentEls.warning) {
+        systemAlignmentEls.warning.textContent = err.message || String(err);
+        systemAlignmentEls.warning.hidden = false;
+      }
     }
-    if (data.reconnect || data.status === "admin_alignment_started") {
-      showReconnectOverlay(data.message);
-      waitForAdminReconnect(previousAdminInstanceId, transition.operation_id);
-    } else {
-      loadSystemAlignmentStatus();
-    }
-  } catch (err) {
-    if (systemAlignmentEls.warning) {
-      systemAlignmentEls.warning.textContent = err.message || String(err);
-      systemAlignmentEls.warning.hidden = false;
-    }
-  }
+  });
 }
 
 async function returnToRunningSystemBuild() {
@@ -20585,25 +20623,27 @@ async function returnToRunningSystemBuild() {
   if (!window.confirm("Return the Admin Console to the last known-good running EMS build?")) {
     return;
   }
-  try {
-    const res = await fetch("/api/admin/system-alignment/return-to-running-build", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ operation_id: transition.operation_id, confirm: true }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(humanErrorText(data, "Return failed."));
-    renderSystemAlignmentStatus(data);
-    if (data.reconnect !== false) {
-      showReconnectOverlay(data.message || "Returning to the running System Build…");
-      waitForAdminReconnect(previousAdminInstanceId, transition.operation_id);
+  await runSystemAlignmentAction(systemAlignmentEls.returnToRunning, "Returning…", async () => {
+    try {
+      const res = await fetch("/api/admin/system-alignment/return-to-running-build", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operation_id: transition.operation_id, confirm: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(humanErrorText(data, "Return failed."));
+      renderSystemAlignmentStatus(data);
+      if (data.reconnect !== false) {
+        showReconnectOverlay(data.message || "Returning to the running System Build…");
+        waitForAdminReconnect(previousAdminInstanceId, transition.operation_id);
+      }
+    } catch (err) {
+      if (systemAlignmentEls.warning) {
+        systemAlignmentEls.warning.textContent = err.message || String(err);
+        systemAlignmentEls.warning.hidden = false;
+      }
     }
-  } catch (err) {
-    if (systemAlignmentEls.warning) {
-      systemAlignmentEls.warning.textContent = err.message || String(err);
-      systemAlignmentEls.warning.hidden = false;
-    }
-  }
+  });
 }
 
 async function abandonSystemAlignment() {
@@ -20611,61 +20651,63 @@ async function abandonSystemAlignment() {
   const action = recoveryActionFor(transition.mode);
   if (!action || !transition.operation_id) return;
   if (!window.confirm(action.confirm)) return;
-  try {
-    let body;
-    if (action.owner === "guided_setup") {
-      // Discard the server's CURRENT workflow explicitly — the panel shows the
-      // current state, so a stale locally-cached identity must not block it.
-      const current = await fetchOwningSetupWorkflowId();
-      body = current ? { setup_workflow_id: current } : {};
-    } else {
-      body = { operation_id: transition.operation_id, confirm: true };
-    }
-    const res = await fetch(action.endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (isSetupOperationInProgress(data)) {
-      // Nothing was discarded: keep the workflow and say which operation owns it.
+  await runSystemAlignmentAction(systemAlignmentEls.abandon, action.busyLabel, async () => {
+    try {
+      let body;
+      if (action.owner === "guided_setup") {
+        // Discard the server's CURRENT workflow explicitly — the panel shows the
+        // current state, so a stale locally-cached identity must not block it.
+        const current = await fetchOwningSetupWorkflowId();
+        body = current ? { setup_workflow_id: current } : {};
+      } else {
+        body = { operation_id: transition.operation_id, confirm: true };
+      }
+      const res = await fetch(action.endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (isSetupOperationInProgress(data)) {
+        // Nothing was discarded: keep the workflow and say which operation owns it.
+        if (systemAlignmentEls.warning) {
+          systemAlignmentEls.warning.textContent =
+            setupOperationInProgressMessage(data);
+          systemAlignmentEls.warning.hidden = false;
+        }
+        loadSystemAlignmentStatus();
+        return;
+      }
+      if (action.owner === "guided_setup" && res.ok && data.ok === true) {
+        setSetupWorkflowId(null);
+      }
+      if (setupCleanupStateFor(data) !== null) {
+        showSetupCleanupIncomplete(data);
+        loadSystemAlignmentStatus();
+        return;
+      }
+      const succeeded =
+        action.owner === "guided_setup" ? data.ok === true : data.stage === "cancelled";
+      if (!res.ok || !succeeded) {
+        throw new Error(
+          humanErrorText(
+            data,
+            action.owner === "guided_setup"
+              ? "The setup could not be discarded."
+              : "The upgrade could not be cancelled."
+          )
+        );
+      }
+      showSetupCleanupIncomplete(null);
+      renderSystemAlignmentStatus(data.transition ? data : data);
+      loadSystemAlignmentStatus();
+    } catch (err) {
       if (systemAlignmentEls.warning) {
-        systemAlignmentEls.warning.textContent =
-          setupOperationInProgressMessage(data);
+        systemAlignmentEls.warning.textContent = err.message || String(err);
         systemAlignmentEls.warning.hidden = false;
       }
-      loadSystemAlignmentStatus();
-      return;
     }
-    if (action.owner === "guided_setup" && res.ok && data.ok === true) {
-      setSetupWorkflowId(null);
-    }
-    if (setupCleanupStateFor(data) !== null) {
-      showSetupCleanupIncomplete(data);
-      loadSystemAlignmentStatus();
-      return;
-    }
-    const succeeded =
-      action.owner === "guided_setup" ? data.ok === true : data.stage === "cancelled";
-    if (!res.ok || !succeeded) {
-      throw new Error(
-        humanErrorText(
-          data,
-          action.owner === "guided_setup"
-            ? "The setup could not be discarded."
-            : "The upgrade could not be cancelled."
-        )
-      );
-    }
-    showSetupCleanupIncomplete(null);
-    renderSystemAlignmentStatus(data.transition ? data : data);
-    loadSystemAlignmentStatus();
-  } catch (err) {
-    if (systemAlignmentEls.warning) {
-      systemAlignmentEls.warning.textContent = err.message || String(err);
-      systemAlignmentEls.warning.hidden = false;
-    }
-  }
+  });
 }
 
 if (systemAlignmentEls.resume) {

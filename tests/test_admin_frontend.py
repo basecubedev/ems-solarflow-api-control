@@ -12782,6 +12782,66 @@ def test_the_candidate_state_reads_the_name_through_the_same_helper():
     assert "configuredDeviceNameForRef(ref)" in _extract_fn(js, "inverterCandidateConnectionState")
 
 
+
+def test_a_recovery_action_holds_every_recovery_button_until_it_answers():
+    js = _read("admin.js")
+    header = "async function runSystemAlignmentAction"
+    script = (
+        header + js.split(header, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+        + """
+function button(text) { return { text, disabled: false, attrs: {},
+  get textContent() { return this.text; }, set textContent(v) { this.text = v; },
+  setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; },
+  removeAttribute(k) { delete this.attrs[k]; } }; }
+const systemAlignmentEls = { resume: button("Resume"), returnToRunning: button("Return"),
+  abandon: button("Cancel upgrade") };
+const systemAlignmentState = { transition: { operation_id: "op" } };
+const renders = [];
+function renderSystemAlignmentStatus(state) {
+  renders.push(state === systemAlignmentState);
+  Object.values(systemAlignmentEls).forEach((b) => { b.disabled = false; });
+}
+let release;
+let calls = 0;
+const pending = runSystemAlignmentAction(systemAlignmentEls.resume, "Resuming…", () => {
+  calls += 1;
+  return new Promise((resolve) => { release = resolve; });
+});
+const during = {
+  disabled: Object.values(systemAlignmentEls).map((b) => b.disabled),
+  label: systemAlignmentEls.resume.textContent,
+  busy: systemAlignmentEls.resume.attrs["aria-busy"],
+};
+runSystemAlignmentAction(systemAlignmentEls.abandon, "Cancelling…", () => { calls += 1; });
+release();
+pending.then(() => {
+  console.log(JSON.stringify({ during, calls, renders,
+    label: systemAlignmentEls.resume.textContent,
+    busy: systemAlignmentEls.resume.attrs["aria-busy"] || null,
+    abandonLabel: systemAlignmentEls.abandon.textContent }));
+});
+"""
+    )
+    out = _run_node(script)
+
+    assert out["during"] == {"disabled": [True, True, True], "label": "Resuming…", "busy": "true"}
+    assert out["calls"] == 1
+    assert out["renders"] == [True]
+    assert out["label"] == "Resume"
+    assert out["busy"] is None
+    assert out["abandonLabel"] == "Cancel upgrade"
+
+
+def test_a_render_during_a_recovery_action_keeps_every_recovery_button_closed():
+    render = _extract_fn(_read("admin.js"), "renderSystemAlignmentStatus")
+
+    assert 'getAttribute("aria-busy") === "true"' in render
+    for target in ("resume", "returnToRunning", "abandon"):
+        block = render.split(f"systemAlignmentEls.{target}.disabled =", 1)[1].split(";", 1)[0]
+        assert "actionBusy ||" in block, target
+    assert "if (recovery && !actionBusy)" in render
+
+
 def test_a_failed_mdns_request_never_reopens_controls_the_server_closed():
     js = _read("admin.js")
     script = (
