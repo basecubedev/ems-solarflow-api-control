@@ -20668,6 +20668,10 @@ async function resumeSystemAlignment() {
   });
 }
 
+const RETURN_TO_DEVELOPMENT_BUILD_CONFIRM =
+  "The last known-good build is a Development build, which has not been " +
+  "released. Return the Admin Console to it anyway?";
+
 async function returnToRunningSystemBuild() {
   const transition = (systemAlignmentState && systemAlignmentState.transition) || {};
   if (!transition.operation_id) return;
@@ -20678,12 +20682,27 @@ async function returnToRunningSystemBuild() {
   }
   await runSystemAlignmentAction(systemAlignmentEls.returnToRunning, "Returning…", async () => {
     try {
-      const res = await fetch("/api/admin/system-alignment/return-to-running-build", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ operation_id: transition.operation_id, confirm: true }),
-      });
-      const data = await res.json();
+      const request = (acknowledgeRisk) =>
+        fetch("/api/admin/system-alignment/return-to-running-build", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            operation_id: transition.operation_id,
+            confirm: true,
+            acknowledge_risk: acknowledgeRisk,
+          }),
+        });
+      let res = await request(false);
+      let data = await res.json();
+      if (
+        !res.ok &&
+        data &&
+        data.error === "acknowledgement_required" &&
+        window.confirm(RETURN_TO_DEVELOPMENT_BUILD_CONFIRM)
+      ) {
+        res = await request(true);
+        data = await res.json();
+      }
       if (!res.ok) throw new Error(humanErrorText(data, "Return failed."));
       renderSystemAlignmentStatus(data);
       if (data.reconnect !== false) {

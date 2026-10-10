@@ -3494,10 +3494,13 @@ class _FakeSystemAlignment:
             )
         return {"ok": True, "operation_id": operation_id, "stage": self.stage}
 
-    def return_to_running_build(self, *, operation_id, confirm):
-        self.return_calls.append(
-            {"operation_id": operation_id, "confirm": confirm}
-        )
+    def return_to_running_build(
+        self, *, operation_id, confirm, development_risk_acknowledged=False
+    ):
+        call = {"operation_id": operation_id, "confirm": confirm}
+        if development_risk_acknowledged:
+            call["development_risk_acknowledged"] = True
+        self.return_calls.append(call)
         return {
             "ok": True,
             "operation_id": operation_id,
@@ -4767,6 +4770,32 @@ def test_system_alignment_status_resume_and_return_routes_are_productive(tmp_pat
     assert return_payload["target_system_tag"] == "v0.7.0"
     assert alignment.resume_calls == []
     assert alignment.return_calls == [{"operation_id": "op-1", "confirm": True}]
+
+
+def test_the_return_route_carries_the_operators_risk_acknowledgement(tmp_path):
+    alignment = _FakeSystemAlignment(stage="failed_recoverable")
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        acknowledged, _, _ = _request(
+            f"{base}/api/admin/system-alignment/return-to-running-build",
+            method="POST",
+            body={"operation_id": "op-1", "confirm": True, "acknowledge_risk": True},
+        )
+        malformed, _, _ = _request(
+            f"{base}/api/admin/system-alignment/return-to-running-build",
+            method="POST",
+            body={"operation_id": "op-1", "confirm": True, "acknowledge_risk": "yes"},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert acknowledged == 200
+    assert malformed == 400
+    assert alignment.return_calls == [
+        {"operation_id": "op-1", "confirm": True, "development_risk_acknowledged": True}
+    ]
 
 
 def test_system_alignment_resource_verification_has_productive_route(tmp_path):

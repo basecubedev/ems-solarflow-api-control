@@ -1051,7 +1051,9 @@ class SystemAlignmentService:
             "revision": running.get("revision"),
         }
 
-    def return_to_running_build(self, *, operation_id, confirm) -> dict:
+    def return_to_running_build(
+        self, *, operation_id, confirm, development_risk_acknowledged=False
+    ) -> dict:
         """Align Admin to the verified build of the EMS container now running.
 
         Refused for a Setup-mode transition. The primitive is two durable steps —
@@ -1059,7 +1061,8 @@ class SystemAlignmentService:
         the workflow that owns the Setup side is not carried across them, so the
         new transition would have no owner able to complete, resume or abandon
         it. Guided Setup recovery keeps Resume and Discard setup instead; see
-        ``docs/technical/admin-workflow-state.md``.
+        ``docs/technical/admin-workflow-state.md``. A Development known-good
+        build needs the operator's risk acknowledgement, as starting one does.
         """
 
         if confirm is not True:
@@ -1117,7 +1120,9 @@ class SystemAlignmentService:
                 "known_good_mismatch",
                 "the available rollback images no longer match known-good",
             )
-        self._require_explicit_development_acknowledgement(target, False)
+        self._require_explicit_development_acknowledgement(
+            target, development_risk_acknowledged
+        )
         try:
             self._transitions.cancel(
                 operation_id=operation_id, now=self._now_value()
@@ -1127,6 +1132,7 @@ class SystemAlignmentService:
         result = self._start_resolved(
             build=target,
             mode=TRANSITION_MODE_ALIGN_EXISTING,
+            development_risk_acknowledged=development_risk_acknowledged is True,
         )
         result["target_system_tag"] = target_tag
         result["status"] = "admin_return_started"

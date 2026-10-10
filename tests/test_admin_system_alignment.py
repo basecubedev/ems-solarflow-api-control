@@ -2228,6 +2228,41 @@ def test_return_action_refuses_development_known_good_before_cancelling(tmp_path
     assert launched == []
 
 
+
+def test_an_acknowledged_return_reaches_a_development_known_good_build(tmp_path):
+    dev_tag = "dev-feature-old-1234567890-aaaaaaa-41-1"
+    old = SystemBuild(
+        requested_tag=dev_tag,
+        canonical_tag=dev_tag,
+        channel="development",
+        revision="a" * 40,
+        build_id=dev_tag,
+        admin_image=f"{ADMIN_IMAGE_REPO}:{dev_tag}",
+        admin_digest="sha256:old-admin",
+        ems_image=f"{EMS_IMAGE_REPO}:{dev_tag}",
+        ems_digest="sha256:old-ems",
+        release_tag=dev_tag,
+    )
+    running_old = {
+        "digest": "sha256:old-ems",
+        "revision": "a" * 40,
+        "channel": "development",
+        "build_id": dev_tag,
+        "release_tag": dev_tag,
+    }
+    service, transitions, _, launched, _, _, operation_id = _return_recovery_service(
+        tmp_path, running_ems=running_old, old=old
+    )
+
+    result = service.return_to_running_build(
+        operation_id=operation_id, confirm=True, development_risk_acknowledged=True
+    )
+
+    assert result["status"] == "admin_return_started"
+    assert transitions.read().system_tag == dev_tag
+    assert transitions.read().development_risk_acknowledged is True
+    assert len(launched) == 1
+
 # --- read-only Guided Upgrade validation (no transition, no resources) -------
 
 

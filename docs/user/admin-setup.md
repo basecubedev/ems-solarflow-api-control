@@ -304,6 +304,8 @@ offers:
 
 A Guided Upgrade recovery additionally offers **Return to running build**, which
 puts the Admin Console back on the System Build your EMS is currently running.
+When that build is a Development build, the console asks you to accept its risk
+first, as it does when you choose one.
 That action is deliberately **not** offered during a setup. Returning is really
 two steps — end the failed operation, then start a new one — and during a setup
 there is no record that would own the new operation afterwards, so a later

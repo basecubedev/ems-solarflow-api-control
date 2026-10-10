@@ -9757,7 +9757,7 @@ def test_reconnect_resume_verifies_resources_through_its_own_stage_route():
 def test_fresh_install_resume_sends_no_acknowledge_risk():
     # Fresh Install recovery relies on the server's stored transition
     # authorization; the browser never injects an acknowledgement flag.
-    resume = _extract_fn(_read("admin.js"), "resumeSystemAlignment")
+    resume = _async_fn_body(_read("admin.js"), "async function resumeSystemAlignment")
     assert "acknowledge_risk" not in resume
 
 
@@ -12898,6 +12898,17 @@ const button = (action, locked) => ({ dataset: { backupId: "b1", backupKind: "ar
     assert out["right"]["restore"] is False
     assert out["plain"]["calls"] == ["preview:"]
     assert out["plain"]["form"] is True
+
+
+def test_returning_to_a_development_build_asks_for_the_risk_and_sends_it():
+    js = _read("admin.js")
+    body = _async_fn_body(js, "async function returnToRunningSystemBuild")
+
+    assert "acknowledge_risk: acknowledgeRisk" in body
+    assert "request(false)" in body
+    assert 'data.error === "acknowledgement_required"' in body
+    assert "window.confirm(RETURN_TO_DEVELOPMENT_BUILD_CONFIRM)" in body
+    assert body.index("RETURN_TO_DEVELOPMENT_BUILD_CONFIRM") < body.index("request(true)")
 
 
 def test_a_reloaded_broker_card_keeps_the_operators_tls_choice():

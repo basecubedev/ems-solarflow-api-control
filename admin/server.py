@@ -2854,15 +2854,22 @@ class AdminHandler(BaseHTTPRequestHandler):
         body = self._read_json_body()
         if body is None:
             return
-        if not isinstance(body, dict) or set(body) - {"operation_id", "confirm"}:
+        if not isinstance(body, dict) or set(body) - {
+            "operation_id", "confirm", "acknowledge_risk"
+        }:
             self._send_json({"error": "unsupported_field"}, status=400)
             return
         if body.get("confirm") is not True:
             self._send_json({"error": "confirmation_required"}, status=400)
             return
+        if not isinstance(body.get("acknowledge_risk", False), bool):
+            self._send_json({"error": "acknowledge_risk must be a boolean"}, status=400)
+            return
         try:
             result = self.server.system_alignment.return_to_running_build(
-                operation_id=body.get("operation_id"), confirm=True
+                operation_id=body.get("operation_id"),
+                confirm=True,
+                development_risk_acknowledged=body.get("acknowledge_risk") is True,
             )
         except (SystemBuildError, SystemAlignmentError) as exc:
             self._send_alignment_error(exc)
