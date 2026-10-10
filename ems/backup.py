@@ -654,6 +654,43 @@ def _reject_symlink_sources(included):
             )
 
 
+class _HashingReader:
+    def __init__(self, handle):
+        self._handle = handle
+        self.digest = hashlib.sha256()
+
+    def read(self, size=-1):
+        data = self._handle.read(size)
+        self.digest.update(data)
+        return data
+
+
+def _add_described_file(tar, entry, described):
+    """Archive one file and refuse it unless it is the file the manifest describes.
+
+    The manifest is hashed in one read and the archive filled in another; a
+    file the EMS rewrote in between produced an archive that fails its own
+    verification on restore.
+    """
+
+    arcname = entry["arcname"]
+    changed = BackupError(
+        f"{arcname} changed while it was being backed up; run the backup again"
+    )
+    try:
+        with open(entry["abs_path"], "rb") as handle:
+            info = tar.gettarinfo(arcname=arcname, fileobj=handle)
+            reader = _HashingReader(handle)
+            tar.addfile(info, reader)
+    except OSError as exc:
+        raise changed from exc
+    if described is not None and (
+        info.size != described.get("size_bytes")
+        or reader.digest.hexdigest() != described.get("sha256")
+    ):
+        raise changed
+
+
 def _write_tar(archive_path, manifest, included, compression_level):
     with tarfile.open(
         archive_path, "w:gz", compresslevel=compression_level
@@ -666,8 +703,9 @@ def _write_tar(archive_path, manifest, included, compression_level):
         info.mtime = 0
         tar.addfile(info, io.BytesIO(manifest_bytes))
 
+        described = {item["path"]: item for item in manifest.get("files", [])}
         for entry in included:
-            tar.add(entry["abs_path"], arcname=entry["arcname"])
+            _add_described_file(tar, entry, described.get(entry["arcname"]))
 
 
 def _emit_archive(

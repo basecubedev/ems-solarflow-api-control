@@ -514,6 +514,38 @@ def test_a_restore_as_root_gives_a_replaced_file_back_to_its_owner(tmp_path, mon
     assert calls == [(owner.st_uid, owner.st_gid)]
 
 
+# ---------------------------------------------------------------------------
+# The archived bytes are the bytes the manifest describes
+# ---------------------------------------------------------------------------
+
+def test_a_file_that_changes_between_manifest_and_archive_fails_the_backup(tmp_path, monkeypatch):
+    base, config, config_path = write_project(tmp_path)
+    real_build = backup.build_manifest
+
+    def build_then_edit(*args, **kwargs):
+        manifest = real_build(*args, **kwargs)
+        with open(config_path, "w") as handle:
+            handle.write('{"edited": "while the backup ran"}')
+        return manifest
+
+    monkeypatch.setattr(backup, "build_manifest", build_then_edit)
+
+    with pytest.raises(backup.BackupError) as excinfo:
+        create(base, config, config_path)
+
+    assert "changed while it was being backed up" in str(excinfo.value)
+    backup_dir = os.path.join(base, "backup")
+    assert not os.path.isdir(backup_dir) or os.listdir(backup_dir) == []
+
+
+def test_an_unchanged_backup_verifies_against_its_manifest(tmp_path):
+    base, config, config_path = write_project(tmp_path)
+
+    path = create(base, config, config_path)
+
+    assert backup.verify_backup(path)["verified"] is True
+
+
 def test_a_filesystem_that_refuses_the_mode_does_not_stop_the_restore(tmp_path, monkeypatch):
     base, config, config_path = write_project(tmp_path)
     path = create(base, config, config_path)
