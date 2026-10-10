@@ -440,13 +440,20 @@ that container has to go before the action is tried again.
 The EMS controller **never starts or manages Docker containers**. When InfluxDB
 is enabled but not reachable, the controller keeps running (telemetry writes are
 failure-isolated and retried) and logs an actionable hint rather than failing
-silently:
+silently. Inside the EMS container (bundled mode) it reads:
 
 ```text
-InfluxDB is enabled but not reachable. For bundled mode run:
-python3 emsctl.py influx init or start the full stack with:
-python3 emsctl.py stack up
+InfluxDB is enabled but not reachable. To add the bundled InfluxDB run on the
+host: sh install-docker.sh --analytics. Analytics are optional: set
+influxdb.enabled=false in config/config.json to run without them.
 ```
+
+A native EMS names `python3 emsctl.py influx init` and `python3 emsctl.py stack
+up` instead, and an external InfluxDB names `influx status` through
+`docker compose exec ems` in the container. Each kind of writer warning comes
+at once, then a minute later, and from then on half as often each time, down to
+once an hour; another kind is named at once, and the first successful write ends
+every pause, so the next failure is named at once again.
 
 The dashboard Analytics tab shows the same guidance when it cannot reach
 InfluxDB:

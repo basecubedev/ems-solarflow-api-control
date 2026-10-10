@@ -40,7 +40,7 @@ from ems.history.schema import (
     planned_task_names,
     query_profile_bucket_names,
 )
-from ems.influx_setup import INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS
+from ems.influx_setup import INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS, is_container_runtime
 from ems.power_direction import derive_house_load_w
 from ems.logging_utils import log_event
 
@@ -261,6 +261,7 @@ class InfluxTelemetryWriter:
         max_queue=600,
         batch_max=240,
         error_log_interval_s=60.0,
+        max_error_log_interval_s=3600.0,
         max_backoff_s=30.0,
     ):
         self.config = influx_config
@@ -269,12 +270,13 @@ class InfluxTelemetryWriter:
         self._queue = queue.Queue(maxsize=max_queue)
         self._batch_max = batch_max
         self._error_log_interval = error_log_interval_s
+        self._max_error_log_interval = max_error_log_interval_s
+        self._error_log_state = {}
         self._max_backoff = max_backoff_s
         self._thread = None
         self._stop = threading.Event()
         self._client = None
         self._dropped = 0
-        self._last_error_log = 0.0
         self._schema_checked = False
         self._schema_reports = 0
         self._schema_failures = 0
@@ -370,7 +372,9 @@ class InfluxTelemetryWriter:
                 self._maybe_log_error(
                     "influx_writer_client_error", error=exc, hint=self._setup_hint()
                 )
-                client = None
+                self._sleep_backoff(backoff)
+                backoff = min(backoff * 2, self._max_backoff)
+                continue
             if client is None:
                 self._maybe_log_error(
                     "influx_writer_unconfigured", hint=self._setup_hint()
@@ -395,6 +399,7 @@ class InfluxTelemetryWriter:
                 backoff = min(backoff * 2, self._max_backoff)
             else:
                 backoff = 1.0
+                self._note_write_succeeded()
                 try:
                     self._report_schema_gap_once(client)
                 except Exception as exc:
@@ -561,22 +566,54 @@ class InfluxTelemetryWriter:
 
         The EMS controller never manages Docker, so when bundled InfluxDB is
         unreachable the fix is a host-side setup command, not anything the
-        control loop can do. External InfluxDB is user-managed.
+        control loop can do. External InfluxDB is user-managed. An EMS-only
+        Docker install starts with analytics enabled and no InfluxDB, so the
+        hint also names the way to switch them off.
         """
+        way_out = (
+            " Analytics are optional: set influxdb.enabled=false in "
+            "config/config.json to run without them."
+        )
+        in_container = is_container_runtime()
         if self.config.get("mode") == "bundled":
+            if in_container:
+                return (
+                    "InfluxDB is enabled but not reachable. To add the bundled "
+                    "InfluxDB run on the host: sh install-docker.sh --analytics."
+                    + way_out
+                )
             return (
                 "InfluxDB is enabled but not reachable. For bundled mode run: "
                 "python3 emsctl.py influx init or start the full stack with: "
-                "python3 emsctl.py stack up"
+                "python3 emsctl.py stack up." + way_out
             )
+        emsctl = (
+            "docker compose exec ems python3 emsctl.py"
+            if in_container
+            else "python3 emsctl.py"
+        )
         return (
             "InfluxDB is enabled but not reachable. Check influxdb.url/token "
-            "(external InfluxDB is user-managed) and run: "
-            "python3 emsctl.py influx status"
+            f"(external InfluxDB is user-managed) and run: {emsctl} influx status."
+            + way_out
         )
 
     def _maybe_log_error(self, event, **fields):
+        """Log one writer failure, each kind on its own widening interval.
+
+        A new kind of failure -- a token rejected after an outage, a queue that
+        starts dropping -- is named at once, not after the pause another kind
+        has built up.
+        """
+
         now = time.time()
-        if now - self._last_error_log >= self._error_log_interval:
-            self._last_error_log = now
-            log_event(logging.WARNING, event, bucket=self.bucket, **fields)
+        last, interval = self._error_log_state.get(event, (None, self._error_log_interval))
+        if last is not None and now - last < interval:
+            return
+        if last is not None:
+            interval = min(interval * 2, self._max_error_log_interval)
+        self._error_log_state[event] = (now, interval)
+        log_event(logging.WARNING, event, bucket=self.bucket, **fields)
+
+    def _note_write_succeeded(self):
+        self._error_log_state.clear()
