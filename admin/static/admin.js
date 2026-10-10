@@ -11180,6 +11180,22 @@ async function loadMqttMigrationReview() {
   }
 }
 
+function markMqttMigrationFailure(stage) {
+  if (stage === "review") {
+    setMqttMigrationStage("backup", null);
+    setMqttMigrationStage("apply", null);
+    setMqttMigrationStage("validate", null);
+  } else if (stage === "backup") {
+    setMqttMigrationStage("backup", "failed");
+    setMqttMigrationStage("apply", null);
+  } else if (stage === "validate") {
+    setMqttMigrationStage("validate", "failed");
+  } else {
+    setMqttMigrationStage("backup", "done");
+    setMqttMigrationStage("apply", "failed");
+  }
+}
+
 async function applyMqttMigration() {
   if (mqttMigrationState.applying || !mqttMigrationState.revision) return;
   const review = mqttMigrationState.review || {};
@@ -11202,6 +11218,7 @@ async function applyMqttMigration() {
   setMqttMigrationStage("backup", backup ? "running" : "done");
   setMqttMigrationStage("apply", backup ? null : "running");
   setMqttMigrationStage("validate", null);
+  let reached = backup ? "backup" : "apply";
   try {
     const resp = await fetch("/api/admin/maintenance/zendure-mqtt/migration-apply", {
       method: "POST",
@@ -11216,8 +11233,10 @@ async function applyMqttMigration() {
     if (!resp.ok || !data.ok) {
       const error = new Error(humanErrorText(data, "Migration apply failed."));
       error.status = data.status || "error";
+      error.stage = typeof data.stage === "string" ? data.stage : null;
       throw error;
     }
+    reached = "validate";
     setMqttMigrationStage("backup", "done");
     setMqttMigrationStage("apply", "done");
     setMqttMigrationStage("validate", "running");
@@ -11234,12 +11253,7 @@ async function applyMqttMigration() {
     setMqttMigrationStage("validate", "done");
   } catch (err) {
     const message = err.message || String(err);
-    if (message.toLowerCase().includes("backup")) {
-      setMqttMigrationStage("backup", "failed");
-    } else {
-      setMqttMigrationStage("backup", "done");
-      setMqttMigrationStage("apply", "failed");
-    }
+    markMqttMigrationFailure(err.stage || reached);
     if (mqttMigrationEls.status) {
       mqttMigrationEls.status.textContent = err.status === "conflict"
         ? "The review is stale. Refresh and confirm the new plan."

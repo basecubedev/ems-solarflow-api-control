@@ -228,3 +228,65 @@ def test_apply_requires_csrf(server):
         headers={"X-CSRF-Token": "wrong-token"},
     )
     assert status == 403
+
+
+def _review_revision(base):
+    _, review = _request(f"{base}{REVIEW}")
+    return review["revision"]
+
+
+def test_a_failed_backup_names_the_backup_stage_and_writes_nothing(server, monkeypatch):
+    from admin.config_apply import ConfigApplyService
+
+    base, root = server
+    path = _write_config(root, _legacy_control_config())
+    before = path.read_bytes()
+
+    def no_backup(self, target):
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(ConfigApplyService, "_backup", no_backup)
+    status, payload = _request(
+        f"{base}{APPLY}",
+        "POST",
+        {"confirm": True, "revision": _review_revision(base), "backup": True},
+    )
+
+    assert status == 500
+    assert payload["ok"] is False
+    assert payload["stage"] == "backup"
+    assert "No space left on device" in payload["message"]
+    assert path.read_bytes() == before
+
+
+def test_a_failed_write_names_the_apply_stage(server, monkeypatch):
+    import admin.config_apply as config_apply
+
+    base, root = server
+    _write_config(root, _legacy_control_config())
+
+    def no_write(path, payload):
+        raise OSError("Read-only file system")
+
+    monkeypatch.setattr(config_apply, "_atomic_write", no_write)
+    status, payload = _request(
+        f"{base}{APPLY}",
+        "POST",
+        {"confirm": True, "revision": _review_revision(base), "backup": False},
+    )
+
+    assert status == 500
+    assert payload["stage"] == "apply"
+
+
+def test_a_stale_review_names_the_review_stage(server):
+    base, root = server
+    _write_config(root, _legacy_control_config())
+    status, payload = _request(
+        f"{base}{APPLY}",
+        "POST",
+        {"confirm": True, "revision": "stale-revision-value"},
+    )
+
+    assert status == 409
+    assert payload["stage"] == "review"

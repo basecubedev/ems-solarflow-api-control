@@ -36,7 +36,7 @@ from admin.admin_update import (
     SystemTransitionLauncher,
     admin_image_ref_from_env,
 )
-from admin.config_apply import ConfigApplyService, ConfigChangedError
+from admin.config_apply import ConfigApplyService, ConfigBackupError, ConfigChangedError
 from admin.config_export import (
     ConfigExportService,
     ConfigExportValidationError,
@@ -3154,17 +3154,20 @@ class AdminHandler(BaseHTTPRequestHandler):
         status = prepared.get("status")
         if status == "conflict":
             self._send_json(
-                self._sanitize_external_mqtt_payload(prepared), status=409
+                self._sanitize_external_mqtt_payload({**prepared, "stage": "review"}),
+                status=409,
             )
             return
         if status == "missing":
             self._send_json(
-                self._sanitize_external_mqtt_payload(prepared), status=404
+                self._sanitize_external_mqtt_payload({**prepared, "stage": "review"}),
+                status=404,
             )
             return
         if status != "ok":
             self._send_json(
-                self._sanitize_external_mqtt_payload(prepared), status=400
+                self._sanitize_external_mqtt_payload({**prepared, "stage": "apply"}),
+                status=400,
             )
             return
         if not prepared.get("changed"):
@@ -3191,10 +3194,24 @@ class AdminHandler(BaseHTTPRequestHandler):
                         {
                             "ok": False,
                             "status": "conflict",
+                            "stage": "review",
                             "message": str(exc),
                         }
                     ),
                     status=409,
+                )
+                return
+            except ConfigBackupError as exc:
+                self._send_json(
+                    self._sanitize_external_mqtt_payload(
+                        {
+                            "ok": False,
+                            "status": "error",
+                            "stage": "backup",
+                            "message": f"Backup failed: {exc}",
+                        }
+                    ),
+                    status=500,
                 )
                 return
             except OSError as exc:
@@ -3203,6 +3220,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                         {
                             "ok": False,
                             "status": "error",
+                            "stage": "apply",
                             "message": f"Apply failed: {exc}",
                         }
                     ),
