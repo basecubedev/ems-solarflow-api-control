@@ -24,7 +24,9 @@ python3 emsctl.py --help
 python3 emsctl.py examples
 ```
 
-Common runtime edits:
+Common runtime edits. A device is named as it is in `config.json`: `INV_1`,
+`INV_2`, … in a config the Admin Console wrote, `WR1`, `WR2` in the template.
+The examples use `WR1`; `python3 emsctl.py status` lists the names yours uses.
 
 ```bash
 python3 emsctl.py status
