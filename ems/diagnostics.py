@@ -61,11 +61,13 @@ BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = config_mod.BATTERY_FULL_CHARGE_ASSIST_DEFA
 DIAGNOSE_REDACT_KEYWORDS = (
     "password",
     "passwd",
-    "password_hash",
+    "passphrase",
     "token",
     "secret",
     "key",
+    "apikey",
     "auth",
+    "authorization",
     "credential",
     "credentials",
     "username",
@@ -73,12 +75,11 @@ DIAGNOSE_REDACT_KEYWORDS = (
     "serial",
     "identity",
     "sn",
-    "device_id",
-    "api",
     "bearer",
     "cookie",
     "session",
 )
+DIAGNOSE_REDACT_TOKEN_PAIRS = (("device", "id"),)
 
 DIAGNOSE_SCHEMA_VERSION = 1
 SUPPORT_BUNDLE_VERSION = 1
@@ -2260,9 +2261,23 @@ def diagnose_reported_property_names(payload):
     return {"reported": names, "unmapped": unmapped}
 
 
+def _diagnose_key_tokens(key):
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(key))
+    return [token for token in re.split(r"[^a-z0-9]+", text.lower()) if token]
+
+
 def diagnose_redact_key(key):
-    lowered = str(key).lower()
-    return any(token in lowered for token in DIAGNOSE_REDACT_KEYWORDS)
+    """Whether a key names a secret or an identity, read as whole words.
+
+    A substring match blanked ``control_snapshot`` for its ``sn`` and
+    ``authority`` for its ``auth``, so the diagnose page lost whole blocks.
+    """
+
+    tokens = _diagnose_key_tokens(key)
+    if any(token in DIAGNOSE_REDACT_KEYWORDS for token in tokens):
+        return True
+    pairs = set(zip(tokens, tokens[1:]))
+    return any(pair in pairs for pair in DIAGNOSE_REDACT_TOKEN_PAIRS)
 
 
 def diagnose_redact_value(value):

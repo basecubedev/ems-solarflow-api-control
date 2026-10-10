@@ -2963,6 +2963,35 @@ def test_the_zone_in_effect_is_named_with_its_offset(tmp_path):
     assert "UTC-01:00" in check["message"]
 
 
+@pytest.mark.parametrize(
+    "key",
+    ["control_snapshot", "authority", "api_family", "snapshot_status", "monkey_patch", "keepalive_seconds"],
+)
+def test_a_key_that_only_contains_a_redaction_word_is_not_redacted(key):
+    assert diagnostics.diagnose_redact_key(key) is False
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "password", "password_hash", "token", "api_key", "apiKey", "app_key", "sn",
+        "serial", "serialNumber", "device_id", "deviceId", "auth_file", "session_cookie",
+        "credentials_ref", "Authorization", "bearer",
+    ],
+)
+def test_a_key_that_names_a_secret_or_identity_is_redacted(key):
+    assert diagnostics.diagnose_redact_key(key) is True
+
+
+def test_the_http_report_keeps_the_control_snapshot_readable():
+    report = {"control": {"control_snapshot": {"commanded_total_w": 420, "sn": "ABC123"}}}
+
+    redacted = diagnostics.diagnose_redact_report_for_http(report)
+
+    assert redacted["control"]["control_snapshot"]["commanded_total_w"] == 420
+    assert redacted["control"]["control_snapshot"]["sn"] == "<redacted>"
+
+
 def test_emsctl_diagnose_control_names_the_limit_the_cycle_named(tmp_path):
     write_control_runtime(tmp_path)
     write_live_control_status(
