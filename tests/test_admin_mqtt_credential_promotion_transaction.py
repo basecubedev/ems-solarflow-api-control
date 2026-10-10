@@ -41,6 +41,20 @@ def _isolate(isolated_install_root):
     return isolated_install_root
 
 
+def _download_status(url, body):
+    headers = dict(auth_headers(url, "POST"))
+    headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(
+        url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            resp.read()
+            return resp.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
 def _request(url, method="GET", body=None):
     data = None
     headers = dict(auth_headers(url, method))
@@ -144,7 +158,9 @@ def test_preview_and_download_are_side_effect_free(tmp_path):
             f"{base}/api/setup/config-preview/validate", "POST", body
         )
         assert status == 200
-        status, _ = _request(f"{base}/api/setup/config/download", "POST", body)
+        status = _download_status(
+            f"{base}/api/setup/config/download", {**body, "password": "download-pw"}
+        )
         assert status == 200
         # No runtime credential is promoted by a read-only preview/download.
         assert not _runtime_secret_saved(srv)

@@ -9,11 +9,13 @@ publishing to the broker. It carries no HTTP session and does not participate in
 HTTP state reconciliation (``supports_state_reconciliation = False``).
 """
 
+import functools
 import json
 import logging
 import math
+import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 from ems import config as cfg
 from ems.charge_record import (
@@ -22,7 +24,7 @@ from ems.charge_record import (
     CHARGE_EXIT_TO_OUTPUT,
     ChargeRecord,
 )
-from ems.clients import parse_device
+from ems.clients import DEVICE_STATE_PROPERTIES, parse_device
 from ems.health import CommHealth
 from ems.logging_utils import log_event
 from ems.mqtt_control import dispatch
@@ -66,6 +68,7 @@ from ems.mqtt_control.zendure_profiles import (
 )
 from ems.zendure_mqtt.config_entries import control_gate_for_broker_source
 from ems.zendure_mqtt.service import SNAPSHOT_STALE
+from ems.zendure_mqtt.snapshot import observable_metrics, pack_witness
 from ems.zendure_mqtt.write_protocols import (
     CONTROL_PUBLISH_QOS,
     MqttPublishMessage,
@@ -106,6 +109,7 @@ MAX_CONFIRMATION_TOLERANCE_W = 200
 MAX_SAFETY_PREEMPT_MARGIN_W = 1000
 MAX_COMMAND_EVIDENCE_RECORDS = 1024
 MAX_COMMAND_EVIDENCE_AGE_SECONDS = 3600.0
+UNCONFIRMED_OWN_TARGET_HISTORY = 2
 
 
 class _WriteBlocked(Exception):
@@ -167,6 +171,17 @@ def _reports_own_target(metrics, observed_output_limit, target, tolerance):
     return abs(float(input_limit) - abs(float(target))) <= tolerance
 
 
+def _serialized(method):
+    """Run ``method`` while holding the device client's command-state lock."""
+
+    @functools.wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return locked
+
+
 def _coerce_reply(payload):
     """Parse a reply payload (bytes/str/mapping) into a dict, or ``None``.
 
@@ -198,6 +213,16 @@ class ZendureMqttDeviceClient:
     published and changes nothing, and neither does the broker accepting the
     exit. The controller reads it as its own record of a charge, the one that
     outlives a reset of its regulation memory or the device's absence.
+
+    Three threads call one instance: the control loop (dispatch, describe), the
+    fetch executor (``fetch``) and the MQTT network thread (``handle_reply``,
+    which may publish the queued target). Every public method that reads or
+    changes the command state holds one reentrant per-device lock, so those
+    calls run one at a time. The lock is held across the broker publish: paho
+    only queues the packet there, and the network thread holds none of the
+    locks a publish takes while it delivers a reply. It does not cover
+    ``read_health``/``write_health`` read directly by other code, the dispatch
+    observer's own state, or the order in which the broker delivers.
     """
 
     ip = "mqtt"
@@ -240,6 +265,7 @@ class ZendureMqttDeviceClient:
         command_evidence_max_records=DEFAULT_COMMAND_EVIDENCE_MAX_RECORDS,
         command_evidence_max_age_seconds=DEFAULT_COMMAND_EVIDENCE_MAX_AGE_SECONDS,
     ):
+        self._lock = threading.RLock()
         self.name = name
         self._service = service
         self._device_id = device_id
@@ -330,7 +356,9 @@ class ZendureMqttDeviceClient:
         self._telemetry_confirmation_override = telemetry_confirmation_supported
         self._last_confirmed_target = None
         self._last_confirmed_monotonic = None
-        self._unconfirmed_own_targets = set()
+        self._unconfirmed_own_targets = deque(maxlen=UNCONFIRMED_OWN_TARGET_HISTORY)
+        self._ignored_report_values = []
+        self._ignored_report_values_named = set()
         self._foreign_streak = 0
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
@@ -357,12 +385,15 @@ class ZendureMqttDeviceClient:
         self.write_health = CommHealth(name, kind="write")
 
     @property
+    @_serialized
     def charge_commanded(self):
         return self._charge.open
 
+    @_serialized
     def charge_exit_due(self):
         return self._charge.exit_due(time.monotonic())
 
+    @_serialized
     def found_exit_due(self):
         """Whether the one exit to AC input found after a start may go out now.
 
@@ -375,6 +406,7 @@ class ZendureMqttDeviceClient:
             return False
         return self._charge.found_exit_due(time.monotonic())
 
+    @_serialized
     def found_exit_exhausted(self):
         """Whether that exit is spent, and no command of it is still in flight."""
 
@@ -384,18 +416,22 @@ class ZendureMqttDeviceClient:
         return self._charge.found_exit_exhausted(time.monotonic())
 
     @property
+    @_serialized
     def found_exit_attempts(self):
         return self._charge.found_exit_attempts
 
     @property
+    @_serialized
     def found_charge_left(self):
         return self._charge.found_charge_left
 
+    @_serialized
     def release_charge_record(self):
         """The charge is someone else's from here: a claim that writes its own."""
 
         self._charge.release()
 
+    @_serialized
     def fetch(self):
         """Map a fresh broker snapshot to a DeviceState, else signal read failure.
 
@@ -412,20 +448,27 @@ class ZendureMqttDeviceClient:
         status = self._service.snapshot_status(self._device_id)
         state = None
         if status.is_fresh:
+            metrics = status.snapshot.metrics or {}
+            observable = observable_metrics(metrics)
+            self._note_ignored_report_values(
+                sorted(
+                    key
+                    for key in DEVICE_STATE_PROPERTIES
+                    if key in metrics and key not in observable
+                )
+            )
             state = parse_device({
-                "properties": status.snapshot.metrics,
+                "properties": observable,
                 # The aggregator holds the pack list separately; without it a
                 # spurious ``packNum: 0`` would latch in the merged metrics.
-                "packData": getattr(status.snapshot, "battery_packs", None),
+                "packData": pack_witness(status.snapshot),
             })
             # Attempt telemetry confirmation from this fresh snapshot BEFORE
             # settling timeouts, so confirming telemetry in the same fetch wins
             # over a confirmation deadline that has just elapsed.
             self._confirm_from_snapshot(state, status.snapshot, now)
-            self._detect_external_control(state, status.snapshot)
-            self._charge.observe(
-                state, setpoint_reported="inputLimit" in status.snapshot.metrics
-            )
+            self._detect_external_control(status.snapshot)
+            self._charge.observe(state, setpoint_reported="inputLimit" in observable)
         else:
             record = self._active_command
             policy = self._confirmation_policy()
@@ -460,6 +503,7 @@ class ZendureMqttDeviceClient:
 
         return bool(self.dispatch_output_limit(value))
 
+    @_serialized
     def set_dispatch_observer(self, observer):
         """Observe later outcomes for targets initially returned as queued."""
 
@@ -491,6 +535,7 @@ class ZendureMqttDeviceClient:
                 )
             )
 
+    @_serialized
     def cancel_pending_output_limit(self, reason):
         """Drop a target queued behind the in-flight command.
 
@@ -501,6 +546,7 @@ class ZendureMqttDeviceClient:
 
         self._discard_pending_target(reason)
 
+    @_serialized
     def dispatch_output_limit(self, value, charge_exit=None):
         """Publish a power write and report the structured dispatch outcome.
 
@@ -569,16 +615,12 @@ class ZendureMqttDeviceClient:
                 # retired command is terminal, so its late reply/telemetry can
                 # never confirm the replacement.
                 mark_superseded(active, now_monotonic=now)
-                self._last_command_state = active.state
-                self._active_command = None
-                self._active_correlation_id = None
+                self._release_superseded(active)
                 self._discard_pending_target("superseded_by_safety_target")
                 return self._publish_target(target, now, found_exit=found_exit)
             if self._should_supersede_latest(active):
                 mark_superseded(active, now_monotonic=now)
-                self._last_command_state = active.state
-                self._active_command = None
-                self._active_correlation_id = None
+                self._release_superseded(active)
                 self._discard_pending_target("superseded_by_latest_target")
                 return self._publish_target(target, now, found_exit=found_exit)
             if self._pending_target == target and self._pending_correlation_id:
@@ -618,6 +660,7 @@ class ZendureMqttDeviceClient:
             return not self._charge.exit_due(now)
         return found_exit and not self._charge.found_exit_due(now)
 
+    @_serialized
     def write_properties(
         self, properties, *, reason, field=None, error_event=None, log_fields=None
     ):
@@ -1210,6 +1253,7 @@ class ZendureMqttDeviceClient:
         prefix = f"{base}/{self._product_key}/{self._device_id}"
         return tuple(f"{prefix}/{suffix}" for suffix in contract.reply_suffixes)
 
+    @_serialized
     def handle_reply(self, payload):
         """Correlate a device reply to the active command. Return whether applied.
 
@@ -1314,7 +1358,7 @@ class ZendureMqttDeviceClient:
             self._active_command = None
             self._active_correlation_id = None
             if record.published_monotonic is not None:
-                self._unconfirmed_own_targets.add(record.target_w)
+                self._remember_unconfirmed_own_target(record.target_w)
             if record.state == STATE_CONFIRMATION_TIMED_OUT:
                 log_event(
                     logging.WARNING,
@@ -1413,21 +1457,68 @@ class ZendureMqttDeviceClient:
 
         self._last_confirmed_target = record.target_w
         self._last_confirmed_monotonic = now_monotonic
-        self._unconfirmed_own_targets = set()
+        self._unconfirmed_own_targets.clear()
         self._foreign_streak = 0
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
 
-    def _detect_external_control(self, state, snapshot):
+    def _note_ignored_report_values(self, names):
+        """Keep which report values were dropped, and name each one once.
+
+        Only fields ``parse_device`` reads are traced: a closed set, so a broker
+        client inventing metric names can neither flood the log nor grow this,
+        and derived or textual metrics nobody reads as numbers are not reported.
+        """
+
+        self._ignored_report_values = names
+        for name in names:
+            if name in self._ignored_report_values_named:
+                continue
+            self._ignored_report_values_named.add(name)
+            log_event(
+                logging.INFO,
+                "mqtt_report_value_ignored",
+                device=self.name,
+                metric=name,
+                reason="not_a_usable_number",
+            )
+
+    def _release_superseded(self, record):
+        """Free the slot of a command a newer one replaced before it was confirmed."""
+
+        self._last_command_state = record.state
+        self._active_command = None
+        self._active_correlation_id = None
+        if record.published_monotonic is not None:
+            self._remember_unconfirmed_own_target(record.target_w)
+
+    def _remember_unconfirmed_own_target(self, target_w):
+        """Remember an own target that left the slot unconfirmed; keep the last two.
+
+        A published command leaves the slot by a confirmation or acknowledgement
+        timeout, or because a newer target superseded or preempted it, and the
+        next is published only after it has left, in publish order. Once the
+        slot is free the device can still legitimately report the target that
+        left it last, or the one before it when the last never landed. A target
+        sent again is a command again and counts again. An older unconfirmed
+        own target needs two newer commands lost in a row, so a report of it
+        counts as foreign evidence instead of being excused until the next
+        confirmation.
+        """
+
+        self._unconfirmed_own_targets.append(target_w)
+
+    def _detect_external_control(self, snapshot):
         """Conservatively flag a foreign writer overwriting a confirmed target.
 
         Requires: no local command in flight, a previously *confirmed* local
         target, and at least two successive newer telemetry reports that show
-        neither that target nor any own target released unconfirmed since,
-        which the device may apply late -- for a discharge its ``outputLimit``,
-        for a charge the report a charging device gives (see
-        ``_reports_own_target``). Reports evidence only — never claims which
-        controller is responsible.
+        neither that target nor the last two own targets released unconfirmed
+        since, which the device may apply late -- for a discharge its
+        ``outputLimit``, for a charge the report a charging device gives (see
+        ``_reports_own_target``). Only a finite number the report carried
+        counts; a missing value is not read as 0 W. Reports evidence only —
+        never claims which controller is responsible.
         """
 
         if self._active_command is not None or self._last_confirmed_target is None:
@@ -1453,7 +1544,7 @@ class ZendureMqttDeviceClient:
             and observed_time <= self._foreign_last_observed_monotonic
         ):
             return
-        observed = getattr(state, "output_limit", None)
+        observed = metrics.get("outputLimit")
         if (
             isinstance(observed, bool)
             or not isinstance(observed, (int, float))
@@ -1594,6 +1685,7 @@ class ZendureMqttDeviceClient:
             return active.published_monotonic + self._confirmation_timeout_s
         return None
 
+    @_serialized
     def describe(self, *, now_monotonic=None):
         """Credential-free control-device status for diagnostics/status output.
 
@@ -1690,6 +1782,7 @@ class ZendureMqttDeviceClient:
             "active_command": active.snapshot() if active is not None else None,
             "pending_target": self._pending_target,
             "last_confirmed_target_w": self._last_confirmed_target,
+            "ignored_report_values": list(self._ignored_report_values),
             "external_control_suspected": bool(self._external_control_suspected),
             "external_control_detail": self._external_control_suspected,
             "confirmation_deadline": confirmation_deadline,

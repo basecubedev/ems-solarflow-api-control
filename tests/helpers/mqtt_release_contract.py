@@ -426,7 +426,9 @@ class ReleaseContractHarness:
     def download(self, *, devices=None, selections=(), supported_grid_meter_count=0):
         return self.request(
             "/api/setup/config/download",
-            body=self._body(devices, selections, supported_grid_meter_count),
+            body=self._body(
+                devices, selections, supported_grid_meter_count, password="download-pw"
+            ),
             raw=True,
         )
 

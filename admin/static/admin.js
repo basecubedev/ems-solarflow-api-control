@@ -213,6 +213,7 @@ let gatewayNetworks = [];
 // mDNS is its own source: always merged, never cleared by manual scans.
 const mdnsDevices = new Map();
 const ignoredMdnsDevices = new Map();
+let lastMdnsStatus = null;
 const mqttBrokers = new Map();
 
 function escapeHtml(value) {
@@ -377,6 +378,7 @@ function createDiscoverySession(mode) {
     scanKeys: new Set(),
     generation: 0,
     progress: { total: 0, done: 0, failed: 0, active: 0 },
+    failureCauses: [],
   };
 }
 
@@ -455,6 +457,7 @@ function resetDiscoverySession(session) {
   session.scanKeys.clear();
   session.mqttProposals = [];
   session.progress = { total: 0, done: 0, failed: 0, active: 0 };
+  session.failureCauses = [];
 }
 
 function validateManualScanInput(raw) {
@@ -1906,13 +1909,15 @@ const MDNS_STATE_TEXT = {
   disabled: "disabled",
   unavailable_dependency: "unavailable",
   unavailable_runtime: "unavailable",
+  request_failed: "no answer",
 };
 
 function mdnsMessageText(status, state) {
   const message =
     status.message || "Automatic mDNS discovery is unavailable in this runtime.";
   const cause = typeof status.last_error === "string" ? status.last_error.trim() : "";
-  if (!cause || state.indexOf("unavailable_") !== 0) return message;
+  const failed = state.indexOf("unavailable_") === 0 || state === "request_failed";
+  if (!cause || !failed) return message;
   return message + " Cause: " + cause;
 }
 
@@ -1920,6 +1925,7 @@ function renderMdnsStatus(status) {
   const state = String(
     status.state || (status.available ? "disabled" : "unavailable_dependency")
   );
+  if (state !== "request_failed") lastMdnsStatus = status;
   els.mdnsState.textContent = MDNS_STATE_TEXT[state] || state;
   els.mdnsState.className =
     "network-badge " +
@@ -1928,7 +1934,8 @@ function renderMdnsStatus(status) {
   const count = Number(status.verified_count) || 0;
   els.mdnsCount.textContent = count + " found";
   notifySetupStatus();
-  const unavailable = state.indexOf("unavailable_") === 0;
+  const unavailable =
+    state.indexOf("unavailable_") === 0 || status.controls_unavailable === true;
   els.mdnsToggle.disabled = unavailable;
   els.mdnsRefresh.disabled = unavailable;
   els.mdnsToggle.textContent = status.enabled ? "Disable" : "Enable";
@@ -1938,8 +1945,22 @@ function renderMdnsStatus(status) {
       ? "running"
       : state.indexOf("unavailable_") === 0
       ? "unavailable"
-      : state;
+      : MDNS_STATE_TEXT[state] || state;
   setSummary(els.summaryMdns, summary);
+}
+
+function renderMdnsRequestFailure(err) {
+  const previous = lastMdnsStatus || {};
+  const previousState = String(
+    previous.state || (previous.available ? "disabled" : "unavailable_dependency")
+  );
+  renderMdnsStatus({
+    ...previous,
+    controls_unavailable: previousState.indexOf("unavailable_") === 0,
+    state: "request_failed",
+    message: "The Admin Console did not answer the mDNS request. It is asked again on the next refresh.",
+    last_error: err && err.message ? err.message : String(err),
+  });
 }
 
 function renderIgnoredDevices() {
@@ -2006,11 +2027,7 @@ async function pollMdns() {
     renderIgnoredDevices();
     if (!scanning) renderAggregate();
   } catch (err) {
-    renderMdnsStatus({
-      state: "unavailable_runtime",
-      message: "Automatic mDNS discovery is unavailable in this runtime.",
-      last_error: err.message || String(err),
-    });
+    renderMdnsRequestFailure(err);
   }
 }
 
@@ -2029,11 +2046,7 @@ async function toggleMdns() {
     renderMdnsStatus(status);
     await pollMdns();
   } catch (err) {
-    renderMdnsStatus({
-      state: "unavailable_runtime",
-      message: "Automatic mDNS discovery is unavailable in this runtime.",
-      last_error: err.message || String(err),
-    });
+    renderMdnsRequestFailure(err);
   }
 }
 
@@ -2051,11 +2064,7 @@ async function refreshMdns() {
     renderMdnsStatus(status);
     await pollMdns();
   } catch (err) {
-    renderMdnsStatus({
-      state: "unavailable_runtime",
-      message: "Automatic mDNS discovery is unavailable in this runtime.",
-      last_error: err.message || String(err),
-    });
+    renderMdnsRequestFailure(err);
   }
 }
 
@@ -3784,6 +3793,8 @@ const configEls = {
   previewRelease: document.getElementById("config-preview-release"),
   previewBase: document.getElementById("config-preview-base"),
   download: document.getElementById("config-download"),
+  downloadPassword: document.getElementById("config-download-password"),
+  downloadPasswordConfirm: document.getElementById("config-download-password-confirm"),
   exportStatus: document.getElementById("config-export-status"),
   apply: document.getElementById("config-apply"),
   applyStatus: document.getElementById("config-apply-status"),
@@ -5346,7 +5357,9 @@ function setupSwitchConfirmationCard(entry) {
   const title = document.createElement("p");
   title.className = "config-switch-confirmation-title";
   title.textContent =
-    "Change this device from " +
+    "Change " +
+    (configuredDeviceNameForRef(entry.current_ref) || "this device") +
+    " from " +
     connectionLabelFor(entry.current_source) +
     " to " +
     connectionLabelFor(entry.candidate_source) +
@@ -5877,11 +5890,15 @@ function inverterCandidateConnectionState(candidateId) {
   };
   const ref = planned && planned.current_ref;
   if (!ref) return state;
+  state.configuredName = configuredDeviceNameForRef(ref);
+  return state;
+}
+
+function configuredDeviceNameForRef(ref) {
   const item =
     configDraftItems.find((entry) => entry.draft_item_id === ref) ||
     zendureMqttPreviewProposals.get(String(ref));
-  state.configuredName = String((item && item.config_name) || "").trim();
-  return state;
+  return String((item && item.config_name) || "").trim();
 }
 
 // The single contextual action a discovered connection offers. "Use connection"
@@ -7413,15 +7430,43 @@ function configExportError(data, fallback) {
   return errors.length ? errors.join(" ") : (data && data.message) || fallback;
 }
 
+const CONFIG_DOWNLOAD_MIN_PASSWORD = 8;
+
+function configDownloadPassword() {
+  const password = configEls.downloadPassword ? configEls.downloadPassword.value : "";
+  const confirmation = configEls.downloadPasswordConfirm
+    ? configEls.downloadPasswordConfirm.value
+    : "";
+  if (password.length < CONFIG_DOWNLOAD_MIN_PASSWORD) {
+    return {
+      error: "Enter a download password of at least " + CONFIG_DOWNLOAD_MIN_PASSWORD +
+        " characters; the download is encrypted with it.",
+    };
+  }
+  if (password !== confirmation) return { error: "The two download passwords differ." };
+  return { password };
+}
+
+function downloadFileName(res, fallback) {
+  const header = res.headers && res.headers.get ? res.headers.get("Content-Disposition") : "";
+  const match = /filename="([^"]+)"/.exec(header || "");
+  return match ? match[1] : fallback;
+}
+
 async function downloadGeneratedConfig() {
   if (!configEls.download || configEls.download.disabled) return;
+  const secret = configDownloadPassword();
+  if (secret.error) {
+    showConfigExportStatus(secret.error, "error");
+    return;
+  }
   configEls.download.disabled = true;
-  showConfigExportStatus("Preparing validated config.json…", "info");
+  showConfigExportStatus("Preparing the encrypted config…", "info");
   try {
     const res = await fetch("/api/setup/config/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(configExportBody(false)),
+      body: JSON.stringify({ ...configExportBody(false), password: secret.password }),
     });
     if (!res.ok) {
       const data = await res.json();
@@ -7431,12 +7476,14 @@ async function downloadGeneratedConfig() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = "config.json";
+    link.download = downloadFileName(res, "ems-config.tar.gz.enc");
     document.body.appendChild(link);
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    showConfigExportStatus("✓ config.json download ready.", "success");
+    configEls.downloadPassword.value = "";
+    configEls.downloadPasswordConfirm.value = "";
+    showConfigExportStatus("✓ Encrypted config download ready.", "success");
   } catch (err) {
     showConfigExportStatus(err.message || String(err), "error");
   } finally {
@@ -11165,6 +11212,22 @@ async function loadMqttMigrationReview() {
   }
 }
 
+function markMqttMigrationFailure(stage) {
+  if (stage === "review") {
+    setMqttMigrationStage("backup", null);
+    setMqttMigrationStage("apply", null);
+    setMqttMigrationStage("validate", null);
+  } else if (stage === "backup") {
+    setMqttMigrationStage("backup", "failed");
+    setMqttMigrationStage("apply", null);
+  } else if (stage === "validate") {
+    setMqttMigrationStage("validate", "failed");
+  } else {
+    setMqttMigrationStage("backup", "done");
+    setMqttMigrationStage("apply", "failed");
+  }
+}
+
 async function applyMqttMigration() {
   if (mqttMigrationState.applying || !mqttMigrationState.revision) return;
   const review = mqttMigrationState.review || {};
@@ -11187,6 +11250,7 @@ async function applyMqttMigration() {
   setMqttMigrationStage("backup", backup ? "running" : "done");
   setMqttMigrationStage("apply", backup ? null : "running");
   setMqttMigrationStage("validate", null);
+  let reached = backup ? "backup" : "apply";
   try {
     const resp = await fetch("/api/admin/maintenance/zendure-mqtt/migration-apply", {
       method: "POST",
@@ -11201,8 +11265,10 @@ async function applyMqttMigration() {
     if (!resp.ok || !data.ok) {
       const error = new Error(humanErrorText(data, "Migration apply failed."));
       error.status = data.status || "error";
+      error.stage = typeof data.stage === "string" ? data.stage : null;
       throw error;
     }
+    reached = "validate";
     setMqttMigrationStage("backup", "done");
     setMqttMigrationStage("apply", "done");
     setMqttMigrationStage("validate", "running");
@@ -11219,12 +11285,7 @@ async function applyMqttMigration() {
     setMqttMigrationStage("validate", "done");
   } catch (err) {
     const message = err.message || String(err);
-    if (message.toLowerCase().includes("backup")) {
-      setMqttMigrationStage("backup", "failed");
-    } else {
-      setMqttMigrationStage("backup", "done");
-      setMqttMigrationStage("apply", "failed");
-    }
+    markMqttMigrationFailure(err.stage || reached);
     if (mqttMigrationEls.status) {
       mqttMigrationEls.status.textContent = err.status === "conflict"
         ? "The review is stale. Refresh and confirm the new plan."
@@ -12900,6 +12961,7 @@ const backupState = {
   selectedType: null,
   selectedDetails: null,
   restorePlan: null,
+  restoreAfterUnlock: false,
   running: false,
   // Bumped per preview request so a slower earlier preview can never overwrite a
   // newer one after restore options changed.
@@ -13067,8 +13129,9 @@ function renderBackupRow(backup) {
   // An invalid archive cannot be restored; the marker keeps the button disabled
   // through the busy-state toggle (see setBackupBusy).
   const restoreDisabled = !backup.valid;
-  const restoreAttrs = restoreDisabled
-    ? ' disabled data-backup-restore-disabled="true"' : "";
+  const restoreAttrs = (restoreDisabled
+    ? ' disabled data-backup-restore-disabled="true"' : "") +
+    (backup.locked ? ' data-backup-locked="true"' : "");
   return (
     '<div class="backup-row" role="listitem">' +
     '<div class="backup-row-main">' +
@@ -13078,7 +13141,7 @@ function renderBackupRow(backup) {
     escapeHtml(backupName) + "</span></div>" +
     '<div class="backup-row-meta" aria-label="Backup metadata">' + facts.join("") + "</div>" +
     '<div class="backup-row-actions">' +
-    '<button type="button" class="secondary-button compact" data-backup-action="details" data-backup-id="' + id + '" data-backup-kind="archive">Details</button>' +
+    '<button type="button" class="secondary-button compact" data-backup-action="details" data-backup-id="' + id + '" data-backup-kind="archive"' + (backup.locked ? ' data-backup-locked="true"' : "") + ">Details</button>" +
     '<button type="button" class="secondary-button compact" data-backup-action="export" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-name="' + escapeHtml(backupName) + '">Download</button>' +
     '<button type="button" class="secondary-button compact" data-backup-action="restore" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-type="' + escapeHtml(backup.backup_type || "config") + '"' + restoreAttrs + ">Restore preview</button>" +
     '<button type="button" class="secondary-button compact" data-backup-action="delete" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-name="' + escapeHtml(backup.name) + '">Delete</button>' +
@@ -13125,12 +13188,17 @@ function renderBackupSetRow(set) {
   );
 }
 
-function selectBackup(id, kind, type) {
+function selectBackup(id, kind, type, locked) {
   backupState.selectedId = id;
   backupState.selectedKind = kind || "archive";
   backupState.selectedType = type || "config";
   backupState.selectedDetails = null;
   backupState.restorePlan = null;
+  backupState.restoreAfterUnlock = false;
+  // A password belongs to one archive: typed for the last one, it must not be
+  // sent with the next.
+  if (backupEls.passwordInput) backupEls.passwordInput.value = "";
+  if (backupEls.passwordForm) backupEls.passwordForm.hidden = !locked;
   // Clear the restore stage content without forcing it open; the restore action
   // opens it, the details action does not.
   backupEls.restoreSummary.innerHTML = "";
@@ -13295,7 +13363,11 @@ function renderRestorePlan(plan) {
   backupEls.restoreFiles.innerHTML = files
     .map((file) => (
       '<div class="backup-file" role="listitem"><span class="backup-file-path">' +
-      escapeHtml(file.path) + '</span><span class="backup-file-kind">' +
+      escapeHtml(
+        file.source_path
+          ? file.path + " (kept outside the project at " + file.source_path + ")"
+          : file.path
+      ) + '</span><span class="backup-file-kind">' +
       escapeHtml(file.action || "") + "</span></div>"
     ))
     .join("");
@@ -13581,25 +13653,47 @@ if (backupEls.importInput) {
   });
 }
 
+function handleBackupListAction(button) {
+  const id = button.dataset.backupId;
+  const kind = button.dataset.backupKind;
+  const action = button.dataset.backupAction;
+  const locked = button.dataset.backupLocked === "true";
+  if (action === "details") {
+    selectBackup(id, kind, button.dataset.backupType, locked);
+    return inspectSelectedBackup(null);
+  }
+  if (action === "restore") {
+    selectBackup(id, kind, button.dataset.backupType, locked);
+    if (locked) {
+      backupState.restoreAfterUnlock = true;
+      backupEls.detailsStage.hidden = false;
+      renderBackupMessage([
+        { tone: "info", text: "This backup is encrypted. Enter its password to preview the restore." },
+      ]);
+      if (backupEls.passwordInput) backupEls.passwordInput.focus();
+      return undefined;
+    }
+    backupEls.restoreStage.hidden = false;
+    return previewRestore();
+  }
+  if (action === "export") return exportBackup(id, button.dataset.backupName);
+  if (action === "delete") return deleteBackup(id, kind, button.dataset.backupName);
+  return undefined;
+}
+
+async function unlockSelectedBackup() {
+  await inspectSelectedBackup(backupEls.passwordInput.value || null);
+  const details = backupState.selectedDetails;
+  if (!backupState.restoreAfterUnlock || !details || details.locked) return;
+  backupState.restoreAfterUnlock = false;
+  backupEls.restoreStage.hidden = false;
+  await previewRestore();
+}
+
 if (backupEls.list) {
   backupEls.list.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-backup-action]");
-    if (!button) return;
-    const id = button.dataset.backupId;
-    const kind = button.dataset.backupKind;
-    const action = button.dataset.backupAction;
-    if (action === "details") {
-      selectBackup(id, kind, button.dataset.backupType);
-      inspectSelectedBackup(null);
-    } else if (action === "restore") {
-      selectBackup(id, kind, button.dataset.backupType);
-      backupEls.restoreStage.hidden = false;
-      previewRestore();
-    } else if (action === "export") {
-      exportBackup(id, button.dataset.backupName);
-    } else if (action === "delete") {
-      deleteBackup(id, kind, button.dataset.backupName);
-    }
+    if (button) handleBackupListAction(button);
   });
 }
 if (backupEls.refreshBtn) backupEls.refreshBtn.addEventListener("click", loadBackups);
@@ -13610,7 +13704,7 @@ if (backupEls.executeBtn) backupEls.executeBtn.addEventListener("click", execute
 if (backupEls.passwordForm) {
   backupEls.passwordForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    inspectSelectedBackup(backupEls.passwordInput.value || null);
+    unlockSelectedBackup();
   });
 }
 
@@ -14571,7 +14665,12 @@ function syncMaintenanceBrokerForm() {
     mconfigEls.brokerHelp.textContent = named
       ? "This installation uses named MQTT broker profiles managed by Setup. " +
         "Edit broker connections there; they are shown read-only here."
-      : (catalog.zendure_mqtt_broker && catalog.zendure_mqtt_broker.help) || "";
+      : ((catalog.zendure_mqtt_broker && catalog.zendure_mqtt_broker.help) || "") +
+        (broker.tls_stored_invalid
+          ? " The stored TLS settings are invalid. Choosing TLS here keeps a " +
+            "stored tls_insecure: true valid; for Plain, or when tls_insecure is " +
+            "not true or false, correct zendure_mqtt.tls_insecure in config.json."
+          : "");
   }
   [
     mconfigEls.brokerHost,
@@ -14649,21 +14748,26 @@ function wireMaintenanceBrokerForm() {
     const port = (mconfigEls.brokerPort.value || "").trim();
     if (port === "") delete broker.port;
     else broker.port = port;
-    broker.tls = mconfigEls.brokerSecurity
-      ? mconfigEls.brokerSecurity.value === "tls"
-      : false;
     broker.username = (mconfigEls.brokerUsername.value || "").trim();
     broker.present = Boolean(broker.host);
   };
   [
     mconfigEls.brokerHost,
     mconfigEls.brokerPort,
-    mconfigEls.brokerSecurity,
     mconfigEls.brokerUsername,
   ].forEach((el) => {
     if (el) el.addEventListener("input", update);
-    if (el && el.tagName === "SELECT") el.addEventListener("change", update);
   });
+  // The TLS the card shows for an invalid stored value is the view's, not the
+  // config's; only an operator's own choice here may replace the stored keys.
+  if (mconfigEls.brokerSecurity) {
+    mconfigEls.brokerSecurity.addEventListener("change", () => {
+      const broker = mconfigBrokerDraft();
+      if (!broker) return;
+      broker.tls = mconfigEls.brokerSecurity.value === "tls";
+      broker.tls_explicit = true;
+    });
+  }
   if (mconfigEls.brokerPassword) {
     mconfigEls.brokerPassword.addEventListener("input", () => {
       const broker = mconfigBrokerDraft();
@@ -16498,13 +16602,32 @@ function maintenanceConfiguredCidrs() {
     .map((result) => result.cidr);
 }
 
-function completeDiscoveryWork(session, failed, generation) {
+function completeDiscoveryWork(session, failed, generation, cause) {
   if (generation !== undefined && generation !== session.generation) return;
   session.progress.active = Math.max(0, session.progress.active - 1);
-  if (failed) session.progress.failed += 1;
-  else session.progress.done += 1;
+  if (failed) {
+    session.progress.failed += 1;
+    if (cause) session.failureCauses.push(cause);
+  } else {
+    session.progress.done += 1;
+  }
   session.active = session.progress.active > 0;
   renderMaintenanceDiscoveryProgress(session);
+}
+
+function discoveryFailureSummary(session) {
+  const causes = (session.failureCauses || []).concat(
+    session.scans
+      .filter((scan) => scan.status === "failed")
+      .map((scan) => scan.cidr + ": " + (scan.error || "scan failed"))
+  );
+  if (!causes.length) return "";
+  const shown = causes.slice(0, 3).join("; ");
+  return causes.length > 3 ? shown + "; and " + (causes.length - 3) + " more" : shown;
+}
+
+function discoveryErrorText(err) {
+  return err && err.message ? err.message : String(err);
 }
 
 async function startMaintenanceDiscovery() {
@@ -16536,15 +16659,18 @@ async function startMaintenanceDiscovery() {
       // failure marks that unit failed but never blocks reading the proposals
       // the remaining sources produced.
       let brokersFailed = false;
+      let brokersCause = null;
       try {
         const refresh = await fetch("/api/discovery/mqtt-brokers/refresh", { method: "POST" });
         if (!refresh.ok) throw new Error("mqtt broker refresh failed");
       } catch (err) {
         brokersFailed = true;
+        brokersCause = "MQTT brokers: " + discoveryErrorText(err);
       }
-      completeDiscoveryWork(session, brokersFailed, generation);
+      completeDiscoveryWork(session, brokersFailed, generation, brokersCause);
 
       let cloudFailed = false;
+      let cloudCause = null;
       try {
         const settingsResponse = await fetch(ZENDURE_CLOUD_BASE + "/settings");
         const settings = await settingsResponse.json();
@@ -16559,10 +16685,12 @@ async function startMaintenanceDiscovery() {
         }
       } catch (err) {
         cloudFailed = true;
+        cloudCause = "Zendure cloud: " + discoveryErrorText(err);
       }
-      completeDiscoveryWork(session, cloudFailed, generation);
+      completeDiscoveryWork(session, cloudFailed, generation, cloudCause);
 
       let failed = false;
+      let cause = null;
       try {
         const response = await fetch("/api/discovery/mqtt-proposals");
         const data = await response.json();
@@ -16571,8 +16699,9 @@ async function startMaintenanceDiscovery() {
         session.mqttProposals = Array.isArray(data.proposals) ? data.proposals : [];
       } catch (err) {
         failed = true;
+        cause = "MQTT proposals: " + discoveryErrorText(err);
       }
-      completeDiscoveryWork(session, failed, generation);
+      completeDiscoveryWork(session, failed, generation, cause);
     })();
 
     const knownScans = queueDiscoveryScans(
@@ -16583,6 +16712,7 @@ async function startMaintenanceDiscovery() {
     );
     const mdnsWork = (async () => {
       let failed = false;
+      let cause = null;
       try {
         const refresh = await fetch("/api/discovery/mdns/refresh", { method: "POST" });
         if (!refresh.ok) throw new Error("mDNS refresh failed");
@@ -16595,11 +16725,13 @@ async function startMaintenanceDiscovery() {
         );
       } catch (err) {
         failed = true;
+        cause = "mDNS: " + discoveryErrorText(err);
       }
-      completeDiscoveryWork(session, failed, generation);
+      completeDiscoveryWork(session, failed, generation, cause);
     })();
     const networkWork = (async () => {
       let failed = false;
+      let cause = null;
       try {
         const response = await fetch("/api/discovery/networks");
         const data = await response.json();
@@ -16610,7 +16742,7 @@ async function startMaintenanceDiscovery() {
           .map((network) => network.cidr)
           .filter(Boolean);
         cidrs.forEach((cidr) => session.networks.set(cidr, { cidr }));
-        completeDiscoveryWork(session, false, generation);
+        completeDiscoveryWork(session, false, generation, null);
         await queueDiscoveryScans(
           session,
           cidrs,
@@ -16620,8 +16752,9 @@ async function startMaintenanceDiscovery() {
         return;
       } catch (err) {
         failed = true;
+        cause = "network discovery: " + discoveryErrorText(err);
       }
-      completeDiscoveryWork(session, failed, generation);
+      completeDiscoveryWork(session, failed, generation, cause);
     })();
     await Promise.all([knownScans, mdnsWork, networkWork, mqttWork]);
     if (generation !== session.generation) return;
@@ -16631,7 +16764,8 @@ async function startMaintenanceDiscovery() {
     );
     renderMaintenanceDiscoveryReview(results);
     mconfigEls.discoveryStatus.textContent = session.progress.failed
-      ? "Discovery completed with warnings. Retained results and the in-memory draft are unchanged."
+      ? "Discovery completed with warnings (" + discoveryFailureSummary(session) +
+        "). Retained results and the in-memory draft are unchanged."
       : "Discovery completed. Results are retained until you reset them.";
     if (cloudSkippedWithoutKey) {
       mconfigEls.discoveryStatus.textContent +=
@@ -16674,7 +16808,9 @@ async function runMaintenanceManualScan(event) {
   if (generation !== discoverySessions.maintenance.generation) return;
   renderMaintenanceDiscoveryProgress(discoverySessions.maintenance);
   mconfigEls.discoveryStatus.textContent = discoverySessions.maintenance.progress.failed
-    ? "Manual scan completed with warnings. Previous results were retained."
+    ? "Manual scan completed with warnings (" +
+      discoveryFailureSummary(discoverySessions.maintenance) +
+      "). Previous results were retained."
     : "Manual scan completed. Previous results were retained.";
 }
 
@@ -18916,6 +19052,7 @@ function recoveryActionFor(mode) {
     return {
       owner: "guided_setup",
       label: "Discard setup",
+      busyLabel: "Discarding…",
       endpoint: "/api/setup/abandon",
       confirm: DISCARD_SETUP_CONFIRM,
     };
@@ -18924,6 +19061,7 @@ function recoveryActionFor(mode) {
     return {
       owner: "guided_upgrade",
       label: "Cancel upgrade",
+      busyLabel: "Cancelling…",
       endpoint: "/api/admin/system-alignment/cancel",
       confirm: CANCEL_UPGRADE_CONFIRM,
     };
@@ -20392,12 +20530,20 @@ function renderSystemAlignmentStatus(data) {
                 "temporary files."
               : "Admin is aligned, but EMS has not completed the matching build transition.");
   }
+  // A recovery action waiting for the server marks its button aria-busy; until
+  // it answers no recovery button may be pressed, whatever this render says.
+  const actionBusy = [
+    systemAlignmentEls.resume,
+    systemAlignmentEls.returnToRunning,
+    systemAlignmentEls.abandon,
+  ].some((button) => button && button.getAttribute && button.getAttribute("aria-busy") === "true");
   if (systemAlignmentEls.resume) {
     systemAlignmentEls.resume.disabled =
-      !transition.operation_id || transition.resume_available !== true;
+      actionBusy || !transition.operation_id || transition.resume_available !== true;
   }
   if (systemAlignmentEls.returnToRunning) {
     systemAlignmentEls.returnToRunning.disabled =
+      actionBusy ||
       setupOwned ||
       !transition.operation_id ||
       transition.return_available !== true;
@@ -20409,8 +20555,9 @@ function renderSystemAlignmentStatus(data) {
     // unknown owner offers no destructive action at all.
     const recovery = recoveryActionFor(transition.mode);
     systemAlignmentEls.abandon.hidden = !recovery;
-    if (recovery) systemAlignmentEls.abandon.textContent = recovery.label;
+    if (recovery && !actionBusy) systemAlignmentEls.abandon.textContent = recovery.label;
     systemAlignmentEls.abandon.disabled =
+      actionBusy ||
       !recovery ||
       !transition.operation_id ||
       transition.cancel_available !== true ||
@@ -20482,53 +20629,84 @@ async function loadSystemAlignmentStatus() {
   }
 }
 
+// One recovery action at a time: a second click would send a second request
+// for the same transition, and a status poll in between must not re-enable the
+// buttons. The busy mark is the button's aria-busy, which the renderer reads.
+async function runSystemAlignmentAction(button, busyLabel, action) {
+  const buttons = [
+    systemAlignmentEls.resume,
+    systemAlignmentEls.returnToRunning,
+    systemAlignmentEls.abandon,
+  ].filter(Boolean);
+  if (!button || buttons.some((item) => item.getAttribute("aria-busy") === "true")) return;
+  const label = button.textContent;
+  button.textContent = busyLabel;
+  button.setAttribute("aria-busy", "true");
+  buttons.forEach((item) => {
+    item.disabled = true;
+  });
+  try {
+    await action();
+  } finally {
+    button.textContent = label;
+    button.removeAttribute("aria-busy");
+    if (systemAlignmentState) renderSystemAlignmentStatus(systemAlignmentState);
+  }
+}
+
 async function resumeSystemAlignment() {
   const transition = (systemAlignmentState && systemAlignmentState.transition) || {};
   if (!transition.operation_id) return;
-  const previousAdminInstanceId = authState.adminInstanceId;
-  try {
-    // Resume/reconnect/retry carries only the operation id and tag. The server
-    // authorizes it from the transition's own stored, tag-bound acknowledgement
-    // — a fresh browser acknowledgement is never trusted during recovery.
-    const body = {
-      operation_id: transition.operation_id,
-      tag: transition.system_tag,
-    };
-    const res = await fetch("/api/admin/system-alignment/resume", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    let data = await res.json();
-    if (!res.ok) throw new Error(humanErrorText(data, "Resume failed."));
-    // Render the reconnect/alignment mutation before starting the next durable
-    // resource-verification mutation.
-    renderSystemAlignmentStatus(data);
-    if (resolveSystemAlignmentStage(data) === "admin_aligned") {
-      const verifyRes = await fetch("/api/admin/system-alignment/verify-resources", {
+  await runSystemAlignmentAction(systemAlignmentEls.resume, "Resuming…", async () => {
+    const previousAdminInstanceId = authState.adminInstanceId;
+    try {
+      // Resume/reconnect/retry carries only the operation id and tag. The server
+      // authorizes it from the transition's own stored, tag-bound acknowledgement
+      // — a fresh browser acknowledgement is never trusted during recovery.
+      const body = {
+        operation_id: transition.operation_id,
+        tag: transition.system_tag,
+      };
+      const res = await fetch("/api/admin/system-alignment/resume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ operation_id: transition.operation_id }),
+        body: JSON.stringify(body),
       });
-      data = await verifyRes.json();
-      if (!verifyRes.ok) {
-        throw new Error(humanErrorText(data, "Resource verification failed."));
-      }
+      let data = await res.json();
+      if (!res.ok) throw new Error(humanErrorText(data, "Resume failed."));
+      // Render the reconnect/alignment mutation before starting the next durable
+      // resource-verification mutation.
       renderSystemAlignmentStatus(data);
+      if (resolveSystemAlignmentStage(data) === "admin_aligned") {
+        const verifyRes = await fetch("/api/admin/system-alignment/verify-resources", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ operation_id: transition.operation_id }),
+        });
+        data = await verifyRes.json();
+        if (!verifyRes.ok) {
+          throw new Error(humanErrorText(data, "Resource verification failed."));
+        }
+        renderSystemAlignmentStatus(data);
+      }
+      if (data.reconnect || data.status === "admin_alignment_started") {
+        showReconnectOverlay(data.message);
+        waitForAdminReconnect(previousAdminInstanceId, transition.operation_id);
+      } else {
+        loadSystemAlignmentStatus();
+      }
+    } catch (err) {
+      if (systemAlignmentEls.warning) {
+        systemAlignmentEls.warning.textContent = err.message || String(err);
+        systemAlignmentEls.warning.hidden = false;
+      }
     }
-    if (data.reconnect || data.status === "admin_alignment_started") {
-      showReconnectOverlay(data.message);
-      waitForAdminReconnect(previousAdminInstanceId, transition.operation_id);
-    } else {
-      loadSystemAlignmentStatus();
-    }
-  } catch (err) {
-    if (systemAlignmentEls.warning) {
-      systemAlignmentEls.warning.textContent = err.message || String(err);
-      systemAlignmentEls.warning.hidden = false;
-    }
-  }
+  });
 }
+
+const RETURN_TO_DEVELOPMENT_BUILD_CONFIRM =
+  "The last known-good build is a Development build, which has not been " +
+  "released. Return the Admin Console to it anyway?";
 
 async function returnToRunningSystemBuild() {
   const transition = (systemAlignmentState && systemAlignmentState.transition) || {};
@@ -20538,25 +20716,42 @@ async function returnToRunningSystemBuild() {
   if (!window.confirm("Return the Admin Console to the last known-good running EMS build?")) {
     return;
   }
-  try {
-    const res = await fetch("/api/admin/system-alignment/return-to-running-build", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ operation_id: transition.operation_id, confirm: true }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(humanErrorText(data, "Return failed."));
-    renderSystemAlignmentStatus(data);
-    if (data.reconnect !== false) {
-      showReconnectOverlay(data.message || "Returning to the running System Build…");
-      waitForAdminReconnect(previousAdminInstanceId, transition.operation_id);
+  await runSystemAlignmentAction(systemAlignmentEls.returnToRunning, "Returning…", async () => {
+    try {
+      const request = (acknowledgeRisk) =>
+        fetch("/api/admin/system-alignment/return-to-running-build", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            operation_id: transition.operation_id,
+            confirm: true,
+            acknowledge_risk: acknowledgeRisk,
+          }),
+        });
+      let res = await request(false);
+      let data = await res.json();
+      if (
+        !res.ok &&
+        data &&
+        data.error === "acknowledgement_required" &&
+        window.confirm(RETURN_TO_DEVELOPMENT_BUILD_CONFIRM)
+      ) {
+        res = await request(true);
+        data = await res.json();
+      }
+      if (!res.ok) throw new Error(humanErrorText(data, "Return failed."));
+      renderSystemAlignmentStatus(data);
+      if (data.reconnect !== false) {
+        showReconnectOverlay(data.message || "Returning to the running System Build…");
+        waitForAdminReconnect(previousAdminInstanceId, transition.operation_id);
+      }
+    } catch (err) {
+      if (systemAlignmentEls.warning) {
+        systemAlignmentEls.warning.textContent = err.message || String(err);
+        systemAlignmentEls.warning.hidden = false;
+      }
     }
-  } catch (err) {
-    if (systemAlignmentEls.warning) {
-      systemAlignmentEls.warning.textContent = err.message || String(err);
-      systemAlignmentEls.warning.hidden = false;
-    }
-  }
+  });
 }
 
 async function abandonSystemAlignment() {
@@ -20564,61 +20759,63 @@ async function abandonSystemAlignment() {
   const action = recoveryActionFor(transition.mode);
   if (!action || !transition.operation_id) return;
   if (!window.confirm(action.confirm)) return;
-  try {
-    let body;
-    if (action.owner === "guided_setup") {
-      // Discard the server's CURRENT workflow explicitly — the panel shows the
-      // current state, so a stale locally-cached identity must not block it.
-      const current = await fetchOwningSetupWorkflowId();
-      body = current ? { setup_workflow_id: current } : {};
-    } else {
-      body = { operation_id: transition.operation_id, confirm: true };
-    }
-    const res = await fetch(action.endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (isSetupOperationInProgress(data)) {
-      // Nothing was discarded: keep the workflow and say which operation owns it.
+  await runSystemAlignmentAction(systemAlignmentEls.abandon, action.busyLabel, async () => {
+    try {
+      let body;
+      if (action.owner === "guided_setup") {
+        // Discard the server's CURRENT workflow explicitly — the panel shows the
+        // current state, so a stale locally-cached identity must not block it.
+        const current = await fetchOwningSetupWorkflowId();
+        body = current ? { setup_workflow_id: current } : {};
+      } else {
+        body = { operation_id: transition.operation_id, confirm: true };
+      }
+      const res = await fetch(action.endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (isSetupOperationInProgress(data)) {
+        // Nothing was discarded: keep the workflow and say which operation owns it.
+        if (systemAlignmentEls.warning) {
+          systemAlignmentEls.warning.textContent =
+            setupOperationInProgressMessage(data);
+          systemAlignmentEls.warning.hidden = false;
+        }
+        loadSystemAlignmentStatus();
+        return;
+      }
+      if (action.owner === "guided_setup" && res.ok && data.ok === true) {
+        setSetupWorkflowId(null);
+      }
+      if (setupCleanupStateFor(data) !== null) {
+        showSetupCleanupIncomplete(data);
+        loadSystemAlignmentStatus();
+        return;
+      }
+      const succeeded =
+        action.owner === "guided_setup" ? data.ok === true : data.stage === "cancelled";
+      if (!res.ok || !succeeded) {
+        throw new Error(
+          humanErrorText(
+            data,
+            action.owner === "guided_setup"
+              ? "The setup could not be discarded."
+              : "The upgrade could not be cancelled."
+          )
+        );
+      }
+      showSetupCleanupIncomplete(null);
+      renderSystemAlignmentStatus(data.transition ? data : data);
+      loadSystemAlignmentStatus();
+    } catch (err) {
       if (systemAlignmentEls.warning) {
-        systemAlignmentEls.warning.textContent =
-          setupOperationInProgressMessage(data);
+        systemAlignmentEls.warning.textContent = err.message || String(err);
         systemAlignmentEls.warning.hidden = false;
       }
-      loadSystemAlignmentStatus();
-      return;
     }
-    if (action.owner === "guided_setup" && res.ok && data.ok === true) {
-      setSetupWorkflowId(null);
-    }
-    if (setupCleanupStateFor(data) !== null) {
-      showSetupCleanupIncomplete(data);
-      loadSystemAlignmentStatus();
-      return;
-    }
-    const succeeded =
-      action.owner === "guided_setup" ? data.ok === true : data.stage === "cancelled";
-    if (!res.ok || !succeeded) {
-      throw new Error(
-        humanErrorText(
-          data,
-          action.owner === "guided_setup"
-            ? "The setup could not be discarded."
-            : "The upgrade could not be cancelled."
-        )
-      );
-    }
-    showSetupCleanupIncomplete(null);
-    renderSystemAlignmentStatus(data.transition ? data : data);
-    loadSystemAlignmentStatus();
-  } catch (err) {
-    if (systemAlignmentEls.warning) {
-      systemAlignmentEls.warning.textContent = err.message || String(err);
-      systemAlignmentEls.warning.hidden = false;
-    }
-  }
+  });
 }
 
 if (systemAlignmentEls.resume) {

@@ -12,10 +12,12 @@ import difflib
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import shutil
 import sqlite3
+import stat
 import tarfile
 import tempfile
 from contextlib import contextmanager
@@ -163,18 +165,29 @@ def _resolve(path, base_dir):
     return os.path.join(base_dir, path)
 
 
-def _archive_rel(abs_path, base_dir):
+OUTSIDE_PROJECT_PREFIX = "_outside_project/"
+
+
+def archive_rel(abs_path, base_dir):
     """Return a safe project-relative archive path for ``abs_path``.
 
-    Paths inside ``base_dir`` keep their relative layout; anything that would
-    escape the project root falls back to its basename so restore stays inside
-    the project.
+    Paths inside ``base_dir`` keep their relative layout. A file that lives
+    outside the project root is archived under ``_outside_project/`` with its
+    origin recorded in the manifest: restoring it by basename into the project
+    put it where nothing reads it.
     """
 
     rel = os.path.relpath(abs_path, base_dir)
     if rel.startswith("..") or os.path.isabs(rel):
-        rel = os.path.basename(abs_path)
+        return outside_project_name(abs_path)
     return rel.replace(os.sep, "/")
+
+
+def outside_project_name(abs_path):
+    """The archive name of a file kept outside the project: unique per path."""
+
+    origin = hashlib.sha256(os.fsencode(os.path.abspath(abs_path))).hexdigest()[:8]
+    return f"{OUTSIDE_PROJECT_PREFIX}{origin}/{os.path.basename(abs_path)}"
 
 
 def collect_config_backup_files(
@@ -249,7 +262,7 @@ def collect_config_backup_files(
         if abs_path and os.path.isfile(abs_path):
             included.append({
                 "abs_path": abs_path,
-                "arcname": _archive_rel(abs_path, base_dir),
+                "arcname": archive_rel(abs_path, base_dir),
                 "kind": kind,
                 "sensitive": sensitive,
             })
@@ -264,7 +277,7 @@ def collect_config_backup_files(
         if secret_path and os.path.isfile(secret_path):
             included.append({
                 "abs_path": secret_path,
-                "arcname": _archive_rel(secret_path, base_dir),
+                "arcname": archive_rel(secret_path, base_dir),
                 "kind": "influxdb_secret",
                 "sensitive": True,
             })
@@ -279,7 +292,7 @@ def collect_config_backup_files(
         db_path = _resolve(section.get(cfg_key, db_default), base_dir)
         if db_path and os.path.isfile(db_path):
             skipped.append({
-                "path": _archive_rel(db_path, base_dir),
+                "path": archive_rel(db_path, base_dir),
                 "reason": SKIP_DATABASE_REASON,
             })
 
@@ -337,7 +350,7 @@ def collect_database_backup_files(
         if abs_path and os.path.isfile(abs_path):
             present.append({
                 "abs_path": abs_path,
-                "arcname": _archive_rel(abs_path, base_dir),
+                "arcname": archive_rel(abs_path, base_dir),
                 "kind": "sqlite",
                 "role": role,
                 # Not a classic secret, but local energy/runtime history.
@@ -345,7 +358,7 @@ def collect_database_backup_files(
                 "privacy_relevant": True,
             })
         else:
-            rel = _archive_rel(abs_path, base_dir) if abs_path else role
+            rel = archive_rel(abs_path, base_dir) if abs_path else role
             missing.append({
                 "path": rel,
                 "kind": "sqlite",
@@ -449,6 +462,8 @@ def _manifest_file_entry(entry):
     }
     if entry.get("privacy_relevant"):
         file_entry["privacy_relevant"] = True
+    if entry["arcname"].startswith(OUTSIDE_PROJECT_PREFIX):
+        file_entry["source_path"] = os.path.abspath(entry.get("source_path") or entry["abs_path"])
     return file_entry
 
 
@@ -652,6 +667,43 @@ def _reject_symlink_sources(included):
             )
 
 
+class _HashingReader:
+    def __init__(self, handle):
+        self._handle = handle
+        self.digest = hashlib.sha256()
+
+    def read(self, size=-1):
+        data = self._handle.read(size)
+        self.digest.update(data)
+        return data
+
+
+def _add_described_file(tar, entry, described):
+    """Archive one file and refuse it unless it is the file the manifest describes.
+
+    The manifest is hashed in one read and the archive filled in another; a
+    file the EMS rewrote in between produced an archive that fails its own
+    verification on restore.
+    """
+
+    arcname = entry["arcname"]
+    changed = BackupError(
+        f"{arcname} changed while it was being backed up; run the backup again"
+    )
+    try:
+        with open(entry["abs_path"], "rb") as handle:
+            info = tar.gettarinfo(arcname=arcname, fileobj=handle)
+            reader = _HashingReader(handle)
+            tar.addfile(info, reader)
+    except OSError as exc:
+        raise changed from exc
+    if described is not None and (
+        info.size != described.get("size_bytes")
+        or reader.digest.hexdigest() != described.get("sha256")
+    ):
+        raise changed
+
+
 def _write_tar(archive_path, manifest, included, compression_level):
     with tarfile.open(
         archive_path, "w:gz", compresslevel=compression_level
@@ -664,8 +716,9 @@ def _write_tar(archive_path, manifest, included, compression_level):
         info.mtime = 0
         tar.addfile(info, io.BytesIO(manifest_bytes))
 
+        described = {item["path"]: item for item in manifest.get("files", [])}
         for entry in included:
-            tar.add(entry["abs_path"], arcname=entry["arcname"])
+            _add_described_file(tar, entry, described.get(entry["arcname"]))
 
 
 def _emit_archive(
@@ -784,6 +837,51 @@ def create_config_backup(
     )
 
 
+def encrypted_config_download(payload, password, *, now=None):
+    """Wrap a config payload as an encrypted config backup: ``(name, bytes)``.
+
+    A config carries API keys and broker passwords, so the Admin Console hands
+    it out only like this. The archive holds ``config/config.json`` and nothing
+    else, and every restore path that reads a config backup reads it.
+    """
+
+    if not password:
+        raise BackupError("a password is required to download a config")
+    with tempfile.TemporaryDirectory(prefix="ems-config-download-") as work:
+        config_file = os.path.join(work, "config", "config.json")
+        os.makedirs(os.path.dirname(config_file), mode=0o700)
+        with open(config_file, "wb") as handle:
+            handle.write(payload)
+        included = [{
+            "abs_path": config_file,
+            "arcname": "config/config.json",
+            "kind": "config",
+            "sensitive": True,
+        }]
+        manifest = build_manifest(
+            included,
+            [],
+            backup_type="config",
+            backup_purpose="manual",
+            encrypted=True,
+            encryption_method=_encryption_method(None, True),
+            created_at=_utc_now_iso(now if isinstance(now, datetime) else None),
+        )
+        path = _emit_archive(
+            "config",
+            "manual",
+            manifest,
+            included,
+            os.path.join(work, "out"),
+            True,
+            password,
+            DEFAULT_COMPRESSION_LEVEL,
+            now,
+        )
+        with open(path, "rb") as handle:
+            return os.path.basename(path), handle.read()
+
+
 def create_rollback_backup(config, rollback_for, *, password=None, **kwargs):
     """Create a config rollback backup tagged for ``rollback_for``."""
 
@@ -844,6 +942,7 @@ def create_database_backup(
             _sqlite_backup_copy(entry["abs_path"], staged_path)
             staged.append({
                 "abs_path": staged_path,
+                "source_path": entry["abs_path"],
                 "arcname": entry["arcname"],
                 "kind": entry["kind"],
                 "role": entry["role"],
@@ -1444,12 +1543,27 @@ def _build_restore_entries(tar, manifest, base_dir):
         manifest_sha = file_entry.get("sha256")
         checksum_ok = manifest_sha is None or actual_sha == manifest_sha
 
-        target = os.path.join(base_dir, *arcname.split("/"))
-        if os.path.isfile(target):
-            current_sha = _sha256_file(target)
-            status = "identical" if current_sha == actual_sha else "conflict"
+        source_path = file_entry.get("source_path")
+        outside_name = arcname.startswith(OUTSIDE_PROJECT_PREFIX)
+        if outside_name or source_path:
+            if (
+                not isinstance(source_path, str)
+                or not outside_name
+                or arcname != outside_project_name(source_path)
+            ):
+                raise BackupError(
+                    f"backup entry {arcname} does not match the origin its manifest "
+                    "names; refusing to restore"
+                )
+            target = None
+            status = "outside_project"
         else:
-            status = "new"
+            target = os.path.join(base_dir, *arcname.split("/"))
+            if os.path.isfile(target):
+                current_sha = _sha256_file(target)
+                status = "identical" if current_sha == actual_sha else "conflict"
+            else:
+                status = "new"
 
         entries.append({
             "path": arcname,
@@ -1461,6 +1575,7 @@ def _build_restore_entries(tar, manifest, base_dir):
             "manifest_sha256": manifest_sha,
             "actual_sha256": actual_sha,
             "is_text": not _looks_binary(data),
+            "source_path": source_path,
             "_data": data,
         })
     return entries
@@ -1507,6 +1622,7 @@ def _atomic_write(target, data):
         raise BackupError(f"restore could not write {target}: {exc}") from exc
     try:
         with os.fdopen(fd, "wb") as handle:
+            _keep_replaced_file_identity(handle.fileno(), target)
             handle.write(data)
         os.replace(tmp, target)
     except OSError as exc:
@@ -1517,6 +1633,30 @@ def _atomic_write(target, data):
                 os.remove(tmp)
         except OSError:
             pass
+
+
+def _keep_replaced_file_identity(fd, target):
+    """Give the new file the mode and, as root, the owner of the one it replaces.
+
+    A restore puts back content, not permissions: forcing 0600 and the
+    restorer's owner on a config the EMS reads as another user locked the EMS
+    out of its own files. A file that did not exist stays private. A
+    filesystem that refuses either (vfat, a root-squashed share) does not stop
+    the restore; it is logged and the file keeps what the filesystem gives it.
+    """
+
+    try:
+        current = os.stat(target)
+    except FileNotFoundError:
+        return
+    try:
+        os.fchmod(fd, stat.S_IMODE(current.st_mode))
+        if os.geteuid() == 0:
+            os.fchown(fd, current.st_uid, current.st_gid)
+    except OSError as exc:
+        logging.getLogger(__name__).warning(
+            "event=backup_restore_identity_not_kept path=%s error=%s", target, exc
+        )
 
 
 def _restore_sqlite(target, data):
@@ -1578,6 +1718,13 @@ def _restore_sqlite(target, data):
 
 def _dry_run_action(entry):
     status = entry["status"]
+    if status == "outside_project":
+        return {
+            "path": entry["path"],
+            "action": "would_skip_outside_project",
+            "status": status,
+            "source_path": entry["source_path"],
+        }
     if status == "identical":
         action = "would_skip_identical"
     elif status == "new":
@@ -1603,7 +1750,10 @@ def restore_backup(
     when ``conflict_resolver`` is ``None``. ``conflict_resolver(entry)`` may
     return ``keep`` / ``replace`` / ``abort`` for interactive callers.
 
-    Returns a result dict with per-file ``actions``.
+    Returns a result dict with per-file ``actions`` and the files it
+    ``created`` (path, target, sha256), which a caller rolling back may remove.
+    A ``BackupError`` raised while writing carries the files created so far as
+    ``created``.
     """
 
     archive_path = _validated_existing_archive_path(
@@ -1614,6 +1764,7 @@ def restore_backup(
 
     base_dir = base_dir or BASE_DIR
     actions = []
+    created = []
 
     with open_backup_archive(
         archive_path, password=password, allowed_root=allowed_root
@@ -1648,6 +1799,13 @@ def restore_backup(
             if status == "identical":
                 actions.append({"path": entry["path"], "action": "skip_identical"})
                 continue
+            if status == "outside_project":
+                actions.append({
+                    "path": entry["path"],
+                    "action": "skipped_outside_project",
+                    "source_path": entry["source_path"],
+                })
+                continue
 
             if status == "conflict":
                 if conflict_resolver is not None:
@@ -1667,17 +1825,32 @@ def restore_backup(
                     continue
                 # decision == "replace" falls through to write.
 
-            if entry.get("kind") == "sqlite":
-                _restore_sqlite(entry["target"], entry["_data"])
-            else:
-                _atomic_write(entry["target"], entry["_data"])
+            try:
+                if entry.get("kind") == "sqlite":
+                    _restore_sqlite(entry["target"], entry["_data"])
+                else:
+                    _atomic_write(entry["target"], entry["_data"])
+            except BackupError as exc:
+                exc.created = list(created)
+                raise
+            if status == "new":
+                created.append({
+                    "path": entry["path"],
+                    "target": entry["target"],
+                    "sha256": entry["actual_sha256"],
+                })
             actions.append({
                 "path": entry["path"],
                 "action": "restored",
                 "status": status,
             })
 
-    return {"manifest": manifest, "actions": actions, "dry_run": dry_run}
+    return {
+        "manifest": manifest,
+        "actions": actions,
+        "created": created,
+        "dry_run": dry_run,
+    }
 
 
 # ---------------------------------------------------------------------------

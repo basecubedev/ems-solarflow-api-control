@@ -101,3 +101,34 @@ def test_disabled_api_device_beside_an_enabled_mqtt_device_stays_bootable():
     }
 
     assert has_runtime_control_device(config) is True
+
+
+def test_disabled_mqtt_control_device_is_not_a_control_config():
+    devices = [_mqtt_control_device("INV_2", enabled=False)]
+
+    assert mqtt_control_device_configs(devices) == []
+
+
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, ""])
+def test_non_boolean_enabled_never_makes_an_mqtt_control_config(value):
+    devices = [_mqtt_control_device("INV_2", enabled=value)]
+
+    assert mqtt_control_device_configs(devices) == []
+
+
+@pytest.mark.parametrize(
+    "devices",
+    [
+        [_api_device("INV_1", enabled=False)],
+        [_mqtt_control_device("INV_2", enabled=False)],
+    ],
+    ids=["api", "mqtt"],
+)
+def test_a_disabled_device_gets_no_runtime_defaults_on_either_transport(devices):
+    import emsctl
+    from ems.diagnostics import diagnose_controllable_config_device_names
+
+    config = {"devices": devices}
+
+    assert emsctl.config_device_defaults(config) == {}
+    assert diagnose_controllable_config_device_names(config) == []

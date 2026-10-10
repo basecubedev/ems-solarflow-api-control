@@ -36,7 +36,7 @@ from admin.admin_update import (
     SystemTransitionLauncher,
     admin_image_ref_from_env,
 )
-from admin.config_apply import ConfigApplyService, ConfigChangedError
+from admin.config_apply import ConfigApplyService, ConfigBackupError, ConfigChangedError
 from admin.config_export import (
     ConfigExportService,
     ConfigExportValidationError,
@@ -252,6 +252,7 @@ from admin.system_build import (
 from dashboard.auth import LoginRateLimiter, SessionStore, auth_file_fingerprint
 from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS
 from dashboard.static_files import build_static_asset_index, static_asset_key
+from ems import backup as backup_mod
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
     PHYSICAL_IDENTITY_TOKEN_FIELD,
@@ -272,6 +273,7 @@ MAX_JSON_BODY_BYTES = 4 * 1024
 # about memory.
 MAX_BACKUP_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 MAX_CONFIG_PREVIEW_BODY_BYTES = 64 * 1024
+CONFIG_DOWNLOAD_MIN_PASSWORD = 8
 
 SETUP_CONFIG_STALE = "stale_setup_config"
 SETUP_ABANDON_REQUIRED = "setup_abandon_required"
@@ -2854,15 +2856,22 @@ class AdminHandler(BaseHTTPRequestHandler):
         body = self._read_json_body()
         if body is None:
             return
-        if not isinstance(body, dict) or set(body) - {"operation_id", "confirm"}:
+        if not isinstance(body, dict) or set(body) - {
+            "operation_id", "confirm", "acknowledge_risk"
+        }:
             self._send_json({"error": "unsupported_field"}, status=400)
             return
         if body.get("confirm") is not True:
             self._send_json({"error": "confirmation_required"}, status=400)
             return
+        if not isinstance(body.get("acknowledge_risk", False), bool):
+            self._send_json({"error": "acknowledge_risk must be a boolean"}, status=400)
+            return
         try:
             result = self.server.system_alignment.return_to_running_build(
-                operation_id=body.get("operation_id"), confirm=True
+                operation_id=body.get("operation_id"),
+                confirm=True,
+                development_risk_acknowledged=body.get("acknowledge_risk") is True,
             )
         except (SystemBuildError, SystemAlignmentError) as exc:
             self._send_alignment_error(exc)
@@ -3154,17 +3163,20 @@ class AdminHandler(BaseHTTPRequestHandler):
         status = prepared.get("status")
         if status == "conflict":
             self._send_json(
-                self._sanitize_external_mqtt_payload(prepared), status=409
+                self._sanitize_external_mqtt_payload({**prepared, "stage": "review"}),
+                status=409,
             )
             return
         if status == "missing":
             self._send_json(
-                self._sanitize_external_mqtt_payload(prepared), status=404
+                self._sanitize_external_mqtt_payload({**prepared, "stage": "review"}),
+                status=404,
             )
             return
         if status != "ok":
             self._send_json(
-                self._sanitize_external_mqtt_payload(prepared), status=400
+                self._sanitize_external_mqtt_payload({**prepared, "stage": "apply"}),
+                status=400,
             )
             return
         if not prepared.get("changed"):
@@ -3191,10 +3203,24 @@ class AdminHandler(BaseHTTPRequestHandler):
                         {
                             "ok": False,
                             "status": "conflict",
+                            "stage": "review",
                             "message": str(exc),
                         }
                     ),
                     status=409,
+                )
+                return
+            except ConfigBackupError as exc:
+                self._send_json(
+                    self._sanitize_external_mqtt_payload(
+                        {
+                            "ok": False,
+                            "status": "error",
+                            "stage": "backup",
+                            "message": f"Backup failed: {exc}",
+                        }
+                    ),
+                    status=500,
                 )
                 return
             except OSError as exc:
@@ -3203,6 +3229,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                         {
                             "ok": False,
                             "status": "error",
+                            "stage": "apply",
                             "message": f"Apply failed: {exc}",
                         }
                     ),
@@ -5780,6 +5807,7 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     def _config_export_request(self):
         body = self._read_json_body(MAX_CONFIG_PREVIEW_BODY_BYTES)
+        self._config_export_body = body if isinstance(body, dict) else {}
         if body is None:
             return None
         if not isinstance(body, dict):
@@ -5856,10 +5884,26 @@ class AdminHandler(BaseHTTPRequestHandler):
         except ConfigExportValidationError as exc:
             self._send_validation_failure(exc.preview)
             return
+        password = self._config_export_body.get("password")
+        if not isinstance(password, str) or len(password) < CONFIG_DOWNLOAD_MIN_PASSWORD:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "download_password_required",
+                    "message": (
+                        "A config holds API keys and broker passwords, so it is "
+                        "downloaded encrypted. Enter a password of at least "
+                        f"{CONFIG_DOWNLOAD_MIN_PASSWORD} characters."
+                    ),
+                },
+                status=400,
+            )
+            return
+        name, archive = backup_mod.encrypted_config_download(payload, password)
         self._send_bytes(
-            payload,
-            "application/json; charset=utf-8",
-            headers={"Content-Disposition": 'attachment; filename="config.json"'},
+            archive,
+            "application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
         )
 
     def _handle_config_write(self):

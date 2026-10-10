@@ -149,9 +149,12 @@ class ConfigApplyService:
             if changed:
                 # Back up before touching the target: a failing backup must abort
                 # the apply so an existing config is never lost.
-                backup_path = (
-                    self._backup(target) if existed and create_backup else None
-                )
+                try:
+                    backup_path = (
+                        self._backup(target) if existed and create_backup else None
+                    )
+                except OSError as exc:
+                    raise ConfigBackupError(str(exc)) from exc
                 _atomic_write(target, change.payload)
         result = {
             "ok": True,
@@ -218,3 +221,7 @@ def _fsync_directory(directory):
 
 class ConfigChangedError(RuntimeError):
     pass
+
+
+class ConfigBackupError(OSError):
+    """The backup taken before an apply failed, so nothing was written."""

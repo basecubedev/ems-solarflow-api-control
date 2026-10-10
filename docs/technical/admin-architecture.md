@@ -150,8 +150,11 @@ exactly one local password per host, and no Admin-only password store.
   `auth/setup` and `auth/login` take no CSRF token, so they accept only an
   `application/json` body (which forces a browser CORS preflight); `auth/setup`
   also refuses an `Origin` whose host name is neither the `Host` nor an
-  `X-Forwarded-Host` name (ports are not compared, so reverse proxies keep
-  working). This stops a page on another website from choosing the first
+  `X-Forwarded-Host` name. Ports are not compared, so a reverse proxy keeps
+  working when it passes the browser's host through, as `Host` or as
+  `X-Forwarded-Host`; one that rewrites `Host` to its upstream name without
+  setting `X-Forwarded-Host` is refused for first-password setup, deliberately.
+  This stops a page on another website from choosing the first
   password; it does not stop someone on the LAN with an HTTP client, so set the
   password right after installing.
 - **Malformed file is a recovery state, not setup.** If the shared file exists

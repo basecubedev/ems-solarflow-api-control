@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Maintenance MQTT migration is a complete authenticated review/apply workflow."""
 
+import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -68,3 +71,41 @@ def test_success_refreshes_config_runtime_and_control_readiness():
     assert "await loadMaintenanceConfig()" in apply
     assert "await loadZendureMqttRuntimeStatus()" in apply
     assert "await loadMqttMigrationReview()" in apply
+
+
+def test_a_failed_apply_marks_the_stage_the_server_names():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the migration stage test")
+    js = _read("admin.js")
+    header = "function markMqttMigrationFailure"
+    fn = header + js.split(header, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+    script = fn + """
+let stages = {};
+function setMqttMigrationStage(name, state) { stages[name] = state; }
+const results = {};
+for (const stage of ["backup", "apply", "validate", "review", null]) {
+  stages = { backup: "running", apply: "running", validate: "running" };
+  markMqttMigrationFailure(stage);
+  results[String(stage)] = { ...stages };
+}
+console.log(JSON.stringify(results));
+"""
+    out = json.loads(
+        subprocess.run([node, "-e", script], capture_output=True, text=True, check=True).stdout
+    )
+
+    assert out["backup"]["backup"] == "failed" and out["backup"]["apply"] is None
+    assert out["apply"] == {"backup": "done", "apply": "failed", "validate": "running"}
+    assert out["validate"]["validate"] == "failed"
+    assert out["review"] == {"backup": None, "apply": None, "validate": None}
+    assert out["null"]["apply"] == "failed"
+
+
+def test_the_failed_stage_is_read_from_the_answer_not_the_message():
+    js = _read("admin.js")
+    apply = js.split("async function applyMqttMigration", 1)[1].split("\nasync function ", 1)[0]
+
+    assert "error.stage = typeof data.stage" in apply
+    assert "markMqttMigrationFailure(err.stage || reached)" in apply
+    assert '.includes("backup")' not in apply

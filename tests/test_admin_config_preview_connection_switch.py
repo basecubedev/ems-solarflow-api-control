@@ -169,3 +169,18 @@ def test_an_enabled_selection_is_generated_as_before():
     proposals[0]["enabled"] = True
     result = _generate(proposals)
     assert _mqtt_device(result)["name"] == "INV_1"
+
+
+def test_a_value_its_type_cannot_hold_blocks_the_selection_s_preview():
+    proposals = _proposal()
+    proposals[0]["config_name"] = "INV_1"
+    proposals[0]["config_values"] = {"max_power": "lots"}
+
+    result = _generate(proposals)
+
+    assert result["ready"] is False
+    assert any(
+        issue["code"] == "config_value_invalid"
+        and issue["message"].startswith("INV_1: max_power")
+        for issue in result["validation"]["errors"]
+    )

@@ -12,6 +12,7 @@ import pytest
 
 from ems.config_mutation import (
     CLEAR,
+    INVALID,
     KEEP,
     MAINTENANCE_POLICY,
     SET,
@@ -335,3 +336,151 @@ def test_device_entries_read_as_indexed_paths():
     )
 
     assert diff["changes"][0]["path"] == "devices[0].max_power"
+
+
+# --- a value the type cannot hold is refused, never guessed ------------------
+
+
+@pytest.mark.parametrize(
+    "field,raw",
+    [
+        ({"type": "boolean"}, "maybe"),
+        ({"type": "boolean"}, "flase"),
+        ({"type": "boolean"}, 2),
+        ({"type": "integer"}, "not-a-number"),
+        ({"type": "integer"}, "1.5"),
+        ({"type": "integer"}, 1.7),
+        ({"type": "integer"}, True),
+        ({"type": "number"}, "abc"),
+        ({"type": "number"}, "nan"),
+        ({"type": "number"}, float("inf")),
+        ({"type": "number"}, False),
+        ({"type": "integer", "min": 0, "max": 23}, 24),
+        ({"type": "number", "min": 0}, -1),
+        ({"type": "month_list"}, "10, x"),
+        ({"type": "month_list"}, [0, 13]),
+    ],
+)
+def test_a_value_its_type_cannot_hold_is_refused(field, raw):
+    operation, message = resolve_change(field, ConfigChange("a.b", raw))
+
+    assert operation == INVALID
+    assert isinstance(message, str) and message
+
+
+@pytest.mark.parametrize(
+    "field,raw,expected",
+    [
+        ({"type": "boolean"}, "No", False),
+        ({"type": "boolean"}, " on ", True),
+        ({"type": "boolean"}, 0, False),
+        ({"type": "integer", "min": 0, "max": 23}, "23", 23),
+        ({"type": "integer"}, 4.0, 4),
+        ({"type": "number", "min": 0}, "0", 0),
+        ({"type": "month_list"}, "1, 12", [1, 12]),
+    ],
+)
+def test_a_value_its_type_holds_is_set(field, raw, expected):
+    assert resolve_change(field, ConfigChange("a.b", raw)) == (SET, expected)
+
+
+def test_an_invalid_value_is_an_error_issue_and_is_not_written():
+    config = {"winter": {"adjust_hour": 12, "enabled": True}}
+    index = {
+        "winter.adjust_hour": {"type": "integer", "min": 0, "max": 23},
+        "winter.enabled": {"type": "boolean"},
+    }
+
+    result = apply_config_changes(
+        config,
+        [ConfigChange("winter.adjust_hour", "noon"), ConfigChange("winter.enabled", "perhaps")],
+        MAINTENANCE_POLICY,
+        field_index=index,
+    )
+
+    assert config == {"winter": {"adjust_hour": 12, "enabled": True}}
+    assert [issue.path for issue in result.errors] == ["winter.adjust_hour", "winter.enabled"]
+    assert {issue.code for issue in result.errors} == {"config_value_invalid"}
+
+
+def test_an_invalid_common_value_is_reported_and_not_written():
+    device = {"max_power": 800}
+    issues = []
+
+    apply_common_values(
+        device, {"max_power": "a lot"}, {"max_power": {"type": "integer"}}, issues=issues
+    )
+
+    assert device == {"max_power": 800}
+    assert [issue.path for issue in issues] == ["max_power"]
+
+
+@pytest.mark.parametrize(
+    "field,raw",
+    [
+        ({"type": "month_list"}, "inf"),
+        ({"type": "month_list"}, "1e999"),
+        ({"type": "month_list"}, "1.5, 2"),
+        ({"type": "integer"}, float("inf")),
+        ({"type": "integer"}, 10**400),
+        ({"type": "number"}, 10**400),
+    ],
+)
+def test_a_number_no_float_can_hold_is_refused_not_raised(field, raw):
+    operation, message = resolve_change(field, ConfigChange("a.b", raw))
+
+    assert operation == INVALID
+    assert message
+
+
+def test_an_untouched_invalid_grid_meter_mqtt_value_does_not_block_other_edits():
+    grid = {"type": "mqtt", "mqtt": {"topic": "t", "port": "18 83"}}
+
+    result = apply_grid_meter_changes(
+        grid,
+        [ConfigChange("mqtt.port", "18 83")],
+        MAINTENANCE_POLICY,
+        field_index={"grid_meter.mqtt.port": {"type": "integer", "min": 1, "max": 65535}},
+    )
+
+    assert result.errors == ()
+    assert grid["mqtt"]["port"] == "18 83"
+
+
+def test_an_unknown_word_for_a_stored_false_switch_is_still_refused():
+    config = {"winter": {"enabled": False}}
+
+    result = apply_config_changes(
+        config,
+        [ConfigChange("winter.enabled", "perhaps")],
+        MAINTENANCE_POLICY,
+        field_index={"winter.enabled": {"type": "boolean"}},
+    )
+
+    assert [issue.path for issue in result.errors] == ["winter.enabled"]
+
+
+def test_a_grid_meter_value_its_type_cannot_hold_is_reported_and_not_written():
+    grid = {"type": "shelly_pro_3em", "ip": "10.0.0.9", "channels": ["a"]}
+
+    result = apply_grid_meter_changes(
+        grid, [ConfigChange("channels", {"x": 1})], MAINTENANCE_POLICY
+    )
+
+    assert [(issue.code, issue.path) for issue in result.errors] == [
+        ("config_value_invalid", "grid_meter.channels")
+    ]
+    assert grid["channels"] == ["a"]
+
+
+def test_a_grid_meter_mqtt_value_its_type_cannot_hold_is_reported_and_not_written():
+    grid = {"type": "mqtt", "mqtt": {"host": "h", "topic": "t", "port": 1883}}
+
+    result = apply_grid_meter_changes(
+        grid, [ConfigChange("mqtt.port", "abc")], MAINTENANCE_POLICY
+    )
+
+    assert [(issue.code, issue.path) for issue in result.errors] == [
+        ("config_value_invalid", "grid_meter.mqtt.port")
+    ]
+    assert grid["mqtt"]["port"] == 1883

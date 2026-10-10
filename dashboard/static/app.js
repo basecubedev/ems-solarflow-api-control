@@ -60,6 +60,7 @@ const state = {
     csrfToken: null,
   },
   runtime: null,
+  runtimeUnavailable: false,
   runtimeEditorDirty: false,
   lastSnapshotTimestamp: null,
   snapshotChangedAt: null,
@@ -4526,7 +4527,7 @@ function renderRestorePlan(plan) {
     .map((action) => `
       <div class="maintenance-plan-row">
         <span class="maintenance-plan-action">${escapeHtml(action.action || "")}</span>
-        <span class="maintenance-plan-path">${escapeHtml(action.path || "")}</span>
+        <span class="maintenance-plan-path">${escapeHtml(action.source_path ? `${action.path || ""} (kept outside the project at ${action.source_path})` : action.path || "")}</span>
       </div>`)
     .join("") || `<div class="maintenance-empty compact">No file changes reported.</div>`;
   const warnings = (plan.warnings || [])
@@ -5331,19 +5332,34 @@ function runtimeChangeWarning(form, payload) {
   const device = runtimeFormSubject(form);
   const endpoint = String(form?.dataset?.runtimeEndpoint || "");
   if (endpoint === "/api/runtime/system" && payload.enabled === false) {
-    return "Turn the EMS off? It stops writing to every inverter; each keeps its last output limit until the EMS is on again.";
+    return "Turn the EMS off? It stops writing to every inverter; each keeps its last output limit until the EMS is on again. A charge the EMS started gets one command that ends it.";
   }
   if (!device) return null;
   if (payload.enabled === false) {
-    return `Take ${device} out of EMS control? It keeps its last output limit until you enable it again.`;
+    return `Take ${device} out of EMS control? The EMS writes nothing more to it, and it keeps its last output limit until you enable it again. A charge the EMS started on it gets one command that ends it.`;
   }
+  const offNote = controlOffNote(device);
   if (payload.runtime_role === "ac_input") {
-    return `Switch ${device} to AC charging? The EMS stops regulating its output and lets it charge from the grid at the AC charge power.`;
+    return [`Switch ${device} to AC charging? The EMS stops regulating its output and lets it charge from the grid at the AC charge power.`, offNote].filter(Boolean).join(" ");
+  }
+  if (payload.runtime_role === "ac_output" && offNote) {
+    return `Switch ${device} back to output? ${offNote} To stop a charge meanwhile, use the Zendure app.`;
   }
   if (payload.offgrid_socket_mode !== undefined) {
-    return `Change the offgrid socket of ${device}? The EMS writes the new mode to the inverter.`;
+    return [`Change the offgrid socket of ${device}? The EMS writes the new mode to the inverter.`, offNote].filter(Boolean).join(" ");
   }
   return null;
+}
+
+function controlOffNote(device) {
+  const runtime = state.runtime || {};
+  if (runtime.system?.enabled === false) {
+    return "The EMS is off, so this takes effect once it is on again.";
+  }
+  if (runtime.devices?.[device]?.enabled === false) {
+    return `${device} is out of EMS control, so this takes effect once you enable it again.`;
+  }
+  return "";
 }
 
 function runtimeErrorText(form, message) {
@@ -5429,12 +5445,38 @@ async function loadRuntimeState(options = {}) {
   }
   try {
     const response = await fetch("/api/runtime");
+    if (!response.ok) throw new Error(`runtime state answered ${response.status}`);
     state.runtime = await response.json();
+    state.runtimeUnavailable = false;
+    cancelRuntimeRetry();
     if (forceRuntimeEditor) clearRuntimeEditorState();
     if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor });
   } catch {
     state.runtime = null;
+    state.runtimeUnavailable = true;
+    if (state.auth.authenticated) scheduleRuntimeRetry();
   }
+  renderWriteModeState();
+}
+
+const RUNTIME_RETRY_MS = 5000;
+let runtimeRetryTimer = null;
+
+// The 30 s refresh would bring the tiles back eventually; right after a login
+// into an EMS that is still restarting, that is half a minute of locked tiles
+// under a header that reads "Write mode".
+function scheduleRuntimeRetry() {
+  if (runtimeRetryTimer) return;
+  runtimeRetryTimer = setTimeout(() => {
+    runtimeRetryTimer = null;
+    return loadRuntimeState();
+  }, RUNTIME_RETRY_MS);
+}
+
+function cancelRuntimeRetry() {
+  if (!runtimeRetryTimer) return;
+  clearTimeout(runtimeRetryTimer);
+  runtimeRetryTimer = null;
 }
 
 async function loadAuthStatus() {
@@ -5475,13 +5517,23 @@ async function loadAuthStatus() {
   }
 }
 
-function renderAuthState() {
+function renderWriteModeState() {
   const statePill = $("writeModeState");
-  const button = $("authButton");
-  if (statePill) {
-    statePill.textContent = state.auth.authenticated ? "Write mode" : "Read-only";
-    statePill.className = state.auth.authenticated ? "pill" : "pill muted";
+  if (!statePill) return;
+  if (!state.auth.authenticated) {
+    statePill.textContent = "Read-only";
+    statePill.className = "pill muted";
+    return;
   }
+  statePill.textContent = state.runtimeUnavailable
+    ? "Write mode · runtime state unavailable, retrying"
+    : "Write mode";
+  statePill.className = "pill";
+}
+
+function renderAuthState() {
+  const button = $("authButton");
+  renderWriteModeState();
   if (button) {
     button.hidden = !state.auth.configured;
     button.textContent = state.auth.authenticated ? "Logout" : "Login";
@@ -5543,12 +5595,17 @@ function initAuthControls() {
       await login();
     });
   }
+
+  document.addEventListener("keydown", handleLoginModalKeydown);
 }
+
+let loginReturnFocus = null;
 
 function openLoginModal() {
   const modal = $("loginModal");
   const password = $("loginPassword");
   const error = $("loginError");
+  loginReturnFocus = document.activeElement || null;
   if (error) error.hidden = true;
   if (password) password.value = "";
   if (modal) modal.hidden = false;
@@ -5557,7 +5614,43 @@ function openLoginModal() {
 
 function closeLoginModal() {
   const modal = $("loginModal");
+  const wasOpen = Boolean(modal && !modal.hidden);
   if (modal) modal.hidden = true;
+  const target = loginReturnFocus && loginReturnFocus.isConnected ? loginReturnFocus : $("authButton");
+  loginReturnFocus = null;
+  if (wasOpen && target && typeof target.focus === "function") target.focus();
+}
+
+function loginModalFocusables() {
+  const form = $("loginForm");
+  if (!form || typeof form.querySelectorAll !== "function") return [];
+  return Array.from(form.querySelectorAll("button, input, select, textarea, [href]"))
+    .filter((node) => !node.disabled && !node.hidden);
+}
+
+function handleLoginModalKeydown(event) {
+  const modal = $("loginModal");
+  if (!modal || modal.hidden) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeLoginModal();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusables = loginModalFocusables();
+  if (!focusables.length) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  const active = document.activeElement;
+  const form = $("loginForm");
+  const inside = Boolean(form && typeof form.contains === "function" && form.contains(active));
+  if (event.shiftKey && (active === first || !inside)) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (active === last || !inside)) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 async function login() {
@@ -6978,6 +7071,16 @@ function historyChartHeight() {
   return 260;
 }
 
+function renderHistoryRetention(data) {
+  const node = $("historyRetention");
+  if (!node) return;
+  const hours = Number(data && data.meta && data.meta.retention_hours);
+  node.hidden = !(hours > 0);
+  node.textContent = hours > 0
+    ? `History keeps the last ${hours} h (dashboard.history_hours), so this range shows ${hours} h at most.`
+    : "";
+}
+
 function renderHistoryChart() {
   const container = $("historyChart");
   if (!container || typeof uPlot === "undefined") return;
@@ -6986,6 +7089,7 @@ function renderHistoryChart() {
   const time = (data && data.time) || [];
   const empty = $("historyEmpty");
   setSourceBadge("historySource", data && data.source);
+  renderHistoryRetention(data);
 
   // No data: tear the chart down (and drop its signature) so a later refresh
   // with data rebuilds, then show the empty/unavailable state.
@@ -7727,6 +7831,9 @@ if (typeof module !== "undefined") {
     logsAuthState,
     setServiceLogLevel,
     renderAuthState,
+    openLoginModal,
+    closeLoginModal,
+    handleLoginModalKeydown,
     logout,
     maintenanceAuthState,
     maintenanceBackupTypeLabel,

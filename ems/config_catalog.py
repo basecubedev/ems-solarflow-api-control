@@ -2,6 +2,7 @@
 """Central catalog for EMS configuration templates and user-facing metadata."""
 
 import copy
+import functools
 import json
 import re
 
@@ -1638,7 +1639,6 @@ _SECTIONS = [
                 "File used to store local dashboard login data.",
                 "text",
                 level="expert",
-                risk="secrets",
             ),
             _field(
                 "dashboard.ssl_enabled",
@@ -1653,7 +1653,6 @@ _SECTIONS = [
                 "Certificate file used when HTTPS is enabled.",
                 "text",
                 level="expert",
-                risk="secrets",
             ),
             _field(
                 "dashboard.ssl_key_file",
@@ -1661,7 +1660,6 @@ _SECTIONS = [
                 "Private key file used when HTTPS is enabled.",
                 "text",
                 level="expert",
-                risk="secrets",
             ),
             _field(
                 "dashboard.ssl_auto_generate",
@@ -1704,7 +1702,6 @@ _SECTIONS = [
                 "Hides sensitive values in dashboard-visible logs when possible.",
                 "boolean",
                 level="advanced",
-                risk="secrets",
             ),
             _field(
                 "dashboard.animation_mode",
@@ -1757,7 +1754,6 @@ _SECTIONS = [
                 "Local environment file used to store generated bundled InfluxDB secrets. Never commit this file.",
                 "text",
                 level="expert",
-                risk="secrets",
             ),
             _field(
                 "influxdb.url",
@@ -1794,7 +1790,6 @@ _SECTIONS = [
                 "Environment variable name used to read the InfluxDB token.",
                 "text",
                 level="expert",
-                risk="secrets",
             ),
             _field(
                 "influxdb.bucket_prefix",
@@ -2226,6 +2221,24 @@ def get_config_feature_field_index():
             + [item for section in _SECTIONS for item in section["fields"]]
         )
     }
+
+
+@functools.lru_cache(maxsize=1)
+def _secret_flag_by_path():
+    return {
+        path: is_secret_catalog_field(field)
+        for path, field in get_config_feature_field_index().items()
+    }
+
+
+def secret_catalog_path(path):
+    """Whether a full catalog path (``influxdb.token``) is a secret, or ``None``.
+
+    ``None`` when ``path`` is no catalog path, so a caller holding a bare
+    config key can fall back to its own reading.
+    """
+
+    return _secret_flag_by_path().get(str(path))
 
 
 def is_secret_catalog_field(field):

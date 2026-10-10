@@ -905,10 +905,27 @@
               existing config first; no deployment is started here.
             </p>
             <pre id="config-preview" class="config-preview">{}</pre>
+            <div class="config-download-password">
+              <label class="field">
+                <span class="field-label">Download password</span>
+                <input id="config-download-password" class="feature-input"
+                       type="password" autocomplete="new-password">
+              </label>
+              <label class="field">
+                <span class="field-label">Repeat download password</span>
+                <input id="config-download-password-confirm" class="feature-input"
+                       type="password" autocomplete="new-password">
+              </label>
+              <p class="future-note">
+                A config holds API keys and broker passwords, so the download is
+                an encrypted config backup. Put it back with Maintenance &rarr;
+                Backups &rarr; Import, or with <code>emsctl backup restore</code>.
+              </p>
+            </div>
             <div class="config-export-buttons">
               <button id="config-download" type="button"
                       class="secondary-button compact" disabled>
-                Download config.json
+                Download encrypted config
               </button>
               <button id="config-apply" type="button"
                       class="primary-button compact" disabled>

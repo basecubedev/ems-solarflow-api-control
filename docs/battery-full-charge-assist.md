@@ -52,9 +52,41 @@ If AC charge mode was used, restore requests `acMode=2` through the existing
 runtime AC intent reconciler. Output control remains blocked until restore is
 done or fresh telemetry confirms the restored state.
 
-All hardware writes respect the existing write gates: dry-run, simulation mode,
-replay mode, `allow_hardware_writes`, and
+All of the assist's own writes respect the existing write gates: dry-run,
+simulation mode, replay mode, `allow_hardware_writes`, and
 `allow_state_reconciliation_writes`.
+
+Switching the EMS off (`system.enabled`) or the device (its runtime `enabled`)
+ends a running assist's grid charge like any charge the EMS started (owner
+decision 2026-10-10): one exit to idle (`smartMode=1`, `acMode=2`,
+`inputLimit=0`, `outputLimit=0`), a power command on the transport's gate,
+logged as `ac_charge_ended_on_disable` with
+`charge=battery_full_charge_assist`. The controller keeps the same record of
+this charge that a transport keeps of its own. While control is on and the EMS
+holds the assist's charge -- `allow_state_reconciliation_writes` on, and the
+assist claiming the device, or restoring `acMode` after a completion or an
+abort -- the charge is on record, and the record reads every fresh report, so a
+clamp the device shows counts as the assist's. Each restore cycle counts as the
+charge's exit, whether its write reached the device or not, so a device that
+took the restore is sent nothing more and, at worst, the first exit after a
+switch-off waits one resend window. Once control is off, that record is owed
+the exit. It goes out again once per resend window until the device reports it
+left the charge or shows a setpoint the assist never wrote, which is someone
+else's charge. A setpoint the device shows before the exit -- a clamp, or a
+charge it has yet to leave -- counts as the assist's. Two things differ from a
+transport's own record: a reported `inputLimit` of 0 counts as no setpoint
+shown, since a device that does not report one reads as 0 too, and the exit is
+sent at most three times each time control goes off, so a firmware protection
+charge that shows no setpoint is not written to for good. Only fresh reports
+count: an unreachable device gets the exit when it answers again. An exit the
+device answered with an error waits its window like an accepted one, and one
+that never reached it goes out again at once; both log `ac_charge_end_failed`,
+told apart by `delivered=True` or `delivered=False`. The assist stays due:
+`socSet` stays at 100 % and the restore waits, and once control is back the
+assist goes on, or completes and restores if the battery got full meanwhile. No
+assist starts while control is off. A charge from before a restart with control
+off was never on record and is left to the device, and a stop of the EMS does
+not end the assist's charge, whether control is on or off.
 
 ## Configuration
 
@@ -65,7 +97,7 @@ replay mode, `allow_hardware_writes`, and
   "assist_window_days": 7,
   "assist_start_soc": 80,
   "force_time": "14:00",
-  "ac_charge_power": 200,
+  "ac_charge_power": 600,
   "enable_ac_charge_mode": true,
   "state_database_path": "data/ems_state.sqlite"
 }

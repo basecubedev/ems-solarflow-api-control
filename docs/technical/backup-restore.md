@@ -381,6 +381,22 @@ An interactive restore asks a few questions. In plain language:
 If two rollback passwords do not match, or rollback creation fails, the restore
 aborts and no partial files are written.
 
+A replaced file keeps the permissions it had, and its owner when the restore
+runs as root, where the filesystem allows it (a refusal is logged and does not
+stop the restore); a file the restore creates is readable by its owner only.
+
+A file your config keeps outside the project directory — a certificate or auth
+file or database at an absolute path elsewhere — is archived under
+`_outside_project/<short hash of its path>/` with its original path in the
+manifest. A restore never writes it, neither into the project nor outside it:
+emsctl, the dashboard and the Admin Console list it as `skipped_outside_project`
+with that path, so you can copy it back from the archive by hand. An archive
+whose entry names do not match the origins its manifest records is refused.
+An archive made before this, or from a time the file lived at the project
+root, keeps the bare file name, and a restore reads that entry as the project
+directory's copy under the normal conflict rules; the dashboard says so and
+names where the configured file lives.
+
 ## What should I check after restore?
 
 ```bash
@@ -390,7 +406,8 @@ python3 emsctl.py influx status
 ```
 
 `influx status` is only relevant when you use bundled/local InfluxDB analytics.
-After a config or database restore the CLI also reminds you to run
+After a config or database restore the CLI names the archive it restored, says
+to restart EMS so it reads the restored files, and reminds you to run
 `diagnose --deep`.
 
 ## Common problems

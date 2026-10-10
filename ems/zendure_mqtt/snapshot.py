@@ -2,8 +2,10 @@
 """Runtime snapshot model and aggregator for Zendure MQTT telemetry.
 
 Consumes classified topics + parsed payloads into per-device snapshots. Read
-only: it never writes hardware and its normalization is for observation only,
-never for driving writes.
+only: it never writes hardware. The derived alias fields are for display;
+``observable_metrics`` is the filter ``parse_device`` reads a report through.
+Confirmation and foreign-writer detection read the merged metrics with checks
+of their own.
 """
 
 import time
@@ -39,6 +41,46 @@ class ZendureMqttSnapshot:
     # Wall-clock epoch for display; monotonic clock for age/staleness math.
     last_seen_epoch: float | None = None
     last_seen_monotonic: float | None = None
+
+
+_EXACT_FLOAT_LIMIT = 2**53
+
+
+def observable_metrics(metrics):
+    """A report's metrics as ``parse_device`` may read them: numbers below 2**53 only.
+
+    Any client on the broker can publish a scalar topic, and a scalar topic
+    keeps text, and numbers no float can hold, as they came. ``parse_device``
+    hands every field straight to the control maths and the dashboard, which
+    compare and divide it; dropped here, such a value reads as a missing one.
+    So does a number of 2**53 or more: past it a float no longer holds every
+    integer, the pack count is read through a float, and the full-charge state
+    store keeps it and its neighbours as SQLite integers, which end at 2**63.
+    A number a report quotes as text was read as that number when it arrived.
+    """
+
+    return {
+        key: value
+        for key, value in (metrics or {}).items()
+        if not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and abs(value) < _EXACT_FLOAT_LIMIT
+    }
+
+
+def pack_witness(snapshot):
+    """What ``parse_device`` weighs against a ``packNum`` of 0.
+
+    The aggregator's pack list, or failing that the ``packData`` value the
+    aggregator kept, when it is not empty: ``observable_metrics`` keeps numbers
+    only, so it would be gone from the properties. A quoted number in it was
+    read as that number when the report arrived, so ``"0"`` is no witness.
+    """
+
+    packs = getattr(snapshot, "battery_packs", None)
+    if packs:
+        return packs
+    return (getattr(snapshot, "metrics", None) or {}).get("packData")
 
 
 def _to_number(value):
@@ -86,7 +128,7 @@ def infer_capabilities(metrics, battery_packs):
 
 
 def _normalized_fields(metrics):
-    """Derived alias fields; raw metrics are always kept alongside these."""
+    """Derived alias fields; the metrics, numeric text as its number, are kept alongside."""
 
     normalized = {}
     if "fanSwitch" in metrics:
@@ -158,7 +200,10 @@ class ZendureMqttAggregator:
             snap.serial_number = report.serial_number
         if report.product and not snap.product:
             snap.product = report.product
-        snap.metrics.update(report.properties)
+        snap.metrics.update(
+            (key, coerce_scalar(value) if isinstance(value, str) else value)
+            for key, value in report.properties.items()
+        )
         for key in report.properties:
             snap.metric_monotonic[key] = snap.last_seen_monotonic
         snap.observed_metrics.update(report.properties)

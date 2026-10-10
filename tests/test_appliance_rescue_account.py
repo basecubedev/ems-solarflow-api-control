@@ -331,7 +331,9 @@ def test_the_console_names_an_account_with_no_password(tmp_path):
     assert "password_set" in source, "the console cannot distinguish a state it never reads"
 
 
-def rescue_helper_run(tmp_path, *, shadow_field, chpasswd_exit=0):
+def rescue_helper_run(
+    tmp_path, *, shadow_field, chpasswd_exit=0, account_exists=True, state_dir=None
+):
     """The shipped helper, against a fake getent/adduser/chpasswd/usermod."""
 
     import os
@@ -347,7 +349,7 @@ def rescue_helper_run(tmp_path, *, shadow_field, chpasswd_exit=0):
         "#!/bin/sh\n"
         f'echo "getent $*" >> "{log}"\n'
         'case "$1" in\n'
-        f'  passwd) [ "$2" = "{rescue_account.ACCOUNT}" ] && exit 0; exit 2 ;;\n'
+        f'  passwd) [ "$2" = "{rescue_account.ACCOUNT}" ] && [ -f "{tools}/exists" ] && exit 0; exit 2 ;;\n'
         "  shadow)\n"
         f'    line=$(grep "^$2:" "{shadow}" 2>/dev/null) || exit 2\n'
         '    printf "%s\\n" "$line"; exit 0 ;;\n'
@@ -356,7 +358,11 @@ def rescue_helper_run(tmp_path, *, shadow_field, chpasswd_exit=0):
         "exit 2\n",
         encoding="utf-8",
     )
-    (tools / "adduser").write_text(f'#!/bin/sh\necho "adduser $*" >> "{log}"\n', encoding="utf-8")
+    if account_exists:
+        (tools / "exists").write_text("", encoding="utf-8")
+    (tools / "adduser").write_text(
+        f'#!/bin/sh\necho "adduser $*" >> "{log}"\n: > "{tools}/exists"\n', encoding="utf-8"
+    )
     (tools / "usermod").write_text(f'#!/bin/sh\necho "usermod $*" >> "{log}"\n', encoding="utf-8")
     (tools / "chpasswd").write_text(
         f'#!/bin/sh\ncat >> "{log}.stdin"\necho "chpasswd $*" >> "{log}"\nexit {chpasswd_exit}\n',
@@ -371,6 +377,7 @@ def rescue_helper_run(tmp_path, *, shadow_field, chpasswd_exit=0):
     environment["EMS_APPLIANCE_RESCUE_HASH_FILE"] = str(
         PACKAGING / "config" / "rescue-password.hash"
     )
+    environment["EMS_APPLIANCE_STATE_DIR"] = str(state_dir or tmp_path / "state")
     result = subprocess.run(
         ["sh", str(PACKAGING / "bin" / "rescue-account.sh")],
         capture_output=True,
@@ -525,3 +532,82 @@ def test_the_console_names_the_state_the_daemon_reported():
     assert "SSH password" in card
     for state in ("refused", "accepted", "unknown", "absent"):
         assert f'"{state}"' in app.split("function rescueSshLabel(", 1)[1].split("\n  }", 1)[0]
+
+
+# --- set once, then left alone ------------------------------------------------
+
+
+def rescue_marker(state_dir):
+    return state_dir / "agent" / "package-state" / "rescue-account-set-up"
+
+
+def test_a_lock_after_the_first_run_survives_every_later_install(tmp_path):
+    """`usermod -p '*'` is a decision too; once the account is set up it is kept."""
+
+    state_dir = tmp_path / "state"
+    rescue_marker(state_dir).parent.mkdir(parents=True)
+    rescue_marker(state_dir).write_text("", encoding="utf-8")
+
+    result, calls = rescue_helper_run(tmp_path, shadow_field="*", state_dir=state_dir)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "chpasswd" not in calls
+
+
+def test_an_older_appliance_without_the_marker_is_repaired_once_and_marked(tmp_path):
+    state_dir = tmp_path / "state"
+
+    result, calls = rescue_helper_run(tmp_path, shadow_field="*", state_dir=state_dir)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "chpasswd" in calls
+    assert rescue_marker(state_dir).is_file()
+
+
+def test_an_operator_password_is_marked_without_being_reset(tmp_path):
+    state_dir = tmp_path / "state"
+
+    result, calls = rescue_helper_run(
+        tmp_path, shadow_field="$6$operator$chose$this", state_dir=state_dir
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "chpasswd" not in calls
+    assert rescue_marker(state_dir).is_file()
+
+
+def test_a_new_account_is_marked_once_its_password_is_set(tmp_path):
+    state_dir = tmp_path / "state"
+
+    result, calls = rescue_helper_run(
+        tmp_path, shadow_field="*", account_exists=False, state_dir=state_dir
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "adduser" in calls and "chpasswd" in calls
+    assert rescue_marker(state_dir).is_file()
+
+
+def test_an_account_whose_password_could_not_be_set_is_not_marked(tmp_path):
+    state_dir = tmp_path / "state"
+
+    result, _ = rescue_helper_run(
+        tmp_path, shadow_field="*", chpasswd_exit=1, state_dir=state_dir
+    )
+
+    assert result.returncode != 0
+    assert not rescue_marker(state_dir).exists()
+
+
+def test_the_marker_lives_where_the_package_keeps_its_state():
+    """The shell cannot import paths.py, so the spelled-out path is pinned here."""
+
+    from appliance.paths import DEFAULT_STATE_DIR, AppliancePaths
+
+    helper = (PACKAGING / "bin" / "rescue-account.sh").read_text(encoding="utf-8")
+    paths = appliance_paths()
+    relative = paths.package_state_dir.relative_to(paths.state_dir)
+
+    assert isinstance(paths, AppliancePaths)
+    assert f"${{EMS_APPLIANCE_STATE_DIR:-{DEFAULT_STATE_DIR}}}" in helper
+    assert f'$STATE_DIR/{relative.as_posix()}' in helper

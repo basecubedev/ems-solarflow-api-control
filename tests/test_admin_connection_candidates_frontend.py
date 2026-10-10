@@ -90,6 +90,7 @@ _STATE_HELPERS = (
     "connectionLabelFor",
     "normalizeInverterAliasTokens",
     "inverterCandidateConnectionState",
+    "configuredDeviceNameForRef",
 )
 
 

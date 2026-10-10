@@ -327,7 +327,7 @@ The template enables EMS full-charge assist by default. Set `enabled` to
     "assist_window_days": 7,
     "assist_start_soc": 80,
     "force_time": "14:00",
-    "ac_charge_power": 200,
+    "ac_charge_power": 600,
     "enable_ac_charge_mode": true,
     "state_database_path": "data/ems_state.sqlite"
   }

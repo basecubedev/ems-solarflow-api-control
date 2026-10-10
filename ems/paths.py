@@ -130,6 +130,20 @@ def resolve_zendure_mqtt_status_path(explicit_path=None, *, base_dir=None):
     return resolve_data_dir(base_dir=base_dir) / ZENDURE_MQTT_STATUS_FILENAME
 
 
+CONTROL_STATUS_FILENAME = "control-status.json"
+
+
+def resolve_control_status_path(runtime_state_path):
+    """Resolve the live control snapshot beside the runtime-state file.
+
+    The EMS and every diagnose caller already agree on the runtime-state path,
+    so the snapshot of one installation is found from it, ``--runtime-state``
+    overrides included.
+    """
+
+    return Path(runtime_state_path).with_name(CONTROL_STATUS_FILENAME)
+
+
 def resolve_compose_path(explicit_path=None, *, base_dir=None):
     """Resolve the EMS Compose file."""
 

@@ -26,6 +26,7 @@ from ems.external_status import sanitize_external_mqtt_status
 from ems.zendure_mqtt.config_entries import (
     DEFAULT_BROKER_REF,
     RESERVED_MQTT_BROKER_REFS,
+    config_entry_enabled,
     is_control_zendure_mqtt_device_config,
     is_zendure_mqtt_device_config,
     legacy_default_broker_present,
@@ -222,7 +223,11 @@ def classify_zendure_mqtt_devices(
     known_broker_refs: Any = None,
     brokers_defined: bool = False,
 ) -> tuple[list[ZendureMqttTelemetryDevice], list[InvalidZendureMqttDevice]]:
-    """Split ``devices[]`` into valid telemetry-only entries and invalid ones."""
+    """Split enabled ``devices[]`` telemetry-only entries into valid and invalid ones.
+
+    A disabled entry is neither: ``enabled`` means for a telemetry device what
+    it means on every other path, so it is not read, shown or counted.
+    """
 
     valid: list[ZendureMqttTelemetryDevice] = []
     invalid: list[InvalidZendureMqttDevice] = []
@@ -234,6 +239,8 @@ def classify_zendure_mqtt_devices(
         # Control (write-capable) entries are handled by the control path, not
         # the read-only telemetry runtime.
         if is_control_zendure_mqtt_device_config(item):
+            continue
+        if not config_entry_enabled(item):
             continue
         name = item.get("name") if isinstance(item.get("name"), str) else f"device-{index}"
         broker_ref = zendure_mqtt_broker_ref(item)

@@ -3,10 +3,11 @@ import json
 import subprocess
 import sys
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+
+from _emsctl_test_helpers import write_live_control_status
 
 pytestmark = [
     pytest.mark.contract,
@@ -67,19 +68,13 @@ def write_config(path):
     }))
 
 
-def write_runtime(tmp_path, **updates):
+LIVE_GRID = (10, -120, -130, 142)
+
+
+def write_runtime(tmp_path, live_devices=None, **updates):
+    """Write operator runtime-state plus the live snapshot a running EMS keeps."""
+
     runtime = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "grid_power_w": 142,
-        "filtered_load_w": 131,
-        "inverter_output_w": 130,
-        "control_samples": [10, -120, -130, 15],
-        "controller": {
-            "enabled": True,
-            "effective_target_total_w": 130,
-            "commanded_total_w": 130,
-            "filtered_load_w": 131,
-        },
         "system": {
             "enabled": True,
             "max_total_power": 900,
@@ -89,21 +84,16 @@ def write_runtime(tmp_path, **updates):
         "winter": {"enabled": False},
         "devices": {
             "WR1": {
-                "online": True,
                 "enabled": True,
-                "soc": 55,
-                "min_soc": 15,
-                "allocated_target_w": 130,
-                "target_w": 130,
-                "output_w": 130,
                 "max_power": 800,
-                "output_limit_w": 800,
+                "pv_priority_factor": 1.0,
             }
         },
     }
     for key, value in updates.items():
         runtime[key] = value
     (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+    write_live_control_status(tmp_path, grid=LIVE_GRID, devices=live_devices)
     return runtime
 
 
@@ -178,9 +168,8 @@ def test_root_causes_are_structured_for_control_and_quality(tmp_path):
     config = json.loads(config_path.read_text())
     config["system"]["dry_run"] = True
     config_path.write_text(json.dumps(config))
-    runtime = write_runtime(tmp_path)
+    runtime = write_runtime(tmp_path, live_devices={"WR1": {"soc": 14, "min_soc": 15}})
     runtime["system"]["enabled"] = False
-    runtime["devices"]["WR1"]["soc"] = 14
     (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
 
     result = run_emsctl(tmp_path, "diagnose", "--control", "--control-quality", "--json")

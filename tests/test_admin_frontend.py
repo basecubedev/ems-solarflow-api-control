@@ -1553,7 +1553,9 @@ def test_config_step_has_no_prominent_download_or_save_actions():
     # The debug-only download stays inside the collapsed preview accordion.
     preview = config.split('id="config-preview-details"', 1)[1]
     assert 'id="config-download"' in preview
-    assert "Download config.json" in preview
+    assert "Download encrypted config" in preview
+    assert 'id="config-download-password"' in preview
+    assert 'id="config-download-password-confirm"' in preview
     assert 'id="config-export-status"' in preview
 
 
@@ -1562,7 +1564,7 @@ def test_config_continue_saves_generated_config_via_write_endpoint():
 
     # The debug download still uses the download endpoint.
     assert "/api/setup/config/download" in js
-    assert 'link.download = "config.json"' in js
+    assert 'link.download = downloadFileName(res, "ems-config.tar.gz.enc")' in js
     # Continue rebuilds/validates and writes the generated config (overwrite),
     # then advances to the deployment step.
     fn = js.split("async function continueFromConfig", 1)[1].split(
@@ -9757,7 +9759,7 @@ def test_reconnect_resume_verifies_resources_through_its_own_stage_route():
 def test_fresh_install_resume_sends_no_acknowledge_risk():
     # Fresh Install recovery relies on the server's stored transition
     # authorization; the browser never injects an acknowledgement flag.
-    resume = _extract_fn(_read("admin.js"), "resumeSystemAlignment")
+    resume = _async_fn_body(_read("admin.js"), "async function resumeSystemAlignment")
     assert "acknowledge_risk" not in resume
 
 
@@ -12647,3 +12649,323 @@ function setTimeout(fn) { pending.push(fn); }
 """
     result = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
     assert json.loads(result.stdout) == ["[]", "[]"]
+
+
+def test_a_failed_mdns_request_is_transient_and_keeps_the_controls():
+    """A request the browser could not complete says so; the runtime is not unavailable."""
+
+    js = _read("admin.js")
+    script = (
+        "const MDNS_STATE_TEXT = " + js.split("const MDNS_STATE_TEXT = ", 1)[1].split("};", 1)[0] + "};\n"
+        + "let lastMdnsStatus = null;\n"
+        + "\n".join(
+            _extract_fn(js, name)
+            for name in ("mdnsMessageText", "renderMdnsStatus", "renderMdnsRequestFailure")
+        )
+        + """
+function node() { return { textContent: "", className: "", disabled: false, attrs: {},
+  setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; } }; }
+const els = { mdnsState: node(), mdnsMessage: node(), mdnsCount: node(),
+  mdnsToggle: node(), mdnsRefresh: node(), summaryMdns: node() };
+function notifySetupStatus() {}
+function setSummary(el, text) { el.textContent = text; }
+renderMdnsStatus({ state: "running_with_devices", enabled: true, verified_count: 3, message: "Running." });
+renderMdnsRequestFailure(new Error("Failed to fetch"));
+console.log(JSON.stringify({
+  state: els.mdnsState.textContent,
+  message: els.mdnsMessage.textContent,
+  count: els.mdnsCount.textContent,
+  toggleDisabled: els.mdnsToggle.disabled,
+  refreshDisabled: els.mdnsRefresh.disabled,
+  pressed: els.mdnsToggle.attrs["aria-pressed"],
+  summary: els.summaryMdns.textContent,
+}));
+"""
+    )
+    out = _run_node(script)
+
+    assert out["state"] == "no answer"
+    assert "Failed to fetch" in out["message"]
+    assert "unavailable in this runtime" not in out["message"]
+    assert out["count"] == "3 found"
+    assert out["toggleDisabled"] is False
+    assert out["refreshDisabled"] is False
+    assert out["pressed"] == "true"
+    assert out["summary"] == "no answer"
+
+
+def test_every_mdns_request_failure_uses_the_transient_state():
+    js = _read("admin.js")
+    for header in ("async function pollMdns", "async function toggleMdns", "async function refreshMdns"):
+        body = _async_fn_body(js, header)
+        assert "renderMdnsRequestFailure(err)" in body, header
+        assert "unavailable_runtime" not in body, header
+
+
+def test_a_maintenance_discovery_with_warnings_names_what_failed():
+    js = _read("admin.js")
+    script = "\n".join(
+        _extract_fn(js, name)
+        for name in ("createDiscoverySession", "completeDiscoveryWork", "discoveryFailureSummary")
+    ) + """
+function renderMaintenanceDiscoveryProgress() {}
+const session = createDiscoverySession("maintenance");
+session.progress.active = 3;
+completeDiscoveryWork(session, true, 0, "mDNS: mDNS refresh failed");
+completeDiscoveryWork(session, false, 0);
+completeDiscoveryWork(session, true, 0, "network discovery: timed out");
+session.scans.push({ cidr: "192.168.1.0/24", status: "failed", error: "host unreachable" });
+session.scans.push({ cidr: "192.168.2.0/24", status: "done", error: null });
+const many = createDiscoverySession("maintenance");
+["a", "b", "c", "d", "e"].forEach((cause) => completeDiscoveryWork(many, true, 0, cause));
+console.log(JSON.stringify({
+  failed: session.progress.failed,
+  summary: discoveryFailureSummary(session),
+  clean: discoveryFailureSummary(createDiscoverySession("maintenance")),
+  many: discoveryFailureSummary(many),
+}));
+"""
+    out = _run_node(script)
+
+    assert out["failed"] == 2
+    assert out["summary"] == (
+        "mDNS: mDNS refresh failed; network discovery: timed out; "
+        "192.168.1.0/24: host unreachable"
+    )
+    assert out["clean"] == ""
+    assert out["many"] == "a; b; c; and 2 more"
+
+
+def test_every_maintenance_discovery_failure_carries_its_cause():
+    js = _read("admin.js")
+    start = _async_fn_body(js, "async function startMaintenanceDiscovery")
+    manual = _async_fn_body(js, "async function runMaintenanceManualScan")
+
+    failures = re.findall(r"completeDiscoveryWork\(session, (\w+), generation(, \w+)?\)", start)
+    assert failures, "the maintenance discovery reports its work units"
+    assert all(cause for _, cause in failures), failures
+    assert "discoveryFailureSummary(session)" in start
+    assert "discoveryFailureSummary(" in manual
+    reset = _extract_fn(js, "resetDiscoverySession")
+    assert "failureCauses" in reset
+
+
+def test_a_switch_confirmation_names_the_device_it_changes():
+    js = _read("admin.js")
+    script = "\n".join(
+        _extract_fn(js, name)
+        for name in ("configuredDeviceNameForRef", "setupSwitchConfirmationCard")
+    ) + """
+const CONTROL_CONTINUITY_TEXT = { lost: "output control would be lost on this connection" };
+function connectionLabelFor(source) { return source === "local_api" ? "Local API" : "Local MQTT"; }
+function answerSetupSwitch() {}
+function el() { return { children: [], dataset: {}, textContent: "", className: "",
+  appendChild(child) { this.children.push(child); }, addEventListener() {} }; }
+global.document = { createElement: () => el() };
+let configDraftItems = [{ draft_item_id: "draft-1", config_name: "Terrace" }];
+const zendureMqttPreviewProposals = new Map([["mqtt-7", { config_name: " Garage " }]]);
+const entry = (ref) => ({ token: "t", current_ref: ref, current_source: "local_api",
+  candidate_source: "local_mqtt", control_continuity: "lost" });
+console.log(JSON.stringify({
+  draft: setupSwitchConfirmationCard(entry("draft-1")).children[0].textContent,
+  mqtt: setupSwitchConfirmationCard(entry("mqtt-7")).children[0].textContent,
+  unknown: setupSwitchConfirmationCard(entry("gone")).children[0].textContent,
+}));
+"""
+    out = _run_node(script)
+
+    assert out["draft"] == "Change Terrace from Local API to Local MQTT?"
+    assert out["mqtt"] == "Change Garage from Local API to Local MQTT?"
+    assert out["unknown"] == "Change this device from Local API to Local MQTT?"
+
+
+def test_the_candidate_state_reads_the_name_through_the_same_helper():
+    js = _read("admin.js")
+    assert "configuredDeviceNameForRef(ref)" in _extract_fn(js, "inverterCandidateConnectionState")
+
+
+
+def test_a_recovery_action_holds_every_recovery_button_until_it_answers():
+    js = _read("admin.js")
+    header = "async function runSystemAlignmentAction"
+    script = (
+        header + js.split(header, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+        + """
+function button(text) { return { text, disabled: false, attrs: {},
+  get textContent() { return this.text; }, set textContent(v) { this.text = v; },
+  setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; },
+  removeAttribute(k) { delete this.attrs[k]; } }; }
+const systemAlignmentEls = { resume: button("Resume"), returnToRunning: button("Return"),
+  abandon: button("Cancel upgrade") };
+const systemAlignmentState = { transition: { operation_id: "op" } };
+const renders = [];
+function renderSystemAlignmentStatus(state) {
+  renders.push(state === systemAlignmentState);
+  Object.values(systemAlignmentEls).forEach((b) => { b.disabled = false; });
+}
+let release;
+let calls = 0;
+const pending = runSystemAlignmentAction(systemAlignmentEls.resume, "Resuming…", () => {
+  calls += 1;
+  return new Promise((resolve) => { release = resolve; });
+});
+const during = {
+  disabled: Object.values(systemAlignmentEls).map((b) => b.disabled),
+  label: systemAlignmentEls.resume.textContent,
+  busy: systemAlignmentEls.resume.attrs["aria-busy"],
+};
+runSystemAlignmentAction(systemAlignmentEls.abandon, "Cancelling…", () => { calls += 1; });
+release();
+pending.then(() => {
+  console.log(JSON.stringify({ during, calls, renders,
+    label: systemAlignmentEls.resume.textContent,
+    busy: systemAlignmentEls.resume.attrs["aria-busy"] || null,
+    abandonLabel: systemAlignmentEls.abandon.textContent }));
+});
+"""
+    )
+    out = _run_node(script)
+
+    assert out["during"] == {"disabled": [True, True, True], "label": "Resuming…", "busy": "true"}
+    assert out["calls"] == 1
+    assert out["renders"] == [True]
+    assert out["label"] == "Resume"
+    assert out["busy"] is None
+    assert out["abandonLabel"] == "Cancel upgrade"
+
+
+def test_a_render_during_a_recovery_action_keeps_every_recovery_button_closed():
+    render = _extract_fn(_read("admin.js"), "renderSystemAlignmentStatus")
+
+    assert 'getAttribute("aria-busy") === "true"' in render
+    for target in ("resume", "returnToRunning", "abandon"):
+        block = render.split(f"systemAlignmentEls.{target}.disabled =", 1)[1].split(";", 1)[0]
+        assert "actionBusy ||" in block, target
+    assert "if (recovery && !actionBusy)" in render
+
+def test_an_encrypted_backup_is_unlocked_before_its_restore_preview():
+    js = _read("admin.js")
+    script = (
+        "\n".join(
+            header + js.split(header, 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+            for header in (
+                "function selectBackup",
+                "function handleBackupListAction",
+                "async function unlockSelectedBackup",
+            )
+        )
+        + """
+const calls = [];
+const backupState = { restoreAfterUnlock: false, selectedDetails: null };
+const node = () => ({ hidden: true, innerHTML: "", disabled: false, value: "", focus() { calls.push("focus"); } });
+const backupEls = { passwordInput: node(), passwordForm: node(), detailsStage: node(),
+  restoreStage: node(), restoreSummary: node(), restoreFiles: node(), restoreSteps: node(),
+  rollbackWarning: node(), executeBtn: node() };
+function renderBackupMessage(items) { calls.push("message:" + (items[0] || {}).text); }
+async function previewRestore() { calls.push("preview:" + backupEls.passwordInput.value); }
+async function inspectSelectedBackup(password) {
+  calls.push("inspect:" + password);
+  backupState.selectedDetails = { locked: password !== "right" };
+}
+const button = (action, locked) => ({ dataset: { backupId: "b1", backupKind: "archive",
+  backupAction: action, backupType: "config", backupLocked: locked ? "true" : undefined } });
+
+(async () => {
+  backupEls.passwordInput.value = "typed-for-another-backup";
+  await handleBackupListAction(button("restore", true));
+  const asked = { calls: calls.splice(0), form: backupEls.passwordForm.hidden,
+    details: backupEls.detailsStage.hidden, restore: backupEls.restoreStage.hidden,
+    value: backupEls.passwordInput.value };
+  backupEls.passwordInput.value = "wrong";
+  await unlockSelectedBackup();
+  const wrong = calls.splice(0);
+  backupEls.passwordInput.value = "right";
+  await unlockSelectedBackup();
+  const right = { calls: calls.splice(0), restore: backupEls.restoreStage.hidden };
+  await handleBackupListAction(button("restore", false));
+  const plain = { calls: calls.splice(0), form: backupEls.passwordForm.hidden };
+  console.log(JSON.stringify({ asked, wrong, right, plain }));
+})();
+"""
+    )
+    out = _run_node(script)
+
+    assert out["asked"]["value"] == ""
+    assert out["asked"]["form"] is False
+    assert out["asked"]["details"] is False
+    assert out["asked"]["restore"] is True
+    assert not any(call.startswith("preview") for call in out["asked"]["calls"])
+    assert out["wrong"] == ["inspect:wrong"]
+    assert out["right"]["calls"] == ["inspect:right", "preview:right"]
+    assert out["right"]["restore"] is False
+    assert out["plain"]["calls"] == ["preview:"]
+    assert out["plain"]["form"] is True
+
+
+def test_returning_to_a_development_build_asks_for_the_risk_and_sends_it():
+    js = _read("admin.js")
+    body = _async_fn_body(js, "async function returnToRunningSystemBuild")
+
+    assert "acknowledge_risk: acknowledgeRisk" in body
+    assert "request(false)" in body
+    assert 'data.error === "acknowledgement_required"' in body
+    assert "window.confirm(RETURN_TO_DEVELOPMENT_BUILD_CONFIRM)" in body
+    assert body.index("RETURN_TO_DEVELOPMENT_BUILD_CONFIRM") < body.index("request(true)")
+
+
+def test_the_config_download_asks_for_a_password_twice_and_sends_it():
+    js = _read("admin.js")
+    script = _extract_fn(js, "configDownloadPassword") + """
+const CONFIG_DOWNLOAD_MIN_PASSWORD = 8;
+const configEls = { downloadPassword: { value: "" }, downloadPasswordConfirm: { value: "" } };
+const cases = {};
+for (const [name, a, b] of [["empty", "", ""], ["short", "1234567", "1234567"],
+                            ["differs", "12345678", "12345679"], ["ok", "12345678", "12345678"]]) {
+  configEls.downloadPassword.value = a;
+  configEls.downloadPasswordConfirm.value = b;
+  cases[name] = configDownloadPassword();
+}
+console.log(JSON.stringify(cases));
+"""
+    out = _run_node(script)
+
+    assert "error" in out["empty"] and "error" in out["short"] and "error" in out["differs"]
+    assert out["ok"] == {"password": "12345678"}
+    download = _async_fn_body(js, "async function downloadGeneratedConfig")
+    assert "password: secret.password" in download
+    assert download.index("configDownloadPassword()") < download.index("fetch(")
+
+
+def test_a_reloaded_broker_card_keeps_the_operators_tls_choice():
+    js = _read("admin.js")
+    sync = _extract_fn(js, "syncMaintenanceBrokerForm")
+
+    assert "tls_explicit" not in sync
+    assert "Skip TLS verification" not in sync
+    assert "correct zendure_mqtt.tls_insecure in config.json" in sync
+
+
+def test_a_failed_mdns_request_never_reopens_controls_the_server_closed():
+    js = _read("admin.js")
+    script = (
+        "const MDNS_STATE_TEXT = " + js.split("const MDNS_STATE_TEXT = ", 1)[1].split("};", 1)[0] + "};\n"
+        + "let lastMdnsStatus = null;\n"
+        + "\n".join(
+            _extract_fn(js, name)
+            for name in ("mdnsMessageText", "renderMdnsStatus", "renderMdnsRequestFailure")
+        )
+        + """
+function node() { return { textContent: "", className: "", disabled: false, attrs: {},
+  setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k]; } }; }
+const els = { mdnsState: node(), mdnsMessage: node(), mdnsCount: node(),
+  mdnsToggle: node(), mdnsRefresh: node(), summaryMdns: node() };
+function notifySetupStatus() {}
+function setSummary(el, text) { el.textContent = text; }
+renderMdnsStatus({ state: "unavailable_dependency", enabled: false, message: "zeroconf missing" });
+renderMdnsRequestFailure(new Error("Failed to fetch"));
+console.log(JSON.stringify({ toggle: els.mdnsToggle.disabled, refresh: els.mdnsRefresh.disabled }));
+"""
+    )
+    out = _run_node(script)
+
+    assert out == {"toggle": True, "refresh": True}

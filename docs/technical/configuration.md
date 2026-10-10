@@ -716,8 +716,10 @@ transport: `"enabled": false` removes the device from the control loop, for a
 local-API device exactly as for a Zendure MQTT control device. A non-boolean
 value (for example the string `"false"`) is never trusted as enabled and also
 removes the device, so a mistyped flag cannot silently keep an inverter under
-EMS control. A config whose only devices are disabled has no control device and
-does not start.
+EMS control. A disabled device gets no runtime defaults and diagnose does not
+list it as controllable, and a disabled Zendure MQTT device that only reports
+telemetry is not read, shown on the dashboard or counted either. A config whose only devices
+are disabled has no control device and does not start.
 
 Static device metadata stays in `config.json`, not in runtime-state.
 `pv_priority_factor` is an exception: the config value remains the installation

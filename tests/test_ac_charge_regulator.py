@@ -120,6 +120,7 @@ class Harness:
         self.feature = {**AC_CHARGE_CONTROL_DEFAULTS, "enabled": feature}
         self.seconds_per_cycle = seconds_per_cycle
         self.clock = clock or SteppedClock()
+        self.state_writes = None
 
     def fetch(self, states):
         for dev, item in zip(self.devices, states):
@@ -136,6 +137,14 @@ class Harness:
             if self.seconds_per_cycle
             else nullcontext()
         )
+        state_gate = (
+            patch(
+                "ems.controller.cfg.state_reconciliation_writes_allowed",
+                return_value=self.state_writes,
+            )
+            if self.state_writes is not None
+            else nullcontext()
+        )
         with patch(
             "ems.controller.fetch_all_devices",
             side_effect=lambda _devices: self.fetch(states),
@@ -147,7 +156,7 @@ class Harness:
             "ems.controller.cfg.DEADBAND", 10
         ), patch("ems.controller.cfg.SOC_RECONCILE_INTERVAL", 0), patch.object(
             cfg, "AC_CHARGE_CONTROL_CONFIG", self.feature
-        ), clock:
+        ), clock, state_gate:
             for _ in range(cycles):
                 self.controller.run_once()
                 self.clock.now += self.seconds_per_cycle or 0
@@ -2250,7 +2259,7 @@ def test_a_charge_found_after_a_restart_on_a_disabled_device_gets_its_one_exit(
         runtime.devices["WR1"] = {"enabled": False}
     harness = Harness([dev], load=300, runtime_state=runtime)
     harness.controller.set_output_limit = hardware
-    harness.controller.device_state_writes_allowed = lambda _dev: state_writes
+    harness.state_writes = state_writes
 
     harness.run(cycles=6, states=[item])
 
@@ -2808,7 +2817,7 @@ def test_a_claim_owns_the_charge_only_where_it_can_write_its_own_power(
     runtime = RuntimeStateStub(devices={})
     harness = Harness([dev], load=-900, runtime_state=runtime)
     harness.controller.set_output_limit = hardware
-    harness.controller.device_state_writes_allowed = lambda _dev: state_writes
+    harness.state_writes = state_writes
     harness.run(cycles=20, states=[item])
     assert item.ac_mode == 1, "the regulator never charged the device"
     before = len(hardware.writes)
@@ -2837,7 +2846,7 @@ def charge_then_claim(claim, state_writes=True):
     runtime = RuntimeStateStub(devices={})
     harness = Harness([dev], load=-900, runtime_state=runtime)
     harness.controller.set_output_limit = hardware
-    harness.controller.device_state_writes_allowed = lambda _dev: state_writes
+    harness.state_writes = state_writes
     harness.run(cycles=20, states=[item])
     assert item.ac_mode == 1, "the regulator never charged the device"
     before = len(hardware.writes)
@@ -2880,6 +2889,44 @@ def test_a_claim_that_charges_on_its_own_power_keeps_it(then):
     assert item.ac_mode == 1
     assert item.grid_input == 500
     assert harness.controller.charges_held_by_ems() == {}
+
+
+def test_a_claim_set_while_control_is_off_takes_the_charge_only_once_it_is_back():
+    """Off is off (OFF-1): a claim with its own power cannot write while control is off.
+
+    An AC-input park with its own charge power, set in the same moment control
+    is switched off, finds the EMS's charge still running. Taking it over is a
+    write it cannot make, so the charge is ended in the role the park gave it,
+    and the park's own power goes out once control is on again.
+    """
+
+    item = pv_less_state(soc=50)
+    dev, hardware = following_http_device(item)
+    runtime = RuntimeStateStub(devices={})
+    harness = Harness([dev], load=-900, runtime_state=runtime)
+    harness.controller.set_output_limit = hardware
+    harness.state_writes = True
+    harness.run(cycles=20, states=[item])
+    assert item.ac_mode == 1, "the regulator never charged the device"
+    before = len(hardware.writes)
+
+    runtime.system["enabled"] = False
+    runtime.devices["WR1"] = {
+        "runtime_role": "ac_input",
+        "runtime_role_reason": "dashboard",
+        "ac_charge_power_w": 500,
+    }
+    harness.run(cycles=6, states=[item])
+
+    assert hardware.writes[before:] == [{"inputLimit": 0}]
+    assert item.grid_input == 0
+    switched_back = len(hardware.writes)
+
+    runtime.system["enabled"] = True
+    harness.run(cycles=3, states=[item])
+
+    assert hardware.writes[switched_back:] == [{"inputLimit": 500}]
+    assert item.grid_input == 500
 
 
 def test_a_park_as_ac_input_ends_the_ems_s_charge_without_moving_the_relay():

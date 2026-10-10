@@ -7,9 +7,9 @@
 # appliance nobody can reach and nobody can log into was a re-flash.
 #
 # The password it sets is documented, and that is the trade: those credentials
-# are public knowledge. Changing them is the operator's choice, so an upgrade
-# must never reset one they chose -- an account that already exists is left
-# exactly as it is.
+# are public knowledge. Changing or locking them is the operator's choice, so
+# once the account is set up a marker records it and no later install touches
+# the account again.
 #
 # No Python: this runs from a postinst that is replacing appliance/*.py.
 set -eu
@@ -18,6 +18,9 @@ ACCOUNT=ems-rescue
 HASH_FILE=${EMS_APPLIANCE_RESCUE_HASH_FILE:-/usr/share/ems-appliance-manager/rescue-password.hash}
 HOME_DIR=/home/$ACCOUNT
 SHELL_PATH=/bin/bash
+STATE_DIR=${EMS_APPLIANCE_STATE_DIR:-/var/lib/ems-appliance-manager}
+MARKER_DIR="$STATE_DIR/agent/package-state"
+MARKER="$MARKER_DIR/rescue-account-set-up"
 
 note() {
     echo "ems-appliance: $1"
@@ -44,6 +47,18 @@ set_password() {
         || fail "the rescue password could not be set"
 }
 
+mark_set_up() {
+    mkdir -p "$MARKER_DIR" && : > "$MARKER" \
+        || fail "could not record that the rescue account is set up ($MARKER)"
+}
+
+# A "*" or "!" with no hash after it is also how an operator locks the account
+# by hand, so after the first run nothing here may read it as a gap.
+if [ -f "$MARKER" ]; then
+    note "the rescue account $ACCOUNT is set up; leaving it untouched"
+    exit 0
+fi
+
 # Creating the account and giving it a password are two steps, and anything
 # between them -- a locked /etc/shadow, a full filesystem, an interrupted
 # install -- used to leave an account with no password that this script then
@@ -51,10 +66,11 @@ set_password() {
 # at a keyboard could never log in, and reinstalling does not help because
 # postrm never deletes it.
 #
-# Only the placeholder adduser --disabled-password writes is filled in: "*" or
-# "!" with no hash after it. A password an operator chose is never reset, and
-# `passwd -l` leaves "!" in front of a hash, which is a decision rather than a
-# gap.
+# Without the marker, which an appliance set up before it existed does not
+# have, only the placeholder adduser --disabled-password writes is filled in:
+# "*" or "!" with no hash after it. A password an operator chose is never
+# reset, and `passwd -l` leaves "!" in front of a hash, which is a decision
+# rather than a gap.
 if getent passwd "$ACCOUNT" >/dev/null 2>&1; then
     stored=$(getent shadow "$ACCOUNT" 2>/dev/null | cut -d: -f2)
     case "$stored" in
@@ -66,6 +82,7 @@ if getent passwd "$ACCOUNT" >/dev/null 2>&1; then
             note "the rescue account $ACCOUNT already exists; leaving it untouched"
             ;;
     esac
+    mark_set_up
     exit 0
 fi
 
@@ -87,5 +104,6 @@ else
     note "there is no sudo group on this host, so $ACCOUNT cannot become root"
 fi
 
+mark_set_up
 note "created the rescue account $ACCOUNT with the documented default password"
 note "see /usr/share/doc/ems-appliance-manager/console-recovery.md"

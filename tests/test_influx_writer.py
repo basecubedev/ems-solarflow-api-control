@@ -1097,3 +1097,104 @@ def test_build_client_factory_override_is_unchanged():
     sentinel = object()
     writer = InfluxTelemetryWriter(CONFIG, client_factory=lambda: sentinel)
     assert writer._build_client() is sentinel
+
+
+# -- an enabled but missing InfluxDB is named usefully, and not every minute --
+
+def _hint(mode, in_container):
+    writer = InfluxTelemetryWriter({**CONFIG, "mode": mode}, client_factory=FakeClient)
+    flag = "1" if in_container else "0"
+    with patch.dict("os.environ", {"EMS_IN_CONTAINER": flag}):
+        return writer._setup_hint()
+
+
+def test_the_hint_in_the_container_names_the_docker_steps_and_the_way_out():
+    hint = _hint("bundled", in_container=True)
+
+    assert "sh install-docker.sh --analytics" in hint
+    assert "influxdb.enabled=false" in hint
+    assert "python3 emsctl.py stack up" not in hint
+
+
+def test_the_native_hint_also_names_the_way_out():
+    hint = _hint("bundled", in_container=False)
+
+    assert "python3 emsctl.py influx init" in hint
+    assert "influxdb.enabled=false" in hint
+
+
+def test_the_external_hint_in_the_container_runs_emsctl_through_compose():
+    hint = _hint("external", in_container=True)
+
+    assert "docker compose exec ems python3 emsctl.py influx status" in hint
+
+
+def test_the_same_failure_is_logged_ever_less_often_until_a_write_succeeds(caplog):
+    writer = InfluxTelemetryWriter(
+        CONFIG, client_factory=FakeClient, error_log_interval_s=60
+    )
+    clock = SimpleNamespace(now=10_000.0)
+    logged_at = []
+
+    with patch("ems.history.influx_writer.time.time", lambda: clock.now):
+        with caplog.at_level(logging.WARNING):
+            for _ in range(8000):
+                before = caplog.text.count("event=influx_writer_unconfigured")
+                writer._maybe_log_error("influx_writer_unconfigured")
+                if caplog.text.count("event=influx_writer_unconfigured") > before:
+                    logged_at.append(clock.now - 10_000.0)
+                clock.now += 1
+            gaps = [b - a for a, b in zip(logged_at, logged_at[1:])]
+
+            writer._note_write_succeeded()
+            before = caplog.text.count("event=influx_writer_unconfigured")
+            writer._maybe_log_error("influx_writer_unconfigured")
+            clock.now += 60
+            writer._maybe_log_error("influx_writer_unconfigured")
+
+    assert gaps[:3] == [60, 120, 240]
+    assert max(gaps) == 3600
+    assert caplog.text.count("event=influx_writer_unconfigured") - before == 2
+
+
+def test_a_new_kind_of_failure_is_named_at_once_after_another_has_widened(caplog):
+    writer = InfluxTelemetryWriter(
+        CONFIG, client_factory=FakeClient, error_log_interval_s=60
+    )
+    clock = SimpleNamespace(now=10_000.0)
+
+    with patch("ems.history.influx_writer.time.time", lambda: clock.now):
+        with caplog.at_level(logging.WARNING):
+            for _ in range(2000):
+                writer._maybe_log_error("influx_writer_unconfigured")
+                clock.now += 1
+            writer._maybe_log_error("influx_writer_write_error", error="401")
+
+    assert "event=influx_writer_write_error" in caplog.text
+
+
+def test_a_client_that_cannot_be_built_is_not_also_called_unconfigured(caplog):
+    def broken():
+        raise RuntimeError("bad token file")
+
+    writer = InfluxTelemetryWriter(
+        CONFIG, client_factory=broken, max_backoff_s=0.01, error_log_interval_s=0
+    )
+    seen = threading.Event()
+    real = writer._maybe_log_error
+
+    def record(event, **fields):
+        real(event, **fields)
+        seen.set()
+
+    writer._maybe_log_error = record
+    with caplog.at_level(logging.WARNING):
+        writer.start()
+        try:
+            writer.enqueue(["line a=1 1"])
+            assert seen.wait(5)
+        finally:
+            writer.stop()
+
+    assert "event=influx_writer_client_error" in caplog.text
+    assert "event=influx_writer_unconfigured" not in caplog.text

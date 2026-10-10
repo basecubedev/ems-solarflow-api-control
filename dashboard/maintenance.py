@@ -409,14 +409,23 @@ def _create_influxdb_backup(config, *, base_dir):
 # Restore (wraps the same ems.backup core the CLI uses)
 # ---------------------------------------------------------------------------
 
-def _restore_archive_path(path, base_dir):
+def _restore_archive_names(path, base_dir):
+    """Every archive name a backup has given ``path``.
+
+    The current name comes from the backup core itself. A file outside the
+    project was archived under its bare name before ``_outside_project/``
+    existed, and the core restore still reads such archives, so the dashboard
+    accepts that name too.
+    """
+
     if not path:
-        return None
+        return set()
     absolute = path if os.path.isabs(path) else os.path.join(base_dir, path)
+    names = {backup_mod.archive_rel(absolute, base_dir)}
     relative = os.path.relpath(absolute, base_dir)
     if relative.startswith("..") or os.path.isabs(relative):
-        relative = os.path.basename(absolute)
-    return relative.replace(os.sep, "/")
+        names.add(os.path.basename(absolute))
+    return names
 
 
 def _config_restore_paths(
@@ -427,43 +436,48 @@ def _config_restore_paths(
     runtime_state_path=None,
     dashboard_auth_path=None,
 ):
+    return set().union(
+        *(
+            _restore_archive_names(path, base_dir)
+            for path in _config_restore_sources(
+                config,
+                config_path=config_path,
+                runtime_state_path=runtime_state_path,
+                dashboard_auth_path=dashboard_auth_path,
+            )
+        )
+    )
+
+
+def _config_restore_sources(
+    config, *, config_path=None, runtime_state_path=None, dashboard_auth_path=None
+):
     system = config.get("system") if isinstance(config.get("system"), dict) else {}
     dashboard = (
         config.get("dashboard") if isinstance(config.get("dashboard"), dict) else {}
     )
     influx = config_mod.normalize_influxdb_config(config.get("influxdb"))
-    paths = {
-        _restore_archive_path(config_path or "config.json", base_dir),
-        _restore_archive_path(
-            runtime_state_path
-            or system.get("runtime_state_path", backup_mod.DEFAULT_RUNTIME_STATE_PATH),
-            base_dir,
-        ),
-        _restore_archive_path(
-            dashboard_auth_path
-            or dashboard.get("auth_file", backup_mod.DEFAULT_DASHBOARD_AUTH_PATH),
-            base_dir,
-        ),
-        _restore_archive_path(
-            dashboard.get("ssl_cert_file", backup_mod.DEFAULT_DASHBOARD_CERT_PATH),
-            base_dir,
-        ),
-        _restore_archive_path(
-            dashboard.get("ssl_key_file", backup_mod.DEFAULT_DASHBOARD_KEY_PATH),
-            base_dir,
-        ),
-    }
+    sources = [
+        config_path or "config.json",
+        runtime_state_path
+        or system.get("runtime_state_path", backup_mod.DEFAULT_RUNTIME_STATE_PATH),
+        dashboard_auth_path
+        or dashboard.get("auth_file", backup_mod.DEFAULT_DASHBOARD_AUTH_PATH),
+        dashboard.get("ssl_cert_file", backup_mod.DEFAULT_DASHBOARD_CERT_PATH),
+        dashboard.get("ssl_key_file", backup_mod.DEFAULT_DASHBOARD_KEY_PATH),
+    ]
     if influx.get("enabled") and influx.get("mode") == "bundled":
-        paths.add(
-            _restore_archive_path(
-                influx.get("secret_file", backup_mod.DEFAULT_INFLUX_SECRET_PATH),
-                base_dir,
-            )
-        )
-    return paths - {None}
+        sources.append(influx.get("secret_file", backup_mod.DEFAULT_INFLUX_SECRET_PATH))
+    return sources
 
 
 def _database_restore_paths(config, base_dir):
+    return set().union(
+        *(_restore_archive_names(path, base_dir) for path in _database_restore_sources(config))
+    )
+
+
+def _database_restore_sources(config):
     dashboard = (
         config.get("dashboard") if isinstance(config.get("dashboard"), dict) else {}
     )
@@ -472,16 +486,33 @@ def _database_restore_paths(config, base_dir):
         if isinstance(config.get("battery_full_charge_assist"), dict)
         else {}
     )
-    return {
-        _restore_archive_path(
-            dashboard.get("database_path", backup_mod.DEFAULT_DASHBOARD_DB_PATH),
-            base_dir,
-        ),
-        _restore_archive_path(
-            assist.get("state_database_path", backup_mod.DEFAULT_STATE_DB_PATH),
-            base_dir,
-        ),
-    }
+    return [
+        dashboard.get("database_path", backup_mod.DEFAULT_DASHBOARD_DB_PATH),
+        assist.get("state_database_path", backup_mod.DEFAULT_STATE_DB_PATH),
+    ]
+
+
+def _legacy_outside_entries(files, sources, base_dir):
+    """``(name, location)`` for each bare-named entry the config now keeps outside.
+
+    Such an entry -- from an older backup, or from a time the file lived at the
+    project root -- is read as the project directory's copy by every restore path;
+    the operator is told where the configured file lives now.
+    """
+
+    outside = {}
+    for path in sources:
+        if not path:
+            continue
+        absolute = os.path.abspath(path if os.path.isabs(path) else os.path.join(base_dir, path))
+        relative = os.path.relpath(absolute, base_dir)
+        if relative.startswith("..") or os.path.isabs(relative):
+            outside[os.path.basename(absolute)] = absolute
+    return [
+        (entry["path"], outside[entry["path"]])
+        for entry in files
+        if isinstance(entry, dict) and not entry.get("source_path") and entry.get("path") in outside
+    ]
 
 
 def _validate_restore_manifest(
@@ -500,6 +531,7 @@ def _validate_restore_manifest(
             f"unknown backup type: {backup_type}", code="unknown_backup_type"
         )
 
+    legacy = []
     if backup_type == "config":
         allowed = _config_restore_paths(
             config,
@@ -509,9 +541,17 @@ def _validate_restore_manifest(
             dashboard_auth_path=dashboard_auth_path,
         )
         valid = all(entry.get("path") in allowed for entry in files)
+        sources = _config_restore_sources(
+            config,
+            config_path=config_path,
+            runtime_state_path=runtime_state_path,
+            dashboard_auth_path=dashboard_auth_path,
+        )
+        legacy = _legacy_outside_entries(files, sources, base_dir)
     elif backup_type == "databases":
         allowed = _database_restore_paths(config, base_dir)
         valid = all(entry.get("path") in allowed for entry in files)
+        legacy = _legacy_outside_entries(files, _database_restore_sources(config), base_dir)
     elif backup_type == "influxdb":
         valid = all(
             isinstance(entry.get("path"), str)
@@ -524,6 +564,16 @@ def _validate_restore_manifest(
             "backup contains a path that cannot be restored from the dashboard",
             code="unsupported_restore_path",
         )
+    return legacy
+
+
+def _legacy_outside_warnings(legacy):
+    return [
+        f"This backup holds {name} under its bare name, so the restore reads it as "
+        f"the copy in the project directory, not as {location}, where the config "
+        f"keeps it now."
+        for name, location in legacy
+    ]
 
 
 def _resolve_restore_target(
@@ -538,8 +588,10 @@ def _resolve_restore_target(
 ):
     """Validate the file and resolve its backup type from the manifest.
 
-    Returns ``(ref, backup_type)``. Raises ``MaintenanceError`` when the file
-    is missing, encrypted without a password, or unreadable.
+    Returns ``(ref, backup_type, legacy)``, ``legacy`` naming the entries an
+    older backup wrote for files kept outside the project. Raises
+    ``MaintenanceError`` when the file is missing, encrypted without a password,
+    or unreadable.
     """
     ref = _find_backup_archive(base_dir, file_name)
     backup_dir = os.path.dirname(ref.path)
@@ -561,7 +613,7 @@ def _resolve_restore_target(
         raise MaintenanceError(
             "backup manifest unavailable", code="manifest_unavailable"
         )
-    _validate_restore_manifest(
+    legacy = _validate_restore_manifest(
         manifest,
         config,
         base_dir,
@@ -569,7 +621,7 @@ def _resolve_restore_target(
         runtime_state_path=runtime_state_path,
         dashboard_auth_path=dashboard_auth_path,
     )
-    return ref, manifest["backup_type"]
+    return ref, manifest["backup_type"], legacy
 
 
 def _sanitize_actions(actions):
@@ -577,13 +629,14 @@ def _sanitize_actions(actions):
     for action in actions or []:
         if not isinstance(action, dict):
             continue
-        out.append(
-            {
-                "path": action.get("path"),
-                "action": action.get("action"),
-                "status": action.get("status"),
-            }
-        )
+        item = {
+            "path": action.get("path"),
+            "action": action.get("action"),
+            "status": action.get("status"),
+        }
+        if action.get("source_path"):
+            item["source_path"] = action["source_path"]
+        out.append(item)
     return out
 
 
@@ -615,7 +668,7 @@ def restore_plan(
     runtime_state_path=None,
     dashboard_auth_path=None,
 ):
-    ref, backup_type = _resolve_restore_target(
+    ref, backup_type, legacy = _resolve_restore_target(
         base_dir,
         file_name,
         password,
@@ -656,14 +709,22 @@ def restore_plan(
                 f"restore preview failed: {exc}", code="restore_plan_failed"
             ) from exc
         actions = result.get("actions", [])
+    writes = any(
+        isinstance(action, dict) and str(action.get("action", "")).startswith(
+            ("would_restore", "would_replace")
+        )
+        for action in actions
+    )
+    config_change = backup_type == "config" and writes
     return {
         "file": file_name,
         "backup_type": backup_type,
         "encrypted": encrypted,
         "actions": _sanitize_actions(actions),
-        "requires_restart": backup_type == "config",
-        "requires_relogin": backup_type == "config",
-        "warnings": list(_RESTORE_WARNINGS.get(backup_type, [])),
+        "requires_restart": config_change,
+        "requires_relogin": config_change,
+        "warnings": (list(_RESTORE_WARNINGS.get(backup_type, [])) if writes else [])
+        + _legacy_outside_warnings(legacy),
     }
 
 
@@ -687,7 +748,7 @@ def restore(
             code="confirmation_required",
         )
 
-    ref, backup_type = _resolve_restore_target(
+    ref, backup_type, legacy = _resolve_restore_target(
         base_dir,
         file_name,
         password,
@@ -765,6 +826,19 @@ def restore(
             "Restore completed. Restart EMS if the dashboard still shows "
             "cached values."
         )
+    actions = [action for action in result.get("actions") or () if isinstance(action, dict)]
+    skipped = [a for a in actions if a.get("action") == "skipped_outside_project"]
+    if not any(a.get("action") == "restored" for a in actions):
+        requires_restart = requires_relogin = False
+        message = "Nothing was restored."
+    if skipped:
+        message += (
+            f" {len(skipped)} file(s) kept outside the project were not restored: "
+            + ", ".join(str(action.get("source_path")) for action in skipped)
+            + ". Copy them back from the archive by hand if you need them."
+        )
+    for warning in _legacy_outside_warnings(legacy):
+        message += " " + warning
     return {
         "restored": True,
         "backup_type": backup_type,

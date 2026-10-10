@@ -24,7 +24,9 @@ python3 emsctl.py --help
 python3 emsctl.py examples
 ```
 
-Common runtime edits:
+Common runtime edits. A device is named as it is in `config.json`: `INV_1`,
+`INV_2`, … in a config the Admin Console wrote, `WR1`, `WR2` in the template.
+The examples use `WR1`; `python3 emsctl.py status` lists the names yours uses.
 
 ```bash
 python3 emsctl.py status
@@ -92,14 +94,24 @@ Modes:
   configured grid meters and Zendure read endpoints. It never writes hardware
   state. The output also includes compact grid-meter and per-device
   communication health (see "Communication health" below).
-- `--control` explains the current regulation path from local config and
-  runtime-state: grid power, filtered grid power, target output, final output,
-  deadband state, device allocation, SOC protection, write-path blockers, and
-  likely root causes.
-- `--sample-seconds N` can be combined with `--control` to collect local
-  runtime-state meter samples. The output reports average/min/max, standard
-  deviation, sign changes, and stale/noisy meter hints.
-- `--control-quality` or `--quality` evaluates real operation over local
+- `--control` explains the current regulation path: grid power, filtered grid
+  power, target output, final output, deadband state, device allocation, SOC
+  protection, write-path blockers, and likely root causes. The cycle values come
+  from the live control snapshot the running EMS writes after every control
+  cycle, `control-status.json` beside the runtime-state file
+  (`data/control-status.json` in new generated configs, see
+  [runtime-state.md](technical/runtime-state.md#live-control-snapshot)); the
+  settings come from config and runtime-state. A snapshot that is missing (the
+  EMS is not running, or has not finished a cycle), unreadable, or older than
+  three loop intervals and at least 60 s is a warning, and its values are not
+  shown as current.
+- `--sample-seconds N` can be combined with `--control` or `--control-quality`
+  to watch the live snapshot for N seconds (at most 60 reads, about one a
+  second) and evaluate the cycles the EMS completed in that window. Without it,
+  both use the last 30 cycles the EMS keeps in the snapshot. The output reports
+  average/min/max, standard deviation, sign changes, and stale/noisy meter
+  hints.
+- `--control-quality` or `--quality` evaluates real operation over those
   samples: export/import quality, a coarse regulation quality score, PV usage
   plausibility, SOC balancing, and higher-level root-cause hints.
 - `--support-bundle` creates a redacted ZIP with a stable file layout:
@@ -213,7 +225,10 @@ controller reconciles the inverter to `acMode=2` during the normal control loop
 and allows normal EMS output allocation. `ac-mode input` writes
 `runtime_role=ac_input`, targets `acMode=1`, and excludes the device from
 normal EMS output allocation. `emsctl` changes runtime-state only and does not
-write raw `acMode` numbers or contact inverter hardware.
+write raw `acMode` numbers or contact inverter hardware. While the EMS or that
+device is switched off, the controller writes nothing to it, so a new role takes
+effect only once control is on again; to stop a charge meanwhile, use the
+Zendure app.
 
 AC charge power is runtime-only:
 

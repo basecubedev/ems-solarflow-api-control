@@ -304,6 +304,211 @@ def test_foreign_value_after_own_timeout_is_still_detected():
     assert dev.describe()["external_control_suspected"] is True
 
 
+def _time_out_unconfirmed(dev, targets):
+    dev._confirmation_timeout_s = 5.0
+    record = None
+    for target in targets:
+        record = _published(dev, target)
+        dev.describe(now_monotonic=record.published_monotonic + 6.0)
+        assert record.state == "confirmation_timed_out"
+    return record
+
+
+def _report_twice(dev, output_limit, after):
+    for offset in (10.0, 20.0):
+        dev._service.set_snapshot(
+            dict(APPLIED, outputLimit=output_limit),
+            after.published_monotonic + offset,
+        )
+        dev.fetch()
+
+
+def test_unconfirmed_own_targets_keep_only_the_last_two():
+    dev, _rec = _confirmed_device()
+
+    _time_out_unconfirmed(dev, range(400, 1400, 50))
+
+    assert list(dev._unconfirmed_own_targets) == [1300, 1350]
+
+
+def test_a_new_confirmation_forgets_the_unconfirmed_targets_before_it():
+    """Excused only until a newer target is confirmed: after that the device has
+    shown it holds the newer one, so an older target arriving is someone else's."""
+
+    dev, _rec = _confirmed_device()
+    _time_out_unconfirmed(dev, (500, 600))
+    confirmed = _published(dev, 400)
+    dev._service.set_snapshot(dict(APPLIED, outputLimit=400), confirmed.published_monotonic + 1.0)
+    dev.fetch()
+    assert confirmed.state == "telemetry_confirmed"
+
+    _report_twice(dev, 600, confirmed)
+
+    assert dev.describe()["external_control_suspected"] is True
+
+
+def test_foreign_value_equal_to_an_older_own_target_is_detected():
+    """Own 500, 600 and 700 W all time out unconfirmed; then the device holds
+    500 W. Only the last two released targets can still be landing late, so
+    500 W is evidence of another writer, not a late own command.
+    """
+
+    dev, _rec = _confirmed_device()
+    last = _time_out_unconfirmed(dev, (500, 600, 700))
+
+    _report_twice(dev, 500, last)
+
+    assert dev.describe()["external_control_suspected"] is True
+
+
+def test_own_target_before_the_latest_unconfirmed_one_is_still_ours():
+    """The latest own command (600 W) never landed; the one before it (500 W)
+    landed late. That is the device following this EMS, not a foreign writer.
+    """
+
+    dev, _rec = _confirmed_device()
+    last = _time_out_unconfirmed(dev, (500, 600))
+
+    _report_twice(dev, 500, last)
+
+    assert dev.describe()["external_control_suspected"] is False
+
+
+@pytest.mark.parametrize("replacement", [600, 0], ids=["superseded", "preempted"])
+def test_an_own_target_that_left_the_slot_for_a_newer_one_is_still_ours(replacement):
+    """On a profile without acknowledgements every changed target supersedes the
+    published one, and a stop preempts it. The device may still apply the one
+    that left; that is the device following this EMS, not a foreign writer.
+    """
+
+    dev, _rec = _confirmed_device()
+    dev._confirmation_timeout_s = 5.0
+    first = _published(dev, 500)
+    second = _published(dev, replacement)
+    assert first.state == "superseded"
+    dev.describe(now_monotonic=second.published_monotonic + 6.0)
+
+    for offset in (10.0, 20.0):
+        dev._service.set_snapshot(dict(APPLIED, outputLimit=500), second.published_monotonic + offset)
+        dev.fetch()
+
+    assert dev.describe()["external_control_suspected"] is False
+
+
+def test_a_target_sent_again_counts_again_in_the_last_two():
+    """Re-sending one target is the controller's answer to a device that does
+    not follow; each send is a command. Counted once, an older own target stayed
+    excused for as long as the new one kept being lost."""
+
+    dev, _rec = _confirmed_device()
+    last = _time_out_unconfirmed(dev, (500, 600, 600, 600))
+
+    _report_twice(dev, 500, last)
+
+    assert list(dev._unconfirmed_own_targets) == [600, 600]
+    assert dev.describe()["external_control_suspected"] is True
+
+
+def test_a_device_that_ignores_every_stop_is_flagged():
+    dev, _rec = _confirmed_device()
+    dev._confirmation_timeout_s = 5.0
+    _published(dev, 800)
+
+    last = _time_out_unconfirmed(dev, (0, 0, 0))
+    _report_twice(dev, 800, last)
+
+    assert dev.describe()["external_control_suspected"] is True
+
+
+def _ack_profile_device():
+    dev = ZendureMqttDeviceClient(
+        "WR",
+        _FakeService(),
+        device_id="DEV",
+        topic_family=FAMILY_LEGACY_JSON,
+        source="local_mqtt",
+        product_key="PK",
+        hardware_profile="hyper_2000",
+        max_power=1200,
+    )
+    dev._command_ack_timeout_s = 3.0
+    dev._confirmation_timeout_s = 5.0
+    return dev
+
+
+def _reply(dev, record, output):
+    assert dev.handle_reply(
+        {
+            "messageId": record.message_id,
+            "deviceId": "DEV",
+            "function": "deviceAutomation",
+            "output": output,
+            "success": 1 if output == "success" else 0,
+        }
+    )
+
+
+def _report_on(dev, value, at):
+    dev._service.set_snapshot({"outputLimit": value}, at)
+    dev.fetch()
+
+
+def _confirmed_on_ack_profile(dev, target=300):
+    record = _published(dev, target)
+    _reply(dev, record, "success")
+    _report_on(dev, target, record.published_monotonic + 1.0)
+    assert record.state == "telemetry_confirmed", record.state
+
+
+def test_an_ack_profile_remembers_both_kinds_of_timeout():
+    dev = _ack_profile_device()
+    _confirmed_on_ack_profile(dev)
+    unanswered = _published(dev, 500)
+    dev.describe(now_monotonic=unanswered.published_monotonic + 4.0)
+    unconfirmed = _published(dev, 600)
+    _reply(dev, unconfirmed, "success")
+    dev.describe(now_monotonic=unconfirmed.published_monotonic + 20.0)
+
+    assert list(dev._unconfirmed_own_targets) == [500, 600]
+    _report_on(dev, 500, unconfirmed.published_monotonic + 30.0)
+    _report_on(dev, 500, unconfirmed.published_monotonic + 40.0)
+    assert dev.describe()["external_control_suspected"] is False
+    _report_on(dev, 400, unconfirmed.published_monotonic + 50.0)
+    _report_on(dev, 400, unconfirmed.published_monotonic + 60.0)
+    assert dev.describe()["external_control_suspected"] is True
+
+
+def test_an_ack_profile_remembers_a_target_a_stop_preempted():
+    dev = _ack_profile_device()
+    _confirmed_on_ack_profile(dev)
+    rise = _published(dev, 800)
+    _reply(dev, rise, "success")
+    stop = _published(dev, 0)
+    _reply(dev, stop, "success")
+    dev.describe(now_monotonic=stop.published_monotonic + 20.0)
+
+    assert rise.state == "superseded"
+    assert list(dev._unconfirmed_own_targets) == [800, 0]
+    _report_on(dev, 800, stop.published_monotonic + 30.0)
+    _report_on(dev, 800, stop.published_monotonic + 40.0)
+    assert dev.describe()["external_control_suspected"] is False
+
+
+def test_a_target_the_device_rejected_is_not_excused():
+    """The device said no; holding that value afterwards is not following this EMS."""
+
+    dev = _ack_profile_device()
+    _confirmed_on_ack_profile(dev)
+    rejected = _published(dev, 500)
+    _reply(dev, rejected, "error")
+
+    _report_on(dev, 500, rejected.published_monotonic + 10.0)
+    _report_on(dev, 500, rejected.published_monotonic + 20.0)
+
+    assert 500 not in dev._unconfirmed_own_targets
+    assert dev.describe()["external_control_suspected"] is True
+
+
 def test_unbounded_timeout_tuning_is_capped():
     dev = _device(command_ack_timeout_seconds=1e12, confirmation_timeout_seconds=1e12)
     assert dev._command_ack_timeout_s == MAX_COMMAND_ACK_TIMEOUT_SECONDS

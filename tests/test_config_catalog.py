@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from ems.config import BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
+from ems.config import BATTERY_FULL_CHARGE_ASSIST_DEFAULTS, WINTER_DEFAULTS
 from ems.config_catalog import (
     GRID_METER_KNOWN_MQTT_KEYS,
     GRID_METER_KNOWN_TOP_KEYS,
@@ -254,12 +254,27 @@ def test_control_tuning_is_expert_and_ha_is_deprecated():
     assert fields["ha.enabled"]["level"] == "deprecated"
 
 
-def test_template_preserves_documented_assist_power_default_mismatch():
-    template_default = get_config_feature_field_index()[
-        "battery_full_charge_assist.ac_charge_power"
-    ]["default"]
-    assert template_default == 600
-    assert BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["ac_charge_power"] == 200
+@pytest.mark.parametrize(
+    ("block", "defaults"),
+    [
+        ("winter", WINTER_DEFAULTS),
+        ("battery_full_charge_assist", BATTERY_FULL_CHARGE_ASSIST_DEFAULTS),
+    ],
+)
+def test_template_and_code_defaults_agree_for_every_feature_key(block, defaults):
+    fields = get_config_feature_field_index()
+    catalogued = {
+        key: fields[f"{block}.{key}"]["default"]
+        for key in defaults
+        if "default" in fields.get(f"{block}.{key}", {})
+    }
+
+    assert catalogued
+    assert catalogued == {key: defaults[key] for key in catalogued}
+
+
+def test_the_assist_charges_at_600_w_when_the_config_names_no_power():
+    assert BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["ac_charge_power"] == 600
 
 
 # --- the safety axis the Maintenance console navigates by -------------------
@@ -384,3 +399,9 @@ def test_no_setting_belongs_to_two_groups_at_once():
             if group is None:
                 continue
             assert group in known, f"{field['path']} names an undeclared group"
+
+
+def test_diagnose_reads_the_assist_defaults_the_ems_charges_with():
+    from ems import diagnostics
+
+    assert diagnostics.BATTERY_FULL_CHARGE_ASSIST_DEFAULTS is BATTERY_FULL_CHARGE_ASSIST_DEFAULTS

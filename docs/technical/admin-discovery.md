@@ -166,7 +166,11 @@ template is validated, exposed read-only at `GET /api/setup/config-template`,
 and used by the Config step as the draft base. The
 `POST /api/setup/config-preview` endpoint accepts the browser's selected-device
 draft and returns a generated config plus structured validation. The same draft
-can be downloaded through `POST /api/setup/config/download` or saved atomically
+can be downloaded through `POST /api/setup/config/download` — only as an
+encrypted config backup (`ems-config-manual-….tar.gz.enc`, `config/config.json`
+alone, encrypted like `emsctl backup create --password`) with a `password` of at
+least 8 characters in the request, refused with `download_password_required`
+otherwise, because a config carries API keys and broker passwords — or saved atomically
 to the fixed Admin-managed `generated/config.json` path through
 `POST /api/setup/config/write`. Saving to `generated/config.json` never targets
 an EMS runtime config and requires explicit confirmation before replacing an
