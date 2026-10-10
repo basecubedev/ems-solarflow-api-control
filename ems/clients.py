@@ -141,17 +141,47 @@ def create_session():
 # =====================
 
 
-class HAClient:
-    """Simple REST client for Home Assistant."""
+HA_REQUEST_TIMEOUT = (0.5, 1.0)
+HA_BACKOFF_INITIAL_S = 30.0
+HA_BACKOFF_MAX_S = 300.0
 
-    def __init__(self, base_url, token, session):
+
+class HAClient:
+    """Simple REST client for Home Assistant.
+
+    The control loop calls it before the device writes, once per sensor, so an
+    unreachable Home Assistant costs one short request and is then left alone
+    for a backoff that doubles with each further failure.
+    """
+
+    def __init__(self, base_url, token, session, clock=time.monotonic):
         self.base_url = base_url.rstrip("/")
         self.session = session
+        self._clock = clock
+        self._backoff_s = 0.0
+        self._retry_at = None
 
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
+
+    def _backing_off(self):
+        return self._retry_at is not None and self._clock() < self._retry_at
+
+    def _record_unreachable(self):
+        if self._backoff_s:
+            self._backoff_s = min(self._backoff_s * 2, HA_BACKOFF_MAX_S)
+        else:
+            self._backoff_s = HA_BACKOFF_INITIAL_S
+        self._retry_at = self._clock() + self._backoff_s
+        return self._backoff_s
+
+    def _record_reachable(self):
+        if self._backoff_s:
+            log_event(logging.INFO, "ha_reachable_again")
+        self._backoff_s = 0.0
+        self._retry_at = None
 
     def set_state(
         self,
@@ -187,40 +217,59 @@ class HAClient:
             "attributes": attributes
         }
 
+        if self._backing_off():
+            return
+
         try:
             r = self.session.post(
                 f"{self.base_url}/api/states/{entity_id}",
                 headers=self.headers,
                 json=payload,
-                timeout=2
+                timeout=HA_REQUEST_TIMEOUT
             )
-
-            if r.status_code >= 300:
-                log_event(
-                    logging.WARNING,
-                    "ha_write_error",
-                    entity=entity_id,
-                    status_code=r.status_code
-                )
-
         except Exception as e:
             log_event(
                 logging.WARNING,
                 "ha_write_error",
                 entity=entity_id,
-                error=e
+                error=e,
+                retry_in_s=f"{self._record_unreachable():g}"
+            )
+            return
+
+        self._record_reachable()
+        if r.status_code >= 300:
+            log_event(
+                logging.WARNING,
+                "ha_write_error",
+                entity=entity_id,
+                status_code=r.status_code
             )
 
     def get_state(self, entity_id):
         """Read a state from HA."""
 
+        if self._backing_off():
+            return None
+
         try:
             r = self.session.get(
                 f"{self.base_url}/api/states/{entity_id}",
                 headers=self.headers,
-                timeout=2
+                timeout=HA_REQUEST_TIMEOUT
             )
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "ha_read_error",
+                entity=entity_id,
+                error=e,
+                retry_in_s=f"{self._record_unreachable():g}"
+            )
+            return None
 
+        self._record_reachable()
+        try:
             if r.status_code != 200:
                 return None
 

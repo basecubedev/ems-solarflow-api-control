@@ -1,6 +1,8 @@
 # Home Assistant Integration
 
-Home Assistant is optional.
+Home Assistant is optional and deprecated. The integration — status publishing
+and helper control — is planned for removal in a future minor or major release,
+never in a patch release. New installations should not enable it.
 
 The EMS can run standalone with `config/config.json` and
 `data/runtime-state.json` (the canonical current paths; a legacy root-level
@@ -22,6 +24,14 @@ Home Assistant has two independent roles:
 Home Assistant is not a safety authority. If helper sync fails, times out, or
 raises an error, the EMS logs the failure and continues the control loop with
 the current local runtime-state values.
+
+Every request to Home Assistant has a short timeout (0.5 s to connect, 1 s to
+answer). When Home Assistant cannot be reached, the EMS logs it once and makes
+no further requests — neither status publishing nor helper reads — for 30
+seconds, doubling the pause with each further failure up to 5 minutes; the
+first answer ends it (`ha_reachable_again`). An unreachable Home Assistant so
+costs the control loop at most one short request per pause instead of one per
+sensor in every cycle.
 
 `data/runtime-state.json` remains the local control state. Home Assistant helpers can
 change only the runtime fields documented below, and only when both static and
