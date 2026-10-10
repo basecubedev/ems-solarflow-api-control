@@ -60,6 +60,7 @@ const state = {
     csrfToken: null,
   },
   runtime: null,
+  runtimeUnavailable: false,
   runtimeEditorDirty: false,
   lastSnapshotTimestamp: null,
   snapshotChangedAt: null,
@@ -5429,12 +5430,38 @@ async function loadRuntimeState(options = {}) {
   }
   try {
     const response = await fetch("/api/runtime");
+    if (!response.ok) throw new Error(`runtime state answered ${response.status}`);
     state.runtime = await response.json();
+    state.runtimeUnavailable = false;
+    cancelRuntimeRetry();
     if (forceRuntimeEditor) clearRuntimeEditorState();
     if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor });
   } catch {
     state.runtime = null;
+    state.runtimeUnavailable = true;
+    if (state.auth.authenticated) scheduleRuntimeRetry();
   }
+  renderWriteModeState();
+}
+
+const RUNTIME_RETRY_MS = 5000;
+let runtimeRetryTimer = null;
+
+// The 30 s refresh would bring the tiles back eventually; right after a login
+// into an EMS that is still restarting, that is half a minute of locked tiles
+// under a header that reads "Write mode".
+function scheduleRuntimeRetry() {
+  if (runtimeRetryTimer) return;
+  runtimeRetryTimer = setTimeout(() => {
+    runtimeRetryTimer = null;
+    return loadRuntimeState();
+  }, RUNTIME_RETRY_MS);
+}
+
+function cancelRuntimeRetry() {
+  if (!runtimeRetryTimer) return;
+  clearTimeout(runtimeRetryTimer);
+  runtimeRetryTimer = null;
 }
 
 async function loadAuthStatus() {
@@ -5475,13 +5502,23 @@ async function loadAuthStatus() {
   }
 }
 
-function renderAuthState() {
+function renderWriteModeState() {
   const statePill = $("writeModeState");
-  const button = $("authButton");
-  if (statePill) {
-    statePill.textContent = state.auth.authenticated ? "Write mode" : "Read-only";
-    statePill.className = state.auth.authenticated ? "pill" : "pill muted";
+  if (!statePill) return;
+  if (!state.auth.authenticated) {
+    statePill.textContent = "Read-only";
+    statePill.className = "pill muted";
+    return;
   }
+  statePill.textContent = state.runtimeUnavailable
+    ? "Write mode · runtime state unavailable, retrying"
+    : "Write mode";
+  statePill.className = "pill";
+}
+
+function renderAuthState() {
+  const button = $("authButton");
+  renderWriteModeState();
   if (button) {
     button.hidden = !state.auth.configured;
     button.textContent = state.auth.authenticated ? "Logout" : "Login";
