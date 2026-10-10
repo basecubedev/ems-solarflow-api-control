@@ -2020,14 +2020,16 @@ def http_control_device_configs(devices=None):
 
 
 def mqtt_control_device_configs(devices=None):
-    """Return devices[] entries that build a write-capable MQTT control device.
+    """Return enabled devices[] entries that build a write-capable MQTT control device.
 
     These are ``zendure_mqtt`` entries that opt in to output control via
-    ``capabilities.write_output_limit=true``. Telemetry-only MQTT entries and
-    HTTP/API devices are excluded.
+    ``capabilities.write_output_limit=true``. Telemetry-only MQTT entries,
+    HTTP/API devices and disabled entries are excluded, as a disabled entry is
+    on the HTTP path.
     """
 
     from ems.zendure_mqtt.config_entries import (
+        config_entry_enabled,
         is_control_zendure_mqtt_device_config,
     )
 
@@ -2038,7 +2040,9 @@ def mqtt_control_device_configs(devices=None):
     return [
         item
         for item in devices
-        if isinstance(item, dict) and is_control_zendure_mqtt_device_config(item)
+        if isinstance(item, dict)
+        and is_control_zendure_mqtt_device_config(item)
+        and config_entry_enabled(item)
     ]
 
 
@@ -2384,10 +2388,7 @@ def config_control_flags(config):
 def config_control_devices_by_gate(config):
     """Group enabled control devices by write gate, as startup would group them."""
 
-    from ems.zendure_mqtt.config_entries import (
-        config_entry_enabled,
-        control_gate_for_config_device,
-    )
+    from ems.zendure_mqtt.config_entries import control_gate_for_config_device
 
     grouped = {gate: [] for gate in _CONTROL_GATE_TRANSPORT}
     devices = config.get("devices") if isinstance(config, dict) else None
@@ -2395,8 +2396,7 @@ def config_control_devices_by_gate(config):
         return grouped
     grouped["api"] = list(http_control_device_configs(devices))
     for item in mqtt_control_device_configs(devices):
-        if config_entry_enabled(item):
-            grouped[control_gate_for_config_device(config, item)].append(item)
+        grouped[control_gate_for_config_device(config, item)].append(item)
     return grouped
 
 
