@@ -165,18 +165,29 @@ def _resolve(path, base_dir):
     return os.path.join(base_dir, path)
 
 
-def _archive_rel(abs_path, base_dir):
+OUTSIDE_PROJECT_PREFIX = "_outside_project/"
+
+
+def archive_rel(abs_path, base_dir):
     """Return a safe project-relative archive path for ``abs_path``.
 
-    Paths inside ``base_dir`` keep their relative layout; anything that would
-    escape the project root falls back to its basename so restore stays inside
-    the project.
+    Paths inside ``base_dir`` keep their relative layout. A file that lives
+    outside the project root is archived under ``_outside_project/`` with its
+    origin recorded in the manifest: restoring it by basename into the project
+    put it where nothing reads it.
     """
 
     rel = os.path.relpath(abs_path, base_dir)
     if rel.startswith("..") or os.path.isabs(rel):
-        rel = os.path.basename(abs_path)
+        return outside_project_name(abs_path)
     return rel.replace(os.sep, "/")
+
+
+def outside_project_name(abs_path):
+    """The archive name of a file kept outside the project: unique per path."""
+
+    origin = hashlib.sha256(os.fsencode(os.path.abspath(abs_path))).hexdigest()[:8]
+    return f"{OUTSIDE_PROJECT_PREFIX}{origin}/{os.path.basename(abs_path)}"
 
 
 def collect_config_backup_files(
@@ -251,7 +262,7 @@ def collect_config_backup_files(
         if abs_path and os.path.isfile(abs_path):
             included.append({
                 "abs_path": abs_path,
-                "arcname": _archive_rel(abs_path, base_dir),
+                "arcname": archive_rel(abs_path, base_dir),
                 "kind": kind,
                 "sensitive": sensitive,
             })
@@ -266,7 +277,7 @@ def collect_config_backup_files(
         if secret_path and os.path.isfile(secret_path):
             included.append({
                 "abs_path": secret_path,
-                "arcname": _archive_rel(secret_path, base_dir),
+                "arcname": archive_rel(secret_path, base_dir),
                 "kind": "influxdb_secret",
                 "sensitive": True,
             })
@@ -281,7 +292,7 @@ def collect_config_backup_files(
         db_path = _resolve(section.get(cfg_key, db_default), base_dir)
         if db_path and os.path.isfile(db_path):
             skipped.append({
-                "path": _archive_rel(db_path, base_dir),
+                "path": archive_rel(db_path, base_dir),
                 "reason": SKIP_DATABASE_REASON,
             })
 
@@ -339,7 +350,7 @@ def collect_database_backup_files(
         if abs_path and os.path.isfile(abs_path):
             present.append({
                 "abs_path": abs_path,
-                "arcname": _archive_rel(abs_path, base_dir),
+                "arcname": archive_rel(abs_path, base_dir),
                 "kind": "sqlite",
                 "role": role,
                 # Not a classic secret, but local energy/runtime history.
@@ -347,7 +358,7 @@ def collect_database_backup_files(
                 "privacy_relevant": True,
             })
         else:
-            rel = _archive_rel(abs_path, base_dir) if abs_path else role
+            rel = archive_rel(abs_path, base_dir) if abs_path else role
             missing.append({
                 "path": rel,
                 "kind": "sqlite",
@@ -451,6 +462,8 @@ def _manifest_file_entry(entry):
     }
     if entry.get("privacy_relevant"):
         file_entry["privacy_relevant"] = True
+    if entry["arcname"].startswith(OUTSIDE_PROJECT_PREFIX):
+        file_entry["source_path"] = os.path.abspath(entry.get("source_path") or entry["abs_path"])
     return file_entry
 
 
@@ -884,6 +897,7 @@ def create_database_backup(
             _sqlite_backup_copy(entry["abs_path"], staged_path)
             staged.append({
                 "abs_path": staged_path,
+                "source_path": entry["abs_path"],
                 "arcname": entry["arcname"],
                 "kind": entry["kind"],
                 "role": entry["role"],
@@ -1484,12 +1498,27 @@ def _build_restore_entries(tar, manifest, base_dir):
         manifest_sha = file_entry.get("sha256")
         checksum_ok = manifest_sha is None or actual_sha == manifest_sha
 
-        target = os.path.join(base_dir, *arcname.split("/"))
-        if os.path.isfile(target):
-            current_sha = _sha256_file(target)
-            status = "identical" if current_sha == actual_sha else "conflict"
+        source_path = file_entry.get("source_path")
+        outside_name = arcname.startswith(OUTSIDE_PROJECT_PREFIX)
+        if outside_name or source_path:
+            if (
+                not isinstance(source_path, str)
+                or not outside_name
+                or arcname != outside_project_name(source_path)
+            ):
+                raise BackupError(
+                    f"backup entry {arcname} does not match the origin its manifest "
+                    "names; refusing to restore"
+                )
+            target = None
+            status = "outside_project"
         else:
-            status = "new"
+            target = os.path.join(base_dir, *arcname.split("/"))
+            if os.path.isfile(target):
+                current_sha = _sha256_file(target)
+                status = "identical" if current_sha == actual_sha else "conflict"
+            else:
+                status = "new"
 
         entries.append({
             "path": arcname,
@@ -1501,6 +1530,7 @@ def _build_restore_entries(tar, manifest, base_dir):
             "manifest_sha256": manifest_sha,
             "actual_sha256": actual_sha,
             "is_text": not _looks_binary(data),
+            "source_path": source_path,
             "_data": data,
         })
     return entries
@@ -1643,6 +1673,13 @@ def _restore_sqlite(target, data):
 
 def _dry_run_action(entry):
     status = entry["status"]
+    if status == "outside_project":
+        return {
+            "path": entry["path"],
+            "action": "would_skip_outside_project",
+            "status": status,
+            "source_path": entry["source_path"],
+        }
     if status == "identical":
         action = "would_skip_identical"
     elif status == "new":
@@ -1712,6 +1749,13 @@ def restore_backup(
             status = entry["status"]
             if status == "identical":
                 actions.append({"path": entry["path"], "action": "skip_identical"})
+                continue
+            if status == "outside_project":
+                actions.append({
+                    "path": entry["path"],
+                    "action": "skipped_outside_project",
+                    "source_path": entry["source_path"],
+                })
                 continue
 
             if status == "conflict":

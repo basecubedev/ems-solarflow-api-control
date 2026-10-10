@@ -1282,10 +1282,13 @@ class BackupRestoreService:
                 if not entry.get("checksum_ok"):
                     blocked = True
                     block_reason = "checksum_invalid"
-                files.append({
+                row = {
                     "path": entry["path"], "action": action,
                     "kind": entry.get("kind"), "archive": target.name,
-                })
+                }
+                if entry.get("source_path"):
+                    row["source_path"] = entry["source_path"]
+                files.append(row)
 
         if has_conflict and conflict_policy == "abort":
             blocked = True
@@ -1302,6 +1305,8 @@ class BackupRestoreService:
         if not entry.get("checksum_ok"):
             return "checksum_invalid", None
         status = entry["status"]
+        if status == "outside_project":
+            return "would_skip_outside_project", "skip"
         if status == "identical":
             return "would_skip_identical", "skip"
         if status == "new":

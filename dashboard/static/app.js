@@ -4527,7 +4527,7 @@ function renderRestorePlan(plan) {
     .map((action) => `
       <div class="maintenance-plan-row">
         <span class="maintenance-plan-action">${escapeHtml(action.action || "")}</span>
-        <span class="maintenance-plan-path">${escapeHtml(action.path || "")}</span>
+        <span class="maintenance-plan-path">${escapeHtml(action.source_path ? `${action.path || ""} (kept outside the project at ${action.source_path})` : action.path || "")}</span>
       </div>`)
     .join("") || `<div class="maintenance-empty compact">No file changes reported.</div>`;
   const warnings = (plan.warnings || [])

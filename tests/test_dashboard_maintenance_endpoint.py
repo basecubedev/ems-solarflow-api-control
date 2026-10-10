@@ -1065,3 +1065,214 @@ def test_config_upgrade_backup_failure_does_not_write(tmp_path, monkeypatch):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_a_config_backup_holding_a_file_from_outside_the_project_still_restores(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    base = tmp_path / "project"
+    (base / "data").mkdir(parents=True)
+    outside = tmp_path / "letsencrypt" / "fullchain.pem"
+    outside.parent.mkdir()
+    outside.write_text("CERT")
+    config = {
+        "system": {"runtime_state_path": "data/runtime-state.json"},
+        "dashboard": {"ssl_cert_file": str(outside)},
+        "influxdb": {"enabled": False},
+        "devices": [],
+    }
+    config_path = base / "config.json"
+    config_path.write_text(json.dumps(config))
+    created = maintenance.create_backup(
+        "config", config, base_dir=str(base), config_path=str(config_path)
+    )
+    name = created["backup"]["name"]
+
+    plan = maintenance.restore_plan(str(base), name, None, config, config_path=str(config_path))
+
+    actions = {item["path"]: item["action"] for item in plan["actions"]}
+    key = backup_mod.archive_rel(str(outside), str(base))
+    assert actions[key] == "would_skip_outside_project"
+
+
+def test_the_dashboard_accepts_every_path_a_backup_writes():
+    """Two lists that must agree: what a backup archives and what a restore accepts."""
+
+    base = "/srv/ems"
+    config = {
+        "system": {"runtime_state_path": "/var/lib/ems/runtime-state.json"},
+        "dashboard": {
+            "auth_file": "config/dashboard-auth.json",
+            "ssl_cert_file": "/etc/ssl/ems.crt",
+            "ssl_key_file": "config/dashboard.key",
+            "database_path": "/var/lib/ems/dashboard.sqlite",
+        },
+        "battery_full_charge_assist": {"state_database_path": "data/ems_state.sqlite"},
+        "influxdb": {"enabled": False},
+    }
+    for path in (
+        "config.json",
+        "/var/lib/ems/runtime-state.json",
+        "config/dashboard-auth.json",
+        "/etc/ssl/ems.crt",
+        "config/dashboard.key",
+    ):
+        absolute = path if os.path.isabs(path) else os.path.join(base, path)
+        assert backup_mod.archive_rel(absolute, base) in maintenance._config_restore_paths(
+            config, base
+        ), path
+    for path in ("/var/lib/ems/dashboard.sqlite", "data/ems_state.sqlite"):
+        absolute = path if os.path.isabs(path) else os.path.join(base, path)
+        assert backup_mod.archive_rel(absolute, base) in maintenance._database_restore_paths(
+            config, base
+        ), path
+
+
+def test_an_older_backup_with_a_bare_outside_file_name_still_restores(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    base = tmp_path / "project"
+    backup_dir = base / "data" / "backups"
+    backup_dir.mkdir(parents=True)
+    outside = tmp_path / "letsencrypt" / "fullchain.pem"
+    outside.parent.mkdir()
+    outside.write_text("CERT")
+    config = {
+        "system": {"runtime_state_path": "data/runtime-state.json"},
+        "dashboard": {"ssl_cert_file": str(outside)},
+        "influxdb": {"enabled": False},
+        "devices": [],
+    }
+    name = "ems-config-manual-2026-01-01-000000.tar.gz"
+    write_crafted_backup(backup_dir / name, "config", "fullchain.pem", b"OLD CERT")
+
+    plan = maintenance.restore_plan(str(base), name, None, config)
+
+    assert [item["path"] for item in plan["actions"]] == ["fullchain.pem"]
+    assert any(str(outside) in warning for warning in plan["warnings"])
+
+
+def test_a_restore_names_where_a_skipped_outside_file_belongs(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    base = tmp_path / "project"
+    (base / "data").mkdir(parents=True)
+    outside = tmp_path / "letsencrypt" / "fullchain.pem"
+    outside.parent.mkdir()
+    outside.write_text("CERT")
+    config = {
+        "system": {"runtime_state_path": "data/runtime-state.json"},
+        "dashboard": {"ssl_cert_file": str(outside)},
+        "influxdb": {"enabled": False},
+        "devices": [],
+    }
+    config_path = base / "config.json"
+    config_path.write_text(json.dumps(config))
+    name = maintenance.create_backup(
+        "config", config, base_dir=str(base), config_path=str(config_path)
+    )["backup"]["name"]
+
+    result = maintenance.restore(
+        str(base), name, None, config, config_path=str(config_path),
+        confirm_preview=True, confirm_restore=True, confirm_replace=True,
+    )
+
+    skipped = [a for a in result["actions"] if a["action"] == "skipped_outside_project"]
+    assert skipped[0]["source_path"] == str(outside)
+    assert str(outside) in result["message"]
+    assert not (base / "_outside_project").exists()
+
+
+def test_a_restore_that_wrote_nothing_does_not_say_it_restored(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    base = tmp_path / "project"
+    (base / "data").mkdir(parents=True)
+    config_path = tmp_path / "etc-ems" / "config.json"
+    config_path.parent.mkdir()
+    config = {
+        "system": {"runtime_state_path": "data/runtime-state.json"},
+        "influxdb": {"enabled": False},
+        "devices": [],
+    }
+    config_path.write_text(json.dumps(config))
+    name = maintenance.create_backup(
+        "config", config, base_dir=str(base), config_path=str(config_path)
+    )["backup"]["name"]
+    (base / "data" / "runtime-state.json").unlink(missing_ok=True)
+
+    result = maintenance.restore(
+        str(base), name, None, config, config_path=str(config_path),
+        confirm_preview=True, confirm_restore=True, confirm_replace=True,
+    )
+
+    assert result["message"].startswith("Nothing was restored.")
+    assert result["requires_restart"] is False
+
+
+def test_a_restore_of_identical_files_agrees_with_its_preview(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    base = tmp_path / "project"
+    (base / "data").mkdir(parents=True)
+    config = {
+        "system": {"runtime_state_path": "data/runtime-state.json"},
+        "influxdb": {"enabled": False},
+        "devices": [],
+    }
+    config_path = base / "config.json"
+    config_path.write_text(json.dumps(config))
+    name = maintenance.create_backup(
+        "config", config, base_dir=str(base), config_path=str(config_path)
+    )["backup"]["name"]
+
+    plan = maintenance.restore_plan(str(base), name, None, config, config_path=str(config_path))
+    result = maintenance.restore(
+        str(base), name, None, config, config_path=str(config_path),
+        confirm_preview=True, confirm_restore=True, confirm_replace=True,
+    )
+
+    assert {a["action"] for a in plan["actions"]} == {"would_skip_identical"}
+    assert {a["action"] for a in result["actions"]} == {"skip_identical"}
+    assert plan["requires_restart"] is result["requires_restart"] is False
+    assert plan["requires_relogin"] is result["requires_relogin"] is False
+    assert result["message"] == "Nothing was restored."
+
+
+def test_a_preview_that_writes_nothing_asks_for_no_restart(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    base = tmp_path / "project"
+    (base / "data").mkdir(parents=True)
+    config_path = tmp_path / "etc-ems" / "config.json"
+    config_path.parent.mkdir()
+    config = {
+        "system": {"runtime_state_path": "data/runtime-state.json"},
+        "influxdb": {"enabled": False},
+        "devices": [],
+    }
+    config_path.write_text(json.dumps(config))
+    name = maintenance.create_backup(
+        "config", config, base_dir=str(base), config_path=str(config_path)
+    )["backup"]["name"]
+    (base / "data" / "runtime-state.json").unlink(missing_ok=True)
+
+    plan = maintenance.restore_plan(str(base), name, None, config, config_path=str(config_path))
+
+    assert plan["requires_restart"] is False
+    assert plan["requires_relogin"] is False
+    assert plan["warnings"] == []
+
+
+def test_a_bare_named_entry_names_the_normalised_location(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    base = tmp_path / "project"
+    backup_dir = base / "data" / "backups"
+    backup_dir.mkdir(parents=True)
+    config = {
+        "dashboard": {"database_path": "../shared/dash.sqlite"},
+        "influxdb": {"enabled": False},
+    }
+    name = "ems-databases-manual-2026-01-01-000000.tar.gz"
+    write_crafted_backup(backup_dir / name, "databases", "dash.sqlite", b"SQLite format 3\x00")
+
+    plan = maintenance.restore_plan(str(base), name, None, config)
+
+    expected = str(tmp_path / "shared" / "dash.sqlite")
+    assert any(expected in warning and "/../" not in warning for warning in plan["warnings"])

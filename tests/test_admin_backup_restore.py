@@ -1089,3 +1089,22 @@ def test_a_backup_download_says_whether_the_file_is_missing_or_unreadable(
     AdminHandler._send_file(handler, str(path), "application/gzip", path.name)
 
     assert sent[0][0] == status
+
+
+def test_the_restore_preview_names_where_an_outside_file_belongs(tmp_path):
+    root = _build_install(tmp_path)
+    outside = tmp_path / "letsencrypt" / "fullchain.pem"
+    outside.parent.mkdir()
+    outside.write_text("CERT")
+    config = json.loads((root / "config" / "config.json").read_text())
+    config["dashboard"]["ssl_cert_file"] = str(outside)
+    (root / "config" / "config.json").write_text(json.dumps(config))
+    _make_config_archive(root)
+    service = _service(root)
+    backup_id = service.list_backups()["backups"][0]["id"]
+
+    plan = _plan_replace(service, backup_id)
+
+    row = next(f for f in plan["files"] if f.get("source_path"))
+    assert row["source_path"] == str(outside)
+    assert row["action"] == "would_skip_outside_project"

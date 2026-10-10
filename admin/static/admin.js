@@ -13331,7 +13331,11 @@ function renderRestorePlan(plan) {
   backupEls.restoreFiles.innerHTML = files
     .map((file) => (
       '<div class="backup-file" role="listitem"><span class="backup-file-path">' +
-      escapeHtml(file.path) + '</span><span class="backup-file-kind">' +
+      escapeHtml(
+        file.source_path
+          ? file.path + " (kept outside the project at " + file.source_path + ")"
+          : file.path
+      ) + '</span><span class="backup-file-kind">' +
       escapeHtml(file.action || "") + "</span></div>"
     ))
     .join("");
