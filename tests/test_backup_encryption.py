@@ -447,3 +447,39 @@ def test_large_input_streams_in_multiple_chunks(tmp_path):
 def test_empty_input_roundtrip(tmp_path):
     enc = _roundtrip(tmp_path, b"")
     assert _count_chunks(str(enc)) == 1
+
+
+def _legacy_envelope(iterations, salt):
+    import struct
+
+    return (
+        backup_crypto.MAGIC
+        + bytes([backup_crypto.LEGACY_FERNET_VERSION])
+        + struct.pack(">I", iterations)
+        + bytes([len(salt)])
+        + salt
+        + b"token"
+    )
+
+
+@pytest.mark.parametrize(
+    "iterations,salt",
+    [
+        (4_000_000_000, b"s" * 16),
+        (1, b"s" * 16),
+        (200_000, b""),
+        (200_000, b"s" * 255),
+    ],
+    ids=["hours-of-pbkdf2", "too-few-iterations", "no-salt", "oversized-salt"],
+)
+def test_a_legacy_header_outside_the_restore_bounds_is_refused_before_any_kdf(
+    tmp_path, monkeypatch, iterations, salt
+):
+    enc = tmp_path / "legacy.bin.enc"
+    enc.write_bytes(_legacy_envelope(iterations, salt))
+    monkeypatch.setattr(
+        backup_crypto, "_derive_key", lambda *a: pytest.fail("the KDF must not run")
+    )
+
+    with pytest.raises(backup_crypto.BackupFormatError):
+        backup_crypto.decrypt_file_to_temp(str(enc), "pw")
