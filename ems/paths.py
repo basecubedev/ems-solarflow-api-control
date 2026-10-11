@@ -86,6 +86,17 @@ def detect_config_layout_state(base_dir=None):
     return LAYOUT_BOTH_SAME if same else LAYOUT_BOTH_DIFFERENT
 
 
+def install_root_for_config(config_path):
+    """The install root a config file belongs to.
+
+    The parent of ``config/`` for the canonical layout, the file's own
+    directory for the legacy root ``config.json``.
+    """
+
+    parent = Path(config_path).parent
+    return parent.parent if parent.name == "config" else parent
+
+
 def resolve_template_path(explicit_path=None, *, base_dir=None):
     """Resolve the EMS template, including the Docker image fallback."""
 

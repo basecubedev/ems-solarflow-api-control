@@ -156,6 +156,31 @@ logs an audit event (`event=runtime_device_renamed`,
 backfilled onto pre-existing entries by name on first load, so subsequent
 renames migrate settings.
 
+## Fresh Setup reset
+
+A fresh Setup (`/api/setup/config/apply`, and the deployment prepare that writes
+the generated config) replaces `config.json` and takes nothing from it, so the
+runtime values the dashboard saved would otherwise override the new config. It
+does not touch `runtime-state.json` itself: an EMS still running on the replaced
+config would write a file set aside now straight back from memory within a
+cycle. The Setup leaves `runtime-state.json.reset-requested` beside it instead,
+naming the config it wrote by its SHA-256, and only the EMS process that starts
+on the new config settles it (`start_runtime_state`). While the installed
+config is the one the request names, the existing file is kept as
+`runtime-state.json.before-setup-<UTC time>` and the state is built from the
+config's values (`runtime_state_reset_by_setup`); a device switched off in the
+dashboard is therefore active again. A request naming any other config -- a
+backup restored since, a Setup write that never arrived -- is dropped
+(`runtime_reset_request_dropped`), so a restore keeps the runtime state it puts
+back, and an automatic rollback onto the Setup's config still resets. Every edit
+of the installed config moves the request to the config it writes -- Maintenance,
+the MQTT migration and a Guided Upgrade through the Admin's apply, the Guided
+Upgrade's config step, `emsctl`, the dashboard and the startup config upgrade
+through `write_config_json_atomic` -- so the reset survives the edit. Setup's start recreates an
+EMS that already runs, because Compose leaves a running service alone when only
+its mounted config changed. A running EMS reloading the file, a `--preflight`
+run, the Admin's maintenance mirror and `emsctl` never settle the request.
+
 ## Config → runtime convergence (Admin maintenance)
 
 A few scalar values are writable in **both** `config.json` (the Admin console) and

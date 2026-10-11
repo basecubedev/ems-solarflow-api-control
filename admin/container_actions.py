@@ -18,13 +18,12 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from admin.deployment import DockerCompose
+from admin.deployment import EMS_SERVICE, DockerCompose
 from admin.install_context import detect_install_context
 from admin.maintenance import run_maintenance_overview
 from ems.influx_setup import INFLUX_READY_TIMEOUT_SECONDS
 
 ANALYTICS_PROFILE = "with-analytics"
-EMS_SERVICE = "ems"
 INFLUX_SERVICE = "influxdb"
 
 # The schema sync waits for InfluxDB inside this call, so the call has to

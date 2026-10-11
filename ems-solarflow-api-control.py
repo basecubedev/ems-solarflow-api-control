@@ -19,7 +19,7 @@ from ems.control_status import ControlStatusWriter
 from ems.controller import EMSController
 from ems.device_identity import broker_sources_from_config
 from ems.logging_utils import log_event, setup_logging
-from ems.runtime_state import RuntimeState, build_runtime_defaults
+from ems.runtime_state import build_runtime_defaults, start_runtime_state
 from ems.simulation import (
     built_in_simulation_frames,
     load_replay_frames,
@@ -345,11 +345,16 @@ def main():
         session
     )
 
-    runtime_state = RuntimeState(
+    if args.preflight:
+        ok = run_live_preflight(devices, shelly, ha)
+        close_grid_meter_client(shelly)
+        sys.exit(0 if ok else 2)
+
+    runtime_state = start_runtime_state(
         cfg.runtime_state_path(),
-        build_runtime_defaults(devices)
+        build_runtime_defaults(devices),
+        cfg.config_path(),
     )
-    runtime_state.load_or_create()
 
     dashboard_store = None
 
@@ -435,11 +440,6 @@ def main():
                 "dashboard_start_failed",
                 error=e
             )
-
-    if args.preflight:
-        ok = run_live_preflight(devices, shelly, ha)
-        close_grid_meter_client(shelly)
-        sys.exit(0 if ok else 2)
 
     # Native InfluxDB telemetry writer: active only when influxdb is enabled and
     # we are reading real hardware (not simulation/replay). Started lazily and

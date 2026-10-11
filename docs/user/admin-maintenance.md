@@ -246,8 +246,8 @@ This path edits an existing installation.
   into `data/runtime-state.json` so the change goes live immediately instead of
   waiting for an EMS restart; it still never moves `data/` history,
   `docker-compose.yml`, or databases. Fields that also carry a live override set
-  from the Dashboard show a badge with the effective value, and a **Reset live
-  overrides** button writes the installed config values back so the live EMS
+  from the Dashboard show a badge with the effective value, and a **Put live
+  values back** button writes the installed config values back so the live EMS
   matches the installed config again.
 
   The hardware section looks and works like the Fresh Install Config step.

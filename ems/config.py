@@ -1490,9 +1490,21 @@ def build_config_upgrade_plan(
 
 
 def write_config_json_atomic(path, data, *, layout=None):
+    """Write ``data`` as the config at ``path``, replacing the file atomically.
+
+    The writer every edit of an installed config goes through, so it carries a
+    fresh setup's pending runtime reset to the config it writes.
+    """
+
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
+
+    try:
+        with open(path, "rb") as handle:
+            replaced = handle.read()
+    except OSError:
+        replaced = None
 
     mode = 0o600
     uid = gid = None
@@ -1523,6 +1535,27 @@ def write_config_json_atomic(path, data, *, layout=None):
         except FileNotFoundError:
             pass
         raise
+    if replaced is not None:
+        _carry_runtime_reset(path, data, replaced)
+
+
+def _carry_runtime_reset(path, data, replaced):
+    """Carry a pending runtime reset along; the config is written by now.
+
+    A failure is reported the way a startup config message is, since the
+    startup upgrade writes through here before logging is set up.
+    """
+
+    from ems.runtime_state import carry_runtime_reset, config_digest
+
+    try:
+        with open(path, "rb") as handle:
+            written = handle.read()
+        carry_runtime_reset(path, data, config_digest(replaced), config_digest(written))
+    except (OSError, ValueError) as exc:
+        _emit_startup_config_message(
+            logging.WARNING, f"event=runtime_reset_carry_failed path={path} error={exc}"
+        )
 
 
 def normalize_config_upgrade_config(config, *, emit_warning=None):

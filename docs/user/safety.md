@@ -241,8 +241,8 @@ Like the Dashboard, the Admin Console can write runtime *overrides*, but only fo
 a fixed whitelist of keys (system power/loop limits, winter/HA enable, per-device
 enabled/max power/PV priority/off-grid mode) and only through the same validated
 runtime-write limits — never the hardware `outputLimit` or state-reconciliation
-write gates. The safety property is the whitelist, not the store: no other key
-can reach `runtime-state.json` from the Admin.
+write gates. No other key reaches `runtime-state.json` from the Admin; a fresh
+Setup only asks the EMS to rebuild it from the new config at its next start.
 
 ## Technical safety model
 

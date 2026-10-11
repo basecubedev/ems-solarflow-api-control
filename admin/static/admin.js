@@ -18394,7 +18394,9 @@ async function startPath(choice) {
     if (result.requires_confirmation) {
       const proceed = window.confirm(
         "An existing installation was detected. Setting up a new system can " +
-          "replace its configuration. Continue anyway?"
+          "replace its configuration, and its dashboard settings, such as a " +
+          "device or the system switched off, start again from the new config. " +
+          "Continue anyway?"
       );
       if (!proceed) return;
       ({ result } = await postStartPath(choice, true));

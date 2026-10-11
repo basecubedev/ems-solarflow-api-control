@@ -965,6 +965,7 @@ def test_step_04_requires_confirmation_to_replace_existing_install():
     assert "will replace config/config.json and docker-compose.yml" in deployment
     assert "backup" in deployment.lower()
     assert "data/ will not be deleted" in deployment
+    assert "start again from the new config" in " ".join(deployment.split())
     block = deployment.split('id="deployment-existing-install"', 1)[1]
     assert "hidden" in block.split(">", 1)[0]
     assert 'id="deployment-existing-replace"' in block

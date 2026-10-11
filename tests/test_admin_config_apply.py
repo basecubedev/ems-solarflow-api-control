@@ -14,6 +14,7 @@ from admin.config_export import (
 )
 from admin.config_preview import ConfigPreviewGenerator
 from admin.install_context import detect_install_context
+from ems.runtime_state import pending_runtime_reset, request_runtime_reset
 
 pytestmark = [
     pytest.mark.admin,
@@ -25,7 +26,7 @@ pytestmark = [
 
 
 TEMPLATE = {
-    "system": {"max_total_power": 800},
+    "system": {"max_total_power": 800, "runtime_state_path": "data/runtime-state.json"},
     "devices": [
         {
             "name": "WR1",
@@ -296,3 +297,190 @@ def test_apply_failure_leaves_existing_config_unchanged(tmp_path):
         service.apply(_draft(), 1)
 
     assert target.read_bytes() == original
+
+
+def _request_marker(install_root):
+    return install_root / "data" / "runtime-state.json.reset-requested"
+
+
+def _runtime_path(install_root):
+    return str(install_root / "data" / "runtime-state.json")
+
+
+def _config_sha(install_root):
+    return hashlib.sha256((install_root / "config" / "config.json").read_bytes()).hexdigest()
+
+
+def test_a_setup_apply_asks_the_next_ems_start_for_a_fresh_runtime_state(tmp_path):
+    install_root = tmp_path / "ems"
+    (install_root / "data").mkdir(parents=True)
+    (install_root / "data" / "runtime-state.json").write_text(
+        json.dumps({"system": {"enabled": False}}), encoding="utf-8"
+    )
+    service = _service(tmp_path / "admin", install_root)
+
+    result = service.apply(_draft(), 1)
+
+    assert result["ok"] is True
+    assert pending_runtime_reset(_runtime_path(install_root)) == _config_sha(install_root)
+    assert json.loads(
+        (install_root / "data" / "runtime-state.json").read_text(encoding="utf-8")
+    ) == {"system": {"enabled": False}}
+
+
+def test_a_maintenance_apply_leaves_the_runtime_state_alone(tmp_path):
+    install_root = tmp_path / "ems"
+    service = _service(tmp_path / "admin", install_root)
+    service.apply(_draft(), 1)
+    _request_marker(install_root).unlink()
+    target = install_root / "config" / "config.json"
+    revision = hashlib.sha256(target.read_bytes()).hexdigest()
+
+    service.apply_maintenance(target.read_bytes() + b"\n", revision)
+
+    assert not _request_marker(install_root).exists()
+
+
+def test_a_request_that_cannot_be_left_leaves_the_config_as_it_was(tmp_path):
+    install_root = tmp_path / "ems"
+    _request_marker(install_root).mkdir(parents=True)
+    (_request_marker(install_root) / "occupied").write_text("", encoding="utf-8")
+    service = _service(tmp_path / "admin", install_root)
+
+    with pytest.raises(OSError):
+        service.apply(_draft(), 1)
+
+    assert not (install_root / "config" / "config.json").exists()
+
+
+def test_a_refused_setup_apply_keeps_a_request_left_before_it(tmp_path):
+    install_root = tmp_path / "ems"
+    service = _service(tmp_path / "admin", install_root)
+    service.apply(_draft(), 1)
+    installed = _config_sha(install_root)
+    other = [dict(item, ip="192.168.1.99") if item["role"] == "inverter" else item for item in _draft()]
+    change = service.config_export.prepare(other, 1, expected_revision="0" * 64)
+
+    with pytest.raises(ConfigChangedError):
+        service.apply(other, 1, prepared=change)
+
+    assert pending_runtime_reset(_runtime_path(install_root)) == installed
+
+
+def test_a_maintenance_edit_carries_the_setups_request_to_its_config(tmp_path):
+    install_root = tmp_path / "ems"
+    service = _service(tmp_path / "admin", install_root)
+    service.apply(_draft(), 1)
+    target = install_root / "config" / "config.json"
+
+    service.apply_maintenance(target.read_bytes() + b"\n", _config_sha(install_root))
+
+    assert pending_runtime_reset(_runtime_path(install_root)) == _config_sha(install_root)
+
+
+def _failing_directory_fsync(monkeypatch, install_root):
+    from admin import config_apply as config_apply_module
+
+    real = config_apply_module._fsync_directory
+
+    def failing(directory):
+        if str(directory) == str(install_root / "config"):
+            raise OSError(5, "Input/output error")
+        return real(directory)
+
+    monkeypatch.setattr(config_apply_module, "_fsync_directory", failing)
+
+
+def test_a_setup_config_that_lands_before_an_error_keeps_its_request(tmp_path, monkeypatch):
+    install_root = tmp_path / "ems"
+    service = _service(tmp_path / "admin", install_root)
+    _failing_directory_fsync(monkeypatch, install_root)
+
+    with pytest.raises(OSError):
+        service.apply(_draft(), 1)
+
+    assert pending_runtime_reset(_runtime_path(install_root)) == _config_sha(install_root)
+
+
+def test_a_maintenance_edit_that_lands_before_an_error_still_carries_the_request(
+    tmp_path, monkeypatch
+):
+    install_root = tmp_path / "ems"
+    service = _service(tmp_path / "admin", install_root)
+    service.apply(_draft(), 1)
+    target = install_root / "config" / "config.json"
+    replaced = _config_sha(install_root)
+    _failing_directory_fsync(monkeypatch, install_root)
+
+    with pytest.raises(OSError):
+        service.apply_maintenance(target.read_bytes() + b"\n", replaced)
+
+    assert pending_runtime_reset(_runtime_path(install_root)) == _config_sha(install_root)
+
+
+def test_a_request_that_cannot_follow_an_edit_never_fails_the_committed_edit(
+    tmp_path, monkeypatch
+):
+    from admin import config_apply as config_apply_module
+
+    install_root = tmp_path / "ems"
+    service = _service(tmp_path / "admin", install_root)
+    service.apply(_draft(), 1)
+    target = install_root / "config" / "config.json"
+
+    def refusing(*_args):
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(config_apply_module, "carry_runtime_reset", refusing)
+
+    result = service.apply_maintenance(target.read_bytes() + b"\n", _config_sha(install_root))
+
+    assert result["ok"] is True and result["changed"] is True
+
+
+def test_a_put_back_that_fails_never_hides_the_applys_own_error(tmp_path, monkeypatch):
+    from admin import config_apply as config_apply_module
+
+    install_root = tmp_path / "ems"
+    service = _service(tmp_path / "admin", install_root)
+    service.apply(_draft(), 1)
+    other = [dict(item, ip="192.168.1.99") if item["role"] == "inverter" else item for item in _draft()]
+    change = service.config_export.prepare(other, 1, expected_revision="0" * 64)
+    real = config_apply_module.request_runtime_reset
+    calls = []
+
+    def put_back_fails(path, digest):
+        calls.append(digest)
+        if len(calls) > 1:
+            raise OSError(28, "No space left on device")
+        return real(path, digest)
+
+    monkeypatch.setattr(config_apply_module, "request_runtime_reset", put_back_fails)
+
+    with pytest.raises(ConfigChangedError):
+        service.apply(other, 1, prepared=change)
+
+    assert len(calls) == 2
+
+
+def test_a_maintenance_edit_leaves_a_void_request_alone(tmp_path):
+    install_root = tmp_path / "ems"
+    service = _service(tmp_path / "admin", install_root)
+    service.apply(_draft(), 1)
+    request_runtime_reset(_runtime_path(install_root), "0" * 64)
+    target = install_root / "config" / "config.json"
+
+    service.apply_maintenance(target.read_bytes() + b"\n", _config_sha(install_root))
+
+    assert pending_runtime_reset(_runtime_path(install_root)) == "0" * 64
+
+
+def test_a_refused_setup_apply_asks_for_nothing(tmp_path):
+    install_root = tmp_path / "ems"
+    service = _service(tmp_path / "admin", install_root)
+    change = service.config_export.prepare(_draft(), 1, expected_revision="0" * 64)
+
+    with pytest.raises(ConfigChangedError):
+        service.apply(_draft(), 1, prepared=change)
+
+    assert not _request_marker(install_root).exists()

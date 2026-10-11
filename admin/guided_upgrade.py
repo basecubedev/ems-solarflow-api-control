@@ -19,7 +19,7 @@ from pathlib import Path
 
 from ems import config as ems_config
 
-from admin.deployment import DockerCli, DockerCompose, DockerError
+from admin.deployment import EMS_SERVICE, DockerCli, DockerCompose, DockerError
 from admin.ems_cli import EmsCliDiagnostics
 from admin.ems_tool import EmsToolRunner, mode_detail
 from admin.install_context import detect_install_context
@@ -31,7 +31,6 @@ from admin.zendure_mqtt_migration_review import (
     zendure_mqtt_migration_review,
 )
 
-EMS_SERVICE = "ems"
 
 # Target-image verification copy for the resolved-System-Build check.
 _VERIFY_OK_DETAIL = "Target image identity verified."

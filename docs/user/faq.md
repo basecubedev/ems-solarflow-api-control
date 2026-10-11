@@ -61,8 +61,9 @@ backups. See the [Admin setup guide](admin-setup.md) and
 
 Not silently. Config changes are previewed and confirmed before writing, and any
 existing config is backed up first. **Set up a new system** replaces the config
-with one built from the release template; to keep your settings, use **Manage
-my existing system**.
+with one built from the release template, and the dashboard's runtime settings
+with ones built from that config; to keep your settings, use **Manage my
+existing system**.
 
 ## Operating models
 

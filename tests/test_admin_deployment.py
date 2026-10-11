@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Deployment preparation service tests (no real Docker daemon)."""
 
+import hashlib
 import itertools
 import json
 import os
@@ -28,6 +29,7 @@ from admin import deployment
 from admin.guided_setup_workflow import GuidedSetupWorkflowStore
 from admin.releases import ReleaseError
 from tests.helpers.setup_config import adopt_generated_config
+from ems.runtime_state import pending_runtime_reset, runtime_state_path_for_config
 
 pytestmark = [
     pytest.mark.admin,
@@ -147,7 +149,7 @@ class _FakeInstaller:
 
 
 class _FakeCompose:
-    def __init__(self, services=None, error=None, logs=""):
+    def __init__(self, services=None, error=None, logs="", before_up=None):
         self.services = services if services is not None else [
             {
                 "name": "ems-solarflow-api-control",
@@ -159,13 +161,19 @@ class _FakeCompose:
             }
         ]
         self.error = error
+        self.before_up = before_up
         self.up_calls = []
         self.ps_calls = []
         self.log_output = logs
 
-    def up(self, workspace, profiles=(), on_line=None):
+    def up(self, workspace, profiles=(), services=(), force_recreate=False, on_line=None):
         self.up_calls.append(
-            {"workspace": str(workspace), "profiles": list(profiles)}
+            {
+                "workspace": str(workspace),
+                "profiles": list(profiles),
+                "services": list(services),
+                "force_recreate": force_recreate,
+            }
         )
         if self.error is not None:
             raise self.error
@@ -174,6 +182,10 @@ class _FakeCompose:
         self.ps_calls.append(str(workspace))
         if self.error is not None:
             raise self.error
+        if self.before_up is not None and not self.up_calls:
+            if isinstance(self.before_up, Exception):
+                raise self.before_up
+            return list(self.before_up)
         return list(self.services)
 
     def logs(self, workspace, service="ems"):
@@ -411,6 +423,101 @@ def test_prepare_backs_up_existing_config_and_compose(tmp_path):
     assert saved_config.read_text(encoding="utf-8") == '{"old": true}\n'
     # Backup paths are reported to the UI on the prepared job.
     assert any(str(path) in job["backups"] for path in backups)
+
+
+def test_prepare_asks_the_next_ems_start_for_a_fresh_runtime_state(tmp_path):
+    install_root = tmp_path / "ems"
+    service = _service_default_workspace(tmp_path, install_root)
+
+    _, job = _run_prepare(service)
+
+    assert job["status"] == "succeeded"
+    live = install_root / "config" / "config.json"
+    written = live.read_bytes()
+    runtime_path = runtime_state_path_for_config(live, json.loads(written))
+    assert pending_runtime_reset(runtime_path) == hashlib.sha256(written).hexdigest()
+
+
+def test_the_request_is_left_before_the_config_is_written(tmp_path, monkeypatch):
+    install_root = tmp_path / "ems"
+    service = _service_default_workspace(tmp_path, install_root)
+
+    def failing(_config):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(service, "_write_config", failing)
+
+    _, job = _run_prepare(service)
+
+    assert job["status"] == "failed"
+    payload = Path(service.config_export.target_path).read_bytes()
+    live = install_root / "config" / "config.json"
+    runtime_path = runtime_state_path_for_config(live, json.loads(payload))
+    assert pending_runtime_reset(runtime_path) == hashlib.sha256(payload).hexdigest()
+
+
+def test_a_request_refused_for_another_reason_fails_the_prepare_at_once(
+    tmp_path, monkeypatch
+):
+    install_root = tmp_path / "ems"
+    service = _service_default_workspace(tmp_path, install_root)
+    calls = []
+
+    def broken(path, digest):
+        calls.append(path)
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(deployment, "request_runtime_reset", broken)
+
+    _, job = _run_prepare(service)
+
+    assert job["status"] == "failed"
+    assert len(calls) == 1
+    assert not (install_root / "config" / "config.json").exists()
+
+
+def test_a_prepare_failing_after_the_config_still_leaves_its_request(tmp_path):
+    install_root = tmp_path / "ems"
+    service = _service_default_workspace(tmp_path, install_root)
+    service.installer = _FakeInstaller(error=RuntimeError("installer failed"))
+
+    _, job = _run_prepare(service)
+
+    assert job["status"] == "failed"
+    live = install_root / "config" / "config.json"
+    written = live.read_bytes()
+    runtime_path = runtime_state_path_for_config(live, json.loads(written))
+    assert pending_runtime_reset(runtime_path) == hashlib.sha256(written).hexdigest()
+
+
+@pytest.mark.parametrize("repaired,status", [(True, "succeeded"), (False, "failed")])
+def test_a_request_data_refuses_is_left_again_after_the_permission_repair(
+    tmp_path, monkeypatch, repaired, status
+):
+    """A root-owned data/ refuses it until the repair hands it to the EMS user."""
+
+    install_root = tmp_path / "ems"
+    service = _service_default_workspace(tmp_path, install_root)
+    real = deployment.request_runtime_reset
+    calls = []
+
+    def refusing(path, digest):
+        calls.append(path)
+        if not (repaired and service.docker.permission_repairs):
+            raise PermissionError(13, "Permission denied")
+        return real(path, digest)
+
+    monkeypatch.setattr(deployment, "request_runtime_reset", refusing)
+
+    _, job = _run_prepare(service)
+
+    assert job["status"] == status
+    assert len(calls) == 2
+    live = install_root / "config" / "config.json"
+    written = live.read_bytes()
+    runtime_path = runtime_state_path_for_config(live, json.loads(written))
+    expected = hashlib.sha256(written).hexdigest() if status == "succeeded" else None
+    assert pending_runtime_reset(runtime_path) == expected
 
 
 # --- existing-install confirmation guard ---------------------------------
@@ -1305,7 +1412,7 @@ def test_data_workspace_permission_detail_includes_socket_mapping_hint():
 
 
 def test_start_runs_compose_in_prepared_workspace_with_analytics_profile(tmp_path):
-    compose = _FakeCompose()
+    compose = _FakeCompose(before_up=[])
     service = _service(tmp_path, influx=BUNDLED, compose=compose)
     _run_prepare(service)
 
@@ -1316,6 +1423,8 @@ def test_start_runs_compose_in_prepared_workspace_with_analytics_profile(tmp_pat
         {
             "workspace": str(tmp_path / "deployment"),
             "profiles": ["with-analytics"],
+            "services": [],
+            "force_recreate": False,
         }
     ]
     assert [step["key"] for step in job["steps"]] == [
@@ -1415,7 +1524,7 @@ def test_start_retries_dashboard_probe_without_restarting_containers(tmp_path):
         attempts.append(True)
         return len(attempts) == 3
 
-    compose = _FakeCompose()
+    compose = _FakeCompose(before_up=[])
     service = _service(tmp_path, compose=compose, dashboard_probe=_probe)
     _run_prepare(service)
 
@@ -1425,6 +1534,47 @@ def test_start_retries_dashboard_probe_without_restarting_containers(tmp_path):
     assert job["dashboard_reachable"] is True
     assert len(attempts) == 3
     assert len(compose.up_calls) == 1
+
+
+@pytest.mark.parametrize(
+    "before_up",
+    [
+        pytest.param(None, id="an EMS already running"),
+        pytest.param(
+            DockerError("compose_ps_failed", "ps failed"), id="its state unreadable"
+        ),
+    ],
+)
+def test_start_recreates_an_ems_that_runs_on_the_config_it_replaced(tmp_path, before_up):
+    """Compose leaves a running service alone when only its mounted config changed."""
+
+    compose = _FakeCompose(before_up=before_up)
+    service = _service(tmp_path, influx=BUNDLED, compose=compose)
+    _run_prepare(service)
+
+    _, job = _run_start(service)
+
+    assert job["status"] == "succeeded"
+    assert compose.up_calls[0] == {
+        "workspace": str(tmp_path / "deployment"),
+        "profiles": ["with-analytics"],
+        "services": ["ems"],
+        "force_recreate": True,
+    }
+    assert compose.up_calls[1]["services"] == []
+    assert len(compose.up_calls) == 2
+
+
+def test_start_creates_a_stopped_ems_without_recreating_it(tmp_path):
+    stopped = [{"name": "ems-solarflow-api-control", "service": "ems", "state": "exited"}]
+    compose = _FakeCompose(before_up=stopped)
+    service = _service(tmp_path, compose=compose)
+    _run_prepare(service)
+
+    _, job = _run_start(service)
+
+    assert job["status"] == "succeeded"
+    assert [call["force_recreate"] for call in compose.up_calls] == [False]
 
 
 def _set_fixed_ems_container(service):

@@ -37,13 +37,17 @@ Admin Console never invents its own config format or its own backup format — i
 calls the same EMS tools a shell user would run directly.
 
 The Admin Console is config-authoritative and does not reconcile the
-runtime-state device lifecycle. The one exception is config → runtime
-convergence: on maintenance Apply it mirrors the whitelisted overlapping scalar
-keys it changed into `runtime-state.json`, but only through the EMS-owned
-runtime-write whitelist (`dashboard/runtime_write.py`) — the same validated
-writer the Dashboard uses — so it introduces no second runtime format and stays
-inside the whitelist safety property. It already writes `runtime-state.json`
-wholesale during restore.
+runtime-state device lifecycle. Besides restoring a backup, it touches runtime
+state in two ways only. Config → runtime convergence: on maintenance Apply it mirrors the whitelisted
+overlapping scalar keys it changed into `runtime-state.json`, but only through
+the EMS-owned runtime-write whitelist (`dashboard/runtime_write.py`) — the same
+validated writer the Dashboard uses — so it introduces no second runtime format
+and stays inside the whitelist safety property. And a fresh Setup leaves a reset
+request beside the file, which only the EMS starting on the new config honours
+(`ems.runtime_state.start_runtime_state`) and only while the installed config is
+the one the request names; the Admin never sets the file aside itself. A restore
+writes `runtime-state.json` wholesale, and a config it puts back voids a pending
+reset request.
 
 ## Standard deployment layout
 

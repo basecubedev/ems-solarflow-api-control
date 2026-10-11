@@ -6,8 +6,8 @@ the source of truth. It is a Docker-only path.
 
 Use this for a fresh install or a deliberate reinstall. To update or change an
 existing system, use [admin-maintenance.md](admin-maintenance.md) instead. Setup
-writes only `config/config.json` (backing up any existing config first); it does
-not touch `data/` or runtime databases. It builds that file from the release
+writes `config/config.json` (backing up any existing config first) and does not
+touch the runtime databases in `data/`. It builds that file from the release
 template and your choices alone: a config already in place is replaced, not
 merged, and the only thing taken from it is where the shared password file
 lives, so the password you signed in with keeps working. Everything else in the
@@ -15,12 +15,13 @@ config starts at the release defaults unless you choose otherwise in Setup: dry
 run is off and the write gates are open, the dashboard listens on port 8080
 without HTTPS, data file locations are the standard ones, and broker profiles
 are only those Setup builds from what you select. What the dashboard keeps in
-`data/runtime-state.json` is not part of the config: system on/off, the total
-power limit, loop interval and minimum output, each device's on/off and limits,
-and winter and AC charging on/off survive the reinstall and override the values
-Setup writes, and a device keeps its entry under a new name as long as its serial
-stays the same (see
-[runtime state](../technical/runtime-state.md#device-lifecycle-reconciliation)).
+`data/runtime-state.json` -- system on/off, the total power limit, loop interval
+and minimum output, each device's on/off and limits, winter and AC charging
+on/off -- starts afresh too: Setup leaves a request beside that file, and the
+EMS that starts on the new config keeps the old file as
+`data/runtime-state.json.before-setup-<UTC time>` and builds a new one from the
+config. A device you had switched off in the dashboard is active again (see
+[runtime state](../technical/runtime-state.md#fresh-setup-reset)).
 
 ## Start
 

@@ -203,8 +203,11 @@ validates the generated config, backs up any existing config to
 `data/admin/backups/config/config-before-admin-apply-YYYYMMDD-HHMMSS.json`, then
 writes atomically. Fresh installs create `config/config.json` without a backup;
 existing installs are always preserved as a backup before being replaced. Apply
-touches only `config.json` — it never moves `data/`, `docker-compose.yml`, or
-runtime databases. Preview stays non-destructive.
+writes `config.json` and, beside the runtime state, the request that the next
+EMS start rebuild it from that config (`data/runtime-state.json.reset-requested`,
+left before the config so failing to leave it changes nothing); it never moves
+`data/`, `docker-compose.yml`, or runtime databases. Preview stays
+non-destructive.
 
 Verified discovered devices replace only the template's `devices` and
 `grid_meter` values; all other release-specific defaults remain intact. The
@@ -1187,12 +1190,17 @@ Once confirmed (or on a fresh/Admin-owned install), it copies an existing
 `config/config.json` or `docker-compose.yml` to
 `${EMS_INSTALL_DIR}/data/admin/backups/` before writing atomically, reports the
 backup paths on the prepare job, and never deletes `data/` or its runtime
-databases — so the standard layout is never silently replaced. Admin-owned state
+databases — so the standard layout is never silently replaced. Before the config
+it leaves the request that the next EMS start rebuild `data/runtime-state.json`
+from that config (see [runtime state](runtime-state.md#fresh-setup-reset)); when
+`data/` refuses it until the permission repair, it is left right after the
+repair. Admin-owned state
 (the prepared marker) stays under `data/admin/state/`; `data/admin/` holds only
 Admin state, backups, staging, and logs. Step 05 is the only wizard step that runs
 `docker compose up -d`; it checks the prepared marker, config hash, and mount
-writability first, then reports Compose service state and dashboard
-reachability. If `config/` or `data/` later have incorrect ownership, the wizard
+writability first, recreates an EMS that already runs (`up -d --force-recreate
+ems`, since Compose leaves a running service alone when only its mounted config
+changed), then reports Compose service state and dashboard reachability. If `config/` or `data/` later have incorrect ownership, the wizard
 can repair only those directories and retry the preflight. It does not remove
 runtime data or Docker volumes.
 
