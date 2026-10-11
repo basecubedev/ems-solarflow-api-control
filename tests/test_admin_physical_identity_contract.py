@@ -135,6 +135,11 @@ PROPOSAL_STATE_HELPER_NAMES = (
     "mconfigDraftDevicesMatchingCandidate",
     "mconfigPristineHasCandidateConnection",
     "mconfigDraftHasProposal",
+    "isExternalMqttProposal",
+    "mconfigExternalProposalState",
+    "issuedCatalogDeviceId",
+    "issuedCatalogId",
+    "mconfigIsExternalDevice",
     "mconfigMqttProposalState",
 )
 

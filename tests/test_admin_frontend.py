@@ -4942,7 +4942,7 @@ def test_setup_unified_overview_uses_hardware_card_list_layout():
     assert '"hardware-card-body"' in card
     assert "data-unified-toggle" in card
     # Facts grid mirrors the config list: IP / Serial / API family / Type.
-    for label in ('"IP"', '"Serial"', '"API family"', '"Type"'):
+    for label in ('"IP"', "mqttIdentityFact(device, readOnly)", '"API family"', '"Type"'):
         assert label in card
     # The one setup-specific extra is kept.
     assert "Selected by priority: " in card
@@ -4968,6 +4968,7 @@ def _run_maintenance_discovery_node(setup):
             "mconfigFindInverterMatch",
             "maintenanceMqttProposals",
             "mconfigIsMqttDevice",
+            "mconfigIsExternalDevice",
             "buildMaintenanceDiscoveryReview",
         )
     )
@@ -7380,6 +7381,11 @@ def run_mconfig_add_mqtt_proposal(proposal):
             "mconfigDraftDevicesMatchingCandidate",
             "mconfigPristineHasCandidateConnection",
             "mconfigDraftHasProposal",
+            "isExternalMqttProposal",
+            "mconfigExternalProposalState",
+            "issuedCatalogDeviceId",
+            "issuedCatalogId",
+            "mconfigIsExternalDevice",
             "mconfigMqttProposalState",
             "mqttProposalBrokerRef",
             "mqttProposalBrokerProfile",

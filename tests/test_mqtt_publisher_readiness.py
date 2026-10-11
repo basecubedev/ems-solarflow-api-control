@@ -79,7 +79,7 @@ class _FakePahoClient:
     def is_connected(self):
         return self._connected_after_connack
 
-    def publish(self, topic, payload, qos=1):
+    def publish(self, topic, payload, qos=1, retain=False):
         self.events.append("publish")
         return _FakeInfo(self._publish_rc, published=self._published)
 

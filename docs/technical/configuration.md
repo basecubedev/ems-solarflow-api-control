@@ -1157,15 +1157,20 @@ A message that cannot be read leaves the previous values in place, because a
 zero would look like a real measurement of nothing. It does not count as a sign
 of life either.
 
-**Publish at least every 30 seconds, also when nothing changed.**
+**Publish retained, at least every 30 seconds, also when nothing changed.**
 Once no readable value has arrived for `zendure_mqtt.stale_after_seconds` (60
 seconds by default), the device shows as stale. Its last values stay in the
 totals, but the device power stops counting as a measurement, and the energy
 statistics skip every sample until it reports again. A bridge that publishes
 only on change falls silent at night, when the values stop changing; send them
-on a timer instead, the `state` object for instance. EMS reads a retained value
-like any other, so after a restart or a reconnect to the broker a bridge that
-has since died still counts with its last values until the device turns stale.
+on a timer instead, the `state` object for instance. Set the retain flag as
+well: Admin discovery listens for a few seconds only and finds a device by its
+retained values, where it would mostly miss one that sends every 30 seconds. EMS
+reads a retained value like any other, so after a restart or a reconnect to the
+broker a bridge that has since died still counts with its last values until the
+device turns stale. A
+device you take away stays on offer in discovery while its retained topics
+remain; clear each with an empty retained message.
 
 **It is never written to.** The type has no control path: an entry carrying
 `capabilities.write_output_limit: true` is refused, and such an entry reaches neither
@@ -1211,7 +1216,46 @@ through, so each is an error rather than a warning:
 repeats a code with a `zendure_mqtt_` prefix (`zendure_mqtt_external_mqtt_family_unknown`,
 for example), and its broker-profile check reports an unknown profile as
 `zendure_mqtt_broker_ref_unknown`. A broker profile that is disabled or
-incomplete is refused for such an entry as for any MQTT device.
+incomplete is refused for such an entry as for any MQTT device, with the same
+message Setup gives for any device. Where an external device's own entry or
+its broker profile blocks a Maintenance apply, the page says what it can change
+there -- name, switch, connection, removal -- and that everything else is
+changed in `config.json`.
+
+**Found by discovery, adopted in Setup and Maintenance.** Admin discovery
+subscribes to each catalog entry's topics on every local broker it finds and
+offers a device once it has seen a readable `inverterPower` from it, on its own
+topic or inside `state`, as a read-only device. One that publishes only the
+optional keys is not offered. The payload rules are the runtime's own, so
+nothing is offered that would then stay dark. Setup
+and Maintenance adopt it like any other discovered device. The entry they write
+holds its name, `"enabled"` (true unless switched off before applying) and the
+`mqtt` block above plus the broker's
+`source`; everything but the name comes from the server's own discovery result
+rather than from the browser, and there are no common device values — no power limit, SoC
+limit or winter policy, which mean nothing for a device that is only read. A
+Maintenance row takes only an offer of its own kind: a Zendure row naming a
+catalog device's offer is refused before anything is merged.
+
+**An installed entry takes the edits every device has, and no others.** The
+maintenance page renames it, switches it on or off (off: kept, but neither read
+nor shown nor counted), moves it to another broker with **Use connection** and
+removes it -- and writes everything else back unchanged rather than treating it
+as the nearest kind it knows. A move is accepted only for a proposal the server
+resolved from current discovery that names the same catalog family and device
+id; the new broker profile is provisioned as for any adopted connection, local
+only. **Remove** names the entry by the server-issued reference described below
+(`removed_external` in the draft), and only that takes it out; a reference that
+names no installed entry is refused (`external_mqtt_device_not_installed`), and
+so is a draft that both keeps and removes it. The browser only says which installed
+entry stays, and says it by a reference the server issued with the draft rather
+than by name, because the browser view masks some names: whatever it sends as
+the entry is ignored. A draft row whose reference names no installed external
+entry and no current discovery offer, or one another row already names
+(`external_mqtt_device_not_installed`), is refused, and so is a draft that leaves
+an installed external entry out without that removal, marks it removed or edits
+it as another kind (`external_mqtt_device_read_only`). The page validates the entry by the rules
+above, not as a Local API device. Everything else on that page stays editable beside it.
 
 Staleness, broker profiles, credentials and TLS work exactly as they do for
 every other MQTT device; see the section below.

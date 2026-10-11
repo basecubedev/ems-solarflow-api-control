@@ -184,6 +184,9 @@ _CARD_HELPERS = _STATE_HELPERS + (
     "renderConnectionCandidateAction",
     "connectionCandidateNote",
     "renderConnectionPill",
+    "isExternalMqttProposal",
+    "mqttIdentityText",
+    "mqttIdentityFact",
     "renderMqttCandidateCard",
     "renderConfigAvailableCard",
 )
