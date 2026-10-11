@@ -107,7 +107,7 @@ function externalProposal(page: Page) {
 function externalCard(page: Page) {
   return page
     .locator("#maintenance-config-inverters .hardware-card")
-    .filter({ hasText: "External device · read over MQTT" })
+    .filter({ hasText: "External device ·" })
     .first();
 }
 
@@ -182,6 +182,80 @@ test("Maintenance: a discovered catalog device is added, renamed and removed lik
   await expect(externalCard(page)).toHaveCount(0);
   await runDiscovery(page);
   await expect(externalProposal(page).getByRole("button", { name: "Add inverter" })).toBeEnabled();
+});
+
+const RETIRED = "E2EKOSTAL0001";
+
+function namespaceBroker() {
+  const host = "192.168.50.10";
+  return {
+    host,
+    port: 1883,
+    devices: [
+      {
+        broker_id: `mqtt:${host}:1883`,
+        broker_host: host,
+        broker_port: 1883,
+        source_type: "local_mqtt",
+        topic_family: "ems_solarflow",
+        device_id: RETIRED,
+        serial_number: null,
+        display_name: "External device",
+        metrics_seen: ["outputHomePower"],
+        topics_seen: [`ems-solarflow/${RETIRED}/inverterPower`],
+      },
+    ],
+  };
+}
+
+function retiredProposal(page: Page) {
+  return page
+    .locator("#maintenance-discovery-results .mconfig-discovery-proposal-card")
+    .filter({ hasText: RETIRED })
+    .first();
+}
+
+test("Maintenance: an entry an earlier build adopted moves into the namespace with Use connection", { tag: ["@maintenance"] }, async ({
+  page,
+  seedAdminScenario,
+  seedDiscoveryState,
+}) => {
+  test.setTimeout(120_000);
+  await mockNetwork(page);
+  const login = new LoginPage(page);
+  await login.open();
+  await login.authenticate();
+  await seedAdminScenario("maintenance_retired_external_device");
+  await seedDiscoveryState({ local_mqtt_brokers: [namespaceBroker()] });
+  await openMaintenance(page);
+
+  const retired = externalCard(page);
+  await expect(retired.locator(".hardware-card-model")).toHaveText("External device · not read");
+  await expect(retired.locator(".hardware-card-meta")).toContainText("Kostal Piko");
+  await expect(retired.locator(".hardware-card-meta")).toContainText("· not read");
+  await retired.locator(".hardware-card-toggle").click();
+  await expect(retired).toContainText("earlier development build");
+
+  await runDiscovery(page);
+  await retiredProposal(page).getByRole("button", { name: "Use connection" }).click();
+  await expect(externalCard(page).locator(".hardware-card-model")).toHaveText(
+    "External device · read on apply",
+  );
+  await expect(externalCard(page)).toContainText("read as discovery found it on apply");
+  await expect(externalCard(page)).toContainText("once this page is applied");
+  await expect(externalCard(page)).not.toContainText("not read");
+  await applyDraft(page);
+
+  await openMaintenance(page);
+  const moved = externalCard(page);
+  await expect(moved.locator(".hardware-card-model")).toHaveText("External device · read over MQTT");
+  await expect(moved.locator(".hardware-card-meta")).toContainText("Kostal Piko");
+  await expect(moved.locator(".hardware-card-meta")).toContainText("· read over MQTT");
+  await expect(moved).not.toContainText("not read");
+  await moved.locator(".hardware-card-toggle").click();
+  await expect(moved).not.toContainText("earlier development build");
+  await runDiscovery(page);
+  await expect(retiredProposal(page).getByRole("button", { name: "In config" })).toBeDisabled();
 });
 
 test("Setup: discovery shows a catalog device as the read-only inverter it is, and Add inverter takes it", { tag: ["@setup"] }, async ({

@@ -311,6 +311,37 @@ def test_an_external_inverter_has_its_own_card_not_a_zendure_editor():
     assert "EXAMPLE0000001" in text
 
 
+_RETIRED_MQTT = {
+    "broker_ref": "house",
+    "topic_family": "kostal_piko",
+    "device_id": "EXAMPLE0000001",
+}
+
+
+def test_an_entry_of_a_retired_family_says_everywhere_that_it_is_not_read():
+    _local, retired = _configured_cards(_external_config(mqtt=dict(_RETIRED_MQTT)))
+
+    text = retired["text"]
+    assert "External device · not read" in text
+    assert "broker house · not read" in text
+    assert "earlier development build" in text
+    assert "read over MQTT" not in text
+
+
+def test_a_retired_entry_moved_by_use_connection_says_it_is_read_on_apply():
+    from admin.maintenance_config import build_maintenance_draft
+
+    draft = build_maintenance_draft(_external_config(mqtt=dict(_RETIRED_MQTT)))
+    draft["devices"][1]["proposal_id"] = "zendure-mqtt:opaque:g1"
+    _local, moved = _render("configured_devices", {}, draft={"devices": draft["devices"]})
+
+    text = moved["text"]
+    assert "External device · read on apply" in text
+    assert "read as discovery found it on apply" in text
+    assert "once this page is applied" in text
+    assert "not read" not in text
+
+
 def test_an_external_inverter_discovery_found_has_the_same_card():
     """Adopted in this session, before Apply: still nothing to edit."""
 

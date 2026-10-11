@@ -431,12 +431,17 @@ This path edits an existing installation.
   Discovery shows the installed device as **In config**, whatever the broker
   profile it sits on is called, and the same device on another broker as an
   alternative: **Use connection** moves it there on apply, keeping its name and
-  switch. **Remove** takes it out of the config. Its catalog family and device
-  id are not edited on this page, and its broker only through **Use
-  connection**; apart from name, switch and connection, applying writes the
-  installed entry back exactly as it is,
+  switch. **Remove** takes it out of the config. Its catalog family and
+  device id are not edited on this page, and its broker (and a retired
+  family) only through **Use connection**; apart from name, switch and
+  connection, applying writes the installed entry back exactly as it is,
   whatever the browser sends for it, and a draft that leaves the entry out
-  without its **Remove** is refused rather than applied.
+  without its **Remove** is refused rather than applied. An entry an earlier
+  development build adopted names topics EMS no longer reads; its card says
+  so, every apply is refused until it is moved or removed, and **Use
+  connection** on the device discovery finds under the same id in the
+  project's namespace moves it there, which also gives it the namespace's
+  catalog family.
 
   Local API, Local MQTT and Zendure Cloud MQTT are alternative control
   transports of the same logical inverter. Switching between them keeps the

@@ -844,6 +844,22 @@ def build_test_runtime(*, data_dir):
             ],
         }
 
+    def retired_external_device_config():
+        config = mixed_transport_config()
+        config["devices"].append(
+            {
+                "name": "Kostal Piko",
+                "type": "external_mqtt",
+                "enabled": True,
+                "mqtt": {
+                    "broker_ref": "local_mixed",
+                    "topic_family": "kostal_piko",
+                    "device_id": "E2EKOSTAL0001",
+                },
+            }
+        )
+        return config
+
     switch_serial = "SWITCH-SERIAL"
     # Cloud proposals always share the one reserved cloud broker ref.
     _CLOUD_SWITCH_REF = "zendure_cloud"
@@ -1464,6 +1480,8 @@ def build_test_runtime(*, data_dir):
                 pass
         elif scenario == "mixed_transports":
             write_install_config(mixed_transport_config())
+        elif scenario == "maintenance_retired_external_device":
+            write_install_config(retired_external_device_config())
         elif scenario == "mixed_transports_api_mqtt_switch":
             write_install_config(mixed_transport_config())
             seed_api_serial_local_candidate()

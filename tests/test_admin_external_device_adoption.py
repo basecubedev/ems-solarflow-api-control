@@ -20,6 +20,7 @@ import pytest
 from admin.mqtt_discovery import MqttBrokerDiscovery, MqttBrokerStore
 from admin.mqtt_topic_discovery import MqttTopicAggregator
 from admin.server import ScanRegistry, create_server
+from admin.zendure_mqtt_config_draft import EXTERNAL_DEVICE_EDIT_HINT
 from ems.zendure_mqtt.config_entries import (
     find_zendure_mqtt_broker_profile_issues,
     validate_external_mqtt_device_config,
@@ -761,6 +762,166 @@ def test_moving_back_onto_the_broker_it_is_on_changes_nothing(tmp_path, monkeypa
 
     assert status == 200 and payload.get("ok") is True, payload
     assert json.loads((config_dir / "config.json").read_bytes()) == json.loads(before)
+
+
+def _installed_retired(tmp_path, monkeypatch):
+    """The entry a development build adopted when the catalog read a Kostal Piko."""
+
+    config_dir = _installed_on_broker_a(tmp_path, monkeypatch)
+    config = json.loads((config_dir / "config.json").read_text(encoding="utf-8"))
+    (entry,) = _external_entries(config)
+    entry["enabled"] = True
+    entry["mqtt"]["topic_family"] = "kostal_piko"
+    (config_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    return config_dir
+
+
+def test_use_connection_moves_a_retired_entry_onto_the_device_of_its_id(
+    tmp_path, monkeypatch
+):
+    """Nothing reads the retired topics, so the bridge's new ones are a new connection.
+
+    Discovery offers the device it finds under the same id as that connection,
+    and Use connection takes it as for any device: the name and on/off stay,
+    and the family becomes the one the catalog reads.
+    """
+
+    config_dir = _installed_retired(tmp_path, monkeypatch)
+    srv, base = _serve_brokers(tmp_path, [(BROKER, INVERTER)])
+    try:
+        proposal = _external_proposal(base)
+        status, loaded = _request(f"{base}/api/admin/maintenance/config")
+        assert status == 200, loaded
+        (row,) = [d for d in loaded["draft"]["devices"] if d.get("kind") == "external_mqtt"]
+        assert row["catalog_retired"] is True
+        assert row["catalog_device_id"] == proposal["catalog_device_id"]
+        assert row["catalog_connection_id"] != proposal["catalog_connection_id"]
+        status, payload = _use_connection(base, proposal)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200 and payload.get("ok") is True, payload
+    config = json.loads((config_dir / "config.json").read_text(encoding="utf-8"))
+    (entry,) = _external_entries(config)
+    assert (entry["name"], entry["enabled"]) == ("Garage roof", True)
+    assert entry["mqtt"]["topic_family"] == "ems_solarflow"
+    _assert_the_runtime_reads_it(config)
+
+
+def test_a_retired_entry_refuses_any_other_change_and_names_the_way_out(
+    tmp_path, monkeypatch
+):
+    config_dir = _installed_retired(tmp_path, monkeypatch)
+    before = (config_dir / "config.json").read_bytes()
+    srv, base = _serve_brokers(tmp_path, [(BROKER, INVERTER)])
+    try:
+        status, loaded = _request(f"{base}/api/admin/maintenance/config")
+        assert status == 200, loaded
+        draft = loaded["draft"]
+        (row,) = [d for d in draft["devices"] if d.get("kind") == "external_mqtt"]
+        row["name"] = "Kostal"
+        status, payload = _request(
+            f"{base}/api/admin/maintenance/config/apply",
+            "POST",
+            {"draft": draft, "revision": loaded["revision"], "confirm": True},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 400, payload
+    (error,) = [
+        e for e in payload["validation"]["errors"]
+        if e["code"] == "external_mqtt_family_unknown"
+    ]
+    assert "same device id" in error["message"]
+    assert "Use connection" in error["message"]
+    assert "can be renamed" not in error["message"]
+    assert (config_dir / "config.json").read_bytes() == before
+
+
+def test_no_error_about_a_retired_entry_offers_an_edit_it_refuses(tmp_path, monkeypatch):
+    config_dir = _installed_retired(tmp_path, monkeypatch)
+    config = json.loads((config_dir / "config.json").read_text(encoding="utf-8"))
+    config["zendure_mqtt"]["brokers"]["fhem"]["enabled"] = False
+    (config_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    srv, base = _serve_brokers(tmp_path, [(BROKER, INVERTER)])
+    try:
+        status, loaded = _request(f"{base}/api/admin/maintenance/config")
+        assert status == 200, loaded
+        status, payload = _request(
+            f"{base}/api/admin/maintenance/config/apply",
+            "POST",
+            {"draft": loaded["draft"], "revision": loaded["revision"], "confirm": True},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    errors = payload["validation"]["errors"]
+    assert {"external_mqtt_family_unknown", "zendure_mqtt_broker_ref_disabled"} <= {
+        error["code"] for error in errors
+    }, errors
+    assert not [error for error in errors if "can be renamed" in error["message"]]
+    for error in errors:
+        assert error["message"].endswith(".") and not error["message"].endswith(".."), error
+
+
+def test_every_error_about_a_current_entry_says_what_this_page_can_change(
+    tmp_path, monkeypatch
+):
+    config_dir = _installed_on_broker_a(tmp_path, monkeypatch)
+    config = json.loads((config_dir / "config.json").read_text(encoding="utf-8"))
+    config["zendure_mqtt"]["brokers"]["fhem"]["enabled"] = False
+    (entry,) = _external_entries(config)
+    entry["enabled"] = True
+    entry["capabilities"] = {"write_output_limit": True}
+    (config_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    srv, base = _serve_brokers(tmp_path, [(BROKER, INVERTER)])
+    try:
+        status, loaded = _request(f"{base}/api/admin/maintenance/config")
+        assert status == 200, loaded
+        status, payload = _request(
+            f"{base}/api/admin/maintenance/config/apply",
+            "POST",
+            {"draft": loaded["draft"], "revision": loaded["revision"], "confirm": True},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    errors = payload["validation"]["errors"]
+    codes = {error["code"] for error in errors}
+    assert "zendure_mqtt_broker_ref_disabled" in codes, errors
+    assert codes - {"zendure_mqtt_broker_ref_disabled"}, errors
+    for error in errors:
+        message = error["message"]
+        assert message.endswith(". " + EXTERNAL_DEVICE_EDIT_HINT), error
+        assert ".. " not in message, error
+
+
+@pytest.mark.parametrize(
+    "row_overrides",
+    [
+        pytest.param({}, id="as-the-page-sends-it"),
+        pytest.param({"original_name": ""}, id="without-the-original-name"),
+    ],
+)
+def test_a_retired_entry_is_moved_onto_no_other_id(tmp_path, monkeypatch, row_overrides):
+    config_dir = _installed_retired(tmp_path, monkeypatch)
+    before = (config_dir / "config.json").read_bytes()
+    other = [("ems-solarflow/EXAMPLE0000009/inverterPower", b"765")]
+    srv, base = _serve_brokers(tmp_path, [(BROKER, other)])
+    try:
+        (foreign,) = [p for p in _proposals(base) if p["device_id"] == "EXAMPLE0000009"]
+        status, payload = _use_connection(base, foreign, **row_overrides)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert not (status == 200 and payload.get("ok") is True), payload
+    assert (config_dir / "config.json").read_bytes() == before
 
 
 @pytest.mark.parametrize(

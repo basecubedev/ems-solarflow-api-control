@@ -1172,6 +1172,16 @@ device turns stale. A
 device you take away stays on offer in discovery while its retained topics
 remain; clear each with an empty retained message.
 
+Development builds read a Kostal Piko as `KostalPiko/<serial>/solarPower` with
+`topic_family: kostal_piko`. Nothing reads those topics any more, so such an
+entry is refused (`external_mqtt_family_unknown`), and every apply is refused
+with it until it is moved or removed. Let the bridge publish the same reading as
+`inverterPower` into the namespace under the same device id, run discovery in
+Maintenance and choose **Use connection** on the device it finds: the entry
+keeps its name and its switch and becomes an `ems_solarflow` entry. A device
+published under another id is another device to EMS; remove the old entry and
+add that one.
+
 **It is never written to.** The type has no control path: an entry carrying
 `capabilities.write_output_limit: true` is refused, and such an entry reaches neither
 the HTTP control list nor the MQTT one; the AC-charge diagnosis lists it as
@@ -1243,8 +1253,10 @@ nor shown nor counted), moves it to another broker with **Use connection** and
 removes it -- and writes everything else back unchanged rather than treating it
 as the nearest kind it knows. A move is accepted only for a proposal the server
 resolved from current discovery that names the same catalog family and device
-id; the new broker profile is provisioned as for any adopted connection, local
-only. **Remove** names the entry by the server-issued reference described below
+id or, for an entry of a retired family, names the successor family and the
+same id, which the move then writes as the entry's family. The new broker
+profile is provisioned as for any adopted connection, local only. **Remove**
+names the entry by the server-issued reference described below
 (`removed_external` in the draft), and only that takes it out; a reference that
 names no installed entry is refused (`external_mqtt_device_not_installed`), and
 so is a draft that both keeps and removes it. The browser only says which installed

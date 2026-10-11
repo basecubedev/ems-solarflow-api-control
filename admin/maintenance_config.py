@@ -121,7 +121,7 @@ from ems.external_status import (
     sanitize_external_mqtt_status,
 )
 from ems.winter_policies import find_winter_policy_issues
-from ems.zendure_mqtt.external_catalog import external_topic_family
+from ems.zendure_mqtt.external_catalog import external_topic_family, successor_family
 from ems.zendure_mqtt.config_entries import (
     EXTERNAL_MQTT_TYPE,
     SOURCE_LOCAL_MQTT,
@@ -645,8 +645,20 @@ def _external_entry_refs(devices, identity_token_key):
     }
 
 
+def _catalog_family_of(device):
+    """The catalog family an entry names, or its successor when that one is retired."""
+
+    family = zendure_mqtt_topic_family(device)
+    successor = successor_family(family)
+    return successor.family if successor is not None else family
+
+
 def _installed_catalog_ids(device, broker_views, identity_token_key):
-    """The catalog device id, and the id of the connection it is read on."""
+    """The catalog device id, and the id of the connection it is read on.
+
+    An entry of a retired family is its successor's device of the same id, read
+    on a connection of its own, so discovery offers to move it there.
+    """
 
     if not is_external_mqtt_device_config(device):
         return None, None
@@ -654,7 +666,7 @@ def _installed_catalog_ids(device, broker_views, identity_token_key):
     family, device_id = mqtt.get("topic_family"), mqtt.get("device_id")
     view = broker_views.get(zendure_mqtt_broker_ref(device))
     return (
-        catalog_device_id(family, device_id, identity_token_key),
+        catalog_device_id(_catalog_family_of(device), device_id, identity_token_key),
         catalog_connection_id(
             family,
             device_id,
@@ -683,6 +695,7 @@ def _external_device_draft(device, entry_ref, catalog_ids=(None, None)):
         "enabled": config_entry_enabled(device),
         _EXTERNAL_ENTRY_REF_FIELD: entry_ref,
         "catalog_label": catalog.label if catalog is not None else None,
+        "catalog_retired": successor_family(mqtt.get("topic_family")) is not None,
         CATALOG_DEVICE_ID_FIELD: catalog_ids[0],
         CATALOG_CONNECTION_ID_FIELD: catalog_ids[1],
         "entry": copy.deepcopy(device),
@@ -1638,13 +1651,26 @@ def _adopted_external_device(merged, item, name, issues):
     return device
 
 
+def _external_edit_hint(device):
+    """What this page can change about an external device, said where it can.
+
+    A retired entry takes no edit until Use connection moves it or Remove takes
+    it out, and its own error says so.
+    """
+
+    if successor_family(zendure_mqtt_topic_family(device)) is not None:
+        return ""
+    return f" {EXTERNAL_DEVICE_EDIT_HINT}"
+
+
 def _same_catalog_device(installed, item):
     """True when a resolved selection names the device ``installed`` reads."""
 
     mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
+    family = _catalog_family_of(installed)
     return (
-        bool(zendure_mqtt_topic_family(installed))
-        and zendure_mqtt_topic_family(installed) == str(mqtt.get("topic_family") or "")
+        bool(family)
+        and family == str(mqtt.get("topic_family") or "")
         and zendure_mqtt_route_device_id(installed) == str(mqtt.get("device_id") or "")
     )
 
@@ -1654,8 +1680,9 @@ def _edited_external_device(merged, installed, item, issues):
 
     Its name and whether it is enabled are the operator's; its broker changes
     only to one the server resolved from current discovery for this very
-    device. Everything else -- type, family, device id, any key the entry
-    carries -- is the installed entry's, whatever the row says.
+    device, and a retired family with it to its successor. Everything else --
+    type, device id, any key the entry carries -- is the installed entry's,
+    whatever the row says.
     """
 
     device = copy.deepcopy(installed)
@@ -1679,9 +1706,10 @@ def _edited_external_device(merged, installed, item, issues):
                 )
             )
             return device
+        mqtt = device.setdefault("mqtt", {})
+        mqtt["topic_family"] = _catalog_family_of(installed)
         _resolve_draft_broker_ref(
-            merged, item.get("broker"), device.setdefault("mqtt", {}), label, issues,
-            local_only=True,
+            merged, item.get("broker"), mqtt, label, issues, local_only=True
         )
     return device
 
@@ -2273,6 +2301,7 @@ def _validate(config, merge_issues=()):
                     _issue("device_name_empty", f"Inverter {index} needs a config name.")
                 )
             if is_external_mqtt_device_config(device):
+                hint = _external_edit_hint(device)
                 for issue in validate_external_mqtt_device_config(
                     device,
                     known_broker_refs=known_refs,
@@ -2283,8 +2312,7 @@ def _validate(config, merge_issues=()):
                         validation["errors"].append(
                             _issue(
                                 issue["code"],
-                                f"{label}: {issue['message']}. "
-                                f"{EXTERNAL_DEVICE_EDIT_HINT}",
+                                f"{label}: {issue['message']}.{hint}",
                             )
                         )
                 continue
@@ -2340,7 +2368,7 @@ def _validate(config, merge_issues=()):
         for issue in find_zendure_mqtt_broker_profile_issues(config):
             message = issue["message"]
             if concerns_external_device(config, issue):
-                message = f"{message}. {EXTERNAL_DEVICE_EDIT_HINT}"
+                message = f"{message}.{_external_edit_hint(devices[issue['device_index']])}"
             validation["errors"].append(_issue(issue["code"], message))
 
     grid_meter = config.get("grid_meter")

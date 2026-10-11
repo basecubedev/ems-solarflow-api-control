@@ -177,6 +177,10 @@ EXTERNAL_TOPIC_FAMILIES: Mapping[str, ExternalTopicFamily] = MappingProxyType(
     {entry.family: entry for entry in (EMS_SOLARFLOW,)}
 )
 
+RETIRED_TOPIC_FAMILIES: Mapping[str, str] = MappingProxyType(
+    {"kostal_piko": EMS_SOLARFLOW.family}
+)
+
 _BY_PREFIX = {entry.prefix: entry for entry in EXTERNAL_TOPIC_FAMILIES.values()}
 
 
@@ -184,6 +188,17 @@ def external_topic_family(family) -> ExternalTopicFamily | None:
     """The catalog entry named ``family``, or ``None``."""
 
     return EXTERNAL_TOPIC_FAMILIES.get(str(family or "").strip())
+
+
+def successor_family(family) -> ExternalTopicFamily | None:
+    """The catalog entry that takes over a device of retired ``family``, or ``None``.
+
+    A development build read the retired family; nothing subscribes to its
+    topics any more. Maintenance moves such an entry onto the successor's device
+    of the same id only by Use connection, never on its own.
+    """
+
+    return external_topic_family(RETIRED_TOPIC_FAMILIES.get(str(family or "").strip()))
 
 
 def match_external_topic(segments) -> tuple[ExternalTopicFamily, str, str] | None:
@@ -217,11 +232,13 @@ def external_discovery_subscriptions() -> tuple[str, ...]:
 __all__ = [
     "EMS_SOLARFLOW",
     "EXTERNAL_TOPIC_FAMILIES",
+    "RETIRED_TOPIC_FAMILIES",
     "CatalogKey",
     "ExternalTopicFamily",
     "external_discovery_subscriptions",
     "external_topic_family",
     "in_catalog_namespace",
     "match_external_topic",
+    "successor_family",
     "valid_device_id",
 ]

@@ -128,6 +128,26 @@ def test_a_family_the_catalog_does_not_list_is_refused():
     assert "external_mqtt_family_unknown" in _codes(issues)
 
 
+def test_a_retired_family_is_refused_with_the_way_out():
+    issues = validate_external_mqtt_device_config(
+        _entry(mqtt=_mqtt(topic_family="kostal_piko"))
+    )
+
+    (issue,) = [i for i in issues if i["code"] == "external_mqtt_family_unknown"]
+    assert "Use connection" in issue["message"]
+    assert "same device id" in issue["message"]
+
+
+def test_a_retired_entry_whose_id_no_namespace_topic_carries_is_told_to_remove_it():
+    issues = validate_external_mqtt_device_config(
+        _entry(mqtt=_mqtt(topic_family="kostal_piko", device_id="piko.garage"))
+    )
+
+    (issue,) = [i for i in issues if i["code"] == "external_mqtt_family_unknown"]
+    assert "remove the entry and add the device again" in issue["message"]
+    assert "Use connection" not in issue["message"]
+
+
 def test_an_entry_without_a_family_is_refused():
     issues = validate_external_mqtt_device_config(_entry(mqtt=_mqtt(topic_family=None)))
 
@@ -530,6 +550,7 @@ def test_a_topic_of_any_other_shape_is_never_read():
         "ems-solarflow/garage inverter/inverterPower",
         "ems-solarflow/garage.inverter/inverterPower",
         "/ems-solarflow/EXAMPLE0000001/inverterPower",
+        "KostalPiko/EXAMPLE0000001/solarPower",
     ):
         aggregator.observe(topic, b"1234")
 

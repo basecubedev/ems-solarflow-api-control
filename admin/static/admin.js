@@ -15502,8 +15502,12 @@ function mconfigExternalDeviceSummary(device) {
   const state = !installed
     ? "added from discovery"
     : device.proposal_id
-      ? "moves to this broker on apply"
-      : "read over MQTT";
+      ? device.catalog_retired
+        ? "read as discovery found it on apply"
+        : "moves to this broker on apply"
+      : device.catalog_retired
+        ? "not read"
+        : "read over MQTT";
   return [
     device.name || "(unnamed)",
     deviceId ? "ID " + deviceId : "ID missing",
@@ -15528,12 +15532,19 @@ function renderMaintenanceExternalDevice(device, index) {
   body.className = "mconfig-fields feature-fields";
   const note = document.createElement("p");
   note.className = "feature-field-desc";
-  note.textContent =
-    "External device from the hardware catalog: EMS reads its values from " +
-    "MQTT and never writes to it, and its topics follow from the catalog. " +
-    (installed
-      ? "Use connection in discovery moves it to another broker that carries it."
-      : "Applying this page adds it as discovery found it.");
+  note.textContent = device.catalog_retired && device.proposal_id
+    ? "Use connection reads this device from the project's MQTT namespace " +
+      "once this page is applied."
+    : device.catalog_retired
+    ? "Added by an earlier development build: EMS no longer reads the topics " +
+      "this entry names, so the device is not read now. Let its bridge publish " +
+      "into the project's MQTT namespace under the same device ID, run discovery " +
+      "and choose Use connection on the device it finds; or remove this entry."
+    : "External device from the hardware catalog: EMS reads its values from " +
+      "MQTT and never writes to it, and its topics follow from the catalog. " +
+      (installed
+        ? "Use connection in discovery moves it to another broker that carries it."
+        : "Applying this page adds it as discovery found it.");
   body.appendChild(note);
   body.appendChild(
     mconfigLabelRow(
@@ -15577,7 +15588,13 @@ function renderMaintenanceExternalDevice(device, index) {
     role: "inverter",
     id,
     title: "Inverter " + (index + 1),
-    model: label + " · read over MQTT",
+    model:
+      label +
+      (!device.catalog_retired
+        ? " · read over MQTT"
+        : device.proposal_id
+          ? " · read on apply"
+          : " · not read"),
     meta: mconfigExternalDeviceSummary(device),
     enabled: device.enabled !== false,
     body,

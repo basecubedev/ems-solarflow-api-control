@@ -30,6 +30,7 @@ from ems.device_identity import (
 from ems.zendure_mqtt.external_catalog import (
     EXTERNAL_TOPIC_FAMILIES,
     external_topic_family,
+    successor_family,
     valid_device_id,
 )
 
@@ -192,7 +193,25 @@ def validate_external_mqtt_device_config(
     )
 
     family = zendure_mqtt_topic_family(item)
-    if family is not None and external_topic_family(family) is None:
+    device_id = zendure_mqtt_route_device_id(item)
+    successor = successor_family(family)
+    if successor is not None:
+        way_out = (
+            f"publish the device under the same device id into {successor.prefix}"
+            "/<device id>/<key> and choose Use connection on it in Maintenance "
+            "discovery, or remove the entry"
+            if device_id is not None and valid_device_id(device_id)
+            else "no device in the namespace can carry its device id, so remove "
+            "the entry and add the device again from discovery"
+        )
+        issues.append(
+            _issue(
+                "error",
+                "external_mqtt_family_unknown",
+                f"mqtt.topic_family '{family}' is no longer read: {way_out}",
+            )
+        )
+    elif family is not None and external_topic_family(family) is None:
         issues.append(
             _issue(
                 "error",
@@ -203,7 +222,6 @@ def validate_external_mqtt_device_config(
             )
         )
 
-    device_id = zendure_mqtt_route_device_id(item)
     if device_id is None:
         issues.append(
             _issue(

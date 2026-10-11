@@ -32,7 +32,11 @@ from ems.zendure_mqtt.config_entries import (
     external_device_subscriptions,
     validate_external_mqtt_device_config,
 )
-from ems.zendure_mqtt.external_catalog import EXTERNAL_TOPIC_FAMILIES
+from ems.zendure_mqtt.external_catalog import (
+    EXTERNAL_TOPIC_FAMILIES,
+    RETIRED_TOPIC_FAMILIES,
+    successor_family,
+)
 from ems.zendure_mqtt.snapshot import ZendureMqttAggregator
 from ems.zendure_mqtt.topics import classify_topic
 
@@ -84,6 +88,12 @@ def test_the_catalog_is_not_empty_and_its_names_are_distinct():
     assert ENTRIES
     assert len({entry.prefix for entry in ENTRIES}) == len(ENTRIES)
     assert len({entry.label for entry in ENTRIES}) == len(ENTRIES)
+
+
+@pytest.mark.parametrize("retired", sorted(RETIRED_TOPIC_FAMILIES))
+def test_a_retired_family_is_read_by_nothing_and_has_a_successor(retired):
+    assert retired not in EXTERNAL_TOPIC_FAMILIES
+    assert successor_family(retired) in EXTERNAL_TOPIC_FAMILIES.values()
 
 
 @pytest.mark.parametrize("entry", ENTRIES, ids=_ids)
