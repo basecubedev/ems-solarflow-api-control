@@ -24,6 +24,12 @@ parallel if they write Zendure `outputLimit`. EMS assumes exclusive write contro
 over `outputLimit` while active. The EMS must not run in parallel with another
 controller writing Zendure `outputLimit`.
 
+An external device EMS only reads over MQTT never receives a write from EMS, but
+it can still be a second controller: a battery that regulates itself to zero
+against the same meter reacts to the same deviation as EMS, and the two can
+overshoot or push energy back and forth. EMS cannot prevent that; see
+[External Devices over MQTT](configuration.md#external-devices-over-mqtt-external_mqtt).
+
 ## Write gates
 
 Runtime `outputLimit` writes share the same safety precondition — `dry_run=false`,

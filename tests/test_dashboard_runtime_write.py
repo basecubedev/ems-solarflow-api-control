@@ -380,7 +380,7 @@ def test_the_dashboard_sets_the_ac_role_and_charge_power_like_emsctl(tmp_path):
 def test_the_ac_role_is_refused_for_an_mqtt_device(tmp_path, payload):
     runtime_state, context = _ac_runtime(tmp_path)
 
-    with pytest.raises(RuntimeWriteError, match="controlled over MQTT"):
+    with pytest.raises(RuntimeWriteError, match="connected over MQTT"):
         apply_device_update(runtime_state, "CLOUD", payload, context)
     assert "runtime_role" not in runtime_state.snapshot()["devices"]["CLOUD"]
     assert effective_limits(context)["ac_role_unsupported"] == ["CLOUD"]
