@@ -685,62 +685,6 @@ def test_config_preview_response_preserves_template_key_order(tmp_path):
         srv.server_close()
 
 
-def test_config_preview_get_masks_cloud_route_and_issues_identity_token(
-    tmp_path, monkeypatch
-):
-    route = "ACCOUNT_ROUTE_7501"
-    product = "PRODUCT_KEY_7501"
-    topic = f"iot/{product}/{route}/properties/write"
-    template = {
-        "zendure_mqtt": {
-            "brokers": {
-                "cloud_a": {
-                    "source": "zendure_cloud_mqtt",
-                    "host": "mqtt.example.invalid",
-                    "port": 8883,
-                    "tls": True,
-                }
-            }
-        },
-        "devices": [
-            {
-                "type": "zendure_mqtt",
-                "name": f"Cloud shed {route}",
-                "mqtt": {
-                    "broker_ref": "cloud_a",
-                    "topic_family": "legacy_zendure_json_alt",
-                    "device_id": route,
-                    "product_key": product,
-                    "write_topic": topic,
-                },
-                "capabilities": {"write_output_limit": False},
-            }
-        ],
-    }
-    config_dir = tmp_path / "config"
-    config_dir.mkdir(parents=True)
-    (config_dir / "config.json").write_text(
-        json.dumps(template), encoding="utf-8"
-    )
-    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
-    srv, base = _serve(
-        release_manager=_FakeReleaseManager(tmp_path, template=template)
-    )
-    try:
-        status, _, payload = _request(f"{base}/api/setup/config-preview")
-    finally:
-        srv.shutdown()
-        srv.server_close()
-
-    assert status == 200
-    flattened = json.dumps(payload)
-    assert route not in flattened
-    assert product not in flattened
-    assert topic not in flattened
-    device = payload["config"]["devices"][0]
-    assert device["physical_identity_token"].startswith("opaque:v1:")
-
-
 def test_release_prepare_returns_clean_embedded_resource_error(tmp_path):
     class _UnwritableAlignment(_FakeSystemAlignment):
         def prepare_setup_resources(

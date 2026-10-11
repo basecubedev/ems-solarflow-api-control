@@ -338,6 +338,22 @@ def test_maintenance_external_change_conflicts_and_rolls_back_credentials(
         srv.server_close()
 
 
+_SETUP_BODY = {
+    "devices": [
+        {
+            "source_id": "local:wr1",
+            "config_name": "WR1",
+            "display_name": "SolarFlow 800",
+            "role": "inverter",
+            "enabled": True,
+            "ip": "192.168.1.100",
+            "serial_number": "AAA",
+        }
+    ],
+    "supported_grid_meter_count": 0,
+}
+
+
 def test_setup_and_maintenance_share_prepared_payload_transaction(monkeypatch, tmp_path):
     monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
     _write_config(tmp_path, _existing_config())
@@ -361,7 +377,7 @@ def test_setup_and_maintenance_share_prepared_payload_transaction(monkeypatch, t
         status, payload = _request(
             f"{base}/api/setup/config/apply",
             "POST",
-            _authorized(base, {"devices": [], "supported_grid_meter_count": 0}),
+            _authorized(base, _SETUP_BODY),
         )
         assert status == 200 and payload.get("ok") is True, payload
         assert len(entries) == 2, "setup apply must use the same prepared payload"
@@ -399,7 +415,7 @@ def test_setup_and_maintenance_share_one_apply_transaction(monkeypatch, tmp_path
         status, payload = _request(
             f"{base}/api/setup/config/apply",
             "POST",
-            _authorized(base, {"devices": [], "supported_grid_meter_count": 0}),
+            _authorized(base, _SETUP_BODY),
         )
         assert status == 200 and payload.get("ok") is True, payload
         assert len(entries) == 2, "setup apply must run inside the same transaction"

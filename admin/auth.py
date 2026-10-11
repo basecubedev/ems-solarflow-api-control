@@ -58,6 +58,29 @@ class AdminAuthPaths:
     warning: str = None
 
 
+def configured_auth_file_at(config_path):
+    """``(auth_file, readable)`` for the config at ``config_path``.
+
+    ``auth_file`` is the non-empty ``dashboard.auth_file`` it sets, stripped, or
+    ``None``; ``readable`` is false when the file cannot be read or parsed. The
+    one reading of that key: the login resolves the password file by it, and a
+    setup that replaces the config carries the same value over.
+    """
+
+    try:
+        with open(config_path, encoding="utf-8") as handle:
+            config = json.load(handle)
+    except (OSError, ValueError):
+        return None, False
+    if isinstance(config, dict):
+        dashboard = config.get("dashboard")
+        if isinstance(dashboard, dict):
+            configured = dashboard.get("auth_file")
+            if isinstance(configured, str) and configured.strip():
+                return configured.strip(), True
+    return None, True
+
+
 def resolve_admin_auth_paths(base_dir=None):
     """Resolve the shared auth-file path from the Admin install context.
 
@@ -83,10 +106,8 @@ def resolve_admin_auth_paths(base_dir=None):
             source=SOURCE_DEFAULT_MISSING_CONFIG,
         )
 
-    try:
-        with open(config_path) as handle:
-            config = json.load(handle)
-    except (OSError, ValueError):
+    auth_file, readable = configured_auth_file_at(config_path)
+    if not readable:
         return AdminAuthPaths(
             install_root=install_root,
             auth_file=default_auth,
@@ -95,15 +116,6 @@ def resolve_admin_auth_paths(base_dir=None):
             source=SOURCE_DEFAULT_CONFIG_PARSE_FAILED,
             warning="config/config.json could not be parsed; using the default auth path.",
         )
-
-    auth_file = None
-    if isinstance(config, dict):
-        dashboard = config.get("dashboard")
-        if isinstance(dashboard, dict):
-            configured = dashboard.get("auth_file")
-            if isinstance(configured, str) and configured.strip():
-                auth_file = configured.strip()
-
     if auth_file is None:
         return AdminAuthPaths(
             install_root=install_root,

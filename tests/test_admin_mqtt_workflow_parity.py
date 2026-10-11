@@ -273,6 +273,35 @@ def _run_setup_workflow(root, case, monkeypatch):
     return config_path.read_text(encoding="utf-8"), root / "config" / "secrets"
 
 
+def test_setup_preview_masks_the_cloud_route_and_issues_an_identity_token(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    case = CASES["zendure_cloud"]
+    srv, base = _serve(tmp_path, case)
+    try:
+        _stage_case_inputs(srv, base, case)
+        proposal = _case_proposal(base, case)
+        body = _authorized(base, {
+            "devices": [_setup_local_device()],
+            "supported_grid_meter_count": 0,
+            "zendure_mqtt_proposals": [
+                {"id": proposal["id"], "broker_ref": proposal["broker_ref"]}
+            ],
+        })
+        status, payload = _request(f"{base}/api/setup/config-preview", "POST", body)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200 and payload["ready"] is True, payload
+    flattened = json.dumps(payload)
+    assert "DK-BBB" not in flattened
+    assert "PK-AAA" not in flattened
+    (device,) = [d for d in payload["config"]["devices"] if d.get("type") == "zendure_mqtt"]
+    assert device["physical_identity_token"].startswith("opaque:v1:")
+
+
 def _write_maintenance_base_config(root):
     config_dir = root / "config"
     config_dir.mkdir(exist_ok=True)

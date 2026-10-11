@@ -84,7 +84,9 @@ the config it emits:
    MQTT device in the base
    (`fix(admin): make repeated setup apply of an mqtt proposal idempotent`). A
    genuine conflict still blocks: an existing HTTP device sharing a serial, or
-   two distinct proposals in one apply.
+   two distinct proposals in one apply. Superseded since: setup builds on the
+   release template and replaces an installed config instead of merging into
+   it, so a repeated apply never meets the device it configured before.
 
 ## Test tiers
 

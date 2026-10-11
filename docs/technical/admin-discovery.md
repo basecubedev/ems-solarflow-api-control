@@ -741,12 +741,12 @@ Admin proposal building, config preview and Core:
   accounts on one host) stay **distinct** profiles and, at runtime, distinct
   MQTT services with isolated reads and writes.
 
-Setup apply is **idempotent**: because apply uses the existing installed config
-as its preview base, re-selecting a Zendure MQTT device already present in the
-config is a no-op rather than a duplicate-identity error. A genuine conflict
-still blocks — an existing HTTP device that shares a serial (a different
-transport for one physical device), or two distinct proposals for the same
-device id in a single apply.
+Setup apply builds on the release template alone: a config already installed
+is replaced, not merged, and only its `dashboard.auth_file` is carried over, so
+a repeated apply never meets a device it configured before. A genuine conflict
+in the selection still blocks — an HTTP device and an MQTT proposal that share
+a serial (two transports for one physical device), or two distinct proposals
+for the same device id in a single apply.
 
 The full setup-to-runtime lifecycle (discovery → trusted proposal → preview →
 apply → `config.json` → Core credential resolution → runtime → telemetry →
@@ -1206,8 +1206,9 @@ sudo chown -R "$(id -u):$(id -g)" config data
 ### Install-context detection inside the container
 
 The config-preview wizard reuses the EMS path resolver (`ems.paths`) through
-`admin/install_context.py` to detect an existing EMS installation and use its
-`config.json` as the preview base. The minimal `ems/__init__.py` and
+`admin/install_context.py` to detect an existing EMS installation: its
+`config.json` is the one a setup replaces, and the one the password file
+location is carried over from. The minimal `ems/__init__.py` and
 `ems/paths.py` are copied into the Admin image so this import chain works; the
 Admin image deliberately does **not** carry the full EMS core.
 
@@ -1221,8 +1222,9 @@ still works), `.../data/`, and `.../docker-compose.yml` from there. Because the
 install root is mounted at the same absolute path inside the container, that path
 is also host-valid — which matters when Admin forwards bind mounts to the host
 Docker daemon for sibling EMS containers. When `EMS_INSTALL_DIR` is unset (e.g.
-direct Compose use without the launcher), detection falls back to the release
-template as the preview base.
+direct Compose use without the launcher), detection does not see the
+installation, so a preview knows neither the config it replaces nor where that
+config keeps the password file.
 
 The install root mount points at the standard `./config`, `./data`,
 `./docker-compose.yml` layout, which is also the live deployment target. Admin

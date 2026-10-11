@@ -7338,8 +7338,9 @@ async function requestConfigPreview() {
     }
     if (configEls.previewBase) {
       const base = data.base || {};
-      configEls.previewBase.textContent =
-        base.source === "existing_config" ? "Existing EMS config" : "Release template";
+      configEls.previewBase.textContent = base.replaces_config_path
+        ? "Release template (replaces the existing config)"
+        : "Release template";
     }
     if (configEls.previewDevices) {
       const summary = data.summary || {};

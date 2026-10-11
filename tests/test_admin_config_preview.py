@@ -6,8 +6,9 @@ import json
 
 import pytest
 
+from admin.auth import resolve_admin_auth_paths
 from admin.config_preview import ConfigPreviewGenerator
-from admin.install_context import AdminInstallContext
+from admin.install_context import AdminInstallContext, detect_install_context
 from admin.releases import ReleaseError
 
 pytestmark = [
@@ -164,24 +165,6 @@ def test_device_config_values_ignore_unknown_and_identity_keys():
     assert "bogus" not in device
     # Device values can never write outside their own device object.
     assert result["config"]["system"]["max_total_power"] == 1600
-
-
-def test_device_config_values_merge_into_existing_device(tmp_path):
-    path = _write_config(tmp_path, EXISTING_CONFIG)
-    result = _existing_generator(path).generate(
-        [
-            _device(
-                1,
-                config_name="WR1",
-                config_values={"max_power": "500"},
-            )
-        ]
-    )
-    wr1 = next(d for d in result["config"]["devices"] if d["name"] == "WR1")
-
-    assert wr1["max_power"] == 500
-    # Unrelated existing device keys are preserved through the merge.
-    assert wr1["custom"] == "keep"
 
 
 def test_grid_meter_type_comes_from_discovery_metadata():
@@ -394,112 +377,115 @@ def _write_config(tmp_path, data):
     return path
 
 
-def test_existing_config_is_used_as_base_and_metadata_reports_source(tmp_path):
+def test_an_existing_config_is_replaced_and_the_preview_says_so(tmp_path):
     path = _write_config(tmp_path, EXISTING_CONFIG)
-    result = _existing_generator(path).generate([_device(1, config_name="WR1")])
+    result = _existing_generator(path).generate([_device(1, config_name="WR1"), _meter()], 1)
 
     assert result["ready"] is True
-    assert result["base"]["source"] == "existing_config"
-    assert result["base"]["config_path"] == str(path)
-    assert result["base"]["config_source"] == "canonical"
-    assert result["base"]["template_source"] == "legacy"
+    assert result["base"] == {"source": "release_template", "replaces_config_path": str(path)}
     codes = {issue["code"] for issue in result["validation"]["info"]}
-    assert "existing_config_base" in codes
+    assert "existing_config_replaced" in codes
 
 
-def test_existing_config_preserves_unrelated_keys_and_untouched_devices(tmp_path):
+def test_nothing_of_the_replaced_config_reaches_the_new_one(tmp_path):
+    """The same draft over an existing config gives the config a fresh install gets."""
+
     path = _write_config(tmp_path, EXISTING_CONFIG)
-    result = _existing_generator(path).generate(
-        [_device(1, config_name="WR1", ip="10.0.0.5", serial_number="NEW1")]
-    )
-    config = result["config"]
+    draft = [
+        _device(1, config_name="WR1", ip="10.0.0.5", serial_number="NEW1"),
+        _meter(ip="10.0.0.20"),
+    ]
 
-    assert config["operator_only"] == {"never": "touch"}
-    assert config["system"]["operator_note"] == "hand-tuned"
-    wr1 = next(d for d in config["devices"] if d["name"] == "WR1")
-    assert wr1["ip"] == "10.0.0.5"
-    assert wr1["sn"] == "NEW1"
-    assert wr1["custom"] == "keep"
-    assert wr1["max_power"] == 800
-    # WR2 is not in the draft and must remain untouched.
-    wr2 = next(d for d in config["devices"] if d["name"] == "WR2")
-    assert wr2 == EXISTING_CONFIG["devices"][1]
+    replaced = _existing_generator(path).generate(draft, 1)["config"]
+    fresh = _existing_generator(path, config_exists=False).generate(draft, 1)["config"]
 
-
-def test_existing_config_appends_new_draft_device_from_template_prototype(tmp_path):
-    path = _write_config(tmp_path, EXISTING_CONFIG)
-    result = _existing_generator(path).generate(
-        [_device(3, config_name="WR3", ip="10.0.0.3", serial_number="NEW3")]
-    )
-    names = [d["name"] for d in result["config"]["devices"]]
-
-    assert names == ["WR1", "WR2", "WR3"]
-    wr3 = result["config"]["devices"][2]
-    assert wr3["ip"] == "10.0.0.3"
-    assert wr3["sn"] == "NEW3"
-    assert wr3["max_power"] == 800  # from template prototype shape
+    assert replaced == fresh
+    assert "operator_only" not in replaced
+    assert "operator_note" not in replaced["system"]
+    assert [device["name"] for device in replaced["devices"]] == ["WR1"]
+    assert "custom" not in replaced["devices"][0]
+    assert "operator_field" not in replaced["grid_meter"]
 
 
-def test_existing_grid_meter_preserved_when_no_draft_meter(tmp_path):
+def test_an_existing_grid_meter_is_not_kept_without_one_in_the_draft(tmp_path):
     path = _write_config(tmp_path, EXISTING_CONFIG)
     result = _existing_generator(path).generate([_device(1, config_name="WR1")])
-
-    assert result["config"]["grid_meter"] == EXISTING_CONFIG["grid_meter"]
-    assert result["ready"] is True
-
-
-def test_draft_grid_meter_updates_existing_grid_meter(tmp_path):
-    path = _write_config(tmp_path, EXISTING_CONFIG)
-    result = _existing_generator(path).generate(
-        [_device(1, config_name="WR1"), _meter(ip="10.0.0.20")], 1
-    )
-    grid = result["config"]["grid_meter"]
-
-    assert grid["ip"] == "10.0.0.20"
-    assert grid["operator_field"] == 1  # existing custom field preserved
-
-
-def test_existing_config_serial_preserved_when_draft_serial_empty(tmp_path):
-    path = _write_config(tmp_path, EXISTING_CONFIG)
-    result = _existing_generator(path).generate(
-        [_device(1, config_name="WR1", serial_number="")]
-    )
-    wr1 = next(d for d in result["config"]["devices"] if d["name"] == "WR1")
-
-    assert wr1["sn"] == "REAL1"
-    codes = {issue["code"] for issue in result["validation"]["errors"]}
-    assert "device_serial_missing" not in codes
-
-
-def test_existing_config_invalid_json_is_reported(tmp_path):
-    path = tmp_path / "config.json"
-    path.write_text("{not json", encoding="utf-8")
-    result = _existing_generator(path).generate([_device(1)])
 
     assert result["ready"] is False
-    assert result["config"] is None
-    assert result["base"]["source"] == "existing_config"
+    assert "grid_meter" not in result["config"]
     codes = {issue["code"] for issue in result["validation"]["errors"]}
-    assert "existing_config_invalid_json" in codes
+    assert "grid_meter_missing" in codes
 
 
-def test_existing_config_not_object_is_reported(tmp_path):
+def test_a_serial_the_draft_lacks_is_not_taken_from_the_replaced_config(tmp_path):
+    path = _write_config(tmp_path, EXISTING_CONFIG)
+    result = _existing_generator(path).generate(
+        [_device(1, config_name="WR1", serial_number=""), _meter()], 1
+    )
+
+    assert result["config"]["devices"][0]["sn"] == ""
+    codes = {issue["code"] for issue in result["validation"]["errors"]}
+    assert "device_serial_missing" in codes
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        "{not json",
+        "[1, 2, 3]",
+        json.dumps({"dashboard": "not an object"}),
+        json.dumps({"dashboard": {"auth_file": "   "}}),
+    ],
+    ids=["unreadable", "invalid JSON", "not an object", "dashboard not an object", "blank"],
+)
+def test_a_config_that_names_no_password_file_leaves_the_template_default(tmp_path, content):
     path = tmp_path / "config.json"
-    path.write_text("[1, 2, 3]", encoding="utf-8")
-    result = _existing_generator(path).generate([_device(1)])
+    if content is not None:
+        path.write_text(content, encoding="utf-8")
+    template = {**TEMPLATE, "dashboard": {"auth_file": "config/dashboard-auth.json"}}
 
-    codes = {issue["code"] for issue in result["validation"]["errors"]}
-    assert "existing_config_not_object" in codes
-    assert result["config"] is None
+    result = _existing_generator(path, template=template).generate([_device(1), _meter()], 1)
+
+    assert result["ready"] is True
+    assert result["config"]["dashboard"] == {"auth_file": "config/dashboard-auth.json"}
 
 
-def test_existing_config_unreadable_is_reported(tmp_path):
-    missing = tmp_path / "does-not-exist" / "config.json"
-    result = _existing_generator(missing).generate([_device(1)])
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"dashboard": {"auth_file": "  secrets/admin-auth.json ", "port": 9999}},
+        {"dashboard": {"auth_file": "/srv/ems/admin-auth.json"}},
+        {"dashboard": {"port": 9999}},
+        "{not json",
+        [1, 2, 3],
+    ],
+    ids=["relative", "absolute", "default", "invalid JSON", "not an object"],
+)
+def test_the_admin_login_reads_the_same_password_file_before_and_after_setup(
+    tmp_path, config
+):
+    """A different file would end every session and open first-password setup."""
 
-    codes = {issue["code"] for issue in result["validation"]["errors"]}
-    assert "existing_config_unreadable" in codes
-    assert result["config"] is None
+    root = tmp_path / "install"
+    config_path = root / "config" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        config if isinstance(config, str) else json.dumps(config), encoding="utf-8"
+    )
+    before = resolve_admin_auth_paths(base_dir=root).auth_file
+    template = {**TEMPLATE, "dashboard": {"auth_file": "config/dashboard-auth.json"}}
+    generator = ConfigPreviewGenerator(
+        _ReleaseManager(template),
+        install_context_provider=lambda: detect_install_context(base_dir=root),
+    )
+
+    result = generator.generate([_device(1), _meter()], 1)
+    config_path.write_text(json.dumps(result["config"]), encoding="utf-8")
+
+    assert result["ready"] is True
+    assert resolve_admin_auth_paths(base_dir=root).auth_file == before
+    assert result["config"]["dashboard"].get("port") is None
 
 
 def test_fresh_setup_uses_release_template_base_when_no_config(tmp_path):
@@ -812,14 +798,12 @@ def test_zendure_mqtt_proposals_skip_non_dicts_and_bad_fragments():
     assert result["summary"]["zendure_mqtt_devices"] == 1
 
 
-def test_existing_sn_and_mqtt_proposal_same_serial_blocks_preview(tmp_path):
-    config = copy.deepcopy(EXISTING_CONFIG)
-    path = _write_config(tmp_path, config)
+def test_a_draft_serial_and_an_mqtt_proposal_of_the_same_serial_block_preview():
     proposal = _mqtt_proposal()
     proposal["config_fragment"]["serial_number"] = "real1"
 
-    result = _existing_generator(path).generate(
-        [], zendure_mqtt_proposals=[proposal]
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [_device(1, serial_number="REAL1"), _meter()], 1, zendure_mqtt_proposals=[proposal]
     )
 
     assert result["ready"] is False
@@ -1752,110 +1736,87 @@ def test_d0_topic_is_rebuilt_server_side_from_serial():
 
 
 # --- Defect 1: existing broker refs are reused only on endpoint match --------
-def _config_with_broker(ref, host, *, source="local_mqtt", port=1883, with_device=True):
-    brokers = {
-        ref: {
-            "enabled": True, "source": source, "host": host, "port": port, "tls": False,
-        }
-    }
-    # These tests exercise broker-ref resolution, not the EMS no-device guard.
-    # Keep one real API control inverter in every fixture so a D0 or telemetry
-    # proposal is never the only object presented as a bootable control config.
-    devices = [
-        {"name": "WR1", "ip": "10.0.0.5", "sn": "API1", "max_power": 800}
+def _device_on(broker_ref, host, device_id):
+    proposal = _broker_proposal(broker_ref, name=f"SolarFlow {device_id}")
+    proposal["id"] = f"zendure-mqtt:{device_id}"
+    proposal["config_fragment"]["mqtt"]["device_id"] = device_id
+    proposal["broker_host"] = host
+    proposal["broker_port"] = 1883
+    return proposal
+
+
+def _entry_of(result, device_id):
+    (entry,) = [
+        d for d in result["config"]["devices"]
+        if (d.get("mqtt") or {}).get("device_id") == device_id
     ]
-    if with_device:
-        devices.insert(
-            0,
-            {
-                "type": "zendure_mqtt", "name": "Legacy", "enabled": True,
-                "serial_number": "LEG1",
-                "hardware_profile": "hyper_2000",
-                "power_write_profile": "legacy_object_device_automation",
-                "mqtt": {
-                    "broker_ref": ref, "source": source,
-                    "topic_family": "legacy_zendure_json", "base_topic": "iot",
-                    "device_id": "DEVLEG", "product_key": "PK1",
-                },
-                "capabilities": {"write_output_limit": True},
-            }
-        )
-    return {
-        "system": {"max_total_power": 2000},
-        "zendure_mqtt": {"enabled": True, "brokers": brokers},
-        "devices": devices,
-        "grid_meter": {"type": "shelly", "ip": "10.0.0.9"},
-    }
+    return entry
 
 
-def test_new_d0_on_different_endpoint_gets_distinct_ref(tmp_path):
-    # Regression scenario 1: existing local_mqtt -> 10.0.0.10; a D0 discovered on
-    # 10.0.0.20 must not inherit the existing endpoint.
-    path = _write_config(tmp_path, _config_with_broker("local_mqtt", "10.0.0.10"))
-    proposal = _d0_grid_proposal(
+def test_new_d0_on_different_endpoint_gets_distinct_ref():
+    # Regression scenario 1: a device on local_mqtt -> 10.0.0.10; a D0 discovered
+    # on 10.0.0.20 under the same ref name must not inherit that endpoint.
+    device = _device_on("local_mqtt", "10.0.0.10", "DEVLEG")
+    d0 = _d0_grid_proposal(
         broker_ref="local_mqtt", broker_host="10.0.0.20", broker_port=1883,
-        replace_grid_meter=True,
     )
-    result = _existing_generator(path).generate([], zendure_mqtt_proposals=[proposal])
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [_device(1)], zendure_mqtt_proposals=[device, d0]
+    )
     assert result["ready"] is True
     brokers = result["config"]["zendure_mqtt"]["brokers"]
-    # The existing broker keeps its endpoint; a second, distinct broker is added.
-    assert brokers["local_mqtt"]["host"] == "10.0.0.10"
+    device_ref = _entry_of(result, "DEVLEG")["mqtt"]["broker_ref"]
     grid_ref = result["config"]["grid_meter"]["mqtt"]["broker_ref"]
-    assert grid_ref != "local_mqtt"
+    assert grid_ref != device_ref
+    assert brokers[device_ref]["host"] == "10.0.0.10"
     assert brokers[grid_ref]["host"] == "10.0.0.20"
-    # The legacy inverter stays on the original broker.
-    legacy = result["config"]["devices"][0]
-    assert legacy["mqtt"]["broker_ref"] == "local_mqtt"
 
 
-def test_matching_existing_broker_endpoint_is_reused(tmp_path):
-    # Regression scenario 2: an existing broker whose endpoint matches the
-    # discovered D0 is reused, never duplicated, even under a different ref name.
-    path = _write_config(
-        tmp_path, _config_with_broker("home_broker", "10.0.0.10", with_device=False)
-    )
-    proposal = _d0_grid_proposal(
+_HOME_BROKER = {"name": "home_broker", "host": "10.0.0.10", "port": 1883}
+
+
+def test_matching_broker_endpoint_is_reused():
+    # Regression scenario 2: a D0 on the endpoint of the broker entered in this
+    # setup reuses that profile, never duplicates it, under a different ref name.
+    d0 = _d0_grid_proposal(
         broker_ref="local_mqtt", broker_host="10.0.0.10", broker_port=1883,
-        replace_grid_meter=True,
     )
-    result = _existing_generator(path).generate([], zendure_mqtt_proposals=[proposal])
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [_device(1)], zendure_mqtt_proposals=[d0], zendure_mqtt_broker=dict(_HOME_BROKER)
+    )
     assert result["ready"] is True
     brokers = result["config"]["zendure_mqtt"]["brokers"]
     assert set(brokers) == {"home_broker"}
     assert result["config"]["grid_meter"]["mqtt"]["broker_ref"] == "home_broker"
 
 
-def test_device_proposal_matching_endpoint_reuses_existing_broker(tmp_path):
-    path = _write_config(
-        tmp_path, _config_with_broker("home_broker", "10.0.0.10", with_device=False)
+def test_device_proposal_matching_endpoint_reuses_the_broker():
+    proposal = _device_on("local_mqtt", "10.0.0.10", "NEWDEV")
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [_device(1), _meter()],
+        1,
+        zendure_mqtt_proposals=[proposal],
+        zendure_mqtt_broker=dict(_HOME_BROKER),
     )
-    proposal = _broker_proposal("local_mqtt", name="New SolarFlow")
-    proposal["config_fragment"]["mqtt"]["device_id"] = "NEWDEV"
-    proposal["broker_host"] = "10.0.0.10"
-    proposal["broker_port"] = 1883
-    result = _existing_generator(path).generate([], zendure_mqtt_proposals=[proposal])
     assert result["ready"] is True
     brokers = result["config"]["zendure_mqtt"]["brokers"]
     assert set(brokers) == {"home_broker"}
-    entry = [d for d in result["config"]["devices"] if d.get("name") == "INV_2"][0]
-    assert entry["mqtt"]["broker_ref"] == "home_broker"
+    assert _entry_of(result, "NEWDEV")["mqtt"]["broker_ref"] == "home_broker"
 
 
-def test_device_proposal_conflicting_endpoint_gets_distinct_ref(tmp_path):
-    path = _write_config(tmp_path, _config_with_broker("local_mqtt", "10.0.0.10"))
-    proposal = _broker_proposal("local_mqtt", name="Second SolarFlow")
-    proposal["config_fragment"]["mqtt"]["device_id"] = "SECONDDEV"
-    proposal["broker_host"] = "10.0.0.20"
-    proposal["broker_port"] = 1883
-    result = _existing_generator(path).generate([], zendure_mqtt_proposals=[proposal])
+def test_device_proposal_conflicting_endpoint_gets_distinct_ref():
+    first = _device_on("local_mqtt", "10.0.0.10", "DEV1")
+    second = _device_on("local_mqtt", "10.0.0.20", "SECONDDEV")
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [_device(1), _meter()], 1, zendure_mqtt_proposals=[first, second]
+    )
     assert result["ready"] is True
     brokers = result["config"]["zendure_mqtt"]["brokers"]
-    assert brokers["local_mqtt"]["host"] == "10.0.0.10"
-    entry = [d for d in result["config"]["devices"] if d.get("name") == "INV_3"][0]
-    new_ref = entry["mqtt"]["broker_ref"]
-    assert new_ref != "local_mqtt"
-    assert brokers[new_ref]["host"] == "10.0.0.20"
+    first_ref = _entry_of(result, "DEV1")["mqtt"]["broker_ref"]
+    second_ref = _entry_of(result, "SECONDDEV")["mqtt"]["broker_ref"]
+    assert first_ref != second_ref
+    assert brokers[first_ref]["host"] == "10.0.0.10"
+    assert brokers[second_ref]["host"] == "10.0.0.20"
     # No endpoint was overwritten and no credential was crossed between profiles.
     blob = json.dumps(result["config"]).lower()
     for secret in ("password", "username", "token"):
@@ -1887,7 +1848,15 @@ def test_cloud_auth_without_inverters_does_not_warn():
     assert "zendure_mqtt_cloud_devices_not_selected" not in _warning_codes(result)
 
 
-def test_cloud_auth_with_mqtt_device_present_does_not_warn(tmp_path):
+def test_cloud_auth_with_an_mqtt_device_selected_does_not_warn():
+    result = _cloud_generator(auth=True).generate(
+        [_device(1)], zendure_mqtt_proposals=[_mqtt_proposal()]
+    )
+    assert [d for d in result["config"]["devices"] if d.get("type") == "zendure_mqtt"]
+    assert "zendure_mqtt_cloud_devices_not_selected" not in _warning_codes(result)
+
+
+def test_cloud_auth_counts_no_device_of_the_config_it_replaces(tmp_path):
     base = copy.deepcopy(EXISTING_CONFIG)
     base["devices"].append(
         {"name": "MQTT1", "type": "zendure_mqtt", "sn": "MQ1",
@@ -1900,7 +1869,8 @@ def test_cloud_auth_with_mqtt_device_present_does_not_warn(tmp_path):
         zendure_cloud_auth_available=lambda: True,
     )
     result = generator.generate([_device(1, config_name="WR1")])
-    assert "zendure_mqtt_cloud_devices_not_selected" not in _warning_codes(result)
+    assert "zendure_mqtt_cloud_devices_not_selected" in _warning_codes(result)
+    assert not [d for d in result["config"]["devices"] if d.get("name") == "MQTT1"]
 
 
 # --- TLS mode is read exactly as EMS Core reads it --------------------------
@@ -2027,33 +1997,15 @@ def test_a_device_value_its_type_cannot_hold_blocks_the_preview_and_names_the_de
     )
 
 
-@pytest.mark.parametrize(
-    "device,name",
-    [
-        (_device(1, config_name="WR1", config_values={"max_power": "lots"}), "WR1"),
-        (
-            _device(
-                3,
-                config_name="WR3",
-                ip="10.0.0.3",
-                serial_number="NEW3",
-                config_values={"max_power": "lots"},
-            ),
-            "WR3",
-        ),
-    ],
-    ids=["a device the config keeps", "a device added to it"],
-)
-def test_a_value_its_type_cannot_hold_blocks_a_preview_on_an_existing_config(
-    tmp_path, device, name
-):
+def test_a_value_its_type_cannot_hold_blocks_a_preview_over_an_existing_config(tmp_path):
     path = _write_config(tmp_path, EXISTING_CONFIG)
+    device = _device(1, config_name="WR1", config_values={"max_power": "lots"})
 
     result = _existing_generator(path).generate([device])
 
     assert result["ready"] is False
     assert any(
         issue["code"] == "config_value_invalid"
-        and issue["message"].startswith(f"{name}: max_power")
+        and issue["message"].startswith("WR1: max_power")
         for issue in result["validation"]["errors"]
     )

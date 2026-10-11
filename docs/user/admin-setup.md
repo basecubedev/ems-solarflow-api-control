@@ -7,7 +7,20 @@ the source of truth. It is a Docker-only path.
 Use this for a fresh install or a deliberate reinstall. To update or change an
 existing system, use [admin-maintenance.md](admin-maintenance.md) instead. Setup
 writes only `config/config.json` (backing up any existing config first); it does
-not touch `data/` or runtime databases.
+not touch `data/` or runtime databases. It builds that file from the release
+template and your choices alone: a config already in place is replaced, not
+merged, and the only thing taken from it is where the shared password file
+lives, so the password you signed in with keeps working. Everything else in the
+config starts at the release defaults unless you choose otherwise in Setup: dry
+run is off and the write gates are open, the dashboard listens on port 8080
+without HTTPS, data file locations are the standard ones, and broker profiles
+are only those Setup builds from what you select. What the dashboard keeps in
+`data/runtime-state.json` is not part of the config: system on/off, the total
+power limit, loop interval and minimum output, each device's on/off and limits,
+and winter and AC charging on/off survive the reinstall and override the values
+Setup writes, and a device keeps its entry under a new name as long as its serial
+stays the same (see
+[runtime state](../technical/runtime-state.md#device-lifecycle-reconciliation)).
 
 ## Start
 
@@ -189,8 +202,9 @@ the Admin Console (see **Start** above), open `http://127.0.0.1:8090`, and pick
    If instead a D0 is discovered on a local MQTT broker, the proposal offers
    **"Use as grid meter"**: choosing it maps the D0's
    `Zendure/sensor/<serial>/totalPower` topic to the central grid meter, reusing
-   the selected broker profile. Only one grid meter can be active, and an
-   existing grid meter is only replaced when you explicitly confirm it.
+   the selected broker profile. Only one grid meter can be active, and a grid
+   meter already chosen in this Setup is only replaced when you explicitly
+   confirm it.
 4. **04 Prepare deployment** — the Admin Console writes the generated config to
    the standard `config/config.json` (backing up any existing config first) and
    prepares the EMS deployment: the Compose file plus the target EMS image and

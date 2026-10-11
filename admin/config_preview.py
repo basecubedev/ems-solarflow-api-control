@@ -3,8 +3,8 @@
 
 import copy
 import json
-from pathlib import Path
 
+from admin.auth import configured_auth_file_at
 from admin.device_common_fields import materialize_common_device_defaults
 from admin.install_context import detect_install_context
 from admin.inverter_names import next_compact_inverter_name
@@ -20,7 +20,6 @@ from admin.zendure_mqtt_broker_profiles import (
     broker_endpoint as _broker_endpoint,
     broker_tls_metadata,
     default_zendure_cloud_auth_available as _default_zendure_cloud_auth_available,
-    existing_broker_profiles as _existing_broker_profiles,
     resolve_broker_ref as _resolve_broker_ref,
     set_broker_profile as _set_broker_profile,
     valid_host as _valid_host,
@@ -54,13 +53,11 @@ from ems.winter_policies import find_winter_policy_issues
 from ems.zendure_mqtt.config_entries import (
     SOURCE_LOCAL_MQTT,
     SOURCE_ZENDURE_CLOUD_MQTT,
-    config_entry_enabled,
     find_duplicate_zendure_device_identities,
     find_reserved_mqtt_broker_ref_issues,
     find_zendure_mqtt_broker_profile_issues,
     has_runtime_control_device,
     is_control_zendure_mqtt_device_config,
-    is_zendure_mqtt_device_config,
     zendure_config_device_identity,
     zendure_mqtt_broker_ref,
 )
@@ -99,80 +96,8 @@ def _issue(code, message):
 # zendure_mqtt_config_draft helper so setup and maintenance stay in sync.
 _MAX_ZENDURE_MQTT_PROPOSALS = 20
 
-def _existing_broker_refs(preview):
-    return set(_existing_broker_profiles(preview))
-
-
-def _upsert_zendure_mqtt_device(
-    devices, base_index_by_identity, entry, resolved_ref, *, broker_sources
-):
-    """Add, update or leave an MQTT device for a trusted proposal ``entry``.
-
-    Returns one of ``added`` / ``updated`` / ``unchanged``. When the proposal's
-    physical identity already matches an enabled Zendure MQTT device in the base,
-    that existing device is rebound in place to ``resolved_ref`` (rebind) or left
-    untouched (exact re-apply) instead of appending a duplicate. Only same-family
-    base entries qualify, snapshotted before the merge: an HTTP device sharing a
-    serial, or a second distinct proposal in this same call, is not treated as a
-    rebind and still collides under duplicate-identity validation.
-    """
-
-    identity = zendure_config_device_identity(
-        entry, broker_sources=broker_sources
-    )
-    existing_index = (
-        base_index_by_identity.get(identity) if identity is not None else None
-    )
-    if existing_index is None:
-        # A brand-new device materializes the central common defaults, exactly
-        # like a device added through Maintenance; a rebind below never touches
-        # the existing device's stored values.
-        devices.append(materialize_common_device_defaults(entry))
-        return "added"
-
-    device = devices[existing_index]
-    mqtt = device.get("mqtt")
-    if not isinstance(mqtt, dict):
-        mqtt = {}
-        device["mqtt"] = mqtt
-    if zendure_mqtt_broker_ref(device) == resolved_ref:
-        return "unchanged"
-    mqtt["broker_ref"] = resolved_ref
-    return "updated"
-
-
-def _prune_unreferenced_new_brokers(preview, preexisting_refs):
-    """Drop broker profiles this merge newly created that nothing references.
-
-    A rebind reuses the existing device and points it at the resolved profile, so
-    a profile provisioned for a proposal that then rebound the base device (or a
-    profile left unused by a skipped proposal) must not linger. A pre-existing
-    operator profile is never auto-removed even when it becomes unreferenced,
-    because deleting user-declared connection state is not this path's decision.
-    """
-
-    zmqtt = preview.get("zendure_mqtt")
-    brokers = zmqtt.get("brokers") if isinstance(zmqtt, dict) else None
-    if not isinstance(brokers, dict):
-        return
-    referenced = set()
-    for device in preview.get("devices", []):
-        if is_zendure_mqtt_device_config(device):
-            referenced.add(zendure_mqtt_broker_ref(device))
-    grid = preview.get("grid_meter")
-    if isinstance(grid, dict):
-        grid_mqtt = grid.get("mqtt")
-        if isinstance(grid_mqtt, dict):
-            ref = grid_mqtt.get("broker_ref")
-            if isinstance(ref, str) and ref.strip():
-                referenced.add(ref.strip())
-    for ref in list(brokers):
-        if ref not in preexisting_refs and ref not in referenced:
-            del brokers[ref]
-
-
 def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_available):
-    """Upsert sanitized Zendure MQTT proposal fragments (telemetry or control).
+    """Add sanitized Zendure MQTT proposal fragments (telemetry or control).
 
     Each fragment is stripped of secrets and capability-gated (output control is
     preserved only where the topic family has a verified write method; an
@@ -180,10 +105,9 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
     validated with the matching EMS-owned validator (control or telemetry) before
     it may become a device. Its broker ref must resolve to a usable enabled broker
     profile (cloud requires external account auth, local requires a known
-    host/port). A proposal whose physical device already exists in the base is
-    upserted onto that device (rebind or no-op) so a trusted re-selection from a
-    different broker never appends a duplicate or orphans a freshly provisioned
-    profile. An invalid or unusable proposal raises a validation error so
+    host/port). The preview holds no MQTT device before this merge, since a setup
+    builds on the release template alone, so every accepted proposal is a new
+    device. An invalid or unusable proposal raises a validation error so
     export/apply cannot proceed with it.
     """
 
@@ -194,34 +118,11 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         devices = []
         preview["devices"] = devices
 
-    # Snapshot, before merging, the base's enabled Zendure MQTT devices by
-    # physical identity (for in-place upsert) and the broker refs that already
-    # existed (so only profiles this call creates may be pruned).
-    preexisting_refs = _existing_broker_refs(preview)
     broker_sources = broker_sources_from_config(preview)
-    base_index_by_identity = {}
-    disabled_base_identities = set()
-    for index, device in enumerate(devices):
-        if not (isinstance(device, dict) and device.get("type") == "zendure_mqtt"):
-            continue
-        identity = zendure_config_device_identity(
-            device, broker_sources=broker_sources
-        )
-        if identity is None:
-            continue
-        if config_entry_enabled(device):
-            base_index_by_identity.setdefault(identity, index)
-        else:
-            # A disabled base device is never a rebind target: an upsert would
-            # append an enabled duplicate that later trips duplicate-identity
-            # validation, so a proposal matching one is rejected instead.
-            disabled_base_identities.add(identity)
 
-    # Two selected proposals for one physical device are an ambiguous selection
-    # even when that device already exists in the base: rebinding it twice would
-    # silently let the last proposal win. Count valid proposal identities up front
-    # so both are rejected before any broker is provisioned or any base device is
-    # rebound.
+    # Two selected proposals for one physical device are an ambiguous selection:
+    # adding both would configure one inverter twice. Count valid proposal
+    # identities up front so both are rejected before any broker is provisioned.
     proposal_identity_counts = {}
     for proposal in proposals[:_MAX_ZENDURE_MQTT_PROPOSALS]:
         if not isinstance(proposal, dict):
@@ -310,15 +211,6 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
                 )
                 reported_conflicts.add(identity)
             continue
-        if identity is not None and identity in disabled_base_identities:
-            validation["errors"].append(
-                _issue(
-                    "zendure_device_identity_disabled",
-                    f"{label}: a disabled Zendure MQTT device with this identity "
-                    "already exists. Re-enable or remove it before adding this one.",
-                )
-            )
-            continue
         try:
             endpoint = _broker_endpoint(proposal)
         except _BrokerEndpointError as exc:
@@ -350,25 +242,15 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         enforce_zendure_mqtt_output_control_capability(
             entry, broker_sources_from_config(preview)
         )
-        if _upsert_zendure_mqtt_device(
-            devices,
-            base_index_by_identity,
-            entry,
-            resolved_ref,
-            broker_sources=broker_sources_from_config(preview),
-        ) == "added":
-            added += 1
-            if is_control_zendure_mqtt_device_config(entry):
-                control_added += 1
-                broker = (preview.get("zendure_mqtt", {}).get("brokers", {})).get(
-                    resolved_ref, {}
-                )
-                if broker.get("source") == SOURCE_ZENDURE_CLOUD_MQTT:
-                    cloud_control_added += 1
-
-    # Rebinds reuse the base device, so a profile provisioned for such a proposal
-    # would otherwise linger unreferenced; prune only newly-created ones.
-    _prune_unreferenced_new_brokers(preview, preexisting_refs)
+        devices.append(materialize_common_device_defaults(entry))
+        added += 1
+        if is_control_zendure_mqtt_device_config(entry):
+            control_added += 1
+            broker = (preview.get("zendure_mqtt", {}).get("brokers", {})).get(
+                resolved_ref, {}
+            )
+            if broker.get("source") == SOURCE_ZENDURE_CLOUD_MQTT:
+                cloud_control_added += 1
 
     # The summary reflects each device's actual capability: control devices are
     # announced as controllable, telemetry devices as read-only.
@@ -435,8 +317,9 @@ def _merge_zendure_mqtt_grid_meter_proposal(
     Backend re-validates everything (source, family, exact totalPower topic,
     broker ref) and rebuilds the fragment from trusted pieces, so a frontend
     role label is never trusted. The D0 is written to ``grid_meter`` only, never
-    appended to ``devices[]``. Exactly one grid meter may be active; an existing
-    HTTP/Shelly grid meter is only replaced on an explicit user request.
+    appended to ``devices[]``. Exactly one grid meter may be active; an
+    HTTP/Shelly grid meter chosen in the draft is only replaced on an explicit
+    user request.
     """
 
     if not isinstance(grid_proposals, list) or not grid_proposals:
@@ -567,9 +450,9 @@ def _grid_meter_summary(preview):
 def _reserved_broker_ref_errors(preview, validation):
     """Reject a named broker profile that uses the reserved ``default`` ref.
 
-    Setup never generates ``zendure_mqtt.brokers.default`` itself, but a carried
-    base config or a manually edited draft can, so the same Core reservation the
-    runtime enforces is applied to the preview before it can be marked ready.
+    Setup never generates ``zendure_mqtt.brokers.default`` itself, but a manual
+    broker named so can, so the same Core reservation the runtime enforces is
+    applied to the preview before it can be marked ready.
     """
 
     for issue in find_reserved_mqtt_broker_ref_issues(preview):
@@ -986,28 +869,14 @@ def _normalize_bundled_influx_secret(config):
         influx["secret_file"] = DOCKER_FIRST_SECRET_FILE
 
 
-def _load_existing_config(path):
-    try:
-        text = Path(path).read_text(encoding="utf-8")
-    except OSError:
-        return None, _issue(
-            "existing_config_unreadable", f"Could not read the existing EMS config at {path}."
-        )
-    try:
-        data = json.loads(text)
-    except ValueError:
-        return None, _issue(
-            "existing_config_invalid_json", f"The existing EMS config at {path} is not valid JSON."
-        )
-    if not isinstance(data, dict):
-        return None, _issue(
-            "existing_config_not_object", f"The existing EMS config at {path} is not a JSON object."
-        )
-    return data, None
-
-
 class ConfigPreviewGenerator:
-    """Generate a config preview, using a real EMS config as base when one exists."""
+    """Generate a config preview from the release template and the setup draft.
+
+    A config already in place is replaced, never merged: nothing of it reaches
+    the new one except where the shared password file lives. The Admin login
+    reads that location from the config it guards, so a new default would end
+    every session and leave the password to whoever opens the console next.
+    """
 
     def __init__(
         self,
@@ -1026,22 +895,17 @@ class ConfigPreviewGenerator:
         except Exception:
             return None
 
-    def _resolve_base(self, template, validation):
+    def _replaced_config(self):
+        """The base metadata, and the password file location a replaced config sets."""
+
         context = self._install_context()
-        if context is not None and context.config_exists:
-            base_meta = {
-                "source": "existing_config",
-                "config_path": str(context.config_path),
-                "config_source": context.config_source,
-                "template_path": str(context.template_path),
-                "template_source": context.template_source,
-            }
-            base_config, error = _load_existing_config(context.config_path)
-            if error is not None:
-                validation["errors"].append(error)
-                return base_meta, None
-            return base_meta, base_config
-        return {"source": "release_template"}, template
+        if context is None or not context.config_exists:
+            return {"source": "release_template"}, None
+        auth_file, _readable = configured_auth_file_at(context.config_path)
+        return (
+            {"source": "release_template", "replaces_config_path": str(context.config_path)},
+            auth_file,
+        )
 
     def generate(
         self,
@@ -1086,18 +950,8 @@ class ConfigPreviewGenerator:
                 "validation": validation,
             }
 
-        base_meta, base_config = self._resolve_base(template, validation)
-        if base_config is None:
-            return {
-                "ready": False,
-                "release": tag,
-                "template_loaded": True,
-                "config": None,
-                "base": base_meta,
-                "validation": validation,
-            }
-        existing_base = base_meta["source"] == "existing_config"
-        preview = copy.deepcopy(base_config)
+        base_meta, kept_auth_file = self._replaced_config()
+        preview = copy.deepcopy(template)
 
         items = draft if isinstance(draft, list) else []
         enabled = [item for item in items if isinstance(item, dict) and item.get("enabled", True)]
@@ -1127,10 +981,7 @@ class ConfigPreviewGenerator:
         prototype = prototypes[0] if prototypes else {}
 
         names = []
-        if existing_base:
-            self._merge_existing_devices(preview, inverters, prototype, names, validation)
-        else:
-            self._build_template_devices(preview, inverters, prototypes, prototype, names, validation)
+        self._build_template_devices(preview, inverters, prototypes, prototype, names, validation)
 
         if not inverters:
             validation["warnings"].append(
@@ -1139,12 +990,12 @@ class ConfigPreviewGenerator:
 
         self._apply_grid_meter(
             preview, meters, template, names, validation,
-            supported_grid_meter_count, existing_base, features,
+            supported_grid_meter_count, features,
             mqtt_grid_meter_selected=bool(grid_meter_proposals),
         )
 
         # Catalog-driven feature values are applied last so setup choices (winter,
-        # dashboard, InfluxDB, grid meter variant, ...) override template/base
+        # dashboard, InfluxDB, grid meter variant, ...) override template
         # defaults while device entries stay owned by the draft above.
         refused = []
         applied_features = apply_setup_features(preview, features, issues=refused)
@@ -1156,6 +1007,11 @@ class ConfigPreviewGenerator:
                     f"Applied {len(applied_features)} setup feature value(s).",
                 )
             )
+        if kept_auth_file is not None:
+            dashboard = preview.get("dashboard")
+            if not isinstance(dashboard, dict):
+                dashboard = preview["dashboard"] = {}
+            dashboard["auth_file"] = kept_auth_file
 
         # Manual broker/devices reuse the discovered-proposal path: provision the
         # user's broker first so the manual devices' broker_ref resolves against
@@ -1202,12 +1058,11 @@ class ConfigPreviewGenerator:
             )
 
         # ``default`` is reserved for the implicit legacy top-level broker; a
-        # carried or hand-edited named brokers.default is rejected before ready.
+        # manual broker named so is rejected before ready.
         _reserved_broker_ref_errors(preview, validation)
 
         # EMS owns broker semantics: block any enabled Zendure MQTT device whose
-        # broker profile is unusable (unknown/disabled/incomplete/auth-missing),
-        # including devices carried over from an existing base config.
+        # broker profile is unusable (unknown/disabled/incomplete/auth-missing).
         for issue in find_zendure_mqtt_broker_profile_issues(preview):
             validation["errors"].append(
                 _issue(
@@ -1227,9 +1082,9 @@ class ConfigPreviewGenerator:
             self.zendure_cloud_auth_available,
         )
 
-        # Final parity gate: a MQTT grid meter (D0 proposal, carried base config
-        # or feature-applied) must pass the same Core resolver EMS uses at
-        # startup, so a "ready" preview can never fail at runtime.
+        # Final parity gate: a MQTT grid meter (D0 proposal or feature-applied)
+        # must pass the same Core resolver EMS uses at startup, so a "ready"
+        # preview can never fail at runtime.
         _validate_mqtt_grid_meter_via_core(preview, validation)
 
         _normalize_bundled_influx_secret(preview)
@@ -1254,11 +1109,7 @@ class ConfigPreviewGenerator:
             broker_sources=broker_sources_from_config(preview),
         ):
             validation["errors"].append(
-                _issue(
-                    issue["code"],
-                    f"{issue['message']} Edit or remove the existing device before "
-                    "adding it again.",
-                )
+                _issue(issue["code"], issue["message"])
             )
 
         if not has_runtime_control_device(preview):
@@ -1279,9 +1130,13 @@ class ConfigPreviewGenerator:
         validation["info"].append(
             _issue("template_loaded", f"Release template {tag} loaded.")
         )
-        if existing_base:
+        if "replaces_config_path" in base_meta:
             validation["info"].append(
-                _issue("existing_config_base", "Existing EMS config used as preview base.")
+                _issue(
+                    "existing_config_replaced",
+                    "The existing EMS config is replaced, not merged; a backup of it "
+                    "is written first.",
+                )
             )
         if not duplicate_names and names and all(names):
             validation["info"].append(
@@ -1342,76 +1197,6 @@ class ConfigPreviewGenerator:
             generated_devices.append(device)
         preview["devices"] = generated_devices
 
-    def _merge_existing_devices(self, preview, inverters, prototype, names, validation):
-        devices = preview.get("devices")
-        if not isinstance(devices, list):
-            devices = []
-            preview["devices"] = devices
-        by_name = {}
-        for device in devices:
-            if isinstance(device, dict):
-                key = str(device.get("name") or "")
-                if key and key not in by_name:
-                    by_name[key] = device
-
-        allocation_names = [
-            str(device.get("name") or "").strip()
-            for device in devices
-            if isinstance(device, dict)
-        ]
-        allocation_count = len(devices)
-        for index, item in enumerate(inverters, 1):
-            if "config_name" in item:
-                name = str(item.get("config_name") or "").strip()
-            else:
-                name = next_compact_inverter_name(
-                    allocation_names, allocation_count
-                )
-            label = name or f"inverter {index}"
-            display_name = str(item.get("display_name") or "").strip()
-            host = str(item.get("ip") or "").strip()
-            serial = str(item.get("serial_number") or "").strip()
-            names.append(name)
-            allocation_count += 1
-            if name:
-                allocation_names.append(name)
-            if not display_name:
-                validation["errors"].append(_issue("display_name_empty", f"{label} needs a display name."))
-            if not _valid_host(host):
-                validation["errors"].append(
-                    _issue("device_host_invalid", f"{label} has an invalid IP address or hostname.")
-                )
-
-            match = by_name.get(name)
-            if match is not None:
-                match["ip"] = host
-                if serial:
-                    match["sn"] = serial
-                _apply_typed_fields(match, item)
-                refused = []
-                apply_device_config_values(match, item.get("config_values"), issues=refused)
-                _refuse_invalid_values(validation, refused, label)
-                if "sn" in match and not str(match.get("sn") or "").strip():
-                    validation["errors"].append(
-                        _issue("device_serial_missing", f"{label} requires a serial number.")
-                    )
-                continue
-
-            device = copy.deepcopy(prototype)
-            device["name"] = name
-            device["ip"] = host
-            if "sn" in device:
-                device["sn"] = serial
-                if not serial:
-                    validation["errors"].append(
-                        _issue("device_serial_missing", f"{label} requires a serial number.")
-                    )
-            _apply_typed_fields(device, item)
-            refused = []
-            apply_device_config_values(device, item.get("config_values"), issues=refused)
-            _refuse_invalid_values(validation, refused, label)
-            devices.append(device)
-
     def _normalize_grid_meter_variant(self, preview, meters, validation):
         grid = preview.get("grid_meter")
         if not isinstance(grid, dict):
@@ -1430,32 +1215,28 @@ class ConfigPreviewGenerator:
 
     def _apply_grid_meter(
         self, preview, meters, template, names, validation,
-        supported_grid_meter_count, existing_base, features,
+        supported_grid_meter_count, features,
         mqtt_grid_meter_selected=False,
     ):
         if len(meters) > 1:
             validation["errors"].append(
                 _issue("grid_meter_duplicate", "Choose only one grid meter for EMS control.")
             )
-            if not existing_base:
-                preview.pop("grid_meter", None)
+            preview.pop("grid_meter", None)
             return
 
         if len(meters) == 1:
             meter = meters[0]
             names.append(str(meter.get("config_name") or "").strip())
-            defaults = preview.get("grid_meter") if existing_base else template.get("grid_meter", {})
+            defaults = template.get("grid_meter", {})
             if not isinstance(defaults, dict):
-                defaults = template.get("grid_meter", {})
+                defaults = {}
             grid = _build_grid_meter(meter, defaults, validation, features)
             if grid is None:
                 # Unresolved neutral candidate: no grid meter is generated.
                 preview.pop("grid_meter", None)
             else:
                 preview["grid_meter"] = grid
-            return
-
-        if existing_base and isinstance(preview.get("grid_meter"), dict):
             return
 
         preview.pop("grid_meter", None)
