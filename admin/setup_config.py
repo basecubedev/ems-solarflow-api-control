@@ -200,7 +200,7 @@ def _device_field_index():
     )
 
 
-def apply_setup_features(config, features):
+def apply_setup_features(config, features, *, issues=None):
     """Apply catalog-driven setup feature values onto a config preview.
 
     ``features`` maps stable catalog config paths to user-entered values. Unknown
@@ -208,7 +208,8 @@ def apply_setup_features(config, features):
     the catalog. Device entries are owned by the device draft, not by features.
     Grid-meter paths go through the canonical grid-meter mutation so a variant
     switch, a cleared field and a padded value read the same here as they do in
-    Maintenance. Returns the list of applied paths.
+    Maintenance. A value its type cannot hold is not written and is reported
+    into ``issues``. Returns the list of applied paths.
     """
 
     if not isinstance(config, dict) or not isinstance(features, dict) or not features:
@@ -224,34 +225,36 @@ def apply_setup_features(config, features):
         else:
             other_changes.append(ConfigChange(path, raw_value))
 
-    applied = list(apply_config_changes(config, other_changes, SETUP_POLICY, field_index=index).applied_paths)
+    results = [apply_config_changes(config, other_changes, SETUP_POLICY, field_index=index)]
     if grid_changes:
         grid = config.get("grid_meter")
         if not isinstance(grid, dict):
             grid = {}
             config["grid_meter"] = grid
-        applied.extend(
-            apply_grid_meter_changes(
-                grid, grid_changes, SETUP_POLICY, field_index=index
-            ).applied_paths
+        results.append(
+            apply_grid_meter_changes(grid, grid_changes, SETUP_POLICY, field_index=index)
         )
-    return applied
+    if issues is not None:
+        for result in results:
+            issues.extend(result.errors)
+    return [path for result in results for path in result.applied_paths]
 
 
-def apply_device_config_values(device, values):
+def apply_device_config_values(device, values, *, issues=None):
     """Apply catalog-backed per-device setup values onto a generated device.
 
     ``values`` maps flat device field keys (e.g. ``max_power``) to user-entered
     values from the inverter draft row. Only known ``devices[]`` catalog fields
     are written, coerced to the catalog field type; unknown keys and identity
     fields (name/ip/sn) are ignored so the UI can never write outside the device
-    object. Returns the list of applied keys.
+    object. A value its type cannot hold is not written and is reported into
+    ``issues``. Returns the list of applied keys.
     """
 
     if not isinstance(device, dict) or not isinstance(values, dict) or not values:
         return []
 
-    applied = apply_common_values(device, values, _device_field_index())
+    applied = apply_common_values(device, values, _device_field_index(), issues=issues)
     return [change.path for change in applied]
 
 

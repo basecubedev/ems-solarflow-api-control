@@ -11,6 +11,8 @@ the UI's explicit warning and confirmation.
 """
 
 import hashlib
+import json
+import logging
 import os
 import tempfile
 import threading
@@ -21,6 +23,16 @@ from pathlib import Path
 from admin.config_export import PreparedConfigChange
 from admin.install_context import detect_install_context
 from admin.models import utc_now_iso
+from ems.runtime_state import (
+    cancel_runtime_reset,
+    carry_runtime_reset,
+    config_digest,
+    pending_runtime_reset,
+    request_runtime_reset,
+    runtime_state_path_for_config,
+)
+
+_LOG = logging.getLogger(__name__)
 
 
 class ConfigApplyService:
@@ -65,7 +77,11 @@ class ConfigApplyService:
 
         The server passes the ``prepared`` change it already staged credentials
         against so the exact staged bytes are written; a direct caller without
-        one falls back to serializing here.
+        one falls back to serializing here. A fresh setup also asks the next EMS
+        start for a runtime state built from this config. The request is left
+        before the config is written, so failing to leave it changes nothing;
+        when the config is not written after all, the request found before is
+        put back, since one naming a config that never arrived is void anyway.
         """
 
         change = prepared or self.config_export.prepare(
@@ -76,7 +92,18 @@ class ConfigApplyService:
             zendure_mqtt_broker,
             zendure_mqtt_manual_devices,
         )
-        return self.apply_prepared(change)
+        context = self.install_context_provider()
+        runtime_path = runtime_state_path_for_config(
+            context.config_path, json.loads(change.payload)
+        )
+        previous = pending_runtime_reset(runtime_path)
+        request_runtime_reset(runtime_path, config_digest(change.payload))
+        try:
+            return self.apply_prepared(change)
+        except BaseException:
+            if not _holds(context.config_path, change.payload):
+                _put_back_runtime_reset(runtime_path, previous)
+            raise
 
     def capture_config_revision(self):
         """Return the target config's ``(expected_revision, expect_absent)`` now.
@@ -96,17 +123,32 @@ class ConfigApplyService:
             return None, True
 
     def apply_maintenance(self, payload, expected_revision, create_backup=True):
-        """Atomically apply an already validated Maintenance config payload."""
+        """Atomically apply an already validated Maintenance config payload.
 
-        return self.apply_prepared(
-            PreparedConfigChange(
-                payload=payload,
-                parsed_config=None,
-                preview=None,
-                expected_revision=expected_revision,
-            ),
-            create_backup=create_backup,
-        )
+        An edit of the config a fresh setup wrote keeps the setup's pending
+        runtime reset: the request moves to the config written here. The config
+        is committed by then, so a request that cannot be moved is logged, not
+        raised.
+        """
+
+        context = self.install_context_provider()
+        try:
+            result = self.apply_prepared(
+                PreparedConfigChange(
+                    payload=payload,
+                    parsed_config=None,
+                    preview=None,
+                    expected_revision=expected_revision,
+                ),
+                create_backup=create_backup,
+            )
+        except BaseException:
+            if _holds(context.config_path, payload):
+                _carry_runtime_reset(context.config_path, payload, expected_revision)
+            raise
+        if result["changed"]:
+            _carry_runtime_reset(context.config_path, payload, expected_revision)
+        return result
 
     def apply_prepared(self, change, *, create_backup=True):
         """Write one prepared payload atomically — the single exact-payload writer.
@@ -149,9 +191,12 @@ class ConfigApplyService:
             if changed:
                 # Back up before touching the target: a failing backup must abort
                 # the apply so an existing config is never lost.
-                backup_path = (
-                    self._backup(target) if existed and create_backup else None
-                )
+                try:
+                    backup_path = (
+                        self._backup(target) if existed and create_backup else None
+                    )
+                except OSError as exc:
+                    raise ConfigBackupError(str(exc)) from exc
                 _atomic_write(target, change.payload)
         result = {
             "ok": True,
@@ -183,6 +228,41 @@ class ConfigApplyService:
             )
             counter += 1
         return candidate
+
+
+def _put_back_runtime_reset(runtime_path, previous):
+    """Restore the request found before a Setup apply whose config never arrived.
+
+    Failing here must not replace the apply's own error, so it is logged.
+    """
+
+    try:
+        if previous is None:
+            cancel_runtime_reset(runtime_path)
+        else:
+            request_runtime_reset(runtime_path, previous)
+    except OSError as exc:
+        _LOG.warning("event=runtime_reset_put_back_failed error=%s", exc)
+
+
+def _carry_runtime_reset(config_path, payload, replaced_digest):
+    """Move a pending runtime reset along with an edit; the config is committed by now."""
+
+    if not replaced_digest:
+        return
+    try:
+        carry_runtime_reset(
+            config_path, json.loads(payload), replaced_digest, config_digest(payload)
+        )
+    except (OSError, ValueError) as exc:
+        _LOG.warning("event=runtime_reset_carry_failed error=%s", exc)
+
+
+def _holds(path, payload):
+    try:
+        return Path(path).read_bytes() == payload
+    except OSError:
+        return False
 
 
 def _atomic_write(path, payload):
@@ -218,3 +298,7 @@ def _fsync_directory(directory):
 
 class ConfigChangedError(RuntimeError):
     pass
+
+
+class ConfigBackupError(OSError):
+    """The backup taken before an apply failed, so nothing was written."""

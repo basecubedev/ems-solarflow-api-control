@@ -3,9 +3,13 @@ import json
 import logging
 import os
 import copy
+import hashlib
+import tempfile
 import threading
+import time
 
 from ems import config as cfg
+from ems.paths import install_root_for_config
 from ems.logging_utils import log_event
 
 
@@ -152,6 +156,173 @@ def merge_runtime_defaults(data, defaults):
     merged["devices"] = merged_devices
 
     return merged
+
+
+RESET_REQUEST_SUFFIX = ".reset-requested"
+SETUP_BACKUP_SUFFIX = ".before-setup"
+
+
+def runtime_reset_request_path(path):
+    """Where a fresh setup leaves its request beside the runtime state at ``path``."""
+
+    return f"{path}{RESET_REQUEST_SUFFIX}"
+
+
+def config_digest(payload):
+    """The SHA-256 a request names a config's bytes by."""
+
+    return hashlib.sha256(payload).hexdigest()
+
+
+def request_runtime_reset(path, config_sha256):
+    """Ask the next EMS start to build the runtime state at ``path`` afresh.
+
+    Only a request: an EMS still running on the replaced config would write a
+    state set aside now straight back from memory, so the EMS that starts on
+    the new config does the reset (:func:`start_runtime_state`). The request
+    names the config it was left for by its SHA-256, so it holds only while
+    that very config is installed.
+    """
+
+    marker = runtime_reset_request_path(path)
+    parent = os.path.dirname(marker) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(
+        prefix=f"{os.path.basename(marker)}.", suffix=".tmp", dir=parent
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"reason": "fresh_setup", "config_sha256": config_sha256}, handle)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, marker)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def pending_runtime_reset(path):
+    """The config SHA-256 a pending request beside ``path`` names, or ``None``."""
+
+    try:
+        with open(runtime_reset_request_path(path), encoding="utf-8") as handle:
+            request = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    digest = request.get("config_sha256") if isinstance(request, dict) else None
+    return digest if isinstance(digest, str) and digest else None
+
+
+def rebind_runtime_reset(path, from_sha256, to_sha256):
+    """Move a pending request from the config it names to the edit replacing it.
+
+    An edit of the set-up config keeps the setup's reset; a request naming any
+    other config is left as it is, void.
+    """
+
+    if from_sha256 and pending_runtime_reset(path) == from_sha256:
+        request_runtime_reset(path, to_sha256)
+        return True
+    return False
+
+
+def runtime_state_path_under(install_root, config):
+    """The runtime-state file the EMS reads for ``config`` under ``install_root``."""
+
+    system = config.get("system") if isinstance(config, dict) else None
+    system = system if isinstance(system, dict) else {}
+    relative = system.get("runtime_state_path") or "runtime-state.json"
+    if os.path.isabs(relative):
+        return relative
+    return os.path.join(str(install_root), relative)
+
+
+def runtime_state_path_for_config(config_path, config):
+    """The runtime-state file the EMS reads for ``config`` installed at ``config_path``."""
+
+    return runtime_state_path_under(install_root_for_config(config_path), config)
+
+
+def carry_runtime_reset(config_path, config, replaced_digest, written_digest):
+    """Move a pending request from the config replaced to the edit that replaces it.
+
+    Every edit of an installed config goes through this, so a setup's reset
+    survives it; a restore never does, and a request naming the config it
+    replaced is then dropped at the next start.
+    """
+
+    return rebind_runtime_reset(
+        runtime_state_path_for_config(config_path, config), replaced_digest, written_digest
+    )
+
+
+def cancel_runtime_reset(path):
+    """Remove a pending request beside the runtime state at ``path``, if any."""
+
+    try:
+        os.remove(runtime_reset_request_path(path))
+    except FileNotFoundError:
+        pass
+
+
+def _setup_backup_path(path):
+    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+    candidate = f"{path}{SETUP_BACKUP_SUFFIX}-{stamp}"
+    counter = 1
+    while os.path.exists(candidate):
+        candidate = f"{path}{SETUP_BACKUP_SUFFIX}-{stamp}-{counter}"
+        counter += 1
+    return candidate
+
+
+def _config_file_digest(path):
+    try:
+        with open(path, "rb") as handle:
+            return config_digest(handle.read())
+    except OSError:
+        return None
+
+
+def start_runtime_state(path, defaults, config_path):
+    """The runtime state a starting EMS works with.
+
+    A fresh setup's request is settled first. While the config at
+    ``config_path`` is still the one it names, the existing file is kept as
+    ``<path>.before-setup-<UTC time>`` and set aside, so the state is built
+    from that config; a request naming any other config -- a restored backup,
+    a write that failed -- is dropped. Only an EMS start calls this; anything
+    else that opens the file leaves the request for it.
+    """
+
+    state = RuntimeState(path, defaults)
+    marker = runtime_reset_request_path(path)
+    if os.path.exists(marker):
+        wanted = pending_runtime_reset(path)
+        if wanted is not None and wanted == _config_file_digest(config_path):
+            backup = _setup_backup_path(path)
+            moved = os.path.exists(path)
+            if moved:
+                os.replace(path, backup)
+            log_event(
+                logging.INFO,
+                "runtime_state_reset_by_setup",
+                path=path,
+                backup=backup if moved else None,
+            )
+        else:
+            log_event(
+                logging.INFO,
+                "runtime_reset_request_dropped",
+                path=path,
+                reason="config_replaced",
+            )
+        os.remove(marker)
+    state.load_or_create()
+    return state
 
 
 class RuntimeState:

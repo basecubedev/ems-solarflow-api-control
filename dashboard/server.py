@@ -1065,7 +1065,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         )
         return range_name, start, end, series, devices
 
-    def _serve_series(self, provider, query, *, log_label, diagnose=None):
+    def _serve_series(self, provider, query, *, log_label, diagnose=None, annotate=None):
         from ems.history.provider import decimate_history_result
 
         parsed = self._resolve_series_query(query)
@@ -1096,6 +1096,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
 
         decimate_history_result(result)
+        if annotate is not None:
+            annotate(result, start, end)
         payload = result.to_dict()
         payload["range"] = range_name
         self._send_json(_external_mqtt_status_payload(self.server, payload))
@@ -1106,8 +1108,18 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         # replaces this source, so these views work with zero external
         # dependencies and remain the default experience.
         self._serve_series(
-            self.server.sqlite_history_provider(), query, log_label="history"
+            self.server.sqlite_history_provider(),
+            query,
+            log_label="history",
+            annotate=self._annotate_history_retention,
         )
+
+    def _annotate_history_retention(self, result, start, end):
+        """Name the retention when the range asks for more than the store keeps."""
+
+        hours = getattr(self.server.store, "retention_hours", None)
+        if isinstance(hours, int) and (end - start).total_seconds() > hours * 3600:
+            result.meta["retention_hours"] = hours
 
     def _handle_analytics_status(self):
         provider = self.server.analytics_provider()

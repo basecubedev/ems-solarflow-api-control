@@ -648,7 +648,10 @@ reports `"range": "custom"`. `start >= end` or unparseable bounds return
 `400 invalid_range`. The response is columnar
 (`time`, `series`, `devices`, `source`, `window`, `range`, `meta`) so the
 front-end uPlot chart can plot every series on one shared time axis. The
-`source` is always `sqlite`.
+`source` is always `sqlite`. When the range reaches further back than the store
+keeps (`dashboard.history_hours`, 48 h by default — so `7d` and beyond),
+`meta.retention_hours` names the retention, and the History panel says under
+the chart that the range shows that many hours at most.
 
 The lightweight **History** panel (shown only on the Aggregate and Devices
 views) uses this endpoint for one combined chart of the default

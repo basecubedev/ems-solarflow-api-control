@@ -652,3 +652,65 @@ def test_write_status_file_swallows_io_errors(tmp_path):
     blocker = tmp_path / "blocker"
     blocker.write_text("x", encoding="utf-8")
     assert runtime.write_status_file(blocker / "status.json") is False
+
+
+@pytest.mark.parametrize("enabled", [False, "false", 0])
+def test_classify_skips_a_disabled_telemetry_device(enabled):
+    disabled = _telemetry_device(name="Off", device_id="DEV2")
+    disabled["enabled"] = enabled
+
+    valid, invalid = classify_zendure_mqtt_devices(
+        [_telemetry_device(name="On", device_id="DEV1"), disabled]
+    )
+
+    assert [d.name for d in valid] == ["On"]
+    assert invalid == []
+
+
+def test_a_disabled_telemetry_device_is_not_read_shown_or_counted():
+    disabled = _telemetry_device(name="Off", device_id="DEV2")
+    disabled["enabled"] = False
+    services = []
+
+    def factory(config):
+        service = FakeService(config)
+        services.append(service)
+        return service
+
+    runtime = build_zendure_mqtt_runtime(
+        {
+            "zendure_mqtt": {"host": "broker.local", "port": 1883},
+            "devices": [_telemetry_device(name="On", device_id="DEV1"), disabled],
+        },
+        service_factory=factory,
+    )
+    runtime.start()
+    services[0].set_snapshots({"DEV1": _Snap("DEV1"), "DEV2": _Snap("DEV2")})
+
+    assert set(runtime.snapshots()) == {"DEV1"}
+    assert [s["name"] for s in runtime.device_summaries()] == ["On"]
+    assert runtime.status()["configured_device_count"] == 1
+
+
+def test_a_broker_whose_only_telemetry_device_is_disabled_is_not_started():
+    disabled = _telemetry_device(name="Off", device_id="DEV2")
+    disabled["enabled"] = False
+    services = []
+
+    def factory(config):
+        service = FakeService(config)
+        services.append(service)
+        return service
+
+    runtime = build_zendure_mqtt_runtime(
+        {
+            "zendure_mqtt": {"host": "broker.local", "port": 1883},
+            "devices": [disabled],
+        },
+        service_factory=factory,
+    )
+    runtime.start()
+
+    assert not any(service.started for service in services)
+    assert runtime.device_summaries() == []
+    assert runtime.status()["configured_device_count"] == 0

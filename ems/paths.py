@@ -86,6 +86,17 @@ def detect_config_layout_state(base_dir=None):
     return LAYOUT_BOTH_SAME if same else LAYOUT_BOTH_DIFFERENT
 
 
+def install_root_for_config(config_path):
+    """The install root a config file belongs to.
+
+    The parent of ``config/`` for the canonical layout, the file's own
+    directory for the legacy root ``config.json``.
+    """
+
+    parent = Path(config_path).parent
+    return parent.parent if parent.name == "config" else parent
+
+
 def resolve_template_path(explicit_path=None, *, base_dir=None):
     """Resolve the EMS template, including the Docker image fallback."""
 
@@ -128,6 +139,20 @@ def resolve_zendure_mqtt_status_path(explicit_path=None, *, base_dir=None):
     if explicit_path:
         return Path(explicit_path)
     return resolve_data_dir(base_dir=base_dir) / ZENDURE_MQTT_STATUS_FILENAME
+
+
+CONTROL_STATUS_FILENAME = "control-status.json"
+
+
+def resolve_control_status_path(runtime_state_path):
+    """Resolve the live control snapshot beside the runtime-state file.
+
+    The EMS and every diagnose caller already agree on the runtime-state path,
+    so the snapshot of one installation is found from it, ``--runtime-state``
+    overrides included.
+    """
+
+    return Path(runtime_state_path).with_name(CONTROL_STATUS_FILENAME)
 
 
 def resolve_compose_path(explicit_path=None, *, base_dir=None):

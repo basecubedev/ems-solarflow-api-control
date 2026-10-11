@@ -166,7 +166,11 @@ template is validated, exposed read-only at `GET /api/setup/config-template`,
 and used by the Config step as the draft base. The
 `POST /api/setup/config-preview` endpoint accepts the browser's selected-device
 draft and returns a generated config plus structured validation. The same draft
-can be downloaded through `POST /api/setup/config/download` or saved atomically
+can be downloaded through `POST /api/setup/config/download` — only as an
+encrypted config backup (`ems-config-manual-….tar.gz.enc`, `config/config.json`
+alone, encrypted like `emsctl backup create --password`) with a `password` of at
+least 8 characters in the request, refused with `download_password_required`
+otherwise, because a config carries API keys and broker passwords — or saved atomically
 to the fixed Admin-managed `generated/config.json` path through
 `POST /api/setup/config/write`. Saving to `generated/config.json` never targets
 an EMS runtime config and requires explicit confirmation before replacing an
@@ -199,8 +203,11 @@ validates the generated config, backs up any existing config to
 `data/admin/backups/config/config-before-admin-apply-YYYYMMDD-HHMMSS.json`, then
 writes atomically. Fresh installs create `config/config.json` without a backup;
 existing installs are always preserved as a backup before being replaced. Apply
-touches only `config.json` — it never moves `data/`, `docker-compose.yml`, or
-runtime databases. Preview stays non-destructive.
+writes `config.json` and, beside the runtime state, the request that the next
+EMS start rebuild it from that config (`data/runtime-state.json.reset-requested`,
+left before the config so failing to leave it changes nothing); it never moves
+`data/`, `docker-compose.yml`, or runtime databases. Preview stays
+non-destructive.
 
 Verified discovered devices replace only the template's `devices` and
 `grid_meter` values; all other release-specific defaults remain intact. The
@@ -737,12 +744,12 @@ Admin proposal building, config preview and Core:
   accounts on one host) stay **distinct** profiles and, at runtime, distinct
   MQTT services with isolated reads and writes.
 
-Setup apply is **idempotent**: because apply uses the existing installed config
-as its preview base, re-selecting a Zendure MQTT device already present in the
-config is a no-op rather than a duplicate-identity error. A genuine conflict
-still blocks — an existing HTTP device that shares a serial (a different
-transport for one physical device), or two distinct proposals for the same
-device id in a single apply.
+Setup apply builds on the release template alone: a config already installed
+is replaced, not merged, and only its `dashboard.auth_file` is carried over, so
+a repeated apply never meets a device it configured before. A genuine conflict
+in the selection still blocks — an HTTP device and an MQTT proposal that share
+a serial (two transports for one physical device), or two distinct proposals
+for the same device id in a single apply.
 
 The full setup-to-runtime lifecycle (discovery → trusted proposal → preview →
 apply → `config.json` → Core credential resolution → runtime → telemetry →
@@ -1183,12 +1190,17 @@ Once confirmed (or on a fresh/Admin-owned install), it copies an existing
 `config/config.json` or `docker-compose.yml` to
 `${EMS_INSTALL_DIR}/data/admin/backups/` before writing atomically, reports the
 backup paths on the prepare job, and never deletes `data/` or its runtime
-databases — so the standard layout is never silently replaced. Admin-owned state
+databases — so the standard layout is never silently replaced. Before the config
+it leaves the request that the next EMS start rebuild `data/runtime-state.json`
+from that config (see [runtime state](runtime-state.md#fresh-setup-reset)); when
+`data/` refuses it until the permission repair, it is left right after the
+repair. Admin-owned state
 (the prepared marker) stays under `data/admin/state/`; `data/admin/` holds only
 Admin state, backups, staging, and logs. Step 05 is the only wizard step that runs
 `docker compose up -d`; it checks the prepared marker, config hash, and mount
-writability first, then reports Compose service state and dashboard
-reachability. If `config/` or `data/` later have incorrect ownership, the wizard
+writability first, recreates an EMS that already runs (`up -d --force-recreate
+ems`, since Compose leaves a running service alone when only its mounted config
+changed), then reports Compose service state and dashboard reachability. If `config/` or `data/` later have incorrect ownership, the wizard
 can repair only those directories and retry the preflight. It does not remove
 runtime data or Docker volumes.
 
@@ -1202,8 +1214,9 @@ sudo chown -R "$(id -u):$(id -g)" config data
 ### Install-context detection inside the container
 
 The config-preview wizard reuses the EMS path resolver (`ems.paths`) through
-`admin/install_context.py` to detect an existing EMS installation and use its
-`config.json` as the preview base. The minimal `ems/__init__.py` and
+`admin/install_context.py` to detect an existing EMS installation: its
+`config.json` is the one a setup replaces, and the one the password file
+location is carried over from. The minimal `ems/__init__.py` and
 `ems/paths.py` are copied into the Admin image so this import chain works; the
 Admin image deliberately does **not** carry the full EMS core.
 
@@ -1217,8 +1230,9 @@ still works), `.../data/`, and `.../docker-compose.yml` from there. Because the
 install root is mounted at the same absolute path inside the container, that path
 is also host-valid — which matters when Admin forwards bind mounts to the host
 Docker daemon for sibling EMS containers. When `EMS_INSTALL_DIR` is unset (e.g.
-direct Compose use without the launcher), detection falls back to the release
-template as the preview base.
+direct Compose use without the launcher), detection does not see the
+installation, so a preview knows neither the config it replaces nor where that
+config keeps the password file.
 
 The install root mount points at the standard `./config`, `./data`,
 `./docker-compose.yml` layout, which is also the live deployment target. Admin

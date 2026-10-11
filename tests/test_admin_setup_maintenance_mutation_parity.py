@@ -188,7 +188,7 @@ def test_scalar_feature_paths_coerce_identically():
     }
 
     apply_setup_features(setup_config, features)
-    maintenance_config._merge_features(maintenance_config_dict, features)
+    maintenance_config._merge_features(maintenance_config_dict, features, [])
 
     assert setup_config["winter"] == maintenance_config_dict["winter"]
     assert setup_config["dashboard"] == maintenance_config_dict["dashboard"]

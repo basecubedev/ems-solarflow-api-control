@@ -726,6 +726,20 @@ device:
   correlation it was queued with) or is retired when the controller skips the
   device. A status read (`describe`) never publishes.
 
+The reply-driven publish above runs on the MQTT network thread, while the
+control loop dispatches and describes and the fetch executor reads telemetry on
+their own threads. Each device client therefore holds one reentrant lock around
+every public method that reads or changes its command state (`fetch`,
+`dispatch_output_limit`, `cancel_pending_output_limit`, `write_properties`,
+`handle_reply`, `describe`, `set_dispatch_observer`), so these calls take turns:
+a stop dispatched while a reply is publishing the queued target waits for that
+publish, finds it in the slot and preempts it, instead of reaching the broker
+first and being overtaken by the older target. The lock is held across the
+publish call, which in paho only queues the packet; the network thread holds
+none of the locks a publish takes while it delivers a reply, so the two cannot
+deadlock. It does not cover `read_health`/`write_health` as read by other code,
+and it orders submissions to the client, not deliveries by the broker.
+
 Terminal records with unresolved broker delivery remain in a bounded per-device
 evidence ledger keyed by their transport receipt. By default it retains at most
 64 records for at most 300 seconds, keeps resolved records briefly for
@@ -768,6 +782,23 @@ the device ignored or overrode it"), `device_command_ack_timed_out`, and
 `external_control_suspected`. `write_output_limit_published` remains a
 **dispatch** event: it never means device success.
 
+A report reaches the controller and the dashboard as finite numbers only. Any
+client on the broker can publish a scalar topic, and a scalar topic keeps text,
+and numbers no float can hold, as they came; `fetch()` and the dashboard's
+telemetry-only tiles drop such a value before `parse_device`, so it reads as a
+missing value instead of reaching the control maths as text, where it ended
+`run_once`, took the device offline or lost the dashboard snapshot. A number of
+2^53 or more is dropped the same way: past it a float no longer holds every
+integer, the pack count is read through a float, and the full-charge state
+store keeps such fields as SQLite integers, which end at 2^63; one such report
+ended the EMS. A number a report quotes as text (`"2"`) is read as that number when
+the report arrives, as a scalar topic's text is, so it also confirms a command
+and counts in foreign-writer detection like any other number. For a controlled
+device, a dropped value of a field `parse_device` reads is named once in the
+log (`mqtt_report_value_ignored`) and listed in its `describe()` as
+`ignored_report_values`; the telemetry-only tiles drop such a value without a
+trace, and other metrics, derived or textual, are not traced.
+
 ### Foreign-writer detection
 
 After a locally **confirmed** target, two successive strictly-newer telemetry
@@ -779,7 +810,19 @@ and a new local confirmation clears the flag. A charge of the EMS's own matches
 as a charging device reports it — `outputLimit` 0 and, where reported, an
 `inputLimit` at the charge power — never as the negative target, which no
 device reports; comparing against that once flagged every steady charge as a
-foreign writer. Operators running Cloud MQTT
+foreign writer. A report also matches when it shows one of the last **two**
+own targets that left the slot unconfirmed since that confirmation — by an
+acknowledgement or confirmation timeout, or superseded or preempted by a newer
+target: commands leave the single slot one after another, so the device can
+still be holding the last one that left or, when that one never landed, the
+one before it. On a profile without acknowledgements every changed target
+supersedes the published one. A target sent again counts again. An older
+unconfirmed own target is not excused; a device holding it has missed two
+newer commands in a row. The confirmed target itself always matches. Only a
+report that carries `outputLimit` as a finite number counts: the report parser
+turns `NaN`, `Infinity` and an integer too large for a float into a missing
+value (a scalar topic keeps such a number as text), and foreign-writer
+detection never reads a missing value as 0 W. Operators running Cloud MQTT
 control must disable Zendure HEMS, Smart Matching, Zendure schedules and any
 other simultaneous controller (the Admin preview/apply and `diagnose` surface
 this advisory as `zendure_cloud_mqtt_single_controller`).
@@ -832,7 +875,8 @@ only), `power_write_profile`, `supported_operations`,
 `command_ack_timeout_seconds`, `confirmation_timeout_seconds`,
 `telemetry_confirmation_supported`, `pending_target`, `confirmation_deadline`,
 `last_confirmed_target_w`, `external_control_suspected` (+
-`external_control_detail`), recent unresolved-delivery summary fields, and a
+`external_control_detail`), `ignored_report_values`, recent
+unresolved-delivery summary fields, and a
 structured `active_command` / `last_command`
 (`{message_id, device_id, device_key, operation, target_power_w, topic, state,
 response_code, response_message, broker_delivery, correlation_id,

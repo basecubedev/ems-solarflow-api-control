@@ -791,3 +791,16 @@ def test_blocked_writes_keep_pending_flags(tmp_path):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_assist_power_falls_back_to_the_config_default_when_the_key_is_missing(tmp_path):
+    store = BatteryFullChargeStateStore(str(tmp_path / "ems_state.sqlite"))
+    controller = controller_for(device(), store)
+    config = {
+        key: value
+        for key, value in cfg.BATTERY_FULL_CHARGE_ASSIST_DEFAULTS.items()
+        if key != "ac_charge_power"
+    }
+
+    with patch.object(cfg, "BATTERY_FULL_CHARGE_ASSIST_CONFIG", config):
+        assert controller.full_charge_assist_ac_charge_power() == 600

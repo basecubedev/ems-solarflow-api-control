@@ -5,14 +5,19 @@ Underscore-prefixed so pytest does not collect it as a test module. Imported by
 both tests/test_emsctl_cli.py and tests/test_diagnostics.py.
 """
 import json
+import math
 import subprocess
 import sys
-from datetime import datetime, timezone
+import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import emsctl
 from ems import paths as ems_paths
+from ems.clients import zero_device_state
+from ems.control_status import ControlStatusWriter
+from ems.target_control import ControlExplanation, DeviceControlExplanation
 
 ROOT = Path(__file__).resolve().parents[1]
 EMSCTL = ROOT / "emsctl.py"
@@ -114,17 +119,9 @@ def runtime_state(tmp_path):
 
 
 def write_control_runtime(tmp_path, **overrides):
+    """Write runtime-state.json as the EMS keeps it: operator state only."""
+
     payload = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "grid_power_w": 142,
-        "filtered_load_w": 131,
-        "inverter_output_w": 130,
-        "controller": {
-            "enabled": True,
-            "effective_target_total_w": 130,
-            "commanded_total_w": 130,
-            "filtered_load_w": 131,
-        },
         "system": {
             "enabled": True,
             "max_total_power": 900,
@@ -136,15 +133,9 @@ def write_control_runtime(tmp_path, **overrides):
         },
         "devices": {
             "WR1": {
-                "online": True,
                 "enabled": True,
-                "soc": 55,
-                "min_soc": 15,
-                "allocated_target_w": 130,
-                "target_w": 130,
-                "output_w": 130,
                 "max_power": 800,
-                "output_limit_w": 800,
+                "pv_priority_factor": 1.0,
             }
         },
     }
@@ -152,6 +143,136 @@ def write_control_runtime(tmp_path, **overrides):
         payload[key] = value
     (tmp_path / "runtime-state.json").write_text(json.dumps(payload))
     return payload
+
+
+DEFAULT_LIVE_DEVICE = {
+    "soc": 55,
+    "min_soc": 15,
+    "output_w": 130,
+    "output_limit_w": 800,
+    "allocated_target_w": 130,
+}
+
+_LIVE_STATE_FIELDS = {
+    "soc": "soc",
+    "min_soc": "min_soc",
+    "pv_input_w": "solar",
+    "output_w": "output",
+    "output_limit_w": "output_limit",
+    "battery_charge_w": "pack_out",
+    "battery_discharge_w": "pack_in",
+}
+
+
+class LiveEms:
+    """A stand-in for the running EMS that publishes through the real writer.
+
+    ``devices`` maps a name to its live fields; ``None`` is a device that never
+    answered. ``measured_at`` dates the meter's readings: ``None`` for a meter
+    without a health record, ``"per_cycle"`` for one read fresh every cycle,
+    ``"frozen"`` for one that kept serving its first reading.
+    """
+
+    def __init__(
+        self,
+        directory,
+        *,
+        devices=None,
+        filtered_load_w=131,
+        effective_target_total_w=130,
+        measured_at=None,
+        read_failures=0,
+        loop_interval=5,
+    ):
+        devices = {"WR1": DEFAULT_LIVE_DEVICE} if devices is None else devices
+        self.filtered_load_w = filtered_load_w
+        self.effective_target_total_w = effective_target_total_w
+        self.measured_at = measured_at
+        self.health = None
+        if measured_at is not None:
+            self.health = SimpleNamespace(consecutive_failures=read_failures, measured=None)
+            self.health.age_seconds = lambda now: now - self.health.measured
+        self.decided = {}
+        last_states = {}
+        for name, fields in devices.items():
+            if fields is None:
+                continue
+            last_states[name] = replace(
+                zero_device_state(),
+                **{
+                    state_field: fields[key]
+                    for key, state_field in _LIVE_STATE_FIELDS.items()
+                    if key in fields
+                },
+            )
+            self.decided[name] = DeviceControlExplanation(
+                device=name,
+                online=fields.get("online", True),
+                pv_input_w=fields.get("pv_input_w", 0),
+                output_w=fields.get("output_w", 0),
+                soc=fields.get("soc"),
+                min_soc=fields.get("min_soc"),
+                max_soc=100,
+                allocated_target_w=fields.get("allocated_target_w"),
+                effective_target_w=fields.get("effective_target_w", fields.get("allocated_target_w")),
+                limiting_reason=fields.get("limiting_reason"),
+            )
+        self.controller = SimpleNamespace(
+            devices=[
+                SimpleNamespace(name=name, max_power=(fields or {}).get("max_power_w", 800))
+                for name, fields in devices.items()
+            ],
+            last_states=last_states,
+            device_online={
+                name: bool(fields) and fields.get("online", True)
+                for name, fields in devices.items()
+            },
+            last_seen={},
+            cycle_failures=0,
+            shelly=SimpleNamespace(health=self.health),
+            runtime_system_int=lambda key, default, minimum=0: loop_interval,
+        )
+        self.writer = ControlStatusWriter(
+            ems_paths.resolve_control_status_path(Path(directory) / "runtime-state.json")
+        )
+
+    def cycle(self, grid_power_w, cycle_time):
+        """Run one cycle at ``cycle_time`` (epoch seconds) and publish it."""
+
+        if self.health is not None and (
+            self.measured_at == "per_cycle" or self.health.measured is None
+        ):
+            self.health.measured = cycle_time
+        controller = self.controller
+        controller.last_fetch_at = cycle_time
+        controller.last_seen = {name: cycle_time for name in controller.last_states}
+        controller.last_control_explanation = ControlExplanation(
+            mode="pv_first",
+            requested_total_w=self.effective_target_total_w,
+            effective_target_total_w=self.effective_target_total_w,
+            allocated_target_total_w=self.effective_target_total_w,
+            commanded_total_w=self.effective_target_total_w,
+            devices=self.decided,
+            load_w=grid_power_w,
+            filtered_load_w=self.filtered_load_w,
+        )
+        assert self.writer.write(controller, now=cycle_time, now_monotonic=cycle_time)
+        return json.loads(self.writer.path.read_text())
+
+
+def write_live_control_status(directory, *, grid=(142,), age_seconds=0, loop_interval=5, **options):
+    """Write control-status.json beside runtime-state.json as a running EMS does.
+
+    Each entry of ``grid`` is one control cycle, ``loop_interval`` apart, the
+    last one ``age_seconds`` ago. The other options are :class:`LiveEms`'s.
+    """
+
+    ems = LiveEms(directory, loop_interval=loop_interval, **options)
+    last_cycle = math.floor(time.time() - age_seconds) + 0.5
+    status = None
+    for index, value in enumerate(grid):
+        status = ems.cycle(value, last_cycle - loop_interval * (len(grid) - 1 - index))
+    return status
 
 
 def write_two_device_config(path):

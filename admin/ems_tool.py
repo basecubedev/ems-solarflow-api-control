@@ -14,7 +14,13 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from admin.deployment import DockerCli, DockerCompose, DockerError, _safe_command_detail
+from admin.deployment import (
+    EMS_SERVICE,
+    DockerCli,
+    DockerCompose,
+    DockerError,
+    _safe_command_detail,
+)
 from admin.container_names import DEFAULT_EMS_CONTAINER
 
 # Container paths inside the published EMS image.
@@ -22,8 +28,6 @@ CONTAINER_EMSCTL_PATH = "/app/emsctl.py"
 CONTAINER_CONFIG_DIR = "/app/config"
 CONTAINER_DATA_DIR = "/app/data"
 
-# The compose service name of the EMS container in the standard install.
-EMS_COMPOSE_SERVICE = "ems"
 
 # Default timeout (seconds) for a normal EMS tool command.
 DEFAULT_TIMEOUT = 180
@@ -309,7 +313,7 @@ class EmsToolRunner:
             kwargs["input_text"] = input_text
         try:
             returncode, detail = self._compose.run_oneoff(
-                str(workspace), EMS_COMPOSE_SERVICE, command, **kwargs
+                str(workspace), EMS_SERVICE, command, **kwargs
             )
         except DockerError as exc:
             return EmsToolResult("compose", False, None, exc.message, None)

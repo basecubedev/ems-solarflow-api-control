@@ -313,3 +313,33 @@ def test_frontend_renders_read_only_tile_without_target_and_with_badge():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("payload", ["9" * 400, "abc"])
+@pytest.mark.parametrize("metric", ["minSoc", "socSet", "hyperTmp", "BatVolt", "remainOutTime"])
+def test_text_in_a_telemetry_only_report_costs_no_snapshot(metric, payload):
+    """The control path reads the aggregator through one filter; the tiles read
+    the same aggregator and must weigh it alike, or one text value loses every
+    device's dashboard snapshot."""
+
+    metrics = {"electricLevel": 88, "solarInputPower": 315, "outputHomePower": 280, metric: payload}
+    runtime = _FakeTelemetryRuntime(
+        summaries=[{"name": "INV_2", "identifier": "ID2", "status": "online"}],
+        snapshots={"ID2": _snapshot(metrics)},
+    )
+    controller = _controller(["WR1"], {"WR1": True}, runtime=runtime)
+
+    snapshot = build_dashboard_snapshot(
+        controller,
+        load_w=0,
+        states=[_control_state()],
+        targets=[300],
+        effective_targets=[300],
+        allocated_total_w=300,
+        effective_total_w=300,
+        enabled=True,
+        max_total_power=1600,
+        min_output_limit=35,
+    )
+
+    assert snapshot["devices"]["INV_2"]["soc"] == 88

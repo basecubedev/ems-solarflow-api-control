@@ -254,7 +254,7 @@ console.log(JSON.stringify(selectedInverterCards().map((card) =>
 
 def test_candidate_cards_render_the_backend_classification():
     out = _run(
-        _INDEX_HELPERS + ("inverterCandidateConnectionState",),
+        _INDEX_HELPERS + ("inverterCandidateConnectionState", "configuredDeviceNameForRef"),
         """
 let setupPlanIndex = emptySetupPlanIndex();
 indexSetupPlan(Object.assign(emptySetupPlan(), {
@@ -795,6 +795,7 @@ def test_a_pending_switch_is_rendered_with_both_connections_and_its_cost():
         (
             "connectionLabelFor",
             "setupSwitchConfirmationCard",
+            "configuredDeviceNameForRef",
             "renderSetupSwitchConfirmations",
         ),
         """
@@ -813,6 +814,8 @@ function node(tag) {
 const document = { createElement: node };
 const host = node("div");
 const configEls = { switchConfirmations: host };
+const configDraftItems = [];
+const zendureMqttPreviewProposals = new Map();
 const setupConfirmedSwitches = new Set();
 let setupPlan = {
   confirmations: [{
@@ -846,6 +849,7 @@ def test_an_answered_switch_stops_being_asked():
         (
             "connectionLabelFor",
             "setupSwitchConfirmationCard",
+            "configuredDeviceNameForRef",
             "renderSetupSwitchConfirmations",
         ),
         """
@@ -861,6 +865,8 @@ function node(tag) {
 const document = { createElement: node };
 const host = node("div");
 const configEls = { switchConfirmations: host };
+const configDraftItems = [];
+const zendureMqttPreviewProposals = new Map();
 const setupConfirmedSwitches = new Set(["plan:v1:tokenA"]);
 let setupPlan = {
   confirmations: [{

@@ -43,6 +43,7 @@ from ems.health import (
 )
 from ems.paths import (
     BASE_DIR,
+    resolve_control_status_path,
     resolve_data_dir,
     resolve_project_path,
     resolve_runtime_path,
@@ -50,29 +51,23 @@ from ems.paths import (
     resolve_template_path,
 )
 from ems.build_info import collect_build_info
+from ems.control_status import CONTROL_STATUS_SCHEMA_VERSION
 from ems.zendure_mqtt import config_entries as zendure_mqtt_entries
 
 
-BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
-    "enabled": True,
-    "interval_days": 28,
-    "assist_window_days": 7,
-    "assist_start_soc": 80,
-    "force_time": "14:00",
-    "ac_charge_power": 200,
-    "enable_ac_charge_mode": True,
-    "state_database_path": "data/ems_state.sqlite",
-}
+BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = config_mod.BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
 
 
 DIAGNOSE_REDACT_KEYWORDS = (
     "password",
     "passwd",
-    "password_hash",
+    "passphrase",
     "token",
     "secret",
     "key",
+    "apikey",
     "auth",
+    "authorization",
     "credential",
     "credentials",
     "username",
@@ -80,12 +75,11 @@ DIAGNOSE_REDACT_KEYWORDS = (
     "serial",
     "identity",
     "sn",
-    "device_id",
-    "api",
     "bearer",
     "cookie",
     "session",
 )
+DIAGNOSE_REDACT_TOKEN_PAIRS = (("device", "id"),)
 
 DIAGNOSE_SCHEMA_VERSION = 1
 SUPPORT_BUNDLE_VERSION = 1
@@ -2267,9 +2261,23 @@ def diagnose_reported_property_names(payload):
     return {"reported": names, "unmapped": unmapped}
 
 
+def _diagnose_key_tokens(key):
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(key))
+    return [token for token in re.split(r"[^a-z0-9]+", text.lower()) if token]
+
+
 def diagnose_redact_key(key):
-    lowered = str(key).lower()
-    return any(token in lowered for token in DIAGNOSE_REDACT_KEYWORDS)
+    """Whether a key names a secret or an identity, read as whole words.
+
+    A substring match blanked ``control_snapshot`` for its ``sn`` and
+    ``authority`` for its ``auth``, so the diagnose page lost whole blocks.
+    """
+
+    tokens = _diagnose_key_tokens(key)
+    if any(token in DIAGNOSE_REDACT_KEYWORDS for token in tokens):
+        return True
+    pairs = set(zip(tokens, tokens[1:]))
+    return any(pair in pairs for pair in DIAGNOSE_REDACT_TOKEN_PAIRS)
 
 
 def diagnose_redact_value(value):
@@ -2379,11 +2387,6 @@ def diagnose_number_from(data, paths, default=None):
     return default if parsed is None else parsed
 
 
-def diagnose_bool_from(data, paths, default=None):
-    value = diagnose_nested_get(data, paths, default=None)
-    return value if isinstance(value, bool) else default
-
-
 def diagnose_sum_devices(devices, keys):
     if not isinstance(devices, dict):
         return None
@@ -2435,123 +2438,133 @@ def diagnose_control_load_runtime(runtime_path):
     return data if isinstance(data, dict) else {}, None
 
 
-def diagnose_first_timestamp(data, paths):
-    for path in paths:
-        value = diagnose_nested_get(data, [path])
-        if isinstance(value, str) and diagnose_parse_timestamp(value):
-            return value
-    return None
+def diagnose_loop_interval(config_data, runtime_data):
+    system_runtime = runtime_data.get("system") if isinstance(runtime_data.get("system"), dict) else {}
+    system_config = config_data.get("system") if isinstance(config_data.get("system"), dict) else {}
+    return diagnose_float(system_runtime.get("loop_interval", system_config.get("loop_interval")))
 
 
-def diagnose_control_live_timestamp(runtime_data):
-    return diagnose_first_timestamp(
-        runtime_data,
-        [
-            ("controller", "timestamp"),
-            ("controller", "last_cycle_timestamp"),
-            ("controller", "last_control_cycle_timestamp"),
-            ("controller", "last_control_cycle_at"),
-            ("controller", "last_update"),
-            ("control", "timestamp"),
-            ("control", "last_cycle_timestamp"),
-            ("control", "last_control_cycle_at"),
-            ("latest", "timestamp"),
-            ("telemetry", "timestamp"),
-        ],
+def diagnose_live_threshold_seconds(loop_interval):
+    return max(60.0, (loop_interval or 5) * 3)
+
+
+def diagnose_live_snapshot(runtime_path, loop_interval=None):
+    """Read the control snapshot the running EMS writes beside runtime-state.
+
+    Only a fresh snapshot lends its values to the report. A missing,
+    unreadable or stale one leaves ``data`` empty, so a stopped EMS is never
+    analysed as if it were regulating now.
+    """
+
+    path = str(resolve_control_status_path(runtime_path)) if runtime_path else None
+    live = {
+        "status": "missing",
+        "path": path,
+        "data": {},
+        "written_at": None,
+        "age_seconds": None,
+        "threshold_seconds": round(diagnose_live_threshold_seconds(loop_interval), 1),
+        "failed_cycles": None,
+        "error": None,
+    }
+    if not path:
+        return live
+    payload, error = diagnose_json_file(path)
+    if error == "missing":
+        return live
+    written = (
+        diagnose_parse_timestamp(payload.get("written_at"))
+        if isinstance(payload, dict)
+        else None
     )
+    if error or written is None or payload.get("schema_version") != CONTROL_STATUS_SCHEMA_VERSION:
+        live.update(
+            status="unreadable",
+            error=error or f"not a control snapshot of schema version {CONTROL_STATUS_SCHEMA_VERSION}",
+        )
+        return live
 
-
-def diagnose_meter_timestamp(runtime_data):
-    return diagnose_first_timestamp(
-        runtime_data,
-        [
-            ("grid_meter", "timestamp"),
-            ("grid_meter", "last_measurement_timestamp"),
-            ("grid_meter", "last_update"),
-            ("meter", "timestamp"),
-            ("meter", "last_measurement_timestamp"),
-            ("meter", "last_update"),
-            ("controller", "grid_meter_timestamp"),
-            ("controller", "meter_timestamp"),
-            ("controller", "last_measurement_timestamp"),
-            ("controller", "last_meter_update"),
-            ("latest", "grid_meter_timestamp"),
-            ("latest", "measurement_timestamp"),
-        ],
+    threshold = diagnose_live_threshold_seconds(
+        diagnose_float(payload.get("loop_interval_s")) or loop_interval
     )
+    age = (datetime.now(timezone.utc) - written).total_seconds()
+    fresh = abs(age) <= threshold
+    cycle = payload.get("cycle") if isinstance(payload.get("cycle"), dict) else {}
+    live.update(
+        status="fresh" if fresh else "stale",
+        data=payload if fresh else {},
+        written_at=payload["written_at"],
+        age_seconds=round(age, 1),
+        threshold_seconds=round(threshold, 1),
+        failed_cycles=diagnose_int(cycle.get("failed_cycles")),
+    )
+    return live
 
 
-def diagnose_meter_failure_count(runtime_data):
-    candidates = [
-        ("grid_meter", "consecutive_read_failures"),
-        ("grid_meter", "read_failures"),
-        ("grid_meter", "failure_count"),
-        ("meter", "consecutive_read_failures"),
-        ("meter", "read_failures"),
-        ("meter", "failure_count"),
-        ("controller", "meter_read_failures"),
-        ("controller", "grid_meter_read_failures"),
-        ("controller", "consecutive_meter_failures"),
-        ("controller", "consecutive_grid_meter_failures"),
-    ]
-    failures = 0
-    for path in candidates:
-        value = diagnose_number_from(runtime_data, [path])
-        if value is not None:
-            failures = max(failures, int(value))
-    return failures
+def diagnose_live_block(live_data, name):
+    block = live_data.get(name)
+    return block if isinstance(block, dict) else {}
 
 
-def diagnose_control_snapshot(config_data, runtime_data, runtime_path, *, config_readable=True):
+def diagnose_live_devices(live_data):
+    return {
+        str(name): device
+        for name, device in diagnose_live_block(live_data, "devices").items()
+        if isinstance(device, dict)
+    }
+
+
+def diagnose_live_snapshot_root_causes(live):
+    status = live["status"]
+    if status == "fresh":
+        failed = live.get("failed_cycles") or 0
+        if not failed:
+            return []
+        return [diagnose_quality_root_cause(
+            "control_cycles_failing",
+            "warning",
+            "Control cycles are failing",
+            f"The last {failed} control cycles raised an error. Each stops where it raised "
+            "and runs the steps before that point again; a device it no longer reaches "
+            "holds the limit it was last given, a charging one keeps charging.",
+            "Look for event=control_cycle_failed in the EMS log.",
+        )]
+    if status == "stale":
+        return [diagnose_quality_root_cause(
+            "live_control_snapshot_stale",
+            "warning",
+            "Live control snapshot is stale",
+            f"The EMS last published a control cycle {live['age_seconds']} s ago, "
+            f"more than {live['threshold_seconds']} s: it is stopped or its loop is stuck.",
+            "Check that the EMS process or container is running, then read its log.",
+        )]
+    if status == "unreadable":
+        return [diagnose_quality_root_cause(
+            "live_control_snapshot_unreadable",
+            "warning",
+            "Live control snapshot unreadable",
+            f"{live['path']} could not be read: {live['error']}.",
+            "Look for event=control_status_write_failed in the EMS log and check the data directory.",
+        )]
+    return [diagnose_quality_root_cause(
+        "live_control_snapshot_missing",
+        "warning",
+        "No live control snapshot",
+        f"{live['path']} does not exist: the EMS is not running with this runtime-state, "
+        "or has not finished a control cycle yet.",
+        "Start the EMS and run diagnose again after one loop interval.",
+    )]
+
+
+def diagnose_control_snapshot(config_data, runtime_data, live_data, runtime_path, *, config_readable=True):
     devices = runtime_data.get("devices", {}) if isinstance(runtime_data.get("devices"), dict) else {}
     system_runtime = runtime_data.get("system", {}) if isinstance(runtime_data.get("system"), dict) else {}
     system_config = config_data.get("system", {}) if isinstance(config_data.get("system"), dict) else {}
     winter_runtime = runtime_data.get("winter", {}) if isinstance(runtime_data.get("winter"), dict) else {}
     winter_config = config_data.get("winter", {}) if isinstance(config_data.get("winter"), dict) else {}
+    control = diagnose_live_block(live_data, "control")
 
-    target_total = diagnose_number_from(
-        runtime_data,
-        [
-            ("target_output_w",),
-            ("target_w",),
-            ("controller", "target_output_w"),
-            ("controller", "effective_target_total_w"),
-            ("controller", "allocated_target_total_w"),
-        ],
-    )
-    if target_total is None:
-        target_total = diagnose_sum_devices(devices, ("target_w", "allocated_target_w"))
-
-    final_output = diagnose_number_from(
-        runtime_data,
-        [
-            ("final_output_w",),
-            ("inverter_output_w",),
-            ("output_w",),
-            ("controller", "commanded_total_w"),
-        ],
-    )
-    if final_output is None:
-        final_output = diagnose_sum_devices(devices, ("output_w", "output_limit_w"))
-
-    grid_power = diagnose_number_from(
-        runtime_data,
-        [
-            ("grid_power_w",),
-            ("grid_power",),
-            ("home_load_w",),
-            ("controller", "grid_power_w"),
-        ],
-    )
-    filtered_grid = diagnose_number_from(
-        runtime_data,
-        [
-            ("filtered_grid_power_w",),
-            ("filtered_load_w",),
-            ("controller", "filtered_grid_power_w"),
-            ("controller", "filtered_load_w"),
-        ],
-    )
+    filtered_grid = diagnose_float(control.get("filtered_load_w"))
     deadband_w = diagnose_float(
         diagnose_nested_get(
             config_data,
@@ -2564,26 +2577,18 @@ def diagnose_control_snapshot(config_data, runtime_data, runtime_path, *, config
     )
     if deadband_w is None:
         deadband_w = 10.0
-    deadband_active = diagnose_bool_from(
-        runtime_data,
-        [
-            ("deadband_active",),
-            ("controller", "deadband_active"),
-        ],
-    )
-    if deadband_active is None and filtered_grid is not None:
-        deadband_active = abs(filtered_grid) <= deadband_w
+    deadband_active = abs(filtered_grid) <= deadband_w if filtered_grid is not None else None
     flags = config_mod.config_control_flags(config_data if config_readable else None)
     placeholders = (
         config_mod.stored_config_placeholder_paths(config_data) if config_readable else []
     )
 
     return {
-        "grid_power_w": grid_power,
+        "grid_power_w": diagnose_float(control.get("grid_power_w")),
         "filtered_grid_power_w": filtered_grid,
-        "target_output_w": target_total,
-        "final_output_w": final_output,
-        "deadband_active": bool(deadband_active) if deadband_active is not None else None,
+        "target_output_w": diagnose_float(control.get("effective_target_total_w")),
+        "final_output_w": diagnose_sum_devices(diagnose_live_devices(live_data), ("output_w",)),
+        "deadband_active": deadband_active,
         "deadband_w": deadband_w,
         "control_enabled": bool(system_runtime.get("enabled", flags["enabled"])),
         "dry_run": flags["dry_run"],
@@ -2592,7 +2597,7 @@ def diagnose_control_snapshot(config_data, runtime_data, runtime_path, *, config
         **diagnose_ac_charging_snapshot(config_data, runtime_data, devices),
         "system_limit_w": diagnose_float(system_runtime.get("max_total_power", system_config.get("max_total_power"))),
         "min_output_limit_w": diagnose_float(system_runtime.get("min_output_limit", system_config.get("min_output_limit"))),
-        "loop_interval_s": diagnose_float(system_runtime.get("loop_interval", system_config.get("loop_interval"))),
+        "loop_interval_s": diagnose_loop_interval(config_data, runtime_data),
         "runtime_state_path": runtime_path,
     }
 
@@ -2700,57 +2705,62 @@ def diagnose_ac_charge_model_refusal(item):
     return None
 
 
-def diagnose_control_samples(runtime_path, runtime_data, sample_seconds):
-    embedded = diagnose_nested_get(
-        runtime_data,
-        [
-            ("control_samples",),
-            ("meter_samples",),
-            ("controller", "samples"),
-            ("controller", "meter_samples"),
-        ],
-        default=None,
-    )
+def diagnose_live_grid_samples(live_data):
     samples = []
-    if isinstance(embedded, list):
-        for item in embedded:
-            if isinstance(item, dict):
-                value = diagnose_float(item.get("grid_power_w", item.get("grid_power")))
-                timestamp = item.get("timestamp")
-            else:
-                value = diagnose_float(item)
-                timestamp = None
-            if value is not None:
-                samples.append({"grid_power_w": value, "timestamp": timestamp})
-        return samples
-
-    if sample_seconds <= 0:
-        current = diagnose_number_from(runtime_data, [("grid_power_w",), ("controller", "grid_power_w")])
-        timestamp = diagnose_meter_timestamp(runtime_data)
-        return [{"grid_power_w": current, "timestamp": timestamp}] if current is not None else []
-
-    count = max(1, min(sample_seconds, 60))
-    deadline = time.monotonic() + sample_seconds
-    for index in range(count):
-        current_data, _ = diagnose_control_load_runtime(runtime_path)
-        value = diagnose_number_from(current_data, [("grid_power_w",), ("controller", "grid_power_w")])
-        timestamp = diagnose_meter_timestamp(current_data)
-        if value is not None:
-            samples.append({"grid_power_w": value, "timestamp": timestamp})
-        if index + 1 >= count or time.monotonic() >= deadline:
-            break
-        time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+    for item in live_data.get("grid_samples") or []:
+        if not isinstance(item, dict):
+            continue
+        value = diagnose_float(item.get("grid_power_w"))
+        if value is None:
+            continue
+        samples.append({
+            "grid_power_w": value,
+            "timestamp": item.get("measured_at"),
+            "cycle_at": item.get("cycle_at"),
+        })
     return samples
 
 
-def diagnose_meter_quality(samples, runtime_data=None, loop_interval=None):
+def diagnose_control_samples(runtime_path, live, sample_seconds, loop_interval=None):
+    """Grid samples for the meter and quality analysis.
+
+    Without a window these are the recent cycles the running EMS keeps in its
+    snapshot. With one, the snapshot is read about once a second and the
+    cycles fetched inside the window are collected. A snapshot that is not
+    fresh yields none.
+    """
+
+    if live["status"] != "fresh":
+        return []
+    if sample_seconds <= 0:
+        return diagnose_live_grid_samples(live["data"])
+
+    started = datetime.now(timezone.utc)
+    collected = {}
+    count = max(1, min(sample_seconds, 60))
+    deadline = time.monotonic() + sample_seconds
+    for index in range(count):
+        current = diagnose_live_snapshot(runtime_path, loop_interval)
+        for sample in diagnose_live_grid_samples(current["data"]):
+            cycle_at = diagnose_parse_timestamp(sample["cycle_at"])
+            if cycle_at is not None and cycle_at >= started:
+                collected[cycle_at] = sample
+        if index + 1 >= count or time.monotonic() >= deadline:
+            break
+        time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+    return [collected[key] for key in sorted(collected)]
+
+
+def diagnose_meter_quality(samples, live_data=None, loop_interval=None):
     values = [
         sample["grid_power_w"]
         for sample in samples
         if diagnose_float(sample.get("grid_power_w")) is not None
     ]
-    threshold = max(60.0, (loop_interval or 5) * 3)
-    failures = diagnose_meter_failure_count(runtime_data or {})
+    threshold = diagnose_live_threshold_seconds(loop_interval)
+    failures = diagnose_int(
+        diagnose_live_block(live_data or {}, "grid_meter").get("consecutive_read_failures")
+    ) or 0
     if not values:
         return {
             "samples": 0,
@@ -2811,54 +2821,51 @@ def diagnose_meter_quality(samples, runtime_data=None, loop_interval=None):
     }
 
 
-def diagnose_control_distribution(config_data, runtime_data):
-    devices = runtime_data.get("devices", {}) if isinstance(runtime_data.get("devices"), dict) else {}
+def diagnose_control_distribution(config_data, runtime_data, live_data):
+    runtime_devices = runtime_data.get("devices", {}) if isinstance(runtime_data.get("devices"), dict) else {}
+    live_devices = diagnose_live_devices(live_data)
     config_limits = {}
-    config_min_soc = {}
     for item in config_data.get("devices", []) if isinstance(config_data, dict) else []:
         if isinstance(item, dict) and item.get("name"):
-            name = str(item["name"])
-            config_limits[name] = diagnose_float(item.get("max_power"))
-            config_min_soc[name] = diagnose_float(item.get("min_soc"))
+            config_limits[str(item["name"])] = diagnose_float(item.get("max_power"))
 
     distribution = []
-    for name in sorted(set(config_limits) | set(devices)):
-        device = devices.get(name, {}) if isinstance(devices.get(name), dict) else {}
-        target = diagnose_float(device.get("allocated_target_w", device.get("target_w", device.get("output_w"))))
-        runtime_limit = diagnose_float(device.get("max_power"))
-        output_limit = diagnose_float(device.get("output_limit_w", device.get("output_limit")))
-        reason = "configured allocation"
+    for name in sorted(set(config_limits) | set(live_devices)):
+        device = live_devices.get(name, {})
+        runtime_device = runtime_devices.get(name) if isinstance(runtime_devices.get(name), dict) else {}
+        target = diagnose_float(device.get("allocated_target_w"))
+        runtime_limit = diagnose_float(runtime_device.get("max_power"))
+        limiting_reason = device.get("limiting_reason")
         if runtime_limit is not None and target is not None and target >= runtime_limit:
             reason = "limited by runtime max power"
-        elif output_limit is not None and target is not None and target >= output_limit:
-            reason = "limited by device output limit"
+        elif limiting_reason:
+            reason = f"limited by {limiting_reason}"
+        else:
+            reason = "configured allocation"
         distribution.append({
             "device": name,
             "target_w": target,
             "output_w": diagnose_float(device.get("output_w")),
             "runtime_max_power_w": runtime_limit,
             "configured_max_power_w": config_limits.get(name),
-            "output_limit_w": output_limit,
+            "output_limit_w": diagnose_float(device.get("output_limit_w")),
             "online": device.get("online"),
             "reason": reason,
         })
 
-    rules = runtime_data.get("rules", {}) if isinstance(runtime_data.get("rules"), dict) else {}
-    active_rules = [
-        name
-        for name, value in rules.items()
-        if isinstance(value, dict) and value.get("active")
-    ]
-    reason = "SOC balancing active" if "battery_balancing" in active_rules else "PV priority balancing active" if "pv_priority_balancing" in active_rules else "configured allocation"
+    pv_priority_balancing = any(
+        diagnose_float(item.get("pv_priority_factor")) not in (None, 1.0)
+        for item in runtime_devices.values()
+        if isinstance(item, dict)
+    )
     return {
         "devices": distribution,
-        "reason": reason,
-        "active_rules": active_rules,
+        "reason": "PV priority balancing active" if pv_priority_balancing else "configured allocation",
+        "active_rules": ["pv_priority_balancing"] if pv_priority_balancing else [],
     }
 
 
-def diagnose_soc_analysis(config_data, runtime_data):
-    devices = runtime_data.get("devices", {}) if isinstance(runtime_data.get("devices"), dict) else {}
+def diagnose_soc_analysis(config_data, runtime_data, live_data):
     configured_min = {}
     for item in config_data.get("devices", []) if isinstance(config_data, dict) else []:
         if isinstance(item, dict) and item.get("name"):
@@ -2868,11 +2875,11 @@ def diagnose_soc_analysis(config_data, runtime_data):
     soc_values = []
     warnings = []
     protected = []
-    for name, device in devices.items():
-        if not isinstance(device, dict):
-            continue
+    for name, device in diagnose_live_devices(live_data).items():
         soc = diagnose_float(device.get("soc"))
-        min_soc = diagnose_float(device.get("min_soc", configured_min.get(name, 0))) or 0
+        min_soc = diagnose_float(device.get("min_soc"))
+        if min_soc is None:
+            min_soc = configured_min.get(name) or 0
         at_min = soc is not None and min_soc > 0 and soc <= min_soc
         if soc is not None:
             soc_values.append(soc)
@@ -2903,47 +2910,50 @@ def diagnose_soc_analysis(config_data, runtime_data):
     }
 
 
-def diagnose_control_stale(runtime_path, runtime_data, loop_interval):
-    del runtime_path
-    timestamp = diagnose_control_live_timestamp(runtime_data)
-    now = datetime.now(timezone.utc)
-    threshold = max(60.0, (loop_interval or 5) * 3)
-    parsed = diagnose_parse_timestamp(timestamp) if timestamp else None
-    if not parsed:
-        return {
-            "stale": False,
-            "age_seconds": None,
-            "stale_source": "unavailable",
-            "checked": False,
-            "note": "No live control timestamp available. Staleness check skipped.",
-        }
-    age = (now - parsed).total_seconds()
-    return {
-        "stale": age > threshold,
-        "age_seconds": round(age, 1),
-        "stale_source": "live_control_timestamp",
-        "checked": True,
-        "timestamp": timestamp,
-        "threshold_seconds": round(threshold, 1),
+def diagnose_control_staleness(live):
+    """The live snapshot's freshness, in the ``runtime_state`` block's shape."""
+
+    checked = live["status"] in ("fresh", "stale")
+    staleness = {
+        "stale": live["status"] == "stale",
+        "age_seconds": live["age_seconds"],
+        "stale_source": "live_control_timestamp" if checked else "unavailable",
+        "checked": checked,
+        "threshold_seconds": live["threshold_seconds"],
+        "snapshot_status": live["status"],
+        "snapshot_path": live["path"],
+        "failed_cycles": live["failed_cycles"],
     }
+    if checked:
+        staleness["timestamp"] = live["written_at"]
+    elif live["status"] == "unreadable":
+        staleness["note"] = f"Live control snapshot unreadable: {live['error']}"
+    else:
+        staleness["note"] = "No live control snapshot: the EMS is not running or has not finished a control cycle."
+    return staleness
 
 
 def diagnose_control_report(config_data, runtime_path, sample_seconds=0, *, config_readable=True):
     runtime_data, runtime_error = diagnose_control_load_runtime(runtime_path)
+    loop_interval = diagnose_loop_interval(config_data, runtime_data)
+    live = diagnose_live_snapshot(runtime_path, loop_interval)
+    live_data = live["data"]
     snapshot = diagnose_control_snapshot(
-        config_data, runtime_data, runtime_path, config_readable=config_readable
+        config_data, runtime_data, live_data, runtime_path, config_readable=config_readable
     )
-    samples = diagnose_control_samples(runtime_path, runtime_data, sample_seconds)
-    meter_quality = diagnose_meter_quality(samples, runtime_data, snapshot.get("loop_interval_s"))
-    distribution = diagnose_control_distribution(config_data, runtime_data)
-    soc_analysis = diagnose_soc_analysis(config_data, runtime_data)
-    runtime_staleness = diagnose_control_stale(runtime_path, runtime_data, snapshot.get("loop_interval_s"))
+    samples = diagnose_control_samples(runtime_path, live, sample_seconds, loop_interval)
+    meter_quality = diagnose_meter_quality(samples, live_data, loop_interval)
+    distribution = diagnose_control_distribution(config_data, runtime_data, live_data)
+    soc_analysis = diagnose_soc_analysis(config_data, runtime_data, live_data)
 
     control_path = []
+    mode = diagnose_live_block(live_data, "cycle").get("mode")
     grid = snapshot.get("grid_power_w")
     filtered = snapshot.get("filtered_grid_power_w")
     target = snapshot.get("target_output_w")
     final = snapshot.get("final_output_w")
+    if mode:
+        control_path.append(f"Controller mode: {mode}")
     if grid is not None:
         control_path.append(f"Grid {'import' if grid > 0 else 'export' if grid < 0 else 'neutral'} detected ({diagnose_format_watts(grid)})")
     if filtered is not None and grid is not None:
@@ -2992,6 +3002,7 @@ def diagnose_control_report(config_data, runtime_path, sample_seconds=0, *, conf
             ),
             "suggested_next_check": "Replace them with the values of this installation, then restart EMS.",
         })
+    root_causes.extend(diagnose_live_snapshot_root_causes(live))
     if runtime_error == "missing":
         root_causes.append("Runtime state is missing")
     if not snapshot.get("control_enabled", True):
@@ -3022,21 +3033,24 @@ def diagnose_control_report(config_data, runtime_path, sample_seconds=0, *, conf
         "write_path": write_path,
         "root_causes": root_causes,
         "runtime_state": {
-            **runtime_staleness,
+            **diagnose_control_staleness(live),
             "load_error": runtime_error,
         },
     }
 
 
 def diagnose_control_add_checks(checks, control):
+    runtime_state = control["runtime_state"]
     if not control["snapshot"].get("control_enabled", True):
         diagnose_add(checks, "control", "warning", "control_disabled", "Control disabled")
     if control["snapshot"].get("dry_run"):
         diagnose_add(checks, "control", "warning", "dry_run_enabled", "Dry run enabled")
-    if control["runtime_state"].get("stale"):
-        diagnose_add(checks, "control", "warning", "control_runtime_state_stale", "Live control timestamp older than expected", **control["runtime_state"])
-    elif not control["runtime_state"].get("checked"):
-        diagnose_add(checks, "control", "ok", "control_staleness_skipped", "INFO: No live control timestamp available. Staleness check skipped.", **control["runtime_state"])
+    if runtime_state.get("stale"):
+        diagnose_add(checks, "control", "warning", "control_runtime_state_stale", "Live control timestamp older than expected", **runtime_state)
+    elif runtime_state.get("snapshot_status") == "unreadable":
+        diagnose_add(checks, "control", "warning", "control_live_snapshot_unreadable", runtime_state["note"], **runtime_state)
+    elif not runtime_state.get("checked"):
+        diagnose_add(checks, "control", "warning", "control_live_snapshot_missing", runtime_state["note"], **runtime_state)
     if control["deadband"].get("active"):
         diagnose_add(checks, "control", "ok", "deadband_active", "Deadband active")
     if control["deadband"].get("frequent_transitions"):
@@ -3095,11 +3109,26 @@ def diagnose_ac_charging_text(snapshot):
     ]
 
 
+def diagnose_live_snapshot_text(runtime_state):
+    status = runtime_state.get("snapshot_status")
+    if status == "fresh":
+        return f"fresh, written {runtime_state.get('age_seconds')} s ago"
+    if status == "stale":
+        return (
+            f"STALE, written {runtime_state.get('age_seconds')} s ago "
+            f"(expected within {runtime_state.get('threshold_seconds')} s)"
+        )
+    if status == "unreadable":
+        return f"UNREADABLE: {runtime_state.get('snapshot_path')}"
+    return f"MISSING: {runtime_state.get('snapshot_path')} (is the EMS running?)"
+
+
 def diagnose_control_text(control):
     snapshot = control["snapshot"]
     lines = [
         "Control Snapshot",
         "",
+        f"Live Snapshot:        {diagnose_live_snapshot_text(control.get('runtime_state', {}))}",
         f"Grid Power:           {diagnose_format_watts(snapshot.get('grid_power_w'))}",
         f"Filtered Grid:        {diagnose_format_watts(snapshot.get('filtered_grid_power_w'))}",
         f"Target Output:        {diagnose_format_watts(snapshot.get('target_output_w'))}",
@@ -3144,17 +3173,6 @@ def diagnose_control_text(control):
         lines.extend(["", "SOC Diagnostics", ""])
         for warning in control["soc_analysis"]["warnings"]:
             lines.append(f"WARNING: {warning}")
-
-    runtime_state = control.get("runtime_state", {})
-    if not runtime_state.get("checked"):
-        lines.extend([
-            "",
-            "Runtime State Diagnostics",
-            "",
-            "INFO:",
-            "No live control timestamp available.",
-            "Staleness check skipped.",
-        ])
 
     if control["write_path"]:
         lines.extend(["", "Write Path", ""])
@@ -3335,11 +3353,9 @@ def diagnose_quality_score(export_import):
     }
 
 
-def diagnose_quality_pv(config_data, runtime_data):
-    devices = runtime_data.get("devices", {}) if isinstance(runtime_data.get("devices"), dict) else {}
-    pv_total = diagnose_number_from(runtime_data, [("pv_total_w",), ("pv_input_w",)])
-    if pv_total is None:
-        pv_total = diagnose_sum_devices(devices, ("pv_input_w", "solar", "pv_power"))
+def diagnose_quality_pv(config_data, runtime_data, live_data):
+    live_devices = diagnose_live_devices(live_data)
+    pv_total = diagnose_sum_devices(live_devices, ("pv_input_w",))
     if pv_total is None:
         return {
             "status": "info",
@@ -3351,28 +3367,13 @@ def diagnose_quality_pv(config_data, runtime_data):
                     "info",
                     "Missing PV telemetry",
                     "PV diagnostics skipped because required PV telemetry is not available.",
-                    "Check whether device telemetry includes pv_input_w or pv_total_w.",
+                    "Check that the EMS is running and that its devices report PV power.",
                 )
             ],
         }
 
-    home_output = diagnose_number_from(runtime_data, [("inverter_output_w",), ("home_output_w",), ("output_w",)])
-    if home_output is None:
-        home_output = diagnose_sum_devices(devices, ("output_w",))
-    battery_charge = diagnose_number_from(runtime_data, [("battery_charge_w",), ("pack_input_w",)])
-    if battery_charge is None:
-        charge_values = []
-        for device in devices.values():
-            if not isinstance(device, dict):
-                continue
-            value = diagnose_float(device.get("battery_power_w"))
-            if value is not None and value < 0:
-                charge_values.append(abs(value))
-            else:
-                pack_input = diagnose_float(device.get("pack_input_w"))
-                if pack_input is not None:
-                    charge_values.append(pack_input)
-        battery_charge = sum(charge_values) if charge_values else None
+    home_output = diagnose_sum_devices(live_devices, ("output_w",))
+    battery_charge = diagnose_sum_devices(live_devices, ("battery_charge_w",))
     system_limit = diagnose_number_from(runtime_data, [("system", "max_total_power")])
     if system_limit is None:
         system_limit = diagnose_nested_get(config_data, [("system", "max_total_power")])
@@ -3431,24 +3432,21 @@ def diagnose_quality_pv(config_data, runtime_data):
     }
 
 
-def diagnose_quality_soc(config_data, runtime_data):
-    devices = runtime_data.get("devices", {}) if isinstance(runtime_data.get("devices"), dict) else {}
-    rows = []
-    soc_values = []
-    for name, device in devices.items():
-        if not isinstance(device, dict):
-            continue
-        soc = diagnose_float(device.get("soc"))
-        if soc is None:
-            continue
-        soc_values.append(soc)
-    if not soc_values:
+def diagnose_quality_soc(config_data, runtime_data, live_data):
+    runtime_devices = runtime_data.get("devices", {}) if isinstance(runtime_data.get("devices"), dict) else {}
+    devices = {
+        name: device
+        for name, device in diagnose_live_devices(live_data).items()
+        if diagnose_float(device.get("soc")) is not None
+    }
+    if not devices:
         return {
             "status": "info",
             "message": "SOC balancing skipped because SOC telemetry is not available.",
             "devices": [],
             "root_causes": [],
         }
+    soc_values = [diagnose_float(device.get("soc")) for device in devices.values()]
     average_soc = sum(soc_values) / len(soc_values)
     highest = max(soc_values)
     lowest = min(soc_values)
@@ -3474,30 +3472,27 @@ def diagnose_quality_soc(config_data, runtime_data):
             "Check device runtime limits and SOC balancing configuration.",
         ))
 
+    rows = []
     for name, device in devices.items():
-        if not isinstance(device, dict):
-            continue
         soc = diagnose_float(device.get("soc"))
-        if soc is None:
-            continue
-        output = diagnose_float(device.get("output_w")) or 0
-        charge = 0
-        battery_power = diagnose_float(device.get("battery_power_w"))
-        if battery_power is not None and battery_power < 0:
-            charge = abs(battery_power)
+        runtime_device = runtime_devices.get(name) if isinstance(runtime_devices.get(name), dict) else {}
+        runtime_max_power = diagnose_float(runtime_device.get("max_power"))
         min_soc = diagnose_float(device.get("min_soc")) or 0
-        max_limit = diagnose_float(device.get("max_power", device.get("output_limit_w")))
         protected = min_soc > 0 and soc <= min_soc + LOW_SOC_PROTECTION_MARGIN_PERCENT
         rows.append({
             "device": name,
             "soc": soc,
-            "output_w": output,
-            "charge_w": charge,
-            "max_output_limit_w": max_limit,
+            "output_w": diagnose_float(device.get("output_w")) or 0,
+            "charge_w": diagnose_float(device.get("battery_charge_w")) or 0,
+            "max_output_limit_w": (
+                runtime_max_power
+                if runtime_max_power is not None
+                else diagnose_float(device.get("output_limit_w"))
+            ),
             "min_soc": min_soc,
             "difference_to_average_soc": round(soc - average_soc, 2),
             "min_soc_protected": protected,
-            "runtime_max_power_w": diagnose_float(device.get("max_power")),
+            "runtime_max_power_w": runtime_max_power,
         })
         if protected:
             root_causes.append(diagnose_quality_root_cause(
@@ -3537,12 +3532,14 @@ def diagnose_quality_soc(config_data, runtime_data):
 
 def diagnose_control_quality_report(config_data, runtime_path, sample_seconds=0):
     runtime_data, _ = diagnose_control_load_runtime(runtime_path)
-    samples = diagnose_control_samples(runtime_path, runtime_data, sample_seconds)
+    loop_interval = diagnose_loop_interval(config_data, runtime_data)
+    live = diagnose_live_snapshot(runtime_path, loop_interval)
+    samples = diagnose_control_samples(runtime_path, live, sample_seconds, loop_interval)
     export_import = diagnose_export_import_quality(samples)
     quality_score = diagnose_quality_score(export_import)
-    pv = diagnose_quality_pv(config_data, runtime_data)
-    soc = diagnose_quality_soc(config_data, runtime_data)
-    root_causes = []
+    pv = diagnose_quality_pv(config_data, runtime_data, live["data"])
+    soc = diagnose_quality_soc(config_data, runtime_data, live["data"])
+    root_causes = diagnose_live_snapshot_root_causes(live)
     if export_import.get("samples") and export_import.get("status") in ("warning", "error"):
         root_causes.append(diagnose_quality_root_cause(
             "export_peaks_detected",

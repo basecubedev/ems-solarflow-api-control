@@ -29,8 +29,18 @@ change it:
 sudo passwd ems-rescue
 ```
 
-An upgrade never resets it. The package creates the account if it is missing and
-leaves an existing one exactly as it is.
+An upgrade never resets it. The package sets the account up once — creating it
+if it is missing — and records that in
+`/var/lib/ems-appliance-manager/agent/package-state/rescue-account-set-up`;
+from then on no install touches it, so a password you chose and an account you
+locked (`sudo passwd -l ems-rescue`, or `sudo usermod -p '*' ems-rescue`) both
+stay as they are. An appliance set up before that record existed gets it on its
+next upgrade; if its account had no password at that moment, that one upgrade
+gives it the documented password first. A Manager package older than the record
+— installed by going back to an older version, or by a revert — does not know
+it: if the account is locked with `*` or `!` alone at that moment, that package
+gives it the documented password again. A lock made with `sudo passwd -l
+ems-rescue` keeps the hash behind the `!` and survives any package.
 
 ## Order of attempts
 

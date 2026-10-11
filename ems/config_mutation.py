@@ -37,6 +37,7 @@ nothing from ``admin``. It is import-side-effect-free.
 """
 
 import copy
+import math
 from dataclasses import dataclass, field as dataclass_field
 
 from ems.config import MQTT_GRID_METER_TYPES, grid_meter_mqtt_settings
@@ -51,11 +52,15 @@ from ems.config_catalog import (
 # Bumped whenever the canonical interpretation of a change moves. Preview
 # authority folds it in, so a preview issued under older semantics can never be
 # applied by a process that would now mutate differently.
-CONFIG_MUTATION_CONTRACT_VERSION = 1
+CONFIG_MUTATION_CONTRACT_VERSION = 2
 
 SET = "set"
 CLEAR = "clear"
 KEEP = "keep"
+INVALID = "invalid"
+
+_TRUE_WORDS = frozenset({"1", "true", "yes", "on"})
+_FALSE_WORDS = frozenset({"0", "false", "no", "off"})
 
 SEVERITY_INFO = "info"
 SEVERITY_WARNING = "warning"
@@ -199,13 +204,15 @@ def coerce_catalog_value(field, value):
     if field_type == "integer":
         try:
             return int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return value
     if field_type == "number":
         try:
             number = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return value
+        if not math.isfinite(number):
+            return number
         return int(number) if number.is_integer() else number
     if field_type in ("month_list", "integer_list"):
         return _coerce_int_list(value)
@@ -228,9 +235,12 @@ def _coerce_int_list(value):
         if not text:
             continue
         try:
-            result.append(int(float(text)))
-        except (TypeError, ValueError):
+            number = float(text)
+        except (TypeError, ValueError, OverflowError):
             return value
+        if not math.isfinite(number) or not number.is_integer():
+            return value
+        result.append(int(number))
     return result
 
 
@@ -261,7 +271,76 @@ def resolve_change(field, change):
     empty = value is None or value == ""
     if empty:
         return (KEEP if is_secret_catalog_field(field or {}) else CLEAR), None
-    return SET, coerce_catalog_value(field, value)
+    coerced = coerce_catalog_value(field, value)
+    problem = _value_problem(field or {}, value, coerced)
+    if problem:
+        return INVALID, f"{change.path}: {problem}, got {value!r}"
+    return SET, coerced
+
+
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_finite_number(value):
+    if not _is_number(value):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _value_problem(field, raw, coerced):
+    """Why ``coerced`` is no value of ``field``'s type, or ``None``.
+
+    Coercion is one-way and lenient; this is the check behind it, so an answer
+    the type cannot hold is refused rather than written as text, read as
+    ``False`` or truncated. An unchanged stored value is the stored
+    config's, not an edit, and the callers leave it alone.
+    """
+
+    field_type = field.get("type")
+    if field_type == "boolean":
+        if isinstance(raw, bool):
+            return None
+        if isinstance(raw, str) and raw.strip().lower() in _TRUE_WORDS | _FALSE_WORDS:
+            return None
+        if _is_number(raw) and raw in (0, 1):
+            return None
+        return "must be true or false"
+    if field_type == "integer":
+        if isinstance(raw, bool) or not isinstance(coerced, int) or isinstance(coerced, bool):
+            return "must be a whole number"
+        if isinstance(raw, float) and not raw.is_integer():
+            return "must be a whole number"
+        if not _is_finite_number(coerced):
+            return "is too large"
+        return _range_problem(field, coerced)
+    if field_type == "number":
+        if isinstance(raw, bool) or not _is_finite_number(coerced):
+            return "must be a finite number"
+        return _range_problem(field, coerced)
+    if field_type in ("month_list", "integer_list"):
+        if not isinstance(coerced, list) or not all(
+            isinstance(item, int) and not isinstance(item, bool) for item in coerced
+        ):
+            return "must be a list of whole numbers"
+        if field_type == "month_list" and not all(1 <= item <= 12 for item in coerced):
+            return "must list months from 1 to 12"
+        return None
+    if field_type == "string_list" and not isinstance(coerced, list):
+        return "must be a list of texts"
+    return None
+
+
+def _range_problem(field, number):
+    minimum, maximum = field.get("min"), field.get("max")
+    if _is_number(minimum) and number < minimum:
+        return f"must be at least {minimum}"
+    if _is_number(maximum) and number > maximum:
+        return f"must be at most {maximum}"
+    return None
 
 
 def get_config_path(config, path):
@@ -334,12 +413,41 @@ def apply_config_changes(config, changes, policy, *, field_index=None):
                 )
             )
             continue
-        applied.extend(_apply_one(config, path, field, change, policy))
+        applied.extend(_apply_one(config, path, field, change, policy, issues))
     return ConfigMutationResult(config=config, applied_changes=tuple(applied), issues=tuple(issues))
 
 
-def _apply_one(config, path, field, change, policy):
+_EXACT_COERCION_TYPES = frozenset({"integer", "number", "month_list", "integer_list", "string_list"})
+
+
+def _is_stored_value(stored, field, raw):
+    """Whether ``raw`` is the stored value sent back, not an edit.
+
+    A number may come back as its text; a switch may not, because the lenient
+    boolean reading turns any unknown word into ``False``.
+    """
+
+    if stored is _MISSING:
+        return False
+    if isinstance(raw, str):
+        raw = raw.strip()
+    if stored == raw:
+        return True
+    return field.get("type") in _EXACT_COERCION_TYPES and stored == coerce_catalog_value(
+        field, raw
+    )
+
+
+def _invalid_value_issue(path, message):
+    return MutationIssue("config_value_invalid", SEVERITY_ERROR, message, path)
+
+
+def _apply_one(config, path, field, change, policy, issues):
     operation, value = resolve_change(field, change)
+    if operation == INVALID:
+        if not _is_stored_value(get_config_path(config, path), field, change.value):
+            issues.append(_invalid_value_issue(path, value))
+        return ()
     if operation == KEEP:
         return ()
     if operation == CLEAR:
@@ -469,9 +577,14 @@ def apply_grid_meter_changes(grid, changes, policy, *, credential=None, field_in
                 )
             )
             continue
+        refused = []
         applied.extend(
             AppliedChange(GRID_METER_PREFIX + entry.path, entry.operation)
-            for entry in _apply_one(grid, change.path, field, change, policy)
+            for entry in _apply_one(grid, change.path, field, change, policy, refused)
+        )
+        issues.extend(
+            _invalid_value_issue(GRID_METER_PREFIX + issue.path, "grid_meter." + issue.message)
+            for issue in refused
         )
 
     if new_type != original_type:
@@ -485,7 +598,9 @@ def apply_grid_meter_changes(grid, changes, policy, *, credential=None, field_in
 
     if new_type in MQTT_GRID_METER_TYPES:
         applied.extend(
-            _apply_grid_meter_mqtt(grid, mqtt_changes, policy, index, new_type, credential)
+            _apply_grid_meter_mqtt(
+                grid, mqtt_changes, policy, index, new_type, credential, issues
+            )
         )
 
     return ConfigMutationResult(config=grid, applied_changes=tuple(applied), issues=tuple(issues))
@@ -502,7 +617,7 @@ def _apply_grid_meter_type(grid, change):
     return (AppliedChange(GRID_METER_PREFIX + "type", SET),)
 
 
-def _apply_grid_meter_mqtt(grid, changes, policy, index, meter_type, credential):
+def _apply_grid_meter_mqtt(grid, changes, policy, index, meter_type, credential, issues):
     """Write MQTT values into the representation this meter already uses."""
 
     editable = editable_grid_meter_mqtt_keys(meter_type)
@@ -533,9 +648,13 @@ def _apply_grid_meter_mqtt(grid, changes, policy, index, meter_type, credential)
             continue
         field = _grid_meter_field(policy, index, f"mqtt.{key}") or {}
         operation, value = resolve_change(field, change)
+        path = f"{GRID_METER_PREFIX}mqtt.{key}"
+        if operation == INVALID:
+            if not _is_stored_value(current.get(key, _MISSING), field, change.value):
+                issues.append(_invalid_value_issue(path, "grid_meter.mqtt." + value))
+            continue
         if operation == KEEP:
             continue
-        path = f"{GRID_METER_PREFIX}mqtt.{key}"
         if operation == CLEAR:
             if not policy.allow_remove:
                 continue
@@ -642,11 +761,12 @@ def mutation_diff(before, after, *, is_secret_leaf, bound_value=None):
 REDACTED_DIFF_VALUE = "••••"
 
 
-def apply_common_values(target, values, fields):
+def apply_common_values(target, values, fields, *, issues=None):
     """Apply the catalog-backed value set of one repeated entry (a device).
 
     Repeated entries have no dotted config path of their own, so they carry a
-    flat key set; the interpretation of each key is the shared one.
+    flat key set; the interpretation of each key is the shared one. A value its
+    type cannot hold is not written, and is reported into ``issues`` when given.
     """
 
     applied = []
@@ -655,6 +775,12 @@ def apply_common_values(target, values, fields):
             continue
         change = ConfigChange(key, values[key])
         operation, value = resolve_change(field, change)
+        if operation == INVALID:
+            if issues is not None and not _is_stored_value(
+                target.get(key, _MISSING), field, values[key]
+            ):
+                issues.append(_invalid_value_issue(key, value))
+            continue
         if operation == KEEP:
             continue
         if operation == CLEAR:

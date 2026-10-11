@@ -1281,6 +1281,35 @@ console.log(JSON.stringify({{
     assert output["power"] is None
 
 
+def test_a_change_made_while_control_is_off_says_when_it_takes_effect():
+    """Off is off (OFF-1): a role or socket change waits until control is on again."""
+
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const device = {{ dataset: {{ runtimeEndpoint: "/api/runtime/device/WR%201" }} }};
+const ask = () => ({{
+  acInput: app.runtimeChangeWarning(device, {{ runtime_role: "ac_input" }}),
+  acOutput: app.runtimeChangeWarning(device, {{ runtime_role: "ac_output" }}),
+  offgrid: app.runtimeChangeWarning(device, {{ offgrid_socket_mode: "eco" }}),
+}});
+app.state.runtime = {{ system: {{ enabled: true }}, devices: {{ "WR 1": {{ enabled: true }} }} }};
+const on = ask();
+app.state.runtime = {{ system: {{ enabled: false }}, devices: {{ "WR 1": {{ enabled: true }} }} }};
+const emsOff = ask();
+app.state.runtime = {{ system: {{ enabled: true }}, devices: {{ "WR 1": {{ enabled: false }} }} }};
+const deviceOff = ask();
+console.log(JSON.stringify({{ on, emsOff, deviceOff }}));
+"""
+    output = run_node(script)
+
+    assert output["on"]["acOutput"] is None
+    assert "takes effect" not in output["on"]["acInput"]
+    for off in (output["emsOff"], output["deviceOff"]):
+        assert all("takes effect once" in message for message in off.values())
+    assert "Zendure app" in output["emsOff"]["acOutput"]
+    assert "out of EMS control" in output["deviceOff"]["offgrid"]
+
+
 def test_device_card_offers_the_ac_role_emsctl_offers():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});

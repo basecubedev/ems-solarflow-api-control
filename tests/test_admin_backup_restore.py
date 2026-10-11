@@ -1089,3 +1089,81 @@ def test_a_backup_download_says_whether_the_file_is_missing_or_unreadable(
     AdminHandler._send_file(handler, str(path), "application/gzip", path.name)
 
     assert sent[0][0] == status
+
+
+def test_an_auto_rollback_removes_the_files_the_failed_restore_created(tmp_path):
+    root = _build_install(tmp_path)
+    _make_config_archive(root)
+    created = root / "config" / "dashboard.crt"
+    created.unlink()
+    service = _service(root)
+    backup_id = service.list_backups()["backups"][0]["id"]
+    plan = _plan_replace(service, backup_id)
+    service._post_restore_check = lambda env, target: (False, "simulated failure")
+
+    result = service.restore_from_plan(plan["plan_id"], confirm=True)
+
+    assert result["status"] == "rolled_back"
+    assert not created.exists()
+
+
+def test_an_auto_rollback_keeps_a_created_file_someone_changed_since(tmp_path):
+    root = _build_install(tmp_path)
+    _make_config_archive(root)
+    created = root / "config" / "dashboard.crt"
+    created.unlink()
+    service = _service(root)
+    backup_id = service.list_backups()["backups"][0]["id"]
+    plan = _plan_replace(service, backup_id)
+
+    def changed_after_restore(env, target):
+        created.write_text("REPLACED BY THE OPERATOR")
+        return False, "simulated failure"
+
+    service._post_restore_check = changed_after_restore
+
+    result = service.restore_from_plan(plan["plan_id"], confirm=True)
+
+    assert result["status"] == "rolled_back"
+    assert created.read_text() == "REPLACED BY THE OPERATOR"
+    assert "config/dashboard.crt" in result["steps"][-1]["detail"]
+
+
+def test_an_auto_rollback_leaves_a_created_database_that_has_a_journal(tmp_path):
+    from admin.backup_restore import BackupRestoreService
+    from types import SimpleNamespace
+
+    root = tmp_path / "install"
+    (root / "data").mkdir(parents=True)
+    database = root / "data" / "ems_dashboard.sqlite"
+    database.write_bytes(b"SQLite format 3\x00")
+    (root / "data" / "ems_dashboard.sqlite-wal").write_bytes(b"wal")
+    created = [{
+        "path": "data/ems_dashboard.sqlite",
+        "target": str(database),
+        "sha256": backup_mod._sha256_file(str(database)),
+    }]
+
+    kept = BackupRestoreService._remove_created_files(SimpleNamespace(base_dir=str(root)), created)
+
+    assert database.exists()
+    assert kept == [("data/ems_dashboard.sqlite", "a database in use")]
+
+
+def test_the_restore_preview_names_where_an_outside_file_belongs(tmp_path):
+    root = _build_install(tmp_path)
+    outside = tmp_path / "letsencrypt" / "fullchain.pem"
+    outside.parent.mkdir()
+    outside.write_text("CERT")
+    config = json.loads((root / "config" / "config.json").read_text())
+    config["dashboard"]["ssl_cert_file"] = str(outside)
+    (root / "config" / "config.json").write_text(json.dumps(config))
+    _make_config_archive(root)
+    service = _service(root)
+    backup_id = service.list_backups()["backups"][0]["id"]
+
+    plan = _plan_replace(service, backup_id)
+
+    row = next(f for f in plan["files"] if f.get("source_path"))
+    assert row["source_path"] == str(outside)
+    assert row["action"] == "would_skip_outside_project"

@@ -70,6 +70,8 @@ worker liveness:
 | B9 | `<admin_data>/backups/config/*.json` | `ConfigApplyService._backup` | restore flows | same | Backup UI | Backup/restore | No |
 | B10 | `<install>/config/config.json` | installer / Admin | EMS runtime, Maintenance, Setup preview | `ConfigApplyService.apply_prepared`, `DeploymentService._write_config` | n/a | **live config** | n/a |
 | B11 | `<install>/data/runtime-state.json` | EMS | EMS, Admin runtime convergence | EMS + `dashboard/runtime_write.py` | n/a | EMS runtime | n/a |
+| B12 | `<install>/data/runtime-state.json.reset-requested` (`{"reason", "config_sha256"}`) | W1/W3 (fresh Setup) | `start_runtime_state` at EMS start | W1/W3 write it; every edit moves it to the config it writes when it names the one replaced (W4–W6 through `apply_maintenance`, the Guided Upgrade config step, emsctl, the dashboard and the startup upgrade through `write_config_json_atomic`) | the EMS start that settles it: honoured while the installed config is the one it names, dropped otherwise | fresh Setup | Yes — resets B11 at the next start. W3 leaves it before the config, or right after the permission repair when `data/` refuses it until then; a prepare failing before that repair leaves the config without it until it is repeated |
+| B13 | `<install>/data/runtime-state.json.before-setup-<UTC time>` | `start_runtime_state` | operator | none | none | EMS runtime backup | No |
 
 ### 1.2 Backend, in-process (does **not** survive Admin restart)
 
@@ -108,13 +110,13 @@ planning state; L1–L8 outlive a session.
 
 | Path | Entry point | Owner | Source | Target | Freshness check | Backup | Cleanup |
 |---|---|---|---|---|---|---|---|
-| W1 Setup apply | `POST /api/setup/config/apply` → `_setup_config_transaction` → `ConfigApplyService.apply` | Guided Setup | browser draft | live `config/config.json` | **workflow + exact-preview authority (§2.3) checked before staging**, plus the commit-time guard | yes | n/a |
+| W1 Setup apply | `POST /api/setup/config/apply` → `_setup_config_transaction` → `ConfigApplyService.apply` | Guided Setup | browser draft | live `config/config.json`, and the runtime reset request beside `runtime-state.json` | **workflow + exact-preview authority (§2.3) checked before staging**, plus the commit-time guard | yes | n/a |
 | W2 Setup export | `POST /api/setup/config/write` → `ConfigExportService.write` | Guided Setup | browser draft | workflow-owned B2 | **same authority as W1**; binds workflow/preview/fingerprint/baseline/payload-hash into B2a for W3 | no | B2/B2a via abandon/supersede |
-| W3 Setup deploy | `POST …/deployment/prepare` → `_run_prepare` → `_write_config` | Guided Setup | **B2 on disk** | live `config/config.json` | **workflow ownership + `base_config_revision` from B2a** (§2.2), checked before any workspace write and not bypassed by `overwrite` | yes (`_backup_existing_runtime`) | B2/B2a/B3 via abandon/supersede |
-| W4 Maintenance apply | `POST /api/admin/maintenance/config/apply` → `prepare_maintenance_config_apply` | Maintenance | browser draft + live config merge | live `config/config.json` | **client-supplied `expected_revision`, captured when the draft was loaded** | optional | n/a |
-| W5 MQTT migration apply | `prepare_migration_apply(expected_revision)` | Maintenance | live config | live `config/config.json` | client `expected_revision` | yes | n/a |
-| W6 Guided Upgrade migration | `admin/guided_upgrade.py:926` | Guided Upgrade | migration output | live `config/config.json` | `migration["revision"]` | yes | n/a |
-| W7 Backup restore | `admin/backup_restore.py` | Backup/restore | backup set | live `config/config.json` | set-scoped | yes | n/a |
+| W3 Setup deploy | `POST …/deployment/prepare` → `_run_prepare` → `_write_config` | Guided Setup | **B2 on disk** | live `config/config.json`, and the runtime reset request beside `runtime-state.json` | **workflow ownership + `base_config_revision` from B2a** (§2.2), checked before any workspace write and not bypassed by `overwrite` | yes (`_backup_existing_runtime`) | B2/B2a/B3 via abandon/supersede |
+| W4 Maintenance apply | `POST /api/admin/maintenance/config/apply` → `prepare_maintenance_config_apply` | Maintenance | browser draft + live config merge | live `config/config.json`; moves a pending B12 along | **client-supplied `expected_revision`, captured when the draft was loaded** | optional | n/a |
+| W5 MQTT migration apply | `prepare_migration_apply(expected_revision)` | Maintenance | live config | live `config/config.json`; moves a pending B12 along | client `expected_revision` | yes | n/a |
+| W6 Guided Upgrade migration | `GuidedUpgradeExecutor._apply_mqtt_migration` | Guided Upgrade | migration output | live `config/config.json`; moves a pending B12 along | `migration["revision"]` | yes | n/a |
+| W7 Backup restore | `admin/backup_restore.py` | Backup/restore | backup set | live `config/config.json`; a pending runtime reset request (B12) that names another config is dropped at the next EMS start | set-scoped | yes | n/a |
 | W8 Legacy migration | `migrate_legacy_root_config` | Install-state | legacy root config | standard config | layout-state guarded | yes | n/a |
 | W9 Runtime convergence | `dashboard/runtime_write.py` whitelist | Maintenance apply | live config | `data/runtime-state.json` | n/a | no | n/a |
 

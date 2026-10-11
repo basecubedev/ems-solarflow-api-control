@@ -6,8 +6,22 @@ the source of truth. It is a Docker-only path.
 
 Use this for a fresh install or a deliberate reinstall. To update or change an
 existing system, use [admin-maintenance.md](admin-maintenance.md) instead. Setup
-writes only `config/config.json` (backing up any existing config first); it does
-not touch `data/` or runtime databases.
+writes `config/config.json` (backing up any existing config first) and does not
+touch the runtime databases in `data/`. It builds that file from the release
+template and your choices alone: a config already in place is replaced, not
+merged, and the only thing taken from it is where the shared password file
+lives, so the password you signed in with keeps working. Everything else in the
+config starts at the release defaults unless you choose otherwise in Setup: dry
+run is off and the write gates are open, the dashboard listens on port 8080
+without HTTPS, data file locations are the standard ones, and broker profiles
+are only those Setup builds from what you select. What the dashboard keeps in
+`data/runtime-state.json` -- system on/off, the total power limit, loop interval
+and minimum output, each device's on/off and limits, winter and AC charging
+on/off -- starts afresh too: Setup leaves a request beside that file, and the
+EMS that starts on the new config keeps the old file as
+`data/runtime-state.json.before-setup-<UTC time>` and builds a new one from the
+config. A device you had switched off in the dashboard is active again (see
+[runtime state](../technical/runtime-state.md#fresh-setup-reset)).
 
 ## Start
 
@@ -189,8 +203,9 @@ the Admin Console (see **Start** above), open `http://127.0.0.1:8090`, and pick
    If instead a D0 is discovered on a local MQTT broker, the proposal offers
    **"Use as grid meter"**: choosing it maps the D0's
    `Zendure/sensor/<serial>/totalPower` topic to the central grid meter, reusing
-   the selected broker profile. Only one grid meter can be active, and an
-   existing grid meter is only replaced when you explicitly confirm it.
+   the selected broker profile. Only one grid meter can be active, and a grid
+   meter already chosen in this Setup is only replaced when you explicitly
+   confirm it.
 4. **04 Prepare deployment** — the Admin Console writes the generated config to
    the standard `config/config.json` (backing up any existing config first) and
    prepares the EMS deployment: the Compose file plus the target EMS image and
@@ -304,6 +319,8 @@ offers:
 
 A Guided Upgrade recovery additionally offers **Return to running build**, which
 puts the Admin Console back on the System Build your EMS is currently running.
+When that build is a Development build, the console asks you to accept its risk
+first, as it does when you choose one.
 That action is deliberately **not** offered during a setup. Returning is really
 two steps — end the failed operation, then start a new one — and during a setup
 there is no record that would own the new operation afterwards, so a later

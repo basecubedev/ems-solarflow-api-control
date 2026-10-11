@@ -118,3 +118,67 @@ def test_the_mutation_fingerprint_never_returns_a_raw_value():
 
     assert fingerprint.startswith("sha256:")
     assert PLAINTEXT not in fingerprint
+
+
+CATALOGUED_SECRETS = frozenset({
+    "grid_meter.mqtt.password",
+    "ha.token",
+    "influxdb.token",
+    "zendure_mqtt.app_key",
+    "zendure_mqtt.password",
+    "zendure_mqtt.username",
+})
+
+# Each names, points at or governs a secret without being one: a path, an
+# environment variable's name, a switch.
+CATALOGUED_NEAR_SECRETS = (
+    "dashboard.auth_file",
+    "dashboard.ssl_cert_file",
+    "dashboard.ssl_key_file",
+    "dashboard.log_redaction",
+    "influxdb.secret_file",
+    "influxdb.token_env",
+)
+
+
+def test_only_credentials_are_catalogued_as_secrets():
+    from ems.config_catalog import get_config_feature_field_index, is_secret_catalog_field
+
+    fields = get_config_feature_field_index()
+    secret = {path for path, field in fields.items() if is_secret_catalog_field(field)}
+
+    assert secret == CATALOGUED_SECRETS
+
+
+@pytest.mark.parametrize("path", CATALOGUED_NEAR_SECRETS)
+def test_a_field_next_to_a_secret_keeps_its_default_and_renders_in_clear(path):
+    from admin.setup_config import build_setup_catalog
+    from ems.config_catalog import get_config_feature_field_index
+
+    catalogued = get_config_feature_field_index()[path]
+    setup_fields = {
+        field["path"]: field
+        for section in build_setup_catalog()["sections"]
+        for field in section["fields"]
+    }
+
+    assert catalogued["type"] != "password"
+    if path in setup_fields:
+        assert setup_fields[path]["secret"] is False
+        assert setup_fields[path].get("default") == catalogued.get("default")
+
+
+def test_a_catalogued_path_is_redacted_by_the_catalog_not_by_its_name():
+    view = redact_config_for_browser({
+        "features": {
+            "influxdb.token_env": "INFLUXDB_TOKEN",
+            "influxdb.secret_file": "deploy/docker/influxdb.env",
+            "influxdb.token": PLAINTEXT,
+            "ha.token": PLAINTEXT,
+        },
+    })
+
+    assert view["features"]["influxdb.token_env"] == "INFLUXDB_TOKEN"
+    assert view["features"]["influxdb.secret_file"] == "deploy/docker/influxdb.env"
+    assert view["features"]["influxdb.token"] != PLAINTEXT
+    assert view["features"]["ha.token"] != PLAINTEXT

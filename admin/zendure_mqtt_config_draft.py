@@ -982,7 +982,7 @@ def _apply_output_control(
             device["mqtt"].pop("write_protocol", None)
 
 
-def apply_zendure_mqtt_draft_fields(device, item, *, broker_sources=None):
+def apply_zendure_mqtt_draft_fields(device, item, *, broker_sources=None, issues=None):
     """Write editable Zendure MQTT fields from a draft entry onto a config device.
 
     Identity (topic family/base topic) follows the selected hardware generation
@@ -1117,7 +1117,7 @@ def apply_zendure_mqtt_draft_fields(device, item, *, broker_sources=None):
     # Common (transport-independent) tuning values round-trip through the same
     # catalog-derived projection as Local API devices; keys absent from the
     # draft stay untouched so a no-op apply remains byte-exact.
-    apply_common_device_values(device, item)
+    apply_common_device_values(device, item, issues=issues)
 
     enabled = bool(item.get("enabled", True))
     if "enabled" in device or item.get("has_enabled_key") or not enabled:

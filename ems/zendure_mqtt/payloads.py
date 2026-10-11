@@ -19,8 +19,9 @@ _KNOWN_REPORT_KEYS = frozenset(
 def coerce_scalar(payload):
     """Coerce a scalar payload to ``int``/``float`` when safe, else ``str``.
 
-    Bytes are decoded as UTF-8; non-finite floats and non-numeric text stay as
-    strings so no telemetry value is silently lost.
+    Bytes are decoded as UTF-8; non-finite floats, integers beyond float range
+    and non-numeric text stay as strings, as they came. Text that reads as a
+    number becomes that number, so an identifier with leading zeros loses them.
     """
 
     if isinstance(payload, (int, float)) and not isinstance(payload, bool):
@@ -36,9 +37,11 @@ def coerce_scalar(payload):
     if not text:
         return payload
     try:
-        return int(text)
+        number = int(text)
     except ValueError:
         pass
+    else:
+        return number if _within_float_range(number) else payload
     try:
         value = float(text)
     except ValueError:
@@ -71,7 +74,10 @@ def _coerce_json(payload):
         return None
     try:
         return json.loads(
-            payload, parse_constant=_drop_constant, parse_float=_finite_float
+            payload,
+            parse_constant=_drop_constant,
+            parse_float=_finite_float,
+            parse_int=_float_range_int,
         )
     except (ValueError, TypeError):
         return None
@@ -86,6 +92,23 @@ def _drop_constant(_name):
 def _finite_float(text):
     value = float(text)
     return value if math.isfinite(value) else None
+
+
+def _float_range_int(text):
+    """A report integer no float can hold is a missing value, never a reading."""
+
+    value = int(text)
+    return value if _within_float_range(value) else None
+
+
+def _within_float_range(number):
+    """Whether ``number`` converts to a float, as every downstream comparison does."""
+
+    try:
+        float(number)
+    except OverflowError:
+        return False
+    return True
 
 
 def _extract_packs(data, properties):

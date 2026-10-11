@@ -7,22 +7,20 @@ Dashboard control tab and ``emsctl``). The live EMS resolves these keys
 runtime-first, so the Admin must surface the *effective* value and whether it is
 a live override of the installed config value.
 
-This module is the single, read-only source for which keys overlap, how to
-resolve the runtime-state file the running EMS actually reads, and how to decide
-provenance. It never writes: runtime writes go through
-``dashboard.runtime_write`` (same whitelist), config writes through the atomic
-config apply service.
+This module is the single, read-only source for which keys overlap and how to
+decide provenance; where the runtime-state file lives it takes from
+``ems.runtime_state.runtime_state_path_under``. It never writes: runtime writes
+go through ``dashboard.runtime_write`` (same whitelist), config writes through
+the atomic config apply service.
 """
 
 import json
-import os
 import re
 
 from dashboard.runtime_write import DEVICE_FIELDS, SECTION_FIELDS, SYSTEM_FIELDS
 from ems import config as cfg
 from ems.config_catalog import device_common_defaults
-
-DEFAULT_RUNTIME_STATE_PATH = "runtime-state.json"
+from ems.runtime_state import runtime_state_path_under
 
 _EMS_DEFAULTS = cfg.default_runtime_config()
 _SYSTEM_DEFAULTS = {key: _EMS_DEFAULTS["system"].get(key) for key in SYSTEM_FIELDS}
@@ -82,11 +80,7 @@ def resolve_runtime_state_path(context, config):
     the Admin container root rather than the mounted install.
     """
 
-    system = config.get("system") if isinstance(config.get("system"), dict) else {}
-    relative = system.get("runtime_state_path") or DEFAULT_RUNTIME_STATE_PATH
-    if os.path.isabs(relative):
-        return relative
-    return os.path.join(str(context.install_root), relative)
+    return runtime_state_path_under(context.install_root, config)
 
 
 def read_runtime_state(path):

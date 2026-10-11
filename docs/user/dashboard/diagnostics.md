@@ -33,8 +33,8 @@ browser."* — with a profile selector and three actions.
 | **Install** | Install-level health: config, paths, clients, reachability | `diagnose` |
 | **Deep** | The above plus deeper runtime inspection | `diagnose --deep` |
 | **Hardware** | Device reachability and reported capabilities | `diagnose --hardware` |
-| **Control** | Measurements, target, allocation, write eligibility | `diagnose --control` |
-| **Quality** | Control quality sampled over a window | `diagnose --control-quality` |
+| **Control** | Measurements, target, allocation, write eligibility of the last control cycle | `diagnose --control` |
+| **Quality** | Control quality over the last 30 control cycles | `diagnose --control-quality` |
 
 ### 2 — Run
 

@@ -6,6 +6,9 @@ from unittest.mock import patch
 import pytest
 
 from ems.clients import (
+    HA_BACKOFF_INITIAL_S,
+    HA_BACKOFF_MAX_S,
+    HA_REQUEST_TIMEOUT,
     EcoTrackerClient,
     HAClient,
     MqttGridMeterClient,
@@ -168,7 +171,7 @@ def test_ha_client_posts_state_payload_and_headers():
     assert method == "post"
     assert url == "http://ha.local/api/states/sensor.ems"
     assert kwargs["headers"]["Authorization"] == "Bearer TOKEN"
-    assert kwargs["timeout"] == 2
+    assert kwargs["timeout"] == HA_REQUEST_TIMEOUT
     assert kwargs["json"] == {
         "state": 42,
         "attributes": {
@@ -1972,3 +1975,219 @@ def test_a_numeric_device_maximum_is_the_device_ceiling(monkeypatch, max_power, 
         max_power=max_power,
     )
     assert zendure.max_power == expected
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_ha_requests_carry_a_timeout_shorter_than_a_control_cycle():
+    connect, read = HA_REQUEST_TIMEOUT
+
+    assert connect + read <= 2
+
+
+def test_an_unreachable_ha_costs_one_request_then_waits_out_the_backoff(caplog):
+    clock = FakeClock()
+    session = SessionStub(post_response=ConnectionError("offline"))
+    client = HAClient("http://ha.local", "TOKEN", session, clock=clock)
+
+    with caplog.at_level(logging.WARNING):
+        for index in range(10):
+            client.set_state(f"sensor.ems_{index}", index)
+
+    assert len(session.calls) == 1
+    assert caplog.text.count("event=ha_write_error") == 1
+    assert f"retry_in_s={HA_BACKOFF_INITIAL_S:g}" in caplog.text
+
+    clock.now += HA_BACKOFF_INITIAL_S - 1
+    client.set_state("sensor.ems_load", 1)
+    assert len(session.calls) == 1
+
+    clock.now += 1
+    client.set_state("sensor.ems_load", 1)
+    assert len(session.calls) == 2
+
+
+def test_each_further_failure_doubles_the_backoff_up_to_its_ceiling():
+    clock = FakeClock()
+    session = SessionStub(post_response=ConnectionError("offline"))
+    client = HAClient("http://ha.local", "TOKEN", session, clock=clock)
+    waits = []
+
+    for _ in range(8):
+        client.set_state("sensor.ems_load", 1)
+        calls = len(session.calls)
+        waited = 0
+        while len(session.calls) == calls:
+            clock.now += 1
+            waited += 1
+            client.set_state("sensor.ems_load", 1)
+        waits.append(waited)
+
+    assert waits[0] == HA_BACKOFF_INITIAL_S
+    assert waits[1] == 2 * HA_BACKOFF_INITIAL_S
+    assert max(waits) == HA_BACKOFF_MAX_S
+    assert waits[-1] == HA_BACKOFF_MAX_S
+
+
+def test_a_reply_ends_the_backoff(caplog):
+    clock = FakeClock()
+    session = SessionStub(post_response=ConnectionError("offline"))
+    client = HAClient("http://ha.local", "TOKEN", session, clock=clock)
+    client.set_state("sensor.ems_load", 1)
+    clock.now += HA_BACKOFF_INITIAL_S
+    session.post_response = ResponseStub(status_code=200)
+
+    with caplog.at_level(logging.INFO):
+        client.set_state("sensor.ems_load", 1)
+        client.set_state("sensor.ems_home", 2)
+
+    assert len(session.calls) == 3
+    assert "event=ha_reachable_again" in caplog.text
+
+
+def test_an_ha_that_answers_with_an_error_status_is_not_backed_off():
+    session = SessionStub(post_response=ResponseStub(status_code=401))
+    client = HAClient("http://ha.local", "TOKEN", session, clock=FakeClock())
+
+    client.set_state("sensor.ems_load", 1)
+    client.set_state("sensor.ems_home", 2)
+
+    assert len(session.calls) == 2
+
+
+def test_helper_reads_share_the_backoff_of_an_unreachable_ha():
+    clock = FakeClock()
+    session = SessionStub(
+        get_response=ConnectionError("offline"),
+        post_response=ConnectionError("offline"),
+    )
+    client = HAClient("http://ha.local", "TOKEN", session, clock=clock)
+
+    client.set_state("sensor.ems_load", 1)
+
+    assert client.get_state("input_number.ems_max_power") is None
+    assert client.get_float("input_number.ems_max_power", 800.0) == 800.0
+    assert len(session.calls) == 1
+
+
+def test_a_helper_read_carries_the_same_short_timeout():
+    session = SessionStub(get_response=ResponseStub(payload={"state": "800"}))
+    client = HAClient("http://ha.local", "TOKEN", session, clock=FakeClock())
+
+    client.get_state("input_number.ems_max_power")
+
+    assert session.calls[0][2]["timeout"] == HA_REQUEST_TIMEOUT
+
+
+def test_a_failed_helper_read_starts_the_backoff_for_reads_and_writes():
+    clock = FakeClock()
+    session = SessionStub(
+        get_response=ConnectionError("offline"),
+        post_response=ConnectionError("offline"),
+    )
+    client = HAClient("http://ha.local", "TOKEN", session, clock=clock)
+
+    assert client.get_state("input_number.ems_max_power") is None
+    client.get_state("input_number.ems_min_soc")
+    client.set_state("sensor.ems_load", 1)
+
+    assert len(session.calls) == 1
+    clock.now += HA_BACKOFF_INITIAL_S
+    client.set_state("sensor.ems_load", 1)
+    assert len(session.calls) == 2
+
+
+def test_after_a_reply_the_next_outage_starts_the_backoff_afresh():
+    clock = FakeClock()
+    session = SessionStub(post_response=ConnectionError("offline"))
+    client = HAClient("http://ha.local", "TOKEN", session, clock=clock)
+    client.set_state("sensor.ems_load", 1)
+    clock.now += HA_BACKOFF_INITIAL_S
+    client.set_state("sensor.ems_load", 1)
+    clock.now += 2 * HA_BACKOFF_INITIAL_S
+    session.post_response = ResponseStub(status_code=200)
+    client.set_state("sensor.ems_load", 1)
+    session.post_response = ConnectionError("offline")
+    client.set_state("sensor.ems_load", 1)
+    calls = len(session.calls)
+
+    clock.now += HA_BACKOFF_INITIAL_S
+    client.set_state("sensor.ems_load", 1)
+
+    assert len(session.calls) == calls + 1
+
+
+def test_a_reply_to_a_helper_read_ends_the_backoff_too(caplog):
+    clock = FakeClock()
+    session = SessionStub(get_response=ConnectionError("offline"))
+    client = HAClient("http://ha.local", "TOKEN", session, clock=clock)
+    client.get_state("input_number.ems_max_power")
+    clock.now += HA_BACKOFF_INITIAL_S
+    session.get_response = ResponseStub(payload={"state": "800"})
+
+    with caplog.at_level(logging.INFO):
+        client.get_state("input_number.ems_max_power")
+    session.get_response = ConnectionError("offline")
+    client.get_state("input_number.ems_max_power")
+    calls = len(session.calls)
+    clock.now += HA_BACKOFF_INITIAL_S
+    client.get_state("input_number.ems_max_power")
+
+    assert "event=ha_reachable_again" in caplog.text
+    assert len(session.calls) == calls + 1
+
+
+def test_a_helper_read_answered_with_an_error_status_ends_the_backoff(caplog):
+    clock = FakeClock()
+    session = SessionStub(get_response=ConnectionError("offline"))
+    client = HAClient("http://ha.local", "TOKEN", session, clock=clock)
+    client.get_state("input_number.ems_missing")
+    clock.now += HA_BACKOFF_INITIAL_S
+    session.get_response = ResponseStub(status_code=404)
+
+    with caplog.at_level(logging.INFO):
+        assert client.get_state("input_number.ems_missing") is None
+    session.get_response = ConnectionError("offline")
+    client.get_state("input_number.ems_missing")
+    calls = len(session.calls)
+    clock.now += HA_BACKOFF_INITIAL_S
+    client.get_state("input_number.ems_missing")
+
+    assert "event=ha_reachable_again" in caplog.text
+    assert len(session.calls) == calls + 1
+
+
+def test_a_helper_read_answered_with_an_error_status_is_not_backed_off():
+    session = SessionStub(get_response=ResponseStub(status_code=404))
+    client = HAClient("http://ha.local", "TOKEN", session, clock=FakeClock())
+
+    client.get_state("input_number.ems_missing")
+    client.get_state("input_number.ems_missing")
+
+    assert len(session.calls) == 2
+
+
+def test_a_write_answered_with_an_error_status_ends_the_backoff(caplog):
+    clock = FakeClock()
+    session = SessionStub(post_response=ConnectionError("offline"))
+    client = HAClient("http://ha.local", "TOKEN", session, clock=clock)
+    client.set_state("sensor.ems_load", 1)
+    clock.now += HA_BACKOFF_INITIAL_S
+    session.post_response = ResponseStub(status_code=401)
+
+    with caplog.at_level(logging.INFO):
+        client.set_state("sensor.ems_load", 1)
+    session.post_response = ConnectionError("offline")
+    client.set_state("sensor.ems_load", 1)
+    calls = len(session.calls)
+    clock.now += HA_BACKOFF_INITIAL_S
+    client.set_state("sensor.ems_load", 1)
+
+    assert "event=ha_reachable_again" in caplog.text
+    assert len(session.calls) == calls + 1

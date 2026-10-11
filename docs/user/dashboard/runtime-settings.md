@@ -186,7 +186,15 @@ Reference: [Runtime state](../../technical/runtime-state.md) ·
 ## Expected result
 
 The value you set is stored, survives a restart, and visibly changes the control
-decision within one loop interval.
+decision within one loop interval. A fresh **Guided setup**
+([Set up a new system](../admin-setup.md)) resets all of these values to the new
+config at the next EMS start: a device you switched off is active again, and AC
+role goes back to Output with no AC charge power (see
+[runtime state](../../technical/runtime-state.md#fresh-setup-reset)). In the
+Admin's Maintenance, **Put live values back**, and an Apply that changes the same
+setting, write the config value over it right away, for every value here except
+**AC role** and **AC charge power**, which have no config value and stay as you
+set them.
 
 ## Warnings and common problems
 

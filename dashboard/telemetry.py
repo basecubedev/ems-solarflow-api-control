@@ -181,6 +181,7 @@ def _telemetry_only_tiles(controller):
         return []
 
     from ems.clients import parse_device
+    from ems.zendure_mqtt.snapshot import observable_metrics, pack_witness
 
     tiles = []
     for summary in summaries:
@@ -198,10 +199,10 @@ def _telemetry_only_tiles(controller):
                 "name": name,
                 "online": status == "online",
                 "state": parse_device({
-                    "properties": metrics,
+                    "properties": observable_metrics(metrics),
                     # The same second witness the control path weighs, so two
                     # readers of one aggregator cannot disagree about packs.
-                    "packData": getattr(snapshot, "battery_packs", None),
+                    "packData": pack_witness(snapshot),
                 }),
             }
         )

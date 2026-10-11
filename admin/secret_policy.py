@@ -31,7 +31,7 @@ from ``ems.config_catalog`` rather than reimplemented here — Admin consumers
 still reach the whole secret policy through this one module.
 """
 
-from ems.config_catalog import is_secret_catalog_field
+from ems.config_catalog import is_secret_catalog_field, secret_catalog_path
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
     PHYSICAL_IDENTITY_TOKEN_FIELD,
@@ -127,8 +127,16 @@ def classify_config_key(key, *, scope):
 
 
 def is_secret_key(key, *, scope):
-    """True when a scope must not expose this key's raw value."""
+    """True when a scope must not expose this key's raw value.
 
+    A full catalog path such as ``influxdb.token_env`` -- the key a feature
+    draft uses -- is answered by the catalog; only a bare config key falls back
+    to the markers.
+    """
+
+    catalogued = secret_catalog_path(key)
+    if catalogued is not None:
+        return catalogued
     return classify_config_key(key, scope=scope) == CLASS_SECRET
 
 

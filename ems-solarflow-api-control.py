@@ -15,10 +15,11 @@ from ems.clients import (
     create_grid_meter_client,
     create_session,
 )
+from ems.control_status import ControlStatusWriter
 from ems.controller import EMSController
 from ems.device_identity import broker_sources_from_config
 from ems.logging_utils import log_event, setup_logging
-from ems.runtime_state import RuntimeState, build_runtime_defaults
+from ems.runtime_state import build_runtime_defaults, start_runtime_state
 from ems.simulation import (
     built_in_simulation_frames,
     load_replay_frames,
@@ -344,11 +345,16 @@ def main():
         session
     )
 
-    runtime_state = RuntimeState(
+    if args.preflight:
+        ok = run_live_preflight(devices, shelly, ha)
+        close_grid_meter_client(shelly)
+        sys.exit(0 if ok else 2)
+
+    runtime_state = start_runtime_state(
         cfg.runtime_state_path(),
-        build_runtime_defaults(devices)
+        build_runtime_defaults(devices),
+        cfg.config_path(),
     )
-    runtime_state.load_or_create()
 
     dashboard_store = None
 
@@ -435,11 +441,6 @@ def main():
                 error=e
             )
 
-    if args.preflight:
-        ok = run_live_preflight(devices, shelly, ha)
-        close_grid_meter_client(shelly)
-        sys.exit(0 if ok else 2)
-
     # Native InfluxDB telemetry writer: active only when influxdb is enabled and
     # we are reading real hardware (not simulation/replay). Started lazily and
     # non-blocking; InfluxDB being unavailable never blocks or stops the EMS.
@@ -513,6 +514,9 @@ def main():
         zendure_mqtt_runtime=zendure_mqtt_runtime,
         winter_store=None if cfg.SIMULATION_MODE else build_winter_store()
     )
+    control_status = ControlStatusWriter(
+        paths.resolve_control_status_path(cfg.runtime_state_path())
+    )
 
     stopped_by = install_stop_signal_handlers()
 
@@ -521,10 +525,15 @@ def main():
     start_time = time.time()
     cycles = 0
 
+    bounded = bool(args.once or args.max_cycles or args.duration)
     try:
         while True:
-            ems.run_once()
+            if bounded:
+                ems.run_once()
+            else:
+                ems.run_guarded()
             cycles += 1
+            control_status.write(ems)
 
             # Self-heal: re-attempt broker connections that failed at boot.
             # start() is idempotent, never raises on connection failure and

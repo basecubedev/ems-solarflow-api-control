@@ -94,7 +94,7 @@ BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
     "assist_window_days": 7,
     "assist_start_soc": 80,
     "force_time": "14:00",
-    "ac_charge_power": 200,
+    "ac_charge_power": 600,
     "enable_ac_charge_mode": True,
     "state_database_path": "data/ems_state.sqlite"
 }
@@ -1490,9 +1490,21 @@ def build_config_upgrade_plan(
 
 
 def write_config_json_atomic(path, data, *, layout=None):
+    """Write ``data`` as the config at ``path``, replacing the file atomically.
+
+    The writer every edit of an installed config goes through, so it carries a
+    fresh setup's pending runtime reset to the config it writes.
+    """
+
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
+
+    try:
+        with open(path, "rb") as handle:
+            replaced = handle.read()
+    except OSError:
+        replaced = None
 
     mode = 0o600
     uid = gid = None
@@ -1523,6 +1535,27 @@ def write_config_json_atomic(path, data, *, layout=None):
         except FileNotFoundError:
             pass
         raise
+    if replaced is not None:
+        _carry_runtime_reset(path, data, replaced)
+
+
+def _carry_runtime_reset(path, data, replaced):
+    """Carry a pending runtime reset along; the config is written by now.
+
+    A failure is reported the way a startup config message is, since the
+    startup upgrade writes through here before logging is set up.
+    """
+
+    from ems.runtime_state import carry_runtime_reset, config_digest
+
+    try:
+        with open(path, "rb") as handle:
+            written = handle.read()
+        carry_runtime_reset(path, data, config_digest(replaced), config_digest(written))
+    except (OSError, ValueError) as exc:
+        _emit_startup_config_message(
+            logging.WARNING, f"event=runtime_reset_carry_failed path={path} error={exc}"
+        )
 
 
 def normalize_config_upgrade_config(config, *, emit_warning=None):
@@ -2020,14 +2053,16 @@ def http_control_device_configs(devices=None):
 
 
 def mqtt_control_device_configs(devices=None):
-    """Return devices[] entries that build a write-capable MQTT control device.
+    """Return enabled devices[] entries that build a write-capable MQTT control device.
 
     These are ``zendure_mqtt`` entries that opt in to output control via
-    ``capabilities.write_output_limit=true``. Telemetry-only MQTT entries and
-    HTTP/API devices are excluded.
+    ``capabilities.write_output_limit=true``. Telemetry-only MQTT entries,
+    HTTP/API devices and disabled entries are excluded, as a disabled entry is
+    on the HTTP path.
     """
 
     from ems.zendure_mqtt.config_entries import (
+        config_entry_enabled,
         is_control_zendure_mqtt_device_config,
     )
 
@@ -2038,7 +2073,9 @@ def mqtt_control_device_configs(devices=None):
     return [
         item
         for item in devices
-        if isinstance(item, dict) and is_control_zendure_mqtt_device_config(item)
+        if isinstance(item, dict)
+        and is_control_zendure_mqtt_device_config(item)
+        and config_entry_enabled(item)
     ]
 
 
@@ -2384,10 +2421,7 @@ def config_control_flags(config):
 def config_control_devices_by_gate(config):
     """Group enabled control devices by write gate, as startup would group them."""
 
-    from ems.zendure_mqtt.config_entries import (
-        config_entry_enabled,
-        control_gate_for_config_device,
-    )
+    from ems.zendure_mqtt.config_entries import control_gate_for_config_device
 
     grouped = {gate: [] for gate in _CONTROL_GATE_TRANSPORT}
     devices = config.get("devices") if isinstance(config, dict) else None
@@ -2395,8 +2429,7 @@ def config_control_devices_by_gate(config):
         return grouped
     grouped["api"] = list(http_control_device_configs(devices))
     for item in mqtt_control_device_configs(devices):
-        if config_entry_enabled(item):
-            grouped[control_gate_for_config_device(config, item)].append(item)
+        grouped[control_gate_for_config_device(config, item)].append(item)
     return grouped
 
 

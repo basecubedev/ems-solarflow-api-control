@@ -1781,3 +1781,21 @@ def test_every_whitelisted_runtime_section_is_reachable(tmp_path):
         assert "system_limits" not in runtime_state.data
     finally:
         server.shutdown()
+
+
+def test_a_history_range_longer_than_the_retention_names_the_retention(tmp_path):
+    db_path = str(tmp_path / "dashboard.sqlite")
+    _seed_snapshots(db_path)
+    store = SeriesStoreStub(db_path)
+    store.retention_hours = 48
+    server, base_url = with_server(store)
+
+    try:
+        _, _, week = json_response(f"{base_url}/api/history/series?range=7d&series=pv")
+        _, _, day = json_response(f"{base_url}/api/history/series?range=24h&series=pv")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert week["meta"]["retention_hours"] == 48
+    assert "retention_hours" not in day["meta"]

@@ -236,14 +236,18 @@ This path edits an existing installation.
   preview of the changes, split into *Takes effect immediately* and *Needs an
   EMS restart*. Nothing is written by editing or previewing. Applying
   the draft is the one action that writes config — it validates the change,
-  backs up the current config first, then writes it. Apply writes `config.json`
+  backs up the current config first, then writes it. A value its field cannot
+  hold — text in a number field, a switch that is neither true nor false, a
+  number outside the field's range — is refused by name instead of being saved
+  as text, read as *off* or cut to a whole number; a value you did not change is
+  left as it is stored. Apply writes `config.json`
   and additionally mirrors the whitelisted overlapping values it changed (system
   power/loop limits, winter enable, and per-device enabled/max power/PV priority)
   into `data/runtime-state.json` so the change goes live immediately instead of
   waiting for an EMS restart; it still never moves `data/` history,
   `docker-compose.yml`, or databases. Fields that also carry a live override set
-  from the Dashboard show a badge with the effective value, and a **Reset live
-  overrides** button writes the installed config values back so the live EMS
+  from the Dashboard show a badge with the effective value, and a **Put live
+  values back** button writes the installed config values back so the live EMS
   matches the installed config again.
 
   The hardware section looks and works like the Fresh Install Config step.

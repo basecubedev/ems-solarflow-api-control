@@ -146,6 +146,7 @@ construction, controller startup, main loop. All real implementation lives in `e
 - `state_store.py` — SQLite store backing battery full-charge assist (and dashboard stats)
 - `simulation.py` — simulation, replay, preflight, self-test helpers
 - `diagnostics.py` — read-only `diagnose` service layer (versioned contract); imported by both `emsctl.py` and the dashboard
+- `control_status.py` — per-cycle live control snapshot (`control-status.json` beside runtime-state) that `diagnose --control` reads; non-authoritative, never raises into the loop
 - `paths.py` — shared project-path resolvers (`BASE_DIR`, `resolve_*_path`); import-side-effect-free
 
 Edit the smallest relevant module rather than the entry script or `controller.py`
@@ -278,8 +279,10 @@ hardware generations are not yet validated on physical hardware (see
 
 State reconciliation writes (`minSoc`, `socSet`, `smartMode`, `gridOffMode`,
 winter `inputLimit`, full-charge-assist `socSet`/`acMode`/`inputLimit`)
-additionally require `allow_state_reconciliation_writes=true` and are API-only
-(MQTT control devices are output-only, `supports_state_reconciliation=False`).
+additionally require `allow_state_reconciliation_writes=true` and control
+switched on (system and device: off is off, see `device_state_writes_allowed`),
+and are API-only (MQTT control devices are output-only,
+`supports_state_reconciliation=False`).
 
 The EMS must not run in parallel with another controller writing Zendure
 `outputLimit`.

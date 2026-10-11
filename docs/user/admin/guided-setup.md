@@ -156,8 +156,12 @@ download* and a *Progress* box.
 
 **What it changes:** **this is the first write.** The Admin Console writes
 `config/config.json` (backing up any existing config first) and prepares the
-Compose file plus the EMS image and resources. `data/` and your runtime databases
-are not touched.
+Compose file plus the EMS image and resources. The new config comes from the
+release template and your choices; nothing of an existing config is kept but
+the location of the shared password file. The dashboard's runtime settings are
+rebuilt from the new config when the EMS starts on it, and the old ones stay in
+`data/runtime-state.json.before-setup-<UTC time>`; your runtime databases are
+not touched.
 
 **Expected result:** the generated config is saved and the deployment is
 prepared; step 05 unlocks.

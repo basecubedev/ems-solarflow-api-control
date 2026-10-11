@@ -458,8 +458,18 @@ def _decrypt_streaming(handle, password, temp_dir):
 
 
 def _decrypt_legacy_fernet(handle, password, temp_dir):
+    """Decrypt a version-1 backup within the bounds a version-2 header must meet.
+
+    The legacy header is read before any authentication, so an unchecked
+    iteration count let a crafted file cost hours of PBKDF2 per restore try.
+    """
+
     iterations = struct.unpack(">I", _read_exact(handle, 4))[0]
+    if not MIN_KDF_ITERATIONS <= iterations <= MAX_KDF_ITERATIONS:
+        raise BackupFormatError(f"PBKDF2 iterations out of range: {iterations}")
     salt_len = _read_exact(handle, 1)[0]
+    if salt_len != SALT_BYTES:
+        raise BackupFormatError("encrypted backup header has invalid salt length")
     salt = _read_exact(handle, salt_len)
     token = handle.read()
 

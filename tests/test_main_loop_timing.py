@@ -28,6 +28,16 @@ def is_call(node, object_name, method_name):
     )
 
 
+def runs_a_cycle(statement):
+    """Whether a loop statement runs the control cycle, guarded or bounded."""
+
+    return any(
+        is_call(node, "ems", name)
+        for node in ast.walk(statement)
+        for name in ("run_once", "run_guarded")
+    )
+
+
 class MainLoopTimingTest(unittest.TestCase):
     def test_live_main_loop_does_not_sleep_after_run_once(self):
         tree = ast.parse(ENTRYPOINT.read_text())
@@ -39,20 +49,16 @@ class MainLoopTimingTest(unittest.TestCase):
         live_loop = next(
             node
             for node in ast.walk(main_function)
-            if (
-                isinstance(node, ast.While)
-                and any(is_call(statement, "ems", "run_once")
-                        for statement in node.body)
-            )
+            if isinstance(node, ast.While) and any(runs_a_cycle(s) for s in node.body)
         )
-        run_once_index = next(
+        cycle_index = next(
             index
             for index, statement in enumerate(live_loop.body)
-            if is_call(statement, "ems", "run_once")
+            if runs_a_cycle(statement)
         )
         sleep_calls_after_run_once = [
             node
-            for statement in live_loop.body[run_once_index + 1:]
+            for statement in live_loop.body[cycle_index + 1:]
             for node in ast.walk(statement)
             if (
                 isinstance(node, ast.Call)

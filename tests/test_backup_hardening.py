@@ -471,3 +471,307 @@ def test_a_directory_that_cannot_be_created_is_reported_as_a_backup_failure(
 
     with pytest.raises(backup.BackupError):
         backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+
+# ---------------------------------------------------------------------------
+# A replaced file keeps the mode and owner it had
+# ---------------------------------------------------------------------------
+
+def test_a_restored_file_keeps_the_mode_of_the_file_it_replaces(tmp_path):
+    base, config, config_path = write_project(tmp_path)
+    path = create(base, config, config_path)
+    with open(config_path, "w") as handle:
+        handle.write('{"changed": true}')
+    os.chmod(config_path, 0o640)
+
+    backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+    assert os.stat(config_path).st_mode & 0o777 == 0o640
+
+
+def test_a_file_the_restore_creates_is_private(tmp_path):
+    base, config, config_path = write_project(tmp_path)
+    path = create(base, config, config_path)
+    os.remove(config_path)
+
+    backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+    assert os.stat(config_path).st_mode & 0o777 == 0o600
+
+
+def test_a_restore_as_root_gives_a_replaced_file_back_to_its_owner(tmp_path, monkeypatch):
+    base, config, config_path = write_project(tmp_path)
+    path = create(base, config, config_path)
+    with open(config_path, "w") as handle:
+        handle.write('{"changed": true}')
+    owner = os.stat(config_path)
+    calls = []
+    monkeypatch.setattr(backup.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(backup.os, "fchown", lambda fd, uid, gid: calls.append((uid, gid)))
+
+    backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+    assert calls == [(owner.st_uid, owner.st_gid)]
+
+
+# ---------------------------------------------------------------------------
+# The archived bytes are the bytes the manifest describes
+# ---------------------------------------------------------------------------
+
+def test_a_file_that_changes_between_manifest_and_archive_fails_the_backup(tmp_path, monkeypatch):
+    base, config, config_path = write_project(tmp_path)
+    real_build = backup.build_manifest
+
+    def build_then_edit(*args, **kwargs):
+        manifest = real_build(*args, **kwargs)
+        with open(config_path, "w") as handle:
+            handle.write('{"edited": "while the backup ran"}')
+        return manifest
+
+    monkeypatch.setattr(backup, "build_manifest", build_then_edit)
+
+    with pytest.raises(backup.BackupError) as excinfo:
+        create(base, config, config_path)
+
+    assert "changed while it was being backed up" in str(excinfo.value)
+    backup_dir = os.path.join(base, "backup")
+    assert not os.path.isdir(backup_dir) or os.listdir(backup_dir) == []
+
+
+def test_an_unchanged_backup_verifies_against_its_manifest(tmp_path):
+    base, config, config_path = write_project(tmp_path)
+
+    path = create(base, config, config_path)
+
+    assert backup.verify_backup(path)["verified"] is True
+
+
+# ---------------------------------------------------------------------------
+# A file kept outside the project is never put back in the wrong place
+# ---------------------------------------------------------------------------
+
+def test_a_file_outside_the_project_is_archived_with_its_origin(tmp_path):
+    base, config, config_path = write_project(tmp_path)
+    outside = tmp_path / "elsewhere" / "dashboard-auth.json"
+    outside.parent.mkdir()
+    outside.write_text('{"hash": "x"}')
+
+    path = backup.create_config_backup(
+        config,
+        base_dir=base,
+        config_path=config_path,
+        dashboard_auth_path=str(outside),
+        backup_dir=os.path.join(base, "backup"),
+    )
+    entry = next(
+        f for f in backup.inspect_backup(path)["manifest"]["files"]
+        if f["path"].endswith("dashboard-auth.json")
+    )
+
+    assert entry["path"] == backup.archive_rel(str(outside), base)
+    assert entry["path"].startswith(backup.OUTSIDE_PROJECT_PREFIX)
+    assert entry["path"].endswith("/dashboard-auth.json")
+    assert entry["source_path"] == str(outside)
+
+
+def test_a_file_from_outside_the_project_is_named_but_not_restored(tmp_path):
+    base, config, config_path = write_project(tmp_path)
+    outside = tmp_path / "elsewhere" / "dashboard-auth.json"
+    outside.parent.mkdir()
+    outside.write_text('{"hash": "x"}')
+    path = backup.create_config_backup(
+        config,
+        base_dir=base,
+        config_path=config_path,
+        dashboard_auth_path=str(outside),
+        backup_dir=os.path.join(base, "backup"),
+    )
+    outside.write_text('{"hash": "changed"}')
+
+    dry = backup.restore_backup(path, base_dir=base, dry_run=True)
+    result = backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+    planned = {a["path"]: a for a in dry["actions"]}
+    done = {a["path"]: a for a in result["actions"]}
+    key = backup.archive_rel(str(outside), base)
+    assert planned[key]["action"] == "would_skip_outside_project"
+    assert done[key]["action"] == "skipped_outside_project"
+    assert done[key]["source_path"] == str(outside)
+    assert outside.read_text() == '{"hash": "changed"}'
+    assert not os.path.exists(os.path.join(base, "_outside_project"))
+    assert not os.path.exists(os.path.join(base, "dashboard-auth.json"))
+
+
+def test_the_admin_preview_skips_a_file_from_outside_the_project_under_every_policy():
+    from admin.backup_restore import BackupRestoreService
+
+    entry = {"status": "outside_project", "checksum_ok": True}
+
+    for policy in ("abort", "keep", "replace"):
+        assert BackupRestoreService._preview_action(entry, policy) == (
+            "would_skip_outside_project",
+            "skip",
+        )
+
+
+def test_emsctl_names_where_a_skipped_outside_file_lives(capsys):
+    import emsctl
+
+    emsctl.print_restore_actions([
+        {"path": "_outside_project/a.json", "action": "skipped_outside_project",
+         "source_path": "/etc/ems/a.json"},
+    ])
+
+    out = capsys.readouterr().out
+    assert "skipped_outside_project: _outside_project/a.json" in out
+    assert "/etc/ems/a.json" in out
+
+
+# ---------------------------------------------------------------------------
+# A config handed out of the Admin Console is an encrypted config backup
+# ---------------------------------------------------------------------------
+
+def test_a_config_download_is_an_encrypted_config_backup_holding_only_the_config(tmp_path):
+    payload = b'{"devices": [], "zendure_mqtt": {"password": "broker-secret"}}\n'
+
+    name, data = backup.encrypted_config_download(payload, "download-pw")
+    archive = tmp_path / name
+    archive.write_bytes(data)
+
+    assert backup.parse_backup_archive_name(name) is not None
+    assert name.endswith(".tar.gz.enc")
+    assert b"broker-secret" not in data
+    manifest = backup.inspect_backup(str(archive), password="download-pw")["manifest"]
+    assert [f["path"] for f in manifest["files"]] == ["config/config.json"]
+    base = tmp_path / "install"
+    (base / "config").mkdir(parents=True)
+    backup.restore_backup(str(archive), base_dir=str(base), password="download-pw")
+    assert (base / "config" / "config.json").read_bytes() == payload
+
+
+def test_a_config_download_without_a_password_is_refused():
+    with pytest.raises(backup.BackupError):
+        backup.encrypted_config_download(b"{}", "")
+
+
+def test_a_filesystem_that_refuses_the_mode_does_not_stop_the_restore(tmp_path, monkeypatch):
+    base, config, config_path = write_project(tmp_path)
+    path = create(base, config, config_path)
+    with open(config_path, "w") as handle:
+        handle.write('{"changed": true}')
+    open_before = len(os.listdir("/proc/self/fd"))
+
+    def refuse(fd, mode):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(backup.os, "fchmod", refuse)
+    for attempt in range(3):
+        with open(config_path, "w") as handle:
+            handle.write(json.dumps({"attempt": attempt}))
+        backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+    assert json.loads(open(config_path).read()) == config
+    assert len(os.listdir("/proc/self/fd")) <= open_before
+
+
+def test_two_outside_files_with_one_name_are_archived_apart(tmp_path):
+    base, config, config_path = write_project(tmp_path)
+    cert = tmp_path / "cert" / "server.pem"
+    key = tmp_path / "key" / "server.pem"
+    for item, text in ((cert, "CERT"), (key, "KEY")):
+        item.parent.mkdir()
+        item.write_text(text)
+    config = {**config, "dashboard": {"ssl_cert_file": str(cert), "ssl_key_file": str(key)}}
+
+    path = create(base, config, config_path)
+    files = {
+        f["source_path"]: f["path"]
+        for f in backup.inspect_backup(path)["manifest"]["files"]
+        if f.get("source_path")
+    }
+
+    assert set(files) == {str(cert), str(key)}
+    assert len(set(files.values())) == 2
+    assert backup.verify_backup(path)["verified"] is True
+
+
+def test_a_database_outside_the_project_records_where_it_lives(tmp_path):
+    base = tmp_path / "proj"
+    (base / "data").mkdir(parents=True)
+    database = tmp_path / "var-lib-ems" / "dashboard.sqlite"
+    database.parent.mkdir()
+    import sqlite3
+
+    con = sqlite3.connect(database)
+    con.execute("CREATE TABLE t (x INTEGER)")
+    con.commit()
+    con.close()
+    config = {"dashboard": {"database_path": str(database)}, "influxdb": {"enabled": False}}
+
+    path = backup.create_database_backup(
+        config, base_dir=str(base), backup_dir=str(base / "backup")
+    )
+    entry = next(
+        f for f in backup.inspect_backup(path)["manifest"]["files"] if f.get("source_path")
+    )
+
+    assert entry["source_path"] == str(database)
+
+
+def _crafted_archive(path, name, manifest_entry_extra):
+    import hashlib as _hashlib
+    import io as _io
+    import tarfile as _tarfile
+
+    data = b"payload"
+    manifest = {
+        "backup_format": backup.BACKUP_FORMAT_VERSION,
+        "backup_type": "config",
+        "backup_purpose": "manual",
+        "created_at": "2026-01-01T00:00:00Z",
+        "app": backup.APP_NAME,
+        "files": [{
+            "path": name, "kind": "config", "sensitive": True,
+            "size_bytes": len(data), "sha256": _hashlib.sha256(data).hexdigest(),
+            **manifest_entry_extra,
+        }],
+    }
+    with _tarfile.open(path, "w:gz") as tar:
+        raw = json.dumps(manifest).encode()
+        info = _tarfile.TarInfo(backup.MANIFEST_NAME)
+        info.size = len(raw)
+        tar.addfile(info, _io.BytesIO(raw))
+        info = _tarfile.TarInfo(name)
+        info.size = len(data)
+        tar.addfile(info, _io.BytesIO(data))
+
+
+@pytest.mark.parametrize(
+    "name_kind,extra",
+    [
+        ("outside-without-origin", {}),
+        ("inside-with-origin", {"source_path": "/etc/shadow"}),
+        ("outside-with-other-origin", {"source_path": "/etc/shadow"}),
+    ],
+)
+def test_an_entry_whose_name_and_origin_disagree_refuses_the_restore(tmp_path, name_kind, extra):
+    base = tmp_path / "proj"
+    base.mkdir()
+    real = str(tmp_path / "letsencrypt" / "fullchain.pem")
+    name = {
+        "outside-without-origin": backup.outside_project_name(real),
+        "inside-with-origin": "config.json",
+        "outside-with-other-origin": backup.outside_project_name(real),
+    }[name_kind]
+    archive = tmp_path / "ems-config-manual-2026-01-01-000000.tar.gz"
+    _crafted_archive(archive, name, extra)
+
+    with pytest.raises(backup.BackupError, match="does not match the origin"):
+        backup.restore_backup(str(archive), base_dir=str(base), on_conflict="replace")
+    assert list(base.iterdir()) == []
+
+
+def test_a_non_utf8_outside_path_still_gets_an_archive_name(tmp_path):
+    name = backup.outside_project_name(str(tmp_path) + "/caf\udce9.pem")
+
+    assert name.startswith(backup.OUTSIDE_PROJECT_PREFIX)

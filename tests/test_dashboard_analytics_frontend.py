@@ -1224,3 +1224,46 @@ console.log(JSON.stringify({{
                 missing.append(f"{tab['id']}/{kpi} needs series {match.group(1)}")
 
     assert missing == []
+
+
+def test_a_history_range_past_the_retention_says_how_much_it_shows():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const nodes = {{
+  historyChart: {{ clientWidth: 600, innerHTML: "" }},
+  historyEmpty: {{ hidden: true, textContent: "" }},
+  historyRetention: {{ hidden: true, textContent: "" }},
+}};
+global.document = {{ hidden: false, getElementById: (id) => nodes[id] || null }};
+global.uPlot = function () {{
+  this.scales = {{ x: {{}} }};
+  this.over = {{ addEventListener: () => {{}} }};
+  this.setData = () => {{}};
+  this.setScale = () => {{}};
+  this.destroy = () => {{}};
+}};
+app.state.flowView = "aggregated";
+app.state.history.data = {{
+  time: [0, 60], series: {{ pv: [1, 2], output: [1, 2], battery: [1, 2] }},
+  meta: {{ retention_hours: 48 }},
+}};
+app.renderHistoryChart();
+const truncated = {{ ...nodes.historyRetention }};
+app.state.history.data = {{
+  time: [0, 60], series: {{ pv: [1, 2], output: [1, 2], battery: [1, 2] }}, meta: {{}},
+}};
+app.renderHistoryChart();
+console.log(JSON.stringify({{ truncated, full: nodes.historyRetention }}));
+"""
+    out = run_node(script)
+
+    assert out["truncated"]["hidden"] is False
+    assert "48 h" in out["truncated"]["textContent"]
+    assert "dashboard.history_hours" in out["truncated"]["textContent"]
+    assert out["full"]["hidden"] is True
+
+
+def test_the_history_panel_has_a_place_for_the_retention_note():
+    html = (ROOT / "dashboard" / "static" / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="historyRetention"' in html

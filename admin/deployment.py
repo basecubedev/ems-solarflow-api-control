@@ -33,8 +33,14 @@ from admin.install_context import detect_install_context
 from admin.models import utc_now_iso
 from admin.releases import DOCKER_IMAGE_REPOSITORY, ReleaseError, default_admin_data_dir
 from admin.setup_workflow import GENERATED_CONFIG_OWNER, read_generated_metadata
+from ems.runtime_state import (
+    config_digest,
+    request_runtime_reset,
+    runtime_state_path_for_config,
+)
 
 INSTALL_SCRIPT = "install-docker.sh"
+EMS_SERVICE = "ems"
 INFLUX_COMPOSE_RESOURCE = "deploy/docker/compose.influxdb.yml"
 _JOB_LOG_MAX_LINES = 200
 
@@ -1048,7 +1054,7 @@ class DockerCompose:
             )
         return _parse_compose_ps(result.stdout)
 
-    def logs(self, workspace, service="ems"):
+    def logs(self, workspace, service=EMS_SERVICE):
         try:
             result = self._run(
                 ["docker", "compose", "logs", "--no-color", "--tail", "80", service],
@@ -1933,6 +1939,9 @@ class DeploymentService:
         rejection = self._generated_config_rejection(config)
         if rejection is not None:
             return rejection
+        rejection = self._deployment_env_rejection()
+        if rejection is not None:
+            return rejection
         identity = self._resolve_runtime_identity()
         if identity is None:
             return _reject(
@@ -2367,6 +2376,13 @@ class DeploymentService:
 
         job.start_step("starting_containers", "Starting EMS containers")
         try:
+            if self._ems_runs_on_the_replaced_config():
+                self.compose.up(
+                    self.workspace_dir,
+                    profiles=context["profiles"],
+                    services=(EMS_SERVICE,),
+                    force_recreate=True,
+                )
             self.compose.up(self.workspace_dir, profiles=context["profiles"])
         except DockerError as exc:
             if exc.code == "compose_container_name_conflict":
@@ -2437,12 +2453,25 @@ class DeploymentService:
     def _selected_image_for_container(self, container_name):
         marker = self._prepared_marker() or {}
         images = marker.get("images")
-        service = "influxdb" if "influx" in container_name.lower() else "ems"
+        service = "influxdb" if "influx" in container_name.lower() else EMS_SERVICE
         if isinstance(images, list):
             for image in images:
                 if isinstance(image, dict) and image.get("service") == service:
                     return image.get("image")
         return None
+
+    def _ems_runs_on_the_replaced_config(self):
+        """Whether an EMS already runs here, on the config this setup replaced.
+
+        Compose leaves a running service alone when only a mounted file
+        changed, so that EMS has to be recreated to start on the new config and
+        honour the runtime reset; when its state cannot be read, it is recreated.
+        """
+
+        try:
+            return _ems_service_running(self.compose.ps(self.workspace_dir))
+        except DockerError:
+            return True
 
     def _find_container_conflict(self, preferred_name=None):
         inspect = getattr(self.docker, "inspect_container", None)
@@ -2567,6 +2596,7 @@ class DeploymentService:
         job.note_backups(self._backup_existing_runtime())
         if context["overwrite"]:
             self._reset_for_overwrite()
+        reset_deferred = not self._request_runtime_reset(config)
         # Place the generated config before the installer runs so install-docker.sh
         # keeps it instead of re-running config init.
         self._write_config(config)
@@ -2613,8 +2643,10 @@ class DeploymentService:
             job.finish_step(key)
 
         job.start_step("permissions", "Verifying workspace permissions…")
-        ems_image = next(image["image"] for image in images if image["service"] == "ems")
+        ems_image = next(image["image"] for image in images if image["service"] == EMS_SERVICE)
         self._repair_workspace(ems_image, puid, pgid)
+        if reset_deferred:
+            self._leave_runtime_reset(config)
         self._verify_workspace_permissions(ems_image, puid, pgid)
         job.finish_step("permissions")
 
@@ -2667,6 +2699,31 @@ class DeploymentService:
                 self.workspace_dir / ".env",
                 "".join(line + "\n" for line in zone_lines).encode(),
             )
+
+    def _request_runtime_reset(self, config):
+        """Leave the fresh setup's runtime reset request before its config.
+
+        Left first, a prepare that fails later leaves the new config with its
+        request, and one naming a config that was never written is void.
+        ``False`` when ``data/`` refuses it until the permission repair: a
+        prepare that fails before the repair then leaves the new config without
+        one, until a repeated prepare leaves it. No EMS starts on that config
+        meanwhile, since its entrypoint refuses a ``data/`` the EMS user cannot
+        write either.
+        """
+
+        try:
+            self._leave_runtime_reset(config)
+        except PermissionError:
+            return False
+        return True
+
+    def _leave_runtime_reset(self, config):
+        payload = Path(config["path"]).read_bytes()
+        live = self.workspace_dir / "config" / "config.json"
+        request_runtime_reset(
+            runtime_state_path_for_config(live, json.loads(payload)), config_digest(payload)
+        )
 
     def _write_config(self, config):
         # Copy the exact generated bytes to preserve key order and formatting.
@@ -2724,6 +2781,27 @@ class DeploymentService:
         )
         return marker
 
+    def _deployment_env_rejection(self):
+        """Refuse a deployment .env this prepare could neither read nor rewrite safely.
+
+        The worker rewrites .env from the values it reads, so a file it cannot
+        decode must stop the prepare before anything is written, with the file
+        left as it is.
+        """
+
+        path = self.workspace_dir / ".env"
+        try:
+            _env_text(path)
+        except UnicodeDecodeError:
+            return _reject(
+                "deployment_env_unreadable",
+                f"{path} is not valid UTF-8 text. Fix or remove the file, then "
+                "prepare the deployment again.",
+            )
+        except OSError:
+            return None
+        return None
+
     def _resolve_runtime_identity(self):
         env_values = _read_env_file(self.workspace_dir / ".env")
         candidates = (
@@ -2748,7 +2826,7 @@ class DeploymentService:
         if not isinstance(marker, dict):
             return None
         for image in marker.get("images") or []:
-            if isinstance(image, dict) and image.get("service") == "ems":
+            if isinstance(image, dict) and image.get("service") == EMS_SERVICE:
                 value = image.get("image")
                 return value if isinstance(value, str) and value else None
         return None
@@ -2985,7 +3063,7 @@ class DeploymentService:
     def _planned_images(self, release, influx):
         if not release:
             return []
-        images = [{"service": "ems", "image": release["ems_image"]}]
+        images = [{"service": EMS_SERVICE, "image": release["ems_image"]}]
         if influx.get("planned") and influx.get("image"):
             images.append({"service": "influxdb", "image": influx["image"]})
         return images
@@ -3007,7 +3085,7 @@ def _ems_service_running(services):
         isinstance(service, dict)
         and service.get("state") == "running"
         and (
-            service.get("service") == "ems"
+            service.get("service") == EMS_SERVICE
             or (
                 not service.get("service")
                 and "ems" in str(service.get("name") or "").lower()
@@ -3025,7 +3103,7 @@ def _ems_selected_service_running(services, selected_image):
         and service.get("state") == "running"
         and service.get("image") == selected_image
         and (
-            service.get("service") == "ems"
+            service.get("service") == EMS_SERVICE
             or (
                 not service.get("service")
                 and "ems" in str(service.get("name") or "").lower()

@@ -905,10 +905,27 @@
               existing config first; no deployment is started here.
             </p>
             <pre id="config-preview" class="config-preview">{}</pre>
+            <div class="config-download-password">
+              <label class="field">
+                <span class="field-label">Download password</span>
+                <input id="config-download-password" class="feature-input"
+                       type="password" autocomplete="new-password">
+              </label>
+              <label class="field">
+                <span class="field-label">Repeat download password</span>
+                <input id="config-download-password-confirm" class="feature-input"
+                       type="password" autocomplete="new-password">
+              </label>
+              <p class="future-note">
+                A config holds API keys and broker passwords, so the download is
+                an encrypted config backup. Put it back with Maintenance &rarr;
+                Backups &rarr; Import, or with <code>emsctl backup restore</code>.
+              </p>
+            </div>
             <div class="config-export-buttons">
               <button id="config-download" type="button"
                       class="secondary-button compact" disabled>
-                Download config.json
+                Download encrypted config
               </button>
               <button id="config-apply" type="button"
                       class="primary-button compact" disabled>
@@ -918,7 +935,8 @@
             <p class="future-note">
               Apply writes the config to the resolved EMS config path
               (<code id="config-apply-target">./config/config.json</code>).
-              An existing config is backed up first.
+              An existing config is backed up first. The EMS uses it, and
+              resets its dashboard settings to it, when it next starts.
             </p>
             <p id="config-export-status" class="config-export-status"
                role="status" aria-live="polite" hidden></p>
@@ -1070,7 +1088,9 @@
             <p class="future-note">
               This will replace config/config.json and docker-compose.yml in the
               current EMS installation. A backup of the existing files will be
-              created first. Runtime data under data/ will not be deleted.
+              created first. Dashboard settings, such as a device or the system
+              switched off, start again from the new config. Runtime data under
+              data/ will not be deleted.
             </p>
             <button id="deployment-existing-replace" type="button" class="secondary-button compact">
               Continue and replace these files
