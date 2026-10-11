@@ -98,6 +98,7 @@ A device can be shown but not written to. The reasons, and where to fix them:
 | Device disabled | Deliberately excluded from regulation | Re-enable in [Device management](../admin/device-management.md) |
 | Telemetry stale | EMS will not act on old data | Restore the transport |
 | No output control | Model or write route not proven | [Why a device is read-only](../admin/device-management.md#why-a-device-is-read-only) |
+| External device | Read over MQTT only, by design | [External devices over MQTT](../external-devices.md) |
 | Write gate off | The transport's gate is disabled | [MQTT write gates](../admin/mqtt.md#write-safety-gates) |
 | Dry run / simulation | EMS is deliberately not writing | Configuration choice |
 

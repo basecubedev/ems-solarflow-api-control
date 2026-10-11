@@ -49,6 +49,7 @@ reports. Definitions and the full matrix live in
 | Any Zendure device via API key | Zendure cloud MQTT | Telemetry for any device; control needs an exact supported model |
 | Zendure & Shelly grid meters — Shelly Pro, Zendure Smart Meter 3CT / Smart Meter D0 (Local API) | HTTP | Shelly Pro Validated; Zendure meters Reverse-engineered |
 | Other HTTP / MQTT grid meters — Shelly Plus/Gen2/Gen3, Shelly 3EM Gen1, everHome EcoTracker, Tasmota, generic MQTT, D0 over local MQTT | HTTP / MQTT | Family-supported / Reverse-engineered |
+| External inverters and batteries — whatever FHEM, ioBroker, Node-RED or a script publishes into `ems-solarflow/<id>/…` ([guide](docs/user/external-devices.md)) | Local MQTT, read only | Reverse-engineered |
 | Home Assistant entity as a load signal | HA API | Legacy; not recommended for new setups |
 
 **MQTT control is an implemented EMS transport**, not a future feature: a

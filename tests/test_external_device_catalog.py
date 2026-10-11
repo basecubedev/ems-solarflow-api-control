@@ -343,6 +343,15 @@ def test_it_never_reaches_a_control_path(entry):
 
 
 @pytest.mark.parametrize("entry", ENTRIES, ids=_ids)
+def test_the_supported_setups_page_lists_it(entry):
+    page = (ROOT / "docs" / "user" / "supported-setups.md").read_text(encoding="utf-8")
+    section = page.split("## External devices (read only)", 1)[1].split("\n## ", 1)[0]
+    for key in (*entry.keys, entry.bundle_key):
+        assert f"`{entry.prefix}/<id>/{key}`" in section
+    assert entry.label in section
+
+
+@pytest.mark.parametrize("entry", ENTRIES, ids=_ids)
 def test_the_configuration_reference_lists_it(entry):
     page = (ROOT / "docs" / "technical" / "configuration.md").read_text(encoding="utf-8")
     section = page.split("## External Devices over MQTT", 1)[1].split("\n## ", 1)[0]

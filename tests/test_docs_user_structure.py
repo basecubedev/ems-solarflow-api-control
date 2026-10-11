@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # One ceiling for the root README, asserted from three directions below. Three
 # separate literals had already drifted apart (110, 110, 130), which means the
 # loosest one was the only rule actually in force.
-README_MAX_LINES = 160
+README_MAX_LINES = 161
 
 
 def read(path):
@@ -66,7 +66,9 @@ def test_readme_is_router_sized():
     # install section started naming Docker and saying how to tell the install
     # worked: the one prerequisite that makes the script fail, and the one page
     # that proves it did not, are routing too -- a reader who does not have
-    # Docker is routed to a copy/paste command that cannot work.
+    # Docker is routed to a copy/paste command that cannot work. It became 161
+    # when external devices read over MQTT got their row in the hardware
+    # summary: which hardware fits at all is the reader's first routing question.
     lines = read(ROOT / "README.md").splitlines()
     assert len(lines) <= README_MAX_LINES, len(lines)
 
