@@ -1124,6 +1124,9 @@ the keys in the table. A key the table does not list —
 - **The sign of `batteryPower` is the dashboard's.** Positive charges, negative
   discharges. Many systems report a battery the other way round; such a value
   has to be negated before it is published.
+- **Without `batterySoc` the device has no battery** as far as EMS can tell:
+  its tile shows no charge level and the average SoC leaves it out, rather than
+  counting an empty battery.
 
 ```json
 {
