@@ -13,6 +13,7 @@ from ems.zendure_mqtt.config_entries import (
     DEFAULT_BROKER_REF,
     SOURCE_ZENDURE_CLOUD_MQTT,
     config_entry_enabled,
+    external_device_subscriptions,
     has_enabled_mqtt_control_device,
     is_control_zendure_mqtt_device_config,
     validate_zendure_mqtt_control_device_config,
@@ -196,6 +197,11 @@ def build_zendure_mqtt_control_runtime(
                 derived = zendure_cloud_device_subscriptions(devices, ref)
                 if derived:
                     broker_config = replace(broker_config, subscriptions=derived)
+            external = external_device_subscriptions(
+                devices, ref, broker_source=broker_config.source
+            )
+            if external:
+                broker_config = replace(broker_config, external_subscriptions=external)
             service = service_factory(broker_config)
             services_by_ref[ref] = service
         device = ZendureMqttDeviceClient(

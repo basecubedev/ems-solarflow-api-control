@@ -374,7 +374,13 @@ def test_mqtt_inverter_card_shows_its_connection_and_supports_remove():
     assert "renderConnectionPill(source)" in card
     assert "config-mqtt-remove" in card
     assert "renderTransportSwitchButton" not in card
-    assert "escapeHtml(serial)" in card
+    assert "mqttIdentityFact(entry)" in card
+    _assert_identity_fact_escapes(js)
+
+
+def _assert_identity_fact_escapes(js):
+    fact = js.split("function mqttIdentityFact", 1)[1].split("\nfunction ", 1)[0]
+    assert "escapeHtml(value)" in fact
 
 
 def test_http_inverter_body_names_its_connection_without_a_switch_control():
@@ -392,7 +398,8 @@ def test_mqtt_candidate_card_uses_uniform_add_label_and_escapes():
     assert "Add as inverter" not in card
     assert "renderConnectionCandidateAction(" in card
     assert "connectionLabelFor(source)" in card
-    assert "escapeHtml(serial)" in card
+    assert "mqttIdentityFact(proposal)" in card
+    _assert_identity_fact_escapes(js)
 
 
 def test_candidate_action_addresses_a_connection_by_its_issued_id():

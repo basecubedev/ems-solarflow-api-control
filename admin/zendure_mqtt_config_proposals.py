@@ -19,6 +19,10 @@ from typing import Any
 
 from admin.models import SOURCE_LOCAL_MQTT, SOURCE_ZENDURE_CLOUD_MQTT
 from admin.zendure_mqtt_config_draft import (
+    CATALOG_CONNECTION_ID_FIELD,
+    CATALOG_DEVICE_ID_FIELD,
+    catalog_connection_id,
+    catalog_device_id,
     generation_label,
     resolve_hardware_generation,
     telemetry_schema_for_topic_family,
@@ -41,6 +45,7 @@ from ems.device_identity import (
     resolve_physical_identity,
 )
 from ems.zendure_mqtt.config_entries import (
+    EXTERNAL_MQTT_TYPE,
     normalized_broker_identity,
     stable_local_broker_ref,
 )
@@ -49,6 +54,10 @@ from ems.zendure_mqtt.config_mapping import (
     WARN_ROUTE_PRODUCT_CONFLICT,
     ZendureMqttConfigProposal,
     map_snapshots_to_proposals,
+)
+from ems.zendure_mqtt.external_catalog import (
+    EXTERNAL_TOPIC_FAMILIES,
+    external_topic_family,
 )
 from ems.zendure_mqtt.snapshot import ZendureMqttSnapshot, infer_capabilities
 from ems.zendure_mqtt.topics import FAMILY_UNKNOWN
@@ -164,10 +173,14 @@ def _metric_keys(observation: Mapping[str, Any]) -> list[str]:
     return [key for key in metrics if isinstance(key, str) and key]
 
 
-# Only the fixed, non-secret local ZenSDK/HA prefix is safe to carry into a
-# snapshot. A cloud topic is prefixed with the account app key (a secret), so it
-# is deliberately dropped and can never reach a proposal or config.
-_SAFE_LOCAL_TOPIC_PREFIX = "Zendure/"
+# Only the fixed, non-secret local prefixes -- ZenSDK/HA and the external
+# catalog's -- are safe to carry into a snapshot. A cloud topic is prefixed with
+# the account app key (a secret), so it is deliberately dropped and can never
+# reach a proposal or config.
+_SAFE_LOCAL_TOPIC_PREFIXES = (
+    "Zendure/",
+    *(f"{entry.prefix}/" for entry in EXTERNAL_TOPIC_FAMILIES.values()),
+)
 
 
 def _safe_local_topics(observation: Mapping[str, Any]) -> set[str]:
@@ -180,7 +193,7 @@ def _safe_local_topics(observation: Mapping[str, Any]) -> set[str]:
     return {
         topic
         for topic in topics
-        if isinstance(topic, str) and topic.startswith(_SAFE_LOCAL_TOPIC_PREFIX)
+        if isinstance(topic, str) and topic.startswith(_SAFE_LOCAL_TOPIC_PREFIXES)
     }
 
 
@@ -229,6 +242,7 @@ def _proposal_to_dict(proposal: ZendureMqttConfigProposal) -> dict[str, Any]:
     from ems.mqtt_control.zendure_profiles import hardware_profile_by_name
 
     model_profile = hardware_profile_by_name(proposal.hardware_profile)
+    catalog = external_topic_family(proposal.topic_family)
     return {
         "id": proposal.proposal_id,
         "source": proposal.source,
@@ -273,6 +287,7 @@ def _proposal_to_dict(proposal: ZendureMqttConfigProposal) -> dict[str, Any]:
             else None
         ),
         "seen_topics": list(proposal.seen_topics),
+        "catalog_label": catalog.label if catalog is not None else None,
     }
 
 
@@ -512,6 +527,26 @@ def _identity_of_kind(evidence, kind):
     )
 
 
+def _attach_catalog_device_id(proposal: dict[str, Any], token_key: bytes) -> None:
+    fragment = proposal.get("config_fragment")
+    if not isinstance(fragment, Mapping) or fragment.get("type") != EXTERNAL_MQTT_TYPE:
+        return
+    mqtt = fragment.get("mqtt") if isinstance(fragment.get("mqtt"), Mapping) else {}
+    family, device_id = mqtt.get("topic_family"), mqtt.get("device_id")
+    issued = catalog_device_id(family, device_id, token_key)
+    if issued is not None:
+        proposal[CATALOG_DEVICE_ID_FIELD] = issued
+    connection = catalog_connection_id(
+        family,
+        device_id,
+        proposal.get("broker_host"),
+        proposal.get("broker_port"),
+        token_key,
+    )
+    if connection is not None:
+        proposal[CATALOG_CONNECTION_ID_FIELD] = connection
+
+
 def _anchored_selection_id(token: str, broker_ref: Any, generation: Any) -> str:
     stable_id = f"zendure-mqtt:{token}:{broker_ref or 'default'}"
     if isinstance(generation, int) and not isinstance(generation, bool):
@@ -554,6 +589,7 @@ def annotate_identity_tokens(
         proposal["identity_status"] = resolve_physical_identity(
             proposal.get("config_fragment"), token_key=token_key
         ).status
+        _attach_catalog_device_id(proposal, token_key)
         evidence = resolve_inverter_identity_evidence(
             proposal.get("config_fragment"), token_key=token_key
         )

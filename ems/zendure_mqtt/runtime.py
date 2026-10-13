@@ -27,15 +27,19 @@ from ems.zendure_mqtt.config_entries import (
     DEFAULT_BROKER_REF,
     RESERVED_MQTT_BROKER_REFS,
     config_entry_enabled,
+    external_device_subscriptions,
     is_control_zendure_mqtt_device_config,
+    is_external_mqtt_device_config,
     is_zendure_mqtt_device_config,
     legacy_default_broker_present,
     zendure_cloud_device_subscriptions,
-    validate_zendure_mqtt_device_config,
+    validate_mqtt_telemetry_device_config,
     zendure_mqtt_broker_ref,
     zendure_mqtt_device_identifier,
     zendure_mqtt_source,
+    zendure_mqtt_route_device_id,
 )
+from ems.zendure_mqtt.external_catalog import external_topic_family
 from ems.zendure_mqtt.service import (
     SNAPSHOT_STALE,
     SNAPSHOT_UNSEEN,
@@ -222,11 +226,15 @@ def classify_zendure_mqtt_devices(
     *,
     known_broker_refs: Any = None,
     brokers_defined: bool = False,
+    broker_sources: Any = None,
 ) -> tuple[list[ZendureMqttTelemetryDevice], list[InvalidZendureMqttDevice]]:
     """Split enabled ``devices[]`` telemetry-only entries into valid and invalid ones.
 
     A disabled entry is neither: ``enabled`` means for a telemetry device what
     it means on every other path, so it is not read, shown or counted.
+
+    ``broker_sources`` is checked for external entries only: it is what refuses
+    one on a Zendure cloud broker.
     """
 
     valid: list[ZendureMqttTelemetryDevice] = []
@@ -234,11 +242,12 @@ def classify_zendure_mqtt_devices(
     if not isinstance(devices, list):
         return valid, invalid
     for index, item in enumerate(devices):
-        if not is_zendure_mqtt_device_config(item):
+        external = is_external_mqtt_device_config(item)
+        if not external and not is_zendure_mqtt_device_config(item):
             continue
         # Control (write-capable) entries are handled by the control path, not
-        # the read-only telemetry runtime.
-        if is_control_zendure_mqtt_device_config(item):
+        # the read-only telemetry runtime. An external entry never has one.
+        if not external and is_control_zendure_mqtt_device_config(item):
             continue
         if not config_entry_enabled(item):
             continue
@@ -246,10 +255,11 @@ def classify_zendure_mqtt_devices(
         broker_ref = zendure_mqtt_broker_ref(item)
         issues = [
             issue
-            for issue in validate_zendure_mqtt_device_config(
+            for issue in validate_mqtt_telemetry_device_config(
                 item,
                 known_broker_refs=known_broker_refs,
                 brokers_defined=brokers_defined,
+                broker_sources=broker_sources if external else None,
             )
             if issue.get("severity") == "error"
         ]
@@ -260,9 +270,16 @@ def classify_zendure_mqtt_devices(
             continue
         mqtt = item.get("mqtt")
         topic_family = mqtt.get("topic_family") if isinstance(mqtt, dict) else None
+        identifier = (
+            external_topic_family(topic_family).snapshot_key(
+                zendure_mqtt_route_device_id(item)
+            )
+            if external
+            else zendure_mqtt_device_identifier(item)
+        )
         valid.append(
             ZendureMqttTelemetryDevice(
-                identifier=zendure_mqtt_device_identifier(item),
+                identifier=identifier,
                 name=name,
                 topic_family=topic_family if isinstance(topic_family, str) else None,
                 broker_ref=broker_ref,
@@ -742,6 +759,7 @@ def build_zendure_mqtt_runtime(
         config.get("devices"),
         known_broker_refs=known_refs,
         brokers_defined=brokers_defined,
+        broker_sources={ref: broker.source for ref, broker in brokers.items()},
     )
 
     devices_by_ref: dict[str, list] = {}
@@ -787,6 +805,13 @@ def build_zendure_mqtt_runtime(
                 broker_config = dataclasses.replace(
                     broker_config, subscriptions=derived
                 )
+        external = external_device_subscriptions(
+            config.get("devices"), ref, broker_source=broker_config.source
+        )
+        if external:
+            broker_config = dataclasses.replace(
+                broker_config, external_subscriptions=external
+            )
         broker_runtimes.append(
             _BrokerRuntime(
                 broker_config,

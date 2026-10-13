@@ -2010,7 +2010,7 @@ def test_emsctl_refuses_an_ac_role_an_mqtt_device_cannot_reconcile(tmp_path, arg
     result = run_emsctl(tmp_path, "device", "WR1", *argv)
 
     assert result.returncode != 0
-    assert "controlled over MQTT" in result.stdout + result.stderr
+    assert "connected over MQTT" in result.stdout + result.stderr
     assert "runtime_role" not in runtime_state(tmp_path)["devices"]["WR1"]
 
 

@@ -3,9 +3,11 @@
 // and prints what the card resolved to, so the hardware-role/transport contract
 // is tested against the shipped renderers instead of a hand-rebuilt copy.
 //
-// Input  (stdin JSON): {"card": "mqtt_proposal"|"hardware", "payload": {...},
-//                       "draft": {...}, "pristine": {...}}
-// Output (stdout JSON): {className, dataset, transportPill, text, action}
+// Input  (stdin JSON): {"card": "mqtt_proposal"|"hardware"|"configured_devices",
+//                       "payload": {...}, "draft": {...}, "pristine": {...}}
+// Output (stdout JSON): {className, dataset, transportPill, text, action}, or
+//                       for "configured_devices" one {classes, dataset, text,
+//                       controls, buttons} per card the draft's devices render.
 //
 // A proposal payload without an explicit "state" resolves it through the real
 // mconfigMqttProposalReviewState against the supplied draft/pristine.
@@ -115,6 +117,7 @@ const HELPERS = [
   "hardwareCardKindForRole",
   "hardwareCardClass",
   "isMqttGridMeterProposal",
+  "isExternalMqttProposal",
   "mqttProposalHardwareRole",
   "mqttGridMeterProposalTopic",
   "mqttProposalBrokerRef",
@@ -141,6 +144,16 @@ const HELPERS = [
   "mconfigSetExpanded",
   "mconfigHardwareCard",
   "renderMaintenanceMqttProposalCard",
+  "mconfigLabelRow",
+  "mconfigCheckboxControl",
+  "mconfigDeviceConnectionSource",
+  "mconfigInverterSummary",
+  "mconfigIsExternalDevice",
+  "mconfigTextControl",
+  "mconfigExternalDeviceSummary",
+  "renderMaintenanceExternalDevice",
+  "renderMaintenanceInverter",
+  "renderMaintenanceInverters",
 ];
 
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
@@ -151,6 +164,18 @@ const STUBS = `
 function generationLabel(id) { return id || ""; }
 function mconfigConnectionRelationshipNote() { return null; }
 function mconfigMqttProposalState() { return "new"; }
+function editorStub(name) {
+  const node = document.createElement("input");
+  node.dataset.editor = name;
+  return node;
+}
+function renderLocalApiConnectionFields() { return editorStub("local_api_connection"); }
+function renderCommonInverterFields() { return editorStub("common_inverter_fields"); }
+function renderMaintenanceZendureMqttDevice() { return editorStub("zendure_mqtt"); }
+function mconfigAttachOverrideBadge(row) { return row; }
+function mconfigDeviceOverrideEntry() { return null; }
+function mconfigRerenderDiscoveryReview() {}
+const mconfigEls = { inverters: document.createElement("div") };
 const mconfigState = {
   openHardware: new Set(),
   draft: ${JSON.stringify(input.draft || {})},
@@ -173,7 +198,9 @@ const factory = new Function(
     HELPERS.map(extractFunction).join("\n") +
     "\nscope.renderMaintenanceMqttProposalCard = renderMaintenanceMqttProposalCard;" +
     "\nscope.mconfigMqttProposalReviewState = mconfigMqttProposalReviewState;" +
-    "\nscope.mconfigHardwareCard = mconfigHardwareCard;"
+    "\nscope.mconfigHardwareCard = mconfigHardwareCard;" +
+    "\nscope.renderMaintenanceInverters = renderMaintenanceInverters;" +
+    "\nscope.mconfigEls = mconfigEls;"
 );
 factory(document, scope);
 
@@ -202,16 +229,43 @@ function describe(element) {
   };
 }
 
-let element;
-if (input.card === "mqtt_proposal") {
-  const item = Object.assign({}, input.payload);
-  if (item.state === undefined) {
-    item.state = scope.mconfigMqttProposalReviewState(item.mqttProposal);
-  }
-  element = scope.renderMaintenanceMqttProposalCard(item);
-} else {
-  const options = Object.assign({}, input.payload);
-  options.body = new Node("div");
-  element = scope.mconfigHardwareCard(options).element;
+function describeConfiguredCard(element) {
+  const nodes = element.descendants();
+  return {
+    classes: (element.className || "").split(/\s+/).filter(Boolean),
+    dataset: element.dataset,
+    text: element.textContent,
+    controls: nodes
+      .filter((node) => ["INPUT", "SELECT", "TEXTAREA"].includes(node.tagName))
+      .map((node) => ({
+        tag: node.tagName,
+        type: node.type || "",
+        editor: node.dataset.editor || "",
+      })),
+    buttons: nodes
+      .filter((node) => node.tagName === "BUTTON")
+      .map((node) => node.className),
+  };
 }
-process.stdout.write(JSON.stringify(describe(element)));
+
+function rendered() {
+  if (input.card === "configured_devices") {
+    scope.renderMaintenanceInverters();
+    return scope.mconfigEls.inverters.children.map(describeConfiguredCard);
+  }
+  let element;
+  if (input.card === "mqtt_proposal") {
+    const item = Object.assign({}, input.payload);
+    if (item.state === undefined) {
+      item.state = scope.mconfigMqttProposalReviewState(item.mqttProposal);
+    }
+    element = scope.renderMaintenanceMqttProposalCard(item);
+  } else {
+    const options = Object.assign({}, input.payload);
+    options.body = new Node("div");
+    element = scope.mconfigHardwareCard(options).element;
+  }
+  return describe(element);
+}
+
+process.stdout.write(JSON.stringify(rendered()));

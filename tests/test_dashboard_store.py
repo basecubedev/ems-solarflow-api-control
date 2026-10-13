@@ -193,6 +193,37 @@ def test_store_records_latest_and_history(tmp_path):
     assert store.latest()["control_explain"] is None
 
 
+
+def test_a_device_that_reports_no_charge_level_records_none(tmp_path):
+    """Recording it as zero would put an empty battery into the history."""
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, retention_hours=48)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    data = snapshot(timestamp)
+    data["devices"]["Garage"] = {
+        **data["devices"]["WR1"],
+        "read_only": True,
+        "soc": 0,
+        "soc_reported": False,
+    }
+
+    store.record(data)
+
+    with sqlite3.connect(path) as con:
+        fields = {
+            device: {field for (field,) in con.execute(
+                "SELECT field FROM telemetry WHERE device = ?", (device,)
+            )}
+            for device in ("WR1", "Garage")
+        }
+        latest = dict(con.execute("SELECT device, soc FROM device_state").fetchall())
+    assert "soc" in fields["WR1"]
+    assert "soc" not in fields["Garage"]
+    assert "output_w" in fields["Garage"]
+    assert latest == {"WR1": 61, "Garage": None}
+    assert store.history("1h")[0]["devices"]["Garage"]["soc_reported"] is False
+
 def test_dashboard_database_recreates_configured_data_path(tmp_path):
     db_path = tmp_path / "data" / "ems_dashboard.sqlite"
 

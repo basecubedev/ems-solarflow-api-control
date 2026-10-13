@@ -30,14 +30,17 @@ from admin.device_common_fields import (
     common_device_draft_values,
 )
 from ems.config_catalog import ZENDURE_MQTT_GENERATIONS
-from ems.device_identity import is_masked_identity_value
+from ems.device_identity import is_masked_identity_value, opaque_catalog_device_id
 from ems.mqtt_control.power_capability import (
     BLOCK_BROKER_SOURCE_UNKNOWN,
     BLOCK_BROKER_SOURCE_WRITE_UNVERIFIED,
 )
 from ems.zendure_mqtt.capability import mqtt_output_control_capability
 from ems.zendure_mqtt.config_entries import (
+    EXTERNAL_MQTT_TYPE,
     is_control_zendure_mqtt_device_config,
+    is_external_mqtt_device_config,
+    validate_external_mqtt_device_config,
     validate_zendure_mqtt_control_device_config,
     validate_zendure_mqtt_device_config,
     zendure_mqtt_broker_ref,
@@ -422,14 +425,100 @@ def sanitize_zendure_mqtt_fragment(value, broker_sources=None):
     return cleaned
 
 
+_EXTERNAL_MQTT_KEYS = ("broker_ref", "source", "topic_family", "device_id")
+
+CATALOG_DEVICE_ID_FIELD = "catalog_device_id"
+CATALOG_CONNECTION_ID_FIELD = "catalog_connection_id"
+
+EXTERNAL_DEVICE_EDIT_HINT = (
+    "On this page an external device can be renamed, switched off, moved with "
+    "Use connection or removed; anything else about it is changed in config.json."
+)
+
+
+def concerns_external_device(config, issue):
+    """True when a device-indexed issue is about an external device's entry."""
+
+    devices = config.get("devices") if isinstance(config, Mapping) else None
+    index = issue.get("device_index") if isinstance(issue, Mapping) else None
+    if not isinstance(devices, list) or not isinstance(index, int):
+        return False
+    return 0 <= index < len(devices) and is_external_mqtt_device_config(devices[index])
+
+
+def catalog_device_id(family, device_id, token_key):
+    """The server-issued id of one catalog device, on whichever broker it is.
+
+    ``None`` when any part is unknown, so two incomplete records never compare
+    equal.
+    """
+
+    if token_key is None or not family or not device_id:
+        return None
+    return opaque_catalog_device_id([str(family), str(device_id)], token_key)
+
+
+def catalog_connection_id(family, device_id, host, port, token_key):
+    """The server-issued id of one catalog device on one broker endpoint.
+
+    Whatever the broker profile is called; ``None`` when any part is unknown.
+    """
+
+    host = str(host or "").strip().lower()
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        return None
+    if token_key is None or not family or not device_id or not host:
+        return None
+    return opaque_catalog_device_id(
+        [str(family), str(device_id), host, port], token_key
+    )
+
+
+def external_mqtt_fragment(value):
+    """A catalog device's entry rebuilt from a fragment, keeping only its fields.
+
+    The catalog fixes everything else about the device, so nothing a fragment
+    carries beside these -- a capability, a topic list, a common device value --
+    can become part of the entry.
+    """
+
+    mqtt = value.get("mqtt") if isinstance(value, Mapping) else None
+    mqtt = mqtt if isinstance(mqtt, Mapping) else {}
+    return {
+        "type": EXTERNAL_MQTT_TYPE,
+        "enabled": True,
+        "name": str(value.get("name") or "").strip() if isinstance(value, Mapping) else "",
+        "mqtt": {
+            key: mqtt[key].strip()
+            for key in _EXTERNAL_MQTT_KEYS
+            if isinstance(mqtt.get(key), str) and mqtt[key].strip()
+        },
+    }
+
+
+def sanitize_mqtt_proposal_fragment(value, broker_sources=None):
+    """The entry a proposal fragment may become, whichever kind of device it is."""
+
+    if is_external_mqtt_device_config(value):
+        return external_mqtt_fragment(value)
+    return sanitize_zendure_mqtt_fragment(value, broker_sources)
+
+
 def validate_zendure_mqtt_fragment(entry, broker_sources=None):
     """Validation issues as ``{code, message}`` (errors only).
 
     Control entries (``write_output_limit=true``) are validated with the control
-    validator; telemetry-only entries with the telemetry validator.
+    validator; telemetry-only entries with the telemetry validator, and a
+    catalog device with its own.
     """
 
-    if is_control_zendure_mqtt_device_config(entry):
+    if is_external_mqtt_device_config(entry):
+        issues = validate_external_mqtt_device_config(
+            entry, broker_sources=broker_sources
+        )
+    elif is_control_zendure_mqtt_device_config(entry):
         issues = validate_zendure_mqtt_control_device_config(
             entry, broker_sources=broker_sources
         )
@@ -1142,6 +1231,14 @@ __all__ = [
     "zendure_mqtt_connection_switched",
     "enforce_zendure_mqtt_output_control_capability",
     "sanitize_zendure_mqtt_fragment",
+    "sanitize_mqtt_proposal_fragment",
+    "external_mqtt_fragment",
+    "CATALOG_CONNECTION_ID_FIELD",
+    "CATALOG_DEVICE_ID_FIELD",
+    "EXTERNAL_DEVICE_EDIT_HINT",
+    "catalog_connection_id",
+    "catalog_device_id",
+    "concerns_external_device",
     "validate_zendure_mqtt_fragment",
     "build_manual_zendure_mqtt_fragment",
     "zendure_mqtt_device_draft",

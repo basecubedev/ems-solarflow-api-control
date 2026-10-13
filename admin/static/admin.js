@@ -1651,9 +1651,10 @@ function renderUnifiedDeviceCard(device) {
   const id = escapeHtml(sourceId);
   const safe = sourceId.replace(/[^a-z0-9]/gi, "-");
   const endpoint = String(device.ip || "");
+  const readOnly = device.read_only === true;
   const meta = [
     endpoint,
-    device.serial_number ? "SN " + device.serial_number : "SN missing",
+    mqttIdentityText(device, readOnly),
     device.api_family,
     device.device_type,
   ]
@@ -1668,7 +1669,9 @@ function renderUnifiedDeviceCard(device) {
   const model =
     device.display_name || device.model_hint || device.device_type || "Device";
   const open = openHardwareCards.has(sourceId);
-  const status = device.confidence === "low" ? "Low confidence" : "Detected";
+  const status = readOnly
+    ? "Read only"
+    : device.confidence === "low" ? "Low confidence" : "Detected";
 
   const badges = (Array.isArray(device.sources) ? device.sources : [])
     .map((source) => {
@@ -1687,13 +1690,7 @@ function renderUnifiedDeviceCard(device) {
   const body =
     '<div class="device-facts">' +
     fact("IP", escapeHtml(endpoint)) +
-    fact(
-      "Serial",
-      device.serial_number
-        ? '<span class="v">' + escapeHtml(device.serial_number) + "</span>"
-        : '<span class="v missing">missing</span>',
-      true
-    ) +
+    mqttIdentityFact(device, readOnly) +
     fact("API family", escapeHtml(String(device.api_family || ""))) +
     fact("Type", escapeHtml(String(device.device_type || ""))) +
     '<div class="device-sources">' + badges + selectedLine + "</div>" +
@@ -2227,6 +2224,7 @@ function renderMqttProposalPill(label) {
 // never appears in normal UI copy.
 function mqttGenerationLabel(proposal) {
   const label =
+    proposal.catalog_label ||
     proposal.hardware_generation_label ||
     generationLabel(proposal.hardware_generation) ||
     "Zendure MQTT";
@@ -2244,11 +2242,37 @@ function isMqttGridMeterProposal(proposal) {
   );
 }
 
+// A device the backend proposed from the external catalog: read over MQTT and
+// never controlled. The backend's own entry type says so; nothing is inferred.
+function isExternalMqttProposal(proposal) {
+  const fragment = proposal && proposal.config_fragment;
+  return !!fragment && fragment.type === "external_mqtt";
+}
+
+function mqttIdentityText(entry, external = isExternalMqttProposal(entry)) {
+  if (external) {
+    return entry.device_id ? "ID " + entry.device_id : "ID missing";
+  }
+  return entry.serial_number ? "SN " + entry.serial_number : "SN missing";
+}
+
+function mqttIdentityFact(entry, external = isExternalMqttProposal(entry)) {
+  const value = external ? entry.device_id : entry.serial_number;
+  return fact(
+    external ? "Device ID" : "Serial",
+    value
+      ? '<span class="v">' + escapeHtml(value) + "</span>"
+      : '<span class="v missing">missing</span>',
+    true
+  );
+}
+
 // Hardware role of an MQTT proposal, from the backend target/role_hint only.
 // Display name, model, serial, topic text and connection source are never
 // evidence; anything not positively classified stays "unknown" and neutral.
 function mqttProposalHardwareRole(proposal) {
   if (!proposal) return "unknown";
+  if (isExternalMqttProposal(proposal)) return "inverter";
   const roleHint = String(proposal.role_hint || "").toLowerCase();
   if (
     isMqttGridMeterProposal(proposal) ||
@@ -2375,6 +2399,8 @@ function mqttControlReasonLabel(reason) {
     identity_conflict: "Identity conflict for this MQTT route — output control is blocked",
     hardware_profile_conflict:
       "Conflicting hardware-model evidence — select the exact model to enable control",
+    external_device_read_only:
+      "Read only: this device reports its values and takes no commands",
   };
   return labels[String(reason || "")] || "No verified MQTT write method for this device";
 }
@@ -5666,10 +5692,9 @@ function renderMqttCandidateCard(proposal) {
   const id = escapeHtml(String(proposal.id || ""));
   const safe = String(proposal.id || "").replace(/[^a-z0-9]/gi, "-");
   const source = mqttSourceOfConnection(proposal.connection_source);
-  const serial = proposal.serial_number || "";
   const controllable = Boolean(proposal.output_control_supported);
   const model = proposal.display_name || proposal.hardware_model || DEFAULT_INVERTER_DISPLAY;
-  const meta = [connectionLabelFor(source), serial ? "SN " + serial : "SN missing"]
+  const meta = [connectionLabelFor(source), mqttIdentityText(proposal)]
     .map((part) => escapeHtml(String(part)))
     .join(" · ");
   const open = openHardwareCards.has(String(proposal.id || ""));
@@ -5683,14 +5708,15 @@ function renderMqttCandidateCard(proposal) {
   const body =
     '<div class="device-facts">' +
     fact("Connection", escapeHtml(connectionLabelFor(source))) +
+    mqttIdentityFact(proposal) +
     fact(
-      "Serial",
-      serial
-        ? '<span class="v">' + escapeHtml(serial) + "</span>"
-        : '<span class="v missing">missing</span>',
-      true
+      "Output control",
+      controllable
+        ? "Supported"
+        : isExternalMqttProposal(proposal)
+          ? "Read only"
+          : "Telemetry only"
     ) +
-    fact("Output control", controllable ? "Supported" : "Telemetry only") +
     "</div>";
   return (
     '<article class="' + hardwareCardClass("inverter") + '"' +
@@ -6000,8 +6026,8 @@ function renderInverterList() {
 function renderMqttInverterCard(entry, index) {
   const proposalId = String(entry.id || "");
   const source = mqttSourceOfConnection(entry.connection_source);
-  const serial = entry.serial_number || "";
   const controllable = mqttSelectionControllable(entry);
+  const external = isExternalMqttProposal(entry);
   const meta = mqttInverterSummaryText(entry);
   const body =
     renderHardwareEnabledRow(
@@ -6019,20 +6045,19 @@ function renderMqttInverterCard(entry, index) {
     "</label>" +
     '<div class="device-facts">' +
     fact("Connection", escapeHtml(connectionLabelFor(source))) +
+    mqttIdentityFact(entry) +
     fact(
-      "Serial",
-      serial
-        ? '<span class="v">' + escapeHtml(serial) + "</span>"
-        : '<span class="v missing">missing</span>',
-      true
+      "Output control",
+      controllable ? "Enabled" : external ? "Read only" : "Telemetry only"
     ) +
-    fact("Output control", controllable ? "Enabled" : "Telemetry only") +
     "</div>" +
     '<div class="proposal-safety">' +
     renderMqttProposalPill(
       controllable
         ? "Output control enabled"
-        : "Telemetry only — output write disabled"
+        : external
+          ? "Read only — never controlled"
+          : "Telemetry only — output write disabled"
     ) +
     "</div>" +
     '<div class="inverter-row-actions">' +
@@ -6055,8 +6080,12 @@ function renderMqttInverterCard(entry, index) {
 
 function mqttInverterSummaryText(entry) {
   const source = mqttSourceOfConnection(entry.connection_source);
-  const serial = entry.serial_number ? "SN " + entry.serial_number : "Serial missing";
-  return [entry.config_name, serial, connectionLabelFor(source)]
+  const identity = isExternalMqttProposal(entry)
+    ? mqttIdentityText(entry)
+    : entry.serial_number
+      ? "SN " + entry.serial_number
+      : "Serial missing";
+  return [entry.config_name, identity, connectionLabelFor(source)]
     .filter(Boolean)
     .join(" · ");
 }
@@ -15152,6 +15181,10 @@ function mconfigIsMqttDevice(device) {
   return device && (device.kind === "zendure_mqtt" || device.type === "zendure_mqtt");
 }
 
+function mconfigIsExternalDevice(device) {
+  return !!device && device.kind === "external_mqtt";
+}
+
 // The MQTT source a configured device uses. Config may omit mqtt.source, so the
 // backend resolves it from the referenced broker profile (mqtt.effective_source);
 // the current trusted proposals are the last resort. "" means unknown and must
@@ -15462,6 +15495,128 @@ function renderMaintenanceInverter(device, index) {
   return card.element;
 }
 
+function mconfigExternalDeviceSummary(device) {
+  const installed = !!device.entry;
+  const mqtt = device.mqtt || (device.entry && device.entry.mqtt) || {};
+  const deviceId = String(mqtt.device_id || "");
+  const state = !installed
+    ? "added from discovery"
+    : device.proposal_id
+      ? device.catalog_retired
+        ? "read as discovery found it on apply"
+        : "moves to this broker on apply"
+      : device.catalog_retired
+        ? "not read"
+        : "read over MQTT";
+  return [
+    device.name || "(unnamed)",
+    deviceId ? "ID " + deviceId : "ID missing",
+    "broker " + String(mqtt.broker_ref || "default"),
+    state,
+  ].join(" · ");
+}
+
+function renderMaintenanceExternalDevice(device, index) {
+  const installed = !!device.entry;
+  const mqtt = device.mqtt || (device.entry && device.entry.mqtt) || {};
+  const label = String(device.catalog_label || device.display_name || "External device");
+  const readOnlyValue = (text) => {
+    const value = document.createElement("span");
+    value.className = "feature-readonly-value";
+    value.textContent = text;
+    return value;
+  };
+  let card;
+
+  const body = document.createElement("div");
+  body.className = "mconfig-fields feature-fields";
+  const note = document.createElement("p");
+  note.className = "feature-field-desc";
+  note.textContent = device.catalog_retired && device.proposal_id
+    ? "Use connection reads this device from the project's MQTT namespace " +
+      "once this page is applied."
+    : device.catalog_retired
+    ? "Added by an earlier development build: EMS no longer reads the topics " +
+      "this entry names, so the device is not read now. Let its bridge publish " +
+      "into the project's MQTT namespace under the same device ID, run discovery " +
+      "and choose Use connection on the device it finds; or remove this entry."
+    : "External device from the hardware catalog: EMS reads its values from " +
+      "MQTT and never writes to it, and its topics follow from the catalog. " +
+      (installed
+        ? "Use connection in discovery moves it to another broker that carries it."
+        : "Applying this page adds it as discovery found it.");
+  body.appendChild(note);
+  body.appendChild(
+    mconfigLabelRow(
+      "Device name",
+      mconfigTextControl(device.name || "", (v) => {
+        device.name = v;
+        card.meta.textContent = mconfigExternalDeviceSummary(device);
+      }),
+      "Short unique EMS name used in config, logs, dashboard and Flowchart."
+    )
+  );
+  body.appendChild(
+    mconfigLabelRow(
+      "Enabled",
+      mconfigCheckboxControl(device.enabled !== false, (checked) => {
+        device.enabled = checked;
+        card.element.dataset.disabled = checked ? "false" : "true";
+        card.status.textContent = checked ? "Enabled" : "Disabled";
+      }),
+      "Off: the entry stays in config.json, but EMS neither reads this device " +
+        "nor shows or counts its output. The inverter itself is never switched."
+    )
+  );
+  body.appendChild(
+    mconfigLabelRow(
+      "MQTT broker profile",
+      readOnlyValue(String(mqtt.broker_ref || "default")),
+      "The broker profile its topics are read from."
+    )
+  );
+  body.appendChild(
+    mconfigLabelRow(
+      "Device ID",
+      readOnlyValue(String(mqtt.device_id || "") || "missing"),
+      "The part of its MQTT topics that names this device."
+    )
+  );
+
+  const id = "maintenance-external-device-" + index;
+  card = mconfigHardwareCard({
+    role: "inverter",
+    id,
+    title: "Inverter " + (index + 1),
+    model:
+      label +
+      (!device.catalog_retired
+        ? " · read over MQTT"
+        : device.proposal_id
+          ? " · read on apply"
+          : " · not read"),
+    meta: mconfigExternalDeviceSummary(device),
+    enabled: device.enabled !== false,
+    body,
+    // An installed entry leaves only by the reference the server issued for
+    // it, so a draft that merely lacks the row is never read as a removal.
+    onRemove: () => {
+      mconfigState.openHardware.delete(id);
+      if (installed && device.entry_ref) {
+        const removed =
+          mconfigState.draft.removed_external ||
+          (mconfigState.draft.removed_external = []);
+        removed.push(device.entry_ref);
+      }
+      mconfigState.draft.devices.splice(index, 1);
+      renderMaintenanceInverters();
+      mconfigRerenderDiscoveryReview();
+    },
+  });
+  card.element.dataset.disabled = device.enabled !== false ? "false" : "true";
+  return card.element;
+}
+
 function renderMaintenanceInverters() {
   const host = mconfigEls.inverters;
   if (!host) return;
@@ -15469,7 +15624,9 @@ function renderMaintenanceInverters() {
   const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
   devices.forEach((device, index) => {
     host.appendChild(
-      mconfigIsMqttDevice(device)
+      mconfigIsExternalDevice(device)
+        ? renderMaintenanceExternalDevice(device, index)
+        : mconfigIsMqttDevice(device)
         ? renderMaintenanceZendureMqttDevice(device, index)
         : renderMaintenanceInverter(device, index)
     );
@@ -15538,6 +15695,7 @@ function buildMaintenanceDiscoveryReview(discovered) {
   const results = [];
   const devices = (mconfigState.draft && mconfigState.draft.devices) || [];
   devices.forEach((configured, index) => {
+    if (mconfigIsExternalDevice(configured)) return;
     const isMqtt = mconfigIsMqttDevice(configured);
     const match = mconfigFindInverterMatch(configured, supported, used);
     if (!match) {
@@ -15726,7 +15884,63 @@ function mconfigDraftHasProposal(proposal) {
   );
 }
 
+function issuedCatalogId(entry, field) {
+  const value = String((entry && entry[field]) || "").trim();
+  return /^catalog:v1:[A-Za-z0-9_-]+$/.test(value) ? value : "";
+}
+
+function issuedCatalogDeviceId(entry) {
+  return issuedCatalogId(entry, "catalog_device_id");
+}
+
+// A catalog device offered by discovery is a configured one when the backend
+// issued both the same catalog device id, and the same connection when it
+// issued both the same catalog connection id; nothing else is compared. The
+// same device on another broker is an alternative connection, as it is for a
+// Zendure device.
+function mconfigExternalProposalState(proposal) {
+  const issued = issuedCatalogDeviceId(proposal);
+  const connection = issuedCatalogId(proposal, "catalog_connection_id");
+  const sameDevice = (device) =>
+    mconfigIsExternalDevice(device) && !!issued && issuedCatalogDeviceId(device) === issued;
+  const sameConnection = (device) =>
+    sameDevice(device) &&
+    !!connection &&
+    issuedCatalogId(device, "catalog_connection_id") === connection;
+  const draft = (mconfigState.draft && mconfigState.draft.devices) || [];
+  if (!draft.some(sameDevice)) return mconfigDraftHasProposal(proposal) ? "added" : "new";
+  if (!draft.some(sameConnection)) return "transport";
+  const pristine = (mconfigState.pristine && mconfigState.pristine.devices) || [];
+  return pristine.some(sameConnection) ? "found" : "added";
+}
+
+// Moves a configured catalog device to the connection discovery offers. The
+// server resolves the proposal and checks it names this very device; the row
+// only says which proposal, and keeps its name and on/off.
+function mconfigUseExternalConnection(proposal) {
+  const issued = issuedCatalogDeviceId(proposal);
+  const devices = (mconfigState.draft && mconfigState.draft.devices) || [];
+  const row = devices.find(
+    (device) => mconfigIsExternalDevice(device) && !!issued && issuedCatalogDeviceId(device) === issued
+  );
+  if (!row) return false;
+  const mqtt = (proposal.config_fragment && proposal.config_fragment.mqtt) || {};
+  row.proposal_id = proposal.id || "";
+  row.proposal_broker_ref = proposal.broker_ref || mqtt.broker_ref || "";
+  row.catalog_connection_id = issuedCatalogId(proposal, "catalog_connection_id");
+  row.mqtt = {
+    broker_ref: mqtt.broker_ref || "",
+    topic_family: mqtt.topic_family || "",
+    device_id: mqtt.device_id || "",
+  };
+  renderMaintenanceInverters();
+  mconfigMarkDraftChanged("discovery");
+  mconfigRerenderDiscoveryReview();
+  return true;
+}
+
 function mconfigMqttProposalState(proposal) {
+  if (isExternalMqttProposal(proposal)) return mconfigExternalProposalState(proposal);
   const view = mconfigProposalIdentityView(proposal);
   // Without an issued identity nothing may be merged, but the offer itself is
   // still recognizable: adding it twice would configure one connection twice.
@@ -15839,6 +16053,38 @@ function mconfigAddZendureMqttProposal(proposal) {
   devices.push(mconfigZendureMqttDraftFromProposal(proposal));
   // Configuration happens on the configured card: adding opens it there.
   mconfigState.openHardware.add("maintenance-mqtt-device-" + (devices.length - 1));
+  renderMaintenanceInverters();
+  mconfigMarkDraftChanged("discovery");
+  mconfigRerenderDiscoveryReview();
+  return true;
+}
+
+// Draft entry for a catalog device discovery offered. The server rebuilds the
+// entry from the trusted proposal this row names and the name given here;
+// everything else on the row is display only.
+function mconfigAddExternalProposal(proposal) {
+  if (mconfigMqttProposalState(proposal) !== "new") return false;
+  const fragment = proposal.config_fragment || {};
+  const mqtt = fragment.mqtt || {};
+  const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
+  devices.push({
+    kind: "external_mqtt",
+    original_name: null,
+    proposal_id: proposal.id || "",
+    proposal_broker_ref: proposal.broker_ref || mqtt.broker_ref || "",
+    catalog_device_id: issuedCatalogDeviceId(proposal),
+    catalog_connection_id: issuedCatalogId(proposal, "catalog_connection_id"),
+    catalog_label: proposal.catalog_label || "",
+    display_name: proposal.display_name || "",
+    name: mconfigNextInverterName(),
+    enabled: true,
+    mqtt: {
+      broker_ref: mqtt.broker_ref || "",
+      topic_family: mqtt.topic_family || "",
+      device_id: mqtt.device_id || "",
+    },
+  });
+  mconfigState.openHardware.add("maintenance-external-device-" + (devices.length - 1));
   renderMaintenanceInverters();
   mconfigMarkDraftChanged("discovery");
   mconfigRerenderDiscoveryReview();
@@ -16233,6 +16479,7 @@ function renderMaintenanceMqttProposalCard(item) {
   const name = document.createElement("span");
   name.className = "device-name";
   name.textContent = proposal.display_name || "Zendure MQTT device";
+  const external = isExternalMqttProposal(proposal);
   const transportPill = document.createElement("span");
   transportPill.className = "connection-pill";
   transportPill.dataset.connection = transportSource;
@@ -16249,10 +16496,14 @@ function renderMaintenanceMqttProposalCard(item) {
   facts.className = "device-facts";
   mconfigAppendDeviceFact(
     facts,
-    "Device/SN",
+    external ? "Device ID" : "Device/SN",
     proposal.serial_number || proposal.device_id || ""
   );
-  mconfigAppendDeviceFact(facts, "Hardware generation", mqttGenerationLabel(proposal));
+  mconfigAppendDeviceFact(
+    facts,
+    external ? "Device" : "Hardware generation",
+    mqttGenerationLabel(proposal)
+  );
   mconfigAppendDeviceFact(facts, "Transport", mqttTransportLabel(proposal));
   const isGridMeter = hardwareRole === "grid_meter";
   const controllable = !isGridMeter && !!proposal.output_control_supported;
@@ -16289,6 +16540,9 @@ function renderMaintenanceMqttProposalCard(item) {
     note.textContent = controllable
       ? "Supported inverter: EMS regulates its output over MQTT using the same " +
         "control loop as a local API device."
+      : external
+      ? "External device from the hardware catalog: EMS reads its values " +
+        "over MQTT and never sends it anything."
       : "Telemetry only: " +
         mqttControlReasonLabel(mqttProposalControlReason(proposal)) +
         ", so EMS reads values but does not send output control.";
@@ -16341,6 +16595,11 @@ function renderMaintenanceMqttProposalCard(item) {
     accept.addEventListener("click", () => {
       if (isGridMeter) {
         mconfigAdoptMqttGridMeterProposal(proposal);
+        return;
+      }
+      if (external) {
+        if (item.state === "transport") mconfigUseExternalConnection(proposal);
+        else mconfigAddExternalProposal(proposal);
         return;
       }
       if (item.state === "transport") {

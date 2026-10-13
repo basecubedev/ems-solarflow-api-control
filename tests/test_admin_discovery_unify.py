@@ -9,6 +9,7 @@ from admin.discovery_preparation import (
     SOURCE_ZENDURE_MQTT,
 )
 from admin.discovery_unify import build_unified_devices
+from admin.mqtt_topic_discovery import MqttTopicAggregator
 
 pytestmark = [
     pytest.mark.admin,
@@ -205,3 +206,28 @@ def test_disabled_source_absent_from_input_is_not_aggregated():
         DEFAULT_PRIORITY,
     )
     assert [d["selected_source"] for d in devices] == [SOURCE_LOCAL_API]
+
+
+def test_a_catalog_device_shows_as_the_read_only_inverter_it_is():
+    """Its id names it, never a serial, and it stays apart from every other device."""
+
+    aggregator = MqttTopicAggregator({"host": "192.168.1.71", "port": 1883})
+    aggregator.observe("ems-solarflow/EXAMPLE0000001/inverterPower", b"765")
+    (device,) = build_unified_devices(
+        {SOURCE_LOCAL_MQTT: aggregator.results()}, DEFAULT_PRIORITY
+    )
+
+    assert (device["role"], device["read_only"]) == ("inverter", True)
+    assert (device["device_id"], device["serial_number"]) == ("EXAMPLE0000001", None)
+    assert device["confidence"] == "low"
+
+
+def test_a_zendure_device_is_not_read_only():
+    aggregator = MqttTopicAggregator({"host": "192.168.1.71", "port": 1883})
+    aggregator.observe("Zendure/sensor/ZENDUREDEV1/outputHomePower", b"120")
+    (raw,) = aggregator.results()
+    assert raw["topic_family"]
+    (device,) = build_unified_devices({SOURCE_LOCAL_MQTT: [raw]}, DEFAULT_PRIORITY)
+
+    assert device["read_only"] is False
+    assert device["role"] != "inverter"

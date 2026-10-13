@@ -19,6 +19,7 @@ from admin.models import SOURCE_LOCAL_MQTT as CANDIDATE_LOCAL_MQTT
 from admin.models import SOURCE_ZENDURE_CLOUD_MQTT as CANDIDATE_ZENDURE_CLOUD
 from admin.observation_identity import stamp_observations
 from ems.device_identity import normalize_physical_serial
+from ems.zendure_mqtt.external_catalog import external_topic_family
 
 CONFIDENCE_HIGH = "high"
 CONFIDENCE_LOW = "low"
@@ -53,6 +54,7 @@ class UnifiedDiscoveryDevice:
     selected_source: str | None = None
     selected_reason: str = REASON_PRIORITY
     confidence: str = CONFIDENCE_LOW
+    read_only: bool = False
     candidates: list = field(default_factory=list)
 
     def to_dict(self):
@@ -70,6 +72,7 @@ class UnifiedDiscoveryDevice:
             "selected_source": self.selected_source,
             "selected_reason": self.selected_reason,
             "confidence": self.confidence,
+            "read_only": self.read_only,
             "candidates": list(self.candidates),
         }
 
@@ -92,7 +95,12 @@ def _candidate_view(source, raw):
         _clean(raw.get("display_name")) or model_hint or _clean(raw.get("device_type"))
     )
     stable_id = _clean(raw.get("id"))
-    role = _clean(raw.get("role_suggestion")) or _clean(raw.get("role"))
+    catalog = external_topic_family(raw.get("topic_family"))
+    role = (
+        _clean(raw.get("role_suggestion"))
+        or _clean(raw.get("role"))
+        or ("inverter" if catalog is not None else None)
+    )
     return {
         "source": source,
         "serial_number": serial,
@@ -104,6 +112,7 @@ def _candidate_view(source, raw):
         "api_family": _clean(raw.get("api_family")),
         "device_type": _clean(raw.get("device_type")),
         "stable_id": stable_id,
+        "read_only": catalog is not None,
         "raw": raw,
     }
 
@@ -217,6 +226,7 @@ def build_unified_devices(
             selected_source=selected_source,
             selected_reason=REASON_PRIORITY if len(sources) > 1 else REASON_ONLY_SOURCE,
             confidence=CONFIDENCE_HIGH if serial else CONFIDENCE_LOW,
+            read_only=selected_view["read_only"],
             candidates=[
                 {
                     "source": v["source"],

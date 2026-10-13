@@ -113,7 +113,9 @@ def test_js_unified_card_escapes_dynamic_device_and_source_values():
     )[0]
     # The display/model fallback is built first, then escaped as a whole.
     assert "escapeHtml(String(model))" in card
-    assert "escapeHtml(device.serial_number)" in card
+    assert "mqttIdentityFact(device, readOnly)" in card
+    fact = js.split("function mqttIdentityFact", 1)[1].split("\nfunction ", 1)[0]
+    assert "escapeHtml(value)" in fact
     assert "escapeHtml(discoverySourceLabel(source))" in card
     # The priority rows escape the raw source key/label too.
     row = js.split("function renderPrioritySourceRow", 1)[1].split("\nfunction ", 1)[0]
