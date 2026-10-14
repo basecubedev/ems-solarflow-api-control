@@ -355,6 +355,8 @@ key is always allowed.
 | `export_root_not_exclusive` | the chroot root holds something this feature does not manage |
 | `exports_not_confined` | an existing export is unmounted, read-write, or publishes something else |
 | `key_conflict` | two key files exist and only an operator can decide which is current |
+| `authorized_keys_unsafe` | `authorized_keys` is a symlink or not a regular file; the agent does not read through it |
+| `ssh_directory_unsafe` | the account's `.ssh` is a symlink or not a directory; the agent does not read through it |
 | `backup_account_home_marker_missing` | the home does not carry the ownership marker this package wrote |
 | `backup_account_home_marker_mismatch` | a file is at the marker path, but it is not the marker this package wrote |
 | `backup_account_home_identity_mismatch` | the recorded home is not that directory any more |

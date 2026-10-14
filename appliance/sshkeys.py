@@ -185,6 +185,11 @@ class AuthorizedKeysStore:
     def list(self):
         return parse_authorized_keys(self._text())
 
+    def text(self):
+        """The key file's text; a symlinked ``.ssh`` or key file is refused."""
+
+        return self._text()
+
     def _open_ssh_dir(self, *, create):
         """The ``.ssh`` directory as a descriptor, never through a symlink."""
 

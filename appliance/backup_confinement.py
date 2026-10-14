@@ -33,6 +33,7 @@ from appliance.ssh_policy import (
 )
 from appliance.ssh_service import parse_passwd_entry
 from appliance.systemd import UNIT_SSH, SystemdBackend
+from appliance.validation import ValidationError
 
 STATE_ACTIVE = "active"
 STATE_DEGRADED = "degraded"
@@ -112,18 +113,21 @@ class BackupAccessActivation:
         return Path(verdict["record"].home) if verdict["owned"] else None
 
     def authorized_keys(self):
-        """The keys sshd would accept, and how many this package can attribute."""
+        """The keys sshd would accept, and how many this package can attribute.
+
+        Read through ``AuthorizedKeysStore``, which never follows a symlinked
+        ``.ssh`` or key file; its ``ValidationError`` reaches the caller.
+        """
 
         from appliance import backup_ownership
-        from appliance.sshkeys import foreign_key_lines, parse_authorized_keys
+        from appliance.sshkeys import (
+            AuthorizedKeysStore,
+            foreign_key_lines,
+            parse_authorized_keys,
+        )
 
-        path = self.authorized_keys_path()
-        text = ""
-        if path is not None and path.is_file():
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                text = ""
+        home = self.account_home()
+        text = AuthorizedKeysStore(home).text() if home is not None else ""
         keys = parse_authorized_keys(text)
         unattributed = backup_ownership.unmanaged_keys(self.paths, keys)
         # A line this parser cannot read is key material all the same, and sshd
@@ -331,7 +335,10 @@ class BackupAccessActivation:
         if not self.restore():
             return self._disabled_report("key_restore_failed", policy=policy, exports=exports)
 
-        keys, unattributed = self.authorized_keys()
+        try:
+            keys, unattributed = self.authorized_keys()
+        except ValidationError as refused:
+            return self._disabled_report(refused.code, policy=policy, exports=exports)
         if unattributed:
             return self._disabled_report(
                 "key_attribution_unknown", policy=policy, exports=exports

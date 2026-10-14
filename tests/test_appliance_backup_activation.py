@@ -14,6 +14,7 @@ from appliance.backup_confinement import (
     STATE_ACTIVE,
     BackupAccessActivation,
 )
+from appliance.validation import ValidationError
 from tests.helpers.appliance import (
     SSHD_BACKUP_MATCH,
     build_test_services,
@@ -104,6 +105,54 @@ def test_a_key_the_package_cannot_attribute_is_not_activated(tmp_path):
 
     assert report["state"] != STATE_ACTIVE, report
     assert report["authentication_disabled"] is True, report
+
+
+def plant_key_file_symlink(services, tmp_path, text):
+    """Replace the key file with a symlink to a file elsewhere that holds ``text``."""
+
+    keys = services.home / ".ssh" / "authorized_keys"
+    elsewhere = tmp_path / "elsewhere-keys"
+    elsewhere.write_text(text, encoding="utf-8")
+    keys.unlink()
+    keys.symlink_to(elsewhere)
+    return keys
+
+
+def test_a_key_file_planted_as_a_symlink_is_not_activated_through(
+    tmp_path, production_chroot_chain
+):
+    services = appliance(tmp_path)
+    keys = plant_key_file_symlink(services, tmp_path, PUBLIC_KEY)
+
+    report = activation(services).activate()
+
+    assert report["state"] != STATE_ACTIVE, report
+    assert report["reason"] == "authorized_keys_unsafe", report
+    assert report["authentication_disabled"] is True, report
+    assert not keys.is_symlink(), "the planted link was left where sshd reads keys"
+
+
+def test_the_key_check_does_not_read_a_planted_symlink_as_root(tmp_path):
+    services = appliance(tmp_path)
+    plant_key_file_symlink(services, tmp_path, "root:$6$hash:20000::::::\n")
+
+    with pytest.raises(ValidationError) as refused:
+        activation(services).authorized_keys()
+
+    assert refused.value.code == "authorized_keys_unsafe"
+
+
+def test_the_key_check_does_not_read_through_a_symlinked_ssh_directory(tmp_path):
+    services = appliance(tmp_path)
+    ssh_dir = services.home / ".ssh"
+    elsewhere = tmp_path / "elsewhere-ssh"
+    ssh_dir.rename(elsewhere)
+    ssh_dir.symlink_to(elsewhere)
+
+    with pytest.raises(ValidationError) as refused:
+        activation(services).authorized_keys()
+
+    assert refused.value.code == "ssh_directory_unsafe"
 
 
 def test_an_account_that_cannot_be_un_expired_is_not_active(tmp_path):
