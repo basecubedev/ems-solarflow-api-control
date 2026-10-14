@@ -399,7 +399,10 @@ window whether the device accepted or rejected it; only an exit the transport
 could not deliver is due again at once. Over
 MQTT a changed target still replaces an exit in flight at once; every MQTT
 command carries the direction, so that is an exit too. The shutdown release is
-the last command and is sent whatever the window says.
+the last command and is sent whatever the window says. The same release after
+three failed cycles in a row (R1-1) is not the last command: it keeps the
+window of the record the charge is on, so a device that charges on is sent it
+again once per window and one that reported it left is sent nothing more.
 
 Telemetry alone cannot say who put a device into AC input, so the EMS also asks
 whether it can tell. It can when it saw the device out of AC input (or in its
@@ -408,8 +411,8 @@ one holds it there — an operator's AC-input role, a maintenance routine —
 and once the device took the exit (below); then a
 charge at the floor is the firmware's from the first cycle. A failed read or an
 offline spell does not change that, because the transport's record of the EMS's
-own charge survives the gap. It cannot tell after a restart: a stop by signal
-leaves the EMS's charge running on purpose, so the process before may have left
+own charge survives the gap. It cannot tell after a restart: a stop by SIGTERM
+or SIGHUP leaves the EMS's charge running on purpose, so the process before may have left
 it drawing from the grid. A device found in AC input — above the floor as at
 it, charging or not — therefore stays with the power command until the device
 takes the exit (`smartMode = 1`, `acMode = 2`, `inputLimit = 0`, the target as

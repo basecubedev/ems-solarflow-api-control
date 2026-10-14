@@ -160,13 +160,12 @@ costs nothing like drawing from the grid on one does.
 ### What happens if the EMS stops while charging
 
 **Stopping the EMS leaves the devices as they are.** That is deliberate: a stop
-you asked for — `docker stop`, `docker compose down`, `systemctl stop`, Ctrl-C —
+by SIGTERM or SIGHUP — `docker stop`, `docker compose down`, `systemctl stop` —
 is usually a restart, and resetting every device for the length of an update
 would drop the house's cover and throw away a charge that then has to re-confirm
 its entry window. Discharging devices keep their `outputLimit` regardless;
 charging devices now keep theirs too. The EMS says so when it happens:
-`event=ac_charge_kept_across_stop` names the signal that stopped it and the
-device it left charging.
+`event=ac_charge_kept_across_stop` names the signal and the device left charging.
 
 A **charging** device therefore keeps drawing while the EMS is away. That is
 bounded — the charge ends at the device's configured maximum SoC — but it still
@@ -175,13 +174,12 @@ drawing until then. If a restart does not complete, or once the EMS is back
 after an abrupt stop, check the device and stop it in the Zendure app or with
 `emsctl.py device WR1 ac-mode output`.
 
-The EMS **does** return a charging device when it stops by itself: `--once`,
-`--max-cycles`, `--duration` or an error that ends it. That covers the
-full-charge assist's grid charge as well as the regulator's. In normal operation a
-failing cycle (`diagnose --control` names it) does not end the EMS: it stops
-where it raised, what it wrote before stands, and a charge it no longer reaches
-runs on, up to the maximum SoC. An unstoppable kill (power loss, `kill -9`, a
-container removed, not stopped) writes nothing; nothing times the command out.
+The EMS **does** return a charging device, the full-charge assist's grid charge
+included, on Ctrl-C, when it stops by itself (`--once`, `--max-cycles`,
+`--duration`, an error that ends it) and from the third failed cycle in a row,
+best effort (see [ac-charging.md](../ac-charging.md#safety)). An unstoppable
+kill (power loss, `kill -9`, a container removed, not stopped) writes nothing;
+nothing times it out.
 
 The same applies to a device that drops off the network mid-charge: the EMS
 cannot write to a device it cannot reach, so that one keeps charging until it is

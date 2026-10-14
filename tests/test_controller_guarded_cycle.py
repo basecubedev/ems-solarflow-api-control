@@ -137,7 +137,10 @@ def test_a_failed_cycle_stops_where_it_raised():
 
 
 def test_a_failed_cycle_leaves_a_charge_it_did_not_reach_running(caplog):
-    """Unlike the crash it replaces, a failed cycle returns no charge."""
+    """Unlike the crash it replaces, one failed cycle returns no charge.
+
+    Three in a row do (R1-1, tests/test_failed_cycles_return_the_charge.py).
+    """
 
     charging = device("WR3")
     charging.charge_commanded = True

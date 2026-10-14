@@ -93,10 +93,19 @@ that returns the regulator's (see [ac-charging.md](ac-charging.md#safety)):
 the exit to idle on the transport's gate, logged as
 `ac_charge_released_on_shutdown` with `charge=battery_full_charge_assist`. It
 reads the same record, so a charge the device left, or one already sent its
-three exits while control was off, gets nothing. A stop by signal leaves the
-charge running, as every charge, and names the device in
-`ac_charge_kept_across_stop`. The assist itself stays due and goes on when the
-EMS is back.
+three exits while control was off, gets nothing. Three failed control cycles
+in a row return it the same way, logged as
+`ac_charge_released_after_failed_cycles`, on the record's resend window and
+three times at most: while cycles fail the assist's claim asks for no `acMode`,
+so that release is the only exit. The assist takes its AC input back once three
+cycles in a row have run through, as many as failed before the release; until
+then its claim asks for `acMode=2` as with its AC mode off, so a cycle that
+fails three times out of four does not move the device in and out of AC input.
+A stop by SIGTERM or SIGHUP (`docker stop`, `docker compose down`,
+`systemctl stop`) leaves the charge running, as every charge, and names the
+device in `ac_charge_kept_across_stop`; Ctrl-C returns it, as a stop the EMS
+reaches by itself does. The assist itself stays due and goes on when the EMS is
+back.
 
 ## Configuration
 

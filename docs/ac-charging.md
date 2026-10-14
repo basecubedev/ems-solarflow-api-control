@@ -230,13 +230,19 @@ transport write gate. Charging is not gated separately: what prevents it is the
 permission set above, not a second gate. Making the way *back* depend on an
 extra gate would leave hardware drawing from the grid when that gate closed.
 
-A stop you asked for leaves a running charge alone: an update or a restart is
+A stop by SIGTERM or SIGHUP (`docker stop`, `docker compose down`,
+`systemctl stop`) leaves a running charge alone: an update or a restart is
 meant to preserve the last state, not reset it. The EMS does return a charging
-device when it stops by *itself* — `--once`, `--max-cycles`, `--duration`, an
-unhandled error — because nothing is coming back to supervise it. In normal
-operation a failing control cycle is not such a stop: the EMS keeps running, and
-a charge the cycle no longer reaches runs on. Either way the charge is bounded
-by the device's own maximum SoC. See [user/safety.md](user/safety.md).
+device on Ctrl-C and when it stops by *itself* — `--once`, `--max-cycles`,
+`--duration`, an unhandled error — because nothing is coming back to supervise
+it. In normal
+operation a failing control cycle is not such a stop: the EMS keeps running.
+From the third failed cycle in a row it returns a charging device best effort
+with the same release, logged as `ac_charge_released_after_failed_cycles`;
+the process goes on, so that release keeps the resend window and goes out
+again while the charge is on record, and a cycle that runs through lets the
+regulator charge again after its entry confirmation. The charge is bounded by
+the device's own maximum SoC either way. See [user/safety.md](user/safety.md).
 
 **While the regulator charges a device, it owns that device's AC direction.**
 Every cycle each device gets a default claim of `ac_output`, and the state
@@ -250,9 +256,9 @@ one command, see above — and a device found in AC input after a start gets the
 one exit described next.
 
 **After a start, AC input gets one exit; after that it is whoever holds it.**
-A stop you asked for leaves the EMS's charge running on purpose, and the next
-process has no record of it: telemetry cannot tell that charge from an app's
-or, at the battery floor, from the firmware's protection charge. So once per
+A stop by SIGTERM or SIGHUP leaves the EMS's charge running on purpose, and the
+next process has no record of it: telemetry cannot tell that charge from an
+app's or, at the battery floor, from the firmware's protection charge. So once per
 process start, a device the EMS could have charged that it finds in AC input —
 above the floor as at it, charging or not — gets the exit, on the power
 command's own gate; `allow_state_reconciliation_writes` does not have to allow
@@ -503,6 +509,7 @@ ac_charge_not_delivered
 ac_charge_refused
 ac_charge_stopped_stale_meter
 ac_charge_kept_across_stop
+ac_charge_released_after_failed_cycles
 ac_charge_released_on_shutdown
 ac_charge_release_failed
 ac_charge_release_withheld
@@ -527,12 +534,16 @@ puts entry and exit at the same threshold; `ac_charge_band_collapsed` names that
 once at startup.
 
 `ac_charge_kept_across_stop` is an `info` and the counterpart of
-`ac_charge_released_on_shutdown`: a stop you asked for leaves a charging device
-as it is, because a restart is coming. It names the signal that ended the run
+`ac_charge_released_on_shutdown`: a stop by SIGTERM or SIGHUP leaves a charging
+device as it is, because a restart is coming. It names the signal that ended the run
 and every device the EMS last put into charge — by the same record the release
 uses, so a charge whose regulator target was reset or zeroed is named too — so
 a device still drawing after `docker compose down` is explained rather than
-surprising. The release event is what you see when the EMS stopped by itself.
+surprising. The release event is what you see when the EMS stopped by itself
+or by Ctrl-C.
+`ac_charge_released_after_failed_cycles` is the same release after failed
+cycles in a row, with `failed_cycles` and the same `charge` field; a release
+that could not be written or was withheld then carries `failed_cycles` too.
 
 `ac_charge_capacity_below_stop` is a `warning`, said once until the capacity is
 sufficient again: the

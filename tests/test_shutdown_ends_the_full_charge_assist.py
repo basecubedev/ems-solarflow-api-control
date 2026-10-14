@@ -557,3 +557,23 @@ def test_a_stop_signal_keeps_the_assist_s_charge_and_names_it(entry, caplog):
     assert len(kept) == 1, caplog.text
     assert "devices=WR1" in kept[0]
     assert f"charging_w={POWER}" in kept[0]
+
+
+def test_ctrl_c_returns_the_assist_s_charge(entry, caplog):
+    """Ctrl-C is someone at the console, not a service manager stopping for a restart.
+
+    Only SIGTERM and SIGHUP -- ``docker stop``, ``docker compose down``,
+    ``systemctl stop`` -- keep a charge; KeyboardInterrupt returns it, as a
+    stop the EMS reaches by itself does.
+    """
+
+    def interrupted():
+        raise KeyboardInterrupt()
+
+    with caplog.at_level(logging.INFO), pytest.raises(KeyboardInterrupt):
+        entry.run(on_loop=interrupted)
+
+    assert entry.hardware.writes == [IDLE_EXIT]
+    assert entry.item.ac_mode == 2
+    assert "event=ac_charge_kept_across_stop" not in caplog.text
+    assert "event=ac_charge_released_on_shutdown" in caplog.text

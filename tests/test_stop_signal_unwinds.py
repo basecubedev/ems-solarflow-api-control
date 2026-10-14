@@ -122,13 +122,11 @@ def test_the_shutdown_release_only_ever_touched_charging_devices():
 
     from ems.controller import EMSController
 
-    source = inspect.getsource(EMSController.release_charging_devices)
+    source = inspect.getsource(EMSController.release_charging_device)
     assert "regulator = self.charge_commanded_by_ems(dev)" in source
-    assert (
-        "if not regulator and not self.full_charge_assist_charge_held(dev):"
-        in source
-    )
-    assert "continue" in source
+    assert "assist = self.full_charge_assist_charge_held(dev)" in source
+    assert "if not regulator and not assist:" in source
+    assert "return" in source
 
 
 def test_the_kept_across_stop_line_names_what_is_still_drawing():

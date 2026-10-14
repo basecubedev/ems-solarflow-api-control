@@ -100,6 +100,7 @@ def finite_grid_load(value):
 
 
 CYCLE_FAILURE_WARN_EVERY = 12
+CYCLE_FAILURES_BEFORE_CHARGE_RELEASE = 3
 
 
 @dataclass
@@ -109,7 +110,8 @@ class FullChargeAssistCharge:
     No transport has this charge on record -- the assist writes it through
     the state reconciler -- so the controller keeps the same
     :class:`~ems.charge_record.ChargeRecord` for it, and counts the exits it
-    sent since control went off.
+    sent since a cycle last found the charge held with control on: after a
+    switch-off, or while cycles fail.
     """
 
     record: ChargeRecord
@@ -137,6 +139,7 @@ class EMSController:
         self.ha = ha
         self.sleep_enabled = sleep_enabled
         self.cycle_failures = 0
+        self.cycles_through_since_release = None
         self.runtime_state = runtime_state
         self.dashboard_store = dashboard_store
         self.zendure_mqtt_runtime = zendure_mqtt_runtime
@@ -1606,8 +1609,8 @@ class EMSController:
         )
         return min(configured, max(0, self.charge_capacity_w))
 
-    def release_charging_devices(self):
-        """Return every device this EMS put into charge, before shutting down.
+    def release_charging_devices(self, failed_cycles=None):
+        """Return every device this EMS put into charge, before shutting down or after failed cycles.
 
         A charge outlives the process that started it: nothing in the device
         stops drawing from the grid until its own SoC ceiling does. This covers
@@ -1630,40 +1633,94 @@ class EMSController:
         controller's record of it too (:meth:`full_charge_assist_charge_held`),
         the one switching control off ends it by. Read off the transport alone,
         it ran on to a full battery after the EMS was gone (AR-1).
+
+        ``failed_cycles`` is the release after that many failed cycles in a row
+        (R1-1): the EMS goes on, so it is not the last command and keeps the
+        records' resend window (:meth:`charge_release_due`), logged as
+        ``ac_charge_released_after_failed_cycles``. Best effort: whatever
+        raises for one device is logged as its ``ac_charge_release_failed`` and
+        the others are still released. The charge direction starts afresh, its
+        hourly entries kept, so a charge waits for its entry confirmation again.
         """
 
         for dev in self.devices:
-            regulator = self.charge_commanded_by_ems(dev)
-            if not regulator and not self.full_charge_assist_charge_held(dev):
-                continue
-
-            fields = {
-                "device": dev.name,
-                "previous_target_w": self.commanded_device_targets.get(dev.name),
-                "charge": self.released_charge(dev, regulator),
-            }
             try:
-                written = self.write_target(dev, 0, CHARGE_EXIT_FINAL)
+                self.release_charging_device(dev, failed_cycles)
             except Exception as exc:
-                written = False
-                fields["error"] = exc
-            if getattr(written, "status", None) is WriteDispatchStatus.WITHHELD:
                 log_event(
-                    logging.INFO,
-                    "ac_charge_release_withheld",
-                    reason=written.reason,
-                    **cfg.resolve_device_write_gate(dev).as_log_fields(),
-                    **fields,
+                    logging.WARNING,
+                    "ac_charge_release_failed",
+                    device=dev.name,
+                    error=exc,
+                    **({} if failed_cycles is None else {"failed_cycles": failed_cycles}),
                 )
-            elif written:
-                log_event(logging.INFO, "ac_charge_released_on_shutdown", **fields)
-            else:
-                log_event(logging.WARNING, "ac_charge_release_failed", **fields)
-            self.commanded_device_targets[dev.name] = 0
 
-        self.charge_direction = ChargeDirectionState()
+        self.charge_direction = ChargeDirectionState(
+            entries=self.charge_direction.entries
+        )
         self.charge_capacity_w = 0
         self.device_charge_limits = {}
+
+    def release_charging_device(self, dev, failed_cycles):
+        """Send ``dev`` the release if one of the EMS's records holds a charge on it."""
+
+        regulator = self.charge_commanded_by_ems(dev)
+        assist = self.full_charge_assist_charge_held(dev)
+        if not regulator and not assist:
+            return
+        if failed_cycles is not None and not self.charge_release_due(dev, regulator):
+            return
+
+        fields = {
+            "device": dev.name,
+            "previous_target_w": self.commanded_device_targets.get(dev.name),
+            "charge": self.released_charge(dev, regulator),
+        }
+        if failed_cycles is not None:
+            fields["failed_cycles"] = failed_cycles
+        try:
+            written = self.write_target(dev, 0, CHARGE_EXIT_FINAL)
+        except Exception as exc:
+            written = False
+            fields["error"] = exc
+        if assist:
+            self.note_full_charge_assist_exit(dev, written)
+        if getattr(written, "status", None) is WriteDispatchStatus.WITHHELD:
+            log_event(
+                logging.INFO,
+                "ac_charge_release_withheld",
+                reason=written.reason,
+                **cfg.resolve_device_write_gate(dev).as_log_fields(),
+                **fields,
+            )
+        elif written and failed_cycles is None:
+            log_event(logging.INFO, "ac_charge_released_on_shutdown", **fields)
+        elif written:
+            log_event(
+                logging.INFO, "ac_charge_released_after_failed_cycles", **fields
+            )
+        else:
+            log_event(logging.WARNING, "ac_charge_release_failed", **fields)
+        self.commanded_device_targets[dev.name] = 0
+
+    def charge_release_due(self, dev, regulator):
+        """Whether a release that is not the last command may go out to ``dev`` now.
+
+        By the record the charge is held on, as the exit of a switch-off is:
+        the transport's or the assist's goes out again once per resend window
+        while the record says the charge runs, and not to a device the last
+        read did not reach; the regulator's target alone is released once,
+        since the release sets it to 0.
+        """
+
+        if not self.device_online.get(dev.name, True):
+            return False
+        if getattr(dev, "charge_commanded", False) is True:
+            return not self.charge_exit_pending(dev)
+        if regulator:
+            return True
+        charge = self.full_charge_assist_charges[dev.name]
+        return charge.record.exit_due(time.monotonic())
 
     def released_charge(self, dev, regulator):
         """The record a released charge is known by, for the release events."""
@@ -1958,7 +2015,9 @@ class EMSController:
         whether that write reached the device or not, so at worst the first
         exit after a switch-off waits one resend window. A device that leaves
         the charge during the restore is released and not put back on record
-        by it; one that takes the restore ends it. Once control is off,
+        by it; one that takes the restore ends it. While failed cycles return
+        the charges the record only reads the reports: the release is the one
+        exit then, on its window and cap. Once control is off,
         the record is owed the exit, sent again once per resend window until
         the device reports it left the charge or shows a setpoint the assist
         never wrote, which is someone else's charge. Two things differ from a
@@ -1979,6 +2038,10 @@ class EMSController:
         state = self.last_states.get(dev.name) if fresh else None
         charge = self.full_charge_assist_charges.get(dev.name)
         if not self.control_switched_off(dev):
+            if charge is not None and self.charges_returned_after_failed_cycles():
+                if state is not None:
+                    self.observe_full_charge_assist_charge(charge, state)
+                return False
             held = self.full_charge_assist_held(dev, state)
             if held is None:
                 self.full_charge_assist_charges.pop(dev.name, None)
@@ -2060,7 +2123,7 @@ class EMSController:
             "charge": FULL_CHARGE_ASSIST_REASON,
             **(self.charge_supervision_ended_by(dev, control_enabled) or {}),
         }
-        if written is False:
+        if not self.note_full_charge_assist_exit(dev, written):
             log_event(
                 logging.WARNING,
                 "ac_charge_end_failed",
@@ -2068,9 +2131,6 @@ class EMSController:
                 **fields,
             )
             return
-        charge = self.full_charge_assist_charges[dev.name]
-        charge.record.exit_sent(time.monotonic())
-        charge.exits += 1
         write_reason = getattr(written, "reason", None)
         if getattr(written, "status", None) is WriteDispatchStatus.WITHHELD:
             log_event(
@@ -2089,6 +2149,21 @@ class EMSController:
             )
         else:
             log_event(logging.INFO, "ac_charge_ended_on_disable", **fields)
+
+    def note_full_charge_assist_exit(self, dev, written):
+        """Count an exit sent to the assist's charge; return whether it reached the transport.
+
+        As on a transport's record, an exit the device answered, accepted or
+        not, opens the resend window, and one that never reached it
+        (``written is False``) is due again at once.
+        """
+
+        if written is False:
+            return False
+        charge = self.full_charge_assist_charges[dev.name]
+        charge.record.exit_sent(time.monotonic())
+        charge.exits += 1
+        return True
 
     def charge_exit_pending(self, dev):
         """Whether the exit owed to ``dev`` is out and its resend window still open.
@@ -3434,13 +3509,29 @@ class EMSController:
             minimum=0
         )
 
+    def full_charge_assist_ac_charge_mode(self):
+        """Whether an active assist charges from AC now.
+
+        Its AC mode on, and its charge not held back after failed cycles
+        returned it (:meth:`assist_ac_input_withheld`): the reconciler would
+        put the charge back in every cycle that reaches it, against the
+        release once per resend window (R1-1).
+        """
+
+        return bool(
+            self.full_charge_assist_config().get("enable_ac_charge_mode", True)
+        ) and not self.assist_ac_input_withheld()
+
     def full_charge_assist_intent(self, dev):
         """Return the assist's claim on ``dev``, or None when it has none.
 
         An assist without its AC mode leaves the direction alone, except where
         it put the device into AC input before its AC mode was switched off
-        (AR-1): it claims ``acMode`` 2 back, as its restore does, until the
-        device reports it.
+        (AR-1), or while failed cycles hold its charge back: it claims
+        ``acMode`` 2 back, as its restore does, until the device reports it.
+        While cycles fail neither claim asks for ``acMode``: the reconciler
+        keeps no window, and the release after failed cycles is the way out,
+        on its record's window and cap.
         """
 
         store = self.battery_full_charge_store
@@ -3451,8 +3542,15 @@ class EMSController:
         if not record or not record.get("has_battery"):
             return None
 
+        restore_ac_mode = (
+            AC_MODE_OUTPUT
+            if record.get("ac_mode_restore_pending")
+            and not self.charges_returned_after_failed_cycles()
+            else None
+        )
+
         if record.get("full_charge_assist_active"):
-            if self.full_charge_assist_config().get("enable_ac_charge_mode", True):
+            if self.full_charge_assist_ac_charge_mode():
                 return ac_input_intent(
                     dev.name,
                     FULL_CHARGE_ASSIST_REASON,
@@ -3464,9 +3562,7 @@ class EMSController:
                 device=dev.name,
                 role=DeviceRuntimeRole.AC_OUTPUT,
                 reason=FULL_CHARGE_ASSIST_REASON,
-                desired_ac_mode=(
-                    AC_MODE_OUTPUT if record.get("ac_mode_restore_pending") else None
-                ),
+                desired_ac_mode=restore_ac_mode,
                 output_control_allowed=False,
                 priority=PRIORITY_MAINTENANCE
             )
@@ -3479,9 +3575,7 @@ class EMSController:
                 device=dev.name,
                 role=DeviceRuntimeRole.AC_OUTPUT,
                 reason=FULL_CHARGE_ASSIST_RESTORE_REASON,
-                desired_ac_mode=(
-                    2 if record.get("ac_mode_restore_pending") else None
-                ),
+                desired_ac_mode=restore_ac_mode,
                 output_control_allowed=False,
                 priority=PRIORITY_MAINTENANCE
             )
@@ -4918,10 +5012,18 @@ class EMSController:
         where it raised: nothing after that point is written, what came before
         it stands, and the next cycle tries again after the loop interval. A
         cycle that fails at the same point every time repeats the writes before
-        it; a device it no longer reaches holds its last limit, and a charging
-        one keeps charging, up to its maximum SoC. The first failure is logged
-        with its traceback, then one warning a minute while it lasts, and the
-        recovery once.
+        it; a device it no longer reaches holds its last limit. The first
+        failure is logged with its traceback, then one warning a minute while
+        it lasts, and the recovery once.
+
+        From the ``CYCLE_FAILURES_BEFORE_CHARGE_RELEASE``-th failure in a row
+        each failed cycle runs the release a stop runs, best effort, on the
+        records' resend window (R1-1, owner decision 2026-10-12), and the
+        full-charge assist takes no AC input until as many cycles in a row have
+        run through (:meth:`assist_ac_input_withheld`). Only an exception out
+        of ``run_once`` counts: a failure the cycle handles itself (a device
+        that does not answer, a write it refuses) is no failed cycle, and a
+        cycle that hangs never ends to be counted.
         """
 
         try:
@@ -4939,13 +5041,42 @@ class EMSController:
                     consecutive=self.cycle_failures,
                     error=exc,
                 )
+            if self.charges_returned_after_failed_cycles():
+                self.release_charging_devices(failed_cycles=self.cycle_failures)
+                self.cycles_through_since_release = 0
+            elif self.cycles_through_since_release is not None:
+                self.cycles_through_since_release = 0
             if self.sleep_enabled:
                 time.sleep(self._loop_interval_after_failure())
             return False
         if self.cycle_failures:
             log_event(logging.INFO, "control_cycle_recovered", failed_cycles=self.cycle_failures)
             self.cycle_failures = 0
+        if self.cycles_through_since_release is not None:
+            self.cycles_through_since_release += 1
+            if self.cycles_through_since_release >= CYCLE_FAILURES_BEFORE_CHARGE_RELEASE:
+                self.cycles_through_since_release = None
         return True
+
+    def charges_returned_after_failed_cycles(self):
+        """Whether failed cycles in a row returned the EMS's charges, until one runs through."""
+
+        return self.cycle_failures >= CYCLE_FAILURES_BEFORE_CHARGE_RELEASE
+
+    def assist_ac_input_withheld(self):
+        """Whether the full-charge assist still takes no AC input after failed cycles returned it.
+
+        From the release until ``CYCLE_FAILURES_BEFORE_CHARGE_RELEASE`` cycles
+        in a row have run through, as many as failed before it. Taken back
+        after the first cycle that ran through, the AC input went in and out
+        every fourth cycle under three failures and one pass (R1b); the
+        regulator's charge waits for its entry confirmation instead.
+        """
+
+        return (
+            self.charges_returned_after_failed_cycles()
+            or self.cycles_through_since_release is not None
+        )
 
     def _loop_interval_after_failure(self):
         try:

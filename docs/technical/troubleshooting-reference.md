@@ -548,8 +548,16 @@ already queued for an MQTT device may still go out. A cycle that fails at the
 same point every time repeats the writes before that point each interval
 (devices earlier in the loop, state reconciliation), so do not expect the
 inverters to stand still. A device the cycle no longer reaches holds the limit
-it was last given — a charging inverter keeps charging, up to its maximum SoC —
-and the next cycle tries again after the loop interval. The log shows the first
+it was last given, and the next cycle tries again after the loop interval. From
+the third failed cycle in a row the EMS returns each device it was charging,
+best effort, with the release a stop uses
+(`event=ac_charge_released_after_failed_cycles`), again once per resend window
+while its record says the charge runs, and the full-charge assist takes no AC
+input until three cycles in a row have run through. The counter sees only a
+cycle that raises: a
+device that does not answer or refuses a write is handled inside the cycle, a
+cycle that hangs is never counted (the live snapshot goes stale instead), and a
+failure every other cycle never makes three in a row. The log shows the first
 failure with its traceback as `event=control_cycle_failed consecutive=1`, then
 one warning a minute while the failures last, and
 `event=control_cycle_recovered failed_cycles=N` once a cycle runs through. While

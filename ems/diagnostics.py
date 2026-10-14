@@ -2542,7 +2542,9 @@ def diagnose_live_snapshot_root_causes(live):
             "Control cycles are failing",
             f"The last {failed} control cycles raised an error. Each stops where it raised "
             "and runs the steps before that point again; a device it no longer reaches "
-            "holds the limit it was last given, a charging one keeps charging.",
+            "holds the limit it was last given. From the third failed cycle in a row the "
+            "EMS returns each device it was charging, again once per resend window "
+            "while the charge holds.",
             "Look for event=control_cycle_failed in the EMS log.",
         )]
     if status == "stale":
