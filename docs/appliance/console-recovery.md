@@ -130,11 +130,16 @@ cat /var/lib/ems-appliance-manager/agent/packages/verify-verdict.json
 waiting for a person — you. An install done by hand with `dpkg` arms nothing, so
 there is no verdict at all and the command above is the only route.
 
-Running `rollback-manager` while a deadline is still armed is safe: the command
-retires the deadline once the older package is on, because its expected version
-can no longer be reached and a deadline left standing would undo the rescue at
-the next tick. A rollback `dpkg` refuses leaves the deadline armed — that is
-the one moment it is the last way out.
+Running `rollback-manager` while a deadline is still armed is safe. The deadline
+was armed for the package you are leaving, so before `dpkg` runs the command
+re-arms it for the package it puts back, with the one that was running as its
+way back. Once the older package is on, the command retires the deadline: you
+are the judge of a console rollback. A rollback `dpkg` refuses leaves the
+re-armed deadline in place — that is the one moment it is the last way out:
+unless the older package is installed and its services are running when the
+window ends, it reinstalls the package the appliance was running, and the
+command says so. If the deadline cannot be re-armed, the command says that
+too, and still runs `dpkg`. With no deadline armed, it arms none.
 
 `rollback-manager` judges the kept package's state formats the way the
 console's revert does: one that declares what it reads, and could not read what

@@ -276,13 +276,22 @@ def command_rollback_manager(args):
     ``manager_install.prepare_revert`` so the record this leaves behind is the
     record the browser reads, and the kept package is judged and claimed for
     exactly as the browser's revert does. What differs is how the package is
-    applied — a person is at the keyboard here, so there is no unit and no
-    deadline — and that ``--force`` installs a package the judgement refuses,
-    because this command is the way out when the console itself is gone. A
-    manager behind its own record is not stopped here: going back to the kept
-    package that wrote the record is how it gets out. An install forced past a
-    format refusal claims the running manager's whole set, so the manager it
-    installs knows it is behind what is on the disk.
+    applied — a person is at the keyboard here, so dpkg runs from this command
+    and not from a unit — and that ``--force`` installs a package the judgement
+    refuses, because this command is the way out when the console itself is
+    gone. A manager behind its own record is not stopped here: going back to the
+    kept package that wrote the record is how it gets out. An install forced
+    past a format refusal claims the running manager's whole set, so the manager
+    it installs knows it is behind what is on the disk.
+
+    A deadline armed when the command starts was armed for the package being
+    left and for the digest of the one coming back, which staging has just
+    rotated out of ``previous.deb``. It is re-armed before dpkg runs, for the
+    package being put back and with what was running as its way back, the
+    reverter taken from the running package as every arming takes it. A
+    rollback dpkg refuses leaves that deadline armed, the last way out; one dpkg
+    accepts retires it, because the person at the keyboard judges a console
+    rollback. With no deadline armed none is armed.
     """
 
     from appliance import (
@@ -319,6 +328,7 @@ def command_rollback_manager(args):
         )
         return EXIT_ERROR
     unreadable = any(problem["code"].startswith("artifact_state_schema") for problem in problems)
+    outrun = manager_verify.read(paths).armed
     try:
         target, retention = manager_install.prepare_revert(
             paths,
@@ -342,31 +352,66 @@ def command_rollback_manager(args):
     from appliance.commands import CommandRunner
 
     archive = retention.current.path
-    print(f"reinstalling {target.version or 'the retained package'} from {archive}")
+    rolled_back = target.version or "the retained package"
+    print(f"reinstalling {rolled_back} from {archive}")
     runner = CommandRunner()
+    rearmed = None
+    if outrun:
+        try:
+            rearmed, _ = manager_verify.arm(
+                paths,
+                runner,
+                expected_version=target.version,
+                build_id=target.build_id,
+                previous=retention.previous.path,
+                now=int(datetime.datetime.now(datetime.timezone.utc).timestamp()),
+                reverter=manager_verify.PACKAGED_REVERTER,
+            )
+        except manager_verify.ManagerVerifyError as exc:
+            print(
+                f"warning: the install deadline could not be re-armed for this rollback "
+                f"({exc.message})",
+                file=sys.stderr,
+            )
     # --force-confold: this runs without a tty, and the alternative to answering
     # a conffile prompt is dpkg picking for the operator.
     result = runner.run("dpkg", ["--force-confold", "--install", archive], timeout=600)
     print(result.stdout or result.stderr)
     if not result.ok:
-        # Left armed on purpose: a rollback dpkg refused is the moment the
-        # deadline is the last way out.
+        if rearmed is not None:
+            try:
+                os.chmod(manager_verify.reverter_path(paths), manager_verify.REVERTER_MODE)
+            except OSError as exc:
+                print(
+                    f"warning: the install deadline's reverter could not be made runnable "
+                    f"again ({exc})",
+                    file=sys.stderr,
+                )
+            fallback = (
+                f"the install deadline puts it back in {rearmed.window_seconds // 60} minutes "
+                f"unless {rolled_back} is installed and running by then"
+            )
+        else:
+            fallback = "no deadline puts it back by itself"
         print(
             "the package could not be installed; "
-            f"{retention.previous.path} is what this appliance was running",
+            f"{retention.previous.path} is what this appliance was running, and {fallback}",
             file=sys.stderr,
         )
         return EXIT_ERROR
 
-    # The deadline was armed for the package this command just removed, and its
-    # expected version can no longer be reached. Left standing, the next tick
-    # judges the rescue unhealthy and reinstalls what the operator came to undo.
     try:
         manager_verify.disarm(paths, runner)
     except manager_verify.ManagerVerifyError as exc:
+        consequence = (
+            f"it puts {retention.previous.path} back unless {rolled_back} is running when "
+            "it expires"
+            if rearmed is not None
+            else "it was armed for the package this rollback replaced"
+        )
         print(
-            f"error: {target.version or 'the retained package'} is installed, but the install "
-            f"deadline could not be retired ({exc.message}); it will undo this rollback",
+            f"error: {rolled_back} is installed, but the install deadline could not be "
+            f"retired ({exc.message}); {consequence}",
             file=sys.stderr,
         )
         return EXIT_ERROR
