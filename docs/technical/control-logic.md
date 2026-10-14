@@ -22,6 +22,18 @@ control chain, see [control-flow.md](control-flow.md).
 13. Apply deadband and write gates.
 14. Write the power command only behind safety gates.
 
+## Reading Device Reports
+
+Both transports read a device's report through one filter
+(`observable_metrics` in `ems/zendure_mqtt/snapshot.py`): a field that is not a
+finite number below 2^53 is read as missing. Past 2^53 a float no longer holds
+every integer, and the full-charge state store keeps several of these fields as
+SQLite integers, which end at 2^63; a local API report with a `socLimit` of
+1e19 or an `acStatus` of 2^63 used to fail every control cycle there, before
+any device was written. The local API names each dropped field once in the log
+(`http_report_value_ignored`); for MQTT see
+[zendure-mqtt-power-control.md](zendure-mqtt-power-control.md).
+
 ## Stable Fast Output Control
 
 The controller keeps an internal `commanded_total_w`. It is signed: positive is

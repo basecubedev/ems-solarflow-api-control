@@ -22,6 +22,7 @@ from ems.health import CommHealth, redact_error, redact_url_credentials
 from ems.logging_utils import log_event
 from ems.models import DeviceState, parse_pack_count
 from ems.power_direction import AC_MODE_INPUT
+from ems.zendure_mqtt.snapshot import observable_metrics
 
 
 def zendure_write_succeeded(error_event, dev, response, **fields):
@@ -491,6 +492,7 @@ class ZendureClient:
         self.observed_product = None
         self._charge = ChargeRecord()
         self.observed_in_charge_mode = False
+        self._ignored_report_values_named = set()
         self.read_health = CommHealth(name, kind="read")
         self.write_health = CommHealth(name, kind="write")
 
@@ -539,12 +541,18 @@ class ZendureClient:
 
             if data.get("product"):
                 self.observed_product = str(data["product"])
-            state = parse_device(data)
+            report = data["properties"]
+            properties = observable_metrics(report)
+            self._note_ignored_report_values(report, properties)
+            state = parse_device({
+                "properties": properties,
+                "packData": data.get("packData") or report.get("packData"),
+            })
             self.observed_in_charge_mode = (
                 state.ac_mode == AC_MODE_INPUT and state.smart_mode == 1
             )
             self._charge.observe(
-                state, setpoint_reported="inputLimit" in data["properties"]
+                state, setpoint_reported="inputLimit" in properties
             )
             self.read_health.record_success((time.monotonic() - start) * 1000.0)
             return state
@@ -557,6 +565,21 @@ class ZendureClient:
             )
             logging.warning(f"{self.name} fetch failed: {e}")
             return None
+
+    def _note_ignored_report_values(self, report, readable):
+        """Name once each field ``parse_device`` reads that a report carried as no usable number."""
+
+        for name in sorted(DEVICE_STATE_PROPERTIES.intersection(report).difference(readable)):
+            if name in self._ignored_report_values_named:
+                continue
+            self._ignored_report_values_named.add(name)
+            log_event(
+                logging.INFO,
+                "http_report_value_ignored",
+                device=self.name,
+                metric=name,
+                reason="not_a_usable_number",
+            )
 
     def write_output_limit(self, value):
         """POST outputLimit to the local device API; return success."""

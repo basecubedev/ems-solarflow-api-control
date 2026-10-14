@@ -58,6 +58,8 @@ def observable_metrics(metrics):
     integer, the pack count is read through a float, and the full-charge state
     store keeps it and its neighbours as SQLite integers, which end at 2**63.
     A number a report quotes as text was read as that number when it arrived.
+    The local API's report is read through this filter as the device sent
+    it, so a number it quotes as text reads as missing there.
     """
 
     return {
