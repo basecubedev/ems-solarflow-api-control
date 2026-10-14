@@ -17,6 +17,7 @@ from admin.maintenance_config import (
 )
 from admin.server import ScanRegistry, create_server
 from tests.admin_auth_helpers import auth_headers, authenticate
+from tests.test_admin_maintenance_transport_switch_frontend import _extract_fn, _read
 
 pytestmark = [
     pytest.mark.admin,
@@ -2086,3 +2087,121 @@ def test_a_grid_meter_value_its_type_cannot_hold_blocks_the_apply():
         e["code"] == "config_value_invalid" and e["message"].startswith("Grid meter:")
         for e in errors
     )
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {},
+        {"tls": True},
+        {"tls": False},
+        {"tls": True, "tls_insecure": True},
+        {"tls_mode": "tls"},
+        {"tls_mode": "system_ca"},
+        {"tls_mode": "insecure_no_verify"},
+        {"tls_mode": "plaintext"},
+        {"tls_mode": "tls", "tls": True},
+        {"tls_mode": "bogus"},
+        {"tls_mode": "tls", "tls": False},
+        {"tls_mode": "tls", "tls_insecure": True},
+        {"tls": "false"},
+        {"tls": False, "tls_insecure": True},
+    ],
+)
+def test_the_broker_card_reads_tls_as_the_ems_connects(stored):
+    """The card's TLS view is the EMS's own reading of the stored keys,
+    ``tls_mode`` included; a reading the EMS refuses is marked invalid and
+    shown as TLS."""
+
+    from admin.maintenance_config import build_maintenance_draft
+    from ems.zendure_mqtt.runtime import load_zendure_mqtt_broker_configs
+
+    block = {"host": "10.0.0.1", **stored}
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": block,
+    }
+
+    view = build_maintenance_draft(config)["zendure_mqtt"]
+    brokers, runtime_errors, _timeout = load_zendure_mqtt_broker_configs(block)
+
+    refused = bool(runtime_errors.get("default"))
+    assert view["tls_stored_invalid"] is refused
+    assert view["tls"] is (True if refused else brokers["default"].tls)
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"tls_mode": "tls"},
+        {"tls_mode": "insecure_no_verify"},
+        {"tls_mode": "plaintext"},
+        {"tls_mode": "bogus"},
+    ],
+)
+def test_an_untouched_broker_card_leaves_a_stored_tls_mode_alone(stored):
+    from admin.maintenance_config import _merge_draft, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {"host": "10.0.0.1", "port": 8883, **stored},
+    }
+    before = json.dumps(config["zendure_mqtt"])
+    draft = build_maintenance_draft(config)
+
+    merged = _merge_draft(config, draft, [])
+
+    assert json.dumps(merged["zendure_mqtt"]) == before
+
+
+@pytest.mark.parametrize(
+    "stored, choice",
+    [
+        ({"tls_mode": "tls"}, False),
+        ({"tls_mode": "plaintext"}, True),
+    ],
+)
+def test_a_security_choice_against_a_stored_tls_mode_is_refused_not_dropped(
+    stored, choice
+):
+    """The card never writes ``tls_mode``; a choice that contradicts it is
+    written as ``tls`` so the EMS's validation refuses it and names the fix,
+    instead of an apply that reports success and changes nothing."""
+
+    from admin.maintenance_config import _merge_draft, _validate, build_maintenance_draft
+
+    config = {
+        "system": {"enabled": True},
+        "devices": [{"name": "INV_1", "ip": "192.0.2.5", "sn": "ABC"}],
+        "zendure_mqtt": {"host": "10.0.0.1", "port": 8883, **stored},
+    }
+    draft = build_maintenance_draft(config)
+    draft["zendure_mqtt"]["tls"] = choice
+    draft["zendure_mqtt"]["tls_explicit"] = True
+    issues = []
+
+    merged = _merge_draft(config, draft, issues)
+    errors = _validate(merged, issues)["errors"]
+
+    assert merged["zendure_mqtt"]["tls_mode"] == stored["tls_mode"]
+    assert merged["zendure_mqtt"]["tls"] is choice
+    assert [e["code"] for e in errors if e["code"] == "zendure_mqtt_tls_invalid"] == [
+        "zendure_mqtt_tls_invalid"
+    ]
+    assert "contradicts tls_mode" in next(
+        e["message"] for e in errors if e["code"] == "zendure_mqtt_tls_invalid"
+    )
+
+
+def test_the_invalid_tls_help_names_a_stored_tls_mode():
+    """The card's TLS view resolves ``tls_mode`` as the EMS does, so a stored
+    mode the EMS refuses is shown as invalid; the help must name that key
+    rather than send the operator to ``tls_insecure`` alone."""
+
+    js = _read()
+    sync = _extract_fn(js, "syncMaintenanceBrokerForm")
+
+    assert "Without a tls_mode, choosing " in sync
+    assert "A stored zendure_mqtt.tls_mode decides TLS on its own" in sync

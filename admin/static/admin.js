@@ -14697,9 +14697,12 @@ function syncMaintenanceBrokerForm() {
         "Edit broker connections there; they are shown read-only here."
       : ((catalog.zendure_mqtt_broker && catalog.zendure_mqtt_broker.help) || "") +
         (broker.tls_stored_invalid
-          ? " The stored TLS settings are invalid. Choosing TLS here keeps a " +
-            "stored tls_insecure: true valid; for Plain, or when tls_insecure is " +
-            "not true or false, correct zendure_mqtt.tls_insecure in config.json."
+          ? " The stored TLS settings are invalid. Without a tls_mode, choosing " +
+            "TLS here keeps a stored tls_insecure: true valid; for Plain, or when " +
+            "tls_insecure is not true or false, " +
+            "correct zendure_mqtt.tls_insecure in config.json. " +
+            "A stored zendure_mqtt.tls_mode decides TLS on its own and is " +
+            "corrected in config.json too."
           : "");
   }
   [

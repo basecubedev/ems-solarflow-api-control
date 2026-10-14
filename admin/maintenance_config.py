@@ -35,8 +35,6 @@ from admin.setup_config import (
 )
 from admin.zendure_mqtt_broker_profiles import (
     BrokerEndpointError,
-    BrokerSecurityError,
-    broker_tls_metadata,
     default_zendure_cloud_auth_available,
     draft_broker_endpoint,
     endpoint_broker_profile,
@@ -727,7 +725,9 @@ def _device_draft(device, broker_sources=None, *, entry_ref=None, catalog_ids=(N
 def _stored_broker_tls(broker):
     """``(tls, invalid)`` for the editable view of a stored legacy broker.
 
-    A view cannot refuse, so an unresolvable stored mode is presented as TLS
+    Read from the stored ``tls_mode``, ``tls`` and ``tls_insecure`` with the
+    resolver the EMS connects with, so the card shows the TLS the EMS uses. A
+    view cannot refuse, so an unresolvable stored mode is presented as TLS
     rather than as plaintext: showing it as plain is the one reading that could
     talk an operator into saving a downgrade of a broker EMS Core would have
     rejected at startup. ``invalid`` tells the merge that this TLS is the view's
@@ -735,8 +735,12 @@ def _stored_broker_tls(broker):
     """
 
     try:
-        tls, _insecure = broker_tls_metadata(broker)
-    except BrokerSecurityError:
+        tls, _insecure = resolve_mqtt_tls_metadata(
+            tls_mode=broker.get("tls_mode"),
+            tls=broker.get("tls"),
+            tls_insecure=broker.get("tls_insecure"),
+        )
+    except ValueError:
         return True, True
     return tls, False
 
@@ -2045,12 +2049,18 @@ def _merge_zendure_mqtt_broker(merged, broker):
         target["port"] = _coerce_number(broker.get("port"))
     elif creating and host:
         target["port"] = 1883
-    stored_invalid = existing_is_dict and _stored_broker_tls(existing)[1]
-    if broker.get("tls_explicit") is True or not stored_invalid:
-        if broker.get("tls"):
-            target["tls"] = True
-        elif "tls" in target:
-            target["tls"] = bool(broker.get("tls"))
+    stored_tls, stored_invalid = (
+        _stored_broker_tls(existing) if existing_is_dict else (False, False)
+    )
+    wanted_tls = bool(broker.get("tls"))
+    if stored_invalid:
+        if broker.get("tls_explicit") is True:
+            if wanted_tls:
+                target["tls"] = True
+            elif "tls" in target:
+                target["tls"] = False
+    elif wanted_tls != stored_tls:
+        target["tls"] = wanted_tls
     username = str(broker.get("username") or "").strip()
     if username:
         target["username"] = username
