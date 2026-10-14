@@ -75,8 +75,7 @@ Use this for standalone EMS operation without Home Assistant.
     "summer_min_soc": 15,
     "winter_min_soc": 40,
     "ramp_step_percent": 3,
-    "adjust_hour": 12,
-    "ac_charge_power": 200
+    "adjust_hour": 12
   },
 
   "devices": [
@@ -612,8 +611,7 @@ control.
     "summer_min_soc": 15,
     "winter_min_soc": 40,
     "ramp_step_percent": 3,
-    "adjust_hour": 12,
-    "ac_charge_power": 200
+    "adjust_hour": 12
   }
 }
 ```
@@ -631,8 +629,8 @@ in the default live profile:
 }
 ```
 
-`inputLimit` is only used in the winter/SOC reconciliation context. Do not use
-winter mode as a per-cycle mode write mechanism.
+Winter mode writes only `minSoc`, never `inputLimit`. Do not use winter mode
+as a per-cycle mode write mechanism.
 
 Run first:
 

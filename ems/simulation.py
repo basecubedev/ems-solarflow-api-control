@@ -763,16 +763,6 @@ def run_self_tests():
             reason="positive_panel_power_not_detected"
         )
 
-    payload = cfg.build_winter_ac_charge_limit_payload()
-    if set(payload.keys()) != {"inputLimit"}:
-        ok = False
-        log_event(
-            logging.ERROR,
-            "self_test_failed",
-            test="winter_ac_charge_limit_payload",
-            payload=json.dumps(payload, sort_keys=True)
-        )
-
     ok = self_test_ac_charge_direction(ok)
     ok = self_test_ac_charge_without_pv(ok)
 

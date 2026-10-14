@@ -116,8 +116,6 @@ views:
                         name: Winter minSoc
                       - entity: sensor.ems_solarflow_winter_ramp_step
                         name: Ramp Step
-                      - entity: sensor.ems_solarflow_winter_ac_charge_power
-                        name: AC Charge Limit
                       - entity: sensor.ems_solarflow_winter_last_adjust_date
                         name: Last Adjust
               - type: horizontal-stack

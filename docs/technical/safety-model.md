@@ -57,7 +57,7 @@ chosen from its broker `source`; the write is published to
 `mqtt.write_topic`).
 
 State reconciliation writes (`minSoc`, `socSet`, `smartMode`, `gridOffMode`,
-winter `inputLimit`, full-charge-assist `socSet`/`acMode`/`inputLimit`)
+full-charge-assist `socSet`/`acMode`/`inputLimit`)
 additionally require:
 
 ```text
@@ -102,7 +102,6 @@ minSoc
 socSet
 smartMode
 gridOffMode for explicit offgrid socket intent
-inputLimit only during winter recovery reconciliation
 socSet=1000 / configured socSet restore during battery full-charge assist
 acMode/inputLimit during battery full-charge assist only through runtime intent
 ```
@@ -235,8 +234,8 @@ the runtime intent reconciler. Legacy role names (`normal_output`,
 
 - `socSet` — Max-SoC / full-charge-assist target; also used by battery
   full-charge assist (`socSet=1000`, then restore of the configured `socSet`).
-- `inputLimit` — AC charge power, reconciled during winter recovery and during
-  battery full-charge assist through the runtime AC intent reconciler.
+- `inputLimit` — AC charge power, reconciled through the runtime AC intent
+  reconciler: an operator's AC input role and battery full-charge assist.
 
 These require `allow_state_reconciliation_writes=true`.
 

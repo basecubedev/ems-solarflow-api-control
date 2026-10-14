@@ -657,8 +657,9 @@ overrides it for one device; `auto` keeps the type default. A battery device
 with `pv_kwp: 0` is battery-only. See
 [winter-mode.md](../winter-mode.md#device-types-and-policies).
 
-`winter.ac_charge_power` is the conservative `inputLimit` used only during the
-winter/SOC reconciliation context.
+Winter mode writes no `inputLimit`. The former `winter.ac_charge_power` key no
+longer exists; one left in an existing `config.json` is ignored, whatever its
+value (see [winter-mode.md](../winter-mode.md#no-ac-charge-limit)).
 
 Winter logic runs as SOC reconciliation. It does not change normal output target
 calculation and must not create per-cycle mode writes.

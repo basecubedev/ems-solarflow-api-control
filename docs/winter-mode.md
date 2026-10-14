@@ -34,7 +34,6 @@ settings below remain static config.
     "winter_min_soc": 40,
     "ramp_step_percent": 3,
     "adjust_hour": 12,
-    "ac_charge_power": 200,
     "policies": {
       "pv_battery": "solar_morning_step",
       "battery_only": "noon_step"
@@ -218,8 +217,9 @@ raise lands on the SoC itself; see
 
 On 2026-10-03 an adjustment raised `minSoc` from 25 to 30 at a SoC of 25, and
 both inverters charged from the grid at their full AC power, 1.2 to 1.4 kW each,
-for five minutes until they had reached it; the 200 W `inputLimit` below does
-not limit that while the inverter is in output mode. On 2026-10-05 `minSoc`
+for five minutes until they had reached it; the 200 W `inputLimit` winter mode
+then also wrote did not limit that while the inverter was in output mode (see
+[No AC Charge Limit](#no-ac-charge-limit)). On 2026-10-05 `minSoc`
 three and four points above the SoC caused no grid charging over five minutes;
 six points above it started about 1 kW of grid charging within five seconds.
 Once started, the firmware kept charging from the grid after `minSoc` was
@@ -257,21 +257,17 @@ what the battery holds.
 What this does not prevent: a battery that discharges down to its `minSoc`
 draws the same burst. After a follow that is one point of discharge away.
 
-## AC Charge Limit
+## No AC Charge Limit
 
-When a daily step is taken, the EMS may write a conservative AC input limit:
-
-```json
-{"inputLimit": 200}
-```
-
-This write is only in the winter reconciliation context. It never includes:
-
-```text
-acMode
-smartMode
-outputLimit
-```
+Winter mode's reconcile writes `minSoc` alone. It used to write
+`inputLimit` = `winter.ac_charge_power` (200 W) with every daily step, meant to
+keep the grid charge a raised `minSoc` sets off small. In output mode the
+firmware ignores it -- on 2026-10-03 both inverters charged at 1.2 to 1.4 kW
+with it in place -- and in AC input mode `inputLimit` belongs to the runtime AC
+intent reconciler, whose charge power it replaced until that wrote it back. The
+write is gone, and `winter.ac_charge_power` with it; one left in an existing
+`config.json` is ignored, whatever its value. What keeps the grid charge away is
+the raise rule above.
 
 ## Safety
 
@@ -300,9 +296,6 @@ winter_follow_soc
 winter_raise_waits_for_battery
 winter_summer_reset
 winter_min_soc_unknown
-dry_run_winter_ac_charge_limit
-write_winter_ac_charge_limit
-write_winter_ac_charge_limit_error
 ```
 
 `winter_mode_state` is logged at `info` only when the active state changes;

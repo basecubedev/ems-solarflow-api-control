@@ -344,12 +344,7 @@ def _winter_target(pack_num):
 
 
 def test_winter_reserve_is_not_applied_without_a_battery():
-    """Raising a minimum SoC on a device with no pack commands nothing.
-
-    It also pulled a winter AC charge input limit along behind it, which is a
-    charge setting for a battery that is not there. The morning step is the
-    one place that can still take one.
-    """
+    """Raising a minimum SoC on a device with no pack commands nothing."""
 
     assert _winter_target(0) == (None, False)
 

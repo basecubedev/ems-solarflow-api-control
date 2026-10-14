@@ -122,9 +122,7 @@ def test_winter_metadata_lists_expected_normal_and_advanced_fields():
 
     assert winter["enabled_path"] == "winter.enabled"
     assert {"winter.months", "winter.summer_min_soc", "winter.winter_min_soc"} <= by_level["normal"]
-    assert {"winter.ramp_step_percent", "winter.adjust_hour", "winter.ac_charge_power"} <= by_level[
-        "advanced"
-    ]
+    assert {"winter.ramp_step_percent", "winter.adjust_hour"} <= by_level["advanced"]
 
 
 def test_grid_meter_variants_are_exposed_for_setup():

@@ -1458,24 +1458,6 @@
             "default": 12,
             "template": true,
             "secret": false
-          },
-          {
-            "path": "winter.ac_charge_power",
-            "label": "AC charge power",
-            "description": "Optional AC charging power used by the winter strategy when supported.",
-            "type": "number",
-            "level": "advanced",
-            "scope": "both",
-            "required": false,
-            "requires_restart": true,
-            "restart_required": true,
-            "backup_recommended": true,
-            "risk": "control_stability",
-            "unit": "W",
-            "min": 0,
-            "default": 200,
-            "template": true,
-            "secret": false
           }
         ],
         "enabled_path": "winter.enabled"

@@ -586,8 +586,8 @@ python3 emsctl.py winter enable
 python3 emsctl.py winter disable
 ```
 
-This only toggles winter mode at runtime. Winter SOC targets, months, ramp
-timing, and AC charge power remain static `config.json` settings.
+This only toggles winter mode at runtime. Winter SOC targets, months and ramp
+timing remain static `config.json` settings.
 
 ## Device Commands
 

@@ -51,7 +51,6 @@ WINTER_DEFAULTS = {
     "winter_min_soc": 40,
     "ramp_step_percent": 3,
     "adjust_hour": 12,
-    "ac_charge_power": 200,
     "policies": configurable_class_defaults()
 }
 
@@ -3528,9 +3527,3 @@ def estimate_winter_ramp_days(current_min_soc):
     remaining = max(0, winter_min_soc - current_min_soc)
 
     return int((remaining + step - 1) / step)
-
-
-def build_winter_ac_charge_limit_payload():
-    return {
-        "inputLimit": winter_config_int("ac_charge_power", 200, minimum=0)
-    }

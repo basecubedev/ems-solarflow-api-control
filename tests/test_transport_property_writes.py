@@ -241,11 +241,10 @@ def test_reconciliation_paths_skip_mqtt_devices_with_explicit_reason(caplog):
             dev, state, ac_output_intent(dev.name)
         ) is True
         controller.apply_device_modes(dev, state)
-        controller.apply_winter_ac_charge_limit(dev)
         controller.apply_runtime_device_state(dev, state)
         assert controller.apply_soc_limits(dev, state) is True
     skips = [r for r in caplog.messages if "state_reconciliation_skipped" in r]
-    assert len(skips) == 5
+    assert len(skips) == 4
     assert all("transport_state_reconciliation_unsupported" in r for r in skips)
     assert dev._service.published == []
 

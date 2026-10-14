@@ -195,7 +195,7 @@ def test_the_morning_step_raises_min_soc_three_points_above_the_soc():
     assert _winter_target(controller, _pv_state(20, soc=21, pv=60)) == (24, True)
 
 
-def test_the_morning_step_writes_the_raise_and_the_winter_input_limit():
+def test_the_morning_step_writes_the_raise_and_nothing_else():
     controller = _controller()
     dev = _device(15, 0)
     _min_soc_writes(controller, dev, _pv_state(20, soc=20, pv=0, max_soc=0))
@@ -209,7 +209,7 @@ def test_the_morning_step_writes_the_raise_and_the_winter_input_limit():
             dev, _pv_state(20, soc=20, pv=60, max_soc=0), winter_active=True, now=DAY
         )
 
-    assert writes == [{"minSoc": 230}, {"inputLimit": 200}]
+    assert writes == [{"minSoc": 230}]
 
 
 def test_the_step_waits_while_the_battery_is_well_below_its_min_soc():

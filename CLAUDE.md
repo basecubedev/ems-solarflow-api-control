@@ -278,7 +278,7 @@ hardware generations are not yet validated on physical hardware (see
 `write_topics.py`).
 
 State reconciliation writes (`minSoc`, `socSet`, `smartMode`, `gridOffMode`,
-winter `inputLimit`, full-charge-assist `socSet`/`acMode`/`inputLimit`)
+full-charge-assist `socSet`/`acMode`/`inputLimit`)
 additionally require `allow_state_reconciliation_writes=true` and control
 switched on (system and device: off is off, see `device_state_writes_allowed`),
 and are API-only (MQTT control devices are output-only,

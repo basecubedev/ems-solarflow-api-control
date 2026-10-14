@@ -3468,7 +3468,7 @@ class EMSController:
         both held to the raise rule.
         """
 
-        desired_min_soc, winter_step = self.winter.reconciliation_target(
+        desired_min_soc, _ = self.winter.reconciliation_target(
             dev,
             state,
             winter_active,
@@ -3483,9 +3483,6 @@ class EMSController:
         )
 
         self.apply_device_modes(dev, state)
-
-        if winter_step:
-            self.apply_winter_ac_charge_limit(dev)
 
     def confirm_full_charge_assist_ac_restore(self, dev, state, intent, now):
         if not self.battery_full_charge_store:
@@ -4154,56 +4151,6 @@ class EMSController:
             target_min_soc=target
         )
 
-    def apply_winter_ac_charge_limit(self, dev):
-        """Apply conservative winter AC charge input limit."""
-
-        if not self.state_reconciliation_supported(dev, "winter_ac_charge_limit"):
-            return
-
-        properties = cfg.build_winter_ac_charge_limit_payload()
-        fields = {
-            "device": dev.name,
-            "input_limit_w": properties["inputLimit"]
-        }
-
-        if not self.device_state_writes_allowed(dev):
-            fields.update(self.state_write_gate_fields(dev))
-
-            log_event(
-                logging.INFO,
-                "dry_run_winter_ac_charge_limit",
-                **fields
-            )
-            return
-
-        try:
-            ok = write_device_properties(
-                dev,
-                properties,
-                reason="winter_ac_charge_limit",
-                field="winter_ac_charge_limit",
-                error_event="write_winter_ac_charge_limit_error",
-                log_fields=fields
-            )
-
-            if not ok:
-                return
-
-            log_event(
-                logging.INFO,
-                "write_winter_ac_charge_limit",
-                **fields
-            )
-
-        except Exception as e:
-            log_event(
-                logging.WARNING,
-                "write_winter_ac_charge_limit_error",
-                device=dev.name,
-                input_limit_w=properties["inputLimit"],
-                error=e
-            )
-
     def apply_device_modes(self, dev, state):
         """Apply device operating modes if required.
 
@@ -4561,13 +4508,6 @@ class EMSController:
             cfg.winter_step_percent(),
             "%",
             None
-        )
-
-        self.publish_sensor(
-            p + "winter_ac_charge_power",
-            cfg.winter_config_int("ac_charge_power", 200, minimum=0),
-            "W",
-            "power"
         )
 
         self.publish_sensor(

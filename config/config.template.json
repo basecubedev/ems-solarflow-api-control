@@ -205,7 +205,6 @@
     "winter_min_soc": 40,
     "ramp_step_percent": 3,
     "adjust_hour": 12,
-    "ac_charge_power": 200,
     "policies": {
       "pv_battery": "solar_morning_step",
       "battery_only": "noon_step"

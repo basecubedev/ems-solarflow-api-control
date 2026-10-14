@@ -1068,8 +1068,6 @@ winter_pv_kwp_zero_but_pv_reported
 winter_follow_soc
 winter_raise_waits_for_battery
 winter_summer_reset
-dry_run_winter_ac_charge_limit
-write_winter_ac_charge_limit
 ```
 
 If no winter event appears, check:
@@ -1099,8 +1097,8 @@ within three hours of the day's first PV or of its step, exports at most
 capability reason `winter_solar_charge`.
 
 `winter_mode_state` is logged at `info` only when the active state changes;
-otherwise it is a `debug` trace. `winter_step`, `winter_follow_soc` and
-`write_winter_ac_charge_limit` stay visible at `info`. `winter_summer_reset` is
+otherwise it is a `debug` trace. `winter_step` and `winter_follow_soc` stay
+visible at `info`. `winter_summer_reset` is
 `debug` while its raise waits for the battery, except the first one that drops
 a target remembered in winter, which is `info`; otherwise it is `info`.
 `winter_raise_waits_for_battery` is `info` at the step and when a waiting raise

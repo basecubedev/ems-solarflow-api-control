@@ -82,8 +82,7 @@ dashboard tells you about it:
 **MQTT control devices take the power command only** — output, and a charge from
 surplus where the model and its **AC charging** switch allow it (see
 [AC charging from surplus](../../ac-charging.md)). State reconciliation
-(`minSoc`, `socSet`, `smartMode`, `gridOffMode`, winter `inputLimit`,
-full-charge assist) and the manual AC role are API-only, so those fields do not
+(`minSoc`, `socSet`, `smartMode`, `gridOffMode`, full-charge assist) and the manual AC role are API-only, so those fields do not
 change for an MQTT-controlled device.
 
 ## Read-only and write-blocked devices
