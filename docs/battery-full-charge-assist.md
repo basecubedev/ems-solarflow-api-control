@@ -85,8 +85,18 @@ told apart by `delivered=True` or `delivered=False`. The assist stays due:
 `socSet` stays at 100 % and the restore waits, and once control is back the
 assist goes on, or completes and restores if the battery got full meanwhile. No
 assist starts while control is off. A charge from before a restart with control
-off was never on record and is left to the device, and a stop of the EMS does
-not end the assist's charge, whether control is on or off.
+off was never on record and is left to the device.
+
+A stop the EMS reaches by itself -- `--once`, `--max-cycles`, `--duration`, an
+error that ends the process -- ends the assist's charge with the same release
+that returns the regulator's (see [ac-charging.md](ac-charging.md#safety)):
+the exit to idle on the transport's gate, logged as
+`ac_charge_released_on_shutdown` with `charge=battery_full_charge_assist`. It
+reads the same record, so a charge the device left, or one already sent its
+three exits while control was off, gets nothing. A stop by signal leaves the
+charge running, as every charge, and names the device in
+`ac_charge_kept_across_stop`. The assist itself stays due and goes on when the
+EMS is back.
 
 ## Configuration
 
@@ -118,7 +128,11 @@ current SOC, unless firmware already reports `socLimit == 1`.
 
 `enable_ac_charge_mode` controls whether active assist also requests AC input
 mode. The AC mode transition uses the runtime AC intent foundation; there is no
-separate assist-owned `acMode` writer.
+separate assist-owned `acMode` writer. Switched off by a restart while an assist
+holds the device in AC input, the assist claims `acMode=2` back through the same
+reconciler and gates, as its restore does; once the device reports it, the
+assist leaves the direction alone for the rest of its run. Switched on again,
+the assist owes the restore of `acMode` after it once more.
 
 Deleting `data/ems_state.sqlite`, or the configured state database, resets the
 full-charge assist history and the remembered enabled/disabled state. On the

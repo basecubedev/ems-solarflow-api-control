@@ -176,7 +176,8 @@ after an abrupt stop, check the device and stop it in the Zendure app or with
 `emsctl.py device WR1 ac-mode output`.
 
 The EMS **does** return a charging device when it stops by itself: `--once`,
-`--max-cycles`, `--duration` or an error that ends it. In normal operation a
+`--max-cycles`, `--duration` or an error that ends it. That covers the
+full-charge assist's grid charge as well as the regulator's. In normal operation a
 failing cycle (`diagnose --control` names it) does not end the EMS: it stops
 where it raised, what it wrote before stands, and a charge it no longer reaches
 runs on, up to the maximum SoC. An unstoppable kill (power loss, `kill -9`, a

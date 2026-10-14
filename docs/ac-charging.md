@@ -324,8 +324,10 @@ command the process writes, so it is sent whatever the resend window says, and
 `ac_charge_release_failed` when it did not, and `ac_charge_release_withheld`
 when the write gate kept it back (dry run, simulation). A dry run never puts a
 charge on a device, so its release is for the regulator's target only; each
-release event names the record it acted on, `charge=ems_charge_on_record` or
-`charge=regulator_target`. On an MQTT device whose commands are
+release event names the record it acted on, `charge=ems_charge_on_record`,
+`charge=regulator_target`, or `charge=battery_full_charge_assist` for the
+full-charge assist's charge, which the controller keeps on a record of its own
+(see [battery-full-charge-assist.md](battery-full-charge-assist.md)). On an MQTT device whose commands are
 acknowledged (Hyper 2000), a change of direction does not queue behind the
 command it replaces.
 
