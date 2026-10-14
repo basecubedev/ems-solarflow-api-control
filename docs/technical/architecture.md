@@ -80,15 +80,14 @@ normal `outputLimit` regulation.
 charge power is stored per device as `ac_charge_power_w` and is reconciled as
 Zendure `inputLimit` only while the runtime role is `ac_input`. Both values are
 compared against current telemetry and written only when they differ, using the
-existing runtime `/properties/write` path and the normal write gates. The
-startup AC mode reconcile path delegates to this same owner so there is not a
-second blind writer.
+existing runtime `/properties/write` path and the normal write gates.
 
-When startup reconciliation targets normal output and the reported `acMode` is
-not a known value (`1` or `2`), the controller logs `unknown_ac_mode` and skips
-the write instead of forcing output mode from unsupported or missing telemetry.
-Explicit runtime output intent, for example `emsctl device WR1 ac-mode output`,
-may write `acMode=2` from reported `acMode=0`.
+A report without `acMode`, or with a value other than `1` or `2`, is an unknown
+mode, not `0` (K10, owner decision 2026-10-12). Over an unknown mode only a role
+the operator set in runtime state is written, for example
+`emsctl device WR1 ac-mode output`; the per-cycle default `ac_output` claim and
+the full-charge assist write nothing, and the controller logs `unknown_ac_mode`
+once per device until the mode is known again.
 Legacy runtime role names from the development branch are accepted defensively:
 `normal_output` is treated as `ac_output`, while `ac_input_charge` and
 `reserved` are treated as `ac_input` so older blocked states never become output

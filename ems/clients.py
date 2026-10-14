@@ -387,6 +387,7 @@ def parse_device(data):
         pack_num=_observed_pack_count(data, props),
         soc_status=props.get("socStatus") or 0,
         battery_calibration_time=props.get("batCalTime"),
+        ac_mode_reported=props.get("acMode") is not None,
     )
 
 
@@ -439,6 +440,7 @@ def zero_device_state():
         pack_num=None,
         soc_status=0,
         battery_calibration_time=None,
+        ac_mode_reported=False,
     )
 
 class ZendureClient:

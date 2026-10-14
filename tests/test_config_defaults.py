@@ -111,7 +111,6 @@ def test_config_template_standalone_live_control_defaults():
     assert template["system"]["allow_mqtt_local_control_writes"] is True
     assert template["system"]["allow_mqtt_zendure_control_writes"] is True
     assert template["system"]["allow_state_reconciliation_writes"] is True
-    assert template["system"]["reconcile_ac_mode_on_start"] is True
     assert template["system"]["reconcile_smart_mode"] is True
 
 
@@ -321,7 +320,6 @@ def base_minimal_config():
             "simulation_mode": False,
             "allow_hardware_writes": True,
             "allow_state_reconciliation_writes": True,
-            "reconcile_ac_mode_on_start": True,
             "reconcile_smart_mode": True,
             "max_total_power": 800,
             "max_device_power": 800,
@@ -1929,7 +1927,6 @@ def test_omitted_ha_keys_default_to_disabled(tmp_path):
             "simulation_mode": False,
             "allow_hardware_writes": True,
             "allow_state_reconciliation_writes": True,
-            "reconcile_ac_mode_on_start": True,
             "reconcile_smart_mode": True,
             "max_total_power": 800,
             "max_device_power": 800,
@@ -1955,7 +1952,6 @@ def test_omitted_ha_keys_default_to_disabled(tmp_path):
 
         assert cfg.HA_ENABLED is False
         assert cfg.HA_CONTROL_ENABLED is False
-        assert cfg.RECONCILE_AC_MODE_ON_START is True
         assert cfg.RECONCILE_SMART_MODE is True
     finally:
         restore_config_module(snapshot)
@@ -1971,7 +1967,6 @@ def test_omitted_ha_section_defaults_to_disabled(tmp_path):
             "simulation_mode": False,
             "allow_hardware_writes": True,
             "allow_state_reconciliation_writes": True,
-            "reconcile_ac_mode_on_start": True,
             "reconcile_smart_mode": True,
             "max_total_power": 800,
             "max_device_power": 800,

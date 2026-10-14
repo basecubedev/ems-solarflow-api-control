@@ -11,7 +11,7 @@ its interval and tries again, and the log says so without flooding.
 import logging
 import time
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -100,7 +100,6 @@ def _run_a_cycle_that_raises_on_wr2(devices):
         sleep_enabled=False,
         runtime_state=RuntimeStateStub(),
     )
-    controller.run_startup_ac_mode_reconcile_once = Mock()
     written = []
 
     def set_output_limit(dev, value, charge_exit=None):

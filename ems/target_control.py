@@ -235,37 +235,6 @@ def firmware_recovery_or_ac_charge_active(state):
     )
 
 
-def startup_ac_mode_initialization_blocker(state):
-    """Return the reason acMode startup initialization should be skipped.
-
-    The battery's own state is asked first. A device found charging used to
-    report ``ac_charge_active`` whatever its charge level, which hid whether the
-    firmware was recovering an empty battery or an EMS that died mid-charge had
-    simply left it that way. At the floor the firmware owns the device and the
-    startup reconcile keeps its hands off; above it, a charge nobody is
-    commanding is a leftover the reconcile is there to take back.
-    """
-
-    if int(state.ac_mode) != 1:
-        return "unknown_or_unsupported_ac_mode"
-
-    if int(state.soc_limit) == 2:
-        return "discharge_cutoff"
-
-    if state.min_soc > 0 and state.soc <= state.min_soc:
-        return "soc_at_or_below_min"
-
-    if state.output > 0:
-        return "output_active"
-
-    if state.pack_in > 0:
-        return "battery_discharge_active"
-
-    if state.pack_out > 0:
-        return "battery_charge_active"
-
-    return None
-
 # =====================
 # DEVICE CLIENTS
 # =====================

@@ -628,7 +628,6 @@ def default_safe_config():
             "allow_mqtt_local_control_writes": False,
             "allow_mqtt_zendure_control_writes": False,
             "allow_state_reconciliation_writes": False,
-            "reconcile_ac_mode_on_start": True,
             "reconcile_smart_mode": True,
             "max_total_power": 800,
             "max_device_power": 800,
@@ -1743,7 +1742,6 @@ ALLOW_HARDWARE_WRITES = False
 ALLOW_MQTT_LOCAL_CONTROL_WRITES = False
 ALLOW_MQTT_ZENDURE_CONTROL_WRITES = False
 ALLOW_STATE_RECONCILIATION_WRITES = False
-RECONCILE_AC_MODE_ON_START = True
 RECONCILE_SMART_MODE = True
 HA_ENABLED = False
 HA_CONTROL_ENABLED = False
@@ -1814,7 +1812,7 @@ def initialize(args, base_dir):
     global OUTPUT_CONTROL_CONFIG, RUNTIME_STATE_PATH, MIN_OUTPUT_LIMIT
     global DRY_RUN, SIMULATION_MODE, ALLOW_HARDWARE_WRITES
     global ALLOW_MQTT_LOCAL_CONTROL_WRITES, ALLOW_MQTT_ZENDURE_CONTROL_WRITES
-    global ALLOW_STATE_RECONCILIATION_WRITES, RECONCILE_AC_MODE_ON_START
+    global ALLOW_STATE_RECONCILIATION_WRITES
     global RECONCILE_SMART_MODE, HA_ENABLED, HA_CONTROL_ENABLED, LOG_LEVEL
     global REDISTRIBUTE_CLAMPED_POWER, PV_KWP_WEIGHTING
     global PV_CHARGE_BALANCE_ENABLED, PV_CHARGE_BALANCE_DEADBAND_PERCENT
@@ -1876,9 +1874,6 @@ def initialize(args, base_dir):
     )
     ALLOW_STATE_RECONCILIATION_WRITES = runtime_control_flag(
         system_config, "allow_state_reconciliation_writes"
-    )
-    RECONCILE_AC_MODE_ON_START = runtime_control_flag(
-        system_config, "reconcile_ac_mode_on_start"
     )
     RECONCILE_SMART_MODE = runtime_control_flag(system_config, "reconcile_smart_mode")
     HA_ENABLED = (
@@ -2207,7 +2202,6 @@ CONTROL_FLAG_BLOCKING_SIDE = {
     "allow_mqtt_local_control_writes": False,
     "allow_mqtt_zendure_control_writes": False,
     "allow_state_reconciliation_writes": False,
-    "reconcile_ac_mode_on_start": False,
     "reconcile_smart_mode": False,
 }
 

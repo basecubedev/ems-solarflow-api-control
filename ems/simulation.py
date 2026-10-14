@@ -185,6 +185,7 @@ def state_from_trace_device(data):
     state.smart_mode = value_from_trace(data, "smart_mode", "smartMode")
     state.grid_off_mode = value_from_trace(data, "grid_off_mode", "gridOffMode")
     state.ac_mode = value_from_trace(data, "ac_mode", "acMode")
+    state.ac_mode_reported = "ac_mode" in data or "acMode" in data
     state.input_limit_w = value_from_trace(data, "input_limit_w", "inputLimit")
     state.charge_max_limit_w = next(
         (
@@ -239,6 +240,7 @@ def built_in_simulation_frames():
                     "outputHomePower": 150,
                     "socLimit": 0,
                     "dcStatus": 1,
+                    "acMode": 2,
                     "acStatus": 1,
                     "packState": 2
                 },
@@ -251,6 +253,7 @@ def built_in_simulation_frames():
                     "outputHomePower": 150,
                     "socLimit": 0,
                     "dcStatus": 1,
+                    "acMode": 2,
                     "acStatus": 1,
                     "packState": 2
                 }
@@ -269,6 +272,7 @@ def built_in_simulation_frames():
                     "outputHomePower": 220,
                     "socLimit": 0,
                     "dcStatus": 1,
+                    "acMode": 2,
                     "acStatus": 1,
                     "packState": 2
                 },
@@ -281,6 +285,7 @@ def built_in_simulation_frames():
                     "outputHomePower": 0,
                     "socLimit": 2,
                     "dcStatus": 0,
+                    "acMode": 2,
                     "acStatus": 0,
                     "packState": 0
                 }
@@ -520,6 +525,7 @@ def self_test_ac_charge_direction(ok):
         surplus_state.solar = 900
         surplus_state.charge_max_limit_w = 1000
         surplus_state.ac_mode = AC_MODE_OUTPUT
+        surplus_state.ac_mode_reported = True
         device.set_state(surplus_state)
 
         meter = SimulatedShellyClient()
@@ -631,6 +637,7 @@ def self_test_ac_charge_without_pv(ok):
         empty_state.max_soc = 100
         empty_state.pack_num = 1
         empty_state.ac_mode = AC_MODE_OUTPUT
+        empty_state.ac_mode_reported = True
         device.set_state(empty_state)
         feeding_the_floor = replace(
             empty_state, soc=40, output=35, output_limit=35, pack_in=42

@@ -237,12 +237,13 @@ writes. The template value is `true` because this is part of the default
 regulation profile after local device limits and SOC limits have been reviewed.
 Required placeholders still force safe mode and block these writes.
 
-`system.reconcile_ac_mode_on_start` keeps the legacy startup compatibility gate
-enabled. Runtime AC mode intent is evaluated during the control loop, but
-startup reconciliation writes happen only when the reported `acMode` is a known
-value and differs from the desired runtime target. This prevents blind repeated
-startup writes while still keeping normal output devices aligned to `acMode=2`;
-explicit runtime output intent can still return a device to `acMode=2`.
+Runtime AC mode intent is evaluated during the control loop. `acMode` is
+written only when the device reports a known mode (`1` or `2`) that differs
+from the desired one, or for an AC role the operator set in runtime state
+(`emsctl device WR1 ac-mode output`, the dashboard): a report without `acMode`
+is an unknown mode, not `0`. The former `system.reconcile_ac_mode_on_start` key
+no longer exists; one left in an existing `config.json` is ignored, whatever its
+value.
 
 Runtime AC charge power is not a static device config value. Set it through
 runtime-state, for example with `python3 emsctl.py device WR1 ac-charge-power
@@ -1540,7 +1541,6 @@ after you enter real local values and review installation-specific limits:
     "dry_run": false,
     "allow_hardware_writes": true,
     "allow_state_reconciliation_writes": true,
-    "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true
   }
 }

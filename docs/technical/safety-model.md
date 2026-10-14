@@ -214,12 +214,15 @@ devices target `acMode=2`; runtime AC input/charge reservations target
 `acMode=1` and are excluded from normal output regulation.
 
 The controller writes `acMode` only when telemetry differs from the desired
-runtime target. Automatic startup reconciliation remains conservative: unknown
-`acMode` values are not forced back to normal output automatically, and firmware
-recovery/charge blockers are still honored before startup returns a device to
-`acMode=2`. An explicit runtime output command, such as
-`emsctl device WR1 ac-mode output`, may still write `acMode=2` from reported
-`acMode=0` or from `acMode=1` with active AC charge telemetry.
+runtime target, and only over a mode it knows: a report without `acMode`, or
+with a value other than `1` or `2`, is an unknown mode, not `0`. Over an
+unknown mode neither the default `ac_output` claim nor the full-charge assist
+writes; `unknown_ac_mode` is logged once per device until the mode is known
+again. A role the operator set, such as `emsctl device WR1 ac-mode output`, is
+still written over an unknown mode, and over `acMode=1` with active AC charge
+telemetry. A charge the firmware runs at the floor is held by its own claim,
+which the reconciler does not write over (see
+[control-logic.md](control-logic.md#who-owns-a-devices-ac-direction)).
 
 `acMode`/`inputLimit` writes for the runtime AC role are owned exclusively by
 the runtime intent reconciler. Legacy role names (`normal_output`,

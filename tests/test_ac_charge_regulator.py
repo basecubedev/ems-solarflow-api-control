@@ -115,7 +115,6 @@ class Harness:
             sleep_enabled=False,
             runtime_state=runtime_state,
         )
-        self.controller.run_startup_ac_mode_reconcile_once = Mock()
         self.controller.set_output_limit = Mock()
         self.feature = {**AC_CHARGE_CONTROL_DEFAULTS, "enabled": feature}
         self.seconds_per_cycle = seconds_per_cycle
@@ -572,15 +571,14 @@ def test_a_running_charge_is_stopped_even_when_the_target_is_zero():
     A charging device reports outputLimit 0 and output 0 while drawing 600 W. A
     discharge-only reference reads that as idle, so an idle target looks like no
     change and the write is skipped -- leaving the hardware charging from the
-    grid with the EMS running and content. Local-HTTP devices are rescued by the
-    startup acMode reconcile; MQTT control devices have no such path, which is
-    how this would have reached hardware.
+    grid with the EMS running and content. The device here has no state
+    reconciler, as an MQTT control device has none, so only this write can end
+    the charge.
     """
 
     device_config = charging_device()
     device_config.supports_state_reconciliation = False
     harness = Harness([device_config], load=0)
-    harness.controller.run_startup_ac_mode_reconcile_once = Mock()
     writes = []
     harness.controller.set_output_limit = lambda dev, value, **_kwargs: writes.append(int(value))
 

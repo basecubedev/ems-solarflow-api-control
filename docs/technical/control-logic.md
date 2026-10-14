@@ -452,6 +452,14 @@ disagrees with the winning claim. A device the regulator is charging therefore
 needs a claim of its own, or the reconciler writes `acMode = 2` once per loop
 against the power command writing `acMode = 1`.
 
+It writes only over a mode it knows. A report without `acMode`, or with a
+value other than `1` or `2`, is an unknown mode, not `0`: over it only a role
+the operator set in runtime state (`emsctl device WR1 ac-mode output`, the
+dashboard's AC role) is written. The default claim and the full-charge assist
+write nothing, and `unknown_ac_mode` is logged once per device until the mode
+is known again (K10, owner decision 2026-10-12). Raw samples from two 800 Pro 2
+over 14 days carry `acMode` only as `1` or `2`.
+
 A claim whose `desired_ac_mode` is `None` means *the power command owns this
 device's direction*, and the reconciler skips it. Three claims do that:
 

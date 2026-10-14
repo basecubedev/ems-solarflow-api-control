@@ -75,11 +75,9 @@ from ems.target_control import (
     derive_soc_runtime_state,
     firmware_recovery_or_ac_charge_active,
     pv_power,
-    startup_ac_mode_initialization_blocker,
 )
 
 
-STARTUP_AC_MODE_RECONCILE_REASON = "startup_ac_mode_reconcile"
 FULL_CHARGE_ASSIST_REASON = "battery_full_charge_assist"
 FULL_CHARGE_ASSIST_RESTORE_REASON = "battery_full_charge_assist_restore"
 
@@ -158,7 +156,7 @@ class EMSController:
         self.device_online = {}
         self.pv_priority_devices = None
         self.battery_power_history = {}
-        self.initial_ac_mode_reconciled = {}
+        self.ac_mode_unknown = set()
         self.last_ha_seen = {}
         self.last_ha_written = {}
         self.commanded_total_w = None
@@ -1533,13 +1531,14 @@ class EMSController:
         return str(value)
 
     def get_device_runtime_intent(self, dev, state):
-        """Return the current runtime reservation intent for a device."""
+        """Return the current runtime reservation intent for a device.
 
-        role = self.runtime_device_str(
-            dev.name,
-            "runtime_role",
-            DeviceRuntimeRole.AC_OUTPUT.value
-        )
+        A role stored in runtime state is the operator's; without one the
+        device gets the default ``ac_output`` claim.
+        """
+
+        stored_role = self.runtime_device_str(dev.name, "runtime_role", "").strip()
+        role = stored_role or DeviceRuntimeRole.AC_OUTPUT.value
         reason = self.runtime_device_str(
             dev.name,
             "runtime_role_reason",
@@ -1548,6 +1547,7 @@ class EMSController:
         intent = runtime_intent_from_role(dev.name, role, reason)
 
         if intent:
+            intent = replace(intent, operator_role=bool(stored_role))
             if intent.role is DeviceRuntimeRole.AC_INPUT:
                 return replace(
                     intent,
@@ -2781,7 +2781,9 @@ class EMSController:
     def ac_mode_intent_log_fields(self, dev, state, intent):
         return {
             "device": dev.name,
-            "current_ac_mode": state.ac_mode,
+            "current_ac_mode": (
+                state.ac_mode if getattr(state, "ac_mode_reported", True) else None
+            ),
             "desired_ac_mode": intent.desired_ac_mode,
             "runtime_role": intent.role.value,
             "reason": intent.reason,
@@ -2793,11 +2795,14 @@ class EMSController:
             "output_pack_w": state.pack_out,
         }
 
-    def is_startup_ac_mode_reconcile_intent(self, intent):
-        return intent.reason == STARTUP_AC_MODE_RECONCILE_REASON
-
     def reconcile_ac_mode_intent(self, dev, state, intent):
-        """Write acMode only when telemetry differs from desired runtime intent."""
+        """Write acMode only when telemetry differs from desired runtime intent.
+
+        A mode the report does not carry, or one other than 1 or 2, is unknown:
+        only a role the operator set is written over it (K10, owner decision
+        2026-10-12). Any other claim writes nothing, said once per device until
+        the mode is known again.
+        """
 
         if not self.state_reconciliation_supported(dev, "ac_mode_intent"):
             return True
@@ -2808,45 +2813,29 @@ class EMSController:
         fields = self.ac_mode_intent_log_fields(dev, state, intent)
         current_ac_mode = int(state.ac_mode)
         desired_ac_mode = int(intent.desired_ac_mode)
-        startup_reconcile = self.is_startup_ac_mode_reconcile_intent(intent)
+        known = getattr(state, "ac_mode_reported", True) and current_ac_mode in (
+            AC_MODE_INPUT,
+            AC_MODE_OUTPUT,
+        )
 
-        if current_ac_mode == desired_ac_mode:
-            log_event(
-                logging.DEBUG,
-                "ac_mode_intent_unchanged",
-                **fields
-            )
-            return True
-
-        if (
-            desired_ac_mode == AC_MODE_OUTPUT
-            and current_ac_mode not in (AC_MODE_INPUT, AC_MODE_OUTPUT)
-            and (current_ac_mode != 0 or startup_reconcile)
-        ):
-            log_event(
-                logging.WARNING,
-                "unknown_ac_mode",
-                **fields
-            )
-            return False
-
-        if (
-            current_ac_mode == AC_MODE_INPUT
-            and desired_ac_mode == AC_MODE_OUTPUT
-            and startup_reconcile
-        ):
-            skip_reason = startup_ac_mode_initialization_blocker(state)
-            if skip_reason:
+        if known:
+            self.ac_mode_unknown.discard(dev.name)
+            if current_ac_mode == desired_ac_mode:
                 log_event(
-                    logging.INFO,
-                    "ac_mode_intent_skip",
-                    **{
-                        **fields,
-                        "reason": skip_reason,
-                        "runtime_role_reason": intent.reason,
-                    }
+                    logging.DEBUG,
+                    "ac_mode_intent_unchanged",
+                    **fields
                 )
-                return False
+                return True
+        elif not intent.operator_role:
+            if dev.name not in self.ac_mode_unknown:
+                self.ac_mode_unknown.add(dev.name)
+                log_event(
+                    logging.WARNING,
+                    "unknown_ac_mode",
+                    **fields
+                )
+            return False
 
         if not self.device_state_writes_allowed(dev):
             log_event(
@@ -4009,31 +3998,6 @@ class EMSController:
                 input_limit_w=properties["inputLimit"],
                 error=e
             )
-
-    def run_startup_ac_mode_reconcile_once(self, dev, state):
-        """Compatibility wrapper for legacy startup acMode reconciliation."""
-
-        if not self.state_reconciliation_supported(dev, "startup_ac_mode_reconcile"):
-            return
-
-        if self.initial_ac_mode_reconciled.get(dev.name, False):
-            return
-
-        self.initial_ac_mode_reconciled[dev.name] = True
-
-        if not cfg.RECONCILE_AC_MODE_ON_START:
-            log_event(
-                logging.INFO,
-                "startup_ac_mode_reconcile_disabled",
-                device=dev.name
-            )
-            return
-
-        self.reconcile_ac_mode_intent(
-            dev,
-            state,
-            ac_output_intent(dev.name, STARTUP_AC_MODE_RECONCILE_REASON)
-        )
 
     def apply_device_modes(self, dev, state):
         """Apply device operating modes if required.
@@ -5575,8 +5539,7 @@ class EMSController:
             # at all. That is not academic: after a restart the EMS would
             # decide "this device should be off", compare 0 against 0, skip the
             # write, and leave the hardware charging from the grid with the EMS
-            # running and content. Local-HTTP devices are saved by the startup
-            # acMode reconcile; MQTT control devices have no such path.
+            # running and content.
             ends_a_charge = self.write_can_end_a_charge(
                 dev
             ) and not settling_out_of_charge(states[i])

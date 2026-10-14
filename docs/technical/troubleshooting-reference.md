@@ -993,7 +993,6 @@ Check whether state reconciliation writes are enabled:
   "system": {
     "allow_state_reconciliation_writes": true,
     "soc_reconcile_interval": 10,
-    "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true
   }
 }

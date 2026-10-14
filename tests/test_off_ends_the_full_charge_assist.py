@@ -71,7 +71,6 @@ def controller_for(store, runtime):
         runtime_state=runtime,
         battery_full_charge_store=store,
     )
-    controller.run_startup_ac_mode_reconcile_once = Mock()
     controller.set_output_limit = Mock(return_value=True)
     return controller, dev
 
@@ -583,7 +582,6 @@ def restarted(controller, runtime):
         runtime_state=runtime,
         battery_full_charge_store=controller.battery_full_charge_store,
     )
-    fresh.run_startup_ac_mode_reconcile_once = Mock()
     fresh.set_output_limit = Mock(return_value=True)
     return fresh
 

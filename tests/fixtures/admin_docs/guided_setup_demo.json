@@ -174,22 +174,6 @@
             "secret": false
           },
           {
-            "path": "system.reconcile_ac_mode_on_start",
-            "label": "Restore AC mode on startup",
-            "description": "Checks and restores the expected AC mode when EMS starts.",
-            "type": "boolean",
-            "level": "advanced",
-            "scope": "both",
-            "required": false,
-            "requires_restart": true,
-            "restart_required": true,
-            "backup_recommended": true,
-            "risk": "restart_required",
-            "default": true,
-            "template": true,
-            "secret": false
-          },
-          {
             "path": "system.reconcile_smart_mode",
             "label": "Restore smart mode",
             "description": "Checks and restores the expected device smart mode for live EMS control.",

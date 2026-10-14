@@ -180,7 +180,6 @@ def _build_control_runtime():
 
 
 def _run_once(controller, states):
-    controller.run_startup_ac_mode_reconcile_once = Mock()
     with patch("ems.controller.fetch_all_devices", return_value=states), patch.multiple(
         "ems.controller.cfg",
         SYSTEM_ENABLED=True,
@@ -263,7 +262,6 @@ def test_mqtt_gates_block_writes_when_disabled():
             [http] + runtime.devices, ShellyStub(2000), sleep_enabled=False,
             runtime_state=RuntimeStateStub(),
         )
-        controller.run_startup_ac_mode_reconcile_once = Mock()
         with patch("ems.controller.fetch_all_devices", return_value=[_state() for _ in range(4)]), patch.multiple(
             "ems.controller.cfg",
             SYSTEM_ENABLED=True, MAX_TOTAL_POWER=3200, MAX_DEVICE_POWER=800,

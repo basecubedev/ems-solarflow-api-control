@@ -96,7 +96,6 @@ class OfflineDeviceHAAvailabilityTest(unittest.TestCase):
             sleep_enabled=False
         )
         controller.runtime_ha_enabled = Mock(return_value=True)
-        controller.run_startup_ac_mode_reconcile_once = Mock()
         controller.set_output_limit = Mock()
 
         with patch(

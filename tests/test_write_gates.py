@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import logging
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -134,7 +135,6 @@ class WriteGateTest(unittest.TestCase):
             runtime_state=runtime_state,
             dashboard_store=dashboard_store
         )
-        controller.run_startup_ac_mode_reconcile_once = Mock()
         controller.set_output_limit = Mock()
 
         with patch(
@@ -368,7 +368,6 @@ class WriteGateTest(unittest.TestCase):
             sleep_enabled=False,
             runtime_state=RuntimeStateStub()
         )
-        controller.run_startup_ac_mode_reconcile_once = Mock()
         controller.set_output_limit = Mock()
 
         with patch(
@@ -704,38 +703,6 @@ class WriteGateTest(unittest.TestCase):
         controller.set_output_limit.assert_not_called()
         self.assertFalse(controller.night_min_soc_idle_active)
 
-    def test_a_battery_at_its_floor_keeps_the_charge_it_was_given(self):
-        """At the floor the firmware owns the device; the reason says so.
-
-        It used to report ``ac_charge_active`` at every charge level, which hid
-        whether an empty battery was being recovered or an EMS that died
-        mid-charge had simply left the device that way.
-        """
-
-        controlled = device("WR1")
-        controller = EMSController(
-            devices=[controlled],
-            shelly=ShellyStub(0),
-            sleep_enabled=False,
-            runtime_state=RuntimeStateStub()
-        )
-
-        with patch("ems.controller.log_event") as log_event:
-            controller.reconcile_ac_mode_intent(
-                controlled,
-                state(ac_mode=1, ac_status=2, solar=0, output=0, soc_limit=2),
-                ac_output_intent("WR1", "startup_ac_mode_reconcile")
-            )
-
-        controlled.session.post.assert_not_called()
-        self.assertTrue(
-            any(
-                call.args[1] == "ac_mode_intent_skip"
-                and call.kwargs["reason"] == "discharge_cutoff"
-                for call in log_event.call_args_list
-            )
-        )
-
     def test_a_leftover_charge_on_a_healthy_battery_is_taken_back(self):
         """Above the floor a charge nobody commands is the reconcile's to undo."""
 
@@ -755,7 +722,7 @@ class WriteGateTest(unittest.TestCase):
             controller.reconcile_ac_mode_intent(
                 controlled,
                 state(ac_mode=1, ac_status=2, solar=0, output=0, soc=60),
-                ac_output_intent("WR1", "startup_ac_mode_reconcile")
+                ac_output_intent("WR1")
             )
 
         written = [
@@ -764,7 +731,7 @@ class WriteGateTest(unittest.TestCase):
         ]
         self.assertIn({"acMode": 2}, written)
 
-    def test_explicit_ac_output_runtime_intent_bypasses_startup_blocker(self):
+    def test_explicit_ac_output_runtime_intent_takes_a_charging_device_back(self):
         controlled = device("WR1")
         controlled.session.post.return_value = SimpleNamespace(status_code=200)
         runtime_state = RuntimeStateStub(
@@ -821,7 +788,7 @@ class WriteGateTest(unittest.TestCase):
             controller.reconcile_ac_mode_intent(
                 controlled,
                 state(ac_mode=0),
-                ac_output_intent("WR1", "startup_ac_mode_reconcile")
+                ac_output_intent("WR1")
             )
 
         controlled.session.post.assert_not_called()
@@ -835,7 +802,8 @@ class WriteGateTest(unittest.TestCase):
             )
         )
 
-    def test_explicit_ac_output_runtime_intent_writes_from_unknown_ac_mode_zero(self):
+    def test_explicit_ac_output_runtime_intent_writes_from_a_missing_ac_mode(self):
+        missing = replace(state(ac_mode=0), ac_mode_reported=False)
         controlled = device("WR1")
         controlled.session.post.return_value = SimpleNamespace(status_code=200)
         runtime_state = RuntimeStateStub(
@@ -852,7 +820,7 @@ class WriteGateTest(unittest.TestCase):
             sleep_enabled=False,
             runtime_state=runtime_state
         )
-        intent = controller.get_device_runtime_intent(controlled, state(ac_mode=0))
+        intent = controller.get_device_runtime_intent(controlled, missing)
 
         with patch(
             "ems.controller.cfg.state_reconciliation_writes_allowed",
@@ -860,7 +828,7 @@ class WriteGateTest(unittest.TestCase):
         ):
             controller.reconcile_ac_mode_intent(
                 controlled,
-                state(ac_mode=0),
+                missing,
                 intent
             )
 

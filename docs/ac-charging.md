@@ -346,8 +346,9 @@ reference is taken from the measured AC input instead — otherwise "switch this
 device off" would compare 0 against 0, skip the write, and leave the hardware
 charging. A device that already shows the exit written (`acMode = 2`, no
 `inputLimit`) while its current runs down for about two seconds is not sent the
-exit again. Local-API devices are also covered by the startup `acMode` reconcile;
-MQTT control devices have no state reconciliation and so no such path.
+exit again. Local-API devices are also covered by the state reconciler's
+`acMode` reconcile; MQTT control devices have no state reconciliation and so no
+such path.
 
 **A charge does not outlive the meter that justifies it.** A grid-meter client
 that cannot reach its hardware returns the last good reading and marks it stale;

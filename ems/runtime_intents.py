@@ -52,6 +52,10 @@ class DeviceRuntimeIntent:
     the absence of a claim — it means the winner owns the device but commands no
     value, which is what keeps a firmware-owned charge distinguishable from an
     EMS-commanded one.
+
+    ``operator_role`` marks the role the operator set in runtime state. Only
+    such a claim writes ``acMode`` to a device whose report carries no known
+    mode (K10, owner decision 2026-10-12).
     """
 
     device: str
@@ -61,6 +65,7 @@ class DeviceRuntimeIntent:
     output_control_allowed: bool
     priority: int = PRIORITY_DEFAULT
     setpoint_w: int | None = None
+    operator_role: bool = False
 
 
 def ac_output_intent(device_name, reason: str = "ac_output", *, priority=PRIORITY_DEFAULT):

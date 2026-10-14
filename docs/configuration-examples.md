@@ -34,7 +34,6 @@ Use this for standalone EMS operation without Home Assistant.
     "simulation_mode": false,
     "allow_hardware_writes": true,
     "allow_state_reconciliation_writes": true,
-    "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true,
     "log_level": "info",
     "max_total_power": 800,
@@ -148,7 +147,6 @@ single-device template values for a two-inverter installation.
     "simulation_mode": false,
     "allow_hardware_writes": true,
     "allow_state_reconciliation_writes": true,
-    "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true,
     "max_total_power": 1600,
     "max_device_power": 800,
@@ -284,7 +282,6 @@ limits are reviewed.
     "dry_run": false,
     "allow_hardware_writes": true,
     "allow_state_reconciliation_writes": true,
-    "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true
   }
 }
@@ -292,10 +289,10 @@ limits are reviewed.
 
 This allows normal `outputLimit` writes and required regulation/state
 reconciliation. Runtime AC mode intent is evaluated during the control loop,
-but startup `acMode` reconciliation is conservative when telemetry is unknown.
+and `acMode` is written only over a mode the device reports (`1` or `2`).
 `ac_output` maps to `acMode=2`; `ac_input` maps to `acMode=1` and blocks normal
 output regulation. An explicit runtime `ac-mode output` command can still write
-`acMode=2` when the reported mode is `0`.
+`acMode=2` when the device reports no mode.
 
 Manual runtime AC charging uses the same loop-owned reconciliation path:
 
