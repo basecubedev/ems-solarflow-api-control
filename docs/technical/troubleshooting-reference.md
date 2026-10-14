@@ -1018,6 +1018,7 @@ dry_run_soc_limits
 write_soc_limits
 soc_limits_unchanged
 soc_limits_not_applicable
+min_soc_raise_waits_for_battery
 pv_first_priority_changed
 dry_run_device_modes
 write_device_modes
@@ -1033,6 +1034,13 @@ The `*_unchanged` events (`soc_limits_unchanged`, `device_modes_unchanged`,
 `soc_limits_not_applicable` (also `debug`) means the device reports no battery,
 so there is no SoC window to reconcile. It is not a skipped write: nothing was
 due. See "Devices Without A Battery" in [control-logic.md](control-logic.md).
+
+`min_soc_raise_waits_for_battery` means the configured `min_soc` is a raise
+the battery does not hold yet: more than three points above the SoC, or exactly
+on it. A device that reports a `minSoc` of 0 waits until the SoC is above the
+target. It is `info` when the wait starts and `debug` while it lasts, and the
+raise is written once the SoC comes within reach (see
+[winter-mode.md](../winter-mode.md#why-three-points)).
 
 `pv_first_priority_changed` (`info`) records which devices hold the exclusive
 PV-first claim whenever that set moves. It is steady for as long as a battery

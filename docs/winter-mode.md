@@ -160,9 +160,10 @@ A report without `minSoc` is an unknown reserve, not 0 %: adopted as the floor,
 or stepped up from it, the 0 would be written over the reserve the ramp built.
 While the report carries none, winter mode plans nothing for the device and the
 reconcile writes no `minSoc` (`socSet` still); a device first seen that way is
-taken up, as above, once its report carries `minSoc` again. Only winter mode
-holds back: with winter mode off, a policy without a step and the full-charge
-assist, the configured `min_soc` is still written over it.
+taken up, as above, once its report carries `minSoc` again. Nothing else writes
+over it either: not the configured `min_soc` with winter mode off or for a
+policy without a step, and not the full-charge assist, which writes no
+`minSoc` at all.
 
 ## PV Charges the Battery First
 
@@ -200,16 +201,19 @@ for this: `passMode` writes were accepted and ignored.
 
 ## Why Three Points
 
-Every raise winter mode writes over a device's reported `minSoc` -- a target
+Every raise the EMS writes over a device's reported `minSoc` -- a target
 remembered while winter mode was switched off or after a failed write, the
 configured floor after a restart, the summer reset of a device found below
-`summer_min_soc`, and the morning step -- waits until it leads the SoC by at
-most three points; only the `noon_step` policy's own step may lead further. A
-raise is never written as a part of itself: cut to three above the SoC and
-written again each reconcile, it would climb with the SoC all day. A device that
-reports no `minSoc` -- a missing value reads as 0 -- gets no raise the battery
-does not already hold, and without a usable SoC reading nothing rises. No raise
-lands on the SoC itself; see
+`summer_min_soc`, the morning step, and the configured `min_soc` where winter
+mode plans nothing (winter mode off, or a device on the policy `none`) -- waits
+until it leads the SoC by at most three points; only the `noon_step` policy's
+own step may lead further. A configured raise that waits logs
+`min_soc_raise_waits_for_battery`. A raise is never written as a part of
+itself: cut to three above the SoC and written again each reconcile, it would
+climb with the SoC all day. A device that reports a `minSoc` of 0 gets no raise
+the battery does not already hold, one whose report carries no `minSoc` gets no
+`minSoc` written at all, and without a usable SoC reading nothing rises. No
+raise lands on the SoC itself; see
 [Why One Point Below the SoC](#why-one-point-below-the-soc).
 
 On 2026-10-03 an adjustment raised `minSoc` from 25 to 30 at a SoC of 25, and
@@ -245,9 +249,10 @@ installation; another firmware has not been measured.
 So the follow keeps `minSoc` one point below the SoC, and any other raise that
 would land exactly on the SoC -- the morning step at `winter_min_soc`, the noon
 step of a battery that sits a step above its `minSoc`, the restart floor, the
-summer reset, a target remembered while its write had not landed -- waits until
-the SoC has moved. A device that reports no
-`minSoc` is raised only to a value below what the battery holds.
+summer reset, a target remembered while its write had not landed, the
+configured `min_soc` where winter mode plans nothing -- waits until the SoC has
+moved. A device that reports a `minSoc` of 0 is raised only to a value below
+what the battery holds.
 
 What this does not prevent: a battery that discharges down to its `minSoc`
 draws the same burst. After a follow that is one point of discharge away.

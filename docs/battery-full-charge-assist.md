@@ -35,7 +35,8 @@ enabled period. This avoids immediate AC charging after seasonal re-enable.
 When a device is due, or due soon and already above `assist_start_soc`, EMS:
 
 1. marks full-charge assist active in the core state store
-2. requests `socSet=1000` through the normal safe SOC write path
+2. requests `socSet=1000` through the normal safe SOC write path; the write
+   carries no `minSoc` (see [The assist and `minSoc`](#the-assist-and-minsoc))
 3. optionally requests AC input mode through the existing runtime AC intent path
 4. optionally applies `inputLimit=<ac_charge_power>` through the existing safe
    AC charge input-limit writer
@@ -51,6 +52,20 @@ configured value is used. EMS does not persist a previous Max-SoC value.
 If AC charge mode was used, restore requests `acMode=2` through the existing
 runtime AC intent reconciler. Output control remains blocked until restore is
 done or fresh telemetry confirms the restored state.
+
+### The assist and `minSoc`
+
+The assist writes `socSet` alone, at its start, on every loop while it runs and
+on its restore. Reaching Max-SoC needs no floor, so `minSoc` stays with the
+periodic SoC reconcile while an assist runs, as at any other time: winter
+mode's target, or where winter mode plans nothing the configured `min_soc`,
+each raise held to the rule in
+[winter-mode.md](winter-mode.md#why-three-points) (written once it leads the
+SoC by at most three points and does not land on it; a lowering at once). The
+assist used to write the configured `min_soc` with its `socSet`: without a look
+at the SoC, which can make the firmware charge from the grid at full power, and
+against winter's target, which the reconcile then wrote back, once each per
+loop for as long as the assist ran.
 
 All of the assist's own writes respect the existing write gates: dry-run,
 simulation mode, replay mode, `allow_hardware_writes`, and

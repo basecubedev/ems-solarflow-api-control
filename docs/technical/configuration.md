@@ -710,7 +710,11 @@ python3 emsctl.py device WR1 pv-priority-factor 1.3
 `battery_kwh` is the configured battery capacity used for battery weighting.
 
 `min_soc` and `max_soc` are static SOC boundaries in percent. Use `0` to leave
-the corresponding value unmanaged.
+the corresponding value unmanaged. Where winter mode plans nothing for the
+device, `min_soc` is written to it, but a raise only once it leads the SoC by at
+most three points and does not land on it (see
+[winter-mode.md](../winter-mode.md#why-three-points)); a lowering is written at
+once, and nothing is written while the device's report carries no `minSoc`.
 
 `enabled` is optional and defaults to `true`. It means the same thing for every
 transport: `"enabled": false` removes the device from the control loop, for a

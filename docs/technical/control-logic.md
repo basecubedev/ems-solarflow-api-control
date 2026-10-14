@@ -37,8 +37,16 @@ any device was written. The local API names each dropped field once in the log
 A missing field reads as 0, which for most fields is the reading itself. Two are
 read as unknown instead, because a write follows from them: `acMode` (see
 [who owns a device's AC direction](#who-owns-a-devices-ac-direction)) and
-`minSoc`, which winter mode leaves unmanaged while the report carries none
+`minSoc`, which no reconcile writes while the report carries none
 ([winter-mode.md](../winter-mode.md#state-after-a-restart)).
+
+`minSoc` has one writer, the periodic SoC reconcile, also while a full-charge
+assist runs (the assist writes `socSet` alone). It writes winter mode's target,
+or where winter mode plans nothing the configured `min_soc`, and holds every
+raise to one rule (`cfg.winter_min_soc_raise_limit`): written once it leads the
+SoC by at most three points and does not land on it, a lowering at once. Only
+the `noon_step` policy's own daily step may lead further. See
+[winter-mode.md](../winter-mode.md#why-three-points) for the field evidence.
 
 ## Stable Fast Output Control
 

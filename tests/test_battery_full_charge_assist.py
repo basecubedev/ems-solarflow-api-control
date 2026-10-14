@@ -374,7 +374,7 @@ def test_reenable_does_not_overwrite_pending_restore(tmp_path):
             writes_allowed=True,
         )
 
-    assert {"minSoc": 150, "socSet": 950} in posted_properties(dev)
+    assert {"socSet": 950} in posted_properties(dev)
     record = store.get_device_state("WR1")
     assert record["last_full_charge_at"] == old.isoformat()
     assert "full_charge_assist_reenabled_schedule_seeded" not in event_types(store)

@@ -62,7 +62,8 @@ from ems.runtime_intents import (
     runtime_intent_from_role,
 )
 from ems.state_store import BatteryFullChargeStateStore
-from ems.winter_reserve import WinterReserve
+from ems.winter_policies import MAX_RAISE_ABOVE_SOC
+from ems.winter_reserve import MIN_SOC_UNMANAGED, WinterReserve
 from ems.target_control import (
     ControlExplanation,
     ControlLimitExplanation,
@@ -180,6 +181,7 @@ class EMSController:
         self.commanded_device_targets = {}
         self._last_winter_active = None
         self.winter = WinterReserve(lambda: self.runtime_state, store=winter_store)
+        self.min_soc_raise_waiting = {}
         self.night_min_soc_idle_active = False
         self.night_min_soc_idle_parked = set()
         self._dashboard_capabilities = []
@@ -3304,7 +3306,13 @@ class EMSController:
         now,
         feature_transition
     ):
-        """Track and advance EMS full-charge assist for fresh telemetry."""
+        """Track and advance EMS full-charge assist for fresh telemetry.
+
+        The assist writes ``socSet`` alone. ``minSoc`` stays with the SoC
+        reconcile while it runs: the assist needs no floor to reach Max-SoC,
+        and writing the configured ``min_soc`` here fought winter's target once
+        per loop and raised it without a look at the SoC (K15).
+        """
 
         store = self.battery_full_charge_store
         if not store:
@@ -3366,6 +3374,7 @@ class EMSController:
             write_ok = self.apply_soc_limits(
                 dev,
                 state,
+                desired_min_soc=MIN_SOC_UNMANAGED,
                 desired_max_soc=100,
                 reason=FULL_CHARGE_ASSIST_REASON
             )
@@ -3381,6 +3390,7 @@ class EMSController:
             write_ok = self.apply_soc_limits(
                 dev,
                 state,
+                desired_min_soc=MIN_SOC_UNMANAGED,
                 desired_max_soc=dev.max_soc,
                 reason=FULL_CHARGE_ASSIST_RESTORE_REASON
             )
@@ -3425,6 +3435,7 @@ class EMSController:
                 write_ok = self.apply_soc_limits(
                     dev,
                     state,
+                    desired_min_soc=MIN_SOC_UNMANAGED,
                     desired_max_soc=100,
                     reason=FULL_CHARGE_ASSIST_REASON
                 )
@@ -3452,6 +3463,9 @@ class EMSController:
         An active full-charge assist owns ``socSet``; writing the configured
         ``max_soc`` here flipped it back and let the firmware report
         ``socLimit == 1`` below 100 %, which completed the assist early.
+        ``minSoc`` is this reconcile's alone, an assist or not: winter's
+        target, or where winter plans nothing the configured ``min_soc``,
+        both held to the raise rule.
         """
 
         desired_min_soc, winter_step = self.winter.reconciliation_target(
@@ -3983,7 +3997,12 @@ class EMSController:
         desired_max_soc=None,
         reason="soc_reconcile"
     ):
-        """Apply configured SOC limits if required."""
+        """Apply the SoC window if it differs from the report.
+
+        ``minSoc`` is what ``min_soc_to_write`` allows; ``MIN_SOC_UNMANAGED``
+        as ``desired_min_soc`` leaves it alone. ``socSet`` is
+        ``desired_max_soc``, or the configured ``max_soc``.
+        """
 
         if not self.state_reconciliation_supported(dev, "soc_limits"):
             return True
@@ -3997,15 +4016,8 @@ class EMSController:
             )
             return True
 
-        configured_min_soc = cfg.safe_soc_limit(dev.min_soc)
         configured_max_soc = cfg.safe_soc_limit(dev.max_soc)
-        effective_min_soc = (
-            cfg.safe_soc_limit(
-                cfg.safe_int(desired_min_soc, configured_min_soc, minimum=0)
-            )
-            if desired_min_soc is not None
-            else configured_min_soc
-        )
+        effective_min_soc = self.min_soc_to_write(dev, state, desired_min_soc)
         effective_max_soc = (
             cfg.safe_soc_limit(
                 cfg.safe_int(desired_max_soc, configured_max_soc, minimum=0)
@@ -4093,6 +4105,54 @@ class EMSController:
                 error=e
             )
             return False
+
+    def min_soc_to_write(self, dev, state, desired_min_soc):
+        """The ``minSoc`` a SoC write may carry, or 0 to leave it alone.
+
+        Nothing is written over a ``minSoc`` the report does not carry. A
+        ``desired_min_soc`` is winter mode's target, which winter holds to the
+        raise rule itself, with its policy's lead. The configured ``min_soc``
+        is held to the same rule (``cfg.winter_min_soc_raise_limit`` with
+        ``MAX_RAISE_ABOVE_SOC``): a raise is written once it leads the SoC by
+        at most that and does not land on it, a lowering at once (K15).
+        """
+
+        if not getattr(state, "min_soc_reported", True):
+            return MIN_SOC_UNMANAGED
+        if desired_min_soc is not None:
+            return cfg.safe_soc_limit(
+                cfg.safe_int(desired_min_soc, MIN_SOC_UNMANAGED, minimum=0)
+            )
+
+        configured = cfg.safe_soc_limit(dev.min_soc)
+        held = cfg.safe_soc_limit(
+            cfg.winter_min_soc_raise_limit(
+                configured,
+                state.min_soc,
+                getattr(state, "soc", None),
+                MAX_RAISE_ABOVE_SOC
+            )
+        )
+        self.log_min_soc_raise_waiting(dev, state, configured, held)
+        return held
+
+    def log_min_soc_raise_waiting(self, dev, state, target, held):
+        """Say when a configured raise starts to wait for the battery, then quietly."""
+
+        if held == target:
+            self.min_soc_raise_waiting.pop(dev.name, None)
+            return
+
+        starts = self.min_soc_raise_waiting.get(dev.name) != target
+        self.min_soc_raise_waiting[dev.name] = target
+        log_event(
+            logging.INFO if starts else logging.DEBUG,
+            "min_soc_raise_waits_for_battery",
+            device=dev.name,
+            current_soc=getattr(state, "soc", None),
+            current_min_soc=state.min_soc,
+            target_min_soc=target
+        )
 
     def apply_winter_ac_charge_limit(self, dev):
         """Apply conservative winter AC charge input limit."""
