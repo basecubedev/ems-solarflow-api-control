@@ -370,8 +370,8 @@ class ZendureMqttDeviceClient:
         # a real, bindable serial from that fallback.
         self.physical_serial = serial_number or None
         self.control_gate = control_gate_for_broker_source(source)
-        self.min_soc = min_soc
-        self.max_soc = max_soc
+        self.min_soc = cfg.device_soc_limit(name, "min_soc", min_soc)
+        self.max_soc = cfg.device_soc_limit(name, "max_soc", max_soc)
         self.ac_discharge_enabled = bool(ac_discharge_enabled)
         self.ac_charge_enabled = bool(ac_charge_enabled)
         self.max_charge_power_w = max_charge_power_w or 0

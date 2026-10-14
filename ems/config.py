@@ -2887,6 +2887,28 @@ def safe_soc_limit(value):
     return int(number)
 
 
+def device_soc_limit(device_name, key, value):
+    """A device's configured ``min_soc``/``max_soc`` as every reader takes it (K14).
+
+    The whole percent the SoC writer always used (``safe_soc_limit``), or 0,
+    unmanaged, for a value that is no percent from 0 to 100; such a value is
+    named once, when the device is built. A missing or ``null`` value is
+    unmanaged without a word, as 0 is.
+    """
+
+    limit = safe_soc_limit(value)
+    if limit == 0 and value is not None and safe_float(value, -1.0) != 0:
+        log_event(
+            logging.WARNING,
+            "device_soc_limit_invalid",
+            device=device_name,
+            key=key,
+            value=value,
+            reason="left_unmanaged"
+        )
+    return limit
+
+
 def safe_percent(value, default=0):
     return max(0, min(100, safe_int(value, default, minimum=0)))
 

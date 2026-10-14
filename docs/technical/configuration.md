@@ -717,6 +717,10 @@ device, `min_soc` is written to it, but a raise only once it leads the SoC by at
 most three points and does not land on it (see
 [winter-mode.md](../winter-mode.md#why-three-points)); a lowering is written at
 once, and nothing is written while the device's report carries no `minSoc`.
+Both are read once, when the EMS starts, as whole percent: a value that is no
+number from 0 to 100 (`"abc"`, `150`, `-5`, `true`) is left unmanaged like `0`,
+and `event=device_soc_limit_invalid` names the device and key. The EMS still
+starts, as it does for an invalid `max_power`; the device keeps its own bound.
 
 `enabled` is optional and defaults to `true`. It means the same thing for every
 transport: `"enabled": false` removes the device from the control loop, for a

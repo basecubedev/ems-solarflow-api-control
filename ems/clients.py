@@ -489,8 +489,8 @@ class ZendureClient:
         self.ip = ip
         self.sn = sn
         self.session = session
-        self.min_soc = min_soc
-        self.max_soc = max_soc
+        self.min_soc = cfg.device_soc_limit(name, "min_soc", min_soc)
+        self.max_soc = cfg.device_soc_limit(name, "max_soc", max_soc)
         self.smart_mode = smart_mode
         self.grid_off_mode = grid_off_mode
         self.max_power = cfg.device_power_ceiling(max_power)
