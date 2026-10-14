@@ -34,8 +34,9 @@ def parse_pack_count(value):
 class DeviceState:
     """One device report as the controller reads it.
 
-    ``ac_mode_reported`` is False when the report carried no usable ``acMode``;
-    ``ac_mode`` then reads 0, which is not a mode the device is in.
+    ``ac_mode_reported`` and ``min_soc_reported`` are False when the report
+    carried no usable ``acMode`` or ``minSoc``; the value then reads 0, which
+    is not a mode the device is in, nor a reserve it holds.
     """
 
     soc: float
@@ -89,6 +90,7 @@ class DeviceState:
     soc_status: int = 0
     battery_calibration_time: int | None = None
     ac_mode_reported: bool = True
+    min_soc_reported: bool = True
 
 
 @dataclass

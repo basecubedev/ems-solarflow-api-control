@@ -34,6 +34,12 @@ any device was written. The local API names each dropped field once in the log
 (`http_report_value_ignored`); for MQTT see
 [zendure-mqtt-power-control.md](zendure-mqtt-power-control.md).
 
+A missing field reads as 0, which for most fields is the reading itself. Two are
+read as unknown instead, because a write follows from them: `acMode` (see
+[who owns a device's AC direction](#who-owns-a-devices-ac-direction)) and
+`minSoc`, which winter mode leaves unmanaged while the report carries none
+([winter-mode.md](../winter-mode.md#state-after-a-restart)).
+
 ## Stable Fast Output Control
 
 The controller keeps an internal `commanded_total_w`. It is signed: positive is

@@ -166,6 +166,7 @@ def state_from_trace_device(data):
 
     state.soc = value_from_trace(data, "soc", "electricLevel")
     state.min_soc = percent_from_trace(data, "min_soc", "minSoc")
+    state.min_soc_reported = "min_soc" in data or "minSoc" in data
     state.max_soc = percent_from_trace(data, "max_soc", "socSet")
     state.solar = value_from_trace(data, "solar", "solarInputPower")
     state.output = value_from_trace(data, "output", "outputHomePower")
@@ -526,6 +527,7 @@ def self_test_ac_charge_direction(ok):
         surplus_state.charge_max_limit_w = 1000
         surplus_state.ac_mode = AC_MODE_OUTPUT
         surplus_state.ac_mode_reported = True
+        surplus_state.min_soc_reported = True
         device.set_state(surplus_state)
 
         meter = SimulatedShellyClient()
@@ -638,6 +640,7 @@ def self_test_ac_charge_without_pv(ok):
         empty_state.pack_num = 1
         empty_state.ac_mode = AC_MODE_OUTPUT
         empty_state.ac_mode_reported = True
+        empty_state.min_soc_reported = True
         device.set_state(empty_state)
         feeding_the_floor = replace(
             empty_state, soc=40, output=35, output_limit=35, pack_in=42

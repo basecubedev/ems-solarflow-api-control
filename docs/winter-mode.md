@@ -156,6 +156,14 @@ A start in heavy overcast before `adjust_hour` cannot tell, and may take a secon
 step that day; it stays within three points of the SoC. A step or a follow the
 database cannot keep is not taken.
 
+A report without `minSoc` is an unknown reserve, not 0 %: adopted as the floor,
+or stepped up from it, the 0 would be written over the reserve the ramp built.
+While the report carries none, winter mode plans nothing for the device and the
+reconcile writes no `minSoc` (`socSet` still); a device first seen that way is
+taken up, as above, once its report carries `minSoc` again. Only winter mode
+holds back: with winter mode off, a policy without a step and the full-charge
+assist, the configured `min_soc` is still written over it.
+
 ## PV Charges the Battery First
 
 While winter is active and state reconciliation writes are allowed, a device on
@@ -286,6 +294,7 @@ winter_pv_kwp_zero_but_pv_reported
 winter_follow_soc
 winter_raise_waits_for_battery
 winter_summer_reset
+winter_min_soc_unknown
 dry_run_winter_ac_charge_limit
 write_winter_ac_charge_limit
 write_winter_ac_charge_limit_error
@@ -301,7 +310,9 @@ day). `winter_policy_invalid` is a `warning` once per device, and
 `info` at the step and when it starts, `debug` while it lasts.
 `winter_summer_reset` is `debug` while its raise waits, except the first one
 that drops a target remembered in winter, which is `info`; otherwise it is
-`info`. Set `system.log_level=debug` to see every reconcile interval.
+`info`. `winter_min_soc_unknown` is a `warning` once per device until its report
+carries `minSoc` again. Set `system.log_level=debug` to see every reconcile
+interval.
 
 ## Home Assistant
 
