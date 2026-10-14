@@ -15,6 +15,17 @@ EMS passively records fresh telemetry in `data/ems_state.sqlite` by default.
 This core database is independent of the dashboard database, so the feature can
 work when the dashboard is disabled.
 
+The database is written only when something in it changes, so it does not wear
+an appliance's SD card with one write per device and cycle (K8b): a report that
+changes nothing but its time stays in memory, and `last_seen_at` is written at
+most every 15 minutes. While the battery stays full, the time it was last seen
+full is held the same way and written the moment it leaves full, so the
+schedule is computed from the exact last full report. Only a stop while the
+battery is full can lose up to the last 15 minutes of it, which moves the next
+due time as much earlier. `diagnose` reads the database from outside the EMS
+process and therefore shows values up to 15 minutes old; nothing decides on
+`last_seen_at`. The feature switch is written when it changes.
+
 Only devices with telemetry `packNum > 0` participate. Devices reporting
 `packNum == 0`, and devices that never report the field at all, are ignored and
 never receive assist writes. The EMS keeps those two cases apart elsewhere — see
