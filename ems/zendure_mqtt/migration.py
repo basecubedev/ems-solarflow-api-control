@@ -40,6 +40,7 @@ from ems.zendure_mqtt.config_entries import (
     zendure_mqtt_device_identifier,
     zendure_mqtt_effective_broker_source,
     zendure_mqtt_hardware_profile,
+    zendure_mqtt_power_write_profile,
     zendure_mqtt_product_key,
     zendure_mqtt_topic_family,
     zendure_mqtt_write_protocol,
@@ -280,8 +281,8 @@ def _already_safe(device, broker_source):
     )
     if not cap.supported or not _addressing_complete(device, profile_backed=True):
         return False
-    stored = device.get("power_write_profile")
-    if isinstance(stored, str) and stored.strip() and stored.strip() != profile.power_write_profile:
+    stored = zendure_mqtt_power_write_profile(device)
+    if stored is not None and stored != profile.power_write_profile:
         return False
     mqtt = device.get("mqtt")
     if isinstance(mqtt, dict) and mqtt.get("write_protocol"):
@@ -309,6 +310,11 @@ def _pin_change(device, index, name, device_id, profile_id, write_profile, sourc
         changes.append(
             _diff(f"{prefix}.mqtt.write_protocol", mqtt.get("write_protocol"), None)
         )
+    nested_write_profile = _contradicting_nested_write_profile(device, write_profile)
+    if nested_write_profile is not None:
+        changes.append(
+            _diff(f"{prefix}.mqtt.power_write_profile", nested_write_profile, None)
+        )
     if _obsolete_write_topic(device) is not None:
         changes.append(
             _diff(f"{prefix}.mqtt.write_topic", mqtt.get("write_topic"), None)
@@ -328,6 +334,46 @@ def _pin_change(device, index, name, device_id, profile_id, write_profile, sourc
         device_id=device_id,
         changes=tuple(changes),
     )
+
+
+def _contradicting_nested_write_profile(device, write_profile):
+    """A stored ``mqtt.power_write_profile`` that disagrees with ``write_profile``.
+
+    Validation reads the nested key when the top-level one is absent, so a pin
+    that writes the canonical top-level value also removes a contradicting
+    nested copy rather than leaving a second, wrong value behind it.
+    """
+
+    mqtt = device.get("mqtt")
+    if not isinstance(mqtt, dict):
+        return None
+    value = mqtt.get("power_write_profile")
+    if not isinstance(value, str) or value.strip() in ("", write_profile):
+        return None
+    return value
+
+
+def _contradicting_write_profiles(device):
+    """The stored top-level and nested ``power_write_profile`` validation refuses.
+
+    Returns ``(flat, nested)``, each the stored value when it contradicts the
+    pinned model, else ``None``.
+    Validation reads the top-level key, or the nested one when the top-level key
+    is absent, so a nested value behind a top-level one that agrees is accepted
+    and left alone.
+    """
+
+    hardware_profile = zendure_mqtt_hardware_profile(device)
+    profile = hardware_profile_by_name(hardware_profile) if hardware_profile else None
+    if profile is None:
+        return None, None
+    expected = profile.power_write_profile
+    flat = device.get("power_write_profile")
+    if not isinstance(flat, str) or not flat.strip():
+        flat = None
+    elif flat.strip() == expected:
+        return None, None
+    return flat, _contradicting_nested_write_profile(device, expected)
 
 
 def _obsolete_write_topic(device):
@@ -362,26 +408,57 @@ def _normalize_write_topic_change(device, index, name, device_id):
     )
 
 
+_MODEL_KEYS = ("hardware_profile", "power_write_profile")
+
+
+def _model_keys_to_drop(device):
+    """``(container, key, path)`` for each stored model key a dropping disable removes.
+
+    ``hardware_profile`` and ``power_write_profile`` go at the top level and
+    under ``mqtt`` alike, so neither level keeps a model that control could be
+    re-enabled with.
+    """
+
+    mqtt = device.get("mqtt")
+    levels = [(device, "")]
+    if isinstance(mqtt, dict):
+        levels.append((mqtt, "mqtt."))
+    return [
+        (container, key, f"{path_prefix}{key}")
+        for container, path_prefix in levels
+        for key in _MODEL_KEYS
+        if container.get(key) is not None
+    ]
+
+
 def _disable_change(
     device, index, name, device_id, *, code, message, keep_identity=False
 ):
     prefix = f"devices[{index}]"
     changes = []
+    kept_profile = zendure_mqtt_hardware_profile(device) if keep_identity else None
     caps = device.get("capabilities")
     before_cap = caps.get("write_output_limit") if isinstance(caps, dict) else None
     if before_cap is not False:
         changes.append(
             _diff(f"{prefix}.capabilities.write_output_limit", before_cap, False)
         )
-    if not keep_identity and device.get("hardware_profile") is not None:
-        changes.append(_diff(f"{prefix}.hardware_profile", device.get("hardware_profile"), None))
+    if kept_profile is None:
+        for container, key, path in _model_keys_to_drop(device):
+            changes.append(_diff(f"{prefix}.{path}", container[key], None))
+    else:
+        flat, nested = _contradicting_write_profiles(device)
+        if flat is not None:
+            changes.append(_diff(f"{prefix}.power_write_profile", flat, None))
+        if nested is not None:
+            changes.append(_diff(f"{prefix}.mqtt.power_write_profile", nested, None))
     mqtt = device.get("mqtt")
     if isinstance(mqtt, dict) and mqtt.get("write_protocol") is not None:
         changes.append(_diff(f"{prefix}.mqtt.write_protocol", mqtt.get("write_protocol"), None))
     return ZendureMqttMigrationChange(
         device=name,
         action=ACTION_DISABLE_CONTROL,
-        hardware_profile=device.get("hardware_profile") if keep_identity else None,
+        hardware_profile=kept_profile,
         power_write_profile=None,
         code=code,
         severity="warning",
@@ -605,6 +682,11 @@ def _apply_change(device, change: ZendureMqttMigrationChange) -> None:
         device["power_write_profile"] = change.power_write_profile
         if isinstance(mqtt, dict):
             mqtt.pop("write_protocol", None)
+            nested = _contradicting_nested_write_profile(
+                device, change.power_write_profile
+            )
+            if nested is not None:
+                mqtt.pop("power_write_profile", None)
             if _obsolete_write_topic(device) is not None:
                 mqtt.pop("write_topic", None)
         return
@@ -616,8 +698,14 @@ def _apply_change(device, change: ZendureMqttMigrationChange) -> None:
     # change that kept the identity (a broker-source block, or a read-only model
     # that can never be re-enabled for control) preserves the pinned model.
     if change.hardware_profile is None:
-        device.pop("hardware_profile", None)
-        device.pop("power_write_profile", None)
+        for container, key, _path in _model_keys_to_drop(device):
+            container.pop(key)
+    else:
+        flat, nested = _contradicting_write_profiles(device)
+        if flat is not None:
+            device.pop("power_write_profile")
+        if nested is not None:
+            mqtt.pop("power_write_profile")
     if isinstance(mqtt, dict):
         mqtt.pop("write_protocol", None)
 
