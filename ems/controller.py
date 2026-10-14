@@ -836,6 +836,8 @@ class EMSController:
                     minimum=0
                 )
 
+            limited = ramp_limit > 0
+
             if bypass:
                 ramp_limit *= self.output_control_float(
                     "bypass_ramp_multiplier",
@@ -844,13 +846,18 @@ class EMSController:
                 )
 
             if stale:
-                ramp_limit *= self.output_control_float(
+                stale_limit = ramp_limit * self.output_control_float(
                     "stale_telemetry_ramp_factor",
                     0.5,
                     minimum=0.0
                 )
+                if self.commanded_total_w < 0 < delta:
+                    stale_limit = max(
+                        stale_limit, min(ramp_limit, -self.commanded_total_w)
+                    )
+                ramp_limit = stale_limit
 
-            if ramp_limit > 0 and abs(delta) > ramp_limit:
+            if limited and abs(delta) > ramp_limit:
                 ramped = (
                     self.commanded_total_w + ramp_limit
                     if delta > 0

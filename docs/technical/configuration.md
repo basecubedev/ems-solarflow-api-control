@@ -531,7 +531,16 @@ is also what the energy statistics treat as measured: a reading inside this
 window is integrated, so a single failed read leaves no hole (see
 [../dashboard.md](../dashboard.md)).
 
-`stale_telemetry_ramp_factor` reduces ramp speed when telemetry is stale.
+`stale_telemetry_ramp_factor` reduces ramp speed when telemetry is stale: the
+total ramp limits are multiplied by it. Telemetry is stale while any one
+device's last answer is older than `telemetry_max_age_seconds`, so a single
+unreachable device keeps it stale for as long as it does not answer. `0` holds
+the total target where it is until telemetry is fresh again (with
+`telemetry_max_age_seconds` at `0`, which makes every reading stale, it never
+moves). The factor never holds or slows a move that reduces a running AC
+charge: up to idle that move takes the configured ramp, so the way back from a
+grid charge is not held by stale telemetry. A ramp limit of `0` means no limit,
+and the factor does not make one.
 
 ## AC Charging
 
