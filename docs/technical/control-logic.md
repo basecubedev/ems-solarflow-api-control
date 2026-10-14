@@ -538,7 +538,9 @@ with the state reconciler stood down for that exit.
 
 If a device cannot be read, the EMS may use a cached state, or a zero fallback
 when no cached state exists, so the loop can continue safely. Offline devices
-are marked offline and skipped for output writes.
+are marked offline and skipped for output writes. A read that raises an error
+instead of returning no state is logged as `device_fetch_failed` with the
+device's name; an exit raised during a read is not absorbed.
 
 Cached telemetry is last-known data. Offline does not automatically mean the
 device is currently producing `0W`; it means the EMS does not have fresh device

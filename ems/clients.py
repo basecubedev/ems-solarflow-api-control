@@ -1661,7 +1661,12 @@ def _parse_mqtt_grid_power_payload(
 
 
 def fetch_all_devices(devices):
-    """Fetch all device states in parallel."""
+    """Fetch all device states in parallel.
+
+    A read that raises an error leaves its device's slot ``None`` and is
+    logged with the device's name; anything that is not an ``Exception``, an
+    exit among them, reaches the caller.
+    """
 
     results = [None] * len(devices)
 
@@ -1680,8 +1685,13 @@ def fetch_all_devices(devices):
 
             try:
                 results[i] = future.result()
-            except:
-                pass
+            except Exception as e:
+                log_event(
+                    logging.WARNING,
+                    "device_fetch_failed",
+                    device=getattr(devices[i], "name", i),
+                    error=e
+                )
 
     return results
 
