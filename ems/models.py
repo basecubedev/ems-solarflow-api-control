@@ -34,9 +34,10 @@ def parse_pack_count(value):
 class DeviceState:
     """One device report as the controller reads it.
 
-    ``ac_mode_reported`` and ``min_soc_reported`` are False when the report
-    carried no usable ``acMode`` or ``minSoc``; the value then reads 0, which
-    is not a mode the device is in, nor a reserve it holds.
+    Each ``*_reported`` flag is False when the report carried no usable value
+    for a field a reconciler writes (``acMode``, ``minSoc``, ``socSet``,
+    ``smartMode``, ``gridOffMode``, ``inputLimit``); the value then reads 0,
+    which is not a state the device is in (K10, K20).
     """
 
     soc: float
@@ -91,6 +92,10 @@ class DeviceState:
     battery_calibration_time: int | None = None
     ac_mode_reported: bool = True
     min_soc_reported: bool = True
+    max_soc_reported: bool = True
+    smart_mode_reported: bool = True
+    grid_off_mode_reported: bool = True
+    input_limit_reported: bool = True
 
 
 @dataclass

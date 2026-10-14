@@ -60,17 +60,24 @@ def out_of_charge(state) -> bool:
 
     Out of the AC-input direction, or still in its mode with no setpoint and
     nothing flowing -- how a charge looks once it was ended by its setpoint
-    alone, which keeps the device in the role a claim gave it.
+    alone, which keeps the device in the role a claim gave it. A report whose
+    ``acMode`` is unknown -- missing, or other than 1 or 2 (K10) -- shows no
+    direction to be out of, so such a device is out only while it draws
+    nothing from the grid.
     """
-
-    if not in_ac_input_direction(state):
-        return True
 
     def reported(name):
         value = getattr(state, name, None)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return 0
         return value
+
+    if not in_ac_input_direction(state):
+        output_mode_shown = (
+            getattr(state, "ac_mode_reported", True) is not False
+            and reported("ac_mode") == AC_MODE_OUTPUT
+        )
+        return output_mode_shown or reported("grid_input") == 0
 
     return (
         reported("ac_status") != AC_STATUS_CHARGING

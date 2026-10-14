@@ -613,6 +613,19 @@ def test_frontend_renders_full_charge_assist_states_via_app_js():
         assert(html.includes("Max-SoC restore"), "restore_pending status renders a Max-SoC restore fact row");
         assert(html.includes("AC output mode"), "restore_pending status renders an AC output mode restore fact row");
         assert(!html.includes("Restore planned"), "restore_pending status does not show the active-assist 'Restore planned' wording");
+        assert(html.includes("first device report that carries socSet"), "the Max-SoC restore names its wait for socSet");
+        assert(html.includes("exit to idle"), "the acMode restore names the exit over a report without acMode");
+        assert(!html.includes("when writes are available"), "the restore says what it waits for");
+
+        const restoring = (restorePending, acModeRestorePending) => context.fullChargeAssistDescription({
+          status: "restore_pending",
+          restore_pending: restorePending,
+          ac_mode_restore_pending: acModeRestorePending,
+        });
+        let text = restoring(true, false);
+        assert(text.includes("socSet") && !text.includes("acMode"), "a Max-SoC restore alone names no acMode restore");
+        text = restoring(false, true);
+        assert(text.includes("acMode=2") && !text.includes("Max-SoC"), "an acMode restore alone names no Max-SoC restore");
 
         // Missing/disabled assist fields render no section instead of "undefined".
         html = context.renderFullChargeAssist({ battery_full_charge_assist: undefined });

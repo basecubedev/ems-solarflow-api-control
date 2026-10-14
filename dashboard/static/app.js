@@ -3754,12 +3754,27 @@ function fullChargeAssistDescription(assist) {
     case "overdue":
       return "Assist is overdue. EMS will start an assist charge as soon as conditions allow.";
     case "restore_pending":
-      return assist.ac_mode_restore_pending
-        ? "EMS will restore the configured Max-SoC and normal AC output mode (firmware acMode=2) when writes are available."
-        : "EMS will restore the configured Max-SoC when writes are available.";
+      return fullChargeAssistRestoreDescription(assist);
     default:
       return "";
   }
+}
+
+function fullChargeAssistRestoreDescription(assist) {
+  const sentences = [];
+  if (assist.restore_pending) {
+    sentences.push("EMS will write the configured Max-SoC at the first device report that carries socSet.");
+  }
+  if (assist.ac_mode_restore_pending) {
+    sentences.push(
+      "EMS will switch the device back to normal AC output mode (firmware acMode=2); "
+      + "while its report carries no acMode, it sends the exit to idle instead, three times at most."
+    );
+  }
+  if (sentences.length) {
+    sentences.push("The restore waits while state writes are not allowed or control is switched off.");
+  }
+  return sentences.join(" ");
 }
 
 function formatAssistTimestamp(value) {

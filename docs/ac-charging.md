@@ -197,7 +197,12 @@ more, logged as `ac_charge_ended_on_disable`. Without it a disabled device kept
 drawing from the grid with nobody watching. The command has done its job when
 the device reports that it left the charge, not when it answered: a device that
 took it and charged on is sent it again once the resend window has passed (30 s,
-the MQTT confirmation window), and nothing in between.
+the MQTT confirmation window), and nothing in between. A device whose report
+carries neither `acMode` nor a charging `acStatus` shows its charge only by its
+grid draw, and one that draws a few watts while idle never shows it left: after
+three exits that only such draw followed, the EMS leaves the charge to the
+device once the last resend window has passed, said once as
+`ac_charge_left_to_device`, and sends it no further exit.
 
 A claim that takes a charging device from the regulator — an operator park
 (`runtime_role` `ac_input`) or a maintenance routine such as the full-charge
@@ -505,6 +510,7 @@ ac_charge_end_withheld
 ac_charge_ended_on_disable
 ac_charge_entry_rate_limited
 ac_charge_handed_to_claim
+ac_charge_left_to_device
 ac_charge_not_delivered
 ac_charge_refused
 ac_charge_stopped_stale_meter
@@ -521,6 +527,13 @@ start: the one exit to AC input found after a start went out three times and
 the device stayed in AC input. `left_to=firmware` is a charge at the battery
 floor, left to the firmware's protection charge; `left_to=holder` is AC input
 above it, which gets what it got before charging existed.
+
+`ac_charge_left_to_device` is a `warning`, said once per charge: the device's
+report carries no known `acMode` and no charging `acStatus`, so after the EMS's
+exit only its grid draw (`grid_input_w`) showed the charge, after `exits=3`
+exits and the last one's resend window. It may be a few watts the device draws
+while idle; if the field shows a charge, end it in the Zendure app or with
+`emsctl.py device WR1 ac-mode output`.
 
 `ac_charge_direction` is `info` when the direction changes and `debug`
 otherwise. `ac_charge_entry_rate_limited` is a `warning`: reaching the hourly

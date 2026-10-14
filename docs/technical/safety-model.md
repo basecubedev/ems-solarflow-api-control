@@ -155,7 +155,11 @@ from its transport's record of the EMS's own charge, which ends when the device
 reports that it left the charge, not when it answered the command: a device that
 did not carry the command out is sent it again once the resend window (30 s) has
 passed, and an unreachable device gets it when it answers again (owner decision
-2026-10-04). An operator park or a
+2026-10-04). A device whose report shows no direction -- no known `acMode`, no
+charging `acStatus` -- shows its charge by grid draw alone, which may be a few
+watts it draws idle: after three exits that only such draw followed, the charge
+is left to the device once the last resend window has passed, logged as
+`ac_charge_left_to_device`. An operator park or a
 maintenance claim that takes the charging device from the regulator gets the
 same single command — on the local API, for a claim that holds the device in AC
 input, as `inputLimit=0` alone, so the reconciler does not move the relay back
@@ -188,6 +192,7 @@ control_disabled_skip_write
 device_disabled_skip_write
 ac_charge_ended_on_disable
 ac_charge_handed_to_claim
+ac_charge_left_to_device
 offline_skip_write
 deadband_skip_write
 write_output_limit_error
@@ -204,7 +209,10 @@ standard -> 0
 ```
 
 Off-grid socket mode is a mode/state value, not power. It is written only when
-the reconciler runs and only behind the state-reconciliation write gate.
+the reconciler runs and only behind the state-reconciliation write gate, and
+never over a report that carries no `gridOffMode`: runtime defaults seed
+`offgrid_socket_mode` for every device, so nothing marks the operator's choice
+apart from the default (K20).
 
 ## acMode
 
@@ -216,10 +224,11 @@ The controller writes `acMode` only when telemetry differs from the desired
 runtime target, and only over a mode it knows: a report without `acMode`, or
 with a value other than `1` or `2`, is an unknown mode, not `0`. Over an
 unknown mode neither the default `ac_output` claim nor the full-charge assist
-writes; `unknown_ac_mode` is logged once per device until the mode is known
-again. A role the operator set, such as `emsctl device WR1 ac-mode output`, is
-still written over an unknown mode, and over `acMode=1` with active AC charge
-telemetry. A charge the firmware runs at the floor is held by its own claim,
+writes it (the assist's restore is its exit to idle instead, see
+[socSet and inputLimit](#socset-and-inputlimit)); `unknown_ac_mode` is logged
+once per device until the mode is known again. A role the operator set, such
+as `emsctl device WR1 ac-mode output`, is still written over an unknown mode,
+and over `acMode=1` with active AC charge telemetry. A charge the firmware runs at the floor is held by its own claim,
 which the reconciler does not write over (see
 [control-logic.md](control-logic.md#who-owns-a-devices-ac-direction)).
 
@@ -236,6 +245,28 @@ the runtime intent reconciler. Legacy role names (`normal_output`,
   full-charge assist (`socSet=1000`, then restore of the configured `socSet`).
 - `inputLimit` — AC charge power, reconciled through the runtime AC intent
   reconciler: an operator's AC input role and battery full-charge assist.
+
+Neither is written over a report that does not carry it, nor is `smartMode`;
+the one exception is the charge power of an `ac_input` role the operator set,
+as for `acMode`. `unknown_state_field` names the device and field once until
+the report carries it again (K20). Any other claim's `acMode=1` and its charge
+power go out together or not at all: neither over an unknown `inputLimit`, and
+the power not over an unknown `acMode`. A full-charge assist owes a restore of
+`acMode`, and holds a charge that a stop or a switch-off ends, only once its
+`acMode=1` went out -- answered with an error or not answered included, since
+the device may have carried it out; a refused one costs one exit to idle at
+most -- or a report showed `acMode` 1 under its claim, and never on
+a transport without state reconciliation, where a restore owed from before the
+device moved there is settled unwritten. A full-charge assist whose `socSet` is
+unknown keeps its request pending. Its restore never holds the device out of
+output control for good: over an unknown `socSet` it stays owed without holding
+the device, and the configured `max_soc` goes out at the first report that
+carries `socSet` again; over an unknown `acMode`, where nothing writes
+`acMode=2`, it is the assist's exit to idle on the power write gate, once per
+resend window and three times at most, settled once a report shows the device
+left the charge (without `acMode`, only with no grid draw) or the third exit's
+resend window has passed (`full_charge_assist_ac_mode_restore_settled`, with
+`left_to=device` when it charges on).
 
 These require `allow_state_reconciliation_writes=true`.
 

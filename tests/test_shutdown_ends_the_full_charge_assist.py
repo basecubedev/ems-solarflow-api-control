@@ -62,12 +62,19 @@ def assist_due(path):
 
 
 def assist_running(path, ac_charge_mode=True):
-    """The store of an EMS that started the assist before this process did."""
+    """The store of an EMS that started the assist before this process did.
+
+    With its AC mode, that EMS put the device into AC input and owes the way back.
+    """
 
     store = assist_due(path)
     store.mark_assist_started("WR1", DUE, ac_charge_mode)
     store.update_device_state(
-        "WR1", DUE, max_soc_request_pending=False, ac_input_request_pending=False
+        "WR1",
+        DUE,
+        max_soc_request_pending=False,
+        ac_input_request_pending=False,
+        ac_mode_restore_pending=bool(ac_charge_mode),
     )
     return store
 

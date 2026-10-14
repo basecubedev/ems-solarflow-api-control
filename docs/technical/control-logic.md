@@ -34,11 +34,30 @@ any device was written. The local API names each dropped field once in the log
 (`http_report_value_ignored`); for MQTT see
 [zendure-mqtt-power-control.md](zendure-mqtt-power-control.md).
 
-A missing field reads as 0, which for most fields is the reading itself. Two are
-read as unknown instead, because a write follows from them: `acMode` (see
-[who owns a device's AC direction](#who-owns-a-devices-ac-direction)) and
-`minSoc`, which no reconcile writes while the report carries none
-([winter-mode.md](../winter-mode.md#state-after-a-restart)).
+A missing field reads as 0, which for most fields is the reading itself. Every
+field a state reconciler writes is read as unknown instead, because a write
+follows from it (owner decision 2026-10-12: the EMS does not write blindly over
+a state it does not know): `acMode` (see
+[who owns a device's AC direction](#who-owns-a-devices-ac-direction)), `minSoc`,
+which no reconcile writes while the report carries none
+([winter-mode.md](../winter-mode.md#state-after-a-restart)), and `socSet`,
+`smartMode`, `gridOffMode` and `inputLimit` (K20). Over a missing `socSet`,
+`smartMode` or `gridOffMode` nothing is written; over a missing `inputLimit` only
+the charge power of an `ac_input` role the operator set, as for `acMode`. The
+full-charge assist's `acMode=1` and its charge power go out together or not at
+all, and its restore over a missing field never holds the device out of output
+control for good (see [safety-model.md](safety-model.md#socset-and-inputlimit)). Each
+such field is logged once per device as `unknown_state_field` (with `field=`;
+a `minSoc` winter mode plans as `winter_min_soc_unknown`) until the report
+carries it again. A report without a known `acMode` shows no direction either:
+the record of a charge, a transport's or the assist's, counts such a device out
+of the charge only while it draws nothing from the grid. A device that draws a
+few watts idle never shows that, so a transport's record leaves the charge to
+the device after three exits that only grid draw followed, once the last
+resend window has passed (`ac_charge_left_to_device`); the assist's record
+has its own cap of three exits. Before, a report without `smartMode` got
+`smartMode=1` every reconcile interval, and one without `gridOffMode` got the
+runtime offgrid mode every cycle, with nothing in the next report to say it took.
 
 `minSoc` has one writer, the periodic SoC reconcile, also while a full-charge
 assist runs (the assist writes `socSet` alone). It writes winter mode's target,

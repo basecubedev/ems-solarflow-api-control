@@ -249,6 +249,29 @@ def test_nothing_is_written_over_a_min_soc_the_report_does_not_carry(context):
     assert rig.hardware.writes == [{"socSet": 1000}]
 
 
+@pytest.mark.parametrize("context", CONTEXTS)
+def test_a_configured_min_soc_the_report_does_not_carry_is_said_once_per_absence(context, caplog):
+    rig = Rig(configured_min_soc=15, item=report(soc=50, min_soc=None), context=context)
+
+    with caplog.at_level(logging.WARNING):
+        rig.reconcile()
+        rig.reconcile()
+        rig.state.min_soc = 15
+        rig.state.min_soc_reported = True
+        rig.reconcile()
+        rig.state.min_soc_reported = False
+        rig.reconcile()
+
+    said = [
+        record.getMessage()
+        for record in caplog.records
+        if "event=unknown_state_field" in record.getMessage()
+        and "field=minSoc" in record.getMessage()
+    ]
+    assert len(said) == 2
+    assert rig.min_soc_written() == []
+
+
 def test_a_configured_raise_that_waits_is_said_once_until_it_is_written(caplog):
     rig = Rig(configured_min_soc=30, item=report(soc=20, min_soc=15))
 

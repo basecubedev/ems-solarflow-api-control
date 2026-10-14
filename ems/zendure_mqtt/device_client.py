@@ -394,6 +394,15 @@ class ZendureMqttDeviceClient:
         return self._charge.exit_due(time.monotonic())
 
     @_serialized
+    def charge_exit_exhausted(self):
+        """Whether the exit is spent on a charge only grid draw shows, and none of it is in flight."""
+
+        active = self._active_command
+        if active is not None and active.is_active:
+            return False
+        return self._charge.exit_exhausted(time.monotonic())
+
+    @_serialized
     def found_exit_due(self):
         """Whether the one exit to AC input found after a start may go out now.
 
@@ -427,7 +436,7 @@ class ZendureMqttDeviceClient:
 
     @_serialized
     def release_charge_record(self):
-        """The charge is someone else's from here: a claim that writes its own."""
+        """The charge is not the EMS's from here: a claim that writes its own, or the device's."""
 
         self._charge.release()
 
@@ -568,11 +577,17 @@ class ZendureMqttDeviceClient:
         device: a repeat of the in-flight target is coalesced (no republish); a
         changed non-safety target is queued as the single latest pending target; a
         safety reduction preempts the in-flight command and publishes immediately.
-        With no command in flight, a non-negative target is held back while an
-        exit from the EMS's own charge, or the one exit to AC input found after
-        a start, is out and its resend window open. A
-        changed target replacing an exit still in flight is not: every command
-        here carries the direction, so it is an exit itself.
+        With no command in flight, a non-negative target other than the
+        shutdown release is held back while an exit from the EMS's own charge
+        is out and its resend window open, and, once ``FOUND_EXIT_ATTEMPTS``
+        exits went to a charge only grid draw shows, until that charge is left
+        to the device; the one exit to AC input found after a start is held
+        while its own window is open or its attempts are spent. A changed
+        target replacing an exit still in flight is not held: every command
+        here carries the direction, so it is an exit itself. Once those exits
+        are spent it is, so a moving load sends no further exit -- except the
+        shutdown release and a target that preempts the command in flight: a
+        stop to 0 W, a cut by the safety margin, a new charge.
         The controller and its write gates are unchanged.
         """
 
@@ -600,6 +615,14 @@ class ZendureMqttDeviceClient:
         found_exit = charge_exit == CHARGE_EXIT_TO_OUTPUT
         active = self._active_command
         if active is not None and active.is_active:
+            if (
+                not final
+                and self._charge.open
+                and self._charge.drawn_exits_spent()
+                and not self._should_preempt(active.target_w, target)
+            ):
+                self._discard_pending_target("superseded_by_pending_charge_exit")
+                return dispatch.coalesced(target, command_state=CHARGE_EXIT_PENDING)
             if active.target_w == target and not final:
                 # The in-flight target is already committed; drop any stale pending.
                 self._discard_pending_target("superseded_by_active_target")

@@ -717,6 +717,17 @@ device:
   so a safety stop never waits for the old command's timeout and the way back
   from a charge never queues behind the charge it ends. Correlation stays
   strict — the retired command can never confirm the replacement;
+- every power command carries its direction, so a changed target that replaces
+  an exit from the EMS's own charge is an exit itself. Once three exits went to
+  a charge only grid draw shows (see
+  [safety-model.md](safety-model.md#zendure-outputlimit)), a changed target
+  while the last one is in flight is **held** (`charge_exit_pending`), so a
+  moving load cannot send a fourth. The shutdown release and every target that
+  preempts as above — a stop to 0 W, a cut by `safety_preempt_margin_w`, a new
+  charge — are not held and go out within the same cycle. With no command in
+  flight, a target other than the shutdown release or a new charge waits while
+  an exit's resend window is open and, once those three exits are spent, until
+  the charge is left to the device after the last one's window;
 - once the active command reaches a terminal state on a broker reply
   (rejection, supersession, acknowledgement completion) → publish the latest
   pending target **once**. When the slot is freed by a timeout or by telemetry

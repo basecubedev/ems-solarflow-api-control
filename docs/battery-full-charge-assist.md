@@ -49,9 +49,42 @@ restores normal Max-SoC from the currently loaded `config.json` device
 `max_soc`. If the user changed `max_soc` while assist was active, the new
 configured value is used. EMS does not persist a previous Max-SoC value.
 
-If AC charge mode was used, restore requests `acMode=2` through the existing
-runtime AC intent reconciler. Output control remains blocked until restore is
-done or fresh telemetry confirms the restored state.
+If the assist put the device into AC input, restore requests `acMode=2`
+through the existing runtime AC intent reconciler. Output control remains
+blocked until restore is done or fresh telemetry confirms the restored state.
+The assist owes that restore once its `acMode=1` went out, or a report showed
+`acMode` 1 while it claimed the device. A write answered with an error, or not
+answered at all, went out: the device may have carried it out, so the restore
+is owed as for an accepted one. If the device refused it, that costs one exit
+to idle at most -- at a switch-off or a stop -- since the next report shows
+`acMode` 2 and closes the record the exit opened. An assist that entered no AC
+input -- its AC charge mode off, behind a shut write gate, on a transport without state
+reconciliation (MQTT control), or over a report without `acMode` or
+`inputLimit` -- owes none, and its abort or completion writes no `acMode`. A
+restore owed from before the device moved to MQTT control is settled at once,
+unwritten, as `full_charge_assist_ac_mode_restore_settled` with
+`reason=transport_state_reconciliation_unsupported`.
+
+A report without `socSet` or `acMode` cannot confirm a restore, and nothing is
+written over a field the report does not carry
+([safety-model.md](technical/safety-model.md#socset-and-inputlimit)), so such a
+restore never holds the device out of output control for good. Over a missing
+`socSet` the restore stays owed but holds nothing while the report lacks it:
+output control goes on, and the assist writes the configured `max_soc` at the
+first report that carries `socSet` again, whatever `soc_reconcile_interval`
+says. A restore write that fails over a known `socSet` stays owed and holds the
+device. Over a missing `acMode` the device may still sit in the assist's AC
+input, so the restore is the assist's exit to idle (`smartMode=1`, `acMode=2`,
+`inputLimit=0`, `outputLimit=0`) on the power write gate, logged as
+`ac_charge_ended_on_disable` with `claim=battery_full_charge_assist_restore`,
+once per resend window and three times at most. It is settled as `full_charge_assist_ac_mode_restore_settled`
+once a report after an exit shows the device out of the charge -- without
+`acMode` in it, only while the device draws nothing from the grid -- or, with
+`left_to=device` at `WARNING`, once the third exit's resend window has passed
+and the device still charges; output control returns in the next cycle.
+The assist's own `acMode=1` and its `inputLimit` go out together or not at all:
+over a report without either it enters no AC input, and holds no charge a stop
+or a switch-off would end.
 
 ### The assist and `minSoc`
 
@@ -78,13 +111,16 @@ decision 2026-10-10): one exit to idle (`smartMode=1`, `acMode=2`,
 logged as `ac_charge_ended_on_disable` with
 `charge=battery_full_charge_assist`. The controller keeps the same record of
 this charge that a transport keeps of its own. While control is on and the EMS
-holds the assist's charge -- `allow_state_reconciliation_writes` on, and the
-assist claiming the device, or restoring `acMode` after a completion or an
-abort -- the charge is on record, and the record reads every fresh report, so a
-clamp the device shows counts as the assist's. Each restore cycle counts as the
-charge's exit, whether its write reached the device or not, so a device that
-took the restore is sent nothing more and, at worst, the first exit after a
-switch-off waits one resend window. Once control is off, that record is owed
+holds the assist's charge -- `allow_state_reconciliation_writes` on, the
+assist's `acMode=1` gone out (whatever its answer) or shown in a report under
+its claim, and the assist claiming the device, or restoring `acMode` after a
+completion or an abort -- the charge is on record, and the record reads every fresh report, so a
+clamp the device shows counts as the assist's. A device the assist never put
+into AC input holds no charge of the assist's and gets neither this exit nor
+the release below. Each restore cycle counts as the charge's exit, whether its
+write reached the device or not, so a device that took the restore is sent
+nothing more and, at worst, the first exit after a switch-off waits one resend
+window. Once control is off, that record is owed
 the exit. It goes out again once per resend window until the device reports it
 left the charge or shows a setpoint the assist never wrote, which is someone
 else's charge. A setpoint the device shows before the exit -- a clamp, or a
@@ -92,7 +128,10 @@ charge it has yet to leave -- counts as the assist's. Two things differ from a
 transport's own record: a reported `inputLimit` of 0 counts as no setpoint
 shown, since a device that does not report one reads as 0 too, and the exit is
 sent at most three times each time control goes off, so a firmware protection
-charge that shows no setpoint is not written to for good. Only fresh reports
+charge that shows no setpoint is not written to for good. That cap stands in
+for the one a transport's record has for a charge only grid draw shows
+(`ac_charge_left_to_device`, see [ac-charging.md](ac-charging.md)), so the
+assist's record goes without it. Only fresh reports
 count: an unreachable device gets the exit when it answers again. An exit the
 device answered with an error waits its window like an accepted one, and one
 that never reached it goes out again at once; both log `ac_charge_end_failed`,
@@ -187,18 +226,21 @@ each battery-backed device card. It reflects the same state as `diagnose`:
   - **AC charge running** is shown only when telemetry confirms `acMode=1`
     and `acStatus=2`. Assist can also run without AC charge mode
     (`enable_ac_charge_mode=false`).
-  - While active, EMS internally marks Max-SoC and (if AC charge mode is
-    used) AC output mode restore as pending for *after* charging finishes.
+  - While active, EMS internally marks Max-SoC and (once the assist put the
+    device into AC input) AC output mode restore as pending for *after*
+    charging finishes.
     The dashboard shows this as **"Restore planned"** — it does not mean a
     restore is currently stuck or failed.
 - **Assist window active** — the device is inside the configured
   `assist_window_days` before its next due date. EMS may start an assist
   charge soon if SOC is already high enough.
 - **Restore pending** — assist has finished (no longer active) and EMS is
-  still waiting for write gates to restore the configured Max-SoC
-  (**Max-SoC restore pending**) and, if AC charge mode was used, normal
-  output mode `acMode=2` (**AC output mode restore pending**). These details
-  are only shown once assist is no longer active.
+  still waiting for write gates, or for a report that carries `socSet`, to
+  restore the configured Max-SoC (**Max-SoC restore pending**) and, if the
+  assist put the device into AC input, normal output mode `acMode=2` -- over a
+  report without `acMode`, the exit to idle, three times at most
+  (**AC output mode restore pending**). The card says which of the two it
+  waits for. These details are only shown once assist is no longer active.
 - **Assist overdue** — the device passed its due date without a completed
   assist. The dashboard shows how many days overdue.
 - Otherwise the card quietly shows the last full-charge timestamp and the next

@@ -389,6 +389,10 @@ def parse_device(data):
         battery_calibration_time=props.get("batCalTime"),
         ac_mode_reported=props.get("acMode") is not None,
         min_soc_reported=props.get("minSoc") is not None,
+        max_soc_reported=props.get("socSet") is not None,
+        smart_mode_reported=props.get("smartMode") is not None,
+        grid_off_mode_reported=props.get("gridOffMode") is not None,
+        input_limit_reported=props.get("inputLimit") is not None,
     )
 
 
@@ -443,6 +447,10 @@ def zero_device_state():
         battery_calibration_time=None,
         ac_mode_reported=False,
         min_soc_reported=False,
+        max_soc_reported=False,
+        smart_mode_reported=False,
+        grid_off_mode_reported=False,
+        input_limit_reported=False,
     )
 
 class ZendureClient:
@@ -507,6 +515,9 @@ class ZendureClient:
     def charge_exit_due(self):
         return self._charge.exit_due(time.monotonic())
 
+    def charge_exit_exhausted(self):
+        return self._charge.exit_exhausted(time.monotonic())
+
     def found_exit_due(self):
         return self._charge.found_exit_due(time.monotonic())
 
@@ -522,7 +533,7 @@ class ZendureClient:
         return self._charge.found_charge_left
 
     def release_charge_record(self):
-        """The charge is someone else's from here: a claim that writes its own."""
+        """The charge is not the EMS's from here: a claim that writes its own, or the device's."""
 
         self._charge.release()
 

@@ -252,7 +252,8 @@ device runtime role is `ac_input`; in `ac_output` mode the stored value is
 ignored for hardware writes.
 
 `system.reconcile_smart_mode` allows smart mode reconciliation and is required
-for the intended Zendure runtime/RAM mode behavior.
+for the intended Zendure runtime/RAM mode behavior. A device whose report
+carries no `smartMode` is not written one (`unknown_state_field`).
 
 `system.log_level` controls log verbosity. Common values are `info` and
 `debug`. The default `info` level focuses on lifecycle events (startup,

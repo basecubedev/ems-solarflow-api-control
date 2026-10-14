@@ -672,6 +672,9 @@ def test_active_assist_disabled_mid_run_aborts_and_restores(tmp_path):
     store = BatteryFullChargeStateStore(str(tmp_path / "ems_state.sqlite"))
     now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
     store.mark_assist_started("WR1", now, ac_charge_mode=True)
+    store.update_device_state(
+        "WR1", now, ac_input_request_pending=False, ac_mode_restore_pending=True
+    )
     controller = controller_for(dev, store)
 
     with configure_assist(enabled=False):
@@ -786,7 +789,7 @@ def test_blocked_writes_keep_pending_flags(tmp_path):
     assert record["full_charge_assist_active"] is True
     assert record["max_soc_request_pending"] is True
     assert record["ac_input_request_pending"] is True
-    assert record["ac_mode_restore_pending"] is True
+    assert record["ac_mode_restore_pending"] is False
 
 
 if __name__ == "__main__":

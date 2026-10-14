@@ -168,6 +168,7 @@ def state_from_trace_device(data):
     state.min_soc = percent_from_trace(data, "min_soc", "minSoc")
     state.min_soc_reported = "min_soc" in data or "minSoc" in data
     state.max_soc = percent_from_trace(data, "max_soc", "socSet")
+    state.max_soc_reported = "max_soc" in data or "socSet" in data
     state.solar = value_from_trace(data, "solar", "solarInputPower")
     state.output = value_from_trace(data, "output", "outputHomePower")
     state.pack_in = value_from_trace(data, "pack_in", "packInputPower")
@@ -184,10 +185,13 @@ def state_from_trace_device(data):
     state.dc_status = value_from_trace(data, "dc_status", "dcStatus")
     state.grid_state = value_from_trace(data, "grid_state", "gridState")
     state.smart_mode = value_from_trace(data, "smart_mode", "smartMode")
+    state.smart_mode_reported = "smart_mode" in data or "smartMode" in data
     state.grid_off_mode = value_from_trace(data, "grid_off_mode", "gridOffMode")
+    state.grid_off_mode_reported = "grid_off_mode" in data or "gridOffMode" in data
     state.ac_mode = value_from_trace(data, "ac_mode", "acMode")
     state.ac_mode_reported = "ac_mode" in data or "acMode" in data
     state.input_limit_w = value_from_trace(data, "input_limit_w", "inputLimit")
+    state.input_limit_reported = "input_limit_w" in data or "inputLimit" in data
     state.charge_max_limit_w = next(
         (
             data[key]
@@ -242,6 +246,8 @@ def built_in_simulation_frames():
                     "socLimit": 0,
                     "dcStatus": 1,
                     "acMode": 2,
+                    "gridOffMode": 2,
+                    "smartMode": 1,
                     "acStatus": 1,
                     "packState": 2
                 },
@@ -255,6 +261,8 @@ def built_in_simulation_frames():
                     "socLimit": 0,
                     "dcStatus": 1,
                     "acMode": 2,
+                    "gridOffMode": 2,
+                    "smartMode": 1,
                     "acStatus": 1,
                     "packState": 2
                 }
@@ -274,6 +282,8 @@ def built_in_simulation_frames():
                     "socLimit": 0,
                     "dcStatus": 1,
                     "acMode": 2,
+                    "gridOffMode": 2,
+                    "smartMode": 1,
                     "acStatus": 1,
                     "packState": 2
                 },
@@ -287,6 +297,8 @@ def built_in_simulation_frames():
                     "socLimit": 2,
                     "dcStatus": 0,
                     "acMode": 2,
+                    "gridOffMode": 2,
+                    "smartMode": 1,
                     "acStatus": 0,
                     "packState": 0
                 }

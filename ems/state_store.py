@@ -381,6 +381,8 @@ class BatteryFullChargeStateStore:
         return record
 
     def mark_assist_started(self, device, now, ac_charge_mode):
+        """Start an assist; the ``acMode`` restore is owed only once its ``acMode=1`` went out."""
+
         return self.update_device_state(
             device,
             now,
@@ -390,7 +392,6 @@ class BatteryFullChargeStateStore:
             restore_pending=True,
             max_soc_request_pending=True,
             ac_input_request_pending=bool(ac_charge_mode),
-            ac_mode_restore_pending=bool(ac_charge_mode),
         )
 
     def mark_assist_completed(self, device, now, interval_days):
