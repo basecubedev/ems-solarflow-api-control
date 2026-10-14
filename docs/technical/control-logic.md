@@ -543,3 +543,12 @@ are marked offline and skipped for output writes.
 Cached telemetry is last-known data. Offline does not automatically mean the
 device is currently producing `0W`; it means the EMS does not have fresh device
 telemetry for that cycle.
+
+An offline device keeps the role its claims give it: the operator's runtime
+role, the full-charge assist's and the regulator's claims are resolved as for a
+device that answered, and a charge the firmware runs by itself, which only a
+report shows, is carried from the last cycle. A device parked in AC input
+therefore gets no share of the output while it does not answer; before, it fell
+back to the default `ac_output` role for every such cycle, and the allocator,
+which keeps an offline device in the allocation on its cached state, gave it
+one. Nothing is reconciled for a device without a report.

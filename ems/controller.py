@@ -56,6 +56,7 @@ from ems.runtime_intents import (
     ac_input_intent,
     ac_output_intent,
     UNPROVEN_CHARGE_REASON,
+    FIRMWARE_CHARGE_REASON,
     firmware_charge_intent,
     is_floor_charge,
     resolve_device_intent,
@@ -1775,6 +1776,29 @@ class EMSController:
         return cfg.safe_int(
             getattr(self.last_states.get(dev.name), "grid_input", 0), 0, minimum=0
         )
+
+    def unanswered_device_intent(self, dev, previous):
+        """The claim on ``dev`` for a cycle in which it did not answer.
+
+        The claims that need no report are resolved as for a device that
+        answered; the firmware's own charge, which only a report shows, is
+        carried from the cycle before. Nothing is reconciled from it.
+        """
+
+        observed = (
+            previous
+            if previous is not None
+            and previous.reason in (FIRMWARE_CHARGE_REASON, UNPROVEN_CHARGE_REASON)
+            else None
+        )
+        return resolve_device_intent([
+            self.get_device_runtime_intent(dev, None),
+            self.full_charge_assist_intent(dev),
+            regulator_charge_intent(
+                dev.name, ems_commanded_charge=self.charge_commanded_by_ems(dev)
+            ),
+            observed,
+        ])
 
     def charge_commanded_by_ems(self, dev):
         """Whether this EMS is charging ``dev``, by its own record.
@@ -5419,6 +5443,7 @@ class EMSController:
             detect_capabilities(state)
             for state in states
         ]
+        previous_intents = self.runtime_intents
         self.runtime_intents = {}
         for dev, state in zip(self.devices, states):
             self.runtime_intents[dev.name] = ac_output_intent(dev.name)
@@ -5428,6 +5453,9 @@ class EMSController:
             raw_states
         ):
             if not state:
+                self.runtime_intents[dev.name] = self.unanswered_device_intent(
+                    dev, previous_intents.get(dev.name)
+                )
                 continue
 
             self.leave_charge_shown_by_draw_alone(dev, state)
