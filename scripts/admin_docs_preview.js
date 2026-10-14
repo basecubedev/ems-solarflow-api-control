@@ -201,10 +201,7 @@
   // names the upgrade even in the live-run screens.
   function setUpgradeFacts() {
     if (typeof upgradeEls === "undefined") return;
-    var cur = (typeof upgradeState !== "undefined" && upgradeState.current) || {};
-    if (upgradeEls.factCurrent) {
-      upgradeEls.factCurrent.textContent = cur.image || cur.tag || "Current version unknown";
-    }
+    if (typeof renderUpgradeCurrent === "function") renderUpgradeCurrent();
     if (upgradeEls.factTarget) upgradeEls.factTarget.textContent = "v0.7.0";
   }
 

@@ -528,6 +528,81 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
     expect(cleared.active).toBe(false);
   });
 
+  test("a cancelled upgrade that left Admin and EMS apart is named on the panel", async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    // Field report 2026-10-03: the panel's only "Current" was the EMS's v0.8.8
+    // while Admin v0.8.10 ran, and the known-good record named the v0.8.8 pair.
+    await page.route("**/api/admin/maintenance/overview", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          install_state: { state: "standard_install", label: "Standard installation" },
+          paths: {
+            config: { path: "/install/config/config.json", exists: true },
+            data: { path: "/install/data", exists: true },
+            compose: { path: "/install/docker-compose.yml", exists: true },
+          },
+          docker: { available: true, server_version: "e2e" },
+          containers: {
+            ems: {
+              found: true,
+              running: true,
+              name: "ems",
+              image: "ghcr.io/basecubedev/ems-solarflow-api-control@sha256:" + "e".repeat(64),
+              tag: "v0.8.8",
+              status: "running",
+            },
+            influxdb: {
+              found: false, running: false, name: "influxdb", image: null, tag: null,
+              status: "missing",
+            },
+          },
+          components: {
+            admin: { image: "ghcr.io/basecubedev/ems-solarflow-admin:v0.8.10", tag: "v0.8.10" },
+            ems: { image: null, tag: "v0.8.8" },
+          },
+          links: { dashboard_url: "http://localhost:8080" },
+          warnings: [],
+        }),
+      }),
+    );
+    await page.route("**/api/admin/system-alignment/status", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          active: false,
+          transition: {
+            operation_id: "cancelled-op",
+            mode: "guided_upgrade",
+            stage: "cancelled",
+            system_tag: "v0.8.10",
+            admin_alignment_required: true,
+          },
+          known_good: { system_tag: "v0.8.8" },
+          known_good_admin_running: false,
+        }),
+      }),
+    );
+
+    await openUpgradePanel(page, seedAdminScenario);
+
+    await expect(page.locator("#upgrade-current-version")).toHaveText("v0.8.8");
+    await expect(page.locator("#upgrade-fact-current")).toHaveText(
+      "EMS v0.8.8 · Admin v0.8.10",
+    );
+    const apart = page.locator("#upgrade-admin-apart");
+    await expect(apart).toBeVisible();
+    await expect(apart).toContainText("The last verified System Build on record is v0.8.8");
+    await expect(apart).toContainText(
+      "A Guided Upgrade to v0.8.10 that needed to replace the Admin was cancelled",
+    );
+  });
+
   test("selecting targets is side-effect free", async ({
     page,
     seedAdminScenario,

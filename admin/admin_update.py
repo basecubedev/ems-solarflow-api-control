@@ -28,6 +28,7 @@ from enum import Enum
 from pathlib import Path
 
 from admin.image_identity import ImageIdentity, identify_image
+from admin.installed_release import probe_running_release
 from admin.models import utc_now_iso
 from admin.releases import TAG_PATTERN
 from admin.system_build_id import SystemBuildIdKind, parse_system_build_id
@@ -289,6 +290,19 @@ def detect_current_admin_identity(docker=None, environ=None, hostname=None):
     if docker is not None:
         return identify_image(docker, image_ref), source
     return ImageIdentity(image_ref=image_ref), source
+
+
+def probe_running_admin(docker, environ=None):
+    """Probe the running Admin container as the running EMS container is probed.
+
+    The release comes from the container's own image labels, read by its
+    immutable image id, so a digest-pinned Admin is named as the Appliance
+    Manager names it. ``EMS_ADMIN_CONTAINER_NAME``, else the default name.
+    """
+
+    environ = os.environ if environ is None else environ
+    name = _clean(environ.get("EMS_ADMIN_CONTAINER_NAME")) or DEFAULT_ADMIN_CONTAINER
+    return probe_running_release(docker, name)
 
 
 def resolve_admin_image_target(release_tag, docker=None) -> AdminImageTarget:
@@ -1787,6 +1801,12 @@ class AdminUpdateService:
                 "pending": None,
             }
         current, source = self._current_identity()
+        running = probe_running_admin(self._docker, self._env())
+        current_admin = {
+            **_identity_view(current),
+            "release": running.identity.tag if running.identity is not None else None,
+            "source": source,
+        }
         try:
             pending = self._reconcile_pending(self._store.read())
         except PendingUpdateStateError as exc:
@@ -1795,13 +1815,13 @@ class AdminUpdateService:
                 "supported": True,
                 "error": exc.reason,
                 "message": exc.message,
-                "current_admin": {**_identity_view(current), "source": source},
+                "current_admin": current_admin,
                 "pending": None,
             }
         return {
             "ok": True,
             "supported": True,
-            "current_admin": {**_identity_view(current), "source": source},
+            "current_admin": current_admin,
             "pending": pending,
         }
 

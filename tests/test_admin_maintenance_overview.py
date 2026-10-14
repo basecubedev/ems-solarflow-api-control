@@ -180,6 +180,83 @@ def test_running_ems_container_is_reported(tmp_path):
     }
 
 
+class _RunningAdminDocker(FakeDocker):
+    """An Admin container whose image labels name a release its environment does not."""
+
+    IMAGE_ID = "sha256:" + "a" * 64
+
+    def __init__(self, admin_status="running", labels=None):
+        super().__init__(
+            containers={
+                "ems-solarflow-admin": {
+                    "container_name": "ems-solarflow-admin",
+                    "image": "aaaaaaaaaaaa",
+                    "status": admin_status,
+                },
+            }
+        )
+        self._labels = labels if labels is not None else {
+            "de.basecubedev.ems.release_tag": "v0.8.10",
+            "org.opencontainers.image.version": "v0.8.10",
+        }
+
+    def inspect_container_image_id(self, name):
+        return self.IMAGE_ID if name == "ems-solarflow-admin" else None
+
+    def inspect_image(self, ref):
+        if ref == self.IMAGE_ID:
+            return {"image_ref": ref, "digest": "sha256:" + "d" * 64, "labels": self._labels}
+        return None
+
+
+def test_the_admin_version_is_read_from_the_running_admin_container(tmp_path, monkeypatch):
+    """Field report 2026-10-03: one Admin, two versions named for it.
+
+    The Appliance Manager reads the release from the running Admin container's
+    image labels. The overview took it from the Admin's environment, which
+    names the build the container was created from.
+    """
+
+    monkeypatch.delenv("EMS_ADMIN_CONTAINER_NAME", raising=False)
+    _standard_install(tmp_path)
+
+    overview = run_maintenance_overview(
+        base_dir=str(tmp_path),
+        docker=_RunningAdminDocker(),
+        admin_image="ghcr.io/basecubedev/ems-solarflow-admin:v0.8.8",
+    )
+
+    assert overview["components"]["admin"]["tag"] == "v0.8.10"
+
+
+def test_a_running_admin_without_labels_is_unknown_not_its_environment(tmp_path, monkeypatch):
+    monkeypatch.delenv("EMS_ADMIN_CONTAINER_NAME", raising=False)
+    _standard_install(tmp_path)
+
+    overview = run_maintenance_overview(
+        base_dir=str(tmp_path),
+        docker=_RunningAdminDocker(labels={}),
+        admin_image="ghcr.io/basecubedev/ems-solarflow-admin:v0.8.8",
+    )
+
+    assert overview["components"]["admin"]["tag"] is None
+
+
+def test_without_an_admin_container_the_environment_still_names_the_admin(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("EMS_ADMIN_CONTAINER_NAME", raising=False)
+    _standard_install(tmp_path)
+
+    overview = run_maintenance_overview(
+        base_dir=str(tmp_path),
+        docker=_RunningAdminDocker(admin_status="exited"),
+        admin_image="ghcr.io/basecubedev/ems-solarflow-admin:v0.8.8",
+    )
+
+    assert overview["components"]["admin"]["tag"] == "v0.8.8"
+
+
 def test_digest_pinned_running_ems_reports_readable_version_from_labels(tmp_path):
     # After a digest-pinned Guided Upgrade the running EMS image ref carries no
     # tag; the overview recovers a readable release from the image's OCI labels

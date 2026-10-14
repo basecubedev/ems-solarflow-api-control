@@ -691,6 +691,26 @@ class SystemAlignmentService:
             "known_good": known_good,
         }
 
+    def known_good_admin_running(self, known_good):
+        """Whether the known-good record names the Admin that runs here.
+
+        ``False`` names a stale record: a Guided Upgrade cancelled after its
+        Admin was replaced, or an Admin the Appliance Manager reinstalled,
+        leaves the record on the pair it last verified. ``None`` when there is
+        no record or either digest cannot be read. Not part of ``status``:
+        that is read on every transition check, and this reads Docker.
+        """
+
+        if not isinstance(known_good, dict) or not known_good.get("admin_digest"):
+            return None
+        try:
+            running = self._identity_dict(self._current_identity()).get("digest")
+        except Exception:
+            return None
+        if not running:
+            return None
+        return str(running).strip() == str(known_good["admin_digest"]).strip()
+
     @staticmethod
     def _selection_fingerprint(build) -> str:
         return ":".join(

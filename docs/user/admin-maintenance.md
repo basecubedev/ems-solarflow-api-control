@@ -196,6 +196,23 @@ You confirm the whole upgrade plan **once**. There is no second, Admin-specific
 confirmation, no standalone *Update Admin* button, and no option to skip Admin
 alignment (or leave the Admin on a different build) in the normal flow.
 
+**Admin and EMS are named separately.** *Current EMS* in the first step is the EMS
+container's release; the Admin's own release is read the same way, from the
+running Admin container's build labels by its immutable image id — the answer the
+Appliance Manager gives too. The Maintenance overview, the plan's *Current* fact
+(`EMS … · Admin …`) and `/api/admin/maintenance/admin-update/status`
+(`current_admin.release`) all use it; the Admin's environment is read only when no
+Admin container runs to answer.
+
+A Guided Upgrade cancelled after it replaced the Admin leaves the Admin on the
+target build and EMS on the old one, and the System Build known-good record —
+written only when an upgrade completes — still names the pair it last verified.
+An Admin reinstalled from the Appliance Manager leaves the record behind the same
+way. When the record does not name the Admin that runs, the Admin alignment step
+says so, names the record's build, and names the cancelled upgrade if that is what
+left them apart. Upgrading to one System Build aligns both and records the pair
+again; the record itself is not rewritten until then.
+
 If you are asked to log in again after the Admin Console restart, use the same
 EMS Dashboard/Admin password. The upgrade resumes exactly where it left off: the
 completed backup and current-state preflight are **not** repeated.

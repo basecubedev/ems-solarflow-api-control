@@ -10,7 +10,7 @@ import os
 import re
 from datetime import datetime, timezone
 
-from admin.admin_update import admin_image_ref_from_env
+from admin.admin_update import admin_image_ref_from_env, probe_running_admin
 from admin.container_names import (
     DEFAULT_INFLUX_CONTAINER,
     resolve_ems_container_name,
@@ -97,6 +97,7 @@ def run_maintenance_overview(base_dir=None, docker=None, admin_image=None):
 
     compose_text = _read_compose(context) if context.compose_exists else ""
     specs = _container_specs(compose_text)
+    docker = docker if docker is not None else _default_docker()
     docker_info, containers = _inspect_containers(docker, specs)
 
     label, message = _STATE_LABELS.get(
@@ -142,7 +143,7 @@ def run_maintenance_overview(base_dir=None, docker=None, admin_image=None):
         "components": {
             "admin": {
                 "image": admin_image,
-                "tag": _image_tag(admin_image),
+                "tag": _admin_release(docker, docker_info, admin_image),
             },
             "ems": {
                 "image": containers["ems"].get("image"),
@@ -156,6 +157,20 @@ def run_maintenance_overview(base_dir=None, docker=None, admin_image=None):
     # can answer "what is wrong" without the owner opening seven cards.
     payload["health"] = build_maintenance_health(payload)
     return payload
+
+
+def _admin_release(docker, docker_info, admin_image):
+    """The running Admin's release from its image labels, as the Manager reads it.
+
+    The environment names the build the container was created from, and is
+    read only when no Admin container runs here to answer.
+    """
+
+    if docker_info.get("available"):
+        probe = probe_running_admin(docker)
+        if probe.running:
+            return probe.identity.tag if probe.identity is not None else None
+    return _image_tag(admin_image)
 
 
 def _placeholder_fields(context):

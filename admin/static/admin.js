@@ -11420,6 +11420,7 @@ const upgradeState = {
   loading: false,
   loadingPromise: null,
   alignmentTransition: null,
+  alignmentStatus: null,
   migrationReview: null,
   migrationRevision: null,
   running: false,
@@ -11453,6 +11454,7 @@ const upgradeAdminEls = {
   current: document.getElementById("upgrade-admin-current"),
   target: document.getElementById("upgrade-admin-target"),
   status: document.getElementById("upgrade-admin-alignment-status"),
+  apart: document.getElementById("upgrade-admin-apart"),
 };
 
 // The reconnect overlay is shared with Guided Setup; it is retained here as the
@@ -11506,9 +11508,39 @@ function renderUpgradeAdminAlignment() {
   if (upgradeAdminEls.status && state && UPGRADE_ALIGNMENT_STATUS_TEXT[state]) {
     upgradeAdminEls.status.textContent = UPGRADE_ALIGNMENT_STATUS_TEXT[state];
   }
+  if (upgradeAdminEls.apart) {
+    const apart = upgradeAdminApartText(upgradeState.alignmentStatus, upgradeState.runningAdmin);
+    upgradeAdminEls.apart.textContent = apart;
+    upgradeAdminEls.apart.hidden = !apart;
+  }
+}
+
+function upgradeAdminApartText(status, runningAdmin) {
+  const record = status && status.known_good;
+  if (!record || status.known_good_admin_running !== false) return "";
+  let text =
+    "The last verified System Build on record is " +
+    (record.system_tag || "unknown") +
+    ", but the Admin running here is " +
+    ((runningAdmin && runningAdmin.tag) || "another build") +
+    ", not the Admin that record names.";
+  const transition = status.transition;
+  if (
+    transition &&
+    transition.mode === "guided_upgrade" &&
+    transition.stage === "cancelled" &&
+    transition.admin_alignment_required === true
+  ) {
+    text +=
+      " A Guided Upgrade to " +
+      (transition.system_tag || "another build") +
+      " that needed to replace the Admin was cancelled before it completed.";
+  }
+  return text + " Upgrading to one System Build aligns Admin and EMS and records the pair again.";
 }
 
 function applyUpgradeAlignmentTransition() {
+  upgradeState.alignmentStatus = systemAlignmentState || null;
   upgradeState.alignmentTransition =
     (systemAlignmentState && systemAlignmentState.transition) || null;
   renderUpgradeAdminAlignment();
@@ -11712,9 +11744,10 @@ function renderUpgradeValidation(items, prepared) {
 // the plan fact beside it went on naming the release that had been replaced.
 function renderUpgradeCurrent() {
   const cur = upgradeState.current;
+  const admin = upgradeState.runningAdmin || {};
   // The readable release first: a digest-pinned install reports its image as
   // repo@sha256:<64 hex>, which is not a version and does not fit the line.
-  const label = cur.tag || cur.image || "Current version unknown";
+  const label = cur.tag || cur.image || "Unknown";
   if (upgradeEls.currentVersion) {
     upgradeEls.currentVersion.textContent = label;
   }
@@ -11722,7 +11755,8 @@ function renderUpgradeCurrent() {
     upgradeEls.currentDetail.textContent = cur.state || "—";
   }
   if (upgradeEls.factCurrent) {
-    upgradeEls.factCurrent.textContent = label;
+    upgradeEls.factCurrent.textContent =
+      "EMS " + label + " · Admin " + (admin.tag || "unknown");
   }
 }
 

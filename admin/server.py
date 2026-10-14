@@ -2649,7 +2649,12 @@ class AdminHandler(BaseHTTPRequestHandler):
         return result
 
     def _handle_system_alignment_status(self):
-        self._send_json(self._alignment_status())
+        payload = self._alignment_status()
+        payload["known_good_admin_running"] = None
+        judge = getattr(self.server.system_alignment, "known_good_admin_running", None)
+        if payload.get("ok") is not False and payload.get("active") is False and callable(judge):
+            payload["known_good_admin_running"] = judge(payload.get("known_good"))
+        self._send_json(payload)
 
     def _handle_system_alignment_validate(self):
         # Read-only Fresh Setup verdict. Selecting the build in Guided Setup is the

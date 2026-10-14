@@ -4810,6 +4810,53 @@ def test_system_alignment_resource_verification_has_productive_route(tmp_path):
     assert alignment.verify_calls == ["op-1"]
 
 
+class _JudgedKnownGoodAlignment(_FakeSystemAlignment):
+    def __init__(self, *, active, running):
+        super().__init__(stage="admin_reconnect_pending", active=active)
+        self.running = running
+        self.judged = []
+
+    def known_good_admin_running(self, known_good):
+        self.judged.append(known_good["system_tag"])
+        return self.running
+
+
+def test_the_status_route_names_a_known_good_record_the_running_admin_has_left(tmp_path):
+    """Field report 2026-10-03: the record named the pair a cancelled upgrade left."""
+
+    alignment = _JudgedKnownGoodAlignment(active=False, running=False)
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        status, _, payload = _request(f"{base}/api/admin/system-alignment/status")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert payload["known_good"]["system_tag"] == "v0.7.0"
+    assert payload["known_good_admin_running"] is False
+
+
+def test_the_status_route_leaves_the_known_good_record_alone_while_a_transition_runs(
+    tmp_path,
+):
+    """A replacement in flight proves nothing about the record, and polls stay cheap."""
+
+    alignment = _JudgedKnownGoodAlignment(active=True, running=False)
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        status, _, payload = _request(f"{base}/api/admin/system-alignment/status")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert payload["known_good_admin_running"] is None
+    assert alignment.judged == []
+
+
 def test_system_alignment_status_read_requires_session_authentication(tmp_path):
     alignment = _FakeSystemAlignment(stage="failed_recoverable")
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
