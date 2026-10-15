@@ -1267,3 +1267,460 @@ def test_the_history_panel_has_a_place_for_the_retention_note():
     html = (ROOT / "dashboard" / "static" / "index.html").read_text(encoding="utf-8")
 
     assert 'id="historyRetention"' in html
+
+
+def _kpi_cards(data, *, tab="overview", device="", snapshot=None, range_token="24h"):
+    """The KPI cards of ``tab`` as {id: [label, value]}."""
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const host = {{ innerHTML: "" }};
+global.document = {{ getElementById: (id) => (id === "analyticsKpis" ? host : null) }};
+app.state.snapshot = {json.dumps(snapshot)};
+app.state.analytics.data = {json.dumps(data)};
+app.state.analytics.tab = {json.dumps(tab)};
+app.state.analytics.device = {json.dumps(device)};
+app.state.range = {json.dumps(range_token)};
+app.renderAnalyticsKpis();
+const cards = {{}};
+for (const match of host.innerHTML.matchAll(
+  /data-analytics-kpi="([^"]+)"><span class="analytics-kpi-label">([^<]*)<\\/span><span class="analytics-kpi-value">([^<]*)</g
+)) {{
+  cards[match[1]] = [match[2], match[3]];
+}}
+console.log(JSON.stringify(cards));
+"""
+    return run_node(script)
+
+
+def _series_payload(start_iso, end_iso, range_name, step=1800, points=4):
+    start = 1_780_000_000
+    return {
+        "range": range_name,
+        "start": start_iso,
+        "end": end_iso,
+        "time": [start + index * step for index in range(points)],
+        "series": {
+            "pv": [1000] * points,
+            "output": [500] * points,
+            "battery": [200] * points,
+        },
+    }
+
+
+def test_a_custom_range_names_the_window_its_kpis_integrate():
+    """The period button still reads 24h; the KPIs integrate three days."""
+    data = _series_payload("2026-06-01T00:00:00+00:00", "2026-06-04T00:00:00+00:00", "custom")
+    cards = _kpi_cards(data, tab="pv", range_token="24h")
+    assert cards["pv"][0] == "PV · 3d"
+    assert cards["output"][0] == "Output · 3d"
+    assert cards["pvPeak"][0] == "PV Peak · 3d"
+    assert all("24h" not in label for label, _ in cards.values())
+
+
+def test_a_zoomed_window_names_its_span():
+    data = _series_payload("2026-06-01T10:00:00+00:00", "2026-06-01T11:30:00+00:00", "custom")
+    cards = _kpi_cards(data, tab="battery", range_token="7d")
+    assert cards["charge"][0] == "Charge · 1.5h"
+    assert cards["discharge"][0] == "Discharge · 1.5h"
+
+    short = _series_payload("2026-06-01T10:00:00+00:00", "2026-06-01T10:20:00+00:00", "custom")
+    assert _kpi_cards(short, tab="battery")["charge"][0] == "Charge · 20m"
+
+
+def test_a_period_button_keeps_its_own_name():
+    data = _series_payload("2026-06-01T00:00:00+00:00", "2026-06-08T00:00:00+00:00", "7d")
+    cards = _kpi_cards(data, tab="pv", range_token="7d")
+    assert cards["pv"][0] == "PV · 7d"
+    assert cards["pvPeak"][0] == "PV Peak · 7d"
+
+
+def _kpi_cards_in_turn(steps, *, tab):
+    """The KPI cards after each (device, data) step, rendered in one page."""
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const host = {{ innerHTML: "" }};
+global.document = {{ getElementById: (id) => (id === "analyticsKpis" ? host : null) }};
+app.state.snapshot = {{ average_soc: 50, devices: {{ WR1: {{ soc: 80, ac_mode: 2 }} }} }};
+app.state.analytics.tab = {json.dumps(tab)};
+const rendered = [];
+for (const [device, data] of {json.dumps(steps)}) {{
+  app.state.analytics.device = device;
+  app.state.analytics.data = data;
+  app.renderAnalyticsKpis();
+  const cards = {{}};
+  for (const match of host.innerHTML.matchAll(
+    /data-analytics-kpi="([^"]+)"><span class="analytics-kpi-label">([^<]*)<\\/span><span class="analytics-kpi-value">([^<]*)</g
+  )) {{
+    cards[match[1]] = [match[2], match[3]];
+  }}
+  rendered.push(cards);
+}}
+console.log(JSON.stringify(rendered));
+"""
+    return run_node(script)
+
+
+def _custom_range_answer(devices, pv_w, grid_w):
+    """A custom-range answer; the device filter changes its values, not its axis."""
+    payload = _series_payload("2026-06-01T00:00:00+00:00", "2026-06-04T00:00:00+00:00", "custom")
+    payload["source"] = "influxdb"
+    payload["devices"] = devices
+    payload["series"] = {"pv": [pv_w] * 4, "output": [pv_w / 2] * 4, "grid": [grid_w] * 4}
+    return payload
+
+
+def test_a_device_chosen_under_a_custom_range_gets_its_own_energy_kpis():
+    every, one = _kpi_cards_in_turn(
+        [["", _custom_range_answer([], 2000, 400)], ["WR1", _custom_range_answer(["WR1"], 500, 400)]],
+        tab="pv",
+    )
+    assert every["pv"] == ["PV · 3d", "3.0 kWh"]
+    assert one["pv"] == ["PV · 3d", "750 Wh"]
+    assert one["output"] == ["Output · 3d", "375 Wh"]
+    assert one["soc"] == ["Current SoC", "80%"]
+
+    back = _kpi_cards_in_turn(
+        [["WR1", _custom_range_answer(["WR1"], 500, 400)], ["", _custom_range_answer([], 2000, 400)]],
+        tab="pv",
+    )[1]
+    assert back["pv"] == ["PV · 3d", "3.0 kWh"]
+
+
+def test_the_meter_kpis_name_no_device_when_one_is_chosen():
+    """Grid Import, Grid Export and Home read the meter whatever the filter."""
+    cards = _kpi_cards_in_turn([["WR1", _custom_range_answer(["WR1"], 500, 400)]], tab="grid")[0]
+    assert cards["gridImport"] == ["Grid Import · 3d", "600 Wh"]
+    assert cards["gridExport"][0] == "Grid Export · 3d"
+    assert cards["home"][0] == "Home · 3d"
+    assert all("WR1" not in label for label, _ in cards.values())
+
+
+def _two_answers_in_flight(order):
+    """A 30-s refresh for every device in flight when the operator picks WR1.
+
+    The two answers are resolved by hand in ``order`` ("choice" or "refresh"
+    first); after each the KPI cards, the device the data describes and
+    whether the loading note shows are recorded.
+    """
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const nodes = {{ analyticsKpis: {{ innerHTML: "" }}, analyticsLoading: {{ hidden: true }} }};
+global.document = {{ hidden: false, getElementById: (id) => nodes[id] || null, querySelectorAll: () => [] }};
+const pending = [];
+global.fetch = (url) => new Promise((resolve) => pending.push({{ url, resolve }}));
+const answers = {{
+  refresh: {json.dumps(_custom_range_answer([], 2000, 400))},
+  choice: {json.dumps(_custom_range_answer(["WR1"], 500, 400))},
+}};
+app.state.snapshot = {{ average_soc: 50, devices: {{ WR1: {{ soc: 80, ac_mode: 2 }} }} }};
+app.state.analytics.tab = "pv";
+app.state.analytics.custom = {{ active: true, start: 1780000000, end: 1780259200 }};
+(async () => {{
+  app.state.analytics.device = "";
+  const loads = {{ refresh: app.loadAnalytics(false) }};
+  app.state.analytics.device = "WR1";
+  loads.choice = app.loadAnalytics();
+  const requests = {{ refresh: pending[0], choice: pending[1] }};
+  const steps = [];
+  for (const name of {json.dumps(order)}) {{
+    requests[name].resolve({{ ok: true, json: async () => answers[name] }});
+    await loads[name];
+    const cards = {{}};
+    for (const match of nodes.analyticsKpis.innerHTML.matchAll(
+      /data-analytics-kpi="([^"]+)"><span class="analytics-kpi-label">[^<]*<\\/span><span class="analytics-kpi-value">([^<]*)</g
+    )) {{
+      cards[match[1]] = match[2];
+    }}
+    const data = app.state.analytics.data;
+    steps.push({{ cards, devices: data ? data.devices : null, loading: !nodes.analyticsLoading.hidden }});
+  }}
+  console.log(JSON.stringify({{ urls: pending.map((request) => request.url), steps }}));
+}})();
+"""
+    return run_node(script)
+
+
+def test_an_older_answer_landing_last_does_not_replace_the_device_chosen_since():
+    """The refresh for every device answers after WR1's own answer, and is dropped."""
+    result = _two_answers_in_flight(["choice", "refresh"])
+    assert "devices=WR1" not in result["urls"][0]
+    assert "devices=WR1" in result["urls"][1]
+    after_choice, after_refresh = result["steps"]
+    assert after_choice["cards"]["pv"] == "750 Wh"
+    assert after_refresh == after_choice
+    assert after_refresh["devices"] == ["WR1"]
+    assert after_refresh["cards"] == {
+        "pv": "750 Wh", "pvPeak": "500 W", "output": "375 Wh", "soc": "80%"
+    }
+
+
+def test_an_older_answer_landing_first_is_not_shown_while_the_choice_loads():
+    after_refresh, after_choice = _two_answers_in_flight(["refresh", "choice"])["steps"]
+    assert after_refresh == {"cards": {}, "devices": None, "loading": True}
+    assert after_choice["devices"] == ["WR1"]
+    assert after_choice["cards"]["pv"] == "750 Wh"
+    assert after_choice["loading"] is False
+
+
+WR1_SHOWN = {"pv": "750 Wh", "data": True, "pvSeries": 500, "loading": False, "bodyHidden": False}
+
+
+def _one_selection_in_turn(events, answers=None):
+    """The operator's pick of WR1 and the 30-s refreshes for it, settled by hand.
+
+    ``events`` holds ``["pick"]`` or ``["refresh"]`` to start a request, and
+    ``["answer", n]``, ``["503", n]`` or ``["fail", n]`` to settle request
+    ``n``; ``answers[n]`` is the body request ``n`` answers with (WR1's
+    750-Wh answer by default). After each settlement the PV card, whether and
+    which data is held, whether the loading note shows and whether the chart
+    body is hidden are recorded.
+    """
+    if answers is None:
+        answers = [_custom_range_answer(["WR1"], 500, 400)] * len(events)
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const nodes = {{ analyticsKpis: {{ innerHTML: "" }}, analyticsLoading: {{ hidden: true }},
+  analyticsBody: {{ hidden: false }}, analyticsUnavailable: {{ hidden: true }} }};
+global.document = {{ hidden: false, getElementById: (id) => nodes[id] || null, querySelectorAll: () => [] }};
+const pending = [];
+global.fetch = (url) => new Promise((resolve, reject) => pending.push({{ url, resolve, reject }}));
+const answers = {json.dumps(answers)};
+app.state.snapshot = {{ average_soc: 50, devices: {{ WR1: {{ soc: 80, ac_mode: 2 }} }} }};
+app.state.analytics.tab = "pv";
+app.state.analytics.custom = {{ active: true, start: 1780000000, end: 1780259200 }};
+app.state.analytics.device = "WR1";
+(async () => {{
+  const loads = [];
+  const steps = [];
+  for (const [kind, n] of {json.dumps(events)}) {{
+    if (kind === "pick") loads.push(app.loadAnalytics());
+    if (kind === "refresh") loads.push(app.loadAnalytics(false));
+    if (kind === "answer") pending[n].resolve({{ ok: true, json: async () => answers[n] }});
+    if (kind === "503") pending[n].resolve({{ ok: false, json: async () => ({{ error: "history_unavailable" }}) }});
+    if (kind === "fail") pending[n].reject(new Error("network"));
+    if (kind === "pick" || kind === "refresh") continue;
+    await loads[n];
+    const pv = nodes.analyticsKpis.innerHTML.match(
+      /data-analytics-kpi="pv"><span class="analytics-kpi-label">[^<]*<\\/span><span class="analytics-kpi-value">([^<]*)</
+    );
+    const data = app.state.analytics.data;
+    steps.push({{
+      settled: `${{kind}} ${{n}}`,
+      pv: pv ? pv[1] : null,
+      data: !!data,
+      pvSeries: data && data.series ? data.series.pv[0] : null,
+      loading: !nodes.analyticsLoading.hidden,
+      bodyHidden: !!nodes.analyticsBody.hidden,
+    }});
+  }}
+  console.log(JSON.stringify({{ urls: [...new Set(pending.map((request) => request.url))], steps }}));
+}})();
+"""
+    return run_node(script)
+
+
+def test_answers_slower_than_the_refresh_are_each_shown_for_the_same_selection():
+    """Every answer takes longer than 30 s, so each refresh starts before the last answer."""
+    result = _one_selection_in_turn(
+        [["pick"], ["refresh"], ["answer", 0], ["refresh"], ["answer", 1], ["refresh"], ["answer", 2]]
+    )
+    assert len(result["urls"]) == 1
+    assert result["steps"] == [
+        {"settled": f"answer {n}", **WR1_SHOWN} for n in range(3)
+    ]
+
+
+def test_a_refresh_failing_before_the_choice_answers_does_not_discard_that_answer():
+    result = _one_selection_in_turn([["pick"], ["refresh"], ["fail", 1], ["answer", 0]])
+    assert len(result["urls"]) == 1
+    assert result["steps"][-1] == {"settled": "answer 0", **WR1_SHOWN}
+
+
+def test_an_older_failure_landing_after_a_newer_answer_keeps_the_newer_answer():
+    """The pick's 503 lands after the refresh started behind it has answered; the server answers on a thread each."""
+    result = _one_selection_in_turn([["pick"], ["refresh"], ["answer", 1], ["503", 0]])
+    assert len(result["urls"]) == 1
+    assert result["steps"] == [
+        {"settled": "answer 1", **WR1_SHOWN},
+        {"settled": "503 0", **WR1_SHOWN},
+    ]
+
+
+def test_an_older_unreachable_answer_landing_after_a_newer_answer_keeps_the_chart():
+    """The pick's "InfluxDB unreachable" lands after the refresh started behind it has answered."""
+    unreachable = {"available": False, "reason": "unreachable", "source": "influxdb", "hint": "x"}
+    result = _one_selection_in_turn(
+        [["pick"], ["refresh"], ["answer", 1], ["answer", 0]],
+        [unreachable, _custom_range_answer(["WR1"], 500, 400)],
+    )
+    assert result["steps"][-1] == {"settled": "answer 0", **WR1_SHOWN}
+
+
+def test_an_older_answer_landing_after_a_newer_one_does_not_replace_it():
+    """The pick's answer lands after the refresh started behind it has answered with newer data."""
+    result = _one_selection_in_turn(
+        [["pick"], ["refresh"], ["answer", 1], ["answer", 0]],
+        [_custom_range_answer(["WR1"], 500, 400), _custom_range_answer(["WR1"], 1000, 400)],
+    )
+    newer = {"pv": "1.5 kWh", "data": True, "pvSeries": 1000, "loading": False, "bodyHidden": False}
+    assert result["steps"] == [{"settled": "answer 1", **newer}, {"settled": "answer 0", **newer}]
+
+
+def test_the_soc_card_follows_the_device_filter_like_the_role_card():
+    snapshot = {
+        "average_soc": 50,
+        "devices": {"WR1": {"soc": 80, "ac_mode": 1}, "WR2": {"soc": 20, "ac_mode": 2}},
+    }
+    data = _series_payload("2026-06-01T00:00:00+00:00", "2026-06-02T00:00:00+00:00", "24h")
+    every = _kpi_cards(data, snapshot=snapshot)
+    assert every["soc"] == ["Current SoC", "50%"]
+    assert every["role"] == ["Runtime Role", "Mixed"]
+
+    one = _kpi_cards(data, device="WR1", snapshot=snapshot)
+    assert one["soc"] == ["Current SoC", "80%"]
+    assert one["role"] == ["Runtime Role", "AC Input"]
+
+    unknown = _kpi_cards(
+        data, device="WR1", snapshot={"average_soc": 50, "devices": {"WR1": {"ac_mode": 2}}}
+    )
+    assert unknown["soc"] == ["Current SoC", "--"]
+
+
+def test_a_read_only_device_without_a_charge_level_shows_none_and_has_no_runtime_role():
+    external = {"soc": 0, "soc_reported": False, "ac_mode": 0, "read_only": True}
+    snapshot = {"average_soc": 80, "devices": {"WR1": {"soc": 80, "ac_mode": 1}, "Garage": external}}
+    data = _series_payload("2026-06-01T00:00:00+00:00", "2026-06-02T00:00:00+00:00", "24h")
+
+    every = _kpi_cards(data, snapshot=snapshot)
+    assert every["soc"] == ["Current SoC", "80%"]
+    assert every["role"] == ["Runtime Role", "AC Input"]
+
+    garage = _kpi_cards(data, device="Garage", snapshot=snapshot)
+    assert garage["soc"] == ["Current SoC", "--"]
+    assert garage["role"] == ["Runtime Role", "--"]
+
+    controlled = _kpi_cards(
+        data, device="WR1", snapshot={"devices": {"WR1": {"soc": 0, "soc_reported": False}}}
+    )
+    assert controlled["soc"] == ["Current SoC", "--"]
+
+
+_R7_GOOD = _custom_range_answer(["WR1"], 500, 400)
+_R7_NEWER = _custom_range_answer(["WR1"], 1000, 400)
+_R7_NEWEST = _custom_range_answer(["WR1"], 1500, 400)
+_R7_UNREACHABLE = {"available": False, "reason": "unreachable", "source": "influxdb", "hint": "x"}
+
+
+def test_an_unavailable_newer_answer_does_not_block_older_data():
+    result = _one_selection_in_turn(
+        [["pick"], ["refresh"], ["answer", 1], ["answer", 0]], [_R7_GOOD, _R7_UNREACHABLE]
+    )
+    assert result["steps"][-1]["pvSeries"] == 500, result["steps"]
+
+
+def test_three_answers_in_flight_landing_in_order_are_each_shown():
+    result = _one_selection_in_turn(
+        [["pick"], ["refresh"], ["refresh"], ["answer", 0], ["answer", 1], ["answer", 2]],
+        [_R7_GOOD, _R7_NEWER, _R7_NEWEST],
+    )
+    assert [s["pvSeries"] for s in result["steps"]] == [500, 1000, 1500], result["steps"]
+
+
+def test_an_old_answer_for_the_selection_is_shown_after_another_selection_showed_data():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const nodes = {{ analyticsKpis: {{ innerHTML: "" }}, analyticsLoading: {{ hidden: true }},
+  analyticsBody: {{ hidden: false }}, analyticsUnavailable: {{ hidden: true }} }};
+global.document = {{ hidden: false, getElementById: (id) => nodes[id] || null, querySelectorAll: () => [] }};
+const pending = [];
+global.fetch = (url) => new Promise((resolve, reject) => pending.push({{ url, resolve, reject }}));
+const good = {json.dumps(_R7_GOOD)};
+const other = {json.dumps(_custom_range_answer(["WR2"], 900, 400))};
+app.state.snapshot = {{ average_soc: 50, devices: {{ WR1: {{ soc: 80, ac_mode: 2 }}, WR2: {{ soc: 70, ac_mode: 2 }} }} }};
+app.state.analytics.tab = "pv";
+app.state.analytics.custom = {{ active: true, start: 1780000000, end: 1780259200 }};
+app.state.analytics.device = "WR1";
+(async () => {{
+  const l0 = app.loadAnalytics();
+  app.state.analytics.device = "WR2";
+  const l1 = app.loadAnalytics();
+  pending[1].resolve({{ ok: true, json: async () => other }}); await l1;
+  app.state.analytics.device = "WR1";
+  const l2 = app.loadAnalytics();
+  pending[0].resolve({{ ok: true, json: async () => good }}); await l0;
+  const d = app.state.analytics.data;
+  console.log(JSON.stringify({{ devices: d ? d.devices : null }}));
+}})();
+"""
+    assert run_node(script)["devices"] == ["WR1"]
+
+
+def test_three_requests_newest_fails_then_oldest_data_lands():
+    """pick(0) slow; refresh(1) answers data; refresh(2) answers 503; then pick(0)'s data lands."""
+    result = _one_selection_in_turn(
+        [["pick"], ["refresh"], ["refresh"], ["answer", 1], ["503", 2], ["answer", 0]],
+        [_R7_GOOD, _R7_NEWER, _R7_GOOD],
+    )
+    assert result["steps"][-1]["data"] is True, result["steps"]
+
+
+def test_a_b_a_detour_whose_b_answer_failed():
+    """A: pick(0) slow, refresh(1) answers data; operator picks B (2), B answers 503;
+    operator picks A again (3), which fails; then A's pick(0) data lands."""
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const nodes = {{ analyticsKpis: {{ innerHTML: "" }}, analyticsLoading: {{ hidden: true }},
+  analyticsBody: {{ hidden: false }}, analyticsUnavailable: {{ hidden: true }} }};
+global.document = {{ hidden: false, getElementById: (id) => nodes[id] || null, querySelectorAll: () => [] }};
+const pending = [];
+global.fetch = (url) => new Promise((resolve, reject) => pending.push({{ url, resolve, reject }}));
+const good = {json.dumps(_R7_GOOD)};
+const newer = {json.dumps(_R7_NEWER)};
+app.state.snapshot = {{ average_soc: 50, devices: {{ WR1: {{ soc: 80, ac_mode: 2 }}, WR2: {{ soc: 70, ac_mode: 2 }} }} }};
+app.state.analytics.tab = "pv";
+app.state.analytics.custom = {{ active: true, start: 1780000000, end: 1780259200 }};
+app.state.analytics.device = "WR1";
+const read = (label) => {{ const d = app.state.analytics.data; return {{ label, device: app.state.analytics.device,
+  data: !!d, pvSeries: d && d.series ? d.series.pv[0] : null, loading: !nodes.analyticsLoading.hidden }}; }};
+(async () => {{
+  const steps = [];
+  const l0 = app.loadAnalytics();
+  const l1 = app.loadAnalytics(false);
+  pending[1].resolve({{ ok: true, json: async () => newer }}); await l1; steps.push(read("A refresh(1) data"));
+  app.state.analytics.device = "WR2";
+  const l2 = app.loadAnalytics();
+  pending[2].resolve({{ ok: false, json: async () => ({{ error: "history_unavailable" }}) }}); await l2; steps.push(read("B pick(2) 503"));
+  app.state.analytics.device = "WR1";
+  const l3 = app.loadAnalytics();
+  pending[3].reject(new Error("network")); await l3; steps.push(read("A pick(3) fails"));
+  pending[0].resolve({{ ok: true, json: async () => good }}); await l0; steps.push(read("A pick(0) data lands"));
+  console.log(JSON.stringify({{ urls: pending.map((p) => p.url), steps }}));
+}})();
+"""
+    result = run_node(script)
+    assert result["steps"][-1]["data"] is True, result["steps"]
+
+
+def test_older_data_is_shown_after_a_newer_unavailable_replaced_newer_data():
+    """pick(0) slow; refresh(1) answers data; refresh(2) answers "unavailable"; then pick(0)'s data lands."""
+
+    result = _one_selection_in_turn(
+        [["pick"], ["refresh"], ["refresh"], ["answer", 1], ["answer", 2], ["answer", 0]],
+        [_R7_GOOD, _R7_NEWER, _R7_UNREACHABLE],
+    )
+
+    assert result["steps"][1]["bodyHidden"] is True
+    assert result["steps"][-1]["data"] is True, result["steps"]
+    assert result["steps"][-1]["bodyHidden"] is False, result["steps"]
+
+
+def test_a_dropped_older_answer_leaves_the_loading_note_of_a_pending_pick():
+    """refresh(0) slow; refresh(1) answers; the operator re-picks the same selection (2); refresh(0) lands."""
+
+    result = _one_selection_in_turn(
+        [["refresh"], ["refresh"], ["answer", 1], ["pick"], ["answer", 0]],
+        [_R7_GOOD, _R7_NEWER],
+    )
+
+    assert result["steps"][-1]["pvSeries"] == 1000
+    assert result["steps"][-1]["loading"] is True, result["steps"]

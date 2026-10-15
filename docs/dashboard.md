@@ -705,13 +705,22 @@ the visible series and KPI cards (no extra chart pages):
 - **Overview** / **Devices** — PV, Inverter Output, Battery Power; KPIs PV,
   Output, Charge, Discharge, Current SoC, Runtime Role.
 - **Grid** — Grid Power, Home Load and AC Charge; KPIs Grid Import, Grid
-  Export, Home, AC Charge, SoC.
-- **Battery** — Battery Power; KPIs Charge, Discharge, SoC, Runtime Role.
-- **PV** — PV Input and Inverter Output; KPIs PV, PV Peak, Output, SoC.
+  Export, Home, AC Charge, Current SoC.
+- **Battery** — Battery Power; KPIs Charge, Discharge, Current SoC, Runtime
+  Role.
+- **PV** — PV Input and Inverter Output; KPIs PV, PV Peak, Output, Current SoC.
 
-Energy KPIs are integrated from the selected period; Current SoC and Runtime
-Role come from the live snapshot. A step between two samples longer than three
-times the series' typical spacing is a gap in the record and is not
+Energy KPIs are integrated from the window the chart loaded, and each of them
+and PV Peak names that window: the period button (`PV · 24h`), or the span of a
+custom range or a zoom (`PV · 3d`, `Charge · 1.5h`, `Charge · 20m`). Current SoC
+and Runtime Role come from the live snapshot. With a device selected, PV,
+Output, Charge, Discharge, AC Charge, PV Peak, Current SoC and Runtime Role
+describe that device; Grid Import, Grid Export and Home always describe the grid
+meter, which measures the whole house. A device that reports no charge level
+shows `--` for Current SoC, not 0 %, and a read-only device (telemetry only, or
+an external device) has no runtime role: it shows `--` on its own and is left
+out of the role of all devices. A step between two samples longer than
+three times the series' typical spacing is a gap in the record and is not
 integrated, so an outage does not count as power held at its last value. A
 KPI's series is always part of its tab's fetched set — a KPI reading a series
 the tab does not request would render a permanent `--`, which reads like a
@@ -776,9 +785,17 @@ Performance and refresh behavior:
   missed because it was never sampled.
 - The Analytics tab auto-refreshes every 30s, but only while it is the active
   view; other views and a backgrounded browser tab do not trigger analytics
-  fetches. Each sub-tab loads only its own series. The lightweight History panel
-  refreshes on the same cadence while Aggregate/Devices is on screen. Either
-  panel's refresh pauses while [its chart is zoomed](#zooming-a-chart).
+  fetches. Each sub-tab loads only its own series. An Analytics answer for a
+  selection that is no longer on screen — a refresh overtaken by a device,
+  range, tab or zoom choice — is dropped, so the chart and KPIs show the latest
+  choice. An answer for the selection on screen is shown whenever it arrives,
+  also when it takes longer than the refresh interval or a later refresh for
+  the same selection failed first — unless the data on screen came from a later
+  request for that selection: the older answer, whether data, an error or
+  "unavailable", is then dropped and that data stays. The lightweight
+  History panel refreshes on the same cadence while Aggregate/Devices is on
+  screen. Either panel's refresh pauses while
+  [its chart is zoomed](#zooming-a-chart).
 - Both panels are mobile-friendly (controls, overlay chips, sub-tabs and KPI
   cards reflow; charts use reduced heights on small screens) and show explicit
   loading and empty/unavailable states.

@@ -46,6 +46,8 @@ const state = {
     // Cached series-based KPI values, keyed by a stable data key. Live snapshot
     // updates reuse this cache instead of re-integrating the full series.
     kpiCache: { dataKey: null, values: {} },
+    requestSequence: 0,
+    applied: { url: null, request: 0 },
   },
   flowView: "aggregated",
   // Presentation only: how many rows an energy card carries. Basic is the
@@ -148,7 +150,7 @@ const ANALYTICS_TABS = [
 const _kpiPos = (value) => Math.max(0, value);
 const _kpiNeg = (value) => Math.max(0, -value);
 
-// KPI registry: id -> { label(range), tone, compute(data, snapshot) }. Energy
+// KPI registry: id -> { label(period), tone, compute(data, snapshot) }. Energy
 // KPIs integrate the fetched series; soc/role read the live snapshot.
 const ANALYTICS_KPIS = {
   pv: { label: (r) => `PV · ${r}`, tone: "pv", compute: (d) => energyLabel(integrateSeries(d, "pv", _kpiPos)) },
@@ -159,10 +161,10 @@ const ANALYTICS_KPIS = {
   gridExport: { label: (r) => `Grid Export · ${r}`, tone: "grid", compute: (d) => energyLabel(integrateSeries(d, "grid", _kpiNeg)) },
   home: { label: (r) => `Home · ${r}`, tone: "output", compute: (d) => energyLabel(integrateSeries(d, "home", _kpiPos)) },
   acCharge: { label: (r) => `AC Charge · ${r}`, tone: "grid", compute: (d) => energyLabel(integrateSeries(d, "ac_charge", _kpiPos)) },
-  pvPeak: { label: () => "PV Peak", tone: "pv", compute: (d) => powerLabel(seriesPeak(d, "pv")) },
+  pvPeak: { label: (r) => `PV Peak · ${r}`, tone: "pv", compute: (d) => powerLabel(seriesPeak(d, "pv")) },
   // ``live`` KPIs read the cheap live snapshot (not the integrated series), so
   // they can be refreshed on every SSE/poll update without re-integrating.
-  soc: { label: () => "Current SoC", tone: "accent", live: true, compute: (_d, s) => (s ? `${Math.round(Number(s.average_soc || 0))}%` : "--") },
+  soc: { label: () => "Current SoC", tone: "accent", live: true, compute: (_d, s) => analyticsSocLabel(s) },
   role: { label: () => "Runtime Role", tone: "output", live: true, compute: (_d, s) => runtimeRoleLabel(s) },
 };
 
@@ -6296,25 +6298,32 @@ async function loadAnalytics(showLoading = true) {
     renderAnalytics();
     return;
   }
+  const url = analyticsFetchUrl();
+  state.analytics.requestSequence += 1;
+  const request = state.analytics.requestSequence;
   if (showLoading) setAnalyticsLoading(true);
   let payload = null;
   try {
-    const response = await fetch(analyticsFetchUrl());
+    const response = await fetch(url);
     payload = response.ok ? await response.json() : null;
   } catch (error) {
     payload = null;
-  } finally {
-    setAnalyticsLoading(false);
   }
+  if (url !== analyticsFetchUrl()) return;
+  const applied = state.analytics.applied;
+  if (applied.url === url && request < applied.request) return;
+  setAnalyticsLoading(false);
   // A 200 payload with available:false means InfluxDB is not configured; show
   // the clean info state instead of an empty/broken chart.
   if (payload && payload.available === false) {
     setAnalyticsAvailable(false, payload);
     state.analytics.data = null;
+    state.analytics.applied = { url: null, request: 0 };
     return;
   }
   setAnalyticsAvailable(true);
   state.analytics.data = payload;
+  state.analytics.applied = payload ? { url, request } : { url: null, request: 0 };
   renderAnalytics();
 }
 
@@ -6955,6 +6964,30 @@ function seriesPeak(data, id) {
   return max;
 }
 
+function analyticsSocLabel(snapshot) {
+  if (!snapshot) return "--";
+  if (!state.analytics.device) return `${Math.round(Number(snapshot.average_soc || 0))}%`;
+  const device = snapshot.devices ? snapshot.devices[state.analytics.device] : null;
+  if (!device || !deviceReportsSoc(device)) return "--";
+  const soc = device.soc ?? device.soc_percent;
+  if (soc == null || !Number.isFinite(Number(soc))) return "--";
+  return `${Math.round(Number(soc))}%`;
+}
+
+function analyticsSpanLabel(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  const tenths = (value) => String(Math.round(value * 10) / 10);
+  if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))}m`;
+  if (seconds < 2 * 86400) return `${tenths(seconds / 3600)}h`;
+  return `${tenths(seconds / 86400)}d`;
+}
+
+function analyticsKpiPeriod(data) {
+  if (data && data.range && data.range !== "custom") return String(data.range);
+  const span = data ? analyticsSpanLabel((Date.parse(data.end) - Date.parse(data.start)) / 1000) : null;
+  return span || state.range;
+}
+
 function runtimeRoleLabel(snapshot) {
   if (!snapshot || !snapshot.devices) return "--";
   const names = state.analytics.device
@@ -6965,22 +6998,27 @@ function runtimeRoleLabel(snapshot) {
   let anyOutput = false;
   names.forEach((name) => {
     const device = snapshot.devices[name];
-    if (!device) return;
+    if (!device || device.read_only === true) return;
     if (Number(device.ac_mode) === 1) anyInput = true;
     else anyOutput = true;
   });
   if (anyInput && anyOutput) return "Mixed";
   if (anyInput) return "AC Input";
-  return "Output";
+  return anyOutput ? "Output" : "--";
 }
 
-// Stable identity for a loaded analytics dataset. When this is unchanged the
-// integrated (series-based) KPI values are guaranteed identical, so they can be
-// served from cache instead of re-integrated.
+// Stable identity for a loaded analytics dataset: its window, the devices it
+// was filtered to and its time axis. When this is unchanged the integrated
+// (series-based) KPI values are identical, so they can be served from cache
+// instead of re-integrated.
 function analyticsDataKey(data) {
   if (!data || !data.time) return "empty";
   return JSON.stringify({
     source: data.source || "",
+    range: data.range || "",
+    start: data.start || "",
+    end: data.end || "",
+    devices: Array.isArray(data.devices) ? data.devices.slice().sort() : [],
     from: data.time[0] || null,
     to: data.time[data.time.length - 1] || null,
     points: data.time.length,
@@ -7030,6 +7068,7 @@ function renderAnalyticsKpis() {
   if (!host) return;
   const cache = ensureAnalyticsKpiCache();
   const snapshot = state.snapshot;
+  const period = analyticsKpiPeriod(state.analytics.data);
   const cards = currentAnalyticsTab()
     .kpis.map((id) => {
       const spec = ANALYTICS_KPIS[id];
@@ -7037,7 +7076,7 @@ function renderAnalyticsKpis() {
       const value = spec.live
         ? spec.compute(null, snapshot)
         : cache.values[id];
-      return analyticsKpiCardHtml(id, spec.label(state.range), value, spec.tone);
+      return analyticsKpiCardHtml(id, spec.label(period), value, spec.tone);
     })
     .filter(Boolean);
   host.innerHTML = cards.join("");
@@ -7850,6 +7889,7 @@ if (typeof module !== "undefined") {
     analyticsPanelVisible,
     analyticsShouldAutoRefresh,
     analyticsFetchUrl,
+    loadAnalytics,
     setAnalyticsAvailable,
     setSourceBadge,
     historyVisible,
