@@ -122,7 +122,8 @@ decides which tag *Latest stable* installs, so it is read over https only: an
      `/etc/ems-appliance-manager/allowed-images.conf`: a host that sets it to
      false shows every candidate greyed out with the reason, and the agent
      refuses the tag with `prerelease_not_allowed` even when it is typed by
-     hand in Expert mode.
+     hand in Expert mode. A version a configured release index marks as a
+     pre-release is a candidate too, whatever its tag says.
    - Expert mode adds *Exact release tag* — enter for example `v0.8.0`. Use it
      for a version the list does not carry, or when the registry cannot be
      reached.

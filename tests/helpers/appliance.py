@@ -827,13 +827,16 @@ class StaticCatalogue:
     """A fixed tag list, classified, ordered and gated by the production code.
 
     Deriving the prerelease flag, the order or the installability here a second
-    time is how a fake comes to offer a list no appliance would.
+    time is how a fake comes to offer a list no appliance would. ``index_url``
+    stands for a configured release index; without one the list is the
+    registry's.
     """
 
-    def __init__(self, tags=(), *, error=None, allow_prerelease=False):
+    def __init__(self, tags=(), *, error=None, allow_prerelease=False, index_url=""):
         self.tags = list(tags)
         self.error = error
         self.allow_prerelease = allow_prerelease
+        self.index_url = index_url
 
     def available(self):
         if self.error:

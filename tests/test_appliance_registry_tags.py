@@ -10,6 +10,7 @@ anonymous token exchange and its paging worth pinning down.
 import io
 import json
 import urllib.error
+from http.client import BadStatusLine, HTTPException, IncompleteRead, LineTooLong
 
 import pytest
 
@@ -167,6 +168,58 @@ def test_an_unreachable_registry_is_a_named_refusal():
         registry_tags.list_tags(REPOSITORY, opener=_unreachable)
 
     assert error.value.code == "release_registry_unreachable"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        BadStatusLine("HTTZ/1.1 200 OK"),
+        LineTooLong("header line"),
+        HTTPException("got more than 100 headers"),
+    ],
+    ids=["status line", "header line too long", "too many headers"],
+)
+def test_an_answer_whose_head_cannot_be_read_is_a_named_refusal(error):
+    """urllib passes an http.client error in the status line or the headers on
+    unwrapped; it failed the version list as an agent error."""
+
+    def _unreadable(request, timeout=None):
+        raise error
+
+    with pytest.raises(RegistryError) as refused:
+        registry_tags.list_tags(REPOSITORY, opener=_unreadable)
+
+    assert refused.value.code == "release_registry_unreachable"
+    assert type(error).__name__ in refused.value.message
+
+
+class _BreaksOff(io.BytesIO):
+    """An answer whose headers arrived and whose body read fails."""
+
+    headers = {}
+
+    def __init__(self, error):
+        super().__init__(b"")
+        self._error = error
+
+    def read(self, size=-1):
+        raise self._error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ConnectionResetError(104, "reset"), TimeoutError("timed out"), IncompleteRead(b'{"t')],
+    ids=["reset", "socket timeout", "incomplete"],
+)
+def test_a_body_that_breaks_off_is_a_named_refusal(error):
+    """Its callers handle RegistryError; a raw error failed the version list and
+    an exact tag's plan as an agent error."""
+
+    with pytest.raises(RegistryError) as refused:
+        registry_tags.list_tags(REPOSITORY, opener=lambda request, timeout=None: _BreaksOff(error))
+
+    assert refused.value.code == "release_registry_unreachable"
+    assert type(error).__name__ in refused.value.message
 
 
 def test_a_body_that_is_not_json_is_a_named_refusal():

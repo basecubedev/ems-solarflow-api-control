@@ -9,8 +9,9 @@ air-gapped site.
 ``available()`` never filters. Whether a version may be installed is a property
 of the entry (``installable``, ``reason``), because a release candidate that
 exists and is refused is something the operator needs to see rather than
-something to hide. The refusal itself is enforced in ``protocol.py``, at request
-validation, and this is a projection of that policy -- never a second authority.
+something to hide. A candidate tag is refused in ``protocol.py``, at request
+validation; a tag only the index calls a prerelease is refused when the exact
+channel resolves, from the same entry the list shows, so the two never disagree.
 
 A mutable name such as ``latest`` is published by the registry too and is dropped
 here like any other non-version tag, so no channel can ever resolve to one.
@@ -167,8 +168,14 @@ class ReleaseCatalogue:
         except RegistryError as exc:
             raise ReleaseResolutionError(exc.code, exc.message) from exc
 
+    @property
+    def index_url(self):
+        """The configured release index, or "" where the registry is the list."""
+
+        return (self.config.release_index_url or "").strip()
+
     def available(self):
-        url = (self.config.release_index_url or "").strip()
+        url = self.index_url
         if url:
             try:
                 payload = json.loads(self._fetch(url))
@@ -199,13 +206,39 @@ def latest_stable_of(targets):
     )
 
 
+def _refuse_what_the_list_refuses(catalogue, tag):
+    """An exact tag the version list shows as refused is refused with its reason.
+
+    ``protocol.py`` refuses a candidate tag at request validation. A release
+    index may also call a plain tag a prerelease, and the list greys it out;
+    this is where the agent agrees. The registry lists tags alone, so it can
+    refuse nothing the tag rule has not, and is not asked. An index that cannot
+    be read refuses nothing here: the tag rule has already run, and an exact
+    tag is the way in when it is unreachable.
+    """
+
+    if not catalogue.index_url:
+        return
+    try:
+        listed = catalogue.available()
+    except ReleaseResolutionError:
+        return
+    for item in listed:
+        if item.tag == tag and not item.installable:
+            raise ReleaseResolutionError(
+                "prerelease_not_allowed", f"{tag} is listed as a prerelease: {item.reason}"
+            )
+
+
 def resolve_channel(channel, *, catalogue, current_tag, previous_known_good, requested_tag=None):
     """Turn a channel name into one concrete, validated release tag."""
 
     if channel == CHANNEL_EXACT:
         if not requested_tag:
             raise ReleaseResolutionError("release_tag_required", "an exact tag must be provided")
-        return ReleaseTarget(tag=validate_release_tag(requested_tag), channel=CHANNEL_EXACT)
+        tag = validate_release_tag(requested_tag)
+        _refuse_what_the_list_refuses(catalogue, tag)
+        return ReleaseTarget(tag=tag, channel=CHANNEL_EXACT)
 
     if channel == CHANNEL_CURRENT:
         if not current_tag:

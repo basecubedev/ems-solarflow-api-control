@@ -305,7 +305,9 @@ and enter an exact release tag.
 
 The chosen version is a release candidate and this host does not accept them.
 Candidates are still listed under **Unstable**, greyed out, and the same refusal
-applies to a candidate tag typed by hand in Expert mode. Set
+applies to a candidate tag typed by hand in Expert mode. A version a configured
+release index marks as a pre-release counts as a candidate even when its tag
+carries no pre-release suffix. Set
 `allow_prerelease = true` in `/etc/ems-appliance-manager/allowed-images.conf`
 and restart `ems-appliance-agent.service` to accept them.
 

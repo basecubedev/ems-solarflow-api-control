@@ -11,6 +11,7 @@ Nothing here is trusted: a tag is a candidate until ``validate_release_tag``
 accepts it, and the install path still verifies the pulled image's OCI labels.
 """
 
+import http.client
 import json
 import re
 import time
@@ -78,7 +79,7 @@ def _open(opener, url, headers, budget):
         return opener(request, timeout=budget.remaining())
     except urllib.error.HTTPError:
         raise
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
         raise RegistryError(
             "release_registry_unreachable",
             f"the registry is unreachable: {exc.__class__.__name__}",
@@ -86,7 +87,13 @@ def _open(opener, url, headers, budget):
 
 
 def _read(response):
-    payload = response.read(MAX_TAGS_BYTES + 1)
+    try:
+        payload = response.read(MAX_TAGS_BYTES + 1)
+    except (OSError, http.client.HTTPException) as exc:
+        raise RegistryError(
+            "release_registry_unreachable",
+            f"the registry answer broke off: {exc.__class__.__name__}",
+        ) from exc
     if len(payload) > MAX_TAGS_BYTES:
         raise RegistryError(
             "release_registry_invalid",
