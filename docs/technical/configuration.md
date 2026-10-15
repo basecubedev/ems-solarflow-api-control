@@ -550,7 +550,7 @@ config upgrade does enable it for an installation that predates the feature, and
 | `charge_hysteresis_w` | How far below the start threshold charging continues |
 | `entry_confirm_cycles` | Observations that must show surplus before charging starts |
 | `entry_window_cycles` | How many recent loops those observations are counted within |
-| `max_charge_entries_per_hour` | Safety limit on how often a device may enter charging |
+| `max_charge_entries_per_hour` | Safety limit on how often a device may enter charging; it also bounds how often the full-charge assist takes its AC input back after failed cycles returned it |
 | `max_total_charge_power_w` | Highest combined charging power across all devices |
 
 The lower edge of the charge band is **derived**, not configured:

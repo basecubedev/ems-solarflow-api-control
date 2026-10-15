@@ -438,6 +438,46 @@ def test_the_assist_s_ac_input_is_not_put_back_between_failure_streaks(tmp_path)
     assert rig.item.ac_mode == 2
 
 
+def _assist_entries(writes):
+    return sum(1 for written in writes if written.get("acMode") == 1)
+
+
+def test_the_assist_takes_its_ac_input_back_within_the_hourly_entry_limit(tmp_path, caplog):
+    """Three failed cycles, three through, over and over (K24).
+
+    The assist took its AC input back after every third pass and the next
+    failure streak released it: the relay moved in and out every six cycles,
+    where the regulator enters a charge no more often than
+    ``max_charge_entries_per_hour``. The assist's re-entries after such a
+    release now share that limit.
+    """
+
+    limit = AC_CHARGE_CONTROL_DEFAULTS["max_charge_entries_per_hour"]
+    rig = assist_charging_at_full_window(tmp_path)
+    before = len(rig.hardware.writes)
+
+    with caplog.at_level(logging.INFO):
+        for _ in range(limit + 8):
+            assist_cycles(rig, RELEASE_AFTER, failing=True)
+            assist_cycles(rig, CYCLE_FAILURES_BEFORE_CHARGE_RELEASE)
+
+    assert _assist_entries(rig.written_since(before)) == limit
+    assert rig.controller.assist_ac_input_withheld() is True
+    limited = [
+        line for line in caplog.text.splitlines()
+        if "event=full_charge_assist_ac_input_rate_limited" in line
+    ]
+    assert len(limited) == 1, caplog.text
+    assert limited[0].startswith("WARNING")
+
+    rig.clock.now += 3600
+    entries = _assist_entries(rig.hardware.writes)
+    assist_cycles(rig, 2)
+
+    assert _assist_entries(rig.hardware.writes) == entries + 1
+    assert rig.item.ac_mode == 1
+
+
 def test_a_failure_between_passes_restarts_the_three_in_a_row(tmp_path):
     """Passes that are not three in a row keep the assist's AC input withheld (R2a).
 

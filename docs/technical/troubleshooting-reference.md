@@ -529,7 +529,10 @@ the third failed cycle in a row the EMS returns each device it was charging,
 best effort, with the release a stop uses
 (`event=ac_charge_released_after_failed_cycles`), again once per resend window
 while its record says the charge runs, and the full-charge assist takes no AC
-input until three cycles in a row have run through. The counter sees only a
+input until three cycles in a row have run through, and then at most
+`max_charge_entries_per_hour` times an hour
+(`event=full_charge_assist_ac_input_rate_limited` once it waits for the hour).
+The counter sees only a
 cycle that raises: a
 device that does not answer or refuses a write is handled inside the cycle, a
 cycle that hangs is never counted (the live snapshot goes stale instead), and a

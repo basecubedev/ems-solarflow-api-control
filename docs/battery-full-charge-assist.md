@@ -89,7 +89,9 @@ device. Over a missing `acMode` the device may still sit in the assist's AC
 input, so the restore is the assist's exit to idle (`smartMode=1`, `acMode=2`,
 `inputLimit=0`, `outputLimit=0`) on the power write gate, logged as
 `ac_charge_ended_on_disable` with `claim=battery_full_charge_assist_restore`,
-once per resend window and three times at most. It is settled as `full_charge_assist_ac_mode_restore_settled`
+once per resend window and three times at most; a device that drops offline
+in between keeps the count, and gets no fresh three once it answers again
+(K24). It is settled as `full_charge_assist_ac_mode_restore_settled`
 once a report after an exit shows the device out of the charge -- without
 `acMode` in it, only while the device draws nothing from the grid -- or, with
 `left_to=device` at `WARNING`, once the third exit's resend window has passed
@@ -194,6 +196,11 @@ so that release is the only exit. The assist takes its AC input back once three
 cycles in a row have run through, as many as failed before the release; until
 then its claim asks for `acMode=2` as with its AC mode off, so a cycle that
 fails three times out of four does not move the device in and out of AC input.
+It takes it back at most `ac_charge_control.max_charge_entries_per_hour` times
+an hour, the regulator's entry limit (K24): three failed cycles and three that
+ran through, over and over, moved the device into AC input every six cycles.
+While the trailing hour leaves no entry the assist waits on, said once as
+`full_charge_assist_ac_input_rate_limited` (`warning`).
 A stop by SIGTERM or SIGHUP (`docker stop`, `docker compose down`,
 `systemctl stop`) leaves the charge running, as every charge, and names the
 device in `ac_charge_kept_across_stop`; Ctrl-C returns it, as a stop the EMS

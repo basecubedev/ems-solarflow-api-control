@@ -496,6 +496,41 @@ def test_a_device_that_keeps_the_assist_s_ac_input_gets_three_exits_then_control
     assert "left_to=device" in caplog.text
 
 
+class AcModeUnreportedOffline(AcModeUnreported):
+    """The rig over a report without ``acMode``, the device unreachable while ``offline`` is set."""
+
+    offline = False
+
+    def fetch(self, devices):
+        if self.offline:
+            return [None]
+        return super().fetch(devices)
+
+
+def test_an_offline_spell_gives_the_restore_s_exits_no_fresh_count(tmp_path, caplog):
+    """Each cycle the device did not answer set the count back: three exits again each time (K24)."""
+
+    rig = AcModeUnreportedOffline(
+        tmp_path, item=charging_item(), store=_assist_completed(tmp_path, ac_charge_mode=True)
+    )
+    rig.hardware.ignore(lambda properties: properties.get("acMode") == 2, times=10_000)
+    window = int(EXIT_RESEND_SECONDS // 5)
+
+    with caplog.at_level(logging.INFO):
+        for _ in range(FOUND_EXIT_ATTEMPTS * 3):
+            rig.run(cycles=window)
+            rig.offline = True
+            rig.run(cycles=2)
+            rig.offline = False
+        rig.run(cycles=window)
+
+    assert rig.hardware.writes.count(IDLE_EXIT) == FOUND_EXIT_ATTEMPTS
+    assert rig.item.ac_mode == 1
+    assert _ac_restore_settled(rig)
+    assert "left_to=device" in caplog.text
+    assert rig.controller.device_output_control_allowed(rig.dev) is True
+
+
 def _settled_lines(caplog):
     return [
         line for line in caplog.text.splitlines()

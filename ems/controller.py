@@ -15,6 +15,7 @@ from ems.ac_charge_control import (
     ChargeDirectionSettings,
     ChargeDirectionState,
     allocate_charge_targets,
+    charge_entries_within_limit,
     charge_headroom_weight,
     count_silent_charge_cycles,
     decide_charge_direction,
@@ -140,6 +141,8 @@ class EMSController:
         self.sleep_enabled = sleep_enabled
         self.cycle_failures = 0
         self.cycles_through_since_release = None
+        self.assist_reentries = ()
+        self.assist_reentry_rate_limited = False
         self.runtime_state = runtime_state
         self.dashboard_store = dashboard_store
         self.zendure_mqtt_runtime = zendure_mqtt_runtime
@@ -2048,7 +2051,9 @@ class EMSController:
         by it; one that takes the restore ends it. Over a report without a
         known ``acMode`` the reconciler writes nothing (K10), so the restore
         is owed this exit as after a switch-off, ``FOUND_EXIT_ATTEMPTS`` times
-        at most (:meth:`confirm_full_charge_assist_ac_restore`). While failed
+        at most (:meth:`confirm_full_charge_assist_ac_restore`); a cycle
+        without a fresh report keeps the count, so an offline spell gives that
+        restore no fresh three exits (K24). While failed
         cycles return the charges the record only reads the reports: the
         release is the one exit then, on its window and cap. Once control is off,
         the record is owed the exit, sent again once per resend window until
@@ -2088,15 +2093,16 @@ class EMSController:
                 self.full_charge_assist_charges[dev.name] = charge
             if created or not restoring:
                 charge.record.charge_sent(setpoint_w)
-            if state is not None:
-                self.observe_full_charge_assist_charge(charge, state)
-                if restoring and not self.ac_mode_known(state):
-                    return (
-                        charge.exits < FOUND_EXIT_ATTEMPTS
-                        and charge.record.exit_due(time.monotonic())
-                    )
-                if restoring:
-                    charge.record.exit_sent(time.monotonic())
+            if state is None:
+                return False
+            self.observe_full_charge_assist_charge(charge, state)
+            if restoring and not self.ac_mode_known(state):
+                return (
+                    charge.exits < FOUND_EXIT_ATTEMPTS
+                    and charge.record.exit_due(time.monotonic())
+                )
+            if restoring:
+                charge.record.exit_sent(time.monotonic())
             charge.exits = 0
             return False
         if charge is None or state is None:
@@ -4485,7 +4491,8 @@ class EMSController:
         each failed cycle runs the release a stop runs, best effort, on the
         records' resend window (R1-1, owner decision 2026-10-12), and the
         full-charge assist takes no AC input until as many cycles in a row have
-        run through (:meth:`assist_ac_input_withheld`). Only an exception out
+        run through, and then within the hourly entry limit
+        (:meth:`assist_ac_input_withheld`). Only an exception out
         of ``run_once`` counts: a failure the cycle handles itself (a device
         that does not answer, a write it refuses) is no failed cycle, and a
         cycle that hangs never ends to be counted.
@@ -4520,8 +4527,53 @@ class EMSController:
         if self.cycles_through_since_release is not None:
             self.cycles_through_since_release += 1
             if self.cycles_through_since_release >= CYCLE_FAILURES_BEFORE_CHARGE_RELEASE:
-                self.cycles_through_since_release = None
+                self.end_assist_ac_input_withhold()
         return True
+
+    def end_assist_ac_input_withhold(self):
+        """Give a running full-charge assist its AC input back, within the hourly entry limit.
+
+        Each time the hold after a failed-cycle release ends while an assist
+        with its AC mode runs is one entry into AC input, counted against the
+        regulator's ``max_charge_entries_per_hour``: three failed cycles and
+        three that ran through, over and over, took the input back every six
+        cycles (K24). While the trailing hour leaves no entry, the hold stays,
+        said once as ``full_charge_assist_ac_input_rate_limited``.
+        """
+
+        if self.full_charge_assist_takes_ac_input():
+            now = time.monotonic()
+            settings = self.charge_settings()
+            entries, allowed = charge_entries_within_limit(
+                self.assist_reentries, now, settings
+            )
+            self.assist_reentries = entries
+            if not allowed:
+                if not self.assist_reentry_rate_limited:
+                    self.assist_reentry_rate_limited = True
+                    log_event(
+                        logging.WARNING,
+                        "full_charge_assist_ac_input_rate_limited",
+                        entries_last_hour=len(entries),
+                        max_entries_per_hour=settings.max_entries_per_hour,
+                    )
+                return
+            self.assist_reentries = entries + (now,)
+        self.assist_reentry_rate_limited = False
+        self.cycles_through_since_release = None
+
+    def full_charge_assist_takes_ac_input(self):
+        """Whether a running full-charge assist with its AC mode on holds any device."""
+
+        store = self.battery_full_charge_store
+        if not store or not self.full_charge_assist_config().get(
+            "enable_ac_charge_mode", True
+        ):
+            return False
+        return any(
+            (store.get_device_state(dev.name) or {}).get("full_charge_assist_active")
+            for dev in self.devices
+        )
 
     def charges_returned_after_failed_cycles(self):
         """Whether failed cycles in a row returned the EMS's charges, until one runs through."""
@@ -4532,10 +4584,12 @@ class EMSController:
         """Whether the full-charge assist still takes no AC input after failed cycles returned it.
 
         From the release until ``CYCLE_FAILURES_BEFORE_CHARGE_RELEASE`` cycles
-        in a row have run through, as many as failed before it. Taken back
-        after the first cycle that ran through, the AC input went in and out
-        every fourth cycle under three failures and one pass (R1b); the
-        regulator's charge waits for its entry confirmation instead.
+        in a row have run through, as many as failed before it, and longer
+        while the hourly entry limit leaves no entry
+        (:meth:`end_assist_ac_input_withhold`). Taken back after the first
+        cycle that ran through, the AC input went in and out every fourth
+        cycle under three failures and one pass (R1b); the regulator's charge
+        waits for its entry confirmation instead.
         """
 
         return (
