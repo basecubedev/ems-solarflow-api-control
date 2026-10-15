@@ -1008,25 +1008,29 @@ class ReleaseManager:
         return identity
 
     def _forget_running_identity(self):
-        """Read the running container afresh on the next question about it.
+        """Read the running container and every image afresh on the next question.
 
         Placing the running build asks for its identity several times per
         listing; one ``docker ps`` per listing is the cost, not one per
-        question. The memo is dropped at both ends of a listing or a prepare,
-        because the container may be replaced between two requests -- an
-        executed upgrade followed by a verify is exactly that -- and nothing
-        read for one request may answer the next.
+        question. The memo and the images read by reference are dropped at
+        both ends of a listing or a prepare, because the container may be
+        replaced between two requests -- an executed upgrade followed by a
+        verify is exactly that -- a tag may move, a target may be pulled, and
+        nothing read for one request may answer the next.
         """
 
         self._running_identity_memo = None
+        self._identity_cache = {}
 
     def _identify(self, image_ref):
         ref = str(image_ref or "").strip()
         if not ref:
             return ImageIdentity()
-        if ref not in self._identity_cache:
-            self._identity_cache[ref] = identify_image(self._docker, ref)
-        return self._identity_cache[ref]
+        identity = self._identity_cache.get(ref)
+        if identity is None:
+            identity = identify_image(self._docker, ref)
+            self._identity_cache[ref] = identity
+        return identity
 
     def _target_identity(self, tag, pull=None):
         if self._docker is None:

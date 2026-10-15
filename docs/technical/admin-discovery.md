@@ -131,7 +131,10 @@ install with no baseline and v0.7.0 proposed to an operator running a v0.8 build
 That placement is an inference and never overrules a digest or a build serial,
 which are readings of the running image itself; and
 when the target image is not local yet its identity cannot be settled from the
-listing alone, so it is `identity_unknown`. Each release carries its
+listing alone, so it is `identity_unknown`. Every listing and every preparation
+reads the running container and the images again: nothing read for one answers
+the next, so a target pulled since, or a `latest` tag that moved, is placed by
+the image Docker holds now. Each release carries its
 `upgrade_state`. Proven non-upgrades (`older_than_running_build`,
 `downgrade_blocked`, `already_current`) are non-selectable with a short reason
 (`latest` excepted, as above). A release whose setup resources could not be

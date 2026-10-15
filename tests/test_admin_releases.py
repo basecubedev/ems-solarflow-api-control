@@ -2315,6 +2315,46 @@ def test_the_running_identity_is_read_afresh_for_every_request(tmp_path):
     assert compared[-2:] == [169, 175]
 
 
+def test_an_image_read_for_one_listing_does_not_answer_the_next(tmp_path):
+    """A tag names whatever image Docker holds under it now.
+
+    The release manager lives as long as the Admin process. Images it had read
+    by tag were kept for that whole life, so a target that was not local at the
+    first listing stayed unverified after it was pulled, and a ``latest`` that
+    moved kept the build it had named before.
+    """
+
+    running = "sha256:" + "a" * 64
+
+    class _RunningDocker(_FakeDocker):
+        def inspect_container_image_id(self, _name):
+            return running
+
+    docker = _RunningDocker(
+        _running_container("latest"),
+        {running: _image(digest=running, build_serial=169, channel="latest")},
+    )
+    manager = ReleaseManager(
+        data_dir=tmp_path / "data",
+        project_dir=_project_compose(tmp_path, "latest"),
+        urlopen=_opener(payload=_two_line_payload()),
+        docker=docker,
+    )
+
+    def listed():
+        return {item["tag"]: item for item in manager.list_releases()["releases"]}
+
+    before = listed()
+    docker._images[_ref("v0.8.3")] = _image(digest=running, build_serial=169)
+    docker._images[_ref("latest")] = _image(digest=running, build_serial=169)
+    after = listed()
+
+    assert before["v0.8.3"]["upgrade_state"] == "identity_unknown"
+    assert after["v0.8.3"]["upgrade_state"] == "already_current"
+    assert after["v0.8.3"]["selectable"] is False
+    assert after["latest"]["upgrade_state"] == "already_current"
+
+
 def test_a_placed_development_install_is_not_called_uncomparable(tmp_path):
     """The warning is for a build nothing could place. A development build
     declaring its release is placed -- v0.7.0 is refused in the same listing --
