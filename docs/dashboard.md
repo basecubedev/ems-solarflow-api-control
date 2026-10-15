@@ -813,8 +813,10 @@ Browser-CPU behavior (live updates):
   live snapshot.
 - The analytics and history charts are **reused in place** (`uPlot.setData`)
   across refreshes when their structure (series set, overlays, axes, selected
-  device) is unchanged; the chart is only destroyed/recreated when that
-  structure changes or the data becomes empty.
+  device) and the palette's colours are unchanged; the chart is only
+  destroyed/recreated when one of them changes or the data becomes empty. A
+  palette switch rebuilds the chart on screen at once, and a chart on a hidden
+  tab when it is next drawn.
 - `dashboard.animation_mode` (`normal` / `reduced` / `off`) reduces or disables
   the animated flow view's pipe motion and glow/blur filters to lower CPU/GPU
   load; `prefers-reduced-motion` is always honored on top of it. See

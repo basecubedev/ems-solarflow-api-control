@@ -23,6 +23,14 @@ the dashboard's own `--o-note-pad`/`--o-fact-pad`) and the pill heights: those
 are fitted to the text they hold, and a density that moved them would undo that
 fit in one setting out of three.
 
+A canvas is the one place a token cannot reach by itself: it is painted with
+colour values, not rules. The Analytics and History charts resolve each token
+with `getComputedStyle` when they are built (`chartColors` in `app.js`; the
+grid is `--border`, the palette's own hairline), keep the resolved colours in
+the signature that decides whether a refresh may reuse the chart, and are
+rebuilt when the palette changes. A new canvas follows the same pattern rather
+than carrying a colour literal.
+
 ## The four tones
 
 A rule does not decide how far off the ground its surface sits. There are four

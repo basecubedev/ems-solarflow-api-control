@@ -149,3 +149,68 @@ test.describe("theme switching @smoke", () => {
     expect(stored).toEqual({ theme: "oxide", style: "halo", density: "roomy" });
   });
 });
+
+// The two charts draw on a canvas, which cannot read a custom property: their
+// colours are resolved from the palette when a chart is built. What a reader
+// sees of that, short of reading pixels, is the legend marker uPlot paints in
+// the series' stroke, so that is what these compare with the palette's own
+// token, resolved by the browser the same way.
+async function legendMarkerColour(page, chartId: string, label: string) {
+  return page.evaluate(
+    ({ chartId, label }) => {
+      const rows = Array.from(document.querySelectorAll(`#${chartId} .u-legend .u-series`));
+      const row = rows.find((node) => (node.textContent || "").includes(label));
+      const marker = row ? row.querySelector(".u-marker") : null;
+      return marker ? getComputedStyle(marker).borderTopColor : null;
+    },
+    { chartId, label }
+  );
+}
+
+async function tokenColour(page, token: string) {
+  return page.evaluate((name) => {
+    const probe = document.createElement("span");
+    probe.style.color = `var(${name})`;
+    document.body.appendChild(probe);
+    const colour = getComputedStyle(probe).color;
+    probe.remove();
+    return colour;
+  }, token);
+}
+
+test.describe("charts follow the palette @smoke", () => {
+  test("a palette switch repaints the chart on screen", async ({ page }) => {
+    await page.goto("/preview/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator("#analyticsChart canvas").first()).toBeVisible();
+    await expect
+      .poll(() => legendMarkerColour(page, "analyticsChart", "PV Input"))
+      .toBe(await tokenColour(page, "--pv"));
+    const before = await legendMarkerColour(page, "analyticsChart", "PV Input");
+
+    await page.selectOption("#themeSelect", "copper");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "copper");
+    const copperPv = await tokenColour(page, "--pv");
+    expect(copperPv).not.toBe(before);
+    await expect
+      .poll(() => legendMarkerColour(page, "analyticsChart", "PV Input"))
+      .toBe(copperPv);
+  });
+
+  test("a chart off screen during the switch is repainted when it comes back", async ({
+    page,
+  }) => {
+    await page.goto("/preview/aggregated", { waitUntil: "domcontentloaded" });
+    await expect(page.locator("#historyChart canvas").first()).toBeVisible();
+    const historyPv = () => legendMarkerColour(page, "historyChart", "PV Input");
+    await expect.poll(historyPv).toBe(await tokenColour(page, "--pv"));
+
+    await page.locator('[data-flow-view="control"]').click();
+    await expect(page.locator(".history-panel")).toBeHidden();
+    await page.selectOption("#themeSelect", "oxide");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "oxide");
+
+    await page.locator('[data-flow-view="aggregated"]').click();
+    await expect(page.locator(".history-panel")).toBeVisible();
+    await expect.poll(historyPv).toBe(await tokenColour(page, "--pv"));
+  });
+});

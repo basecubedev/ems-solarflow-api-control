@@ -1605,6 +1605,108 @@ def test_a_read_only_device_without_a_charge_level_shows_none_and_has_no_runtime
     assert controlled["soc"] == ["Current SoC", "--"]
 
 
+PALETTE_HARNESS = """
+const app = require(%(app)s);
+const palettes = {
+  signal: { "--pv": "#ffd166", "--output": "#38d5ff", "--battery": "#39e58c",
+            "--muted": "#94a3b8", "--border": "rgba(148, 163, 184, 0.16)", "--accent": "#8b5cf6" },
+  copper: { "--pv": "#e8b45a", "--output": "#7fb8c8", "--battery": "#8fbf6a",
+            "--muted": "#a89b89", "--border": "rgba(184, 160, 128, 0.16)", "--accent": "#c98a4b" },
+};
+let theme = "signal";
+const built = [];
+const nodes = {
+  analyticsChart: { clientWidth: 800, innerHTML: "", isConnected: true },
+  historyChart: { clientWidth: 800, innerHTML: "" },
+};
+global.document = {
+  hidden: false,
+  documentElement: {
+    getAttribute: (name) => (name === "data-theme" ? theme : null),
+    setAttribute: (name, value) => { if (name === "data-theme") theme = value; },
+  },
+  getElementById: (id) => nodes[id] || null,
+  querySelectorAll: () => [],
+};
+global.window = { innerWidth: 1200, localStorage: { getItem: () => null, setItem: () => {} } };
+global.getComputedStyle = () => ({ getPropertyValue: (name) => palettes[theme][name] || "" });
+global.uPlot = function (opts, data) {
+  built.push({
+    chart: opts.cursor && opts.cursor.sync ? "analytics" : "history",
+    series: opts.series.slice(1).map((s) => s.stroke),
+    axis: opts.axes[1].stroke,
+    grid: opts.axes[1].grid.stroke,
+  });
+  this.data = data;
+  this.scales = { x: { min: data[0][0], max: data[0][data[0].length - 1] } };
+  this.setData = (next) => { this.data = next; };
+  this.setScale = () => {};
+  this.destroy = () => {};
+};
+const data = { time: [0, 1800, 3600], series: { pv: [1, 2, 3], output: [1, 2, 3], battery: [1, -2, 3] } };
+app.state.analytics.tab = "overview";
+app.state.analytics.data = data;
+app.state.history.data = data;
+"""
+
+
+def _palette_run(body):
+    script = PALETTE_HARNESS % {"app": json.dumps(str(APP_JS))} + body
+    return run_node(script)
+
+
+def test_a_palette_change_repaints_the_chart_on_screen():
+    """Canvas strokes are resolved once; the palette switch must resolve them again."""
+    out = _palette_run(
+        """
+app.state.flowView = "analytics";
+app.renderAnalyticsChart();
+app.applyTheme("copper");
+console.log(JSON.stringify(built));
+"""
+    )
+    assert len(out) == 2, out
+    signal, copper = out
+    assert signal["series"] == ["#ffd166", "#38d5ff", "#39e58c"]
+    assert copper["series"] == ["#e8b45a", "#7fb8c8", "#8fbf6a"]
+    assert copper["axis"] == "#a89b89"
+
+
+def test_the_chart_grid_is_the_palettes_own_line():
+    out = _palette_run(
+        """
+app.state.flowView = "aggregated";
+app.renderHistoryChart();
+app.applyTheme("copper");
+console.log(JSON.stringify(built));
+"""
+    )
+    assert [entry["grid"] for entry in out] == [
+        "rgba(148, 163, 184, 0.16)",
+        "rgba(184, 160, 128, 0.16)",
+    ]
+
+
+def test_a_chart_off_screen_during_a_palette_change_takes_it_on_its_next_render():
+    """A hidden chart is not rebuilt at zero width; its next render rebuilds it."""
+    out = _palette_run(
+        """
+app.state.flowView = "analytics";
+app.renderAnalyticsChart();
+app.state.flowView = "aggregated";
+app.applyTheme("copper");
+const whileHidden = built.filter((entry) => entry.chart === "analytics").length;
+app.state.flowView = "analytics";
+app.renderAnalyticsChart();
+console.log(JSON.stringify({ whileHidden, built }));
+"""
+    )
+    assert out["whileHidden"] == 1
+    analytics = [entry for entry in out["built"] if entry["chart"] == "analytics"]
+    assert len(analytics) == 2
+    assert analytics[-1]["series"] == ["#e8b45a", "#7fb8c8", "#8fbf6a"]
+
+
 _R7_GOOD = _custom_range_answer(["WR1"], 500, 400)
 _R7_NEWER = _custom_range_answer(["WR1"], 1000, 400)
 _R7_NEWEST = _custom_range_answer(["WR1"], 1500, 400)

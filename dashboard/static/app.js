@@ -6699,6 +6699,21 @@ function cssColor(varName, fallback) {
   return value || fallback;
 }
 
+function chartColors(seriesIds) {
+  const axis = cssColor("--muted", "#8a94a3");
+  return {
+    series: seriesIds.map((id) => cssColor(ANALYTICS_SERIES_META[id].colorVar, "#888")),
+    axis,
+    grid: cssColor("--border", axis),
+    pct: cssColor("--accent", "#8b5cf6"),
+  };
+}
+
+function repaintChartsForPalette() {
+  if (state.analytics.chart && analyticsPanelVisible()) renderAnalyticsChart();
+  if (state.history.chart && historyVisible()) renderHistoryChart();
+}
+
 // Analytics chart display-only sign convention. The backend/API/SQLite/KPI sign
 // convention is unchanged (charging positive, discharging negative). For the
 // Analytics uPlot chart only we invert the battery line so charging reads below
@@ -6745,18 +6760,19 @@ function analyticsSeriesTooltip(seriesId, displayValue, unit) {
   return `${rounded} ${unit}`;
 }
 
-// Identity of the uPlot structure (series set, axes, scales). When this is
-// unchanged across a refresh the chart can be updated in place with setData()
+// Identity of the uPlot structure (series set, axes, scales, colours). When this
+// is unchanged across a refresh the chart can be updated in place with setData()
 // instead of being destroyed and recreated -- avoiding canvas setup, layout and
-// GC churn. A change (tab, series, overlays, device, axis/pct scale) forces a
-// rebuild.
-function analyticsChartSignature(chartSeries, usesPctScale) {
+// GC churn. A change (tab, series, overlays, device, axis/pct scale, the
+// palette's colours, which a canvas cannot read from CSS) forces a rebuild.
+function analyticsChartSignature(chartSeries, usesPctScale, colors) {
   return JSON.stringify({
     tab: state.analytics.tab,
     series: chartSeries,
     overlays: state.analytics.overlays,
     device: state.analytics.device || "",
     pct: usesPctScale,
+    colors,
   });
 }
 
@@ -6813,7 +6829,8 @@ function renderAnalyticsChart() {
   chartSeries.forEach((id) => {
     if (ANALYTICS_SERIES_META[id].scaleId === "pct") usesPctScale = true;
   });
-  const signature = analyticsChartSignature(chartSeries, usesPctScale);
+  const colors = chartColors(chartSeries);
+  const signature = analyticsChartSignature(chartSeries, usesPctScale, colors);
   // Battery is inverted here for display only; raw state.analytics.data is untouched.
   const seriesData = analyticsChartSeriesData(data, chartSeries);
 
@@ -6842,12 +6859,12 @@ function renderAnalyticsChart() {
   container.innerHTML = "";
 
   const seriesConfig = [{}];
-  chartSeries.forEach((id) => {
+  chartSeries.forEach((id, index) => {
     const meta = ANALYTICS_SERIES_META[id];
     const isOverlay = !currentAnalyticsTab().series.includes(id);
     seriesConfig.push({
       label: meta.label,
-      stroke: cssColor(meta.colorVar, "#888"),
+      stroke: colors.series[index],
       width: 2,
       dash: isOverlay ? [6, 4] : undefined,
       scale: meta.scaleId || "y",
@@ -6855,19 +6872,17 @@ function renderAnalyticsChart() {
     });
   });
 
-  const axisColor = cssColor("--muted", "#8a94a3");
-  const gridColor = "rgba(255,255,255,0.06)";
   const scales = { x: { time: true }, y: {} };
   const axes = [
-    { stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor } },
-    { scale: "y", stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor } },
+    { stroke: colors.axis, grid: { stroke: colors.grid }, ticks: { stroke: colors.grid } },
+    { scale: "y", stroke: colors.axis, grid: { stroke: colors.grid }, ticks: { stroke: colors.grid } },
   ];
   if (usesPctScale) {
     scales.pct = { range: [0, 100] };
     axes.push({
       scale: "pct",
       side: 1,
-      stroke: cssColor("--accent", "#8b5cf6"),
+      stroke: colors.pct,
       grid: { show: false },
       values: (_self, ticks) => ticks.map((t) => `${t}%`),
     });
@@ -7229,10 +7244,11 @@ function renderHistoryChart() {
   // discharging) and null handling.
   const seriesData = analyticsChartSeriesData(data, seriesIds);
 
-  // The history chart structure only varies by the (fixed) series set and the
-  // selected device, so reuse the instance in place across refreshes when those
-  // are unchanged.
-  const signature = JSON.stringify({ series: seriesIds, device: state.history.device || "" });
+  // The history chart structure only varies by the (fixed) series set, the
+  // selected device and the palette's colours, so reuse the instance in place
+  // across refreshes when those are unchanged.
+  const colors = chartColors(seriesIds);
+  const signature = JSON.stringify({ series: seriesIds, device: state.history.device || "", colors });
   if (
     state.history.chart &&
     state.history.chartSignature === signature &&
@@ -7253,11 +7269,11 @@ function renderHistoryChart() {
   container.innerHTML = "";
 
   const seriesConfig = [{}];
-  seriesIds.forEach((id) => {
+  seriesIds.forEach((id, index) => {
     const meta = ANALYTICS_SERIES_META[id];
     seriesConfig.push({
       label: meta.label,
-      stroke: cssColor(meta.colorVar, "#888"),
+      stroke: colors.series[index],
       width: 2,
       scale: "y",
       // Reuse the Analytics tooltip so the inverted battery line reads back as
@@ -7266,16 +7282,14 @@ function renderHistoryChart() {
     });
   });
 
-  const axisColor = cssColor("--muted", "#8a94a3");
-  const gridColor = "rgba(255,255,255,0.06)";
   const opts = {
     width: container.clientWidth || 600,
     height: historyChartHeight(),
     series: seriesConfig,
     scales: { x: { time: true }, y: {} },
     axes: [
-      { stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor } },
-      { scale: "y", stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor } },
+      { stroke: colors.axis, grid: { stroke: colors.grid }, ticks: { stroke: colors.grid } },
+      { scale: "y", stroke: colors.axis, grid: { stroke: colors.grid }, ticks: { stroke: colors.grid } },
     ],
     cursor: { focus: { prox: 24 } },
     legend: { live: true },
@@ -7539,6 +7553,7 @@ function applyTheme(id) {
   } catch (err) {
     /* localStorage may be unavailable; the choice holds for this page. */
   }
+  repaintChartsForPalette();
   return theme;
 }
 
@@ -7897,6 +7912,7 @@ if (typeof module !== "undefined") {
     loadHistory,
     HISTORY_SERIES,
     renderHistoryChart,
+    applyTheme,
     detectZoom,
     onAnalyticsXScale,
     onHistoryXScale,
