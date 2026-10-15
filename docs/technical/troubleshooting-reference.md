@@ -1214,7 +1214,9 @@ actually running. They are used only when no EMS container is active (absent,
 stopped, or Docker unavailable). Recreate the EMS container from the verified
 System Build to restore a readable release. The custom container name honored
 here is `EMS_CONTAINER_NAME` (falling back to the Compose `container_name`, then
-the canonical `ems-solarflow-api-control`).
+the canonical `ems-solarflow-api-control`), and every Admin view reads the EMS
+container by that one rule: the start page, which recommends Maintenance once
+an EMS container exists, the release listing and the `emsctl` runner included.
 
 ### Guided upgrade digest pull failed
 

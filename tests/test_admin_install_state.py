@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from admin import install_state as istate
+from admin.container_names import resolve_ems_container_name
+from admin.setup_intent import default_runtime_state_fingerprint
 
 pytestmark = [
     pytest.mark.admin,
@@ -91,6 +93,80 @@ def test_docker_unavailable_falls_back_to_filesystem(tmp_path):
         base_dir=tmp_path, ems_container_probe=_probe(available=False)
     )
     assert state.recommended_path == istate.PATH_MANAGE_EXISTING
+
+
+class _OneContainerDocker:
+    """Docker that answers for exactly one container, under one name."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def inspect_container(self, name):
+        if name != self.name:
+            return None
+        return {"container_name": name, "status": "running", "image": "ems:v0.8.14"}
+
+    def inspect_container_image_id(self, _name):
+        return "sha256:" + "a" * 64
+
+
+def _live_probe(base_dir, docker):
+    return lambda: default_runtime_state_fingerprint(base_dir, docker=docker)
+
+
+def test_the_probe_finds_the_ems_container_under_its_configured_name(
+    tmp_path, monkeypatch
+):
+    """``EMS_CONTAINER_NAME`` names the EMS container for every Admin view.
+
+    The Maintenance overview and the release listing read the container by it.
+    The landing's probe read only the compose file and the default name, so an
+    EMS running under its configured name was no container at all, and the
+    landing recommended a fresh setup, which replaces the config, over it.
+    """
+
+    monkeypatch.setenv("EMS_CONTAINER_NAME", "custom-ems")
+    _write_json(_standard(tmp_path), {"a": 1})
+    (tmp_path / "docker-compose.yml").write_text("services:\n  ems:\n    image: ems\n")
+    docker = _OneContainerDocker("custom-ems")
+
+    state = istate.detect_install_state(
+        base_dir=tmp_path, ems_container_probe=_live_probe(tmp_path, docker)
+    )
+
+    assert state.recommended_path == istate.PATH_MANAGE_EXISTING
+
+
+@pytest.mark.parametrize(
+    ("env_name", "compose_name"),
+    (
+        (None, None),
+        (None, "compose-ems"),
+        ("env-ems", None),
+        ("env-ems", "compose-ems"),
+    ),
+)
+def test_the_probe_inspects_the_container_the_overview_inspects(
+    tmp_path, monkeypatch, env_name, compose_name
+):
+    """The landing and the Maintenance overview name one EMS container."""
+
+    if env_name is None:
+        monkeypatch.delenv("EMS_CONTAINER_NAME", raising=False)
+    else:
+        monkeypatch.setenv("EMS_CONTAINER_NAME", env_name)
+    compose = "services:\n  ems:\n    image: ems\n"
+    if compose_name is not None:
+        compose += f"    container_name: {compose_name}\n"
+    (tmp_path / "docker-compose.yml").write_text(compose)
+    overview_name = resolve_ems_container_name(compose_text=compose)
+
+    evidence = default_runtime_state_fingerprint(
+        tmp_path, docker=_OneContainerDocker(overview_name)
+    )
+
+    assert evidence["container_name"] == overview_name
+    assert evidence["container_exists"] is True
 
 
 def test_compose_only_recommends_manage(tmp_path):
