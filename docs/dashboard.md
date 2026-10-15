@@ -357,6 +357,12 @@ Power limits are checked against the configured EMS and device limits, not only
 generic type ranges. The routes follow the same allowlist, so a section is
 reachable exactly when it is writable — there is no second list to keep in sync.
 
+After a save the Control tab reloads the runtime state. A reload started
+earlier -- the 30-s refresh, a retry -- that answers after the save's reload
+has answered is dropped, and so is a failure older than the values on screen,
+so neither replaces the saved values with older ones. A failed reload is no
+values: an earlier reload answering after it is still shown.
+
 What the Control tab can change: EMS enabled / max total power / min output
 limit / loop interval; per device its enabled flag, **AC charging**, max power,
 PV priority and offgrid socket mode; Winter mode; and **AC charging** for the
@@ -796,8 +802,8 @@ Performance and refresh behavior:
   request for that selection: the older answer, whether data, an error or
   "unavailable", is then dropped and that data stays. The lightweight
   History panel refreshes on the same cadence while Aggregate/Devices is on
-  screen. Either panel's refresh pauses while
-  [its chart is zoomed](#zooming-a-chart).
+  screen, and keeps the same rule for its range and device. Either panel's
+  refresh pauses while [its chart is zoomed](#zooming-a-chart).
 - Both panels are mobile-friendly (controls, overlay chips, sub-tabs and KPI
   cards reflow; charts use reduced heights on small screens) and show explicit
   loading and empty/unavailable states.

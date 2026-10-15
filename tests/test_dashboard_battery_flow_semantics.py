@@ -542,6 +542,7 @@ def test_frontend_battery_flow_scenarios_execute_against_app_js():
 
         const context = {
           console,
+          URLSearchParams,
           document: {
             getElementById: element,
             createElement: () => new FakeElement(),
@@ -836,6 +837,7 @@ def test_frontend_control_explain_view_executes_against_app_js():
 
         const context = {
           console,
+          URLSearchParams,
           document: {
             getElementById: element,
             createElement: () => new FakeElement(),

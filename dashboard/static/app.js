@@ -18,6 +18,7 @@ const state = {
     // refresh that would reset it.
     zoom: null,
     applyingScale: false,
+    answers: answerOrder(),
   },
   // InfluxDB-backed long-term analytics shown in the dedicated Analytics tab.
   // ``available`` is null until probed; false renders the "not configured"
@@ -46,8 +47,7 @@ const state = {
     // Cached series-based KPI values, keyed by a stable data key. Live snapshot
     // updates reuse this cache instead of re-integrating the full series.
     kpiCache: { dataKey: null, values: {} },
-    requestSequence: 0,
-    applied: { url: null, request: 0 },
+    answers: answerOrder(),
   },
   flowView: "aggregated",
   // Presentation only: how many rows an energy card carries. Basic is the
@@ -62,6 +62,7 @@ const state = {
     csrfToken: null,
   },
   runtime: null,
+  runtimeAnswers: answerOrder(),
   runtimeUnavailable: false,
   runtimeEditorDirty: false,
   lastSnapshotTimestamp: null,
@@ -5526,6 +5527,30 @@ function setRuntimeFeedback(message, isError, endpoint) {
   });
 }
 
+// Answers to a request repeated for what is on screen -- a refresh, a pick, a
+// save's reload -- land in any order. One is applied only for the selection
+// still on screen and never over a newer answer for it; a failure is not
+// applied data, so it holds back no older answer that lands after it.
+function answerOrder() {
+  return { sequence: 0, applied: { key: null, request: 0 } };
+}
+
+function startAnswer(order) {
+  order.sequence += 1;
+  return order.sequence;
+}
+
+function answerIsCurrent(order, key, request, keyOnScreen) {
+  if (key !== keyOnScreen) return false;
+  return !(order.applied.key === key && request < order.applied.request);
+}
+
+function recordAnswer(order, key, request, applied) {
+  order.applied = applied ? { key, request } : { key: null, request: 0 };
+}
+
+const RUNTIME_STATE_URL = "/api/runtime";
+
 async function loadRuntimeState(options = {}) {
   const forceRuntimeEditor = Boolean(options.forceRuntimeEditor) || !isRuntimeEditorEditing();
   if (state.demoMode) {
@@ -5534,15 +5559,31 @@ async function loadRuntimeState(options = {}) {
     if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor });
     return;
   }
+  const order = state.runtimeAnswers;
+  const request = startAnswer(order);
+  let runtime = null;
   try {
-    const response = await fetch("/api/runtime");
+    const response = await fetch(RUNTIME_STATE_URL);
     if (!response.ok) throw new Error(`runtime state answered ${response.status}`);
-    state.runtime = await response.json();
+    runtime = await response.json();
+  } catch {
+    runtime = null;
+  }
+  if (!answerIsCurrent(order, RUNTIME_STATE_URL, request, RUNTIME_STATE_URL)) {
+    if (options.forceRuntimeEditor) {
+      clearRuntimeEditorState();
+      if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor: true });
+    }
+    return;
+  }
+  recordAnswer(order, RUNTIME_STATE_URL, request, runtime !== null);
+  if (runtime !== null) {
+    state.runtime = runtime;
     state.runtimeUnavailable = false;
     cancelRuntimeRetry();
     if (forceRuntimeEditor) clearRuntimeEditorState();
     if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor });
-  } catch {
+  } else {
     state.runtime = null;
     state.runtimeUnavailable = true;
     if (state.auth.authenticated) scheduleRuntimeRetry();
@@ -6313,8 +6354,8 @@ async function loadAnalytics(showLoading = true) {
     return;
   }
   const url = analyticsFetchUrl();
-  state.analytics.requestSequence += 1;
-  const request = state.analytics.requestSequence;
+  const order = state.analytics.answers;
+  const request = startAnswer(order);
   if (showLoading) setAnalyticsLoading(true);
   let payload = null;
   try {
@@ -6323,21 +6364,19 @@ async function loadAnalytics(showLoading = true) {
   } catch (error) {
     payload = null;
   }
-  if (url !== analyticsFetchUrl()) return;
-  const applied = state.analytics.applied;
-  if (applied.url === url && request < applied.request) return;
+  if (!answerIsCurrent(order, url, request, analyticsFetchUrl())) return;
   setAnalyticsLoading(false);
   // A 200 payload with available:false means InfluxDB is not configured; show
   // the clean info state instead of an empty/broken chart.
   if (payload && payload.available === false) {
     setAnalyticsAvailable(false, payload);
     state.analytics.data = null;
-    state.analytics.applied = { url: null, request: 0 };
+    recordAnswer(order, url, request, false);
     return;
   }
   setAnalyticsAvailable(true);
   state.analytics.data = payload;
-  state.analytics.applied = payload ? { url, request } : { url: null, request: 0 };
+  recordAnswer(order, url, request, Boolean(payload));
   renderAnalytics();
 }
 
@@ -7191,15 +7230,21 @@ async function loadHistory(showLoading = true) {
     renderHistoryChart();
     return;
   }
+  const url = historyFetchUrl();
+  const order = state.history.answers;
+  const request = startAnswer(order);
   if (showLoading) setHistoryLoading(true);
+  let payload = null;
   try {
-    const response = await fetch(historyFetchUrl());
-    state.history.data = response.ok ? await response.json() : null;
+    const response = await fetch(url);
+    payload = response.ok ? await response.json() : null;
   } catch (error) {
-    state.history.data = null;
-  } finally {
-    setHistoryLoading(false);
+    payload = null;
   }
+  if (!answerIsCurrent(order, url, request, historyFetchUrl())) return;
+  setHistoryLoading(false);
+  state.history.data = payload;
+  recordAnswer(order, url, request, Boolean(payload) && !(payload.meta && payload.meta.unavailable));
   renderHistoryChart();
 }
 
