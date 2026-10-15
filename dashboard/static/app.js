@@ -2739,6 +2739,7 @@ const CONTROL_DECISION_SENTENCES = {
   ac_charge_share_too_small: (name) => `${name} may charge, but its share of this surplus was too small to be worth changing direction for, so it went to the other devices.`,
   ac_charge_no_ceiling: (name) => `${name} may charge, but has no charge limit to charge at: it reports 0, or reports none and its model carries no rating.`,
   ac_charge_not_permitted: (name) => `${name} is not charging this cycle: its model has no AC charge path, charging is switched off for it, or its battery is full, drained by another load or unavailable.`,
+  ac_charge_held_by_full_charge_assist: (name) => `${name} takes no share of the surplus: the full-charge assist holds it, for its own charge or the restore after it.`,
 };
 
 function controlReadableDecisionReason(reason, name) {

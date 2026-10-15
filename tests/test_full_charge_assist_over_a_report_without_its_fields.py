@@ -925,3 +925,116 @@ def test_without_its_charge_on_record_the_assist_keeps_no_device_from_the_regula
     ]
     assert entries, "the regulator never entered its charge"
     assert rig.dev.charge_commanded is True
+
+
+@pytest.mark.parametrize("hide", [False, True], ids=["its claim", "its direction hold"])
+def test_the_control_view_names_the_assist_for_a_device_it_holds_out_of_a_fleet_charge(
+    tmp_path, hide
+):
+    """WR2 charges from surplus while the assist holds WR1: WR1's reason names the assist.
+
+    It read ``ac_charge_not_permitted``, which the Control view tells as a
+    model without an AC charge path, charging switched off or a battery
+    full, drained or unavailable, while WR1 drew 200 W in the assist's charge.
+    """
+
+    rig = TwoDevices(tmp_path)
+    rig.ac_charge_control = True
+    rig.run()
+    assert rig.item.ac_mode == 1, "the assist never put the device into AC input"
+    rig.run()
+    rig.hide = hide
+    rig.controller.shelly = ShellyStub(-1200)
+
+    rig.run(cycles=40)
+
+    explanation = rig.controller.last_control_explanation.to_dict()
+    assert explanation["mode"] == "ac_charge"
+    devices = explanation["devices"]
+    assert devices["WR2"]["decision_reason"] == "ac_charge_allocation"
+    assert devices["WR1"]["decision_reason"] == "ac_charge_held_by_full_charge_assist"
+    assert rig.item.grid_input == POWER
+
+
+def _wr1_reason_in_a_fleet_charge(rig):
+    explanation = rig.controller.last_control_explanation.to_dict()
+    assert explanation["mode"] == "ac_charge"
+    assert explanation["devices"]["WR2"]["decision_reason"] == "ac_charge_allocation"
+    return explanation["devices"]["WR1"]["decision_reason"]
+
+
+def test_the_control_view_names_the_assist_for_a_device_its_restore_holds(tmp_path):
+    """The assist completed while WR2 charges; WR1 ignores ``acMode=2`` and stays under the restore."""
+
+    rig = TwoDevices(tmp_path)
+    rig.ac_charge_control = True
+    rig.run()
+    assert rig.item.ac_mode == 1, "the assist never put the device into AC input"
+    rig.run()
+    rig.controller.shelly = ShellyStub(-1200)
+    rig.run(cycles=40)
+    rig.hardware.ignore(lambda written: written.get("acMode") == 2, times=10_000)
+    rig.item.soc_limit = 1
+
+    rig.run(cycles=5)
+
+    assert _record(rig)["full_charge_assist_active"] is False
+    assert rig.controller.runtime_intents["WR1"].reason == "battery_full_charge_assist_restore"
+    assert _wr1_reason_in_a_fleet_charge(rig) == "ac_charge_held_by_full_charge_assist"
+
+
+def _never_entered(rig):
+    rig.store.mark_assist_started("WR1", DUE, True)
+    rig.hide = True
+
+
+def _left_the_charge(rig):
+    rig.run()
+    assert rig.item.ac_mode == 1, "the assist never put the device into AC input"
+    rig.run()
+    rig.runtime.system["enabled"] = False
+    rig.run()
+    assert rig.item.ac_mode == 2
+    rig.runtime.system["enabled"] = True
+    rig.hide = True
+
+
+ASSIST_STANDING_DOWN = {"never entered": _never_entered, "left its charge": _left_the_charge}
+
+
+@pytest.mark.parametrize("setup", ASSIST_STANDING_DOWN.values(), ids=ASSIST_STANDING_DOWN.keys())
+def test_an_assist_that_claims_nothing_is_not_named_for_a_device_switched_off_for_charging(
+    tmp_path, setup
+):
+    """WR1's own switch keeps it from the charge, not the assist, which stands down and holds nothing."""
+
+    rig = TwoDevices(tmp_path)
+    rig.ac_charge_control = True
+    setup(rig)
+    rig.runtime.devices["WR1"] = {"ac_charge_enabled": False}
+    rig.controller.shelly = ShellyStub(-1200)
+
+    rig.run(cycles=40)
+
+    with rig.loop():
+        assert rig.controller.full_charge_assist_held_by(rig.dev) == "fields_not_reported"
+        assert rig.controller.full_charge_assist_holds_direction(rig.dev) is False
+    assert _record(rig)["full_charge_assist_active"] is True
+    assert _wr1_reason_in_a_fleet_charge(rig) == "ac_charge_not_permitted"
+
+
+@pytest.mark.parametrize("role", PARKS.values(), ids=PARKS.keys())
+def test_a_park_without_the_assist_is_not_named_as_the_assist(tmp_path, role):
+    """An operator's AC-input role keeps WR1 from the charge; no assist runs on it."""
+
+    rig = TwoDevices(tmp_path)
+    rig.ac_charge_control = True
+    rig.store.update_device_state("WR1", DUE, next_due_at="2099-01-01T00:00:00+00:00")
+    rig.runtime.devices["WR1"] = {"runtime_role": role}
+    rig.controller.shelly = ShellyStub(-1200)
+
+    rig.run(cycles=40)
+
+    assert _record(rig)["full_charge_assist_active"] is False
+    assert rig.controller.device_output_control_allowed(rig.dev) is False
+    assert _wr1_reason_in_a_fleet_charge(rig) == "ac_charge_not_permitted"

@@ -2854,8 +2854,24 @@ class EMSController:
                 device_explanation.decision_reason = "ac_charge_share_too_small"
             elif dev.name in self.charge_blocked_by_ceiling:
                 device_explanation.decision_reason = "ac_charge_no_ceiling"
+            elif self.full_charge_assist_claims(dev):
+                device_explanation.decision_reason = "ac_charge_held_by_full_charge_assist"
             else:
                 device_explanation.decision_reason = "ac_charge_not_permitted"
+
+    def full_charge_assist_claims(self, dev):
+        """Whether the claim on ``dev`` this cycle is the full-charge assist's or its restore's.
+
+        Every such claim keeps the device from a charge of the regulator's:
+        it takes the device out of output control, or, as the direction hold,
+        makes it ineligible (:meth:`device_charge_allowed`).
+        """
+
+        intent = self.runtime_intents.get(dev.name)
+        return intent is not None and intent.reason in (
+            FULL_CHARGE_ASSIST_REASON,
+            FULL_CHARGE_ASSIST_RESTORE_REASON,
+        )
 
     def log_charge_direction(
         self, decision, stabilized_total, filtered_load_w, chargeable

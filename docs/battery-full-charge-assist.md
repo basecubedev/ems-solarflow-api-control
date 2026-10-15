@@ -194,7 +194,10 @@ decide: the charge is the assist's while the report shows the device in it, by
 decides the start, the claim
 and the dashboard's **Assist waiting** (or **Assist unavailable** for the
 transport): what keeps the assist from writing what it needs on the device now
--- its transport, a shut gate, control switched off, or such a report.
+-- its transport, a shut gate, control switched off, or such a report. While
+other devices charge from surplus, the Control view says of a device the
+assist or its restore holds, by its claim or by the direction hold, that the
+full-charge assist holds it, not that the device may not charge.
 
 A restore cannot be written while `allow_state_reconciliation_writes` is off,
 or any other gate on the state write path is shut (dry run, simulation, replay,
