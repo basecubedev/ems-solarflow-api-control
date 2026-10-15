@@ -64,7 +64,11 @@ or where winter mode plans nothing the configured `min_soc`, and holds every
 raise to one rule (`cfg.winter_min_soc_raise_limit`): written once it leads the
 SoC by at most three points and does not land on it, a lowering at once. Only
 the `noon_step` policy's own daily step may lead further. See
-[winter-mode.md](../winter-mode.md#why-three-points) for the field evidence.
+[winter-mode.md](../winter-mode.md#why-three-points) for the field evidence. A
+SoC write carries only the bounds that differ from the report: an unchanged
+`minSoc` is not sent again with a `socSet` change (K21), also not while it
+equals the SoC, where a `minSoc` write makes an 800 Pro 2 draw about 1.2 kW from
+the grid for a few seconds.
 
 ## Stable Fast Output Control
 

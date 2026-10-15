@@ -457,7 +457,8 @@ def test_assist_window_start_writes_socset_acmode_and_input_limit_same_loop(tmp_
         )
 
     properties = posted_properties(dev)
-    assert {"minSoc": 150, "socSet": 1000} in properties
+    assert {"socSet": 1000} in properties
+    assert not any("minSoc" in item for item in properties)
     assert {"acMode": 1} in properties
     assert {"inputLimit": 200} in properties
     assert controller.set_output_limit.call_count == 0
@@ -531,7 +532,8 @@ def test_existing_due_schedule_starts_when_already_enabled(tmp_path):
             writes_allowed=True,
         )
 
-    assert {"minSoc": 150, "socSet": 1000} in posted_properties(dev)
+    assert {"socSet": 1000} in posted_properties(dev)
+    assert not any("minSoc" in item for item in posted_properties(dev))
     assert store.get_device_state("WR1")["full_charge_assist_active"] is True
 
 
@@ -562,7 +564,8 @@ def test_force_start_works_after_seeded_due_date(tmp_path):
             writes_allowed=True,
         )
 
-    assert {"minSoc": 150, "socSet": 1000} in posted_properties(dev)
+    assert {"socSet": 1000} in posted_properties(dev)
+    assert not any("minSoc" in item for item in posted_properties(dev))
     assert store.get_device_state("WR1")["full_charge_assist_active"] is True
 
 
@@ -582,7 +585,8 @@ def test_active_assist_completion_uses_only_soc_limit_and_restores_config_max_so
         )
 
     properties = posted_properties(dev)
-    assert {"minSoc": 150, "socSet": 950} in properties
+    assert {"socSet": 950} in properties
+    assert not any("minSoc" in item for item in properties)
     assert all("batCalTime" not in item for item in properties)
     record = store.get_device_state("WR1")
     assert record["full_charge_assist_active"] is False
@@ -605,7 +609,8 @@ def test_active_assist_completion_still_runs_when_feature_disabled(tmp_path):
             writes_allowed=True,
         )
 
-    assert {"minSoc": 150, "socSet": 950} in posted_properties(dev)
+    assert {"socSet": 950} in posted_properties(dev)
+    assert not any("minSoc" in item for item in posted_properties(dev))
     record = store.get_device_state("WR1")
     assert record["full_charge_assist_active"] is False
     assert record["restore_pending"] is False
@@ -660,7 +665,8 @@ def test_restore_pending_runs_when_feature_disabled(tmp_path):
             writes_allowed=True,
         )
 
-    assert {"minSoc": 150, "socSet": 950} in posted_properties(dev)
+    assert {"socSet": 950} in posted_properties(dev)
+    assert not any("minSoc" in item for item in posted_properties(dev))
     record = store.get_device_state("WR1")
     assert record["restore_pending"] is False
     assert record["max_soc_request_pending"] is False
@@ -685,7 +691,8 @@ def test_active_assist_disabled_mid_run_aborts_and_restores(tmp_path):
         )
 
     properties = posted_properties(dev)
-    assert {"minSoc": 150, "socSet": 900} in properties
+    assert {"socSet": 900} in properties
+    assert not any("minSoc" in item for item in properties)
     assert {"acMode": 2} in properties
     record = store.get_device_state("WR1")
     assert record["full_charge_assist_active"] is False

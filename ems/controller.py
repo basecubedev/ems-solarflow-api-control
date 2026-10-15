@@ -3904,13 +3904,15 @@ class EMSController:
         desired_max_soc=None,
         reason="soc_reconcile"
     ):
-        """Apply the SoC window if it differs from the report.
+        """Write the bounds of the SoC window that differ from the report, and only those.
 
         ``minSoc`` is what ``min_soc_to_write`` allows; ``MIN_SOC_UNMANAGED``
         as ``desired_min_soc`` leaves it alone. ``socSet`` is
         ``desired_max_soc``, or the configured ``max_soc``, and is not written
         over a ``socSet`` the report does not carry (K20); a call that wanted
-        only that write then returns False.
+        only that write then returns False. A bound the report already shows
+        is not sent again with the other: an unchanged ``minSoc`` written
+        onto the SoC is what makes an 800 Pro 2 draw from the grid (K21).
         """
 
         if not self.state_reconciliation_supported(dev, "soc_limits"):
@@ -3938,19 +3940,25 @@ class EMSController:
         max_soc_known = effective_max_soc <= 0 or self.state_field_known(
             dev, state, "socSet", "max_soc_reported"
         )
-        managed = {}
-        differs = False
-        if effective_min_soc > 0:
-            managed["minSoc"] = int(effective_min_soc * 10)
-            differs |= int(state.min_soc) != int(effective_min_soc)
-        if effective_max_soc > 0 and max_soc_known:
-            managed["socSet"] = int(effective_max_soc * 10)
-            differs |= int(state.max_soc) != int(effective_max_soc)
+        managed = effective_min_soc > 0 or (effective_max_soc > 0 and max_soc_known)
+        changes = {}
+        written = {}
+        if effective_min_soc > 0 and int(state.min_soc) != int(effective_min_soc):
+            changes["minSoc"] = int(effective_min_soc * 10)
+            written["min_soc"] = effective_min_soc
+        if (
+            effective_max_soc > 0
+            and max_soc_known
+            and int(state.max_soc) != int(effective_max_soc)
+        ):
+            changes["socSet"] = int(effective_max_soc * 10)
+            written["max_soc"] = effective_max_soc
+            written["max_soc_property"] = "socSet"
 
         if not managed:
             return max_soc_known
 
-        if not differs:
+        if not changes:
 
             log_event(
                 logging.DEBUG,
@@ -3966,9 +3974,7 @@ class EMSController:
                 logging.INFO,
                 "dry_run_soc_limits",
                 device=dev.name,
-                min_soc=effective_min_soc,
-                max_soc=effective_max_soc,
-                max_soc_property="socSet",
+                **written,
                 reason=reason,
                 **self.state_write_gate_fields(dev)
             )
@@ -3978,16 +3984,11 @@ class EMSController:
 
             ok = write_device_properties(
                 dev,
-                managed,
+                changes,
                 reason="soc_limits",
-                field="/".join(managed),
+                field="/".join(changes),
                 error_event="write_soc_limits_error",
-                log_fields={
-                    "min_soc": effective_min_soc,
-                    "max_soc": effective_max_soc,
-                    "max_soc_property": "socSet",
-                    "reason": reason,
-                }
+                log_fields={**written, "reason": reason}
             )
 
             if not ok:
@@ -3997,9 +3998,7 @@ class EMSController:
                 logging.INFO,
                 "write_soc_limits",
                 device=dev.name,
-                min_soc=effective_min_soc,
-                max_soc=effective_max_soc,
-                max_soc_property="socSet",
+                **written,
                 reason=reason
             )
             return True
@@ -4010,9 +4009,7 @@ class EMSController:
                 logging.WARNING,
                 "write_soc_limits_error",
                 device=dev.name,
-                min_soc=effective_min_soc,
-                max_soc=effective_max_soc,
-                max_soc_property="socSet",
+                **written,
                 reason=reason,
                 error=e
             )

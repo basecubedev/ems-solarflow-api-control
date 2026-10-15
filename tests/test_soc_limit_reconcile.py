@@ -73,6 +73,29 @@ def test_both_bounds_unmanaged_writes_nothing():
     assert _reconcile(_device(0, 0), _state()) == (True, [])
 
 
+@pytest.mark.parametrize(
+    "device_bounds, state_bounds, expected",
+    [
+        ((15, 90), (15, 95, 15), {"socSet": 900}),
+        ((20, 95), (15, 95, 50), {"minSoc": 200}),
+        ((20, 90), (15, 95, 50), {"minSoc": 200, "socSet": 900}),
+    ],
+    ids=["min_soc on the soc unchanged", "soc_set unchanged", "both differ"],
+)
+def test_only_the_bounds_that_differ_are_written(device_bounds, state_bounds, expected):
+    """An unchanged ``minSoc`` went out again with every ``socSet`` change (K21).
+
+    Also while ``minSoc`` equals the SoC, where a ``minSoc`` write is the known
+    trigger of the 800 Pro 2's grid draw of about 1.2 kW (FI-2).
+    """
+
+    min_soc, max_soc, soc = state_bounds
+    result, writes = _reconcile(_device(*device_bounds), _state(min_soc, max_soc, soc))
+
+    assert result is True
+    assert writes == [expected]
+
+
 @pytest.mark.parametrize("min_soc, max_soc", [(0, 95), (15, 0)])
 def test_an_unmanaged_bound_never_counts_as_a_difference(min_soc, max_soc):
     result, writes = _reconcile(_device(min_soc, max_soc), _state(15, 95))
@@ -107,7 +130,7 @@ def test_periodic_reconcile_leaves_an_active_full_charge_assist_at_100(
             dev, _state(15, 50), winter_active=False, now=datetime(2026, 7, 1, 9, 0)
         )
 
-    assert writes == [{"minSoc": 150, "socSet": socset}]
+    assert writes == [{"socSet": socset}]
 
 
 DAY = datetime(2026, 11, 2, 9, 0)
@@ -210,6 +233,29 @@ def test_the_morning_step_writes_the_raise_and_nothing_else():
         )
 
     assert writes == [{"minSoc": 230}]
+
+
+def test_an_assist_s_soc_set_goes_out_without_winter_s_min_soc_on_the_soc():
+    """Winter's target, unchanged and on the SoC, went out again with the assist's socSet (K21)."""
+
+    controller = EMSController(
+        devices=[],
+        shelly=None,
+        sleep_enabled=False,
+        battery_full_charge_store=_AssistStore(True),
+    )
+    _remember(controller, 20, step_date=DAY.date().isoformat())
+
+    with _captured_writes() as writes, patch.object(
+        cfg, "WINTER_CONFIG", dict(cfg.WINTER_DEFAULTS)
+    ), patch.object(cfg, "winter_feature_enabled", lambda runtime: True), patch.object(
+        controller, "apply_device_modes", lambda dev, state: None
+    ), _devices_configured():
+        controller.reconcile_device_state_limits(
+            _device(15, 95), _pv_state(20, soc=20, max_soc=95), winter_active=True, now=DAY
+        )
+
+    assert writes == [{"socSet": 1000}]
 
 
 def test_the_step_waits_while_the_battery_is_well_below_its_min_soc():

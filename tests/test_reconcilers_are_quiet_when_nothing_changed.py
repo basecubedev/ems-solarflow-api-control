@@ -131,10 +131,8 @@ def test_a_settled_device_is_written_to_at_all():
         # Each reconciler speaks only for its own field.
         ("ac_mode", 1, ["acMode"]),
         ("smart_mode", 0, ["smartMode"]),
-        # The SoC window is one setting with two bounds, written as one property
-        # set -- still behind a single "unchanged" check, as the first test shows.
-        ("min_soc", 5, ["minSoc", "socSet"]),
-        ("max_soc", 80, ["minSoc", "socSet"]),
+        ("min_soc", 5, ["minSoc"]),
+        ("max_soc", 80, ["socSet"]),
     ],
 )
 def test_only_the_field_that_drifted_is_written(field, value, expected):

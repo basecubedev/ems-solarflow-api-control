@@ -186,7 +186,7 @@ def test_a_known_soc_set_is_still_reconciled():
     with _gate_open():
         controller.apply_soc_limits(controlled, _report(socSet=900))
 
-    assert _written(controlled) == [{"minSoc": 150, "socSet": 1000}]
+    assert _written(controlled) == [{"socSet": 1000}]
 
 
 def test_the_full_charge_assist_raise_is_not_written_over_a_missing_soc_set_and_stays_owed():
