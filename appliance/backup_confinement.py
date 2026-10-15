@@ -144,25 +144,37 @@ class BackupAccessActivation:
         return None if keys is None else keys.with_name(keys.name + DISABLED_SUFFIX)
 
     def conflicted_key_files(self):
-        """Preserved key files nobody has decided about yet."""
+        """Preserved key files nobody has decided about yet.
 
-        disabled = self.disabled_keys_path()
-        if disabled is None or not disabled.parent.is_dir():
+        Listed through ``AuthorizedKeysStore``, which never follows a symlinked
+        ``.ssh``; its ``ValidationError`` reaches the caller.
+        """
+
+        from appliance.sshkeys import AuthorizedKeysStore
+
+        home = self.account_home()
+        if home is None:
             return []
-        prefix = disabled.name + CONFLICT_SUFFIX
-        return sorted(
-            item for item in disabled.parent.iterdir() if item.name.startswith(prefix)
-        )
+        store = AuthorizedKeysStore(home)
+        prefix = store.path.name + DISABLED_SUFFIX + CONFLICT_SUFFIX
+        return [store.ssh_dir / name for name in store.entries() if name.startswith(prefix)]
 
     def observe(self):
         keys = self.authorized_keys_path()
         disabled = self.disabled_keys_path()
+        refused = ""
+        try:
+            conflicts = [str(item) for item in self.conflicted_key_files()]
+        except ValidationError as refusal:
+            conflicts = []
+            refused = refusal.code
         return {
             "account": self.config.backup_user,
             "home": str(keys.parent.parent) if keys else "",
             "keys_present": bool(keys and keys.is_file()),
             "keys_disabled": bool(disabled and disabled.is_file()),
-            "keys_conflicted": [str(item) for item in self.conflicted_key_files()],
+            "keys_conflicted": conflicts,
+            "keys_refused": refused,
             "openssh_installed": self.runner.available("sshd"),
         }
 
@@ -191,29 +203,56 @@ class BackupAccessActivation:
         unconfined daemon could accept. A key file that appeared next to an
         already preserved one is a conflict only an operator can resolve, so
         both are kept and authentication stays off.
+
+        The key file is moved through ``AuthorizedKeysStore``, which never
+        follows a symlinked ``.ssh``; with one, nothing is moved, the account
+        is expired, and ``keys_refused`` names why.
         """
+
+        from appliance.sshkeys import AuthorizedKeysStore
 
         ownership = self.ownership()
         if not ownership["owned"]:
             return self._disable_through_account(reason, ownership)
 
-        home = Path(ownership["record"].home)
-        keys = home / ".ssh" / "authorized_keys"
-        disabled = keys.with_name(keys.name + DISABLED_SUFFIX)
-        moved = False
-        if keys.is_file():
-            keys.replace(disabled if not disabled.exists() else self._free_conflict_path(disabled))
-            moved = True
-        conflicts = self.conflicted_key_files()
-        if disabled.is_file() or conflicts:
+        store = AuthorizedKeysStore(ownership["record"].home)
+        preserved_name = store.path.name + DISABLED_SUFFIX
+        try:
+            moved = store.set_aside(_preserved_names(preserved_name)) is not None
+            entries = store.entries()
+        except ValidationError as refused:
+            return self._disable_unsafe_keys(reason, ownership, refused.code)
+        preserved = preserved_name in entries
+        conflicts = [
+            store.ssh_dir / name
+            for name in entries
+            if name.startswith(preserved_name + CONFLICT_SUFFIX)
+        ]
+        if preserved or conflicts:
             self._expire_account()
         return {
             "state": STATE_DEGRADED,
             "reason": reason,
             "authentication_disabled": True,
-            "keys_preserved": disabled.is_file(),
+            "keys_preserved": preserved,
             "keys_conflicted": [str(item) for item in conflicts],
             "changed": moved,
+            "ownership": ownership["reason"],
+            "home_owned": True,
+            "operator_state_untouched": True,
+        }
+
+    def _disable_unsafe_keys(self, reason, ownership, refused):
+        """Fail closed past a key directory nothing may be moved through: expire the account."""
+
+        return {
+            "state": STATE_DEGRADED,
+            "reason": reason,
+            "authentication_disabled": self._expire_account(),
+            "keys_preserved": False,
+            "keys_conflicted": [],
+            "keys_refused": refused,
+            "changed": False,
             "ownership": ownership["reason"],
             "home_owned": True,
             "operator_state_untouched": True,
@@ -237,24 +276,25 @@ class BackupAccessActivation:
             "operator_state_untouched": True,
         }
 
-    @staticmethod
-    def _free_conflict_path(disabled):
-        for index in range(1, MAX_CONFLICT_FILES + 1):
-            suffix = CONFLICT_SUFFIX if index == 1 else f"{CONFLICT_SUFFIX}.{index}"
-            candidate = disabled.with_name(disabled.name + suffix)
-            if not candidate.exists():
-                return candidate
-        raise OSError(f"{disabled.parent} holds too many unresolved key files")
-
     def restore(self):
+        """Put the preserved key file back, then lift the account's expiry.
+
+        Moved through ``AuthorizedKeysStore``: a symlinked ``.ssh``, key file
+        or preserved key file raises its ``ValidationError`` before the account
+        is un-expired.
+        """
+
+        from appliance.sshkeys import AuthorizedKeysStore
+
         home = self.managed_home()
-        if home is None or self.conflicted_key_files():
+        if home is None:
             return False
-        keys = home / ".ssh" / "authorized_keys"
-        disabled = keys.with_name(keys.name + DISABLED_SUFFIX)
+        store = AuthorizedKeysStore(home)
+        preserved_name = store.path.name + DISABLED_SUFFIX
+        if any(name.startswith(preserved_name + CONFLICT_SUFFIX) for name in store.entries()):
+            return False
         try:
-            if disabled.is_file() and not keys.is_file():
-                disabled.replace(keys)
+            store.take_back(preserved_name)
         except OSError:
             return False
         return self._unexpire_account()
@@ -329,10 +369,18 @@ class BackupAccessActivation:
                 reason = "export_root_not_exclusive"
             return self._disabled_report(reason, policy=policy, exports=exports)
 
-        if self.conflicted_key_files():
+        try:
+            conflicted = self.conflicted_key_files()
+        except ValidationError as refused:
+            return self._disabled_report(refused.code, policy=policy, exports=exports)
+        if conflicted:
             return self._disabled_report("key_conflict", policy=policy, exports=exports)
 
-        if not self.restore():
+        try:
+            restored = self.restore()
+        except ValidationError as refused:
+            return self._disabled_report(refused.code, policy=policy, exports=exports)
+        if not restored:
             return self._disabled_report("key_restore_failed", policy=policy, exports=exports)
 
         try:
@@ -395,6 +443,16 @@ class BackupAccessActivation:
             or evaluate_policy({}, export_root=self.paths.export_root),
             "exports": exports if exports is not None else self.export_state(),
         }
+
+
+def _preserved_names(preserved):
+    """Where a key file is set aside: the preserved name, then its conflict names."""
+
+    conflicts = (
+        preserved + (CONFLICT_SUFFIX if index == 1 else f"{CONFLICT_SUFFIX}.{index}")
+        for index in range(1, MAX_CONFLICT_FILES + 1)
+    )
+    return (preserved, *conflicts)
 
 
 def build_activation(*, paths, config, runner=None, probe=None):

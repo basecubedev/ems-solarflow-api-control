@@ -121,7 +121,11 @@ class SshService:
 
         activation = build_activation(paths=self.paths, config=self.config, runner=self.runner)
         disabled = activation.disabled_keys_path()
-        if (disabled is not None and disabled.exists()) or activation.conflicted_key_files():
+        try:
+            conflicted = activation.conflicted_key_files()
+        except ValidationError as exc:
+            raise SshServiceError(exc.code, exc.message)
+        if (disabled is not None and disabled.exists()) or conflicted:
             raise SshServiceError(
                 "backup_access_withdrawn",
                 "backup access was disabled because its confinement could not be proven; "

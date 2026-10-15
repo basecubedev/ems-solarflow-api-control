@@ -8,6 +8,8 @@ installation publishes a directory nobody validated. Each of those has to end in
 ``unavailable`` or ``degraded`` with a named reason — never in ``active``.
 """
 
+import os
+
 import pytest
 
 from appliance.backup_confinement import (
@@ -153,6 +155,160 @@ def test_the_key_check_does_not_read_through_a_symlinked_ssh_directory(tmp_path)
         activation(services).authorized_keys()
 
     assert refused.value.code == "ssh_directory_unsafe"
+
+
+# --- disable and restore move key files without following a symlink ----------
+
+
+DISABLED_NAME = "authorized_keys.disabled-by-appliance"
+
+
+def plant_ssh_directory_symlink(services, tmp_path, names):
+    """Make ``.ssh`` a symlink to a directory elsewhere holding ``names``."""
+
+    ssh_dir = services.home / ".ssh"
+    elsewhere = tmp_path / "elsewhere-ssh"
+    elsewhere.mkdir()
+    for item in ssh_dir.iterdir():
+        item.unlink()
+    ssh_dir.rmdir()
+    ssh_dir.symlink_to(elsewhere)
+    for name in names:
+        (elsewhere / name).write_text(PUBLIC_KEY, encoding="utf-8")
+    return elsewhere
+
+
+def chage_calls(services, value):
+    return [call for call in services.host.calls if call[0] == "chage" and call[1][:2] == ("-E", value)]
+
+
+def test_disabling_through_a_symlinked_ssh_directory_moves_nothing_and_expires_the_account(tmp_path):
+    services = appliance(tmp_path)
+    elsewhere = plant_ssh_directory_symlink(services, tmp_path, ["authorized_keys"])
+
+    outcome = activation(services).disable(reason="requested")
+
+    assert sorted(item.name for item in elsewhere.iterdir()) == ["authorized_keys"]
+    assert (elsewhere / "authorized_keys").read_text(encoding="utf-8") == PUBLIC_KEY
+    assert (services.home / ".ssh").is_symlink()
+    assert outcome["keys_refused"] == "ssh_directory_unsafe", outcome
+    assert outcome["authentication_disabled"] is True, outcome
+    assert chage_calls(services, "1"), services.host.calls
+
+
+def test_restoring_through_a_symlinked_ssh_directory_is_refused(tmp_path):
+    services = appliance(tmp_path)
+    elsewhere = plant_ssh_directory_symlink(services, tmp_path, [DISABLED_NAME])
+
+    with pytest.raises(ValidationError) as refused:
+        activation(services).restore()
+
+    assert refused.value.code == "ssh_directory_unsafe"
+    assert sorted(item.name for item in elsewhere.iterdir()) == [DISABLED_NAME]
+    assert not chage_calls(services, "-1"), services.host.calls
+
+
+def test_activation_through_a_symlinked_ssh_directory_leaves_its_target_alone(
+    tmp_path, production_chroot_chain
+):
+    services = appliance(tmp_path)
+    elsewhere = plant_ssh_directory_symlink(services, tmp_path, ["authorized_keys"])
+
+    report = activation(services).activate()
+
+    assert report["state"] != STATE_ACTIVE, report
+    assert report["reason"] == "ssh_directory_unsafe", report
+    assert report["authentication_disabled"] is True, report
+    assert sorted(item.name for item in elsewhere.iterdir()) == ["authorized_keys"]
+    assert not chage_calls(services, "-1"), services.host.calls
+
+
+def test_a_conflict_in_a_symlinked_ssh_directory_s_target_is_refused_as_the_link(
+    tmp_path, production_chroot_chain
+):
+    """The conflict gate lists ``.ssh`` without following it, as every other step does."""
+
+    services = appliance(tmp_path)
+    conflict = DISABLED_NAME + ".conflict"
+    elsewhere = plant_ssh_directory_symlink(services, tmp_path, ["authorized_keys", conflict])
+
+    report = activation(services).activate()
+
+    assert report["reason"] == "ssh_directory_unsafe", report
+    assert report["keys_conflicted"] == [], report
+    assert report["authentication_disabled"] is True, report
+    assert sorted(item.name for item in elsewhere.iterdir()) == ["authorized_keys", conflict]
+    assert not chage_calls(services, "-1"), services.host.calls
+
+
+def test_the_status_names_a_symlinked_ssh_directory_instead_of_listing_its_target(tmp_path):
+    services = appliance(tmp_path)
+    plant_ssh_directory_symlink(
+        services, tmp_path, ["authorized_keys", DISABLED_NAME + ".conflict"]
+    )
+
+    observed = activation(services).observe()
+
+    assert observed["keys_conflicted"] == []
+    assert observed["keys_refused"] == "ssh_directory_unsafe"
+
+
+def test_a_preserved_key_file_planted_as_a_symlink_is_not_restored(tmp_path):
+    services = appliance(tmp_path)
+    ssh_dir = services.home / ".ssh"
+    elsewhere = tmp_path / "elsewhere-keys"
+    elsewhere.write_text(PUBLIC_KEY, encoding="utf-8")
+    (ssh_dir / "authorized_keys").unlink()
+    (ssh_dir / DISABLED_NAME).symlink_to(elsewhere)
+
+    with pytest.raises(ValidationError) as refused:
+        activation(services).restore()
+
+    assert refused.value.code == "authorized_keys_unsafe"
+    assert not os.path.lexists(ssh_dir / "authorized_keys")
+    assert (ssh_dir / DISABLED_NAME).is_symlink()
+    assert not chage_calls(services, "-1"), services.host.calls
+
+
+def test_a_key_file_planted_as_a_symlink_is_not_restored_over(tmp_path):
+    services = appliance(tmp_path)
+    keys = plant_key_file_symlink(services, tmp_path, PUBLIC_KEY)
+
+    with pytest.raises(ValidationError) as refused:
+        activation(services).restore()
+
+    assert refused.value.code == "authorized_keys_unsafe"
+    assert keys.is_symlink()
+    assert not chage_calls(services, "-1"), services.host.calls
+
+
+def test_restoring_leaves_a_live_key_file_in_place_beside_a_preserved_one(tmp_path):
+    """The key file sshd reads is the operator's now; the preserved one is not put over it."""
+
+    services = appliance(tmp_path)
+    ssh_dir = services.home / ".ssh"
+    operator_keys = "# the operator's own file\n"
+    (ssh_dir / DISABLED_NAME).write_text(PUBLIC_KEY, encoding="utf-8")
+    (ssh_dir / "authorized_keys").write_text(operator_keys, encoding="utf-8")
+
+    activation(services).restore()
+
+    assert (ssh_dir / "authorized_keys").read_text(encoding="utf-8") == operator_keys
+    assert (ssh_dir / DISABLED_NAME).read_text(encoding="utf-8") == PUBLIC_KEY
+
+
+def test_a_dangling_key_file_symlink_is_moved_out_of_sshds_reach(tmp_path):
+    services = appliance(tmp_path)
+    keys = services.home / ".ssh" / "authorized_keys"
+    keys.unlink()
+    keys.symlink_to(tmp_path / "not-there-yet")
+
+    outcome = activation(services).disable(reason="requested")
+
+    assert not os.path.lexists(keys)
+    assert (keys.parent / DISABLED_NAME).is_symlink()
+    assert outcome["authentication_disabled"] is True, outcome
+    assert not (tmp_path / "not-there-yet").exists()
 
 
 def test_an_account_that_cannot_be_un_expired_is_not_active(tmp_path):

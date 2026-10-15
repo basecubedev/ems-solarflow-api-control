@@ -313,6 +313,34 @@ def test_a_confinement_lost_after_the_plan_stops_the_backup_key_write(tmp_path):
     assert not (tmp_path / "home" / "ems-backup" / ".ssh" / "authorized_keys").exists()
 
 
+def test_a_backup_key_write_names_a_symlinked_ssh_directory_instead_of_its_target(tmp_path):
+    """The withdrawn-access gate lists ``.ssh`` without following a link planted after the plan."""
+
+    services = appliance(tmp_path)
+    handlers = handlers_for(services)
+    planned = handlers.dispatch(
+        {"operation": "ssh.plan_key_add", "account": "ems-backup", "public_key": ED25519}
+    )
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    conflict = elsewhere / "authorized_keys.disabled-by-appliance.conflict"
+    conflict.write_text(ED25519 + "\n", encoding="utf-8")
+    (tmp_path / "home" / "ems-backup" / ".ssh").symlink_to(elsewhere)
+
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+
+    operation = services.operations.get(planned["operation"]["operation_id"])
+    assert operation.state != STATE_SUCCEEDED
+    assert operation.error["code"] == "ssh_directory_unsafe"
+    assert sorted(item.name for item in elsewhere.iterdir()) == [conflict.name]
+
+
 def test_an_account_outside_the_configuration_is_refused(tmp_path):
     services = appliance(tmp_path)
     handlers = handlers_for(services)

@@ -355,8 +355,8 @@ key is always allowed.
 | `export_root_not_exclusive` | the chroot root holds something this feature does not manage |
 | `exports_not_confined` | an existing export is unmounted, read-write, or publishes something else |
 | `key_conflict` | two key files exist and only an operator can decide which is current |
-| `authorized_keys_unsafe` | `authorized_keys` is a symlink or not a regular file; the agent does not read through it |
-| `ssh_directory_unsafe` | the account's `.ssh` is a symlink or not a directory; the agent does not read through it |
+| `authorized_keys_unsafe` | `authorized_keys`, or the key file preserved beside it, is a symlink or not a regular file; the agent does not read it or move it back |
+| `ssh_directory_unsafe` | the account's `.ssh` is a symlink or not a directory; the agent does not read or move anything through it |
 | `backup_account_home_marker_missing` | the home does not carry the ownership marker this package wrote |
 | `backup_account_home_marker_mismatch` | a file is at the marker path, but it is not the marker this package wrote |
 | `backup_account_home_identity_mismatch` | the recorded home is not that directory any more |
@@ -406,6 +406,13 @@ If both `authorized_keys` and `authorized_keys.disabled-by-appliance` exist,
 neither file is discarded: the live one is preserved under a `.conflict` name
 and authentication stays disabled until an operator decides which key is
 current.
+
+The key files are listed and renamed through a descriptor of `.ssh` that never
+follows a symlink, and a planted link is moved as the link it is, its target
+untouched. With a symlinked `.ssh` nothing is listed or moved:
+`backup-access disable` expires the account instead and names
+`ssh_directory_unsafe` under `keys_refused`, as `backup-access status` does,
+activation reports it as its reason, and adding a key is refused with it.
 
 OpenSSH stays optional: without it the feature reports `unavailable` and the
 package still installs.

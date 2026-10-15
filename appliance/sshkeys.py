@@ -166,6 +166,15 @@ def foreign_key_lines(text):
     return [line for line in unparsed_lines(text) if not line.strip().startswith("#")]
 
 
+def _entry_mode(directory, name):
+    """The mode of ``name`` in ``directory`` as the entry it is, or ``None``."""
+
+    try:
+        return os.stat(name, dir_fd=directory, follow_symlinks=False).st_mode
+    except FileNotFoundError:
+        return None
+
+
 class AuthorizedKeysStore:
     """Read and atomically rewrite one account's ``authorized_keys``."""
 
@@ -189,6 +198,70 @@ class AuthorizedKeysStore:
         """The key file's text; a symlinked ``.ssh`` or key file is refused."""
 
         return self._text()
+
+    def entries(self):
+        """The names in ``.ssh``, listed through a descriptor; a symlinked ``.ssh`` is refused."""
+
+        directory = self._open_ssh_dir(create=False)
+        if directory is None:
+            return []
+        try:
+            return sorted(os.listdir(directory))
+        finally:
+            os.close(directory)
+
+    def set_aside(self, names):
+        """Rename the key file to the first of ``names`` that ``.ssh`` does not hold.
+
+        The key file is renamed as the entry it is, so a planted symlink leaves
+        sshd's reach and its target is not touched. Returns the name used, or
+        ``None`` without a key file.
+        """
+
+        directory = self._open_ssh_dir(create=False)
+        if directory is None:
+            return None
+        try:
+            current = _entry_mode(directory, self.path.name)
+            if current is None or not (stat.S_ISREG(current) or stat.S_ISLNK(current)):
+                return None
+            for name in names:
+                if _entry_mode(directory, name) is None:
+                    os.rename(self.path.name, name, src_dir_fd=directory, dst_dir_fd=directory)
+                    return name
+            raise OSError(f"{self.ssh_dir} holds too many unresolved key files")
+        finally:
+            os.close(directory)
+
+    def take_back(self, name):
+        """Rename the preserved key file ``name`` back, unless a key file is there.
+
+        A key file or a preserved one that is not a regular file is refused, a
+        planted symlink included. Returns whether it renamed.
+        """
+
+        directory = self._open_ssh_dir(create=False)
+        if directory is None:
+            return False
+        try:
+            current = _entry_mode(directory, self.path.name)
+            if current is not None:
+                if not stat.S_ISREG(current):
+                    raise ValidationError(
+                        "authorized_keys_unsafe", f"{self.path} is not a regular file"
+                    )
+                return False
+            preserved = _entry_mode(directory, name)
+            if preserved is None:
+                return False
+            if not stat.S_ISREG(preserved):
+                raise ValidationError(
+                    "authorized_keys_unsafe", f"{self.ssh_dir / name} is not a regular file"
+                )
+            os.rename(name, self.path.name, src_dir_fd=directory, dst_dir_fd=directory)
+            return True
+        finally:
+            os.close(directory)
 
     def _open_ssh_dir(self, *, create):
         """The ``.ssh`` directory as a descriptor, never through a symlink."""
