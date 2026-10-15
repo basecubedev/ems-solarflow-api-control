@@ -576,6 +576,38 @@ key or a pooled credential saved in between, waits until the running refresh has
 ended and then reads its inputs again, so no caller is answered from
 credentials replaced before it asked.
 
+The EMS signs in to the Zendure cloud broker with the same client id: applying a
+cloud device stores the deviceList `client_id` in the EMS's cloud runtime record,
+and the EMS connects with it. A discovery listen under that id would drop the
+EMS's session for the whole window, and both would knock each other off on
+reconnect. So while an enabled `zendure_cloud_mqtt` broker profile of the
+installed config signs in with this account's client id — read as the EMS runtime
+builds its brokers, each cloud record resolved —, every cloud refresh reads the
+deviceList only and never connects. The same holds while the EMS's live status
+(`data/zendure-mqtt-status.json`, the snapshot the Maintenance telemetry status
+reads) shows a connected cloud broker and a cloud runtime record carries this
+client id: the default record, or one a broker profile names, enabled or not. That
+covers a broker change the config editor applied and lists under "Needs an EMS
+restart": disabling or removing the cloud profile leaves the EMS signed in under
+the id until it restarts. The result carries `mqtt_status: "ems_session"` and a
+`mqtt_message` saying live telemetry was not sampled, which the cloud panel shows;
+the discovery run's per-source `refresh` block carries the same two fields, and
+Setup's discovery run writes that message, or the cloud refresh's failure, into
+the cloud panel as well. A config that exists but cannot be read, or a connected
+cloud session no readable cloud record names, is treated the same way, since the
+EMS's session cannot be ruled out. A live status that is missing, stale (older
+than three minutes) or malformed adds nothing, and the config alone decides: the
+running EMS writes it on every loop, so it is missing or stale only while no EMS
+loop runs or the EMS could not build its MQTT runtime, and a fresh install, where
+no EMS has run yet, still listens. Without an installed config (a fresh install),
+with the cloud profile disabled and no connected cloud broker in the live status,
+or with a profile of another account, the refresh listens as before. The
+candidates are then those of a listen that saw no telemetry: model, serial,
+product key and route id come from the deviceList, so a proposal keeps its model
+and write route, while the topic family, metrics and capabilities only telemetry
+shows stay unknown and the proposal is flagged `waiting_for_mqtt_telemetry` and
+`unknown_topic_family`.
+
 ## Network suggestions
 
 The page lists detected local networks (`GET /api/discovery/networks`) so you can
@@ -1056,7 +1088,9 @@ Cloud flow (`admin/zendure_cloud_auth.py`, `admin/zendure_cloud_mqtt.py`):
 - Connect to the returned broker with **TLS** (paho `tls_set()` before connect),
   MQTT 3.1, bounded per-device subscriptions (`/<pk>/<dev>/#`,
   `iot/<pk>/<dev>/#`, `<appKey>/#`), and enrich matching candidates with
-  observed topics/metrics (`discovery_status = mqtt_observed`).
+  observed topics/metrics (`discovery_status = mqtt_observed`). Skipped while
+  the EMS signs in with the returned client id (`mqtt_status: "ems_session"`,
+  see above).
 
 TLS rules: cloud MQTT is encrypted-only and never falls back to plaintext. The
 deviceList usually returns the broker without a port; because 1883 is the
@@ -1090,7 +1124,8 @@ API (all require Admin auth):
   connection); returns the device count and broker. Uses the supplied `api_key`
   / token or the saved one.
 - `POST /api/discovery/zendure-cloud-mqtt/refresh` — full cloud discovery
-  (deviceList + read-only TLS MQTT listen), returns cloud candidates.
+  (deviceList + read-only TLS MQTT listen, deviceList only while the EMS holds
+  the account's MQTT session), returns cloud candidates.
 
 The deviceList request uses a generous ~25s timeout (clamped at ~30s) because the
 live Zendure endpoint can take ~14-15s to respond; a slow response surfaces a

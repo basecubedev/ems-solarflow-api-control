@@ -112,7 +112,9 @@ def _refresh_outcome(refresher):
 
     A raised exception, an explicit ``ok: False`` result (Zendure cloud), or an
     ``unavailable_*`` mDNS state count as a failed refresh; the source keeps
-    whatever state it already had.
+    whatever state it already had. A successful cloud refresh keeps its
+    redaction-safe ``mqtt_status``/``mqtt_message``, such as live telemetry
+    not sampled because the EMS holds the account's session.
     """
 
     try:
@@ -141,7 +143,12 @@ def _refresh_outcome(refresher):
                 "error": state,
                 "message": str(result.get("message") or _GENERIC_REFRESH_ERROR),
             }
-    return {"ok": True, "error": None, "message": None}
+    outcome = {"ok": True, "error": None, "message": None}
+    if isinstance(result, dict):
+        for key in ("mqtt_status", "mqtt_message"):
+            if isinstance(result.get(key), str):
+                outcome[key] = result[key]
+    return outcome
 
 
 def refresh_enabled_sources(

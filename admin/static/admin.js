@@ -1610,6 +1610,14 @@ function syncSourcePanels(data) {
     zendureCloudDevices.push(device);
   }
   renderZendureCloudDevices();
+  const refreshed = (data && data.refresh && data.refresh.sources) || {};
+  const cloud = refreshed.zendure_mqtt;
+  if (cloud && typeof cloud === "object") {
+    els.zendureCloudMessage.textContent =
+      cloud.ok === false
+        ? "Zendure cloud discovery failed: " + (cloud.message || "refresh failed")
+        : cloud.mqtt_message || "Zendure cloud discovery complete.";
+  }
   pollMdns().catch(() => {});
   loadMqttBrokers().catch(() => {});
   loadZendureCloudSettings().catch(() => {});

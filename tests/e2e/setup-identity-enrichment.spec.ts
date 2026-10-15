@@ -362,3 +362,68 @@ test("Fresh Setup: the same raw route in two broker scopes stays two distinct ca
     page.locator(`.config-mqtt-add[data-proposal-id="${otherScopeProposal().id}"]`),
   ).toHaveCount(1);
 });
+
+// Review 4 (r11): over an install whose EMS holds the account's cloud session,
+// the run reads the device list only. Its per-source refresh block names why,
+// and Setup's own discovery run (the one the Devices step starts, as "Run
+// discovery" does) puts that reason into the cloud panel instead of leaving
+// proposals flagged waiting for telemetry with no word on it.
+const EMS_SESSION_MESSAGE =
+  "Live MQTT telemetry was not sampled: the EMS signs in to the Zendure cloud " +
+  "broker with this account's MQTT client ID, and a discovery session under it " +
+  "would disconnect the EMS. The devices come from the Zendure device list.";
+
+test("Fresh Setup: a discovery run names in the cloud panel why live telemetry was not sampled", { tag: ["@setup"] }, async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const state: DiscoveryState = {
+    proposals: [routeOnlyProposal()],
+    priority: ["zendure_mqtt", "local_api", "local_mqtt"],
+  };
+  const refreshRuns: unknown[] = [];
+  await page.route("**/api/setup/discovery/gateway-probe", (route) =>
+    json(route, { candidates: [] }),
+  );
+  await page.route("**/api/setup/discovery/run", (route) => {
+    const body = route.request().postDataJSON() || {};
+    const refreshed = body.refresh
+      ? {
+          refresh: {
+            requested: true,
+            status: "ok",
+            sources: {
+              zendure_mqtt: {
+                ok: true,
+                error: null,
+                message: null,
+                mqtt_status: "ems_session",
+                mqtt_message: EMS_SESSION_MESSAGE,
+              },
+            },
+          },
+          warnings: [],
+        }
+      : {};
+    if (body.refresh) refreshRuns.push(body);
+    return json(route, {
+      priority: state.priority,
+      sources: {
+        local_api: { enabled: true },
+        local_mqtt: { enabled: true },
+        zendure_mqtt: { enabled: true },
+      },
+      devices: [],
+      details: { zendure_mqtt: { candidates: [] } },
+      ...refreshed,
+    });
+  });
+  await reachDevices(page, state);
+
+  await expect.poll(() => refreshRuns.length).toBe(1);
+  await page
+    .locator('#discovery-priority-list [data-source="zendure_mqtt"] [data-prep-configure]')
+    .click();
+
+  await expect(page.locator("#zendure-cloud-message")).toHaveText(EMS_SESSION_MESSAGE);
+});
