@@ -6,6 +6,8 @@ Each section is collected independently: a probe that fails degrades to an
 down with it.
 """
 
+import os
+import stat
 import time
 
 from appliance import rescue_account, validation
@@ -560,8 +562,21 @@ class StatusService:
         return "", failure
 
     def _tail_file(self, path, lines):
+        """The file's last lines, read without following a link; or why not.
+
+        The web service owns the directory its log sits in and this runs as
+        root on its behalf, so a link or a pipe planted there is refused.
+        """
+
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
         try:
-            content = path.read_text(encoding="utf-8", errors="replace")
-        except (OSError, AttributeError) as exc:
+            with os.fdopen(os.open(str(path), flags), "rb") as handle:
+                mode = os.fstat(handle.fileno()).st_mode
+                if stat.S_ISDIR(mode):
+                    raise IsADirectoryError(f"{path} is a directory")
+                if not stat.S_ISREG(mode):
+                    raise OSError(f"{path} is not a regular file")
+                content = handle.read().decode("utf-8", errors="replace")
+        except OSError as exc:
             return "", exc.__class__.__name__
         return "\n".join(content.splitlines()[-int(lines) :]), ""

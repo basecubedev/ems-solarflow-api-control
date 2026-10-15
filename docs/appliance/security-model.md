@@ -66,6 +66,12 @@ reported rather than fatal: whoever can plant such a link already holds the web
 account, and failing the install would hand them a way to block every later
 package as well.
 
+The agent also reads `web/appliance.log` for the console when the web unit's
+journal has nothing to give. It opens that file, as every log file it tails,
+without following a link and refuses anything that is not a regular file: a
+link planted there had it read whatever the link pointed at, as root, and hand
+it back as the web log.
+
 The web account can neither write, read nor list the agent tree. That matters
 because an operation record carries the live confirmation token of its plan and
 a known-good file carries the rollback identity: a group-readable record would
