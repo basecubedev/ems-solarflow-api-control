@@ -340,6 +340,141 @@ def validate_system_build_tag(requested_tag: str) -> str:
     return tag
 
 
+def validate_system_build_pair(tag, channel, admin: ImageIdentity, ems: ImageIdentity) -> None:
+    """Raise ``system_build_mismatch`` unless ``admin`` and ``ems`` are one build of ``tag``.
+
+    The one pairing rule: a resolution applies it to the two images it
+    pulled, and the known-good reconciliation to the two that run.
+    """
+
+    def _mismatch(message):
+        raise SystemBuildError("system_build_mismatch", message)
+
+    # Required identity metadata must be present on both images.
+    for role, identity in (("admin", admin), ("ems", ems)):
+        if not identity.version_label:
+            _mismatch(f"{role} image is missing its version label")
+        if not identity.revision:
+            _mismatch(f"{role} image is missing its revision label")
+        if not identity.build_id:
+            _mismatch(f"{role} image is missing its build_id label")
+        if not identity.channel:
+            _mismatch(f"{role} image is missing its channel label")
+        try:
+            validate_system_build_id(identity.build_id)
+        except ValueError as exc:
+            _mismatch(f"{role} image has an invalid build_id label: {exc}")
+
+    # A locally-built image (local build id) published under the rolling
+    # ``latest`` tag is a mis-tag, not a registry latest build. Surface an
+    # actionable rebuild error rather than silently reinterpreting it.
+    if tag == "latest" and any(
+        parse_system_build_id(identity.build_id).is_local
+        for identity in (admin, ems)
+    ):
+        raise SystemBuildError(
+            "system_build_local_mistagged_latest",
+            "This local image uses the rolling latest tag. Rebuild it with "
+            "deploy/admin/start-admin-setup.sh to register it as a local "
+            "System Build.",
+        )
+
+    # The pair identity: revision, build_id and channel must all agree.
+    if admin.revision != ems.revision:
+        _mismatch("admin and ems image revisions differ")
+    if admin.build_id != ems.build_id:
+        _mismatch("admin and ems image build ids differ")
+    if admin.channel != ems.channel:
+        _mismatch("admin and ems image channels differ")
+    if admin.version_label != ems.version_label:
+        _mismatch("admin and ems image version labels differ")
+    # The resolved build reports one of each and takes both from the Admin
+    # image, while the move is judged against the running EMS build and it
+    # is the EMS image that gets deployed. One image may answer for the
+    # other only where they are known to say the same thing.
+    if admin.contains_release != ems.contains_release:
+        _mismatch("admin and ems image declared releases differ")
+    if admin.build_serial != ems.build_serial:
+        _mismatch("admin and ems image build serials differ")
+    if admin.version_label != tag:
+        _mismatch("image version label does not match the requested build tag")
+    if channel != CHANNEL_UNKNOWN and admin.channel != channel:
+        _mismatch(
+            f"image channel {admin.channel!r} does not match requested {channel!r} build"
+        )
+
+    # A canonical development tag is itself the immutable build identity.
+    # Binding both labels to the requested tag detects a moved/overwritten
+    # tag even when the two repositories were overwritten together.
+    if tag == "local":
+        expected_local_id = f"local-{admin.revision[:7]}"
+        if admin.build_id not in {
+            expected_local_id,
+            f"{expected_local_id}-dirty",
+        }:
+            _mismatch("local build_id does not match the image revision")
+        if admin.release_tag != tag or ems.release_tag != tag:
+            _mismatch("local release_tag does not match the local System Build")
+    elif channel == CHANNEL_DEV:
+        if admin.build_id != tag:
+            _mismatch("development build_id does not match the requested tag")
+        if admin.release_tag != tag or ems.release_tag != tag:
+            _mismatch(
+                "development release_tag does not match the requested canonical tag"
+            )
+
+    # Stable/RC builds must also match the expected release tag on both.
+    if channel in _RELEASE_TAG_CHANNELS or channel == CHANNEL_LATEST:
+        if admin.release_tag != tag or ems.release_tag != tag:
+            _mismatch(
+                f"release_tag label does not match the requested build tag {tag}"
+            )
+
+
+def _paired_build(requested_tag, tag, channel, admin, ems, *, admin_image, ems_image):
+    return SystemBuild(
+        requested_tag=str(requested_tag).strip(),
+        canonical_tag=tag,
+        channel=admin.channel or channel,
+        revision=admin.revision,
+        build_id=admin.build_id,
+        admin_image=admin_image,
+        admin_digest=admin.digest,
+        ems_image=ems_image,
+        ems_digest=ems.digest,
+        release_tag=admin.release_tag,
+        build_serial=admin.build_serial,
+        contains_release=admin.contains_release,
+    )
+
+
+def running_system_build(admin: ImageIdentity, ems: ImageIdentity) -> SystemBuild:
+    """The System Build a running Admin and EMS are, by the rule a resolution applies.
+
+    The tag is the Admin image's version label, the label a resolution binds
+    to the requested tag. Raises :class:`SystemBuildError` when the two are not
+    one build, or when either image's digest is unknown.
+    """
+
+    for role, identity in (("admin", admin), ("ems", ems)):
+        if not identity.digest:
+            raise SystemBuildError(
+                f"system_build_{role}_unavailable",
+                f"the running {role} image has no digest",
+            )
+    if not admin.version_label:
+        raise SystemBuildError(
+            "system_build_mismatch", "admin image is missing its version label"
+        )
+    tag = validate_system_build_tag(admin.version_label)
+    channel = classify_channel(tag)
+    validate_system_build_pair(tag, channel, admin, ems)
+    return _paired_build(
+        tag, tag, channel, admin, ems,
+        admin_image=f"{ADMIN_IMAGE_REPO}:{tag}", ems_image=f"{EMS_IMAGE_REPO}:{tag}",
+    )
+
+
 class SystemBuildResolver:
     """Resolve a requested tag into a verified :class:`SystemBuild` pair.
 
@@ -392,25 +527,15 @@ class SystemBuildResolver:
         ems_identity = self._pull_and_identify(
             ems_pull_ref, "ems", repository_local=repository_local
         )
-        self._validate_pair(tag, channel, admin_identity, ems_identity)
+        validate_system_build_pair(tag, channel, admin_identity, ems_identity)
         if descriptor is not None:
             self._validate_development_descriptor(
                 descriptor, admin_identity, ems_identity
             )
 
-        return SystemBuild(
-            requested_tag=str(requested_tag).strip(),
-            canonical_tag=tag,
-            channel=admin_identity.channel or channel,
-            revision=admin_identity.revision,
-            build_id=admin_identity.build_id,
-            admin_image=admin_ref,
-            admin_digest=admin_identity.digest,
-            ems_image=ems_ref,
-            ems_digest=ems_identity.digest,
-            release_tag=admin_identity.release_tag,
-            build_serial=admin_identity.build_serial,
-            contains_release=admin_identity.contains_release,
+        return _paired_build(
+            requested_tag, tag, channel, admin_identity, ems_identity,
+            admin_image=admin_ref, ems_image=ems_ref,
         )
 
     def _development_descriptor(self, tag, channel, admin_ref, ems_ref):
@@ -494,91 +619,6 @@ class SystemBuildResolver:
                 code, f"the {role} image could not be {action}: {image_ref}"
             )
         return identity
-
-    def _validate_pair(self, tag, channel, admin: ImageIdentity, ems: ImageIdentity) -> None:
-        def _mismatch(message):
-            raise SystemBuildError("system_build_mismatch", message)
-
-        # Required identity metadata must be present on both images.
-        for role, identity in (("admin", admin), ("ems", ems)):
-            if not identity.version_label:
-                _mismatch(f"{role} image is missing its version label")
-            if not identity.revision:
-                _mismatch(f"{role} image is missing its revision label")
-            if not identity.build_id:
-                _mismatch(f"{role} image is missing its build_id label")
-            if not identity.channel:
-                _mismatch(f"{role} image is missing its channel label")
-            try:
-                validate_system_build_id(identity.build_id)
-            except ValueError as exc:
-                _mismatch(f"{role} image has an invalid build_id label: {exc}")
-
-        # A locally-built image (local build id) published under the rolling
-        # ``latest`` tag is a mis-tag, not a registry latest build. Surface an
-        # actionable rebuild error rather than silently reinterpreting it.
-        if tag == "latest" and any(
-            parse_system_build_id(identity.build_id).is_local
-            for identity in (admin, ems)
-        ):
-            raise SystemBuildError(
-                "system_build_local_mistagged_latest",
-                "This local image uses the rolling latest tag. Rebuild it with "
-                "deploy/admin/start-admin-setup.sh to register it as a local "
-                "System Build.",
-            )
-
-        # The pair identity: revision, build_id and channel must all agree.
-        if admin.revision != ems.revision:
-            _mismatch("admin and ems image revisions differ")
-        if admin.build_id != ems.build_id:
-            _mismatch("admin and ems image build ids differ")
-        if admin.channel != ems.channel:
-            _mismatch("admin and ems image channels differ")
-        if admin.version_label != ems.version_label:
-            _mismatch("admin and ems image version labels differ")
-        # The resolved build reports one of each and takes both from the Admin
-        # image, while the move is judged against the running EMS build and it
-        # is the EMS image that gets deployed. One image may answer for the
-        # other only where they are known to say the same thing.
-        if admin.contains_release != ems.contains_release:
-            _mismatch("admin and ems image declared releases differ")
-        if admin.build_serial != ems.build_serial:
-            _mismatch("admin and ems image build serials differ")
-        if admin.version_label != tag:
-            _mismatch("image version label does not match the requested build tag")
-        if channel != CHANNEL_UNKNOWN and admin.channel != channel:
-            _mismatch(
-                f"image channel {admin.channel!r} does not match requested {channel!r} build"
-            )
-
-        # A canonical development tag is itself the immutable build identity.
-        # Binding both labels to the requested tag detects a moved/overwritten
-        # tag even when the two repositories were overwritten together.
-        if tag == "local":
-            expected_local_id = f"local-{admin.revision[:7]}"
-            if admin.build_id not in {
-                expected_local_id,
-                f"{expected_local_id}-dirty",
-            }:
-                _mismatch("local build_id does not match the image revision")
-            if admin.release_tag != tag or ems.release_tag != tag:
-                _mismatch("local release_tag does not match the local System Build")
-        elif channel == CHANNEL_DEV:
-            if admin.build_id != tag:
-                _mismatch("development build_id does not match the requested tag")
-            if admin.release_tag != tag or ems.release_tag != tag:
-                _mismatch(
-                    "development release_tag does not match the requested canonical tag"
-                )
-
-        # Stable/RC builds must also match the expected release tag on both.
-        if channel in _RELEASE_TAG_CHANNELS or channel == CHANNEL_LATEST:
-            if admin.release_tag != tag or ems.release_tag != tag:
-                _mismatch(
-                    f"release_tag label does not match the requested build tag {tag}"
-                )
-
 
 # --- verified-resolution reuse --------------------------------------------
 #

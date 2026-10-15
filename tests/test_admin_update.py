@@ -70,7 +70,7 @@ class FakeDocker:
 
     def inspect_container(self, name):
         if self.container_image:
-            return {"image": self.container_image}
+            return {"image": self.container_image, "status": "running"}
         return None
 
     def inspect_image(self, image_ref):

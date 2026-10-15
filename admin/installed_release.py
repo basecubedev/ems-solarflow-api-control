@@ -15,7 +15,7 @@ This is the single shared installed-image identity helper; both
 disagree about the installed release.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from admin.container_names import DEFAULT_EMS_CONTAINER
 from admin.image_identity import (
@@ -167,6 +167,59 @@ def running_image_ref(docker, container_name=DEFAULT_EMS_CONTAINER):
     if not container or str(container.get("status") or "").lower() != "running":
         return None
     return _running_image_ref(docker, container, container_name)
+
+
+def _created_from(docker, container, container_name):
+    get_ref = getattr(docker, "inspect_container_image_ref", None)
+    if callable(get_ref):
+        try:
+            declared = str(get_ref(container_name) or "").strip()
+        except Exception:
+            declared = ""
+        if _names_one_image(declared):
+            return declared
+    shown = str(container.get("image") or "").strip()
+    return shown if _names_one_image(shown) else None
+
+
+def running_container_identity(docker, container_name):
+    """``(running, identity)``: whether a container runs, and the image it runs.
+
+    Read as :func:`probe_running_release` reads it: labels and digest by the
+    container's immutable image id, never by the image string ``docker ps``
+    reports. ``identity.image_ref`` is the reference the container was created
+    from when that names one image. ``(False, None)`` when it does not run or
+    Docker cannot say; ``(True, None)`` when nothing names the image it runs.
+    """
+
+    inspect_container = getattr(docker, "inspect_container", None)
+    if not callable(inspect_container):
+        return False, None
+    try:
+        container = inspect_container(container_name)
+    except Exception:
+        return False, None
+    if not container or str(container.get("status") or "").lower() != "running":
+        return False, None
+    image_ref = _running_image_ref(docker, container, container_name)
+    if not image_ref:
+        return True, None
+    identity = identify_image(docker, image_ref)
+    declared = _created_from(docker, container, container_name)
+    if declared:
+        identity = replace(identity, image_ref=declared)
+    return True, identity
+
+
+def runs_healthy(container):
+    """Docker reports the container running, and its health check, if any, passing."""
+
+    if not isinstance(container, dict):
+        return False
+    if str(container.get("status") or "").lower() != "running":
+        return False
+    detail = str(container.get("status_detail") or "").lower()
+    return "(unhealthy)" not in detail and "(health: starting)" not in detail
 
 
 def probe_running_release(docker, container_name=DEFAULT_EMS_CONTAINER):

@@ -205,7 +205,11 @@ Maintenance offers:
   is actually running. (This is offered for an upgrade; deliberately *not* during
   a setup.)
 - **Cancel upgrade** — ends the upgrade only. Your running system, live config and
-  last known-good build stay exactly as they are.
+  last known-good build stay exactly as they are. The known-good record follows
+  what runs afterwards only if Admin and EMS run one System Build and its EMS
+  passes the health check an upgrade requires, so a build whose health check
+  failed is not recorded by cancelling; see
+  [Admin maintenance](../admin-maintenance.md).
 
 **Retry vs recovery:** retry the same step when the cause was transient (network,
 rate limit). Use recovery when the state itself is inconsistent — for example the

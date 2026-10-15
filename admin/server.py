@@ -121,6 +121,7 @@ from admin.guided_upgrade_context import (
     GuidedUpgradeContextStore,
 )
 from admin.install_context import detect_install_context
+from admin.installed_release import runs_healthy
 from admin.image_identity import identify_image
 from admin.operation_coordinator import OperationCoordinator
 from admin.install_state import (
@@ -144,6 +145,7 @@ from admin.maintenance_config import (
     redact_config_for_browser,
     trusted_selection_conflicts_with_stored_device,
 )
+from admin.running_pair_health import RunningPairHealthCheck
 from admin.runtime_convergence import (
     mirror_changed_keys_to_runtime,
     reset_targets_to_config,
@@ -847,6 +849,23 @@ def _ems_container_identity(docker, *, running_only):
     return identify_image(docker, image_ref) if image_ref else identify_image(docker, "")
 
 
+def _running_pair_healthy(docker):
+    """Whether Docker reports the Admin and EMS containers running, neither unhealthy.
+
+    Only what runs: the EMS image has no Docker health check, so whether its
+    EMS is healthy is the upgrade's own health check (``_build_system_alignment``).
+    """
+
+    names = (
+        os.environ.get("EMS_ADMIN_CONTAINER_NAME", DEFAULT_ADMIN_CONTAINER),
+        ems_container_name(detect_install_context()),
+    )
+    try:
+        return all(runs_healthy(docker.inspect_container(name)) for name in names)
+    except Exception:
+        return False
+
+
 def _build_system_alignment(
     *,
     release_manager,
@@ -854,8 +873,13 @@ def _build_system_alignment(
     docker,
     operation_coordinator=None,
     transition_store=None,
+    ems_cli=None,
 ):
-    """Compose the single productive alignment service for this Admin runtime."""
+    """Compose the single productive alignment service for this Admin runtime.
+
+    ``ems_cli`` runs the EMS health check an upgrade requires; the known-good
+    record follows a running pair only once it passes, and without it never.
+    """
 
     state_dir = Path(admin_data_dir) / "state"
     transition_store = transition_store or PendingTransitionStore(state_dir)
@@ -902,6 +926,10 @@ def _build_system_alignment(
         current_identity=lambda: _running_admin_identity(docker),
         current_ems_identity=lambda: _running_ems_identity(docker),
         installed_ems_identity=lambda: _installed_ems_identity(docker),
+        running_pair_healthy=lambda: _running_pair_healthy(docker),
+        system_health_verdict=(
+            RunningPairHealthCheck(ems_cli.run).verdict if ems_cli is not None else None
+        ),
         persistent_ref=admin_image_ref_from_env,
         launcher=launcher,
         operation_coordinator=operation_coordinator,
@@ -1035,6 +1063,7 @@ def create_admin_runtime(
         docker=docker,
         operation_coordinator=operation_coordinator,
         transition_store=transition_store,
+        ems_cli=ems_cli,
     )
     setup_intents = setup_intents or SetupIntentStore()
     setup_lifecycle = SetupLifecycleCoordinator()
@@ -2682,8 +2711,19 @@ class AdminHandler(BaseHTTPRequestHandler):
     def _handle_system_alignment_status(self):
         payload = self._alignment_status()
         payload["known_good_admin_running"] = None
-        judge = getattr(self.server.system_alignment, "known_good_admin_running", None)
-        if payload.get("ok") is not False and payload.get("active") is False and callable(judge):
+        payload["running_pair"] = None
+        service = self.server.system_alignment
+        if payload.get("ok") is False or payload.get("active") is not False:
+            self._send_json(payload)
+            return
+        reconcile = getattr(service, "reconcile_known_good", None)
+        if callable(reconcile):
+            outcome = dict(reconcile())
+            if outcome.get("known_good") is not None:
+                payload["known_good"] = outcome.pop("known_good")
+            payload["running_pair"] = outcome
+        judge = getattr(service, "known_good_admin_running", None)
+        if callable(judge):
             payload["known_good_admin_running"] = judge(payload.get("known_good"))
         self._send_json(payload)
 

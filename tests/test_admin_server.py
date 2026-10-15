@@ -4921,6 +4921,78 @@ def test_the_status_route_leaves_the_known_good_record_alone_while_a_transition_
     assert alignment.judged == []
 
 
+class _ReconcilingKnownGoodAlignment(_JudgedKnownGoodAlignment):
+    def __init__(self, *, active, outcome):
+        super().__init__(active=active, running=True)
+        self.outcome = outcome
+        self.reconciled = 0
+
+    def reconcile_known_good(self):
+        self.reconciled += 1
+        return dict(self.outcome)
+
+
+def test_the_status_route_answers_with_the_record_the_running_pair_left(tmp_path):
+    """A-M13b: the record follows what runs, and is judged after it moved."""
+
+    recorded = {"system_tag": "v0.8.1", "admin_digest": "sha256:running"}
+    alignment = _ReconcilingKnownGoodAlignment(
+        active=False,
+        outcome={"state": "recorded", "admin": {}, "ems": {}, "known_good": recorded},
+    )
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        status, _, payload = _request(f"{base}/api/admin/system-alignment/status")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert payload["known_good"] == recorded
+    assert payload["running_pair"] == {"state": "recorded", "admin": {}, "ems": {}}
+    assert alignment.judged == ["v0.8.1"]
+    assert payload["known_good_admin_running"] is True
+
+
+def test_the_status_route_names_a_running_pair_of_two_builds(tmp_path):
+    outcome = {
+        "state": "unpaired",
+        "admin": {"release": "v0.8.1"},
+        "ems": {"release": "v0.7.0"},
+        "message": "admin and ems image build ids differ",
+    }
+    alignment = _ReconcilingKnownGoodAlignment(active=False, outcome=outcome)
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        status, _, payload = _request(f"{base}/api/admin/system-alignment/status")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert payload["running_pair"] == outcome
+    assert payload["known_good"]["system_tag"] == "v0.7.0"
+
+
+def test_the_status_route_reconciles_nothing_while_a_transition_runs(tmp_path):
+    alignment = _ReconcilingKnownGoodAlignment(
+        active=True, outcome={"state": "recorded", "known_good": {"system_tag": "x"}}
+    )
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        status, _, payload = _request(f"{base}/api/admin/system-alignment/status")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert alignment.reconciled == 0
+    assert payload["running_pair"] is None
+
+
 def test_system_alignment_status_read_requires_session_authentication(tmp_path):
     alignment = _FakeSystemAlignment(stage="failed_recoverable")
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
