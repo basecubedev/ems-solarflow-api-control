@@ -181,6 +181,17 @@ def is_prerelease_tag(tag):
     return "-" in validate_release_tag(tag)
 
 
+def validate_installable_tag(value, *, allow_prerelease):
+    """A release tag this host installs: a prerelease only where it allows them."""
+
+    tag = validate_release_tag(value)
+    if is_prerelease_tag(tag) and not allow_prerelease:
+        raise ValidationError(
+            "prerelease_not_allowed", f"{tag} is a prerelease and is not enabled on this host"
+        )
+    return tag
+
+
 def normalize_version(value):
     """Compare tags and OCI version labels without their optional ``v`` prefix."""
 

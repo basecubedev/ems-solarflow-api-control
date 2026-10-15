@@ -1287,7 +1287,7 @@ def test_an_install_unit_systemd_would_not_start_leaves_no_deadline_armed(tmp_pa
     assert not manager_verify.read(services.paths).armed
     assert services.host.units[manager_verify.VERIFY_TIMER]["enabled"] == "disabled"
     assert not manager_install.request_path(services.paths).exists()
-    assert service._verification_pending() is None
+    assert service.verification_pending() is None
     assert "deadline was retired" in record.error["message"], record.error
 
 

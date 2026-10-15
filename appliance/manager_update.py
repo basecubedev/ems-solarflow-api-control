@@ -295,7 +295,7 @@ class ManagerUpdateService:
 
     # --- status -----------------------------------------------------------
 
-    def _verification_pending(self):
+    def verification_pending(self):
         """An armed deadline inside its window that nothing has judged yet.
 
         "An armed deadline blocks both Update and Revert" was an invariant that
@@ -325,7 +325,7 @@ class ManagerUpdateService:
         }
 
     def _refuse_while_unjudged(self):
-        pending = self._verification_pending()
+        pending = self.verification_pending()
         if pending:
             raise ManagerUpdateError(pending["code"], pending["message"])
 
@@ -388,7 +388,7 @@ class ManagerUpdateService:
         )
         if verdict.outcome == persistent_state.STATE_BEHIND:
             blockers.append({"code": "state_schema_behind", "message": verdict.detail})
-        pending = self._verification_pending()
+        pending = self.verification_pending()
         if pending:
             blockers.append(pending)
         claimed = str((candidate.get("described") or {}).get("release_version") or "")

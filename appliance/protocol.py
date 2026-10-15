@@ -444,12 +444,9 @@ def _coerce(field, value, context):
     if kind == KIND_RELEASE_CHANNEL:
         return validation.validate_release_channel(value)
     if kind == KIND_RELEASE_TAG:
-        tag = validation.validate_release_tag(value)
-        if validation.is_prerelease_tag(tag) and not context.allow_prerelease:
-            raise ValidationError(
-                "prerelease_not_allowed", f"{tag} is a prerelease and is not enabled on this host"
-            )
-        return tag
+        return validation.validate_installable_tag(
+            value, allow_prerelease=context.allow_prerelease
+        )
     if kind == KIND_CONTAINER:
         return validation.validate_container_name(value, context.containers)
     if kind == KIND_LOG_SOURCE:

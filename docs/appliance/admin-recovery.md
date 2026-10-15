@@ -196,7 +196,7 @@ Execution is transactional:
 02 Save the current Admin metadata
 03 Save the current Compose and environment files
 04 Pull and inspect the target image
-05 Record the current known-good digest
+05 Record the running Admin as known-good, if it is a release
 06 Write repository@sha256:... into the deployment
 07 Stop the current Admin container
 08 Recreate Admin from the immutable reference
@@ -204,6 +204,18 @@ Execution is transactional:
 10 Verify the Admin API and its version on the loopback address
 11 Mark the target as known-good
 ```
+
+Step 05 records the Admin being replaced when Docker reports it running and
+healthy (or without a health check) and its image has a digest, and when it
+passes the release rule a status read applies (see the known-good history
+below): a Development build, the rolling build labelled `latest`, a release
+candidate this host does not accept, or an image whose labels or architecture
+an install refuses is not recorded, and the step's detail says so. Unlike a
+status read, the step does not compare that digest with the one the deployment
+asks for, ask the Admin endpoint, or skip an Admin the history already names:
+it records the Admin it is about to replace. A failed install does not need
+that record: its recovery restores the Admin identity captured when the install
+was planned.
 
 Step 06 happens **before** the running Admin is stopped. If the deployment
 file cannot be written, the operation ends `failed_recoverable` and the
@@ -313,7 +325,7 @@ Automatic rollback has to be able to prove *what* came back, not only that
 something did. At preflight the appliance therefore captures the running
 Admin's immutable identity — image digest, canonical reference and version —
 independently of the known-good history, because an Admin installed before this
-appliance, or one that never became healthy, has no known-good record at all.
+appliance, or one that never became healthy, may have no known-good record at all.
 
 Recovery restores that identity and verifies it: the restored digest, the
 restored version and a reachable HTTP endpoint. An image carrying the same
@@ -383,6 +395,58 @@ Admin:
   "healthcheck": "passed"
 }
 ```
+
+The history is the rollback order: **Rollback** and *Previous known-good* install
+the previous entry, and a repair verifies against the current one. Entries come
+from this appliance's own installs (the Admin installed, and the Admin it
+replaced) and rollbacks, and from the Admin that runs.
+The Admin console replaces itself through System Build and Guided Upgrade and
+writes nothing here, so after such an upgrade the appliance records the Admin
+the console put in place itself, the next time it reads the Admin status (the
+pages poll it; `ems-appliance status` reads it too). It records that Admin only
+when all of this holds:
+
+- the container is running and Docker reports it `healthy`, or reports no
+  health check at all (`none`);
+- it is a release this appliance could roll back to: its version label is a
+  release tag (a Development build's `dev-…` label and the rolling `latest`
+  build's are not), a release candidate only where `allow_prerelease` is set,
+  and its OCI labels and architecture pass the checks an install applies — the
+  release rule an install also applies to the Admin it replaces (step 05 above);
+- it passes the same verification an install does, asked once instead of
+  waited for: its image digest is the one the deployment's image reference
+  resolves to, the Admin HTTP endpoint answers, and the image carries a version
+  label;
+- no operation holds the appliance when the record starts — an install,
+  rollback, repair, start, stop or restart, a Manager update or revert, or any
+  other plan or operation — and no Manager install still waits for its verdict
+  inside its window;
+- no Admin transition is live (see below); one past its expiry, or one that
+  cannot be read, does not hold the record back, as it does not hold back a
+  repair;
+- the history does not already name it as current, so a status read every few
+  seconds writes nothing.
+
+An Admin that never passes these, or whose deployment names no resolvable image
+(a tag variable such as `${EMS_ADMIN_TAG}`), is not recorded, and the history
+keeps the Admin this appliance installed last. A record that cannot be written
+does not fail the status read; the next one tries again. A Rollback, or an
+install from *Previous known-good*, planned while a status read is recording
+waits for that record (a few Docker inspections and one endpoint probe) and
+plans against the history it left; Admin operations hold the history still in
+the same way. After a console upgrade from v0.8.13 to v0.8.14 the history
+therefore names v0.8.14, then v0.8.13: Rollback goes one step back, not two.
+
+A Development build, the rolling `latest` build, or a release candidate on a
+host that does not accept them is never recorded — not by a status read, and
+not by an install of this appliance that replaces it — so it never becomes a
+rollback target. While one that the console installed runs, the history keeps
+naming the release that ran before it: a repair's start, restart or recreate of
+that build reports `image_mismatch`, and Rollback installs the history's
+previous entry, one release older than the one the build replaced — install
+that one by its tag instead to go back to it. Once the console moves on to a
+release, or this appliance installs one over the build, that release is
+recorded.
 
 ## When Admin is replacing itself
 
@@ -513,15 +577,18 @@ None of these report `succeeded`:
 `container_missing` and `image_mismatch` end as `manual_action_required` — a
 retry cannot fix either. The others end as `failed_recoverable`.
 
-Start, Restart and Repair measure against what the **deployment** names, not
-against the appliance's known-good record. The Admin console replaces itself
-through System Build and Guided Upgrade and writes nothing back here, so that
-record is stale afterwards while the deployment and the container agree with
-each other. Measuring against it made a healthy, up-to-date Admin report
-`image_mismatch` on every Start, Restart and Repair, with no appliance action
-able to clear it — and told the operator to reinstall a working Admin to
-satisfy a bookkeeping entry. A container that matches neither the record nor
-the deployment is still a fault.
+Start and Restart measure against what the **deployment** names, and the
+repair's identity check accepts a container that runs it. A repair's start,
+restart or recreate verifies against the known-good history's current entry,
+which follows a console upgrade once a status read has seen the console's
+Admin pass the checks listed with the known-good history above. A history that
+still named the Admin this appliance installed last made a healthy, up-to-date
+Admin report `image_mismatch` with no appliance action able to clear it, and
+told the operator to reinstall a working Admin to satisfy a bookkeeping entry.
+A repair of an Admin that broke before any status read saw the console's Admin
+pass those checks still reports `image_mismatch` once; the next status read
+records the Admin the repair brought back if it passes them. A container that
+matches neither the record nor the deployment is still a fault.
 
 ## Logs
 
