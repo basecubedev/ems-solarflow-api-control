@@ -133,7 +133,7 @@ from admin.container_actions import (
     build_maintenance_container_plan,
     run_maintenance_container_sync,
 )
-from admin.container_names import DEFAULT_EMS_CONTAINER
+from admin.ems_tool import ems_container_name
 from admin.maintenance import run_maintenance_overview
 from admin.maintenance_config import (
     PROPOSAL_IDENTITY_MISMATCH_CODE,
@@ -821,7 +821,7 @@ def _installed_ems_identity(docker):
 
 
 def _ems_container_identity(docker, *, running_only):
-    container_name = os.environ.get("EMS_CONTAINER_NAME", DEFAULT_EMS_CONTAINER)
+    container_name = ems_container_name(detect_install_context())
     try:
         container = docker.inspect_container(container_name)
     except DockerError:
