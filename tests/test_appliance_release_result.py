@@ -101,6 +101,25 @@ def test_a_release_gate_that_did_not_pass_blocks_readiness(tmp_path):
     assert payload["physical_ready"] is False
 
 
+def test_a_builder_qualification_is_not_a_release_gate_pass(tmp_path):
+    """The gates' builder mode prints PASS too, and says it is not a release."""
+
+    dist = tmp_path / "dist"
+    write_reports(dist)
+    gate = tmp_path / "release-gate-report.txt"
+    gate.write_text(
+        "source-bundle PASS\n"
+        "RESULT: PASS (builder qualification, 0 optional gate(s) NOT RUN)\n"
+        "This is not a release: run --mode production against a signing environment.\n"
+    )
+
+    _result, payload = generate(dist, tmp_path, "--gate-report", str(gate))
+
+    assert payload["release_gate"]["result"] == "fail"
+    assert "builder qualification" in payload["release_gate"]["detail"]
+    assert payload["physical_ready"] is False
+
+
 def test_every_report_is_bound_by_its_own_digest(tmp_path):
     dist = tmp_path / "dist"
     reports = write_reports(dist)

@@ -110,14 +110,16 @@ def parse_args(argv):
 
 
 def gate_verdict(path):
+    """The report read as the kit builder and its verifier read it."""
+
     if not path or not Path(path).is_file():
         return {"result": "not_run", "detail": "no release gate report"}
     text = Path(path).read_text(encoding="utf-8", errors="replace")
-    verdicts = [line.strip() for line in text.splitlines() if line.startswith("RESULT:")]
-    verdict = verdicts[-1] if verdicts else ""
+    verdict = release_inputs.gate_verdict_line(text)
+    passed, detail = release_inputs.gate_passed(path)
     return {
-        "result": "pass" if verdict.startswith("RESULT: PASS") else "fail" if verdict else "not_run",
-        "detail": verdict or "the report carries no verdict",
+        "result": "pass" if passed else "fail" if verdict else "not_run",
+        "detail": detail,
         "sha256": file_sha256(path),
     }
 

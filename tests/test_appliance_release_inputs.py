@@ -415,3 +415,55 @@ def test_a_role_release_policy_does_not_approve_at_all_is_untrusted(tmp_path):
 
     assert problems
     assert release_inputs.BUILDER_UNTRUSTED in problems[0]
+
+
+# --- the release gate's verdict ---------------------------------------------
+
+PRODUCTION_PASS = "RESULT: PASS (production release, 0 optional gate(s) NOT RUN)"
+
+
+def _gate_report(tmp_path, *lines):
+    report = tmp_path / "release-gate-report.txt"
+    report.write_text("source-bundle                PASS\n" + "\n".join(lines) + "\n")
+    return report
+
+
+def test_a_production_gate_verdict_passes(tmp_path):
+    assert release_inputs.gate_passed(_gate_report(tmp_path, PRODUCTION_PASS))[0] is True
+
+
+def test_a_builder_qualification_is_not_a_production_gate_pass(tmp_path):
+    """The gates' builder mode prints PASS too, and says it is not a release."""
+
+    report = _gate_report(
+        tmp_path,
+        "RESULT: PASS (builder qualification, 0 optional gate(s) NOT RUN)",
+        "This is not a release: run --mode production against a signing environment.",
+    )
+
+    passed, detail = release_inputs.gate_passed(report)
+
+    assert passed is False
+    assert "builder qualification" in detail
+
+
+def test_only_the_last_verdict_counts(tmp_path):
+    """A report appended to by a second run carries both runs' verdicts."""
+
+    report = _gate_report(tmp_path, PRODUCTION_PASS, "RESULT: FAIL (1 gate(s))")
+
+    assert release_inputs.gate_passed(report) == (False, "RESULT: FAIL (1 gate(s))")
+
+
+def test_a_verdict_quoted_inside_a_line_is_not_a_verdict(tmp_path):
+    report = _gate_report(tmp_path, f"a log line that quotes {PRODUCTION_PASS}")
+
+    assert release_inputs.gate_passed(report)[0] is False
+
+
+def test_the_verdict_read_is_the_one_the_gates_print_and_the_finalizer_requires():
+    gates = (ROOT / "scripts/appliance-release-gates.sh").read_text(encoding="utf-8")
+    finalizer = (ROOT / "scripts/appliance-finalize-rpi-release.sh").read_text(encoding="utf-8")
+
+    assert f'echo "{release_inputs.PRODUCTION_GATE_PASS}' in gates
+    assert f'grep -q "^{release_inputs.PRODUCTION_GATE_PASS}' in finalizer

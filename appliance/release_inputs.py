@@ -136,22 +136,38 @@ def inspection_passed(path):
     return True, "pass"
 
 
+# What appliance-release-gates.sh prints when every gate a production release
+# requires passed, and what the finalizer greps for. Its builder mode prints a
+# PASS as well, for a build that is not a release.
+PRODUCTION_GATE_PASS = "RESULT: PASS (production release"
+
+
+def gate_verdict_line(text):
+    """The last line of a gate report that starts with ``RESULT:``, or nothing."""
+
+    verdicts = [line.strip() for line in str(text).splitlines() if line.startswith("RESULT:")]
+    return verdicts[-1] if verdicts else ""
+
+
 def gate_passed(path):
-    """The gate report's own verdict.
+    """The gate report's own verdict: a production pass on its last verdict line.
 
     Only meaningful once the attestation has proven *which* file this is: the
     words RESULT: PASS are a claim anyone can write, and a stale report from a
-    previous build carries them just as convincingly.
+    previous build carries them just as convincingly. Within the file only the
+    last verdict counts, since a report a second run appended to carries both,
+    and only the production mode's pass: a builder qualification is not a
+    release.
     """
 
     try:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False, "the release gate report could not be read"
-    if "RESULT: PASS" not in text:
-        last = [line for line in text.splitlines() if line.startswith("RESULT:")]
-        return False, last[-1] if last else "the report carries no verdict"
-    return True, "RESULT: PASS"
+    verdict = gate_verdict_line(text)
+    if not verdict:
+        return False, "the report carries no verdict"
+    return verdict.startswith(PRODUCTION_GATE_PASS), verdict
 
 
 def describe_source_bundle(bundle, *, root, ref="HEAD", created_at=None):
