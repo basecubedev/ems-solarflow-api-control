@@ -772,6 +772,52 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
   });
 });
 
+const LISTING_WARNINGS = [
+  "The development build catalogue could not be read, so no development builds are listed.",
+  "The current release cannot be compared safely; no downgrade claim was made.",
+];
+
+test.describe("Guided Upgrade release listing warnings", { tag: ["@workflow"] }, () => {
+  test("every listing warning is named while a build stays selectable", async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    await page.route("**/api/setup/releases**", async (route: Route) => {
+      const response = await route.fetch();
+      const data = await response.json();
+      data.warnings = [...LISTING_WARNINGS];
+      await route.fulfill({ json: data });
+    });
+
+    const select = await openUpgradePanel(page, seedAdminScenario);
+
+    const warnings = page.locator("#upgrade-release-warnings");
+    await expect(warnings).toBeVisible();
+    for (const warning of LISTING_WARNINGS) {
+      await expect(warnings).toContainText(warning);
+    }
+    await expect(page.locator("#upgrade-release-error")).toBeHidden();
+    await select.selectOption("v9.9.10");
+    await expect(warnings).toBeVisible();
+  });
+
+  test("a listing without warnings shows no warning line", async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    await page.route("**/api/setup/releases**", async (route: Route) => {
+      const response = await route.fetch();
+      const data = await response.json();
+      data.warnings = [];
+      await route.fulfill({ json: data });
+    });
+
+    await openUpgradePanel(page, seedAdminScenario);
+
+    await expect(page.locator("#upgrade-release-warnings")).toBeHidden();
+  });
+});
+
 test.describe("Guided Upgrade verified-fingerprint enforcement", { tag: ["@workflow"] }, () => {
   test("a prepared release is not treated as a verified System Build", async ({
     page,

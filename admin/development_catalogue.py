@@ -1,5 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Load and validate the public development System Build catalogue."""
+"""Load and validate the public development System Build catalogue.
+
+``load_development_builds`` returns ``None`` when the catalogue cannot be used,
+so the listing can say so rather than show no development builds; a catalogue
+that is present but names no installable build is the empty list, and that
+answer is trusted.
+"""
 
 import json
 import os
@@ -53,11 +59,12 @@ def load_development_builds(
     cache_path=None,
     urlopen=None,
     now=None,
-) -> list:
+) -> list | None:
     """Load a local or remote catalogue and return only complete build pairs.
 
     Transport failures may use a recent valid cache. Malformed, oversized, or
     schema-invalid responses fail closed and do not fall back to older content.
+    Every catalogue that cannot be used is ``None``, never an empty list.
     """
 
     source = default_catalogue_source() if source is None else source
@@ -68,11 +75,11 @@ def load_development_builds(
         except (OSError, TimeoutError, urllib.error.URLError):
             return _load_fresh_cache(cache, now=now)
         except _InvalidCatalogue:
-            return []
+            return None
         try:
             builds = _validated_builds(payload)
         except _InvalidCatalogue:
-            return []
+            return None
         _write_cache(cache, {"builds": builds})
         return builds
 
@@ -80,7 +87,7 @@ def load_development_builds(
         payload = json.loads(Path(source).read_text(encoding="utf-8"))
         return _validated_builds(payload)
     except (OSError, ValueError, _InvalidCatalogue):
-        return []
+        return None
 
 
 def development_catalogue_source(
@@ -220,15 +227,15 @@ def _now_timestamp(now=None) -> float:
     return float(value)
 
 
-def _load_fresh_cache(path: Path, *, now=None) -> list:
+def _load_fresh_cache(path: Path, *, now=None) -> list | None:
     try:
         age = _now_timestamp(now) - path.stat().st_mtime
         if age < 0 or age > CATALOGUE_CACHE_MAX_AGE_SECONDS:
-            return []
+            return None
         payload = json.loads(path.read_text(encoding="utf-8"))
         return _validated_builds(payload)
     except (OSError, ValueError, _InvalidCatalogue):
-        return []
+        return None
 
 
 def _write_cache(path: Path, payload) -> None:

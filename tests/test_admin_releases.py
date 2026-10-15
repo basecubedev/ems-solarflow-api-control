@@ -22,6 +22,7 @@ from admin.releases import (
     legacy_release_resource_ref,
     legacy_release_resource_url,
 )
+from admin.system_build import SystemBuildError, SystemBuildResolver
 
 pytestmark = [
     pytest.mark.admin,
@@ -1544,6 +1545,7 @@ def test_development_source_failure_never_breaks_the_catalogue(tmp_path):
 
     assert [item["tag"] for item in result["releases"]][:1] == ["latest"]
     assert all(item["channel"] != "development" for item in result["releases"])
+    assert _DEVELOPMENT_UNREADABLE in result["warnings"]
 
 
 # --- production development build catalogue -------------------------------
@@ -1581,14 +1583,14 @@ def _write_catalogue(tmp_path, entries):
     return path
 
 
-def test_missing_catalogue_yields_empty_development_group(tmp_path):
-    assert load_development_builds(tmp_path / "does-not-exist.json") == []
+def test_a_missing_catalogue_cannot_be_read(tmp_path):
+    assert load_development_builds(tmp_path / "does-not-exist.json") is None
 
 
 def test_invalid_catalogue_json_is_fail_closed(tmp_path):
     path = tmp_path / "development-builds.json"
     path.write_text("{ not valid json", encoding="utf-8")
-    assert load_development_builds(path) == []
+    assert load_development_builds(path) is None
 
 
 def test_catalogue_lists_installable_canonical_pair(tmp_path):
@@ -1657,7 +1659,7 @@ def test_catalogue_rejects_duplicate_canonical_tags(tmp_path):
         tmp_path,
         [_catalogue_entry(), _catalogue_entry(display_name="duplicate")],
     )
-    assert load_development_builds(path) == []
+    assert load_development_builds(path) is None
 
 
 def test_dynamic_catalogue_fetch_is_bounded_and_cached(tmp_path):
@@ -1709,7 +1711,7 @@ def test_catalogue_outage_rejects_stale_cache(tmp_path):
         cache_path=cache,
         urlopen=unavailable,
         now=lambda: datetime.now(timezone.utc),
-    ) == []
+    ) is None
 
 
 def test_oversized_remote_catalogue_is_fail_closed_without_cache_fallback(tmp_path):
@@ -1722,7 +1724,7 @@ def test_oversized_remote_catalogue_is_fail_closed_without_cache_fallback(tmp_pa
         "https://catalogue.example/development-builds.json",
         cache_path=cache,
         urlopen=oversized,
-    ) == []
+    ) is None
 
 
 def test_stable_admin_source_can_observe_a_later_catalogue_publication(tmp_path):
@@ -1795,6 +1797,74 @@ def test_catalogue_source_preserves_exact_pair_metadata_in_release_item(tmp_path
     assert descriptor["admin_digest"] == entry["admin_digest"]
     assert descriptor["ems_digest"] == entry["ems_digest"]
     assert manager.development_build("dev-missing-aaaaaaa-1-1") is None
+
+
+_DEVELOPMENT_UNREADABLE = (
+    "The development build catalogue could not be read, so no development "
+    "builds are listed."
+)
+
+
+def _offline(_request, timeout):
+    raise urllib.error.URLError("offline")
+
+
+def _unreadable_catalogue_manager(tmp_path):
+    return ReleaseManager(
+        data_dir=tmp_path / "data",
+        urlopen=_opener(),
+        development_source=development_catalogue_source(
+            "https://catalogue.example/development-builds.json",
+            cache_path=tmp_path / "no-cache.json",
+            urlopen=_offline,
+        ),
+    )
+
+
+def test_a_development_catalogue_that_cannot_be_read_is_named_in_the_listing(tmp_path):
+    """"Could not be read" is not "there are no development builds".
+
+    An unreachable catalogue without a recent copy, a malformed one and an
+    oversized one all read as an empty catalogue, so the Experimental group
+    disappeared without a word, while the release catalogue beside it refuses
+    to make exactly that mistake.
+    """
+
+    result = _unreadable_catalogue_manager(tmp_path).list_releases()
+
+    assert all(item["channel"] != "development" for item in result["releases"])
+    assert _DEVELOPMENT_UNREADABLE in result["warnings"]
+
+
+def test_a_development_catalogue_naming_no_build_is_trusted_as_empty(tmp_path):
+    manager = ReleaseManager(
+        data_dir=tmp_path / "data",
+        urlopen=_opener(),
+        development_source=development_catalogue_source(
+            _write_catalogue(tmp_path, [])
+        ),
+    )
+
+    result = manager.list_releases()
+
+    assert all(item["channel"] != "development" for item in result["releases"])
+    assert _DEVELOPMENT_UNREADABLE not in result["warnings"]
+
+
+def test_a_development_build_is_not_called_uninstallable_while_its_catalogue_is_unreadable(
+    tmp_path,
+):
+    """Selecting a listed build re-reads the catalogue; an outage then is not a verdict."""
+
+    resolver = SystemBuildResolver(
+        docker=object(),
+        development_build_source=_unreadable_catalogue_manager(tmp_path).development_build,
+    )
+
+    with pytest.raises(SystemBuildError) as raised:
+        resolver.resolve(_CATALOGUE_TAG)
+
+    assert "could not be verified" in str(raised.value)
 
 
 # --- mocked opener host matching -----------------------------------------

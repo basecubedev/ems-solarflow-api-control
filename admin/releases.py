@@ -77,6 +77,10 @@ ROLLBACK_REASON = (
     "Earlier patch in the release line you are running. Selectable as a "
     "rollback; it is not an upgrade."
 )
+DEVELOPMENT_CATALOGUE_UNREADABLE = (
+    "The development build catalogue could not be read, so no development "
+    "builds are listed."
+)
 # What the identity assessment actually weighed. These two are readings of the
 # running image itself; every other basis is a comparison against something that
 # is not necessarily installed.
@@ -640,7 +644,11 @@ class ReleaseManager:
         releases.sort(key=self._release_channel_sort_key)
         # Development builds are a distinct, always-last group in the same
         # catalogue (never mixed into the versioned sort above).
-        releases.extend(self._development_release_items())
+        development = self._development_release_items()
+        if development is None:
+            warnings.append(DEVELOPMENT_CATALOGUE_UNREADABLE)
+            development = []
+        releases.extend(development)
         # A valid locally-built pair is offered as its own explicit Experimental
         # entry — never merged into or presented as the rolling ``latest`` tag.
         local_item = self._local_release_item()
@@ -1308,7 +1316,8 @@ class ReleaseManager:
         Admin/EMS pair is complete (``installable``) are surfaced; floating
         aliases, incomplete pairs and failed builds are dropped. Reuses the
         canonical dev-tag rules from ``system_build`` (imported lazily to avoid a
-        module import cycle). A failing source never breaks the catalogue.
+        module import cycle). A failing source never breaks the catalogue: it is
+        ``None``, which the listing names, not an empty development group.
         """
 
         source = self._development_source
@@ -1317,9 +1326,12 @@ class ReleaseManager:
         from admin.system_build import classify_channel, is_immutable_dev_tag
 
         try:
-            raw = list(source())
+            raw = source()
+            if raw is None:
+                return None
+            raw = list(raw)
         except Exception:
-            return []
+            return None
 
         items = []
         seen = set()
@@ -1372,15 +1384,18 @@ class ReleaseManager:
         return items
 
     def development_build(self, tag):
-        """Return the complete installable catalogue descriptor for ``tag``."""
+        """Return the complete installable catalogue descriptor for ``tag``.
+
+        Raises when the catalogue cannot be read: that is no answer about
+        ``tag``, and ``None`` would say the catalogue does not list it.
+        """
 
         source = self._development_source
         if source is None:
             return None
-        try:
-            entries = source()
-        except Exception:
-            return None
+        entries = source()
+        if entries is None:
+            raise ReleaseError(DEVELOPMENT_CATALOGUE_UNREADABLE, 503)
         for entry in entries:
             if (
                 isinstance(entry, dict)

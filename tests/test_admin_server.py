@@ -3780,8 +3780,8 @@ def test_production_server_wires_development_catalogue_source(tmp_path, monkeypa
     source = getattr(runtime.release_manager, "_development_source", None)
 
     assert callable(source)
-    # A missing fixture source degrades to an empty group without network access.
-    assert list(source()) == []
+    # A missing fixture source reads as unreadable, without network access.
+    assert source() is None
 
 
 def test_setup_release_prepare_verifies_resources_without_updating_admin(tmp_path):

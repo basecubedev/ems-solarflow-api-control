@@ -956,7 +956,8 @@ def create_admin_runtime(
     docker = docker or DockerCli()
     # Give the release manager a productive development-build catalogue source
     # (the CI-published, read-only JSON index) so installable development builds
-    # appear in Setup without any test injection; a missing catalogue is empty.
+    # appear in Setup without any test injection; one that cannot be read is
+    # named in the listing's warnings.
     release_manager = release_manager or ReleaseManager(
         docker=docker,
         development_source=development_catalogue_source(),

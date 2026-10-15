@@ -75,7 +75,17 @@ present, come from the CI-published release catalogue
 the content CDN on every listing; a copy from the last day stands in only when
 the CDN cannot be reached) -- see `docs/developer/ci-release.md`. The GitHub API
 is asked only when that catalogue cannot be read, and a catalogue that cannot be
-trusted counts as unreadable rather than as empty.
+trusted counts as unreadable rather than as empty. The **Experimental** group
+comes from the development-build catalogue (`development-builds.json` on the same
+branch, with the same one-day copy) under the same rule: one that cannot be read
+or trusted lists no development builds and the listing says so in its warnings,
+and selecting a development build while it cannot be read is refused as not
+verifiable rather than as a build the catalogue does not list. Only a readable
+catalogue that names no installable build is an empty group. Guided Setup and
+Guided Upgrade show every warning of the listing beside the selector, also when
+a build is selectable, on a line of their own under the status line, so a
+selection change, a Verify or a failure that rewrites the status leaves them in
+place.
 
 The synthetic `latest` option maps the rolling Docker channel to setup resources
 from the repository's `main` branch. It is selectable when those resources can be

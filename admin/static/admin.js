@@ -8126,6 +8126,7 @@ const setupState = {
     current: null,
     error: null,
     releases: [],
+    warnings: [],
     resources: null,
     docker_image: null,
   },
@@ -8156,6 +8157,7 @@ const setupEls = {
   releaseReload: document.getElementById("release-reload"),
   releaseStatus: document.getElementById("release-status"),
   releaseError: document.getElementById("release-error"),
+  releaseWarnings: document.getElementById("release-warnings"),
   releaseSelectedVal: document.getElementById("release-selected-val"),
   releaseStatusVal: document.getElementById("release-status-val"),
   releaseBadges: document.getElementById("release-badges"),
@@ -9443,6 +9445,12 @@ async function onReleaseSelectChange() {
   presentSelectedSystemBuild(value || null);
 }
 
+function renderReleaseListingWarnings(element, warnings) {
+  if (!element) return;
+  element.textContent = warnings.join(" · ");
+  element.hidden = !warnings.length;
+}
+
 function setReleaseStatus(status, error) {
   setupState.release.status = status;
   setupState.release.error = error || null;
@@ -9462,6 +9470,7 @@ function setReleaseStatus(status, error) {
     setupEls.releaseError.hidden = !error;
     setupEls.releaseError.textContent = error || "";
   }
+  renderReleaseListingWarnings(setupEls.releaseWarnings, setupState.release.warnings);
   renderStepper();
 }
 
@@ -9673,6 +9682,7 @@ async function loadActiveConfigTemplate(expectedTag) {
 }
 
 async function loadReleases() {
+  setupState.release.warnings = [];
   setReleaseStatus("loading");
   try {
     const res = await fetch("/api/setup/releases");
@@ -9681,6 +9691,7 @@ async function loadReleases() {
       throw new Error(humanErrorText(data, "release list unavailable"));
     }
     const releases = Array.isArray(data.releases) ? data.releases : [];
+    setupState.release.warnings = Array.isArray(data.warnings) ? data.warnings : [];
     setupState.release.releases = releases;
     // One supported list drives both what is rendered and what can be selected:
     // a build in an unknown or hidden channel is dropped here and can therefore
@@ -9716,11 +9727,7 @@ async function loadReleases() {
       ) ||
       supportedReleases.find((item) => item.selectable !== false);
     if (!selected) {
-      throw new Error(
-        Array.isArray(data.warnings) && data.warnings.length
-          ? data.warnings[0]
-          : "No System Builds are available."
-      );
+      throw new Error("No System Builds are available.");
     }
     setupEls.releaseSelect.value = selected.tag;
     setupEls.releaseSelect.disabled = false;
@@ -9742,10 +9749,6 @@ async function loadReleases() {
     }
     if (selected.reason && setupEls.releaseStatus) {
       setupEls.releaseStatus.textContent = selected.reason;
-    }
-    if (Array.isArray(data.warnings) && data.warnings.length) {
-      setupEls.releaseStatus.textContent =
-        (selected.prepared ? "Cached resources are ready. " : "") + data.warnings[0];
     }
     renderReleaseResources();
     if (systemBuildResumeValidationTag) {
@@ -11360,6 +11363,7 @@ const upgradeEls = {
   reload: document.getElementById("upgrade-release-reload"),
   releaseStatus: document.getElementById("upgrade-release-status"),
   releaseError: document.getElementById("upgrade-release-error"),
+  releaseWarnings: document.getElementById("upgrade-release-warnings"),
   options: Array.from(document.querySelectorAll("[data-upgrade-option]")),
   validationCard: document.getElementById("upgrade-validation-card"),
   validationState: document.getElementById("upgrade-validation-state"),
@@ -11393,6 +11397,7 @@ const upgradeState = {
   current: { tag: null, image: null, state: null },
   runningAdmin: { tag: null, image: null },
   releases: [],
+  releaseWarnings: [],
   selected: null,
   prepared: false,
   preparedTag: null,
@@ -11672,6 +11677,7 @@ function setUpgradeReleaseStatus() {
     upgradeEls.releaseError.hidden = !upgradeState.error;
     upgradeEls.releaseError.textContent = humanErrorText(upgradeState, "");
   }
+  renderReleaseListingWarnings(upgradeEls.releaseWarnings, upgradeState.releaseWarnings);
   if (upgradeEls.prepareBtn) {
     const release = upgradeSelectedRelease();
     const verifying = upgradeState.status === "preparing";
@@ -12344,6 +12350,7 @@ function upgradeVerificationSurvivesReload(preserve, releases, selectedTag) {
 async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } = {}) {
   upgradeState.status = "loading";
   upgradeState.error = null;
+  upgradeState.releaseWarnings = [];
   setUpgradeReleaseStatus();
   try {
     // Maintenance/upgrade flow: apply the upgrade-only build-identity gate.
@@ -12354,6 +12361,7 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
     }
     const releases = Array.isArray(data.releases) ? data.releases : [];
     upgradeState.releases = releases;
+    upgradeState.releaseWarnings = Array.isArray(data.warnings) ? data.warnings : [];
     upgradeEls.select.innerHTML = "";
     // One selector grouped from the single shared System Build catalogue:
     // Latest, Stable, Unstable, then Experimental (always last).
@@ -12383,8 +12391,6 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
       throw new Error(
         pinnedTag
           ? "The System Build being upgraded is no longer available."
-          : Array.isArray(data.warnings) && data.warnings.length
-          ? data.warnings[0]
           : "No System Builds are available."
       );
     }
