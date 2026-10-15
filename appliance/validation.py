@@ -273,6 +273,15 @@ def validate_oci_labels(labels, *, requested_tag, expected_source, legacy_exempt
     return {"legacy_exempt": False, "missing_labels": []}
 
 
+def is_localhost(name):
+    """Whether a hostname is one systemd treats as no hostname at all."""
+
+    name = name.lower().rstrip(".")
+    return name in ("localhost", "localhost.localdomain") or name.endswith(
+        (".localhost", ".localhost.localdomain")
+    )
+
+
 def validate_hostname(value):
     text = _require_text(value, "invalid_hostname", max_length=MAX_HOSTNAME_LENGTH)
     lowered = text.lower()

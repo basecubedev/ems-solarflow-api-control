@@ -245,6 +245,124 @@ def test_an_unchanged_hostname_is_refused(tmp_path):
     assert getattr(excinfo.value, "code", "") == "hostname_unchanged"
 
 
+DEBIAN_HOSTS = (
+    "127.0.0.1\tlocalhost\n"
+    "::1\t\tlocalhost ip6-localhost ip6-loopback\n"
+    "ff02::1\t\tip6-allnodes\n"
+    "ff02::2\t\tip6-allrouters\n"
+    "\n"
+    "127.0.1.1\t\tems-solarflow\n"
+)
+
+
+def hosts_file(services, text):
+    path = services.probe.root / "etc" / "hosts"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o644)
+    return path
+
+
+def test_a_hostname_change_keeps_the_new_name_resolving_through_etc_hosts(tmp_path):
+    """hostnamectl changes the name and leaves /etc/hosts naming the old one.
+
+    Debian resolves its own hostname through the 127.0.1.1 line, so after a
+    change `sudo` on the console printed "unable to resolve host" and waited
+    on DNS for every command, and anything asking for its own name on the
+    appliance got nothing.
+    """
+
+    services = build_test_services(tmp_path)
+    path = hosts_file(services, DEBIAN_HOSTS)
+
+    operation, _ = plan_and_execute(services, "network.hostname.plan", hostname="ems-pi5")
+
+    assert operation.state == STATE_SUCCEEDED
+    assert path.read_text(encoding="utf-8") == DEBIAN_HOSTS.replace(
+        "127.0.1.1\t\tems-solarflow\n", "127.0.1.1\t\tems-pi5\n"
+    )
+    assert (path.stat().st_mode & 0o777) == 0o644
+
+
+def test_a_hostname_hostnamectl_refuses_leaves_etc_hosts_alone(tmp_path):
+    services = build_test_services(tmp_path)
+    path = hosts_file(services, DEBIAN_HOSTS)
+    handlers = handlers_for(services)
+    planned = handlers.dispatch({"operation": "network.hostname.plan", "hostname": "ems-pi5"})
+    services.host.fail_command("hostnamectl")
+
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+
+    assert services.operations.get(planned["operation"]["operation_id"]).state == (
+        STATE_FAILED_TERMINAL
+    )
+    assert path.read_text(encoding="utf-8") == DEBIAN_HOSTS
+
+
+def test_etc_hosts_without_a_line_for_the_host_gains_debians(tmp_path):
+    services = build_test_services(tmp_path)
+    original = "127.0.0.1\tlocalhost\n192.168.1.50\tems-solarflow\n"
+    path = hosts_file(services, original)
+
+    plan_and_execute(services, "network.hostname.plan", hostname="ems-pi5")
+
+    assert path.read_text(encoding="utf-8") == original + "127.0.1.1\tems-pi5\n"
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        (
+            "127.0.1.1 ems-solarflow.home.lan ems-solarflow # installer\n",
+            "127.0.1.1 ems-pi5.home.lan ems-pi5 # installer\n",
+        ),
+        (
+            "127.0.0.1 localhost EMS-SolarFlow\n",
+            "127.0.0.1 localhost ems-pi5\n",
+        ),
+        (
+            "# ems-solarflow keeps its name here\n127.0.1.1\tems-solarflow-lab\n",
+            "# ems-solarflow keeps its name here\n127.0.1.1\tems-solarflow-lab\n"
+            "127.0.1.1\tems-pi5\n",
+        ),
+        (
+            "127.0.0.1 localhost\n10.0.0.2 ems-solarflow\n127.0.1.1 ems-pi5",
+            "127.0.0.1 localhost\n10.0.0.2 ems-solarflow\n127.0.1.1 ems-pi5",
+        ),
+    ],
+    ids=["domain-and-comment", "loopback-case", "comment-and-lookalike", "already-named"],
+)
+def test_only_loopback_names_of_the_old_host_are_renamed(before, after):
+    from appliance.network import hosts_naming
+
+    assert hosts_naming(before, "ems-solarflow", "ems-pi5") == after
+
+
+@pytest.mark.parametrize("fallback", ["localhost", "localhost.localdomain"])
+def test_leaving_systemds_fallback_name_keeps_localhost_resolving(tmp_path, fallback):
+    """With no static hostname systemd names the host ``localhost``, which is
+    no hostname at all, and that is the name a change leaves. Renaming it on
+    the loopback lines took ``localhost`` itself out of /etc/hosts."""
+
+    services = build_test_services(tmp_path)
+    services.host.hostname = fallback
+    original = (
+        "127.0.0.1\tlocalhost.localdomain localhost\n"
+        "::1\t\tlocalhost ip6-localhost ip6-loopback\n"
+    )
+    path = hosts_file(services, original)
+
+    plan_and_execute(services, "network.hostname.plan", hostname="ems-pi5")
+
+    assert path.read_text(encoding="utf-8") == original + "127.0.1.1\tems-pi5\n"
+
+
 def test_a_single_slot_appliance_still_changes_its_hostname(tmp_path):
     services = build_test_services(tmp_path)
 

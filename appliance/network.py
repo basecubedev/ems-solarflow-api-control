@@ -11,7 +11,10 @@ passphrases are handed to ``nmcli`` on stdin, never in argv, so they never
 appear in the host process table.
 """
 
+import ipaddress
 import json
+import re
+import stat
 import time
 
 from pathlib import Path
@@ -21,12 +24,15 @@ from dataclasses import dataclass, field
 from appliance.commands import CommandError
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED, STATE_VERIFYING
 from appliance.paths import atomic_write
-from appliance.validation import validate_hostname
+from appliance.validation import is_localhost, validate_hostname
 
 TYPE_WIFI = "network.wifi"
 TYPE_HOSTNAME = "network.hostname"
 
 STATE_CONNECTED = "connected"
+
+HOSTS_FILE = "etc/hosts"
+HOSTNAME_LOOPBACK = "127.0.1.1"
 
 WIFI_PROFILE_PREFIX = "ems-appliance-"
 
@@ -152,6 +158,55 @@ def parse_wifi_list(text):
         )
     networks.sort(key=lambda item: (item["signal"] or 0), reverse=True)
     return networks
+
+
+def _loopback(address):
+    try:
+        return ipaddress.ip_address(address.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False
+
+
+def _renamed(name, previous, hostname):
+    lowered = name.lower()
+    if previous and lowered == previous:
+        return hostname
+    if previous and lowered.startswith(previous + "."):
+        return hostname + name[len(previous):]
+    return name
+
+
+def hosts_naming(text, previous, hostname):
+    """``/etc/hosts`` naming ``hostname`` where it named ``previous``; nothing else moves.
+
+    Only loopback entries are renamed, the bare name and its ``previous.<domain>``
+    form alike: a LAN address mapped to the old name is the operator's. A
+    ``previous`` systemd treats as no hostname -- ``localhost``, its fallback --
+    is no name to rename: ``localhost`` keeps resolving. When no loopback entry
+    names the host afterwards, Debian's ``127.0.1.1`` line is added at the end.
+    """
+
+    previous = str(previous or "").lower()
+    if is_localhost(previous):
+        previous = ""
+    named = False
+    lines = []
+    for line in text.splitlines(keepends=True):
+        body, mark, comment = line.partition("#")
+        parts = re.split(r"(\s+)", body)
+        fields = [index for index, part in enumerate(parts) if part and not part.isspace()]
+        if len(fields) >= 2 and _loopback(parts[fields[0]]):
+            for index in fields[1:]:
+                parts[index] = _renamed(parts[index], previous, hostname)
+                named = named or parts[index].lower() == hostname
+            line = "".join(parts) + mark + comment
+        lines.append(line)
+    rewritten = "".join(lines)
+    if named:
+        return rewritten
+    if rewritten and not rewritten.endswith("\n"):
+        rewritten += "\n"
+    return rewritten + f"{HOSTNAME_LOOPBACK}\t{hostname}\n"
 
 
 class NetworkService:
@@ -602,17 +657,49 @@ class NetworkService:
             )
             raise NetworkError("hostname_change_failed", "the hostname could not be changed")
 
+        hosts = self._name_in_hosts(target.get("previous_hostname", ""), hostname)
+        self._advance(operation, "updating_hosts", detail=hosts)
+
         self._advance(operation, "updating_mdns", state=STATE_VERIFYING)
         self.runner.run("systemctl", ["try-restart", "avahi-daemon.service"], timeout=60)
 
         payload = {
             "hostname": hostname,
             "previous_hostname": target.get("previous_hostname", ""),
+            "hosts": hosts,
             "new_url": f"http://{hostname}.local:{self.config.web_port}",
             "admin_url": f"http://{hostname}.local:{self.config.admin_port}",
         }
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
+
+    def _name_in_hosts(self, previous, hostname):
+        """Keep the new name resolving through ``/etc/hosts``; says what was done.
+
+        Rewritten as a whole, in place of the old file and with its mode. A link
+        is left alone rather than replaced with a file, and a file that is not
+        there is not invented.
+        """
+
+        path = Path(self.probe.root) / HOSTS_FILE
+        shown = "/" + HOSTS_FILE
+        if path.is_symlink():
+            return f"{shown} is a link and was left alone"
+        try:
+            current = path.read_text(encoding="utf-8")
+            mode = stat.S_IMODE(path.stat().st_mode)
+        except FileNotFoundError:
+            return f"{shown} does not exist and was not created"
+        except (OSError, UnicodeDecodeError) as exc:
+            return f"{shown} could not be read ({exc.__class__.__name__})"
+        updated = hosts_naming(current, previous, hostname)
+        if updated == current:
+            return f"{shown} already names {hostname}"
+        try:
+            atomic_write(path, updated, mode=mode, owner_root=True)
+        except OSError as exc:
+            return f"{shown} could not be written ({exc.__class__.__name__})"
+        return f"{shown} names {hostname}"
 
     def _advance(self, operation, stage, *, state=None, detail=None):
         self.operations.advance(operation.operation_id, stage, state=state, detail=detail)

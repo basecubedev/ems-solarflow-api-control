@@ -198,15 +198,6 @@ class AgentAuth:
             raise AuthError("agent_unavailable", str(getattr(exc, "message", exc)))
 
 
-def is_localhost(name):
-    """Whether a hostname is one systemd treats as no hostname at all."""
-
-    name = name.lower().rstrip(".")
-    return name in ("localhost", "localhost.localdomain") or name.endswith(
-        (".localhost", ".localhost.localdomain")
-    )
-
-
 def hostname_cleanup(name):
     """A hostname as systemd cleans one read from /etc/hostname, or "" where
     systemd would refuse it.
@@ -349,7 +340,7 @@ class ApplianceWebApp:
             if not line or line.startswith("#"):
                 continue
             name = hostname_cleanup(line)
-            if name and not is_localhost(name):
+            if name and not validation.is_localhost(name):
                 return name
             break
         return socket.gethostname()
