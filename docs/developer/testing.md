@@ -529,7 +529,14 @@ refuse fails on a runner instead of in the field. The runbook is
 The image build then consumes what that workflow published:
 `scripts/appliance-fetch-manager-package.py` reads the same index the fleet
 reads, takes the newest **stable** entry, verifies the signature and the digest,
-and hands the package to `appliance-build-rpi-image.sh --manager-package`. Its
+and hands the package to `appliance-build-rpi-image.sh --manager-package`. It
+reads through the appliance's own transport, `release_fetch.HttpsFetcher`:
+https only, redirects included, and each transfer ends on a deadline from its
+first connection attempt to its last byte (120 seconds for the index, a
+manifest or a signature, 900 seconds for the package), so a mirror that
+trickles cannot hold the image build. Only the name lookups, before the first
+connection and before a redirect's, are bounded by the resolver's own timeout
+instead. Its
 exit 3 means "no stable release published yet", which is a state this project is
 actually in and not a failure — the build then makes its own package and says
 so. A package that failed verification is a different matter and fails the job;

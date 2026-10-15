@@ -1023,3 +1023,56 @@ def test_a_redirect_to_http_is_refused_before_it_is_followed(trusted_tls):
         plain.close()
 
     assert caught.value.code == "release_source_insecure"
+
+
+# --- the image build reads through the same transport -------------------------
+
+
+def test_the_image_build_s_read_ends_on_a_deadline(trusted_tls, monkeypatch):
+    """``scripts/appliance-fetch-manager-package.py`` gave each socket wait 30 s
+    and nothing bounded a transfer, so a mirror trickling the index, a manifest
+    or the package held the image build for as long as it cared to send.
+
+    Interleaving: the response head and part of the body have arrived when the
+    deadline passes, while the build reads the rest; it stops there, before the
+    server's patience runs out and it sends the rest.
+    """
+
+    from tests.test_appliance_fetch_manager_package import fetcher
+
+    timers = ManualTimers()
+    monkeypatch.setattr(threading, "Timer", timers)
+
+    def trickles(server, conn):
+        with server.tls(conn) as tls:
+            tls.sendall(HEAD + b"Content-Length: 4\r\n\r\n" + BODY)
+            if timers.made:
+                timers.deadline_passes()
+            if not server.waits_for_the_fetcher():
+                tls.sendall(BODY)
+
+    with LoopbackHttps(trusted_tls, trickles) as server:
+        with pytest.raises(OSError) as stopped:
+            fetcher.fetch(server.url(), limit=1024, label="the index")
+
+    assert "release_download_timed_out" in str(stopped.value)
+    assert not server.patience_ran_out
+
+
+def test_the_image_build_still_falls_back_when_no_index_is_published(trusted_tls, tmp_path):
+    """Exit 3 is "no Manager release yet", read from the index's 404."""
+
+    from tests.test_appliance_fetch_manager_package import fetcher
+
+    def not_published(server, conn):
+        with server.tls(conn) as tls:
+            tls.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+
+    keyring = tmp_path / "keyring.gpg"
+    keyring.write_bytes(b"")
+    with LoopbackHttps(trusted_tls, not_published) as server:
+        status = fetcher.main(
+            ["--index", server.url(), "--into", str(tmp_path / "into"), "--keyring", str(keyring)]
+        )
+
+    assert status == 3
