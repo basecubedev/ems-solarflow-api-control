@@ -547,15 +547,29 @@ class ScanRegistry:
 
     Old scans are evicted once ``MAX_TRACKED_SCANS`` is exceeded so a long-lived
     preview cannot grow unbounded. State is intentionally not persisted.
+
+    A network is probed by one scan at a time: a request for a network that is
+    still being scanned joins that scan instead of probing every host again.
     """
 
     def __init__(self, scan_runner=scan_network):
         self._lock = threading.Lock()
         self._scans = {}
         self._order = []
+        self._in_flight = {}
         self._scan_runner = scan_runner
 
+    @staticmethod
+    def _network_key(cidr):
+        try:
+            return str(validate_cidr(cidr))
+        except CidrValidationError:
+            return str(cidr).strip()
+
     def start(self, cidr, ports, timeout_ms, max_workers):
+        """Start a scan of ``cidr``, or return the one still scanning its network."""
+
+        network = self._network_key(cidr)
         scan_id = uuid.uuid4().hex
         record = {
             "scan_id": scan_id,
@@ -577,15 +591,30 @@ class ScanRegistry:
             },
         }
         with self._lock:
+            running = self._scans.get(self._in_flight.get(network))
+            if running is not None:
+                return dict(running)
             self._scans[scan_id] = record
             self._order.append(scan_id)
+            self._in_flight[network] = scan_id
             self._evict_locked()
 
         thread = threading.Thread(
-            target=self._run, args=(scan_id, cidr, timeout_ms, max_workers), daemon=True
+            target=self._run,
+            args=(scan_id, network, cidr, timeout_ms, max_workers),
+            daemon=True,
         )
-        thread.start()
+        try:
+            thread.start()
+        except RuntimeError:
+            with self._lock:
+                self._retire_locked(network, scan_id)
+            raise
         return record
+
+    def _retire_locked(self, network, scan_id):
+        if self._in_flight.get(network) == scan_id:
+            del self._in_flight[network]
 
     def get(self, scan_id):
         with self._lock:
@@ -625,7 +654,7 @@ class ScanRegistry:
                 }
         return update
 
-    def _run(self, scan_id, cidr, timeout_ms, max_workers):
+    def _run(self, scan_id, network, cidr, timeout_ms, max_workers):
         try:
             devices, errors = self._scan_runner(
                 cidr, timeout_ms=timeout_ms, max_workers=max_workers,
@@ -640,6 +669,7 @@ class ScanRegistry:
             payload = {"status": "failed", "errors": [{"error": str(exc)}]}
 
         with self._lock:
+            self._retire_locked(network, scan_id)
             record = self._scans.get(scan_id)
             if record is None:
                 return

@@ -3143,6 +3143,70 @@ def test_scan_registry_failed_scan_keeps_known_progress():
     assert failed["progress"]["percent"] < 100
 
 
+def test_a_scan_of_a_network_already_being_scanned_joins_that_scan():
+    """Interleaving: a second scan of a network arrives while its first scan runs.
+
+    The second request, spelled as the same range or as another address in it,
+    gets the running scan rather than a second probe of every host. Another
+    network is scanned on its own, and once the first scan ends, its network
+    can be scanned again.
+    """
+
+    scanning = threading.Event()
+    release = threading.Event()
+    threads = []
+
+    def runner(cidr, timeout_ms=600, max_workers=32, progress_callback=None):
+        threads.append(threading.current_thread())
+        scanning.set()
+        release.wait(5)
+        return [], []
+
+    registry = ScanRegistry(scan_runner=runner)
+    try:
+        first = registry.start("192.168.1.0/24", [80], 600, 32)
+        assert scanning.wait(5)
+        again = registry.start("192.168.1.0/24", [80], 600, 32)
+        respelled = registry.start("192.168.1.7/24", [80], 1500, 64)
+        other = registry.start("192.168.2.0/24", [80], 600, 32)
+    finally:
+        release.set()
+    for thread in list(threads):
+        thread.join(5)
+
+    assert again["scan_id"] == first["scan_id"]
+    assert respelled["scan_id"] == first["scan_id"]
+    assert other["scan_id"] != first["scan_id"]
+    assert len(threads) == 2
+    assert registry.get(first["scan_id"])["status"] == "finished"
+
+    later = registry.start("192.168.1.0/24", [80], 600, 32)
+    for thread in threads[2:]:
+        thread.join(5)
+    assert later["scan_id"] != first["scan_id"]
+    assert len(threads) == 3
+
+
+def test_a_scan_whose_thread_cannot_start_does_not_hold_its_network(monkeypatch):
+    scanned = threading.Event()
+
+    def runner(cidr, timeout_ms=600, max_workers=32, progress_callback=None):
+        scanned.set()
+        return [], []
+
+    def refuse(self):
+        raise RuntimeError("can't start new thread")
+
+    registry = ScanRegistry(scan_runner=runner)
+    with monkeypatch.context() as patch:
+        patch.setattr(threading.Thread, "start", refuse)
+        with pytest.raises(RuntimeError):
+            registry.start("192.168.1.0/24", [80], 600, 32)
+
+    registry.start("192.168.1.0/24", [80], 600, 32)
+    assert scanned.wait(5)
+
+
 def test_scan_result_view_keeps_existing_fields_and_adds_progress():
     record = {
         "scan_id": "abc",

@@ -541,6 +541,14 @@ a results reset). The device scan starts as soon as the first network is found
 and stays active until the gateway probe has finished adding networks and every
 LAN network has been scanned, so a slow gateway probe never cuts the run short.
 
+The backend probes a network with one scan at a time. `POST /api/discovery/scan`
+for a network that is still being scanned, from another tab, another session or
+a scan started again right after Cancel, answers with that running scan's
+`scan_id` instead of probing every host a second time; another address in the
+same range counts as the same network, whatever timeout or worker count the
+second request asked for. Once the scan has ended, the network can be scanned
+again.
+
 ## Network suggestions
 
 The page lists detected local networks (`GET /api/discovery/networks`) so you can
