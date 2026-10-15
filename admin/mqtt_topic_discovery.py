@@ -14,13 +14,19 @@ import json
 import time
 
 from admin.models import MqttHardwareCandidate
-from ems.config import MQTT_TLS_MODE_PLAIN, mqtt_tls_mode_name
+from ems.config import (
+    MQTT_TLS_MODE_PLAIN,
+    is_zendure_smartmeter_d0_topic,
+    mqtt_tls_mode_name,
+)
+from ems.models import DEVICE_STATE_PROPERTIES
 from ems.mqtt_control.topic_families import (
     FAMILY_LEGACY_JSON,
     FAMILY_LEGACY_JSON_ALT,
     FAMILY_UNKNOWN,
     FAMILY_ZENDURE_CLOUD_SCALAR,
     FAMILY_ZENSDK_HA_SCALAR,
+    SCALAR_FAMILIES,
 )
 from ems.zendure_mqtt.external_catalog import (
     EXTERNAL_TOPIC_FAMILIES,
@@ -92,6 +98,18 @@ def classify_topic(topic):
             FAMILY_LEGACY_JSON_WRITE, device_id=segments[2], product_key=segments[1]
         )
     return match
+
+
+def _reads_zendure_property(topic, match):
+    """Whether a Zendure scalar topic carries a value the EMS reads.
+
+    A report property ``parse_device`` reads, or the D0 grid meter's exact
+    ``totalPower`` topic. Only such a topic finds a device: any other metric --
+    an ESPHome entity's ``state``, ``command``, ``availability`` or MQTT
+    discovery ``config`` topic of the same shape -- is no evidence of one.
+    """
+
+    return match.metric in DEVICE_STATE_PROPERTIES or is_zendure_smartmeter_d0_topic(topic)
 
 
 def _coerce_json(payload):
@@ -191,6 +209,7 @@ class MqttTopicAggregator:
         self._catalog_topic_count = 0
         self._candidates = {}
         self._pack_data = {}
+        self._held = {}
 
     @property
     def topics_seen_count(self):
@@ -231,6 +250,9 @@ class MqttTopicAggregator:
         key = (match.family, device_key)
         candidate = self._candidates.get(key)
         if candidate is None:
+            if match.family in SCALAR_FAMILIES and not _reads_zendure_property(topic, match):
+                self._hold(key, topic, match.metric)
+                return
             if len(self._candidates) >= self._max_candidates:
                 return
             candidate = MqttHardwareCandidate(
@@ -247,10 +269,10 @@ class MqttTopicAggregator:
                 candidate.display_name = external.label
             self._candidates[key] = candidate
             self._pack_data[key] = False
-        if topic not in candidate.topics_seen and (
-            len(candidate.topics_seen) < MAX_TOPICS_PER_CANDIDATE
-        ):
-            candidate.topics_seen.append(topic)
+            for held_topic, held_metric in self._held.pop(key, {}).items():
+                self._add_topic(candidate, held_topic)
+                self._add_metric(candidate, held_metric)
+        self._add_topic(candidate, topic)
         if readings:
             for metric in readings:
                 self._add_metric(candidate, metric)
@@ -267,6 +289,24 @@ class MqttTopicAggregator:
             if parsed.get("pack_data"):
                 self._pack_data[key] = True
         candidate.confidence = _score(candidate, self._pack_data[key])
+
+    def _hold(self, key, topic, metric):
+        """Keep a scalar topic of a device not found yet, for when it is.
+
+        Retained topics arrive in any order, and a device is found on its first
+        property the EMS reads; what it sent before is taken then. Bounded per
+        device like a candidate's metrics, and in all by the message budget.
+        """
+
+        held = self._held.setdefault(key, {})
+        if topic not in held and len(held) < MAX_METRICS_PER_CANDIDATE:
+            held[topic] = metric
+
+    def _add_topic(self, candidate, topic):
+        if topic not in candidate.topics_seen and (
+            len(candidate.topics_seen) < MAX_TOPICS_PER_CANDIDATE
+        ):
+            candidate.topics_seen.append(topic)
 
     def _add_metric(self, candidate, metric):
         if metric not in candidate.metrics_seen and (

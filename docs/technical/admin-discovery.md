@@ -728,7 +728,26 @@ Zendure topic families (`zensdk_ha_scalar`, `legacy_zendure_json`,
 catalog does not list, or a catalog topic whose payload the runtime would not
 read is no candidate at all, and neither is a catalog device that has not
 reported its required key (`inverterPower`), so a broker carrying only such
-topics reports "no hardware topics". A catalog device becomes a read-only
+topics reports "no hardware topics". A Zendure scalar device
+(`Zendure/<component>/<device>/<metric>`, or the cloud-prefixed
+`<appKey>/<component>/<device>/<metric>`) is found only on a topic whose metric
+is a property the EMS reads from a Zendure report — the
+`DEVICE_STATE_PROPERTIES` list `parse_device` reads, in `ems/models.py` — or on
+the exact D0 grid-meter topic `Zendure/sensor/<serial>/totalPower`; a
+`totalPower` under `number`, `select` or `sensors` finds none. Once found, the
+device takes every metric name it reports, also those that arrived before the
+property did (kept per device, bounded like a candidate's metrics, at most 64).
+Discovery keeps names, not values, so a capability the runtime infers from a
+value (multi MPPT from `chargeMaxLimit` of 2400 W or more) is not inferred
+here. An ESPHome
+entity publishes `<prefix>/sensor/<name>/state` (also under `switch`,
+`binary_sensor` or `number`, plus `command`, `availability` and MQTT discovery
+`config` topics), which has the same shape; each entity is a device of its own
+and none carries such a property, so the node is not offered as a Zendure
+device even when its prefix is `Zendure`. A node under any other prefix is not
+received, except under `iot/` or a leading `/`, where its topics are received
+and classified unknown. The EMS runtime classifier is unchanged by this rule. A
+catalog device becomes a read-only
 `external_mqtt` proposal (see
 [External Devices over MQTT](configuration.md#external-devices-over-mqtt-external_mqtt)),
 and only from a local broker. A topic

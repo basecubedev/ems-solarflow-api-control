@@ -20,7 +20,7 @@ from ems.charge_record import (
 )
 from ems.health import CommHealth, redact_error, redact_url_credentials
 from ems.logging_utils import log_event
-from ems.models import DeviceState, parse_pack_count
+from ems.models import DEVICE_STATE_PROPERTIES, DeviceState, parse_pack_count
 from ems.power_direction import AC_MODE_INPUT, DEFAULT_SAFETY_PREEMPT_MARGIN_W
 from ems.zendure_mqtt.snapshot import observable_metrics
 
@@ -153,19 +153,6 @@ def _observed_pack_count(data, props):
         return None
 
     return packs
-
-
-DEVICE_STATE_PROPERTIES = frozenset(
-    {
-        "electricLevel", "minSoc", "socSet", "solarInputPower", "outputHomePower",
-        "packInputPower", "outputPackPower", "hyperTmp", "BatVolt", "rssi",
-        "remainOutTime", "solarPower1", "solarPower2", "solarPower3", "solarPower4",
-        "outputLimit", "socLimit", "packState", "faultLevel", "smartMode",
-        "gridOffMode", "acMode", "acStatus", "dcStatus", "gridState", "inputLimit",
-        "packNum", "socStatus", "batCalTime", "gridInputPower", "gridReverse",
-        "chargeLimit", "chargeMaxLimit",
-    }
-)
 
 
 def parse_device(data):

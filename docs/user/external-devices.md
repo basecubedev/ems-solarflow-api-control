@@ -147,6 +147,27 @@ Any of their MQTT modules that can publish a reading to a topic works: publish
 each value to the topic above, or build the `state` object, with the retain flag
 set and on a timer rather than only on change.
 
+### ESPHome
+
+An ESPHome node's own topics (`<node>/sensor/<name>/state`, its `…/config`
+discovery topics and the like) are not read, and Admin never offers the node as
+a device — not as a Zendure one either, even with `topic_prefix: Zendure`.
+Publish its values into the namespace instead, retained and on an interval,
+with `mqtt.publish`:
+
+```yaml
+interval:
+  - interval: 15s
+    then:
+      - mqtt.publish:
+          topic: ems-solarflow/pool-inverter/inverterPower
+          payload: !lambda 'return str_sprintf("%.0f", id(inverter_power).state);'
+          retain: true
+```
+
+`inverter_power` stands for the id of the sensor that measures the AC output;
+add one `mqtt.publish` for each key you have.
+
 ## Adding the device in Admin
 
 1. Start publishing, then open **Guided Setup** (new installation) or
@@ -170,6 +191,7 @@ battery total and — if it reports one — its SoC in the average.
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | Discovery finds nothing | No `inverterPower` yet, values not retained, a spelling mistake, or a dot or space in the id | Check the topic letter by letter; publish retained |
+| An ESPHome node is not found | Its own `…/state` topics are not read | Publish into `ems-solarflow/<id>/…`, see [ESPHome](#esphome) |
 | Card shows **Offline** | Nothing readable for about a minute | Publish at least every 30 seconds, also unchanged values |
 | A value never changes | The payload is not a plain number | Remove units, use a dot as decimal separator |
 | Battery shows charging while discharging | The source counts the other way round | Negate `batteryPower` |

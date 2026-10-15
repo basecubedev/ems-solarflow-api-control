@@ -216,7 +216,7 @@ def test_core_proposes_nothing_for_an_observation_without_the_required_key(entry
 def test_zendure_traffic_cannot_use_up_the_budget_before_a_catalog_device_reports(entry):
     discovery = MqttTopicAggregator({"host": "10.0.0.71", "port": 1883}, max_topics=10)
     for n in range(50):
-        discovery.observe(f"Zendure/sensor/ZEN{n % 3}/metric{n}", b"1")
+        discovery.observe(f"Zendure/sensor/ZEN{n % 3}/electricLevel", b"1")
 
     discovery.observe(_required_topic(entry), b"765")
 

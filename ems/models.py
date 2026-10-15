@@ -30,6 +30,19 @@ def parse_pack_count(value):
     return int(packs)
 
 
+DEVICE_STATE_PROPERTIES = frozenset(
+    {
+        "electricLevel", "minSoc", "socSet", "solarInputPower", "outputHomePower",
+        "packInputPower", "outputPackPower", "hyperTmp", "BatVolt", "rssi",
+        "remainOutTime", "solarPower1", "solarPower2", "solarPower3", "solarPower4",
+        "outputLimit", "socLimit", "packState", "faultLevel", "smartMode",
+        "gridOffMode", "acMode", "acStatus", "dcStatus", "gridState", "inputLimit",
+        "packNum", "socStatus", "batCalTime", "gridInputPower", "gridReverse",
+        "chargeLimit", "chargeMaxLimit",
+    }
+)
+
+
 @dataclass
 class DeviceState:
     """One device report as the controller reads it.
