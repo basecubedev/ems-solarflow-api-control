@@ -769,6 +769,8 @@ def test_ac_restore_retries_until_telemetry_confirms_output_mode(tmp_path):
 
 
 def test_blocked_writes_keep_pending_flags(tmp_path):
+    """A running assist's requests stay pending behind blocked writes (a due one waits, K25)."""
+
     dev = device(max_soc=90)
     dev.session.post.return_value = SimpleNamespace(status_code=200)
     store = BatteryFullChargeStateStore(str(tmp_path / "ems_state.sqlite"))
@@ -781,6 +783,9 @@ def test_blocked_writes_keep_pending_flags(tmp_path):
         datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
         has_battery=True,
         next_due_at=datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc).isoformat(),
+    )
+    store.mark_assist_started(
+        "WR1", datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc), True
     )
     controller = controller_for(dev, store)
 

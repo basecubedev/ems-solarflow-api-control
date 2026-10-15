@@ -367,7 +367,10 @@ def test_an_unreachable_device_is_sent_nothing_on_its_last_report(tmp_path):
 
 @pytest.mark.parametrize("limit", [POWER, 450, 0])
 def test_a_charge_the_ems_could_not_hold_gets_no_exit(tmp_path, limit):
+    """A running assist behind a shut state gate never held the charge (a due one waits, K25)."""
+
     store = assist_due(tmp_path)
+    store.mark_assist_started("WR1", DUE, True)
     runtime = Runtime()
     controller, _ = controller_for(store, runtime)
     clock = Clock()
@@ -866,14 +869,18 @@ def test_a_higher_charge_still_shown_from_before_the_assist_is_its_own(
 
 
 def test_an_on_period_puts_the_assist_s_charge_back_on_record(tmp_path):
-    _, runtime, controller, _, clock = started_assist(tmp_path)
+    """Its claim writes the charge again over a report that carries its fields."""
+
+    _, runtime, controller, dev, clock = started_assist(tmp_path)
     switch_off(runtime, "system")
     run(controller, charging(), clock)
     clock.now += 5
     run(controller, left(), clock)
     runtime.system["enabled"] = True
     clock.now += 5
-    run(controller, None, clock)
+    before = len(posted_properties(dev))
+    run(controller, left(), clock)
+    assert {"acMode": 1} in posted_properties(dev)[before:]
     switch_off(runtime, "system")
     clock.now += 600
 

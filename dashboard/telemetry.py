@@ -225,6 +225,7 @@ def _battery_full_charge_assist_payload(controller, dev, state, now):
         config = controller.full_charge_assist_config()
         enabled = controller.full_charge_assist_enabled()
         has_battery = bool(controller.full_charge_assist_has_battery(dev, state))
+        held_by = controller.full_charge_assist_held_by(dev)
         store = getattr(controller, "battery_full_charge_store", None)
         record = store.get_device_state(dev.name) if store else None
     except Exception:
@@ -239,7 +240,7 @@ def _battery_full_charge_assist_payload(controller, dev, state, now):
         return unknown
 
     derived = describe_full_charge_assist_status(
-        config, enabled, has_battery, record, now
+        config, enabled, has_battery, record, now, held_by=held_by
     )
 
     return {

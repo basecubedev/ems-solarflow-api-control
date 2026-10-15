@@ -629,6 +629,7 @@ def test_a_device_drawing_without_ac_mode_or_ac_status_is_not_read_out_of_the_ch
     assert len(settled) == 1, caplog.text
     assert settled[0].startswith("WARNING")
     assert "left_to=device" in settled[0]
+    assert "event=ac_charge_left_to_device" not in caplog.text, "said twice"
 
 
 class IdleDraw(FullReport):
@@ -949,20 +950,6 @@ def test_a_charge_record_counts_only_exits_the_device_answers_with_grid_draw_alo
     assert record.drawn_exits == 0
 
 
-def test_the_full_charge_assist_s_record_leaves_its_exits_to_the_controller():
-    """The assist's exits are capped per switch-off by the controller (OFF-1b)."""
-
-    record = ChargeRecord(bounded_by_draw=False)
-    record.charge_sent(POWER)
-    for now in (0.0, 30.0, 60.0, 90.0):
-        record.exit_sent(now)
-        record.observe(_drawn(), setpoint_reported=False)
-
-    assert record.drawn_exits == 0
-    assert record.exit_due(120.0) is True
-    assert record.exit_exhausted(120.0) is False
-
-
 def test_the_ac_mode_restore_over_a_device_out_of_any_charge_returns_control(tmp_path):
     """The reported shape (R1a): no acMode, no charge; one exit to idle at most, then control."""
 
@@ -986,9 +973,13 @@ class InputLimitUnreported(Assist):
 
 
 def test_the_assist_enters_ac_input_only_with_its_charge_power(tmp_path, caplog):
-    """acMode=1 without the inputLimit beside it charged from the grid at a power nobody knew."""
+    """acMode=1 without the inputLimit beside it charged from the grid at a power nobody knew.
+
+    A due assist no longer starts over such a report, so this one is running.
+    """
 
     rig = InputLimitUnreported(tmp_path)
+    rig.store.mark_assist_started("WR1", NOW, True)
 
     with caplog.at_level(logging.INFO):
         rig.run(cycles=3)
@@ -1003,6 +994,7 @@ def test_the_assist_enters_ac_input_only_with_its_charge_power(tmp_path, caplog)
 
 def _assist_discharging_without_input_limit(tmp_path):
     rig = InputLimitUnreported(tmp_path)
+    rig.store.mark_assist_started("WR1", NOW, True)
     rig.item.output_limit = 400
     rig.item.output = 400
     rig.run(cycles=3)
@@ -1047,6 +1039,7 @@ def test_switching_off_sends_no_exit_to_an_assist_that_entered_no_ac_input(tmp_p
 
 def _never_reports_ac_mode(tmp_path, charging):
     rig = AcModeUnreported(tmp_path)
+    rig.store.mark_assist_started("WR1", NOW, True)
     if charging:
         rig.item.ac_mode = 1
         rig.item.ac_status = 2
@@ -1294,6 +1287,7 @@ def test_the_assist_s_charge_power_waits_for_a_known_ac_mode(tmp_path):
     """The other half of together or not at all: no inputLimit while acMode=1 cannot go out."""
 
     rig = AcModeUnreported(tmp_path)
+    rig.store.mark_assist_started("WR1", NOW, True)
 
     rig.run(cycles=3)
 
@@ -1349,11 +1343,15 @@ def _report_of(ac_mode_reported, **changes):
 def test_an_assist_on_a_transport_without_state_reconciliation_owes_no_ac_mode_restore(
     tmp_path, ac_mode_reported
 ):
-    """No acMode goes out there, so the assist never put the device into AC input."""
+    """No acMode goes out there, so the assist never put the device into AC input.
+
+    It does not start there (K25); this one ran from before the device moved.
+    """
 
     store = BatteryFullChargeStateStore(str(tmp_path / "ems_state.sqlite"))
     store.set_full_charge_feature_enabled_state(True, NOW)
     store.update_device_state("WR1", NOW, has_battery=True, next_due_at=NOW.isoformat())
+    store.mark_assist_started("WR1", NOW, True)
     controlled = _mqtt_control_device()
     controller = controller_for(controlled, store)
 
@@ -1362,6 +1360,7 @@ def test_an_assist_on_a_transport_without_state_reconciliation_owes_no_ac_mode_r
             run_controller_once(controller, _report_of(ac_mode_reported, soc=85))
         assert store.get_device_state("WR1")["full_charge_assist_active"] is True
         assert store.get_device_state("WR1")["ac_mode_restore_pending"] is False
+        assert controller.device_output_control_allowed(controlled) is True
         for _ in range(3):
             run_controller_once(
                 controller, _report_of(ac_mode_reported, soc=100, soc_limit=1)

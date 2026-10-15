@@ -531,7 +531,9 @@ report carries no known `acMode` and no charging `acStatus`, so after the EMS's
 exit only its grid draw (`grid_input_w`) showed the charge, after `exits=3`
 exits and the last one's resend window. It may be a few watts the device draws
 while idle; if the field shows a charge, end it in the Zendure app or with
-`emsctl.py device WR1 ac-mode output`.
+`emsctl.py device WR1 ac-mode output`. For the full-charge assist's charge it
+carries `charge=battery_full_charge_assist` (see
+[battery-full-charge-assist.md](battery-full-charge-assist.md)).
 
 `ac_charge_direction` is `info` when the direction changes and `debug`
 otherwise. `ac_charge_entry_rate_limited` is a `warning`: reaching the hourly

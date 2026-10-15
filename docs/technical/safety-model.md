@@ -224,11 +224,16 @@ The controller writes `acMode` only when telemetry differs from the desired
 runtime target, and only over a mode it knows: a report without `acMode`, or
 with a value other than `1` or `2`, is an unknown mode, not `0`. Over an
 unknown mode neither the default `ac_output` claim nor the full-charge assist
-writes it (the assist's restore is its exit to idle instead, see
+writes it: the assist writes no `acMode` there apart from its restore's exit
+to idle and the exits a switch-off, a stop or a release after failed cycles
+sends to the charge on its record (see
 [socSet and inputLimit](#socset-and-inputlimit)); `unknown_ac_mode` is logged
 once per device until the mode is known again. A role the operator set, such
 as `emsctl device WR1 ac-mode output`, is still written over an unknown mode,
-and over `acMode=1` with active AC charge telemetry. A charge the firmware runs at the floor is held by its own claim,
+and over `acMode=1` with active AC charge telemetry, unless a claim above it
+holds the device: while the full-charge assist's charge is on its record, the
+assist's claim holds the direction over an unknown mode (see
+[socSet and inputLimit](#socset-and-inputlimit)). A charge the firmware runs at the floor is held by its own claim,
 which the reconciler does not write over (see
 [control-logic.md](control-logic.md#who-owns-a-devices-ac-direction)).
 
@@ -257,19 +262,42 @@ the power not over an unknown `acMode`. A full-charge assist owes a restore of
 the device may have carried it out; a refused one costs one exit to idle at
 most -- or a report showed `acMode` 1 under its claim, and never on
 a transport without state reconciliation, where a restore owed from before the
-device moved there is settled unwritten. A full-charge assist whose `socSet` is
-unknown keeps its request pending. Its restore never holds the device out of
-output control for good: over an unknown `socSet` it stays owed without holding
+device moved there is settled unwritten. A full-charge assist does not start
+over a report without `socSet`, or with its AC mode without `acMode` or
+`inputLimit`, and a running one claims nothing while the report lacks a field
+it still has to write -- `socSet` until its `socSet=1000` went out, `acMode`
+and `inputLimit` until it entered AC input -- so it holds no device out of
+output control there; its request stays pending (see
+[battery-full-charge-assist.md](../battery-full-charge-assist.md#over-a-report-without-a-field-it-writes)).
+A charge it entered stays its own, on the record a stop or a switch-off ends,
+until a report shows the device out of it; then it needs those fields again as
+an assist that never entered. Over a report without `acMode` it holds the
+device only while the report shows it charging (`acStatus`); otherwise, with
+control on, it sends neither its charge nor an exit, its claim holding only
+the direction while the charge is on its record -- no `acMode` of its own, at
+the assist's priority -- so no claim below it, a role the operator set
+included, writes `acMode` into that charge. Output control it leaves as the
+best of those claims has it: with the regulator under the default claim, with
+nobody under an operator park; and the device is not eligible for a regulator
+charge while the hold stands, so no second record of a charge opens beside the
+assist's. Its record stays as it is, an exit already out included. Once the
+device left the charge, it claims nothing over such a report.
+Its restore never holds the device out of output control for good: over an
+unknown `socSet` it stays owed without holding
 the device, and the configured `max_soc` goes out at the first report that
 carries `socSet` again; over an unknown `acMode`, where nothing writes
 `acMode=2`, it is the assist's exit to idle on the power write gate, once per
 resend window and three times at most, settled once a report shows the device
 left the charge (without `acMode`, only with no grid draw) or the third exit's
 resend window has passed (`full_charge_assist_ac_mode_restore_settled`, with
-`left_to=device` when it charges on). Behind a shut state write gate no restore
-holds the device at all: it stays owed, nothing of it is written -- neither
-`socSet` nor `acMode=2` nor the exit to idle -- and it goes out once the gate
-opens (K22, see
+`left_to=device` when it charges on). Behind a shut state write gate, or with
+control switched off, no restore holds the device at all: it stays owed,
+nothing of it is written -- neither `socSet` nor `acMode=2` nor the exit to
+idle -- and it goes out once the gate opens and control is on (K22). Nor
+does the assist itself: a due one does not start behind that gate, and one
+already running stays active but claims nothing until the gate opens; on an
+MQTT control device, which takes no state write at all, it never starts and
+claims nothing (K25, see
 [battery-full-charge-assist.md](../battery-full-charge-assist.md#behind-a-shut-write-gate)).
 
 These require `allow_state_reconciliation_writes=true`.

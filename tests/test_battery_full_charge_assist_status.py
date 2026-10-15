@@ -10,7 +10,11 @@ from types import SimpleNamespace
 import pytest
 
 from dashboard.telemetry import build_dashboard_snapshot
-from ems.state_store import describe_full_charge_assist_status
+from ems.diagnostics import (
+    diagnose_battery_full_charge_assist_report,
+    diagnose_control_snapshot,
+)
+from ems.state_store import BatteryFullChargeStateStore, describe_full_charge_assist_status
 
 pytestmark = [
     pytest.mark.power_control,
@@ -23,6 +27,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 NOW = datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc)
 CONFIG = {"assist_window_days": 7}
+HELD_BY_GATE = "state_writes_not_allowed"
+HELD_BY_TRANSPORT = "transport_state_reconciliation_unsupported"
 
 
 def test_disabled_status_when_feature_not_enabled():
@@ -119,6 +125,69 @@ def test_inside_assist_window_false_outside_window_days():
     assert result["days_until_due"] == 20
 
 
+def _record(active, next_due_at):
+    return {
+        "full_charge_assist_active": active,
+        "restore_pending": active,
+        "ac_mode_restore_pending": False,
+        "next_due_at": next_due_at.isoformat(),
+        "last_seen_soc_limit": 0,
+    }
+
+
+def test_an_active_assist_that_can_write_nothing_is_waiting_not_active():
+    """Behind a shut state gate it claims nothing (K25), so it is not running."""
+
+    record = _record(True, NOW + timedelta(days=2))
+
+    result = describe_full_charge_assist_status(
+        CONFIG, True, True, record, NOW, held_by=HELD_BY_GATE
+    )
+
+    assert result["status"] == "waiting"
+    assert "state writes" in result["message"]
+
+
+def test_an_active_assist_over_a_report_without_its_fields_waits_for_one():
+    """It claims nothing while the report lacks a field it still has to write."""
+
+    record = _record(True, NOW + timedelta(days=2))
+
+    result = describe_full_charge_assist_status(
+        CONFIG, True, True, record, NOW, held_by="fields_not_reported"
+    )
+
+    assert result["status"] == "waiting"
+    assert "report" in result["message"]
+    assert "state writes" not in result["message"]
+
+
+def test_a_due_assist_behind_a_shut_gate_stays_overdue():
+    """It starts in the first cycle after the gate opens."""
+
+    record = _record(False, NOW - timedelta(days=1))
+
+    result = describe_full_charge_assist_status(
+        CONFIG, True, True, record, NOW, held_by=HELD_BY_GATE
+    )
+
+    assert result["status"] == "overdue"
+
+
+@pytest.mark.parametrize("active", [False, True], ids=["due", "from before the move"])
+def test_an_assist_on_a_transport_without_state_writes_is_unavailable(active):
+    """Over MQTT control it never starts, and one from before claims nothing."""
+
+    record = _record(active, NOW - timedelta(days=3))
+
+    result = describe_full_charge_assist_status(
+        CONFIG, True, True, record, NOW, held_by=HELD_BY_TRANSPORT
+    )
+
+    assert result["status"] == "unavailable"
+    assert "MQTT" in result["message"]
+
+
 class AssistStoreStub:
     def __init__(self, record):
         self.record = record
@@ -152,6 +221,7 @@ def _controller(*, enabled, has_battery, record, raise_error=False):
         full_charge_assist_config=lambda: {"assist_window_days": 7},
         full_charge_assist_enabled=lambda: enabled,
         full_charge_assist_has_battery=lambda dev, state: has_battery,
+        full_charge_assist_held_by=lambda dev: None,
         battery_full_charge_store=AssistStoreStub(record),
     )
 
@@ -254,8 +324,9 @@ class MultiAssistStoreStub:
         return self.records.get(device)
 
 
-def _multi_controller(records):
+def _multi_controller(records, held_by=None):
     names = list(records)
+    held_by = held_by or {}
     return SimpleNamespace(
         devices=[SimpleNamespace(name=name) for name in names],
         runtime_state=None,
@@ -266,6 +337,7 @@ def _multi_controller(records):
         full_charge_assist_config=lambda: {"assist_window_days": 7},
         full_charge_assist_enabled=lambda: True,
         full_charge_assist_has_battery=lambda dev, state: True,
+        full_charge_assist_held_by=lambda dev: held_by.get(dev.name),
         battery_full_charge_store=MultiAssistStoreStub(records),
     )
 
@@ -352,6 +424,131 @@ def test_full_charge_assist_rule_lists_all_active_devices():
     assert "WR1" in rule["reason"]
     assert "WR3" in rule["reason"]
     assert "WR2" not in rule["reason"]
+
+
+def test_full_charge_assist_rule_leaves_out_an_assist_that_can_write_nothing():
+    controller = _multi_controller(
+        {"WR1": _active_assist_record(), "WR2": _active_assist_record()},
+        held_by={"WR1": HELD_BY_GATE},
+    )
+    snapshot = _full_snapshot(controller, [_state(), _state()])
+
+    assert snapshot["devices"]["WR1"]["battery_full_charge_assist"]["status"] == "waiting"
+    rule = snapshot["rules"]["full_charge_assist_active"]
+    assert rule["active"] is True
+    assert "WR2" in rule["reason"]
+    assert "WR1" not in rule["reason"]
+
+
+def _diagnose_config(tmp_path, system, *devices):
+    return {
+        "system": system,
+        "devices": list(devices),
+        "grid_meter": {"type": "shelly", "ip": "10.1.2.4"},
+        "battery_full_charge_assist": {
+            "enabled": True,
+            "assist_window_days": 7,
+            "state_database_path": str(tmp_path / "ems_state.sqlite"),
+        },
+    }
+
+
+def _stored(tmp_path, active, *names):
+    store = BatteryFullChargeStateStore(str(tmp_path / "ems_state.sqlite"))
+    for name in names:
+        store.update_device_state(
+            name,
+            NOW,
+            has_battery=True,
+            next_due_at=(NOW - timedelta(days=3)).isoformat(),
+        )
+        if active:
+            store.mark_assist_started(name, NOW, True)
+
+
+def _diagnose_status(config, runtime=None):
+    report = diagnose_battery_full_charge_assist_report(config, runtime or {})
+    return {item["device"]: item["status"] for item in report["devices"]}
+
+
+OPEN_GATES = {
+    "enabled": True,
+    "dry_run": False,
+    "allow_state_reconciliation_writes": True,
+}
+API_DEVICE = {"name": "WR1", "ip": "10.1.2.3", "sn": "HOA1NAH9A123456"}
+MQTT_DEVICE = {
+    "name": "WR2",
+    "type": "zendure_mqtt",
+    "capabilities": {"write_output_limit": True},
+}
+
+
+@pytest.mark.parametrize("active", [False, True], ids=["due", "from before the move"])
+def test_diagnose_names_an_mqtt_device_the_assist_never_runs_on(tmp_path, active):
+    _stored(tmp_path, active, "WR1", "WR2")
+
+    status = _diagnose_status(
+        _diagnose_config(tmp_path, OPEN_GATES, API_DEVICE, MQTT_DEVICE)
+    )
+
+    assert status["WR1"] == ("active" if active else "overdue")
+    assert status["WR2"] == "not available over MQTT"
+
+
+@pytest.mark.parametrize(
+    "shut",
+    [
+        {"allow_state_reconciliation_writes": False},
+        {"dry_run": True},
+        {"simulation_mode": True},
+        {"allow_hardware_writes": False},
+        {"enabled": False},
+    ],
+    ids=["state writes off", "dry run", "simulation", "transport gate", "control off"],
+)
+def test_diagnose_names_an_active_assist_its_config_keeps_from_writing(tmp_path, shut):
+    """The gates the EMS's state write gate reads, and control switched off (off is off)."""
+
+    _stored(tmp_path, True, "WR1")
+
+    status = _diagnose_status(
+        _diagnose_config(tmp_path, {**OPEN_GATES, **shut}, API_DEVICE)
+    )
+
+    assert status["WR1"] == "active, waiting for state writes"
+
+
+SWITCHES = {
+    "stored off, runtime on": ({"enabled": False}, {"system": {"enabled": True}}, True, True),
+    "runtime off": ({}, {"system": {"enabled": False}}, False, False),
+    "runtime off as text": ({}, {"system": {"enabled": "off"}}, False, False),
+    "device switched off": ({}, {"devices": {"WR1": {"enabled": False}}}, True, False),
+    "device switched on": ({}, {"devices": {"WR1": {"enabled": True}}}, True, True),
+}
+
+
+@pytest.mark.parametrize(
+    "stored,runtime,system_on,writes", SWITCHES.values(), ids=SWITCHES.keys()
+)
+def test_diagnose_reads_control_switched_off_as_the_ems_does(
+    tmp_path, stored, runtime, system_on, writes
+):
+    """The system's and the device's ``enabled``, runtime-state over the stored config (R14-2).
+
+    Read from the stored config alone, an assist the EMS was running read as
+    waiting, and one it held behind control switched off at runtime as active.
+    The control snapshot reads ``system.enabled`` the same way.
+    """
+
+    _stored(tmp_path, True, "WR1")
+    config = _diagnose_config(tmp_path, {**OPEN_GATES, **stored}, API_DEVICE)
+
+    status = _diagnose_status(config, runtime)
+
+    assert status["WR1"] == ("active" if writes else "active, waiting for state writes")
+    snapshot = diagnose_control_snapshot(config, runtime, {}, "runtime-state.json")
+    assert snapshot["control_enabled"] is system_on
 
 
 def test_dashboard_rules_contract_includes_expected_keys():
@@ -535,6 +732,62 @@ def test_frontend_renders_full_charge_assist_states_via_app_js():
         assert(!html.includes("Running"), "AC charge running fact row is not shown unless acStatus == 2");
         assert(html.includes("AC charge standby"), "firmware status shows AC charge standby while charge is requested but not running");
         assert(!html.includes("AC-charging"), "active status description does not claim AC charging unless acStatus == 2");
+
+        // An active assist that can write nothing is not shown as running.
+        html = context.renderFullChargeAssist({
+          battery_full_charge_assist: {
+            enabled: true,
+            has_battery: true,
+            status: "waiting",
+            inside_assist_window: true,
+            days_until_due: 1,
+            assist_window_days: 7,
+            last_full_charge_at: null,
+            next_due_at: "2026-06-16T14:00:00+02:00",
+            window_starts_at: "2026-06-09T14:00:00+02:00",
+            assist_started_at: "2026-06-14T14:05:00+02:00",
+            restore_pending: true,
+            ac_mode_restore_pending: true,
+            soc_limit: 0,
+            ac_mode: 1,
+            ac_status: 2,
+            message: "Full-charge assist waiting for state writes",
+          },
+        });
+        assert(html.includes("Assist waiting"), "a waiting assist renders its own pill label");
+        assert(!html.includes("Assist active"), "a waiting assist is not shown as active");
+        assert(!html.includes("EMS is helping"), "a waiting assist does not claim EMS is helping the device");
+        assert(html.includes("state writes not allowed, control switched off"), "a waiting assist says what it waits for");
+        assert(html.includes("a device report without socSet"), "a waiting assist names the report it waits for");
+        assert(html.includes("Started"), "a waiting assist shows when it started");
+        assert(!html.includes("Running"), "a waiting assist claims no AC charge of its own");
+
+        // A device whose transport takes no state write gets no assist.
+        html = context.renderFullChargeAssist({
+          battery_full_charge_assist: {
+            enabled: true,
+            has_battery: true,
+            status: "unavailable",
+            inside_assist_window: false,
+            days_until_due: -3,
+            assist_window_days: 7,
+            last_full_charge_at: "2026-05-01T13:42:00+02:00",
+            next_due_at: "2026-06-11T13:42:00+02:00",
+            window_starts_at: "2026-06-04T13:42:00+02:00",
+            assist_started_at: null,
+            restore_pending: false,
+            ac_mode_restore_pending: false,
+            soc_limit: 0,
+            ac_mode: 2,
+            ac_status: 1,
+            message: "Full-charge assist is not available over MQTT control",
+          },
+        });
+        assert(html.includes("Assist unavailable"), "an unavailable assist renders its own pill label");
+        assert(html.includes("local API"), "an unavailable assist names the transport it needs");
+        assert(!html.includes("Overdue by"), "an unavailable assist is never shown overdue");
+        assert(!html.includes("Next due"), "an unavailable assist names no due date it will not keep");
+        assert(html.includes("Last full charge"), "an unavailable assist still shows the last full charge seen");
 
         // Overdue renders positive wording, never a negative "Due in" value.
         html = context.renderFullChargeAssist({

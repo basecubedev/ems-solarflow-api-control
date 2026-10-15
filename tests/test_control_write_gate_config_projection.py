@@ -83,6 +83,38 @@ def test_projection_matches_the_loaded_resolver(overrides):
             )
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {},
+        {"allow_state_reconciliation_writes": False},
+        {"dry_run": True},
+        {"simulation_mode": True},
+        {"allow_hardware_writes": False},
+        {"allow_mqtt_local_control_writes": False},
+        {"allow_mqtt_zendure_control_writes": False},
+        {"allow_hardware_writes": False, "allow_state_reconciliation_writes": False},
+    ],
+)
+def test_state_projection_matches_the_loaded_state_resolver(overrides):
+    """A state write a stored config allows is the one the running EMS allows."""
+
+    system = _system(**{"allow_state_reconciliation_writes": True, **overrides})
+    config = _config(system)
+    with (
+        _globals_matching(system),
+        patch.object(
+            cfg,
+            "ALLOW_STATE_RECONCILIATION_WRITES",
+            system["allow_state_reconciliation_writes"],
+        ),
+    ):
+        for gate in GATES:
+            assert cfg.resolve_config_state_write_gate(
+                config, gate
+            ) == cfg.resolve_state_write_gate(gate)
+
+
 def test_missing_gate_keys_resolve_to_release_defaults():
     config = _config({"enabled": True, "dry_run": False, "simulation_mode": False})
     for gate in GATES:

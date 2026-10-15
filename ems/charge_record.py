@@ -64,16 +64,10 @@ CHARGE_EXIT_PENDING = "charge_exit_pending"
 
 
 class ChargeRecord:
-    """Whether the EMS's own charge is on one device, by what the device reports.
+    """Whether the EMS's own charge is on one device, by what the device reports."""
 
-    ``bounded_by_draw`` counts the exits after which only grid draw showed the
-    charge. The full-charge assist's record goes without: the controller caps
-    its exits itself, three per switch-off (OFF-1b).
-    """
-
-    def __init__(self, resend_after_s=EXIT_RESEND_SECONDS, *, bounded_by_draw=True):
+    def __init__(self, resend_after_s=EXIT_RESEND_SECONDS):
         self.resend_after_s = resend_after_s
-        self.bounded_by_draw = bounded_by_draw
         self.open = False
         self.exit_sent_at = None
         self.exit_target_w = None
@@ -175,6 +169,11 @@ class ChargeRecord:
 
         if not self.open or self.drawn_exits_spent():
             return False
+        return self.exit_window_passed(now)
+
+    def exit_window_passed(self, now):
+        """Whether the last exit's resend window has passed, or no exit is out."""
+
         return self.exit_sent_at is None or now - self.exit_sent_at >= self.resend_after_s
 
     def exit_exhausted(self, now):
@@ -185,11 +184,7 @@ class ChargeRecord:
         the latest one.
         """
 
-        return (
-            self.open
-            and self.drawn_exits_spent()
-            and now - self.exit_sent_at >= self.resend_after_s
-        )
+        return self.open and self.drawn_exits_spent() and self.exit_window_passed(now)
 
     def drawn_exits_spent(self):
         """Whether ``FOUND_EXIT_ATTEMPTS`` exits went out to a charge only grid draw shows."""
@@ -230,7 +225,7 @@ class ChargeRecord:
         AC-input direction that is grid draw over an unknown direction.
         """
 
-        self._drawn = self.bounded_by_draw and not in_ac_input_direction(state)
+        self._drawn = not in_ac_input_direction(state)
         if self._drawn and not self._exit_drawn:
             self._exit_drawn = True
             self.drawn_exits += 1

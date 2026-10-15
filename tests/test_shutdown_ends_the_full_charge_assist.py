@@ -127,9 +127,7 @@ class Assist:
     def __init__(self, tmp_path, *, item=None, store=None, runtime=None):
         self.store = store or assist_due(tmp_path / "ems_state.sqlite")
         self.item = item or state(soc=85, max_soc=90, ac_mode=2, input_limit_w=0)
-        self.dev, self.hardware = following_http_device(
-            self.item, hardware_profile="solarflow_800_pro_2"
-        )
+        self.dev, self.hardware = self.device(self.item)
         self.runtime = runtime or Runtime()
         self.controller = EMSController(
             devices=[self.dev],
@@ -139,6 +137,9 @@ class Assist:
             battery_full_charge_store=self.store,
         )
         self.clock = SteppedClock()
+
+    def device(self, item):
+        return following_http_device(item, hardware_profile="solarflow_800_pro_2")
 
     def fetch(self, _devices):
         self.dev.fetch()
@@ -248,12 +249,14 @@ def test_the_end_of_the_assist_s_charge_needs_no_state_reconciliation(tmp_path):
 
 
 def test_an_assist_that_could_not_write_its_charge_is_released_nothing(tmp_path):
-    """Behind a shut state gate the assist never put the device into AC input.
+    """Behind a shut state gate a running assist never put the device into AC input.
 
     Someone else's AC input on the device is not the assist's to end.
     """
 
-    rig = Assist(tmp_path)
+    store = assist_due(tmp_path / "ems_state.sqlite")
+    store.mark_assist_started("WR1", DUE, True)
+    rig = Assist(tmp_path, store=store)
     rig.run(state_writes=False)
     assert rig.store.get_device_state("WR1")["full_charge_assist_active"] is True
     assert rig.hardware.writes == []

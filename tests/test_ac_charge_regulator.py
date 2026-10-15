@@ -1155,7 +1155,7 @@ def test_the_full_charge_assist_takes_a_device_away_mid_charge():
     assert harness.controller.charge_direction.charging is True
     assert harness.controller.runtime_intents["WR1"].reason == REGULATOR_CHARGE_REASON
 
-    harness.controller.full_charge_assist_intent = lambda dev: ac_input_intent(
+    harness.controller.full_charge_assist_intent = lambda dev, below=None: ac_input_intent(
         dev.name, "full_charge_assist", setpoint_w=600
     )
     harness.run(cycles=3, states=[item])
@@ -2742,7 +2742,7 @@ def test_a_charge_left_with_no_sign_of_discharge_steps_up_to_the_house_once(
     assert min(hardware.readings) >= -HOUSE_TOLERANCE_W, hardware.readings
 
 
-def maintenance_claim_without_a_charge(dev):
+def maintenance_claim_without_a_charge(dev, below=None):
     from ems.runtime_intents import (
         PRIORITY_MAINTENANCE,
         DeviceRuntimeIntent,

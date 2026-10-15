@@ -54,7 +54,11 @@ of the charge only while it draws nothing from the grid. A device that draws a
 few watts idle never shows that, so a transport's record leaves the charge to
 the device after three exits that only grid draw followed, once the last
 resend window has passed (`ac_charge_left_to_device`); the assist's record
-has its own cap of three exits. Before, a report without `smartMode` got
+does the same for the exits of a switch-off, a release after failed cycles or
+its restore, beside its own cap of three exits, and with control on its
+running charge is sent no exit over such a report
+(see [battery-full-charge-assist.md](../battery-full-charge-assist.md#over-a-report-without-a-field-it-writes)).
+Before, a report without `smartMode` got
 `smartMode=1` every reconcile interval, and one without `gridOffMode` got the
 runtime offgrid mode every cycle, with nothing in the next report to say it took.
 
@@ -506,8 +510,9 @@ write nothing, and `unknown_ac_mode` is logged once per device until the mode
 is known again (K10, owner decision 2026-10-12). Raw samples from two 800 Pro 2
 over 14 days carry `acMode` only as `1` or `2`.
 
-A claim whose `desired_ac_mode` is `None` means *the power command owns this
-device's direction*, and the reconciler skips it. Three claims do that:
+A claim whose `desired_ac_mode` is `None` writes no `acMode`, and the
+reconciler skips it. For three such claims it means *the power command owns
+this device's direction*:
 
 | Claim | Priority | Raised when |
 |---|---:|---|
@@ -517,6 +522,20 @@ device's direction*, and the reconciler skips it. Three claims do that:
 
 An operator park (150) and maintenance (200) outrank all three, so either still
 takes a device away mid-charge.
+
+The full-charge assist's direction hold (`battery_full_charge_assist`, 200) is
+a fourth, and under it nobody owns the direction. It stands while the assist's
+charge is open on its record and the report carries no known `acMode` and no
+charging `acStatus`, so the direction cannot be read. It keeps every claim
+below it, a role the operator set included, from writing `acMode` over the
+unknown mode into that charge, and the device takes no regulator charge while
+it stands. Output control is as the best claim below it has it: the
+regulator's under the default claim, nobody's under an operator park; the
+regulator's target then reaches the device only as the bare `outputLimit` a
+device in AC input ignores. The direction is written again only by the exits
+on the assist's record -- a switch-off's, a stop's, a release after failed
+cycles -- or by the assist itself once a report carries `acMode` (see
+[battery-full-charge-assist.md](../battery-full-charge-assist.md#over-a-report-without-a-field-it-writes)).
 
 ## Deadband
 

@@ -47,6 +47,8 @@ from ems.power_direction import (
     AC_MODE_OUTPUT,
     derive_house_load_w,
     found_in_ac_input,
+    in_ac_input_direction,
+    out_of_charge,
     settling_out_of_charge,
 )
 from ems.runtime_intents import (
@@ -111,14 +113,25 @@ class FullChargeAssistCharge:
 
     No transport has this charge on record -- the assist writes it through
     the state reconciler -- so the controller keeps the same
-    :class:`~ems.charge_record.ChargeRecord` for it, and counts the exits it
-    sent since a cycle last found the charge held with control on: after a
-    switch-off, or while cycles fail. That cap bounds its exits, so the record
-    goes without the one a transport's has for a charge only grid draw shows.
+    :class:`~ems.charge_record.ChargeRecord` for it, bounded as a transport's
+    is for a charge only grid draw shows, and counts the exits it sent since a
+    cycle with control on last found the charge held over a known ``acMode``:
+    after a switch-off, by its restore over an unknown ``acMode``, or while
+    cycles fail. That cap bounds the exits to a charge the device still shows.
     """
 
     record: ChargeRecord
     exits: int = 0
+
+    def charge_exit_exhausted(self):
+        """Whether the charge is the device's: its exits spent on grid draw alone, a window ago."""
+
+        return self.record.exit_exhausted(time.monotonic())
+
+    def release_charge_record(self):
+        """The charge is not the EMS's from here; the record stays, closed."""
+
+        self.record.release()
 
 
 class EMSController:
@@ -1763,12 +1776,27 @@ class EMSController:
             and previous.reason in (FIRMWARE_CHARGE_REASON, UNPROVEN_CHARGE_REASON)
             else None
         )
-        return resolve_device_intent([
+        return self.resolve_device_claims(
+            dev,
             self.get_device_runtime_intent(dev, None),
-            self.full_charge_assist_intent(dev),
             regulator_charge_intent(
                 dev.name, ems_commanded_charge=self.charge_commanded_by_ems(dev)
             ),
+            observed,
+        )
+
+    def resolve_device_claims(self, dev, runtime, regulator, observed):
+        """The winning claim on ``dev``: the operator's or default, the assist's, the regulator's, an observed one.
+
+        The assist's direction hold takes output control from the best of
+        the others (:meth:`full_charge_assist_intent`).
+        """
+
+        below = resolve_device_intent([runtime, regulator, observed])
+        return resolve_device_intent([
+            runtime,
+            self.full_charge_assist_intent(dev, below),
+            regulator,
             observed,
         ])
 
@@ -1802,9 +1830,16 @@ class EMSController:
         It can once it has watched the device, and for a device it could never
         have charged -- the feature or the device's switch off, or a model
         without an AC charge path -- no charge can be the EMS's own at all.
+        Nor is a charge unproven on a device this process had the full-charge
+        assist's charge on record for: that record owns the device's exit, with
+        its own cap, open or closed (:meth:`full_charge_assist_exit_due`).
         """
 
-        return dev.name in self.ac_input_watched or not self.charge_permitted(dev)
+        return (
+            dev.name in self.ac_input_watched
+            or dev.name in self.full_charge_assist_charges
+            or not self.charge_permitted(dev)
+        )
 
     def note_ac_input_provenance(self, dev_name, uncommanded, intent):
         """Remember whether the EMS can tell who put a device into AC input.
@@ -1934,7 +1969,7 @@ class EMSController:
             left_to="firmware" if is_floor_charge(state) else "holder",
         )
 
-    def leave_charge_shown_by_draw_alone(self, dev, state):
+    def leave_charge_shown_by_draw_alone(self, dev, state, holder=None):
         """Leave the EMS's charge on ``dev`` to the device once its exits are spent on grid draw alone.
 
         A device whose report carries no known ``acMode`` and no charging
@@ -1944,18 +1979,22 @@ class EMSController:
         one write per window, and a stop's release going to it. The record
         bounds those exits (see :mod:`ems.charge_record`); once the last
         window has passed, the record is released and a warning says so once.
+        ``holder`` keeps the record: ``dev``'s transport, or the full-charge
+        assist's charge on it (:class:`FullChargeAssistCharge`).
         """
 
-        exhausted = getattr(dev, "charge_exit_exhausted", None)
+        holder = dev if holder is None else holder
+        exhausted = getattr(holder, "charge_exit_exhausted", None)
         if not callable(exhausted) or exhausted() is not True:
             return
-        dev.release_charge_record()
+        holder.release_charge_record()
         log_event(
             logging.WARNING,
             "ac_charge_left_to_device",
             device=dev.name,
             exits=FOUND_EXIT_ATTEMPTS,
             grid_input_w=state.grid_input,
+            **({} if holder is dev else {"charge": FULL_CHARGE_ASSIST_REASON}),
         )
 
     def end_charges_on_disable(self, control_enabled):
@@ -2043,7 +2082,25 @@ class EMSController:
         assist without its AC mode do -- the charge is on record at the
         assist's setpoint, and the record reads
         every fresh report, as a transport's does, so a clamp shown before the
-        exit counts as the assist's. Each restore cycle with a fresh report --
+        exit counts as the assist's. It reads the report before the claim puts
+        the charge back on it, so an exit the device took ends the charge
+        there (R14-3), and the claim does so only over a report with a known
+        ``acMode``. With control on, a field the report does not carry causes
+        no write (R17-1): over a report without a known ``acMode`` the running
+        assist's claim holds the device only while the report shows it
+        charging (``acStatus``) and otherwise writes nothing and leaves output
+        control to the regulator, holding only the direction while the charge
+        is on record (:meth:`full_charge_assist_intent`), and either way the
+        record is left as it is -- not closed, since the charge may run on,
+        and not put back on record, so an exit already out stands with its
+        count; the exits still owed go out at a switch-off or a stop. After
+        ``FOUND_EXIT_ATTEMPTS`` exits that only grid draw followed the charge
+        is the device's, as on a transport's record
+        (:meth:`leave_charge_shown_by_draw_alone`, R16-2).
+        The record stays for the process once made, closed once nothing holds
+        the charge: the device's AC input is then attributable
+        (:meth:`ac_input_attributable`), its only exit the record's (R16-1).
+        Each restore cycle with a fresh report --
         the reconciler writes acMode 2 in it -- counts as the charge's exit,
         whether that write reached the device or not, so at worst the first
         exit after a switch-off waits one resend window. A device that leaves
@@ -2067,7 +2124,11 @@ class EMSController:
         gets the exit when it answers again. The record outlives the assist
         completing or being aborted while control is off; the assist, still
         due, goes on once control is back. A charge from before a restart with
-        control off was never held, and is left to the device.
+        control off was never on this record: neither the running assist nor
+        its restore claims the device while control is off, so it is any AC
+        input found after a start (:meth:`unproven_charge_exit`), sent that
+        exit where the EMS could have charged the device and otherwise left to
+        it (R14-1).
         """
 
         if not getattr(dev, "supports_state_reconciliation", True):
@@ -2075,39 +2136,41 @@ class EMSController:
         fresh = self.device_online.get(dev.name, True)
         state = self.last_states.get(dev.name) if fresh else None
         charge = self.full_charge_assist_charges.get(dev.name)
+        if charge is not None and state is not None:
+            self.observe_full_charge_assist_charge(charge, state)
+            self.leave_charge_shown_by_draw_alone(dev, state, charge)
         if not self.control_switched_off(dev):
             if charge is not None and self.charges_returned_after_failed_cycles():
-                if state is not None:
-                    self.observe_full_charge_assist_charge(charge, state)
                 return False
             held = self.full_charge_assist_held(dev, state)
             if held is None:
-                self.full_charge_assist_charges.pop(dev.name, None)
+                if charge is not None and not self.full_charge_assist_stands_down(dev):
+                    charge.release_charge_record()
                 return False
             setpoint_w, restoring = held
             created = charge is None
             if created:
-                charge = FullChargeAssistCharge(
-                    record=ChargeRecord(bounded_by_draw=False)
-                )
+                charge = FullChargeAssistCharge(record=ChargeRecord())
                 self.full_charge_assist_charges[dev.name] = charge
-            if created or not restoring:
                 charge.record.charge_sent(setpoint_w)
             if state is None:
                 return False
-            self.observe_full_charge_assist_charge(charge, state)
-            if restoring and not self.ac_mode_known(state):
+            if created:
+                self.observe_full_charge_assist_charge(charge, state)
+            if not self.ac_mode_known(state):
                 return (
-                    charge.exits < FOUND_EXIT_ATTEMPTS
+                    restoring
+                    and charge.exits < FOUND_EXIT_ATTEMPTS
                     and charge.record.exit_due(time.monotonic())
                 )
             if restoring:
                 charge.record.exit_sent(time.monotonic())
+            else:
+                charge.record.charge_sent(setpoint_w)
             charge.exits = 0
             return False
         if charge is None or state is None:
             return False
-        self.observe_full_charge_assist_charge(charge, state)
         return (
             charge.exits < FOUND_EXIT_ATTEMPTS
             and charge.record.exit_due(time.monotonic())
@@ -2137,6 +2200,35 @@ class EMSController:
         if intent.reason == FULL_CHARGE_ASSIST_REASON and intent.setpoint_w is not None:
             return intent.setpoint_w, False
         return None
+
+    def full_charge_assist_stands_down(self, dev):
+        """Whether the running assist can write nothing on ``dev`` for a report without a field it needs.
+
+        Its charge record is left as it is then (R17-1): nothing was written,
+        and the charge may run on. While that record is open the assist's
+        claim holds the direction (:meth:`full_charge_assist_intent`).
+        """
+
+        store = self.battery_full_charge_store
+        record = store.get_device_state(dev.name) if store else None
+        return bool(record and record.get("full_charge_assist_active")) and (
+            self.full_charge_assist_held_by(dev, record=record) == "fields_not_reported"
+        )
+
+    def full_charge_assist_holds_direction(self, dev):
+        """Whether the running assist holds ``dev``'s direction only: it stands down, its charge open on record.
+
+        Its claim then writes no ``acMode`` and keeps every claim below it
+        from writing one (:meth:`full_charge_assist_intent`), and the device
+        takes no regulator charge (:meth:`device_charge_allowed`).
+        """
+
+        charge = self.full_charge_assist_charges.get(dev.name)
+        return (
+            charge is not None
+            and charge.record.open
+            and self.full_charge_assist_stands_down(dev)
+        )
 
     def full_charge_assist_charge_held(self, dev):
         """Whether the assist's charge on ``dev`` is on the controller's record, its exit still owed.
@@ -2342,7 +2434,9 @@ class EMSController:
 
         Feature, operator, model, runtime capability, device activation, whoever
         owns the AC mode — and whether the device can absorb anything at all.
-        Any one of them saying no is enough.
+        Any one of them saying no is enough. A device whose direction the
+        full-charge assist holds for its charge on record takes no charge of
+        the regulator's over it (R19-1).
 
         Capacity belongs here and not only in the allocator: without it the
         system would enter charge direction with nothing to allocate to, and the
@@ -2362,6 +2456,9 @@ class EMSController:
         # A device the operator parked, maintenance is using or the firmware is
         # charging is not the surplus regulator's to command.
         if not self.device_intent_allows_command(dev):
+            return False
+
+        if self.full_charge_assist_holds_direction(dev):
             return False
 
         if charge_headroom_weight(state, dev, capability) <= 0:
@@ -3410,7 +3507,10 @@ class EMSController:
         Its restore over a report without ``socSet`` cannot be written (K20)
         and stays owed, holding no device out of output control meanwhile
         (:meth:`full_charge_assist_intent`): the configured ``max_soc`` goes
-        out at the first report that carries ``socSet``.
+        out at the first report that carries ``socSet``. A due assist starts
+        only where a state reconciler may write (K25): behind a shut gate
+        nothing it needs could go out, so it stays due until the gate opens,
+        and on a transport without state reconciliation it never starts.
         """
 
         store = self.battery_full_charge_store
@@ -3505,7 +3605,10 @@ class EMSController:
                 )
             record = store.get_device_state(dev.name, now)
 
-        if feature_transition.get("current_enabled") and not self.control_switched_off(dev):
+        if (
+            feature_transition.get("current_enabled")
+            and self.full_charge_assist_held_by(dev, state, record) is None
+        ):
             start, event_type = self.should_start_full_charge_assist(
                 record,
                 state,
@@ -3541,6 +3644,84 @@ class EMSController:
                         now,
                         max_soc_request_pending=False
                     )
+
+    def full_charge_assist_held_by(self, dev, state=None, record=None):
+        """What keeps the assist from writing what it needs to ``dev`` now, or None.
+
+        ``transport_state_reconciliation_unsupported`` on a transport without
+        state reconciliation (MQTT control), where nothing the assist needs
+        ever goes out; ``state_writes_not_allowed`` while a state write gate is
+        shut or control is switched off (K25); ``fields_not_reported`` while
+        the report lacks a field the assist still has to write
+        (:meth:`full_charge_assist_field_unreported`). The assist's start, its
+        claim and its waiting status read this. ``state`` and ``record``
+        default to the device's last report and its assist record.
+        """
+
+        if not getattr(dev, "supports_state_reconciliation", True):
+            return "transport_state_reconciliation_unsupported"
+        if not self.device_state_writes_allowed(dev):
+            return "state_writes_not_allowed"
+        if state is None:
+            state = self.last_states.get(dev.name)
+        if record is None and self.battery_full_charge_store:
+            record = self.battery_full_charge_store.get_device_state(dev.name)
+        if state is not None and self.full_charge_assist_field_unreported(
+            dev, state, record
+        ):
+            return "fields_not_reported"
+        return None
+
+    def full_charge_assist_field_unreported(self, dev, state, record):
+        """Whether ``state`` lacks a field the assist still has to write.
+
+        Nothing is written over a field the report does not carry: ``socSet``
+        (K20), until the assist's ``socSet=1000`` went out, and with its AC
+        charge mode ``acMode`` (K10) and ``inputLimit``, which go out together
+        or not at all, until it entered AC input. A start has all of them to
+        write. While the charge it entered runs and the report shows it -- a
+        known ``acMode``, or without one a charging ``acStatus`` -- nothing is
+        owed here: that charge is the EMS's own, on the record a switch-off or
+        a stop ends it by (:meth:`full_charge_assist_charge_open`). A report
+        that shows it neither way holds the device for nothing the assist
+        could write (R17-1). Once the device left it, the fields are owed
+        again as for an assist that never entered (R14-3).
+        """
+
+        running = bool(record and record.get("full_charge_assist_active"))
+        if (
+            running
+            and record.get("ac_mode_restore_pending")
+            and (self.ac_mode_known(state) or in_ac_input_direction(state))
+            and self.full_charge_assist_charge_open(dev, state)
+        ):
+            return False
+        if (
+            not running or record.get("max_soc_request_pending")
+        ) and not self.state_field_known(dev, state, "socSet", "max_soc_reported"):
+            return True
+        return self.full_charge_assist_ac_charge_mode() and not (
+            self.ac_mode_known(state)
+            and self.state_field_known(
+                dev, state, "inputLimit", "input_limit_reported"
+            )
+        )
+
+    def full_charge_assist_charge_open(self, dev, state):
+        """Whether the charge the assist entered on ``dev`` still runs.
+
+        By its record, as last observed: :meth:`full_charge_assist_exit_due`
+        reads each report before the assist's claim puts the charge back on
+        it, so an exit the device took ends it there. The record stays,
+        closed, for the life of the process, so only a process that never had
+        one -- after a restart -- lets ``state`` decide: the charge runs
+        unless the report shows the device out of it.
+        """
+
+        charge = self.full_charge_assist_charges.get(dev.name)
+        if charge is None:
+            return not out_of_charge(state)
+        return charge.record.open
 
     def full_charge_assist_max_soc(self, dev):
         """``100`` while an assist owns ``socSet`` for ``dev``, else ``None``."""
@@ -3590,7 +3771,8 @@ class EMSController:
         report first, then decides: settled once the device reported it left
         after an exit, or, once ``FOUND_EXIT_ATTEMPTS`` exits went out and the
         last one's resend window has passed with the device still in the
-        charge, left to the device, as after a switch-off. Until then the claim
+        charge, left to the device, as after a switch-off, and the record
+        closes. Until then the claim
         keeps the device out of output control; after it, nothing does. A
         transport without state reconciliation never had the assist's
         ``acMode`` written, so a restore owed there -- from before the device
@@ -3629,9 +3811,11 @@ class EMSController:
             left = charge.record.open
             if left and (
                 charge.exits < FOUND_EXIT_ATTEMPTS
-                or not charge.record.exit_due(time.monotonic())
+                or not charge.record.exit_window_passed(time.monotonic())
             ):
                 return
+            if left:
+                charge.release_charge_record()
             event = "full_charge_assist_ac_mode_restore_settled"
             log_event(
                 logging.WARNING if left else logging.INFO,
@@ -3675,7 +3859,7 @@ class EMSController:
             self.full_charge_assist_config().get("enable_ac_charge_mode", True)
         ) and not self.assist_ac_input_withheld()
 
-    def full_charge_assist_intent(self, dev):
+    def full_charge_assist_intent(self, dev, below=None):
         """Return the assist's claim on ``dev``, or None when it has none.
 
         An assist without its AC mode leaves the direction alone, except where
@@ -3688,9 +3872,24 @@ class EMSController:
         nothing while the device's report does not carry ``socSet``: it cannot
         be written there (K20) and waits in the store for a report that does,
         so it holds no device out of output control in the meantime. Nor does
-        any restore while the state write gate is shut (K22): neither
-        ``socSet`` nor ``acMode=2`` nor the exit to idle can go out then, and
-        the restore stays owed in the store until the gate opens.
+        any restore while the state write gate is shut (K22) or control is
+        switched off (R14-1, off is off): neither ``socSet`` nor ``acMode=2``
+        nor the exit to idle can go out then, and the restore stays owed in
+        the store until the EMS may write it again. A device in AC input after
+        a restart is then any AC input found after a start. A running
+        assist claims nothing while it cannot write what it needs
+        (:meth:`full_charge_assist_held_by`): behind that gate or with control
+        switched off (K25), on a transport without state reconciliation, or
+        over a report without a field it still has to write. It stays active
+        in the store and claims the device again once it can. Over such a
+        report while its charge is still open on the controller's record it
+        holds the direction instead (:meth:`full_charge_assist_holds_direction`),
+        as the regulator's charge claim does: no ``acMode`` of its own, at its
+        priority, so no claim below it -- a role the operator set included --
+        writes ``acMode`` over the unknown mode into the charge on record
+        (R17-1). Output control it leaves as ``below``, the best of the other
+        claims (:meth:`resolve_device_claims`), has it: the regulator's under
+        the default claim, nobody's under an operator park (R19-2).
         """
 
         store = self.battery_full_charge_store
@@ -3708,7 +3907,22 @@ class EMSController:
             else None
         )
 
+        state_writes_allowed = self.device_state_writes_allowed(dev)
+
         if record.get("full_charge_assist_active"):
+            if self.full_charge_assist_holds_direction(dev):
+                return DeviceRuntimeIntent(
+                    device=dev.name,
+                    role=DeviceRuntimeRole.AC_INPUT,
+                    reason=FULL_CHARGE_ASSIST_REASON,
+                    desired_ac_mode=None,
+                    output_control_allowed=(
+                        below is None or below.output_control_allowed
+                    ),
+                    priority=PRIORITY_MAINTENANCE
+                )
+            if self.full_charge_assist_held_by(dev, record=record) is not None:
+                return None
             if self.full_charge_assist_ac_charge_mode():
                 return ac_input_intent(
                     dev.name,
@@ -3732,9 +3946,7 @@ class EMSController:
                 record.get("restore_pending")
                 and getattr(self.last_states.get(dev.name), "max_soc_reported", True)
             )
-        ) and cfg.state_reconciliation_writes_allowed(
-            getattr(dev, "control_gate", "api")
-        ):
+        ) and state_writes_allowed:
             return DeviceRuntimeIntent(
                 device=dev.name,
                 role=DeviceRuntimeRole.AC_OUTPUT,
@@ -4760,14 +4972,14 @@ class EMSController:
                 ems_commanded_charge=ems_commanded_charge,
                 watched=self.ac_input_attributable(dev),
             )
-            intent = resolve_device_intent([
+            intent = self.resolve_device_claims(
+                dev,
                 self.get_device_runtime_intent(dev, state),
-                self.full_charge_assist_intent(dev),
                 regulator_charge_intent(
                     dev.name, ems_commanded_charge=ems_commanded_charge
                 ),
                 uncommanded,
-            ])
+            )
             self.note_ac_input_provenance(dev.name, uncommanded, intent)
             self.runtime_intents[dev.name] = intent
             ac_mode_write_ok = self.reconcile_ac_mode_intent(dev, state, intent)

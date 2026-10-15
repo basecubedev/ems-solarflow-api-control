@@ -383,6 +383,50 @@ def test_emsctl_diagnose_reports_battery_full_charge_assist_state(tmp_path):
     assert isinstance(payload["checks"], list)
 
 
+@pytest.mark.parametrize(
+    "stored,switched,status",
+    [
+        (False, True, "active"),
+        (True, False, "active, waiting for state writes"),
+    ],
+    ids=["stored off, switched on", "stored on, switched off"],
+)
+def test_diagnose_reads_the_assist_s_control_switch_from_runtime_state(
+    tmp_path, monkeypatch, stored, switched, status
+):
+    """``system.enabled`` as the EMS reads it: runtime-state over the stored config (R14-2)."""
+
+    monkeypatch.delenv("EMS_IN_CONTAINER", raising=False)
+    args = diagnose_args(tmp_path)
+    config_path = tmp_path / "config.json"
+    config = json.loads(config_path.read_text())
+    config["system"].update(
+        enabled=stored,
+        dry_run=False,
+        simulation_mode=False,
+        allow_state_reconciliation_writes=True,
+    )
+    database_path = tmp_path / "ems_state.sqlite"
+    config["battery_full_charge_assist"] = {
+        "enabled": True,
+        "state_database_path": str(database_path),
+    }
+    config_path.write_text(json.dumps(config))
+    write_control_runtime(
+        tmp_path,
+        system={"enabled": switched, "max_total_power": 900, "loop_interval": 5},
+    )
+    now = datetime.now(timezone.utc)
+    store = BatteryFullChargeStateStore(str(database_path))
+    store.update_device_state("WR1", now, has_battery=True, next_due_at=now.isoformat())
+    store.mark_assist_started("WR1", now, True)
+
+    report = diagnostics.run_install_diagnosis(args)
+
+    devices = report["battery_full_charge_assist"]["devices"]
+    assert [(item["device"], item["status"]) for item in devices] == [("WR1", status)]
+
+
 def test_emsctl_diagnose_output_without_support_bundle_is_usage_error(tmp_path):
     result = run_emsctl(tmp_path, "diagnose", "--output", str(tmp_path / "bundle.zip"))
 

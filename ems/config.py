@@ -2423,9 +2423,31 @@ def resolve_state_write_gate(control_gate="api") -> WriteGateDecision:
     that would block the write.
     """
 
-    gate = resolve_write_gate(control_gate)
+    return _with_state_reconciliation_gate(
+        resolve_write_gate(control_gate), ALLOW_STATE_RECONCILIATION_WRITES
+    )
+
+
+def resolve_config_state_write_gate(config, control_gate) -> WriteGateDecision:
+    """State-reconciliation gate decision a stored config produces once EMS loads it.
+
+    The read-only projection of :func:`resolve_state_write_gate`, through the
+    same rule: :func:`resolve_config_write_gate` for the transport and
+    ``allow_state_reconciliation_writes`` as :func:`config_control_flags`
+    projects it.
+    """
+
+    return _with_state_reconciliation_gate(
+        resolve_config_write_gate(config, control_gate),
+        config_control_flags(config)["allow_state_reconciliation_writes"],
+    )
+
+
+def _with_state_reconciliation_gate(gate, allow_state_reconciliation_writes):
+    """``gate`` with the global ``allow_state_reconciliation_writes`` gate added."""
+
     blocked = list(gate.blocked_by)
-    if not ALLOW_STATE_RECONCILIATION_WRITES:
+    if not allow_state_reconciliation_writes:
         blocked.append("allow_state_reconciliation_writes")
     return WriteGateDecision(
         allowed=not blocked,

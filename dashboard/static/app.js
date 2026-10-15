@@ -3790,6 +3790,8 @@ function setFlowView(view, persist = true) {
 function fullChargeAssistMeta(status) {
   const meta = {
     active: { label: "Assist active", tone: "tone-send", icon: "charge" },
+    waiting: { label: "Assist waiting", tone: "tone-warn", icon: "history" },
+    unavailable: { label: "Assist unavailable", tone: "tone-skip", icon: "rule" },
     window: { label: "Assist window active", tone: "tone-warn", icon: "history" },
     restore_pending: { label: "Restore pending", tone: "tone-warn", icon: "warning" },
     overdue: { label: "Assist overdue", tone: "tone-warn", icon: "warning" },
@@ -3810,6 +3812,12 @@ function fullChargeAssistDescription(assist) {
       return isAssistAcChargeActive(assist)
         ? "EMS is helping this device reach firmware Max-SoC and is currently AC-charging for monthly battery calibration support."
         : "EMS is helping this device reach firmware Max-SoC.";
+    case "waiting":
+      return "The assist waits while it cannot write what it needs: state writes not allowed, control switched off, "
+        + "or a device report without socSet or, for its AC charge, acMode or inputLimit. "
+        + "It goes on once it can; until then it completes only if the firmware reaches Max-SoC by itself.";
+    case "unavailable":
+      return "The assist needs socSet and the AC input, which only the local API writes; MQTT control takes the power command only.";
     case "window":
       return "EMS may start a short assist charge before the due date to reach firmware Max-SoC.";
     case "overdue":
@@ -3869,6 +3877,11 @@ function renderFullChargeAssist(device) {
     if (assist.restore_pending || assist.ac_mode_restore_pending) {
       rows.push(deviceValue("After charge", "Restore planned", "history"));
     }
+  } else if (assist.status === "waiting") {
+    rows.push(deviceValue("Started", formatAssistTimestamp(assist.assist_started_at), "history"));
+    rows.push(deviceValue("Firmware", fullChargeAssistFirmwareSummary(assist), "gauge"));
+  } else if (assist.status === "unavailable") {
+    rows.push(deviceValue("Last full charge", formatAssistTimestamp(assist.last_full_charge_at), "history"));
   } else if (assist.status === "overdue") {
     const overdueDays = Number.isFinite(assist.days_until_due) ? Math.abs(assist.days_until_due) : null;
     rows.push(deviceValue(

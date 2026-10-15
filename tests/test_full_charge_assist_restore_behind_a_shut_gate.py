@@ -21,9 +21,10 @@ import logging
 
 import pytest
 
-from ems.charge_record import FOUND_EXIT_ATTEMPTS
+from ems.charge_record import EXIT_RESEND_SECONDS, FOUND_EXIT_ATTEMPTS
 from test_ac_charge_regulator import IDLE_EXIT
 from test_battery_full_charge_assist import state
+from test_full_charge_assist_behind_a_shut_gate import _switch
 from test_shutdown_ends_the_full_charge_assist import Assist, charging_item
 from test_unknown_state_fields import AcModeUnreported, _assist_completed
 
@@ -125,6 +126,92 @@ def test_the_restore_goes_out_once_the_gate_opens(tmp_path, caplog, restore):
     assert record["restore_pending"] is False
     assert record["ac_mode_restore_pending"] is False
     assert rig.controller.device_output_control_allowed(rig.dev) is True
+
+
+@pytest.mark.parametrize(
+    "ac_charge_control", [False, True], ids=["AC charging off", "AC charging on"]
+)
+@pytest.mark.parametrize("switch", ["system", "device"])
+@pytest.mark.parametrize("restore", RESTORES)
+def test_with_control_switched_off_a_restore_holds_nothing_either(
+    tmp_path, restore, switch, ac_charge_control
+):
+    """Off is off (R14-1): after a restart the device is any AC input found after a start.
+
+    With AC charging on it gets the one exit found after a start, as a running
+    assist's device does; otherwise the charge is left to it. The restore
+    claimed the device all the same, wrote nothing, and kept that exit from
+    it. Once control is back the restore goes out and settles.
+    """
+
+    rig = _owed(tmp_path, restore, ac_charge_control=ac_charge_control)
+    in_ac_input = restore != "socSet"
+    _switch(rig, switch, False)
+
+    rig.run(cycles=FOUND_EXIT_ATTEMPTS * 8)
+
+    exit_taken = ac_charge_control and in_ac_input
+    assert _state_writes(rig.hardware.writes) == ([IDLE_EXIT] if exit_taken else [])
+    assert rig.item.ac_mode == (1 if in_ac_input and not exit_taken else 2)
+    record = _record(rig)
+    assert record["restore_pending"] is True
+    assert record["ac_mode_restore_pending"] is in_ac_input
+
+    _switch(rig, switch, True)
+    before = len(rig.hardware.writes)
+    rig.run(cycles=FOUND_EXIT_ATTEMPTS * 8)
+
+    assert {"socSet": 900} in rig.written_since(before)
+    assert rig.item.ac_mode == 2
+    assert rig.item.grid_input == 0
+    record = _record(rig)
+    assert record["restore_pending"] is False
+    assert record["ac_mode_restore_pending"] is False
+    assert rig.controller.device_output_control_allowed(rig.dev) is True
+
+
+def _exit_times(rig, cycles):
+    """When each exit to idle went out, by the rig's clock, over ``cycles`` cycles."""
+
+    times = []
+    for _ in range(cycles):
+        before = len(rig.hardware.writes)
+        now = rig.clock.now
+        rig.run()
+        times += [now] * rig.written_since(before).count(IDLE_EXIT)
+    return times
+
+
+@pytest.mark.parametrize("switch", ["system", "device"])
+@pytest.mark.parametrize("restore", ["acMode known", "acMode unknown"])
+def test_a_restore_on_record_switched_off_gets_the_assist_s_three_exits_and_no_other(
+    tmp_path, restore, switch
+):
+    """One exit owner (R16-1): the assist's record, with its cap, not the exit found after a start too.
+
+    After a restart with control on the restore put the charge on the
+    assist's record; the device ignores ``acMode=2``. Switched off at
+    runtime, the restore stands down (R14-1) and the device was any AC input
+    found after a start as well: both exits went out, six instead of three.
+    The record's three go out, one per resend window, and the exit found
+    after a start never does.
+    """
+
+    rig = _owed(tmp_path, restore, ac_charge_control=True)
+    rig.hardware.ignore(lambda written: written.get("acMode") == 2, times=10_000)
+    exit_times = _exit_times(rig, cycles=2)
+    assert "WR1" in rig.controller.full_charge_assist_charges
+    _switch(rig, switch, False)
+
+    exit_times += _exit_times(rig, cycles=FOUND_EXIT_ATTEMPTS * 8)
+
+    assert len(exit_times) == FOUND_EXIT_ATTEMPTS
+    assert all(
+        later - earlier >= EXIT_RESEND_SECONDS
+        for earlier, later in zip(exit_times, exit_times[1:])
+    )
+    assert rig.dev.found_exit_attempts == 0
+    assert rig.item.ac_mode == 1
 
 
 def test_a_restore_whose_write_fails_behind_an_open_gate_still_holds_the_device(tmp_path):

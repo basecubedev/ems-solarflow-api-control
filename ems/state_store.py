@@ -507,12 +507,19 @@ def parse_iso_timestamp(value):
     return parsed
 
 
-def describe_full_charge_assist_status(config, enabled, has_battery, record, now):
+def describe_full_charge_assist_status(
+    config, enabled, has_battery, record, now, held_by=None
+):
     """Derive a normalized battery full-charge assist status for the API.
 
     This is the single place that decides the dashboard-facing ``status``
     and related derived fields, so the browser does not need to duplicate
-    assist window/overdue/restore logic.
+    assist window/overdue/restore logic. ``held_by`` is what keeps the assist
+    from writing to the device now
+    (:meth:`~ems.controller.EMSController.full_charge_assist_held_by`): on a
+    transport without state reconciliation it never runs (``unavailable``),
+    and an active one that cannot write what it needs is ``waiting``, not
+    running.
     """
 
     config = config or {}
@@ -536,6 +543,15 @@ def describe_full_charge_assist_status(config, enabled, has_battery, record, now
             "message": "No battery detected",
         }
 
+    if held_by == "transport_state_reconciliation_unsupported":
+        return {
+            "status": "unavailable",
+            "inside_assist_window": False,
+            "days_until_due": None,
+            "window_starts_at": None,
+            "message": "Full-charge assist is not available over MQTT control",
+        }
+
     if record is None:
         return {
             "status": "unknown",
@@ -554,7 +570,14 @@ def describe_full_charge_assist_status(config, enabled, has_battery, record, now
         window_starts_at = next_due_at - timedelta(days=assist_window_days)
         inside_assist_window = window_starts_at <= now <= next_due_at
 
-    if record.get("full_charge_assist_active"):
+    if record.get("full_charge_assist_active") and held_by is not None:
+        status = "waiting"
+        message = (
+            "Full-charge assist waiting for a device report that carries what it writes"
+            if held_by == "fields_not_reported"
+            else "Full-charge assist waiting for state writes"
+        )
+    elif record.get("full_charge_assist_active"):
         status = "active"
         message = "Full-charge assist active"
     elif record.get("restore_pending") or record.get("ac_mode_restore_pending"):

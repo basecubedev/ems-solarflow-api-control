@@ -58,10 +58,11 @@ their raw value for debugging, for example `Unknown AC state (value 9)`.
 When [battery full-charge assist](battery-full-charge-assist.md) is enabled
 and a battery-backed device has known assist state, the device card also shows
 a compact "Full-charge assist" section with the current status (active,
-assist window active, restore pending, or scheduled), last full-charge and
-next due timestamps, and pending restore flags. Devices without a detected
-battery, and devices when the feature is globally disabled, do not show this
-section.
+waiting for state writes or a device report that carries what it writes,
+unavailable over MQTT control, assist window active, restore pending, or
+scheduled), last full-charge and next due timestamps, and pending restore
+flags. Devices without a detected battery, and devices when the feature is
+globally disabled, do not show this section.
 
 ## Analytics View
 
