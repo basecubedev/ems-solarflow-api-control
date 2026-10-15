@@ -211,12 +211,14 @@ class _AnswerThatBreaksOff(io.BytesIO):
     def read(self, size=-1):
         raise ConnectionResetError(104, "Connection reset by peer")
 
+    read1 = read
+
 
 def registry_that_breaks_off(asked):
     from appliance import registry_tags
     from appliance.releases import ReleaseCatalogue
 
-    def opener(request, timeout=None):
+    def opener(request, timeout=None, deadline=None):
         asked.append(request.full_url)
         return _AnswerThatBreaksOff()
 

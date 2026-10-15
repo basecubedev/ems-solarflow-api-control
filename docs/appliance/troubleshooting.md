@@ -320,6 +320,16 @@ Expert mode still accepts an exact release tag. Check the appliance's DNS and
 outbound HTTPS; a site that has neither can point `release_index_url` in
 `/etc/ems-appliance-manager/appliance.conf` at a mirror's JSON index instead.
 
+The lookup — the registry's challenge, its anonymous token and every page of
+tags — has 10 seconds in all, from the first connection attempt to the last
+byte, a body the registry keeps trickling included. Only the name lookups,
+before each of its connections, are bounded by the resolver's own timeout
+instead: a slow resolver can hold the lookup past its 10 seconds, and the
+next connection is then refused at once. A redirect is followed to
+https only, refused before an http hop is contacted, and the registry's token
+goes to the registry's own host alone: not along a redirect to another host,
+and not to a next page the registry names on one (`release_registry_invalid`).
+
 ## "release_index_insecure"
 
 `release_index_url` is not an https URL, or the server it names redirected to

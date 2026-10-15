@@ -208,14 +208,35 @@ class _UnheldConnection(Exception):
     """A connection that opened without handing its socket to the deadline."""
 
 
+def _same_origin(first, second):
+    """Whether two URLs share scheme, host and port, the scope of a credential."""
+
+    try:
+        return _origin(first) == _origin(second)
+    except ValueError:
+        return False
+
+
+def _origin(url):
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme, parts.hostname, parts.port or {"https": 443, "http": 80}.get(parts.scheme)
+
+
 class _HttpsRedirectsOnly(urllib.request.HTTPRedirectHandler):
-    """A redirect is followed only to https, and refused before it is opened."""
+    """A redirect is followed only to https, and refused before it is opened.
+
+    urllib copies every request header onto a redirect, whatever host it names;
+    an ``Authorization`` header goes along only to the same origin.
+    """
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if urllib.parse.urlsplit(newurl).scheme != "https":
             fp.close()
             raise _InsecureRedirect(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        follow = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if follow is not None and not _same_origin(newurl, req.full_url):
+            follow.remove_header("Authorization")
+        return follow
 
 
 class _WatchedHttpsHandler(urllib.request.HTTPSHandler):

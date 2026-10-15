@@ -9,15 +9,22 @@ place the image is pulled from anyway.
 
 Nothing here is trusted: a tag is a candidate until ``validate_release_tag``
 accepts it, and the install path still verifies the pulled image's OCI labels.
+
+The lookup is read through ``release_fetch``'s transport: one deadline over the
+whole lookup, whose timer ends every connection it opened, and redirects
+followed to https only, the registry's token to its own origin alone.
 """
 
 import http.client
 import json
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from appliance import release_fetch
 
 DEFAULT_TIMEOUT = 10
 MAX_TAGS_BYTES = 512 * 1024
@@ -36,27 +43,6 @@ class RegistryError(Exception):
         self.message = message
 
 
-class _Budget:
-    """One wall-clock budget for the whole lookup.
-
-    A per-request timeout bounds nothing here: a challenge, its token exchange
-    and ten pages are eleven requests, and the operator's request would sit
-    behind all of them long past the agent's own operation timeout.
-    """
-
-    def __init__(self, seconds, clock):
-        self._clock = clock
-        self._deadline = clock() + max(float(seconds), 0.0)
-
-    def remaining(self):
-        left = self._deadline - self._clock()
-        if left <= 0:
-            raise RegistryError(
-                "release_registry_unreachable", "the registry did not answer in time"
-            )
-        return left
-
-
 def split_repository(repository):
     """The registry host and the repository path a reference names."""
 
@@ -69,43 +55,59 @@ def split_repository(repository):
     return DEFAULT_REGISTRY, text if rest else f"library/{text}"
 
 
-def _open(opener, url, headers, budget):
+def _open(opener, url, headers, deadline):
     if urllib.parse.urlsplit(url).scheme != "https":
         raise RegistryError(
             "release_registry_unreachable", "only an https registry endpoint is read"
         )
     request = urllib.request.Request(url, headers=headers)
     try:
-        return opener(request, timeout=budget.remaining())
+        return opener(request, timeout=deadline.remaining(), deadline=deadline)
     except urllib.error.HTTPError:
         raise
+    except release_fetch._InsecureRedirect:
+        raise RegistryError(
+            "release_registry_unreachable", "the registry redirected to a non-https location"
+        ) from None
+    except release_fetch._UnheldConnection:
+        raise RegistryError(
+            "release_registry_unreachable",
+            "the registry answered over a connection its deadline could not end",
+        ) from None
     except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
+        deadline.remaining()
         raise RegistryError(
             "release_registry_unreachable",
             f"the registry is unreachable: {exc.__class__.__name__}",
         ) from exc
 
 
-def _read(response):
+def _read(response, deadline):
+    label = "the registry answer"
+    release_fetch.HttpsFetcher._still_https(response, label)
+    payload = bytearray()
+    for block in release_fetch.HttpsFetcher._blocks(response, deadline, label):
+        payload += block
+        if len(payload) > MAX_TAGS_BYTES:
+            raise RegistryError(
+                "release_registry_invalid",
+                f"the registry sends more than the {MAX_TAGS_BYTES} bytes this appliance reads",
+            )
     try:
-        payload = response.read(MAX_TAGS_BYTES + 1)
-    except (OSError, http.client.HTTPException) as exc:
-        raise RegistryError(
-            "release_registry_unreachable",
-            f"the registry answer broke off: {exc.__class__.__name__}",
-        ) from exc
-    if len(payload) > MAX_TAGS_BYTES:
-        raise RegistryError(
-            "release_registry_invalid",
-            f"the registry sends more than the {MAX_TAGS_BYTES} bytes this appliance reads",
-        )
-    try:
-        return json.loads(payload.decode("utf-8", errors="replace"))
+        return json.loads(bytes(payload).decode("utf-8", errors="replace"))
     except ValueError as exc:
         raise RegistryError("release_registry_invalid", "the registry answer is not JSON") from exc
 
 
-def _token(opener, challenge, budget):
+def _refused(exc):
+    """A transport refusal under the registry's own code."""
+
+    if exc.code == "release_download_timed_out":
+        return RegistryError("release_registry_unreachable", "the registry did not answer in time")
+    return RegistryError("release_registry_unreachable", exc.message)
+
+
+def _token(opener, challenge, deadline):
     """An anonymous pull token, from the realm the registry's challenge names.
 
     The realm is a URL the registry chose, so it is held to https like every
@@ -121,7 +123,7 @@ def _token(opener, challenge, budget):
     query = urllib.parse.urlencode(
         {key: value for key, value in parameters.items() if key in ("service", "scope")}
     )
-    payload, _ = _page(opener, f"{realm}?{query}" if query else realm, {}, budget)
+    payload, _ = _page(opener, f"{realm}?{query}" if query else realm, {}, deadline)
     token = ""
     if isinstance(payload, dict):
         token = payload.get("token") or payload.get("access_token") or ""
@@ -130,10 +132,10 @@ def _token(opener, challenge, budget):
     return str(token)
 
 
-def _page(opener, url, headers, budget):
+def _page(opener, url, headers, deadline):
     try:
-        with _open(opener, url, headers, budget) as response:
-            return _read(response), response.headers.get("Link", "")
+        with _open(opener, url, headers, deadline) as response:
+            return _read(response, deadline), response.headers.get("Link", "")
     except urllib.error.HTTPError as exc:
         raise RegistryError(
             "release_registry_unreachable", f"the registry answered HTTP {exc.code}"
@@ -141,26 +143,35 @@ def _page(opener, url, headers, budget):
 
 
 def list_tags(repository, *, opener=None, timeout=DEFAULT_TIMEOUT, clock=time.monotonic):
-    """Every tag the repository publishes, in the order the registry lists them."""
+    """Every tag the repository publishes, in the order the registry lists them.
 
-    opener = opener or urllib.request.urlopen
-    budget = _Budget(timeout, clock)
+    A challenge, its token and every page are read under one deadline of
+    ``timeout`` seconds, a body kept alive inside one read included.
+    """
+
+    opener = opener or release_fetch._open_watched
     host, path = split_repository(repository)
     base = f"https://{host}"
-    url = f"{base}/v2/{path}/tags/list?n={PAGE_SIZE}"
-    headers = {"Accept": "application/json"}
-
     try:
-        with _open(opener, url, headers, budget) as response:
-            payload, link = _read(response), response.headers.get("Link", "")
+        with release_fetch._Deadline(timeout, clock, "the registry", threading.Timer) as deadline:
+            return _lookup(opener, base, f"{base}/v2/{path}/tags/list?n={PAGE_SIZE}", deadline)
+    except release_fetch.FetchError as exc:
+        raise _refused(exc) from None
+
+
+def _lookup(opener, base, url, deadline):
+    headers = {"Accept": "application/json"}
+    try:
+        with _open(opener, url, headers, deadline) as response:
+            payload, link = _read(response, deadline), response.headers.get("Link", "")
     except urllib.error.HTTPError as exc:
         if exc.code != 401:
             raise RegistryError(
                 "release_registry_unreachable", f"the registry answered HTTP {exc.code}"
             ) from exc
-        token = _token(opener, exc.headers.get("WWW-Authenticate", ""), budget)
+        token = _token(opener, exc.headers.get("WWW-Authenticate", ""), deadline)
         headers["Authorization"] = f"Bearer {token}"
-        payload, link = _page(opener, url, headers, budget)
+        payload, link = _page(opener, url, headers, deadline)
 
     tags = []
     pages = 1
@@ -170,6 +181,11 @@ def list_tags(repository, *, opener=None, timeout=DEFAULT_TIMEOUT, clock=time.mo
         match = _NEXT_LINK.search(link or "")
         if not match or pages >= MAX_PAGES:
             break
-        payload, link = _page(opener, urllib.parse.urljoin(base, match.group(1)), headers, budget)
+        following = urllib.parse.urljoin(base, match.group(1))
+        if not release_fetch._same_origin(following, base):
+            raise RegistryError(
+                "release_registry_invalid", "the registry names a next page on another host"
+            )
+        payload, link = _page(opener, following, headers, deadline)
         pages += 1
     return tags

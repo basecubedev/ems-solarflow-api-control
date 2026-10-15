@@ -42,7 +42,7 @@ class _Registry:
         self.challenge = challenge
         self.requests = []
 
-    def __call__(self, request, timeout=None):
+    def __call__(self, request, timeout=None, deadline=None):
         url = request.full_url
         self.requests.append((url, dict(request.header_items())))
         if url.startswith("https://ghcr.io/token"):
@@ -110,19 +110,32 @@ def test_paging_follows_the_link_header_the_registry_sends():
     assert registry.requests[1][0].endswith("/tags/list?last=v0.7.0")
 
 
+class _Slow(_Registry):
+    """Each request takes ``seconds`` of the clock the lookup reads."""
+
+    def __init__(self, pages, *, seconds, **kwargs):
+        super().__init__(pages, **kwargs)
+        self.now = 0.0
+        self.seconds = seconds
+
+    def __call__(self, request, timeout=None, deadline=None):
+        self.now += self.seconds
+        return super().__call__(request, timeout=timeout, deadline=deadline)
+
+
 def test_the_whole_lookup_is_bounded_by_one_budget_not_by_request():
     """A challenge, a token and ten pages are eleven requests. An operator waits
     once, not eleven times, and the agent's own operation timeout is 30s."""
 
-    ticks = iter([0.0, 0.0, 4.0, 9.9, 10.1])
     endless = page(["v0.7.0"], link='</v2/x/tags/list?last=v0.7.0>; rel="next"')
-    registry = _Registry([endless] * 6, challenge="")
+    registry = _Slow([endless] * 6, seconds=4.0, challenge="")
 
     with pytest.raises(RegistryError) as error:
-        registry_tags.list_tags(REPOSITORY, opener=registry, clock=lambda: next(ticks))
+        registry_tags.list_tags(REPOSITORY, opener=registry, clock=lambda: registry.now)
 
     assert error.value.code == "release_registry_unreachable"
     assert "in time" in error.value.message
+    assert len(registry.requests) == 3
 
 
 def test_paging_stops_at_the_bound_rather_than_following_forever():
@@ -137,6 +150,24 @@ def test_paging_stops_at_the_bound_rather_than_following_forever():
 
 
 # --- what it refuses ---------------------------------------------------------
+
+
+def test_a_next_page_on_another_host_is_refused_and_gets_no_token():
+    """The token is the registry's; a Link header naming another host would
+    have taken it there along with the request."""
+
+    registry = _Registry(
+        [
+            page(["v0.7.0"], link='<https://elsewhere.example/v2/x/tags/list?last=v0.7.0>; rel="next"'),
+            page(["v0.8.0"]),
+        ]
+    )
+
+    with pytest.raises(RegistryError) as error:
+        registry_tags.list_tags(REPOSITORY, opener=registry)
+
+    assert error.value.code == "release_registry_invalid"
+    assert not [url for url, _ in registry.requests if "elsewhere.example" in url]
 
 
 def test_a_repository_with_no_registry_host_resolves_to_docker_hub():
@@ -161,7 +192,7 @@ def test_a_token_realm_that_is_not_https_is_refused():
 
 
 def test_an_unreachable_registry_is_a_named_refusal():
-    def _unreachable(request, timeout=None):
+    def _unreachable(request, timeout=None, deadline=None):
         raise urllib.error.URLError("no route")
 
     with pytest.raises(RegistryError) as error:
@@ -183,7 +214,7 @@ def test_an_answer_whose_head_cannot_be_read_is_a_named_refusal(error):
     """urllib passes an http.client error in the status line or the headers on
     unwrapped; it failed the version list as an agent error."""
 
-    def _unreadable(request, timeout=None):
+    def _unreadable(request, timeout=None, deadline=None):
         raise error
 
     with pytest.raises(RegistryError) as refused:
@@ -205,6 +236,9 @@ class _BreaksOff(io.BytesIO):
     def read(self, size=-1):
         raise self._error
 
+    def read1(self, size=-1):
+        raise self._error
+
 
 @pytest.mark.parametrize(
     "error",
@@ -216,14 +250,16 @@ def test_a_body_that_breaks_off_is_a_named_refusal(error):
     an exact tag's plan as an agent error."""
 
     with pytest.raises(RegistryError) as refused:
-        registry_tags.list_tags(REPOSITORY, opener=lambda request, timeout=None: _BreaksOff(error))
+        registry_tags.list_tags(
+            REPOSITORY, opener=lambda request, timeout=None, deadline=None: _BreaksOff(error)
+        )
 
     assert refused.value.code == "release_registry_unreachable"
     assert type(error).__name__ in refused.value.message
 
 
 def test_a_body_that_is_not_json_is_a_named_refusal():
-    def _garbage(request, timeout=None):
+    def _garbage(request, timeout=None, deadline=None):
         response = io.BytesIO(b"<html>no</html>")
         response.url = request.full_url
         response.headers = {}
@@ -242,7 +278,7 @@ def test_a_tag_list_that_is_not_a_list_of_strings_yields_no_tags():
 
 
 def test_an_oversized_answer_is_refused_rather_than_truncated():
-    def _flood(request, timeout=None):
+    def _flood(request, timeout=None, deadline=None):
         response = io.BytesIO(b" " * (registry_tags.MAX_TAGS_BYTES + 10))
         response.url = request.full_url
         response.headers = {}
@@ -252,3 +288,14 @@ def test_an_oversized_answer_is_refused_rather_than_truncated():
         registry_tags.list_tags(REPOSITORY, opener=_flood)
 
     assert error.value.code == "release_registry_invalid"
+
+
+def test_the_troubleshooting_page_names_the_lookup_s_deadline():
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "docs/appliance/troubleshooting.md").read_text(
+        encoding="utf-8"
+    )
+    section = text.split('## "release_registry_unreachable"', 1)[1].split("\n## ", 1)[0]
+
+    assert f"{registry_tags.DEFAULT_TIMEOUT} seconds in all" in section
