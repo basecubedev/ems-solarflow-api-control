@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """EMS-owned credential store: Zendure token, MQTT secrets, migration."""
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -136,6 +137,251 @@ def test_deleted_token_is_not_reimported_from_the_legacy_copy(tmp_path):
     assert store.load_zendure_token() is None
     assert store.zendure.settings()["token_saved"] is False
     assert not legacy.token_path.exists()
+
+
+WAIT_S = 5
+OTHER_TOKEN = "another-zendure-api-token-value"
+
+
+class _SignallingLock:
+    """A reentrant lock that sets ``contended`` when another thread has to wait for it."""
+
+    def __init__(self, contended):
+        self._lock = threading.RLock()
+        self._contended = contended
+
+    def __enter__(self):
+        if not self._lock.acquire(blocking=False):
+            self._contended.set()
+            self._lock.acquire()
+        return self
+
+    def __exit__(self, *_exc):
+        self._lock.release()
+
+
+class _PausingLegacy(ZendureTokenStore):
+    """Pauses the thread named ``pause_in`` once, in ``delete_token`` or ``load_token``."""
+
+    def __init__(self, data_dir, *, step, pause_in):
+        super().__init__(data_dir)
+        self.paused = threading.Event()
+        self.go_on = threading.Event()
+        self._step = step
+        self._pause_in = pause_in
+
+    def _pause(self, step):
+        if step == self._step and threading.current_thread().name == self._pause_in:
+            self._step = None
+            self.paused.set()
+            self.go_on.wait(WAIT_S)
+
+    def delete_token(self):
+        self._pause("delete_token")
+        return super().delete_token()
+
+    def load_token(self):
+        token = super().load_token()
+        self._pause("load_token")
+        return token
+
+
+def _run(name, call, results):
+    thread = threading.Thread(
+        target=lambda: results.setdefault(name, call()), name=name, daemon=True
+    )
+    thread.start()
+    return thread
+
+
+def _legacy_backed_store(tmp_path, *, step, pause_in):
+    legacy = _PausingLegacy(tmp_path / "admin-data", step=step, pause_in=pause_in)
+    legacy.save_token(TOKEN)
+    store = ZendureCloudTokenStore(tmp_path / "config", legacy_store=legacy)
+    contended = threading.Event()
+    store._lock = _SignallingLock(contended)
+    return store, legacy, contended
+
+
+def test_a_status_read_during_a_delete_does_not_bring_the_token_back(tmp_path):
+    """Interleaving: the token was migrated; a delete has started and pauses at the
+    legacy copy; a status read on another thread migrates; the delete ends.
+
+    Before, the delete had removed the new file and not yet the legacy copy, so the
+    status read found no token, migrated the legacy one, and the deleted token was
+    saved again. Migration and deletion now hold one lock.
+    """
+
+    store, legacy, contended = _legacy_backed_store(
+        tmp_path, step="delete_token", pause_in="delete"
+    )
+    assert store.load_token() == TOKEN
+    results = {}
+
+    deleter = _run("delete", store.delete_token, results)
+    assert legacy.paused.wait(WAIT_S)
+
+    def read_status():
+        settings = store.settings()
+        contended.set()
+        return settings
+
+    reader = _run("status", read_status, results)
+    try:
+        assert contended.wait(WAIT_S)
+    finally:
+        legacy.go_on.set()
+    deleter.join(WAIT_S)
+    reader.join(WAIT_S)
+
+    assert not deleter.is_alive() and not reader.is_alive()
+    assert results["delete"]["removed"] is True
+    assert store.load_token() is None
+    assert not legacy.token_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        (lambda store: store.delete_token(), None),
+        (lambda store: store.save_token(OTHER_TOKEN), OTHER_TOKEN),
+    ],
+    ids=["deleted", "replaced"],
+)
+def test_a_migration_in_flight_does_not_undo_a_delete_or_a_save(tmp_path, change, expected):
+    """Interleaving: nothing was migrated yet; a status read has read the legacy
+    token to migrate it and pauses; the token is deleted, or another one saved, on
+    another thread; the migration then writes.
+
+    The migration holds the lock the change takes, so the change lands after it
+    and stands.
+    """
+
+    store, legacy, contended = _legacy_backed_store(
+        tmp_path, step="load_token", pause_in="status"
+    )
+    results = {}
+
+    reader = _run("status", store.settings, results)
+    assert legacy.paused.wait(WAIT_S)
+
+    def apply_change():
+        outcome = change(store)
+        contended.set()
+        return outcome
+
+    writer = _run("change", apply_change, results)
+    try:
+        assert contended.wait(WAIT_S)
+    finally:
+        legacy.go_on.set()
+    reader.join(WAIT_S)
+    writer.join(WAIT_S)
+
+    assert not reader.is_alive() and not writer.is_alive()
+    assert store.load_token() == expected
+
+
+class _PausingPath:
+    """The token path; its first ``exists()`` on the thread ``status`` answers, then pauses."""
+
+    def __init__(self, path):
+        self._path = path
+        self.paused = threading.Event()
+        self.go_on = threading.Event()
+        self._armed = True
+
+    def exists(self):
+        answer = self._path.exists()
+        if self._armed and threading.current_thread().name == "status":
+            self._armed = False
+            self.paused.set()
+            self.go_on.wait(WAIT_S)
+        return answer
+
+    def __getattr__(self, name):
+        return getattr(self._path, name)
+
+
+def test_a_save_between_the_migrations_check_and_its_save_stands(tmp_path):
+    """Interleaving: nothing was migrated yet; a status read finds no new record
+    and pauses right after that check; another token is saved on another thread;
+    the read goes on.
+
+    The check sits under the lock the save takes, so the save lands after the
+    migration and stands, instead of the migration writing the legacy token over it.
+    """
+
+    legacy = ZendureTokenStore(tmp_path / "admin-data")
+    legacy.save_token(TOKEN)
+    store = ZendureCloudTokenStore(tmp_path / "config", legacy_store=legacy)
+    contended = threading.Event()
+    store._lock = _SignallingLock(contended)
+    pausing = _PausingPath(store.token_path)
+    store.token_path = pausing
+    results = {}
+
+    reader = _run("status", store.settings, results)
+    assert pausing.paused.wait(WAIT_S)
+
+    def save():
+        outcome = store.save_token(OTHER_TOKEN)
+        contended.set()
+        return outcome
+
+    writer = _run("change", save, results)
+    try:
+        assert contended.wait(WAIT_S)
+    finally:
+        pausing.go_on.set()
+    reader.join(WAIT_S)
+    writer.join(WAIT_S)
+
+    assert not reader.is_alive() and not writer.is_alive()
+    assert store.load_token() == OTHER_TOKEN
+
+
+def test_a_metadata_write_during_a_delete_does_not_bring_the_token_back(tmp_path):
+    """Interleaving: a metadata write has read the record and pauses before
+    writing it back, token included; a delete runs on another thread; the
+    metadata write then writes. The delete waits for it and the token stays gone.
+    """
+
+    store = ZendureCloudTokenStore(tmp_path / "config")
+    store.save_token(TOKEN)
+    contended = threading.Event()
+    store._lock = _SignallingLock(contended)
+    paused = threading.Event()
+    go_on = threading.Event()
+    write_record = store._files.write_record
+
+    def pausing_write(name, record):
+        if threading.current_thread().name == "metadata":
+            paused.set()
+            go_on.wait(WAIT_S)
+        return write_record(name, record)
+
+    store._files.write_record = pausing_write
+    results = {}
+
+    writer = _run("metadata", lambda: store.update_metadata(last_status="ok"), results)
+    assert paused.wait(WAIT_S)
+
+    def delete():
+        outcome = store.delete_token()
+        contended.set()
+        return outcome
+
+    deleter = _run("delete", delete, results)
+    try:
+        assert contended.wait(WAIT_S)
+    finally:
+        go_on.set()
+    writer.join(WAIT_S)
+    deleter.join(WAIT_S)
+
+    assert not writer.is_alive() and not deleter.is_alive()
+    assert store.load_token() is None
 
 
 def test_legacy_admin_token_is_migrated(tmp_path):

@@ -17,6 +17,7 @@ The listener is injectable so the whole flow is testable without a real broker.
 """
 
 import json
+import threading
 import time
 from dataclasses import dataclass
 
@@ -639,6 +640,8 @@ class ZendureCloudDiscovery:
         self._tls_mode = tls_mode if tls_mode in TLS_MODES else TLS_SYSTEM_CA
         self._candidates = []
         self._trusted_candidates = []
+        self._candidates_key = None
+        self._candidates_lock = threading.Lock()
         self._last_seed_attempt = 0.0
         self._refreshes = SingleFlight()
 
@@ -688,11 +691,10 @@ class ZendureCloudDiscovery:
             app_key=result.get("app_key"),
         )
         candidate_set.seed_devices(devices)
-        self._candidates = candidate_set.results()
-        self._trusted_candidates = candidate_set.trusted_results()
         try:
-            self.store.update_metadata(
-                last_checked=utc_now_iso(),
+            self._keep_result(
+                api_key,
+                (candidate_set.results(), candidate_set.trusted_results()),
                 last_status="ok",
                 last_error=None,
                 last_device_count=len(devices),
@@ -710,7 +712,10 @@ class ZendureCloudDiscovery:
         # closed without touching the credential store.
         credential = normalize_app_key(api_key)
         resolve_device_list_credential(credential)
-        self.store.save_token(credential)
+        with self._candidates_lock:
+            self.store.save_token(credential)
+            if credential != self._candidates_key:
+                self._forget_candidates()
         result = {
             "ok": True,
             "token_saved": True,
@@ -835,9 +840,9 @@ class ZendureCloudDiscovery:
         return [] if change.existed_before else [ref]
 
     def delete_token(self):
-        result = self.store.delete_token()
-        self._candidates = []
-        self._trusted_candidates = []
+        with self._candidates_lock:
+            result = self.store.delete_token()
+            self._forget_candidates()
         return {
             "ok": True,
             "token_saved": False,
@@ -852,15 +857,11 @@ class ZendureCloudDiscovery:
         try:
             result = self._fetch(api_key, DEVICE_LIST_TIMEOUT_S)
         except ZendureCloudError as exc:
-            self.store.update_metadata(
-                last_checked=utc_now_iso(),
-                last_status="error",
-                last_error=str(exc),
-            )
+            self._keep_result(api_key, last_status="error", last_error=str(exc))
             return {"ok": False, "error": "device_list_failed", "message": str(exc)}
         broker, tls_mode = self._broker_from_result(result)
-        self.store.update_metadata(
-            last_checked=utc_now_iso(),
+        self._keep_result(
+            api_key,
             last_status="ok",
             last_error=None,
             last_device_count=len(result.get("devices", [])),
@@ -883,7 +884,9 @@ class ZendureCloudDiscovery:
         second session under it drops the first: a refresh asked for while one
         with the same saved key runs joins it, one with another key waits. While
         the EMS may hold a session under that ``client_id``, the refresh reads
-        the deviceList only and says so in ``mqtt_status``.
+        the deviceList only and says so in ``mqtt_status``. A refresh that ends
+        after its key was removed or replaced answers its callers and keeps
+        nothing.
         """
 
         return self._refreshes.run(self._refresh_inputs, self._refresh)
@@ -898,11 +901,7 @@ class ZendureCloudDiscovery:
         try:
             result = self._fetch(api_key, DEVICE_LIST_TIMEOUT_S)
         except ZendureCloudError as exc:
-            self.store.update_metadata(
-                last_checked=utc_now_iso(),
-                last_status="error",
-                last_error=str(exc),
-            )
+            self._keep_result(api_key, last_status="error", last_error=str(exc))
             return {"ok": False, "error": "device_list_failed", "message": str(exc)}
 
         devices = result.get("devices", [])
@@ -936,16 +935,16 @@ class ZendureCloudDiscovery:
             except Exception:  # a listener fault must never crash the Admin route
                 mqtt_error = _ERR_MQTT_FAILED
 
-        self._candidates = candidate_set.results()
-        self._trusted_candidates = candidate_set.trusted_results()
+        candidates = candidate_set.results()
         observed = candidate_set.mqtt_observed_count()
         # Reaching this point means the deviceList succeeded, so the discovery run
         # is "ok" even if the best-effort live-MQTT enrichment failed. Only a
         # deviceList failure (handled above) is a hard error; a failed/empty MQTT
         # listen is surfaced as the transient ``mqtt_status``/``mqtt_message`` in
         # the payload, not as a persisted "error" that hides the found devices.
-        self.store.update_metadata(
-            last_checked=utc_now_iso(),
+        self._keep_result(
+            api_key,
+            (candidates, candidate_set.trusted_results()),
             last_status="ok",
             last_error=None,
             last_device_count=len(devices),
@@ -956,10 +955,10 @@ class ZendureCloudDiscovery:
             "ok": True,
             "device_list_count": len(devices),
             "mqtt_observed_count": observed,
-            "devices_found": len(self._candidates),
+            "devices_found": len(candidates),
             "tls_mode": tls_mode,
             "broker": broker,
-            "candidates": self._candidates,
+            "candidates": candidates,
         }
         if ems_session is not False:
             payload["mqtt_status"] = MQTT_STATUS_EMS_SESSION
@@ -975,6 +974,29 @@ class ZendureCloudDiscovery:
         else:
             payload["mqtt_status"] = "ok"
         return payload
+
+    def _keep_result(self, api_key, found=None, **metadata):
+        """Keep what a read with ``api_key`` found, while ``api_key`` is the saved key.
+
+        ``found`` is ``(candidates, trusted_candidates)``. A read that outlived
+        the removal or replacement of its key, or a test of a key that is not
+        saved, keeps nothing: no candidates, and no metadata on the record of
+        another key. The record write rewrites the whole record, so it holds
+        the lock ``delete_token`` takes and cannot bring a deleted key back.
+        """
+
+        with self._candidates_lock:
+            if self.store.load_token() != api_key:
+                return
+            if found is not None:
+                self._candidates, self._trusted_candidates = found
+                self._candidates_key = api_key
+            self.store.update_metadata(last_checked=utc_now_iso(), **metadata)
+
+    def _forget_candidates(self):
+        self._candidates = []
+        self._trusted_candidates = []
+        self._candidates_key = None
 
     def _ems_session(self, client_id):
         """Whether the EMS signs in under ``client_id``; ``None`` when unknown."""

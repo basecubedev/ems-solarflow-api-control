@@ -2498,6 +2498,100 @@ def test_config_preview_accepts_zendure_cloud_mqtt_proposal(tmp_path):
         srv.server_close()
 
 
+class _HeldCloudSession:
+    """A cloud listener that lets sessions through until ``hold`` is set."""
+
+    def __init__(self):
+        self.hold = threading.Event()
+        self.listening = threading.Event()
+        self.release = threading.Event()
+
+    def listener(self, _connection):
+        return SimpleNamespace(listen=self._listen)
+
+    def _listen(self, _timeout_s, _on_message):
+        if self.hold.is_set():
+            self.listening.set()
+            self.release.wait(5)
+
+
+def test_config_preview_refuses_a_cloud_device_of_a_key_replaced_while_it_was_refreshed(
+    tmp_path,
+):
+    """Interleaving: a cloud refresh with key A listens on the cloud broker when
+    key B is saved through the token route, and ends after it.
+
+    Before, the refresh put A's device back into the trusted proposal set once
+    it ended, and config-preview resolved a selection of it for account B. Now
+    A's device is gone with A's key, and the selection is refused.
+    """
+
+    from admin.credential_store import CredentialStore
+
+    session = _HeldCloudSession()
+    discovery = ZendureCloudDiscovery(
+        CredentialStore().zendure,
+        device_list_fetcher=lambda _t, _to: _cloud_device_list_result(),
+        listener_factory=session.listener,
+        timeout_s=0.0,
+    )
+    discovery.save_token(_CLOUD_API_KEY)
+    assert discovery.refresh()["ok"] is True
+    srv, base = _serve(
+        release_manager=_FakeReleaseManager(tmp_path),
+        zendure_cloud_discovery=discovery,
+    )
+    refreshed = {}
+    try:
+        _, _, proposals_payload = _request(f"{base}/api/discovery/mqtt-proposals")
+        proposal = next(
+            p
+            for p in proposals_payload["proposals"]
+            if p["broker_ref"] == "zendure_cloud"
+        )
+        selection = {
+            "id": proposal["id"],
+            "broker_ref": proposal["broker_ref"],
+            "serial_number": proposal["serial_number"],
+            "device_id": proposal["device_id"],
+        }
+        session.hold.set()
+        refresh = threading.Thread(
+            target=lambda: refreshed.update(result=discovery.refresh()), daemon=True
+        )
+        refresh.start()
+        try:
+            assert session.listening.wait(5)
+            status, _, _ = _request(
+                f"{base}/api/discovery/zendure-cloud-mqtt/token",
+                method="POST",
+                body={"api_key": "another-app-key"},
+            )
+            assert status == 200
+        finally:
+            session.release.set()
+        refresh.join(5)
+        assert refreshed["result"]["ok"] is True
+
+        status, _, payload = _request(
+            f"{base}/api/setup/config-preview/validate",
+            method="POST",
+            body={
+                "devices": [],
+                "supported_grid_meter_count": 0,
+                "zendure_mqtt_proposals": [selection],
+            },
+        )
+        assert status == 400, payload
+        _, _, proposals_payload = _request(f"{base}/api/discovery/mqtt-proposals")
+        assert [
+            p for p in proposals_payload["proposals"] if p["broker_ref"] == "zendure_cloud"
+        ] == []
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def test_discovery_devices_excludes_cloud_candidates(tmp_path):
     discovery = _cloud_discovery(tmp_path)
     discovery.store.save_token(_CLOUD_API_KEY)

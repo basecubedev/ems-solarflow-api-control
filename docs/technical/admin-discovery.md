@@ -576,6 +576,19 @@ key or a pooled credential saved in between, waits until the running refresh has
 ended and then reads its inputs again, so no caller is answered from
 credentials replaced before it asked.
 
+The cloud candidates belong to the key they were read with. Saving another key,
+or removing it, drops them, and a cloud refresh or the deviceList seed of a
+discovery run that ends after its key was removed or replaced keeps nothing of
+what it read: its devices do not enter the trusted proposal set that
+config-preview resolves selections against, and its status does not land on the
+record of a key saved since. The callers of such a refresh still get the answer
+read with the key they asked with. A credential test, the validation of a save
+included, records its status the same way: only on the record of the key it
+tested, and only while that key is the saved one, so testing a key that is not
+saved leaves the saved key's status alone. Each of these writes rewrites the
+whole record, token included, and holds the lock a key change takes, so a
+status written while the key is deleted cannot bring the key back.
+
 The EMS signs in to the Zendure cloud broker with the same client id: applying a
 cloud device stores the deviceList `client_id` in the EMS's cloud runtime record,
 and the EMS connects with it. A discovery listen under that id would drop the
@@ -1069,7 +1082,11 @@ The `admin.secret_store.ZendureTokenStore` shim may still exist internally for
 compatibility, but the credential store is the current storage layer. The raw
 credential is never returned to the browser and never logged; only redacted
 metadata (last check time, status, device count, broker host/port, TLS mode) is exposed.
-`GET settings` reports key status without the key.
+`GET settings` reports key status without the key. A token an older Admin kept
+in its own data directory is imported on the first read and stays there until
+the token is deleted, which removes both copies. The import, a save, a delete and
+a metadata write hold one lock in the credential store, so a read that imports
+cannot bring back a token that a delete or a save is replacing at that moment.
 
 Cloud flow (`admin/zendure_cloud_auth.py`, `admin/zendure_cloud_mqtt.py`):
 
@@ -1115,14 +1132,14 @@ API (all require Admin auth):
 
 - `GET /api/discovery/zendure-cloud-mqtt/settings` — redacted credential status.
 - `POST /api/discovery/zendure-cloud-mqtt/token` — save/replace the API key or
-  HA/deviceList token.
+  HA/deviceList token; another key drops the cached cloud candidates.
   Field `api_key` (or `token` as a backwards-compatible alias, but never both);
   explicit modes `zendure_api_key` and `ha_device_list_token` are accepted.
 - `DELETE /api/discovery/zendure-cloud-mqtt/token` — forget the credential +
   cache.
 - `POST /api/discovery/zendure-cloud-mqtt/test` — deviceList only (no MQTT
   connection); returns the device count and broker. Uses the supplied `api_key`
-  / token or the saved one.
+  / token or the saved one; the status is recorded only for the saved key.
 - `POST /api/discovery/zendure-cloud-mqtt/refresh` — full cloud discovery
   (deviceList + read-only TLS MQTT listen, deviceList only while the EMS holds
   the account's MQTT session), returns cloud candidates.

@@ -22,6 +22,7 @@ from admin.mqtt_discovery import MqttBrokerDiscovery
 from admin.secret_store import ZendureTokenStore
 from admin.server import ScanRegistry, create_admin_runtime, create_server
 from admin.single_flight import SingleFlight
+from admin.zendure_cloud_auth import ZendureCloudError
 from admin.zendure_cloud_mqtt import ZendureCloudDiscovery
 from tests.admin_auth_helpers import authenticate, request
 
@@ -210,6 +211,370 @@ def test_a_cloud_refresh_for_another_account_waits_and_reads_its_own(tmp_path):
     assert _serials(results[FIRST]["candidates"]) == ["SN-A"]
     assert _serials(results[SECOND]["candidates"]) == ["SN-B"]
     assert _serials(discovery.candidates()) == ["SN-B"]
+
+
+def test_a_cloud_refresh_that_outlives_its_deleted_key_keeps_none_of_its_devices(tmp_path):
+    """Interleaving: a refresh with key A listens on the cloud broker when the
+    saved key is deleted, and ends after it.
+
+    Before, the refresh stored A's deviceList candidates once it ended, the
+    trusted ones config-preview resolves selections against included, and they
+    stayed until the next refresh. Now its result is dropped, since the key it
+    read with is no longer the saved one.
+    """
+
+    discovery, broker, _store, _accounts = _cloud(tmp_path)
+    discovery.save_token(ACCOUNT_A)
+    results = {}
+
+    first = _start(FIRST, discovery.refresh, results)
+    try:
+        assert broker.first_listening.wait(WAIT_S)
+        discovery.delete_token()
+    finally:
+        broker.release_first.set()
+    first.join(WAIT_S)
+
+    assert not first.is_alive()
+    assert discovery.candidates() == []
+    assert discovery.trusted_candidates() == []
+
+
+def test_a_cloud_refresh_that_outlives_its_replaced_key_keeps_none_of_its_devices(tmp_path):
+    """Interleaving: a refresh with key A listens on the cloud broker when key B
+    is saved, and ends after it.
+
+    A's devices are not kept for B, and B's record does not take A's result:
+    nothing has been read with B yet.
+    """
+
+    discovery, broker, _store, _accounts = _cloud(tmp_path)
+    discovery.save_token(ACCOUNT_A)
+    results = {}
+
+    first = _start(FIRST, discovery.refresh, results)
+    try:
+        assert broker.first_listening.wait(WAIT_S)
+        discovery.save_token(ACCOUNT_B)
+    finally:
+        broker.release_first.set()
+    first.join(WAIT_S)
+
+    assert not first.is_alive()
+    assert discovery.candidates() == []
+    assert discovery.trusted_candidates() == []
+    settings = discovery.settings()
+    assert settings["last_status"] is None, settings
+    assert settings["last_device_count"] is None, settings
+
+
+def test_a_device_list_seed_that_outlives_its_deleted_key_keeps_none_of_its_devices(tmp_path):
+    """Interleaving: the lazy deviceList seed reads with key A when the saved
+    key is deleted, and its read ends after it."""
+
+    reading = threading.Event()
+    release = threading.Event()
+    accounts = _CloudAccounts()
+
+    def fetch(api_key, timeout):
+        reading.set()
+        release.wait(WAIT_S)
+        return accounts(api_key, timeout)
+
+    discovery = ZendureCloudDiscovery(
+        store=ZendureTokenStore(tmp_path),
+        device_list_fetcher=fetch,
+        listener_factory=_CloudBroker().listener,
+    )
+    discovery.save_token(ACCOUNT_A)
+    results = {}
+
+    seed = _start(FIRST, discovery.ensure_device_list_candidates, results)
+    try:
+        assert reading.wait(WAIT_S)
+        discovery.delete_token()
+    finally:
+        release.set()
+    seed.join(WAIT_S)
+
+    assert accounts.fetched_with == [ACCOUNT_A]
+    assert results[FIRST] == 0
+    assert discovery.candidates() == []
+    assert discovery.trusted_candidates() == []
+
+
+def test_a_failed_cloud_refresh_that_outlives_its_replaced_key_leaves_the_new_record_alone(
+    tmp_path,
+):
+    """Interleaving: a refresh reads the deviceList with key A when key B is
+    saved, and the read fails after it.
+
+    The failure is A's: B's record does not report it."""
+
+    reading = threading.Event()
+    release = threading.Event()
+
+    def fetch(_api_key, _timeout):
+        reading.set()
+        release.wait(WAIT_S)
+        raise ZendureCloudError("deviceList unavailable")
+
+    discovery = ZendureCloudDiscovery(
+        store=ZendureTokenStore(tmp_path),
+        device_list_fetcher=fetch,
+        listener_factory=_CloudBroker().listener,
+    )
+    discovery.save_token(ACCOUNT_A)
+    results = {}
+
+    first = _start(FIRST, discovery.refresh, results)
+    try:
+        assert reading.wait(WAIT_S)
+        discovery.save_token(ACCOUNT_B)
+    finally:
+        release.set()
+    first.join(WAIT_S)
+
+    assert results[FIRST]["error"] == "device_list_failed"
+    settings = discovery.settings()
+    assert settings["last_status"] is None, settings
+    assert settings["last_error"] is None, settings
+
+
+def test_the_cached_devices_follow_the_saved_key(tmp_path):
+    """Saving the same key again keeps its devices; another key or none drops them."""
+
+    discovery, broker, _store, _accounts = _cloud(tmp_path)
+    broker.release_first.set()
+    discovery.save_token(ACCOUNT_A)
+    assert discovery.refresh()["ok"] is True
+
+    discovery.save_token(ACCOUNT_A)
+    assert _serials(discovery.candidates()) == ["SN-A"]
+    assert _serials(discovery.trusted_candidates()) == ["SN-A"]
+
+    discovery.save_token(ACCOUNT_B)
+    assert discovery.candidates() == []
+    assert discovery.trusted_candidates() == []
+
+    assert discovery.refresh()["ok"] is True
+    assert _serials(discovery.trusted_candidates()) == ["SN-B"]
+    discovery.delete_token()
+    assert discovery.candidates() == []
+    assert discovery.trusted_candidates() == []
+
+
+class _SignallingLock:
+    """A lock that sets ``contended`` when a caller has to wait for it."""
+
+    def __init__(self, contended):
+        self._lock = threading.Lock()
+        self._contended = contended
+
+    def __enter__(self):
+        if not self._lock.acquire(blocking=False):
+            self._contended.set()
+            self._lock.acquire()
+        return self
+
+    def __exit__(self, *_exc):
+        self._lock.release()
+
+
+class _PausingStore(ZendureTokenStore):
+    """Pauses the first thread at the next key read, or record write, once armed."""
+
+    def __init__(self, data_dir, pause_at):
+        super().__init__(data_dir)
+        self.armed = False
+        self.paused = threading.Event()
+        self.go_on = threading.Event()
+        self._pause_at = pause_at
+
+    def _pause(self, step):
+        if self.armed and step == self._pause_at and threading.current_thread().name == FIRST:
+            self.armed = False
+            self.paused.set()
+            self.go_on.wait(WAIT_S)
+
+    def load_token(self):
+        token = super().load_token()
+        self._pause("load_token")
+        return token
+
+    def _write_record(self, record):
+        self._pause("write_record")
+        return super()._write_record(record)
+
+
+def _paused_cloud(tmp_path, pause_at):
+    """A cloud discovery whose store pauses the first thread after its deviceList read."""
+
+    store = _PausingStore(tmp_path, pause_at)
+    broker = _CloudBroker()
+    broker.release_first.set()
+    accounts = _CloudAccounts()
+
+    def fetch(api_key, timeout):
+        result = accounts(api_key, timeout)
+        if threading.current_thread().name == FIRST:
+            store.armed = True
+        return result
+
+    discovery = ZendureCloudDiscovery(
+        store=store, device_list_fetcher=fetch, listener_factory=broker.listener
+    )
+    contended = threading.Event()
+    discovery._candidates_lock = _SignallingLock(contended)
+    return discovery, store, contended
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        lambda discovery: discovery.save_token(ACCOUNT_B),
+        lambda discovery: discovery.delete_token(),
+    ],
+    ids=["replaced", "deleted"],
+)
+def test_a_key_changed_between_a_refreshs_key_check_and_its_store_drops_its_result(
+    tmp_path, change
+):
+    """Interleaving: a refresh with key A has read the saved key to keep its
+    result, and pauses there; key B is saved, or the key deleted, on another
+    thread; the refresh then stores.
+
+    The check and the store hold the lock the key change takes, so the change
+    waits for the store and then drops it.
+    """
+
+    discovery, store, contended = _paused_cloud(tmp_path, "load_token")
+    discovery.save_token(ACCOUNT_A)
+    results = {}
+
+    first = _start(FIRST, discovery.refresh, results)
+    assert store.paused.wait(WAIT_S)
+
+    def change_key():
+        change(discovery)
+        contended.set()
+
+    second = _start(SECOND, change_key, results)
+    try:
+        assert contended.wait(WAIT_S)
+    finally:
+        store.go_on.set()
+    first.join(WAIT_S)
+    second.join(WAIT_S)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert store.load_token() in (ACCOUNT_B, None)
+    assert discovery.trusted_candidates() == [], _serials(discovery.trusted_candidates())
+    assert discovery.candidates() == []
+
+
+def test_a_credential_test_cannot_bring_a_deleted_key_back(tmp_path):
+    """Interleaving: a credential test with the saved key A has read the record
+    to write its status and pauses before the write; the key is deleted on
+    another thread; the test then writes.
+
+    The record write rewrites the whole record, token included. It holds the
+    lock delete_token takes, so the delete waits for it and the key stays gone.
+    """
+
+    discovery, store, contended = _paused_cloud(tmp_path, "write_record")
+    discovery.save_token(ACCOUNT_A)
+    results = {}
+
+    first = _start(FIRST, discovery.test, results)
+    assert store.paused.wait(WAIT_S)
+
+    def delete():
+        discovery.delete_token()
+        contended.set()
+
+    second = _start(SECOND, delete, results)
+    try:
+        assert contended.wait(WAIT_S)
+    finally:
+        store.go_on.set()
+    first.join(WAIT_S)
+    second.join(WAIT_S)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert results[FIRST]["ok"] is True
+    assert store.load_token() is None
+    assert discovery.settings()["token_saved"] is False
+
+
+def test_a_validation_on_save_that_outlives_its_key_leaves_the_new_record_alone(tmp_path):
+    """Interleaving: save_token(A, validate=True) reads the deviceList with A
+    when key B is saved, and the read ends after it.
+
+    The validation describes A: B's record does not take its status."""
+
+    reading = threading.Event()
+    release = threading.Event()
+    accounts = _CloudAccounts()
+
+    def fetch(api_key, timeout):
+        if api_key == ACCOUNT_A:
+            reading.set()
+            release.wait(WAIT_S)
+        return accounts(api_key, timeout)
+
+    discovery = ZendureCloudDiscovery(
+        store=ZendureTokenStore(tmp_path),
+        device_list_fetcher=fetch,
+        listener_factory=_CloudBroker().listener,
+    )
+    results = {}
+
+    first = _start(FIRST, lambda: discovery.save_token(ACCOUNT_A, validate=True), results)
+    try:
+        assert reading.wait(WAIT_S)
+        discovery.save_token(ACCOUNT_B)
+    finally:
+        release.set()
+    first.join(WAIT_S)
+
+    assert results[FIRST]["validation"]["ok"] is True
+    assert discovery.store.load_token() == ACCOUNT_B
+    settings = discovery.settings()
+    assert settings["last_status"] is None, settings
+    assert settings["last_device_count"] is None, settings
+    assert settings["last_broker"] is None, settings
+
+
+@pytest.mark.parametrize("found", [True, False], ids=["device-list-read", "device-list-failed"])
+def test_a_credential_test_of_another_key_leaves_the_saved_keys_record_alone(tmp_path, found):
+    accounts = _CloudAccounts()
+
+    def fetch(api_key, timeout):
+        if not found:
+            raise ZendureCloudError("deviceList unavailable")
+        return accounts(api_key, timeout)
+
+    discovery = ZendureCloudDiscovery(
+        store=ZendureTokenStore(tmp_path),
+        device_list_fetcher=fetch,
+        listener_factory=_CloudBroker().listener,
+    )
+    discovery.save_token(ACCOUNT_A)
+
+    assert discovery.test(api_key=ACCOUNT_B)["ok"] is found
+    settings = discovery.settings()
+    assert settings["last_status"] is None, settings
+    assert settings["last_error"] is None, settings
+    assert settings["last_device_count"] is None, settings
+
+    assert discovery.test()["ok"] is found
+    settings = discovery.settings()
+    assert settings["last_status"] == ("ok" if found else "error"), settings
+    if found:
+        assert settings["last_device_count"] == 1, settings
+    else:
+        assert settings["last_error"] == "deviceList unavailable", settings
 
 
 class _BrokerNetwork:
