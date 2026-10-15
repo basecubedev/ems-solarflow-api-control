@@ -13,12 +13,16 @@ walk covers the forms ems/ uses to put a code into an explanation, and fails on
 the binding forms it knows it cannot follow unless ``UNREADABLE`` names them. It
 does not prove completeness against every Python construct: a code passed in a
 form the walk does not know can still go unseen.
+
+A device card says what the EMS decided about the device in the same terms: a
+stage shows as blocked only where the EMS's explanation blocks it.
 """
 
 import ast
 import dataclasses
 import functools
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -26,7 +30,9 @@ from pathlib import Path
 import pytest
 
 from ems.runtime_intents import DeviceRuntimeRole
+from ems.target_control import calculate_targets, detect_capabilities
 from ems.winter_reserve import SOLAR_CHARGE_REASON
+from tests.test_write_gates import device, state
 
 pytestmark = [
     pytest.mark.contract,
@@ -628,3 +634,77 @@ def test_a_parked_device_explains_itself_in_a_sentence():
     assert "below min soc" not in html
     assert "already parked" not in html
     assert "WR1 is parked at the minimum output" in html
+
+
+def _device_cards(html):
+    """Each device card's HTML, by the name its card carries."""
+    cards = {}
+    for match in re.finditer(r'data-control-device="([^"]*)"', html):
+        end = html.find('data-control-device="', match.end())
+        cards[match.group(1)] = html[match.start(): end if end >= 0 else len(html)]
+    return cards
+
+
+def _limits_result_blocked(card):
+    stage = re.search(
+        r'<section class="control-stage control-stage-limits"[\s\S]*?</section>', card
+    )
+    assert stage, "the card has an Adjustments / Limits stage"
+    result = re.search(r'class="control-result control-stage-result([^"]*)"', stage.group(0))
+    assert result, "the stage has a result"
+    return "tone-blocked" in result.group(1).split()
+
+
+def _ems_explanation(states):
+    names = [f"WR{index + 1}" for index in range(len(states))]
+    _targets, _current, _new, explanation = calculate_targets(
+        0,
+        states,
+        1600,
+        device_configs=[device(name) for name in names],
+        capabilities=[detect_capabilities(report) for report in states],
+        requested_total=600,
+        explain=True,
+    )
+    return explanation.to_dict()
+
+
+def test_a_device_the_ems_did_not_limit_is_not_shown_blocked():
+    explanation = _ems_explanation([
+        state(solar=500, output=300, output_limit=300),
+        state(solar=0, soc=60),
+    ])
+    reasons = {name: entry["capability_reason"] for name, entry in explanation["devices"].items()}
+    assert all(reasons.values()), reasons
+    assert all(entry["can_export"] for entry in explanation["devices"].values())
+
+    cards = _device_cards(_control_html(explanation))
+
+    assert sorted(cards) == ["WR1", "WR2"]
+    assert {name: _limits_result_blocked(card) for name, card in cards.items()} == {
+        "WR1": False,
+        "WR2": False,
+    }
+
+
+def test_a_device_the_full_charge_assist_holds_is_shown_blocked_at_its_limits(tmp_path):
+    explanation = _assist_held_explanation(tmp_path)
+    assert explanation["devices"]["WR1"]["can_export"] is False
+
+    cards = _device_cards(_control_html(explanation))
+
+    assert _limits_result_blocked(cards["WR1"]) is True
+
+
+def test_a_device_the_ems_cannot_export_from_is_shown_blocked_at_its_limits():
+    explanation = _ems_explanation([
+        state(solar=500, output=300, output_limit=300),
+        state(solar=0, soc_limit=2, dc_status=0, ac_status=0),
+    ])
+    assert explanation["devices"]["WR2"]["can_export"] is False
+    assert explanation["devices"]["WR2"]["limiting_reason"] == "cannot_export"
+
+    cards = _device_cards(_control_html(explanation))
+
+    assert _limits_result_blocked(cards["WR1"]) is False
+    assert _limits_result_blocked(cards["WR2"]) is True

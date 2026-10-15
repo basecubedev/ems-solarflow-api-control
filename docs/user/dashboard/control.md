@@ -165,6 +165,12 @@ you, this is where to look.
 | **CAPABILITY** | Detected capability, e.g. *PV input detected* |
 | **RESULT / ADJUSTED TARGET** | After the limits |
 
+The result turns red only when EMS reports that the device cannot export this
+cycle: its telemetry shows no way out, it is in AC input mode, the full-charge
+assist holds it, discharge is switched off for it, or winter mode holds its PV
+for charging. **CAPABILITY** then names why. A limit that binds, such as the
+PV-only limit, does not turn it red.
+
 ### 05 — Final target
 
 *Adjusted target and write gate finish the decision.*

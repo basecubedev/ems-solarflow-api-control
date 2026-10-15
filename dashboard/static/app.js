@@ -2836,7 +2836,7 @@ function controlDeviceDecisionFlow(device, explain, weightContext, writeDecision
       resultLabel: "Adjusted target",
       resultValue: controlAdjustedTarget(device),
       resultFormatter: watts,
-      resultTone: device.capability_reason ? "blocked" : "",
+      resultTone: device.can_export === false ? "blocked" : "",
     },
     {
       title: "Final Target",
