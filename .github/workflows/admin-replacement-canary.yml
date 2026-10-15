@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       source_tag:
-        description: "Optional immutable Development source tag (newest older build of the target's branch by default)"
+        description: "Optional stable source release (the stable release before the target by default)"
         required: false
         type: string
       target_tag:
-        description: "Optional immutable Development target tag (newest installable by default)"
+        description: "Optional stable target release (the latest stable release by default)"
         required: false
         type: string
   schedule:
@@ -32,43 +32,20 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Resolve immutable source and target Development builds
+      - name: Resolve the previous and the latest stable release
         id: pair
         env:
           SOURCE_TAG: ${{ inputs.source_tag || '' }}
           TARGET_TAG: ${{ inputs.target_tag || '' }}
-          SOURCE: https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/development-build-catalogue/development-builds.json
         run: |
-          curl --fail --silent --show-error "${SOURCE}?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" > development-builds.json
-          # Missing pair, mutable digest or identical Admin digests are blocked
-          # preconditions inside the resolver; nothing here may degrade to a skip.
+          # No stable pair, a listing that warns of releases it could not read,
+          # labels that are not one System Build or identical Admin digests are
+          # blocked preconditions inside the resolver; nothing here may degrade
+          # to a skip.
           python3 scripts/resolve_canary_builds.py \
-            --catalogue development-builds.json \
             --source-tag "$SOURCE_TAG" \
             --target-tag "$TARGET_TAG" \
             --github-output "$GITHUB_OUTPUT"
-      - name: Verify selected public source entry
-        run: |
-          python3 scripts/verify_development_catalogue.py \
-            --source development-builds.json \
-            --tag "${{ steps.pair.outputs.source_tag }}" \
-            --revision "${{ steps.pair.outputs.source_revision }}" \
-            --build-id "${{ steps.pair.outputs.source_build_id }}" \
-            --admin-image "${{ steps.pair.outputs.source_admin_image }}" \
-            --admin-digest "${{ steps.pair.outputs.source_admin_digest }}" \
-            --ems-image "${{ steps.pair.outputs.source_ems_image }}" \
-            --ems-digest "${{ steps.pair.outputs.source_ems_digest }}"
-      - name: Verify selected public target entry
-        run: |
-          python3 scripts/verify_development_catalogue.py \
-            --source development-builds.json \
-            --tag "${{ steps.pair.outputs.target_tag }}" \
-            --revision "${{ steps.pair.outputs.target_revision }}" \
-            --build-id "${{ steps.pair.outputs.target_build_id }}" \
-            --admin-image "${{ steps.pair.outputs.target_admin_image }}" \
-            --admin-digest "${{ steps.pair.outputs.target_admin_digest }}" \
-            --ems-image "${{ steps.pair.outputs.target_ems_image }}" \
-            --ems-digest "${{ steps.pair.outputs.target_ems_digest }}"
       - name: Install Chromium dependencies
         run: |
           npm ci

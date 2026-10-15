@@ -126,7 +126,9 @@ browser-level specs:
 
 - Admin update reconnect → Continue completion, and a failed replacement —
   `tests/e2e/admin-update.spec.ts` (plus the real-container replacement canary
-  in `tests/e2e/admin-replacement-canary.spec.ts`).
+  in `tests/e2e/admin-replacement-canary.spec.ts`, which upgrades the previous
+  stable release's Admin to the latest stable release; see
+  [`ci-release.md`](ci-release.md)).
 - MQTT migration review/apply and stale-fingerprint rejection —
   `tests/e2e/mqtt-migration.spec.ts`.
 - Guided Upgrade preflight and live step progression —

@@ -114,7 +114,7 @@ def test_no_job_suppresses_failures_unconditionally():
 
 def test_only_the_canary_workflow_runs_the_admin_replacement_config():
     # The replacement journey may only run against immutable digests resolved
-    # from the Development catalogue, so exactly one workflow owns it.
+    # from the stable releases' registry manifests, so exactly one workflow owns it.
     marker = "playwright.admin-replacement.config.ts"
     owners = [
         path.name
@@ -129,10 +129,10 @@ def test_canary_resolves_immutable_digests_for_both_replacement_sides():
     assert "CANARY_SOURCE_ADMIN_DIGEST: ${{ steps.pair.outputs.source_admin_digest }}" in text
     assert "CANARY_ADMIN_DIGEST: ${{ steps.pair.outputs.target_admin_digest }}" in text
     assert "CANARY_EMS_DIGEST: ${{ steps.pair.outputs.target_ems_digest }}" in text
-    # An absent pair, a mutable digest or one image replacing itself are blocked
-    # preconditions inside the resolver, never a skip.
+    # An absent pair or one image replacing itself are blocked preconditions
+    # inside the resolver, a mutable digest one inside the runner, never a skip.
     assert "scripts/resolve_canary_builds.py" in text
-    assert text.count("verify_development_catalogue.py") == 2
+    assert "development-builds.json" not in text
     assert "continue-on-error" not in text
 
 

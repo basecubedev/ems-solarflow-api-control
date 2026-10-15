@@ -79,7 +79,7 @@ def main(argv=None):
         print(
             f"{args.role} Admin image {args.image} does not implement admin test "
             f"contract {version}: missing {', '.join(absent)}.\n"
-            "Pick a published Development build whose Admin serves these hooks. "
+            "The canary needs two stable releases whose Admins serve these hooks. "
             "Do not add legacy selectors to the shared page objects.",
             file=sys.stderr,
         )

@@ -20,6 +20,7 @@ const EVENTS = process.env.ADMIN_REPLACEMENT_EVENTS as string;
 const CONTAINER = "ems-solarflow-admin";
 const ADMIN_REPO = "ghcr.io/basecubedev/ems-solarflow-admin";
 const EMS_REPO = "ghcr.io/basecubedev/ems-solarflow-api-control";
+const CHANNEL = "stable";
 
 function docker(...args: string[]) {
   return execFileSync("docker", args, { encoding: "utf8" }).trim();
@@ -33,11 +34,18 @@ function imageLabels(reference: string): Record<string, string> {
   return JSON.parse(docker("image", "inspect", "--format", "{{json .Config.Labels}}", reference));
 }
 
-function expectBuildIdentity(reference: string, revision: string, buildId: string) {
+function expectBuildIdentity(
+  reference: string,
+  tag: string,
+  revision: string,
+  buildId: string,
+) {
   const labels = imageLabels(reference);
+  expect(labels["org.opencontainers.image.version"], `${reference} version`).toBe(tag);
+  expect(labels["de.basecubedev.ems.release_tag"], `${reference} release tag`).toBe(tag);
   expect(labels["org.opencontainers.image.revision"], `${reference} revision`).toBe(revision);
   expect(labels["de.basecubedev.ems.build_id"], `${reference} build id`).toBe(buildId);
-  expect(labels["de.basecubedev.ems.channel"], `${reference} channel`).toBe("development");
+  expect(labels["de.basecubedev.ems.channel"], `${reference} channel`).toBe(CHANNEL);
 }
 
 async function adminInstanceId(page: Page) {
@@ -119,9 +127,9 @@ test("real Admin replacement reconnects and preserves the selected build", async
   const sourceAdmin = `${ADMIN_REPO}@${SOURCE_ADMIN_DIGEST}`;
   const targetAdmin = `${ADMIN_REPO}@${ADMIN_DIGEST}`;
   const targetEms = `${EMS_REPO}@${EMS_DIGEST}`;
-  expectBuildIdentity(sourceAdmin, SOURCE_REVISION, SOURCE_BUILD_ID);
-  expectBuildIdentity(targetAdmin, REVISION, BUILD_ID);
-  expectBuildIdentity(targetEms, REVISION, BUILD_ID);
+  expectBuildIdentity(sourceAdmin, SOURCE_TAG, SOURCE_REVISION, SOURCE_BUILD_ID);
+  expectBuildIdentity(targetAdmin, TAG, REVISION, BUILD_ID);
+  expectBuildIdentity(targetEms, TAG, REVISION, BUILD_ID);
   expect(
     docker("container", "inspect", "--format", "{{.Image}}", CONTAINER),
     "journey starts on the published source Admin",
@@ -137,7 +145,7 @@ test("real Admin replacement reconnects and preserves the selected build", async
   const sourceInstance = await adminInstanceId(page);
   const setup = new SetupPage(page);
   await setup.chooseFreshInstall();
-  await setup.selectDevelopmentBuild(TAG);
+  await setup.selectChannelBuild(TAG, CHANNEL);
   expect(await expectValidSystemBuildAction(page, setup, testInfo)).toBe("admin_update");
 
   const oldContainer = docker("container", "inspect", "--format", "{{.Id}}", CONTAINER);
@@ -178,7 +186,7 @@ test("real Admin replacement reconnects and preserves the selected build", async
   expect(validation.action_state.resource_state).toBe("prepared");
   expect(validation.system_build, "target EMS identity").toMatchObject({
     canonical_tag: TAG,
-    channel: "development",
+    channel: CHANNEL,
     revision: REVISION,
     build_id: BUILD_ID,
     admin_image: `${ADMIN_REPO}:${TAG}`,

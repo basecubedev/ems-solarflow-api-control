@@ -285,15 +285,20 @@ Four things are worth knowing before adding a spec to either:
   Docker suites skip with a precise reason instead of failing.
 - Playwright tiers need `npm ci` and
   `npx playwright install chromium firefox`. No tier installs dependencies.
-- The RC `admin-replacement` gate replaces one published Admin container with
-  another, both pinned by digest, so it needs `ADMIN_REPLACEMENT_RUNTIME`,
-  `ADMIN_REPLACEMENT_EVENTS`, the source identity (`CANARY_SOURCE_TAG`,
-  `CANARY_SOURCE_REVISION`, `CANARY_SOURCE_BUILD_ID`,
-  `CANARY_SOURCE_ADMIN_DIGEST`) and the target identity (`CANARY_TAG`,
-  `CANARY_REVISION`, `CANARY_BUILD_ID`, `CANARY_ADMIN_DIGEST`,
-  `CANARY_EMS_DIGEST`). Both sides come from the Development catalogue;
-  `python3 scripts/resolve_canary_builds.py --catalogue <file>` prints them and
-  `./scripts/test-rc.sh` names the missing ones before running any gate.
+- The RC `admin-replacement` gate replaces the previous stable release's Admin
+  container with the latest stable release's, both pinned by digest, so it
+  needs `ADMIN_REPLACEMENT_RUNTIME`, `ADMIN_REPLACEMENT_EVENTS`, the source
+  identity (`CANARY_SOURCE_TAG`, `CANARY_SOURCE_REVISION`,
+  `CANARY_SOURCE_BUILD_ID`, `CANARY_SOURCE_ADMIN_DIGEST`) and the target
+  identity (`CANARY_TAG`, `CANARY_REVISION`, `CANARY_BUILD_ID`,
+  `CANARY_ADMIN_DIGEST`, `CANARY_EMS_DIGEST`).
+  `python3 scripts/resolve_canary_builds.py` prints them from the GitHub
+  releases and the registry (`--source-tag`/`--target-tag` name another stable
+  pair) and `./scripts/test-rc.sh` names the missing ones before running any
+  gate. The gate replays published stable releases only: the spec asserts the
+  `stable` channel, so it never exercises the candidate's own Admin. That
+  Admin is first replaced into by the weekly canary after it is released. A
+  listing that warns of releases it could not read blocks the resolve.
 
 ## Classifying a new test
 
