@@ -44,6 +44,7 @@
     pollTimer: null,
     pollTicks: 0,
     busy: false,
+    holds: [],
     lostPlan: null,
     resumingPlan: false,
     securityAudit: null,
@@ -69,7 +70,7 @@
         if (value === null || value === undefined || value === false) return;
         if (key === "class") node.className = value;
         else if (key === "text") node.textContent = String(value);
-        else if (key === "onclick") node.addEventListener("click", value);
+        else if (key === "onclick") node.addEventListener("click", pressing(node, value));
         else if (key === "onsubmit") node.addEventListener("submit", value);
         else if (key === "onchange") node.addEventListener("change", value);
         else if (value === true) node.setAttribute(key, "");
@@ -85,6 +86,95 @@
 
   function clear(node) {
     while (node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  /* The control whose press is being handled, set only while its handler
+     runs, so the request the handler sends can hold the control that sent it. */
+  var pressed = null;
+
+  function pressing(node, handler) {
+    return function (event) {
+      pressed = node;
+      try {
+        return handler.call(node, event);
+      } finally {
+        pressed = null;
+      }
+    };
+  }
+
+  /* A control whose request has not been answered is disabled, aria-busy and
+     says what it waits for, so a second press sends nothing. The hold is kept
+     under the anchor focusAnchor uses as well, because the two-second poll
+     rebuilds the view and would otherwise hand the control back enabled while
+     its request is still out. */
+  function holdControl(control, busyLabel) {
+    if (!control) return function () {};
+    var hold = { control: control, anchor: anchorOf(control), label: busyLabel || "" };
+    state.holds.push(hold);
+    markHeld(control, hold.label);
+    return function release() {
+      state.holds = state.holds.filter(function (item) { return item !== hold; });
+      heldNodes(hold).forEach(unmarkHeld);
+    };
+  }
+
+  function isHeld(control) {
+    return !!control && control.getAttribute("aria-busy") === "true";
+  }
+
+  function anchorOf(control) {
+    var test = control.getAttribute("data-test");
+    var selector = test ? '[data-test="' + test + '"]' : (control.id ? "#" + control.id : null);
+    if (!selector) return null;
+    var matches = Array.prototype.slice.call(document.querySelectorAll(selector));
+    return { selector: selector, index: Math.max(0, matches.indexOf(control)) };
+  }
+
+  function heldNodes(hold) {
+    var nodes = [hold.control];
+    if (hold.anchor) {
+      var match = document.querySelectorAll(hold.anchor.selector)[hold.anchor.index];
+      if (match && match !== hold.control) nodes.push(match);
+    }
+    return nodes;
+  }
+
+  function markHeld(control, busyLabel) {
+    if (isHeld(control)) return;
+    control.setAttribute("data-held-text", control.textContent);
+    if (control.disabled) control.setAttribute("data-held-disabled", "");
+    control.setAttribute("aria-busy", "true");
+    control.disabled = true;
+    if (busyLabel) control.textContent = busyLabel;
+  }
+
+  function unmarkHeld(control) {
+    if (!isHeld(control)) return;
+    control.textContent = control.getAttribute("data-held-text");
+    control.disabled = control.hasAttribute("data-held-disabled");
+    control.removeAttribute("aria-busy");
+    control.removeAttribute("data-held-text");
+    control.removeAttribute("data-held-disabled");
+  }
+
+  /* The poll may rebuild the view while a request is out; its answer goes to
+     the element the page shows now, not to the one the request started from. */
+  function shownNow(node) {
+    var test = node.getAttribute("data-test");
+    return (test && document.querySelector('[data-test="' + test + '"]')) || node;
+  }
+
+  function say(node, text) {
+    var shown = shownNow(node);
+    shown.textContent = text;
+    shown.hidden = false;
+  }
+
+  function reapplyHolds() {
+    state.holds.forEach(function (hold) {
+      heldNodes(hold).forEach(function (node) { markHeld(node, hold.label); });
+    });
   }
 
   function announce(message) {
@@ -427,6 +517,8 @@
 
   function submitGate(event) {
     event.preventDefault();
+    var submit = document.getElementById("gate-submit");
+    if (isHeld(submit)) return;
     var error = document.getElementById("gate-error");
     error.hidden = true;
     var password = document.getElementById("gate-password").value;
@@ -434,8 +526,10 @@
     var firstRun = !state.passwordConfigured;
     var path = firstRun ? "/api/session/setup" : "/api/session/login";
     var body = firstRun ? { password: password, confirmation: confirmation } : { password: password };
+    var release = holdControl(submit, firstRun ? "Creating password\u2026" : "Signing in\u2026");
 
     api(path, { method: "POST", body: body }).then(function (payload) {
+      release();
       state.authenticated = true;
       state.passwordConfigured = true;
       state.passwordFileMissing = false;
@@ -447,6 +541,7 @@
       renderNav();
       refresh();
     }).catch(function (exc) {
+      release();
       error.textContent = exc.message;
       error.hidden = false;
     });
@@ -461,12 +556,16 @@
   }
 
   function logout() {
+    var button = document.getElementById("logout-button");
+    if (isHeld(button)) return;
+    var release = holdControl(button, "Signing out\u2026");
     api("/api/session/logout", { method: "POST", body: {} }).then(function () {
+      release();
       state.authenticated = false;
       state.csrf = "";
       stopPolling();
       showGate(false);
-    });
+    }, release);
   }
 
   /* ------------------------------------------------------------- views */
@@ -556,6 +655,7 @@
     var view = VIEWS.filter(function (item) { return item.id === state.view; })[0] || VIEWS[0];
     main.appendChild(renderOperationBanner());
     view.render(main);
+    reapplyHolds();
     updateNavMarks();
     restoreFocus(main, anchor);
     if (window.scrollY !== scrolled) window.scrollTo(0, scrolled);
@@ -938,6 +1038,7 @@
     var main = document.getElementById("main");
     var existing = main && main.querySelector('[data-test="operation-banner"]');
     if (existing) main.replaceChild(renderOperationBanner(), existing);
+    reapplyHolds();
   }
 
   function renderPolled() {
@@ -970,23 +1071,33 @@
 
   function acknowledgeOperation() {
     if (!state.operation) return;
+    var release = holdControl(pressed, "Acknowledging\u2026");
     api("/api/operations/acknowledge", {
       method: "POST", body: { operation_id: state.operation.operation_id }
     }).then(function () {
+      release();
       state.operation = null;
       announce("Operation acknowledged");
       refresh();
-    }).catch(showToastError);
+    }).catch(function (exc) {
+      release();
+      showToastError(exc);
+    });
   }
 
   function cancelOperation() {
     if (!state.operation) return;
+    var release = holdControl(pressed, "Cancelling\u2026");
     api("/api/operations/cancel", {
       method: "POST", body: { operation_id: state.operation.operation_id }
     }).then(function () {
+      release();
       announce("Operation cancelled");
       refresh();
-    }).catch(showToastError);
+    }).catch(function (exc) {
+      release();
+      showToastError(exc);
+    });
   }
 
   function showToastError(exc) {
@@ -998,6 +1109,7 @@
   function planOperation(options) {
     if (state.busy) return;
     state.busy = true;
+    var release = holdControl(pressed, "Planning\u2026");
     var request = planRequestId();
     var body = {};
     Object.keys(options.body || {}).forEach(function (key) { body[key] = options.body[key]; });
@@ -1007,9 +1119,11 @@
       method: "POST", body: body, account: options.account
     }).then(function (payload) {
       state.busy = false;
+      release();
       showPlan(payload, options);
     }).catch(function (exc) {
       state.busy = false;
+      release();
       if (!exc.status) {
         state.lostPlan = { request: request, options: options };
         showToastError(new Error("The appliance did not answer in time. If it is still making the plan, the plan opens here once it is ready."));
@@ -1232,6 +1346,7 @@
   }
 
   function dismissDialog() {
+    if (isHeld(document.getElementById("dialog-cancel"))) return;
     var pending = state.pending;
     closeDialog();
     if (!pending || !pending.operation) return;
@@ -1248,8 +1363,15 @@
 
   function confirmDialog() {
     var pending = state.pending;
-    if (!pending) return;
+    var confirm = document.getElementById("dialog-confirm");
+    if (!pending || isHeld(confirm)) return;
     var error = document.getElementById("dialog-error");
+    var releaseConfirm = holdControl(confirm, "Starting\u2026");
+    var releaseCancel = holdControl(document.getElementById("dialog-cancel"));
+    var release = function () {
+      releaseConfirm();
+      releaseCancel();
+    };
     api("/api/operations/confirm", {
       method: "POST",
       body: {
@@ -1257,6 +1379,7 @@
         confirmation_token: pending.confirmation_token
       }
     }).then(function (payload) {
+      release();
       state.operation = payload.operation;
       if (state.pendingForget) clearChoices(state.pendingForget);
       state.pendingForget = null;
@@ -1266,6 +1389,7 @@
       if (type === "system.reboot" || type === "system.shutdown") showReconnect(type);
       render();
     }).catch(function (exc) {
+      release();
       error.textContent = exc.message;
       error.hidden = false;
     });
@@ -3265,17 +3389,21 @@
       class: "inline-form",
       onsubmit: function (event) {
         event.preventDefault();
+        var submit = event.submitter || event.target.querySelector('[type="submit"]');
+        if (isHeld(submit)) return;
+        var release = holdControl(submit, "Confirming\u2026");
         api("/api/settings/password/confirm", {
           method: "POST",
           body: { password: previous.value }
         }).then(function (payload) {
+          release();
           state.passwordConfirmed = true;
           state.securityAudit = payload.security_audit || state.securityAudit;
           announce("Password confirmed");
           render();
         }).catch(function (exc) {
-          message.textContent = exc.message;
-          message.hidden = false;
+          release();
+          say(message, exc.message);
         });
       }
     }, [
@@ -3298,6 +3426,9 @@
       class: "inline-form",
       onsubmit: function (event) {
         event.preventDefault();
+        var submit = event.submitter || event.target.querySelector('[type="submit"]');
+        if (isHeld(submit)) return;
+        var release = holdControl(submit, "Changing password\u2026");
         api("/api/settings/password", {
           method: "POST",
           body: {
@@ -3306,8 +3437,8 @@
             confirmation: confirmation.value
           }
         }).then(function () {
-          message.textContent = "Password changed. All sessions were signed out.";
-          message.hidden = false;
+          release();
+          say(message, "Password changed. All sessions were signed out.");
           announce("Password changed");
           window.setTimeout(function () {
             state.authenticated = false;
@@ -3316,8 +3447,8 @@
             showGate(false);
           }, 1500);
         }).catch(function (exc) {
-          message.textContent = exc.message;
-          message.hidden = false;
+          release();
+          say(message, exc.message);
         });
       }
     }, [

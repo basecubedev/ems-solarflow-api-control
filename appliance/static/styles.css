@@ -693,6 +693,7 @@ textarea { min-height: 90px; font-family: ui-monospace, "SF Mono", Menlo, monosp
 }
 
 button[disabled] { opacity: 0.45; cursor: not-allowed; }
+button[aria-busy="true"] { cursor: progress; }
 
 .primary-button.compact, .ghost-button.compact, .danger-button.compact {
   min-height: 28px;

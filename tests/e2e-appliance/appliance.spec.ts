@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Appliance Manager UI journeys against the deterministic test server.
 // Every assertion waits on a locator or a response, never on a fixed timeout.
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { PASSWORD, PUBLIC_KEY, openView, parkAtBottom, resetAppliance, setMode, signIn } from "./helpers";
 
 // Playwright gives every test its own browser context, so localStorage and
@@ -319,6 +319,157 @@ test.describe("the two-second poll", () => {
     await page.waitForResponse((response) => response.url().includes("/api/operations"));
 
     await expect(page.locator("#main .page-title")).toBeFocused();
+  });
+});
+
+test.describe("a control waiting for the appliance", () => {
+  // A control whose request has not been answered shows it is waiting and
+  // cannot send a second one. Each request is held at the route until the test
+  // lets it through, so the waiting state is looked at, never raced.
+  async function holdRequests(page: Page, pattern: string) {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const seen = { count: 0 };
+    await page.route(pattern, async (route) => {
+      seen.count += 1;
+      await gate;
+      await route.continue();
+    });
+    return { release, seen };
+  }
+
+  test("a plan button holds until its plan answers, through the poll's rebuilds", async ({
+    page,
+  }) => {
+    await signIn(page);
+    const held = await holdRequests(page, "**/api/admin/restart");
+    const button = page.locator('[data-test="quick-restart-admin"]');
+
+    await Promise.all([
+      page.waitForRequest((request) => request.url().includes("/api/admin/restart")),
+      button.click(),
+    ]);
+    await expect(button).toHaveAttribute("aria-busy", "true");
+    await expect(button).toBeDisabled();
+    await expect(button).toHaveText("Planning…");
+
+    const first = await button.elementHandle();
+    await expect.poll(() => first!.evaluate((node) => node.isConnected)).toBe(false);
+    await expect(button).toHaveAttribute("aria-busy", "true");
+    await expect(button).toBeDisabled();
+
+    held.release();
+    await expect(page.locator("#dialog")).toBeVisible();
+    expect(held.seen.count).toBe(1);
+    await page.locator("#dialog-cancel").click();
+    await expect(page.locator("#dialog-backdrop")).toBeHidden();
+    await expect(button).toBeEnabled();
+    await expect(button).not.toHaveAttribute("aria-busy", "true");
+    await expect(button).toHaveText("Restart Admin");
+  });
+
+  test("Confirm holds itself and Cancel until the appliance answers", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "admin");
+    await page.locator('[data-test="admin-restart"]').click();
+    await expect(page.locator("#dialog")).toBeVisible();
+    const held = await holdRequests(page, "**/api/operations/confirm");
+    const confirm = page.locator("#dialog-confirm");
+    const cancel = page.locator("#dialog-cancel");
+
+    await Promise.all([
+      page.waitForRequest((request) => request.url().includes("/api/operations/confirm")),
+      confirm.click(),
+    ]);
+    await expect(confirm).toHaveAttribute("aria-busy", "true");
+    await expect(confirm).toBeDisabled();
+    await expect(cancel).toBeDisabled();
+
+    held.release();
+    await expect(page.locator("#dialog-backdrop")).toBeHidden();
+    await expect(page.locator('[data-test="operation-stage"]')).toBeVisible();
+    expect(held.seen.count).toBe(1);
+    await expect(confirm).not.toHaveAttribute("aria-busy", "true");
+    await expect(cancel).toBeEnabled();
+  });
+
+  test("a refused confirmation gives both buttons back", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "admin");
+    await page.locator('[data-test="admin-restart"]').click();
+    await expect(page.locator("#dialog")).toBeVisible();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/operations/confirm", async (route) => {
+      await gate;
+      await route.fulfill({
+        status: 409,
+        json: { error: "operation_not_confirmable", message: "this plan can no longer be confirmed" },
+      });
+    });
+    const confirm = page.locator("#dialog-confirm");
+
+    await Promise.all([
+      page.waitForRequest((request) => request.url().includes("/api/operations/confirm")),
+      confirm.click(),
+    ]);
+    await expect(confirm).toBeDisabled();
+    release();
+
+    await expect(page.locator("#dialog-error")).toContainText("can no longer be confirmed");
+    await expect(confirm).toBeEnabled();
+    await expect(confirm).not.toHaveAttribute("aria-busy", "true");
+    await expect(confirm).toHaveText("Confirm");
+    await expect(page.locator("#dialog-cancel")).toBeEnabled();
+  });
+
+  test("signing in holds its button until the appliance answers", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.locator("#gate")).toBeVisible();
+    const held = await holdRequests(page, "**/api/session/setup");
+    await page.locator("#gate-password").fill(PASSWORD);
+    await page.locator("#gate-confirm").fill(PASSWORD);
+    const submit = page.locator("#gate-submit");
+
+    await Promise.all([
+      page.waitForRequest((request) => request.url().includes("/api/session/setup")),
+      submit.click(),
+    ]);
+    await expect(submit).toHaveAttribute("aria-busy", "true");
+    await expect(submit).toBeDisabled();
+    await page.locator("#gate-confirm").press("Enter");
+
+    held.release();
+    await expect(page.locator("#shell")).toBeVisible();
+    expect(held.seen.count).toBe(1);
+  });
+
+  test("changing the password holds its button until the appliance answers", async ({
+    page,
+  }) => {
+    await signIn(page);
+    await openView(page, "settings");
+    const held = await holdRequests(page, "**/api/settings/password");
+    await page.locator('[data-test="pw-current"]').fill(PASSWORD);
+    await page.locator('[data-test="pw-new"]').fill("a-second-appliance-secret");
+    await page.locator('[data-test="pw-confirm"]').fill("a-second-appliance-secret");
+    const submit = page.locator('[data-test="pw-submit"]');
+
+    await Promise.all([
+      page.waitForRequest((request) => request.url().includes("/api/settings/password")),
+      submit.click(),
+    ]);
+    await expect(submit).toHaveAttribute("aria-busy", "true");
+    await expect(submit).toBeDisabled();
+    await page.locator('[data-test="pw-confirm"]').press("Enter");
+
+    held.release();
+    await expect(page.locator('[data-test="pw-message"]')).toContainText("signed out");
+    expect(held.seen.count).toBe(1);
   });
 });
 
