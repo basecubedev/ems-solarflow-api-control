@@ -98,7 +98,7 @@ class DeviceState:
     input_limit_reported: bool = True
 
 
-@dataclass
+@dataclass(frozen=True)
 class DeviceCapabilities:
     can_charge: bool
     can_discharge: bool

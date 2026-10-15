@@ -294,7 +294,7 @@ def _control_explain(devices, *, requested_total_w=800, max_total_power_w=800):
             "allocated_target_w": _num(dev.get("allocated_target_w")),
             "effective_target_w": target,
             "adjustment_delta_w": 0,
-            "decision_reason": "remaining_demand_assigned",
+            "decision_reason": "pv_first_allocation",
             "write_decision": "send" if dev.get("online", True) else "skip",
             "write_reason": "output_limit_update" if dev.get("online", True) else "ac_inactive",
             "deadband_reference_w": target,

@@ -2545,7 +2545,7 @@ function controlPipelineFact(label, value, iconName = "rule", formatter = contro
 function controlContextRail(explain, devices, notes) {
   const limits = Array.isArray(explain.limits) ? explain.limits : [];
   const contextItems = [
-    controlContextItem("Mode", explain.mode, "rule", controlText),
+    controlContextItem("Mode", explain.mode, "rule", controlReason),
     controlContextItem("Max power", explain.max_total_power_w, "warning", watts),
     controlContextItem("Min output", explain.min_output_limit_w, "warning", watts),
     controlContextItem("Undistributed", explain.undistributed_target_w, "warning", watts),
@@ -2687,22 +2687,23 @@ function controlDeviceReasonNote(name, device, explain, writeDecision) {
 }
 
 function controlDeviceDecisionReason(name, device, explain, writeDecision) {
+  const writeReason = controlReason(firstExplainValue(writeDecision.reason, device.write_reason, ""));
+  if (writeDecision.tone === "blocked") {
+    return `${name} is blocked: ${writeReason || "the device cannot be controlled"}.`;
+  }
+
   const explicitReason = firstExplainValue(device.decision_reason, device.reason);
   if (hasExplainValue(explicitReason)) {
     return controlReadableDecisionReason(explicitReason, name);
   }
 
-  const writeReason = controlReason(firstExplainValue(writeDecision.reason, device.write_reason, ""));
-  if (writeDecision.tone === "blocked") {
-    return `${name} is blocked because ${writeReason || "the device cannot be controlled"}.`;
-  }
   if (writeDecision.tone === "skip" && writeReason.toLowerCase().includes("deadband")) {
     return "Write skipped because the target change is inside the deadband.";
   }
 
   const limitingReason = firstExplainValue(device.limiting_reason, device.capability_reason);
   if (hasExplainValue(limitingReason)) {
-    return `${name} target is limited by ${controlReason(limitingReason)}.`;
+    return `${name} target is limited: ${controlReason(limitingReason)}.`;
   }
 
   const pvPriority = numericOrNull(device.pv_priority_factor);
@@ -2724,21 +2725,24 @@ function controlDeviceDecisionReason(name, device, explain, writeDecision) {
   return "Target is distributed according to device weight, SOC, PV availability, and configured limits.";
 }
 
+const CONTROL_DECISION_SENTENCES = {
+  pv_first_allocation: (name) => `${name} target is shaped by PV-first allocation and local solar availability.`,
+  full_soc_pv_priority: (name) => `${name} exports its own PV first because its battery is full and cannot store it.`,
+  pv_first_with_battery_topup: (name) => `${name} adds battery output to its PV share because PV alone does not cover the target.`,
+  solar_plus_battery_discharge: (name) => `${name} supplies its PV and the battery covers the rest of its share.`,
+  night_min_soc_idle: (name) => `${name} is parked at the minimum output while the batteries rest at their minimum SoC.`,
+  ac_charge_allocation: (name) => `${name} is charging from surplus, taking a share of it weighted by the room left in its battery.`,
+  ac_charge_share_too_small: (name) => `${name} may charge, but its share of this surplus was too small to be worth changing direction for, so it went to the other devices.`,
+  ac_charge_no_ceiling: (name) => `${name} may charge, but has no charge limit to charge at: it reports 0, or reports none and its model carries no rating.`,
+  ac_charge_not_permitted: (name) => `${name} is not charging this cycle: its model has no AC charge path, charging is switched off for it, or its battery is full, drained by another load or unavailable.`,
+};
+
 function controlReadableDecisionReason(reason, name) {
   const normalized = String(reason).trim().toLowerCase();
-  const map = {
-    pv_first_allocation: `${name} target is shaped by PV-first allocation and local solar availability.`,
-    pv_priority_applied: `${name} keeps more PV available for charging because local PV priority is active.`,
-    remaining_demand_assigned: `${name} carries the remaining house load after PV-priority allocation.`,
-    battery_discharge: `${name} supports the load from battery output according to the current target split.`,
-    ac_charge_allocation: `${name} is charging from surplus, taking a share of it weighted by the room left in its battery.`,
-    ac_charge_share_too_small: `${name} may charge, but its share of this surplus was too small to be worth changing direction for, so it went to the other devices.`,
-    ac_charge_no_ceiling: `${name} may charge, but has no charge limit to charge at: it reports 0, or reports none and its model carries no rating.`,
-    ac_charge_not_permitted: `${name} is not charging this cycle: its model has no AC charge path, charging is switched off for it, or its battery is full, drained by another load or unavailable.`,
-    deadband: "Write skipped because the target change is inside the deadband.",
-    output_limit_update: `${name} receives a write because the target differs from the current output limit.`,
-  };
-  return map[normalized] || controlReason(reason);
+  if (Object.prototype.hasOwnProperty.call(CONTROL_DECISION_SENTENCES, normalized)) {
+    return CONTROL_DECISION_SENTENCES[normalized](name);
+  }
+  return controlReason(reason);
 }
 
 function controlDeviceMeasurementPanel(device) {
@@ -3155,11 +3159,56 @@ function controlText(value) {
   return String(value);
 }
 
-// Known firmware/EMS reason codes get an explicit readable phrase. Anything
-// not in the map falls back to the previous underscore-to-space behavior, so
-// unknown reasons stay legible without a localization framework.
-const CONTROL_REASON_LABELS = {
-  ac_input_runtime_role: "AC input mode is active; normal output writes are blocked",
+// Every code the EMS writes into a control explanation that the view shows as
+// a short value: the strategy, a limiting or write reason, a capability signal
+// and a limit name; CONTROL_DECISION_SENTENCES holds the sentence above a device
+// card. The codes live in the EMS, so both are paired registries and
+// tests/test_dashboard_control_labels_frontend.py walks both sides. A code that
+// is not here still falls back to its words, so a newer EMS stays legible.
+const CONTROL_CODE_LABELS = {
+  pv_first: "PV first",
+  battery_discharge: "Battery discharge",
+  night_min_soc_idle: "Night idle at minimum SoC",
+  ac_charge: "AC charging",
+  no_devices: "No devices",
+  max_total_power: "Maximum total power",
+  zero_floor: "No negative target",
+  pv_surplus_available: "PV surplus available",
+  full_soc_pv_priority: "PV first for full batteries",
+  pv_only_target_limit: "PV-only target",
+  battery_topup_after_pv_first: "Battery top-up after PV first",
+  battery_discharge_required: "Battery discharge required",
+  discharge_capacity: "Discharge capacity",
+  pv_only_final_limits: "PV-only final limits",
+  device_output_limits: "Device output limits",
+  undistributed_target: "Undistributed target",
+  min_output_limit: "Minimum output limit",
+  cannot_export: "Device cannot export",
+  no_pv_only_available: "No PV for a PV-only share",
+  cannot_discharge: "Battery cannot discharge",
+  no_battery_available: "No battery available",
+  no_usable_battery: "No usable battery capacity",
+  pv_only_limit: "PV-only limit",
+  max_output_limit: "Device output limit",
+  no_allocation: "No share of the target",
+  no_battery: "Device reports no battery pack",
+  below_min_soc: "Battery at or below minimum SoC",
+  soc_protection: "SoC protection",
+  offline: "Device is offline",
+  device_disabled: "Device is switched off",
+  control_disabled: "Control is switched off",
+  not_controllable: "Device cannot be controlled",
+  runtime_role_ac_input: "AC input mode is active; normal output writes are blocked",
+  runtime_role_ac_output: "Full-charge assist holds this device",
+  runtime_role_blocked: "Runtime role blocks output control",
+  ac_discharge_disabled: "Discharge is switched off for this device",
+  winter_solar_charge: "Winter mode keeps its PV for charging",
+  already_parked: "Already parked at minimum output",
+  already_at_min_output_limit: "Already at the minimum output limit",
+  park_at_min_output_limit: "Park at the minimum output limit",
+  deadband: "Change is inside the deadband",
+  output_limit_update: "Output limit update",
+  normal: "Normal",
   charge_inhibit: "Firmware reports Max-SoC / charge cutoff",
   discharge_inhibit: "Firmware reports Min-SoC / discharge protection",
   dc_inactive: "DC path is inactive",
@@ -3167,16 +3216,25 @@ const CONTROL_REASON_LABELS = {
   pack_standby: "Battery pack is in standby",
   fault_observed: "Firmware reports a fault signal",
   pv_evidence: "PV input detected",
-  no_battery: "Device reports no battery pack",
+  output_evidence: "Output detected",
+  output_limit_evidence: "Output limit set",
+  ac_evidence: "AC path active",
 };
 
-function controlReason(value) {
-  const text = controlText(value);
-  const normalized = text.trim().toLowerCase();
-  if (Object.prototype.hasOwnProperty.call(CONTROL_REASON_LABELS, normalized)) {
-    return CONTROL_REASON_LABELS[normalized];
+function controlCodeLabel(code) {
+  const normalized = code.trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(CONTROL_CODE_LABELS, normalized)) {
+    return CONTROL_CODE_LABELS[normalized];
   }
-  return text.replaceAll("_", " ");
+  return code.trim().replaceAll("_", " ");
+}
+
+function controlReason(value) {
+  return controlText(value)
+    .split(",")
+    .filter((code) => code.trim())
+    .map(controlCodeLabel)
+    .join(", ");
 }
 
 function decimal(value) {
@@ -7751,6 +7809,10 @@ if (typeof module !== "undefined") {
     deviceBatteryVisual,
     renderDevices,
     renderControlExplain,
+    controlExplainHtml,
+    controlReason,
+    CONTROL_CODE_LABELS,
+    CONTROL_DECISION_SENTENCES,
     renderEnergyStats,
     setEnergyDetail,
     renderEnergySubtitle,

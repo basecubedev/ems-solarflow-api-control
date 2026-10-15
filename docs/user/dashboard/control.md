@@ -57,7 +57,7 @@ behaviour.
 | Fact | Meaning |
 | --- | --- |
 | **REQUESTED** | The requested total (`commanded_total_w` plus filtered load) |
-| **STRATEGY** | The allocation strategy, e.g. `pv first` |
+| **STRATEGY** | The allocation strategy, e.g. *PV first*, *Battery discharge*, *AC charging* or *Night idle at minimum SoC* |
 | **RESULT / EFFECTIVE TARGET** | The system target after limits |
 
 ### 03 — Distribution
@@ -67,7 +67,7 @@ behaviour.
 | Fact | Meaning |
 | --- | --- |
 | **TARGET SPLIT** | The per-device split, e.g. `WR1: 400 W / WR2: 400 W` |
-| **STRATEGY** | `pv first` |
+| **UNDISTRIBUTED** | Target no device could take within its limits |
 | **RESULT / ALLOCATED TOTAL** | The sum actually allocated |
 
 This is where a device "not contributing" is usually explained. PV-first
@@ -111,14 +111,17 @@ deliberately writes nothing. That is not a failure.
 ### The context strip
 
 Under the six stages, a compact strip shows the inputs that shaped the cycle:
-**MODE** (`pv_first`), **MAX POWER**, **MIN OUTPUT**, **DEVICES**, **ACTIVE
-GATES**.
+**MODE** (the strategy again, e.g. *PV first*), **MAX POWER**, **MIN OUTPUT**,
+**DEVICES**, **ACTIVE GATES** and **INACTIVE GATES**.
 
 ## Per-device stages
 
 Each inverter gets its own row: a **MEASUREMENTS** block (PV, SOC, OUTPUT), a
 **CONTEXT** block (SOC RANGE, OUTPUT LIMIT, DEVICE MAX, PV PRIORITY), then five
-stages.
+stages. The line under the inverter's name says in one sentence why EMS does not
+write a device it blocks, e.g. *WR1 is blocked: AC input mode is active; normal
+output writes are blocked.*, and otherwise what decided its target, e.g. *WR1
+target is shaped by PV-first allocation and local solar availability.*
 
 ### 01 — Inputs
 
@@ -171,7 +174,7 @@ you, this is where to look.
 | **ADJUSTED** / **FINAL** | Before and after the final step |
 | **DELTA OUTPUT** | Change to be applied |
 | **WRITE** | `Send` or suppressed |
-| **REASON** | Why, e.g. `output limit update` |
+| **REASON** | Why, e.g. *Output limit update* or *Change is inside the deadband* |
 | **RESULT / FINAL / WRITE** | The decision and the value |
 
 ## Deadbands, ramps and limits
