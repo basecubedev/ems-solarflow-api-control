@@ -85,8 +85,9 @@ History panel — are zoomed the same three ways:
 - **Mouse wheel** over the plot. It zooms around the pointer, so whatever is
   under it stays under it, and it never scrolls the page while the pointer is
   over a chart.
-- The **`+` and `−` buttons** in the chart's top-left corner. They zoom around
-  the middle of the visible window.
+- The **`+` and `−` buttons** in the chart's top-left corner, on a strip above
+  the plot so that they cover none of its axis labels. They zoom around the
+  middle of the visible window.
 
 `↺ Back to live` appears in the same corner as soon as a chart is zoomed, and
 it is the reset: it returns the chart to the live window and resumes the 30s
