@@ -13,6 +13,7 @@ of the same rule and only one of them used to be tested.
 """
 
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -341,6 +342,747 @@ def test_postrm_purge_keeps_a_replacement_home_and_its_key(host):
     assert quarantined(host) == [], quarantined(host)
     assert "deluser" not in " ".join(host.calls()), host.calls()
     assert "purge did not complete" in result.stderr, result.stdout + result.stderr
+
+
+# --- key material behind a symbolic link -----------------------------------
+
+ROOT_KEY = "ssh-ed25519 AAAAroot root@host\n"
+OTHER_KEY = "ssh-ed25519 AAAAother other@host\n"
+DISABLED_NAME = "authorized_keys.disabled-by-appliance"
+
+
+def foreign_key_directory(host):
+    """A directory outside the backup home, say root's own ``.ssh``.
+
+    Its ``authorized_keys`` carries a key whose hash the package recorded, so a
+    withdrawal that followed a link into it would delete that file; the key
+    beside it is nobody's the package knows, so it would be quarantined.
+    """
+
+    foreign = host.root / "root" / ".ssh"
+    foreign.mkdir(parents=True)
+    (foreign / "authorized_keys").write_text(ROOT_KEY, encoding="utf-8")
+    (foreign / DISABLED_NAME).write_text(OTHER_KEY, encoding="utf-8")
+    host.register_managed_key("AAAAroot")
+    return foreign
+
+
+def foreign_contents(foreign):
+    return {item.name: item.read_text(encoding="utf-8") for item in foreign.iterdir()}
+
+
+def symlinked_key_directory(host):
+    """The package's own account and home, with ``.ssh`` linked elsewhere."""
+
+    import shutil
+
+    host.run("ensure")
+    foreign = foreign_key_directory(host)
+    ssh_dir = host.home / ".ssh"
+    if ssh_dir.is_dir() and not ssh_dir.is_symlink():
+        shutil.rmtree(ssh_dir)
+    ssh_dir.symlink_to(foreign, target_is_directory=True)
+    return ssh_dir, foreign
+
+
+PURGES = {
+    "helper": lambda host: host.run("purge"),
+    "postrm": lambda host: host.run_postrm("purge", EMS_APPLIANCE_LIBDIR=str(host.package_bin)),
+}
+
+OPERATOR_KEY = "ssh-ed25519 AAAAoperator operator@laptop\n"
+
+
+def drop_real_ssh(host):
+    import shutil
+
+    ssh_dir = host.home / ".ssh"
+    if ssh_dir.is_dir() and not ssh_dir.is_symlink():
+        shutil.rmtree(ssh_dir)
+    return ssh_dir
+
+
+def in_home_store(host, name=".ssh-store"):
+    store = host.home / name
+    store.mkdir()
+    (store / "authorized_keys").write_text(OPERATOR_KEY, encoding="utf-8")
+    return store
+
+
+def key_file_link(host, target):
+    keys = host.home / ".ssh" / "authorized_keys"
+    keys.parent.mkdir(parents=True, exist_ok=True)
+    keys.unlink(missing_ok=True)
+    os.symlink(target, keys)
+    return keys
+
+
+def plant_link(host, plant):
+    """Every kind of link at ``.ssh`` or a key file purge might meet.
+
+    Returns the link and the places outside the home whose state it must keep.
+    """
+
+    host.run("ensure")
+    foreign = foreign_key_directory(host)
+    outside = [host.root / "root"]
+    if plant == "outside":
+        link = drop_real_ssh(host)
+        os.symlink(str(foreign), link)
+    elif plant == "outside-key-file":
+        link = key_file_link(host, str(foreign / DISABLED_NAME))
+    elif plant == "preserved-key-file":
+        link = host.home / ".ssh" / DISABLED_NAME
+        link.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(str(foreign / DISABLED_NAME), link)
+    elif plant == "in-home-relative":
+        in_home_store(host)
+        link = drop_real_ssh(host)
+        os.symlink(".ssh-store", link)
+    elif plant == "in-home-absolute":
+        store = in_home_store(host)
+        link = drop_real_ssh(host)
+        os.symlink(str(store), link)
+    elif plant == "the-home-itself":
+        (host.home / "authorized_keys").write_text(OPERATOR_KEY, encoding="utf-8")
+        link = drop_real_ssh(host)
+        os.symlink(".", link)
+    elif plant == "in-home-key-file":
+        (host.home / "kept-keys").write_text(OPERATOR_KEY, encoding="utf-8")
+        link = key_file_link(host, "../kept-keys")
+    elif plant == "dot-dot":
+        (host.home / "a").mkdir()
+        link = drop_real_ssh(host)
+        os.symlink(os.path.join("a", os.path.relpath(foreign, host.home / "a")), link)
+    elif plant == "outside-hop-into-the-home":
+        store = in_home_store(host, "store")
+        hop = host.root / "alice" / "hop"
+        hop.parent.mkdir()
+        os.symlink(str(store), hop)
+        outside.append(hop.parent)
+        link = drop_real_ssh(host)
+        os.symlink(str(hop), link)
+    elif plant == "trailing-line-break":
+        os.symlink(str(foreign), host.home / "keys\n")
+        link = drop_real_ssh(host)
+        os.symlink("keys\n", link)
+    elif plant == "home-and-a-line-break":
+        sibling = host.home.with_name(host.home.name + "\n")
+        sibling.mkdir()
+        (sibling / "authorized_keys").write_text(OPERATOR_KEY, encoding="utf-8")
+        outside.append(sibling)
+        link = drop_real_ssh(host)
+        os.symlink(str(host.home) + "\n/", link)
+    elif plant == "numbered-conflict-key-file":
+        link = host.home / ".ssh" / (DISABLED_NAME + ".conflict.2")
+        link.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(str(foreign / DISABLED_NAME), link)
+    elif plant == "loop":
+        link = drop_real_ssh(host)
+        os.symlink(".ssh", link)
+    elif plant == "dangling":
+        link = drop_real_ssh(host)
+        os.symlink(str(host.root / "nowhere"), link)
+    else:
+        link = host.home / ".ssh" / (DISABLED_NAME + ".conflict")
+        link.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(str(host.root / "nowhere"), link)
+    return link, outside
+
+
+LINK_PLANTS = [
+    "outside",
+    "outside-key-file",
+    "preserved-key-file",
+    "in-home-relative",
+    "in-home-absolute",
+    "the-home-itself",
+    "in-home-key-file",
+    "dot-dot",
+    "outside-hop-into-the-home",
+    "trailing-line-break",
+    "home-and-a-line-break",
+    "numbered-conflict-key-file",
+    "loop",
+    "dangling",
+    "dangling-conflict",
+]
+
+
+def tree_state(path):
+    """Every entry under ``path`` as it is, links as links, never followed."""
+
+    if not os.path.lexists(path):
+        return None
+    state = {}
+    for directory, names, files in os.walk(path, followlinks=False):
+        for name in names + files:
+            entry = os.path.join(directory, name)
+            relative = os.path.relpath(entry, path)
+            if os.path.islink(entry):
+                state[relative] = ("link", os.readlink(entry))
+            elif os.path.isfile(entry):
+                with open(entry, "rb") as handle:
+                    state[relative] = ("file", handle.read())
+            else:
+                state[relative] = ("directory",)
+    return state
+
+
+def lock_calls(host):
+    return [line for line in host.calls() if line.startswith("usermod --expiredate 1 --lock")]
+
+
+@pytest.mark.parametrize("purge", sorted(PURGES))
+@pytest.mark.parametrize("plant", LINK_PLANTS)
+def test_purge_follows_no_link_and_leaves_the_home_for_a_later_purge(host, purge, plant):
+    """A link at ``.ssh`` or a key file, of any kind, stops the purge for the
+    account: nothing behind it is read, moved or removed, the home stays as it
+    is, with the account locked and expired and its record kept, and the home
+    and the link are named for the operator to resolve."""
+
+    link, outside = plant_link(host, plant)
+    home_before = tree_state(host.home)
+    outside_before = [tree_state(path) for path in outside]
+    managed_before = host.managed_keys.read_text(encoding="utf-8")
+    shown = os.readlink(link).replace("\n", "?")
+
+    result = PURGES[purge](host)
+
+    output = result.stdout + result.stderr
+    assert tree_state(host.home) == home_before, output
+    assert [tree_state(path) for path in outside] == outside_before, output
+    assert quarantined(host) == [], quarantined(host)
+    assert host.account_exists(), output
+    assert lock_calls(host), host.calls()
+    assert host.marker.is_file()
+    assert host.managed_keys.read_text(encoding="utf-8") == managed_before
+    assert f"{link} is a symbolic link to {shown}; nothing behind it was read" in output, output
+    assert f"{host.home} was left in place" in output, output
+    assert f"{BACKUP_USER} was locked and expired" in output, output
+    assert "Remove every link named above, reinstall the package, then purge it again" in output
+    if purge == "helper":
+        assert result.returncode != 0, output
+    else:
+        assert result.returncode == 0, output
+        unfinished = [
+            line for line in result.stderr.splitlines() if "purge did not complete for:" in line
+        ]
+        assert unfinished, result.stderr
+        assert f"the-home-directory-{host.home}" in unfinished[0].split(), unfinished
+
+
+@pytest.mark.parametrize("purge", sorted(PURGES))
+def test_a_kept_home_does_not_claim_a_lock_that_failed(host, purge):
+    plant_link(host, "outside")
+    host.environment["EMS_STUB_USERMOD_RC"] = "6"
+
+    result = PURGES[purge](host)
+
+    output = result.stdout + result.stderr
+    assert "locked and expired" not in output, output
+    assert f"{BACKUP_USER} could not be locked or expired" in output, output
+    assert host.account_exists()
+    if purge == "helper":
+        assert result.returncode != 0, output
+    else:
+        unfinished = [
+            line for line in result.stderr.splitlines() if "purge did not complete for:" in line
+        ]
+        assert unfinished, result.stderr
+        assert f"the-{BACKUP_USER}-account" in unfinished[0].split(), unfinished
+        assert f"the-home-directory-{host.home}" in unfinished[0].split(), unfinished
+
+
+def unfinished_items(result):
+    lines = [line for line in result.stderr.splitlines() if "purge did not complete for:" in line]
+    assert lines, result.stderr
+    return lines[0].split()
+
+
+PACKAGE_KEY = "ssh-ed25519 AAAApackagekey backup@appliance\n"
+
+
+def without_the_packages_keys(host, key_file):
+    """What an operator does with ``the keys <list> lists by hash``."""
+
+    import hashlib
+
+    listed = set(host.managed_keys.read_text(encoding="utf-8").split())
+    kept = [
+        line
+        for line in key_file.read_text(encoding="utf-8").splitlines(keepends=True)
+        if len(line.split()) < 2
+        or hashlib.sha256(line.split()[1].encode("utf-8")).hexdigest() not in listed
+    ]
+    key_file.write_text("".join(kept), encoding="utf-8")
+
+
+def created_home_message(host):
+    return (
+        f"{host.home} was left in place because a key path in it is a symbolic link and "
+        f"{BACKUP_USER} no longer exists. Remove every link named above, then move aside from "
+        f"{host.home} "
+        f"what you want to keep, then remove {host.home}, {host.marker} and "
+        f"{host.managed_keys} by hand"
+    )
+
+
+@pytest.mark.parametrize("purge", sorted(PURGES))
+def test_a_kept_home_whose_account_is_gone_names_the_way_out_that_works(host, purge):
+    """Without the account a reinstall refuses the home it finds, so the message
+    says what to keep and what to remove by hand. Followed, the operator's key
+    survives, the package's goes with the home, and a fresh installation then
+    attributes nothing it did not write: a key the old list knew is quarantined
+    at that installation's purge, not deleted as its own."""
+
+    import shutil
+
+    link, _outside = plant_link(host, "preserved-key-file")
+    host.write_key(text=PACKAGE_KEY)
+    operator = host.write_key(name=DISABLED_NAME + ".conflict.3", text=OPERATOR_KEY, managed=False)
+    host.register_managed_key("AAAAenrolledbefore")
+    host.remove_account()
+
+    result = PURGES[purge](host)
+
+    output = result.stdout + result.stderr
+    assert "locked and expired" not in output, output
+    assert "reinstall the package" not in output, output
+    assert created_home_message(host) in output, output
+    assert not lock_calls(host), host.calls()
+    assert host.home.is_dir()
+    if purge == "postrm":
+        assert f"the-home-directory-{host.home}" in unfinished_items(result)
+    else:
+        assert result.returncode != 0, output
+
+    link.unlink()
+    kept = host.root / "kept-by-the-operator"
+    shutil.move(str(operator), kept)
+    shutil.rmtree(host.home)
+    host.marker.unlink()
+    host.managed_keys.unlink()
+    assert kept.read_text(encoding="utf-8") == OPERATOR_KEY
+
+    reinstall = host.run("ensure")
+    assert reinstall.returncode == 0, reinstall.stdout + reinstall.stderr
+    host.write_key(text="ssh-ed25519 AAAAenrolledbefore operator@laptop\n", managed=False)
+    final = PURGES[purge](host)
+
+    assert not host.home.exists(), final.stdout + final.stderr
+    assert not host.account_exists(), final.stdout + final.stderr
+    assert quarantined(host), "a key the old list knew was deleted, not quarantined"
+
+
+def adopted_home_with_linked_keys(host):
+    """A home that was there, empty, before the package; ``.ssh`` now links to
+    the operator's own key directory inside it."""
+
+    host.home.mkdir(parents=True, exist_ok=True)
+    host.home.chmod(0o755)
+    installed = host.run("ensure")
+    assert installed.returncode == 0, installed.stdout + installed.stderr
+    assert host.record()["home_created_by_package"] is False
+    store = host.home / "operator-keys"
+    store.mkdir()
+    (store / "authorized_keys").write_text(OPERATOR_KEY, encoding="utf-8")
+    link = drop_real_ssh(host)
+    os.symlink("operator-keys", link)
+    return link, store
+
+
+def adopted_home_message(host):
+    return (
+        f"{host.home} was left in place because a key path in it is a symbolic link and "
+        f"{BACKUP_USER} no longer exists; this package did not create {host.home}, so it "
+        f"stays yours. Remove every link named above, then take the keys {host.managed_keys} "
+        f"lists by hash "
+        f"out of {host.home}/.ssh, then remove {host.marker} and {host.managed_keys} by hand"
+    )
+
+
+@pytest.mark.parametrize("purge", sorted(PURGES))
+def test_an_adopted_home_whose_account_is_gone_stays_the_operators(host, purge):
+    """A home the package did not create is never removed, so the way out names
+    the link, the package's own keys, the ownership record and the list."""
+
+    link, store = adopted_home_with_linked_keys(host)
+    host.remove_account()
+
+    result = PURGES[purge](host)
+
+    output = result.stdout + result.stderr
+    assert f"remove {host.home}," not in output, output
+    assert adopted_home_message(host) in output, output
+    assert (store / "authorized_keys").read_text(encoding="utf-8") == OPERATOR_KEY
+    if purge == "postrm":
+        items = unfinished_items(result)
+        assert f"the-ownership-record-{host.marker}" in items, items
+        assert f"the-home-directory-{host.home}" not in items, items
+    else:
+        assert result.returncode != 0, output
+
+
+@pytest.mark.parametrize("purge", sorted(PURGES))
+def test_an_adopted_homes_way_out_removes_the_packages_keys_and_keeps_the_operators(host, purge):
+    """Followed literally: the package's key leaves the operator's home before the
+    list that identifies it is deleted, and the operator's key behind the link stays."""
+
+    host.home.mkdir(parents=True, exist_ok=True)
+    host.home.chmod(0o755)
+    assert host.run("ensure").returncode == 0
+    assert host.record()["home_created_by_package"] is False
+    keys = host.write_key(text=PACKAGE_KEY)
+    with keys.open("a", encoding="utf-8") as handle:
+        handle.write("ssh-ed25519 AAAAmine operator@laptop\n")
+    elsewhere = host.root / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "k").write_text(OPERATOR_KEY, encoding="utf-8")
+    link = host.home / ".ssh" / DISABLED_NAME
+    os.symlink(str(elsewhere / "k"), link)
+    host.remove_account()
+
+    result = PURGES[purge](host)
+
+    assert adopted_home_message(host) in result.stdout + result.stderr
+    link.unlink()
+    without_the_packages_keys(host, keys)
+    host.marker.unlink()
+    host.managed_keys.unlink()
+
+    assert "AAAApackagekey" not in keys.read_text(encoding="utf-8")
+    assert "AAAAmine" in keys.read_text(encoding="utf-8")
+    assert (elsewhere / "k").read_text(encoding="utf-8") == OPERATOR_KEY
+    assert host.home.is_dir()
+
+
+@pytest.mark.parametrize("purge", sorted(PURGES))
+@pytest.mark.parametrize("home", ["created", "adopted"])
+@pytest.mark.parametrize(
+    "plant", ["outside", "dot-dot", "trailing-line-break", "home-and-a-line-break"]
+)
+def test_following_a_gone_account_way_out_literally_leaves_roots_keys_alone(
+    host, purge, home, plant
+):
+    """``.ssh`` reaches root's own ``.ssh``; the account was removed by hand. Every
+    step the message names is taken literally, in its order, and root's keys
+    and anything else outside the home stay as they were: the link goes first,
+    so no later step acts through it."""
+
+    import shutil
+
+    if home == "adopted":
+        host.home.mkdir(parents=True, exist_ok=True)
+        host.home.chmod(0o755)
+    link, outside = plant_link(host, plant)
+    outside_before = [tree_state(path) for path in outside]
+    host.remove_account()
+
+    result = PURGES[purge](host)
+
+    output = result.stdout + result.stderr
+    if home == "created":
+        assert created_home_message(host) in output, output
+        link.unlink()
+        kept = host.root / "kept-by-the-operator"
+        kept.mkdir()
+        for name in os.listdir(host.home):
+            shutil.move(str(host.home / name), str(kept / name))
+        shutil.rmtree(host.home)
+    else:
+        assert adopted_home_message(host) in output, output
+        link.unlink()
+        ssh_dir = host.home / ".ssh"
+        if ssh_dir.is_dir() and not ssh_dir.is_symlink():
+            for key_file in ssh_dir.iterdir():
+                without_the_packages_keys(host, key_file)
+    host.marker.unlink()
+    host.managed_keys.unlink()
+
+    assert [tree_state(path) for path in outside] == outside_before
+
+
+def named_links(output):
+    return [
+        line.split("ems-appliance: ", 1)[-1].split(" is a symbolic link to ", 1)[0]
+        for line in output.splitlines()
+        if " is a symbolic link to " in line
+    ]
+
+
+@pytest.mark.parametrize("purge", sorted(PURGES))
+@pytest.mark.parametrize("home", ["created", "adopted"])
+def test_two_links_left_by_two_disables_are_both_named_and_both_removed_first(
+    host, purge, home
+):
+    """``authorized_keys`` linked to root's own key file; the package's disable
+    moves the link to the preserved name, and after it is linked again, to a
+    conflict name. Purge names both links, and following the message removes
+    every one of them before any step acts inside the home, so root's keys stay."""
+
+    import shutil
+
+    if home == "adopted":
+        host.home.mkdir(parents=True, exist_ok=True)
+        host.home.chmod(0o755)
+    assert host.run("ensure").returncode == 0
+    foreign = foreign_key_directory(host)
+    ssh_dir = host.home / ".ssh"
+    ssh_dir.mkdir(exist_ok=True)
+    for _ in range(2):
+        keys = ssh_dir / "authorized_keys"
+        keys.unlink(missing_ok=True)
+        os.symlink(str(foreign / "authorized_keys"), keys)
+        disabled = host.run("disable")
+        assert disabled.returncode == 0, disabled.stdout + disabled.stderr
+    links = sorted(str(item) for item in ssh_dir.iterdir() if item.is_symlink())
+    assert links == [
+        str(ssh_dir / DISABLED_NAME),
+        str(ssh_dir / (DISABLED_NAME + ".conflict")),
+    ], links
+    roots_before = tree_state(foreign)
+    host.remove_account()
+
+    result = PURGES[purge](host)
+
+    output = result.stdout + result.stderr
+    assert sorted(named_links(output)) == links, output
+    if home == "created":
+        assert created_home_message(host) in output, output
+    else:
+        assert adopted_home_message(host) in output, output
+    for link in named_links(output):
+        os.unlink(link)
+    if home == "created":
+        kept = host.root / "kept-by-the-operator"
+        kept.mkdir()
+        for name in os.listdir(host.home):
+            shutil.move(str(host.home / name), str(kept / name))
+        shutil.rmtree(host.home)
+    else:
+        for key_file in ssh_dir.iterdir():
+            without_the_packages_keys(host, key_file)
+    host.marker.unlink()
+    host.managed_keys.unlink()
+
+    assert tree_state(foreign) == roots_before
+
+
+@pytest.mark.parametrize("purge", sorted(PURGES))
+def test_a_record_that_does_not_say_the_package_created_the_home_reads_as_adopted(host, purge):
+    """Only an explicit ``home_created_by_package: true`` lets the way out name the
+    home for removal; a record without the field is treated as an adopted home."""
+
+    import json
+
+    plant_link(host, "outside")
+    record = json.loads(host.marker.read_text(encoding="utf-8"))
+    record.pop("home_created_by_package")
+    host.marker.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    host.remove_account()
+
+    result = PURGES[purge](host)
+
+    output = result.stdout + result.stderr
+    assert adopted_home_message(host) in output, output
+    assert f"remove {host.home}," not in output, output
+
+
+@pytest.mark.parametrize("purge", sorted(PURGES))
+def test_an_adopted_home_keeps_the_operators_keys_through_the_reinstall_way_out(host, purge):
+    link, store = adopted_home_with_linked_keys(host)
+
+    PURGES[purge](host)
+    link.unlink()
+    reinstall = host.run("ensure")
+    assert reinstall.returncode == 0, reinstall.stdout + reinstall.stderr
+    final = PURGES[purge](host)
+
+    output = final.stdout + final.stderr
+    assert not host.account_exists(), output
+    assert (store / "authorized_keys").read_text(encoding="utf-8") == OPERATOR_KEY
+    assert "was left in place because" not in output, output
+
+
+@pytest.mark.parametrize("purge", sorted(PURGES))
+def test_purge_without_a_link_still_removes_the_account_and_its_home(host, purge):
+    host.run("ensure")
+    host.write_key()
+    host.write_key(name=DISABLED_NAME, text=OPERATOR_KEY, managed=False)
+
+    result = PURGES[purge](host)
+
+    output = result.stdout + result.stderr
+    assert not host.home.exists(), output
+    assert not host.account_exists(), output
+    assert not host.marker.exists(), output
+    assert [
+        (host.quarantine_dir / name).read_text(encoding="utf-8") for name in quarantined(host)
+    ] == [OPERATOR_KEY]
+    assert "was left in place" not in output, output
+
+
+@pytest.mark.parametrize("purge", sorted(PURGES))
+@pytest.mark.parametrize("plant", ["outside", "in-home-relative", "outside-key-file"])
+def test_a_purge_after_the_link_is_removed_and_a_reinstall_completes(host, purge, plant):
+    """The way out the message names: remove the link, reinstall, purge again.
+    The managed-key list survived the first purge, so the package's own key is
+    deleted then, not quarantined as somebody else's."""
+
+    link, _outside = plant_link(host, plant)
+    ssh_dir = host.home / ".ssh"
+    if ssh_dir.is_dir() and not ssh_dir.is_symlink():
+        host.write_key(name=DISABLED_NAME, text="ssh-ed25519 AAAApackage package@appliance\n")
+    PURGES[purge](host)
+    assert host.home.is_dir()
+
+    link.unlink()
+    reinstall = host.run("ensure")
+    assert reinstall.returncode == 0, reinstall.stdout + reinstall.stderr
+    result = PURGES[purge](host)
+
+    output = result.stdout + result.stderr
+    assert not host.home.exists(), output
+    assert not host.account_exists(), output
+    assert not host.marker.exists(), output
+    assert not host.managed_keys.exists(), output
+    assert quarantined(host) == [], quarantined(host)
+    assert "was left in place" not in output, output
+
+
+@pytest.mark.parametrize("dangling", [False, True], ids=["link-to-a-file", "dangling-link"])
+@pytest.mark.parametrize("expires", [True, False], ids=["expired", "not-expired"])
+def test_disable_moves_a_key_file_link_aside_as_the_link_it_is(host, dangling, expires):
+    """sshd reads authorized_keys through a link; the fallback moves the link, as
+    ``backup-access disable`` does, and leaves nothing where sshd reads keys."""
+
+    host.run("ensure")
+    target = host.root / "root" / ".ssh" / "authorized_keys"
+    target.parent.mkdir(parents=True)
+    if not dangling:
+        target.write_text(ROOT_KEY, encoding="utf-8")
+    keys = host.home / ".ssh" / "authorized_keys"
+    keys.parent.mkdir(parents=True, exist_ok=True)
+    keys.unlink(missing_ok=True)
+    keys.symlink_to(target)
+    if not expires:
+        host.environment["EMS_STUB_USERMOD_RC"] = "1"
+        host.environment["EMS_STUB_CHAGE_RC"] = "1"
+
+    result = host.run("disable")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not os.path.lexists(keys), sorted(item.name for item in keys.parent.iterdir())
+    preserved = keys.with_name(DISABLED_NAME)
+    assert preserved.is_symlink() and os.readlink(preserved) == str(target)
+    if not dangling:
+        assert target.read_text(encoding="utf-8") == ROOT_KEY
+
+
+def test_disable_fails_while_something_it_cannot_move_stays_where_sshd_reads_keys(host):
+    host.run("ensure")
+    keys = host.home / ".ssh" / "authorized_keys"
+    keys.parent.mkdir(parents=True, exist_ok=True)
+    keys.unlink(missing_ok=True)
+    keys.mkdir()
+
+    result = host.run("disable")
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert str(keys) in result.stderr, result.stderr
+
+
+def test_disable_fails_when_a_key_file_link_is_still_there_after_the_move(host):
+    """A move that reports success is checked: a dangling link left behind fails the run."""
+
+    host.run("ensure")
+    keys = host.home / ".ssh" / "authorized_keys"
+    keys.parent.mkdir(parents=True, exist_ok=True)
+    keys.unlink(missing_ok=True)
+    keys.symlink_to(host.root / "nowhere")
+    host.stub_command("mv", "exit 0")
+
+    result = host.run("disable")
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert keys.is_symlink()
+
+
+def test_the_removal_fallback_says_on_stderr_that_the_account_was_not_expired(host):
+    """prerm keeps the fallback's stdout quiet but passes its stderr through, so
+    ``apt remove`` tells the operator the account could not be expired."""
+
+    host.run("ensure")
+    keys = host.write_key()
+    host.stub_command("ems-appliance", "exit 1")
+    host.environment["EMS_STUB_USERMOD_RC"] = "1"
+    host.environment["EMS_STUB_CHAGE_RC"] = "1"
+
+    result = host.run_prerm("remove")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not os.path.lexists(keys)
+    assert "could not be expired" in result.stderr, result.stdout + result.stderr
+    assert "could not be expired" not in result.stdout, result.stdout
+
+
+def test_disable_treats_a_dangling_link_at_the_preserved_name_as_taken(host):
+    """As ``backup-access disable`` does: an entry there, a link included, is a conflict."""
+
+    host.run("ensure")
+    keys = host.write_key()
+    preserved = keys.with_name(DISABLED_NAME)
+    preserved.symlink_to(host.root / "nowhere")
+
+    result = host.run("disable")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert preserved.is_symlink()
+    assert keys.with_name(DISABLED_NAME + ".conflict").is_file()
+    assert not os.path.lexists(keys)
+
+
+def test_disable_treats_a_dangling_link_at_a_conflict_name_as_taken(host):
+    host.run("ensure")
+    keys = host.write_key(text="ssh-ed25519 AAAA live\n")
+    host.write_key(name=DISABLED_NAME, text="ssh-ed25519 AAAA old\n")
+    conflict = keys.with_name(DISABLED_NAME + ".conflict")
+    conflict.symlink_to(host.root / "nowhere")
+
+    result = host.run("disable")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert conflict.is_symlink()
+    assert keys.with_name(DISABLED_NAME + ".conflict.2").read_text(encoding="utf-8") == (
+        "ssh-ed25519 AAAA live\n"
+    )
+
+
+def test_disable_moves_nothing_through_a_symlinked_key_directory_and_expires_the_account(host):
+    ssh_dir, foreign = symlinked_key_directory(host)
+    before = foreign_contents(foreign)
+
+    result = host.run("disable")
+
+    assert foreign_contents(foreign) == before
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert any(
+        line.startswith(("usermod", "chage")) for line in host.calls()
+    ), host.calls()
+    assert f"{ssh_dir} is a symbolic link" in result.stderr, result.stderr
+
+
+def test_disable_fails_closed_when_a_symlinked_key_directory_account_cannot_expire(host):
+    _ssh_dir, foreign = symlinked_key_directory(host)
+    before = foreign_contents(foreign)
+    host.environment["EMS_STUB_USERMOD_RC"] = "1"
+    host.environment["EMS_STUB_CHAGE_RC"] = "1"
+
+    result = host.run("disable")
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert foreign_contents(foreign) == before
 
 
 def test_a_replacement_home_purge_names_the_ownership_mismatch(host):
@@ -832,6 +1574,18 @@ def test_the_home_authority_is_the_same_text_in_both_maintainer_scripts():
     assert account == postrm, "the two package-home authorities have drifted apart"
     assert "home_marker_is_recorded" in account
     assert "home_is_recorded" in account
+
+
+def test_the_key_withdrawal_is_the_same_text_in_both_maintainer_scripts():
+    """Purge withdraws key material twice over, and both refuse a link the same way."""
+
+    account = shared_block(ACCOUNT_SCRIPT, "package key withdrawal")
+    postrm = shared_block(POSTRM_SCRIPT, "package key withdrawal")
+
+    assert account == postrm, "the two key withdrawals have drifted apart"
+    assert "withdraw_managed_keys" in account
+    assert "home_left_in_place" in account
+    assert '[ -L "$entry" ]' in account
 
 
 def test_the_object_identity_is_the_same_text_in_the_export_and_purge_scripts():

@@ -531,13 +531,15 @@ write_origin_declaration() {
 # one thing an ownership upgrade may not assume away.
 keys_are_attributed() {
     directory=$1
+    [ -L "$directory" ] && return 1
     [ -d "$directory" ] || return 0
     for conflict in "$directory/authorized_keys$DISABLED_SUFFIX".conflict*; do
-        if [ -e "$conflict" ]; then
+        if [ -e "$conflict" ] || [ -L "$conflict" ]; then
             return 1
         fi
     done
     for file in "$directory/authorized_keys" "$directory/authorized_keys$DISABLED_SUFFIX"; do
+        [ -L "$file" ] && return 1
         [ -f "$file" ] || continue
         while IFS= read -r line || [ -n "$line" ]; do
             case "$line" in ''|\#*) continue ;; esac
@@ -577,7 +579,10 @@ keys_content_is_package_only() {
     for entry in "$directory"/* "$directory"/.[!.]* "$directory"/..?*; do
         [ -e "$entry" ] || [ -L "$entry" ] || continue
         case "${entry##*/}" in
-            authorized_keys|"authorized_keys$DISABLED_SUFFIX") continue ;;
+            authorized_keys|"authorized_keys$DISABLED_SUFFIX")
+                [ -L "$entry" ] && return 1
+                continue
+                ;;
         esac
         return 1
     done
@@ -754,7 +759,7 @@ free_conflict_path() {
         else
             candidate="$base.conflict.$index"
         fi
-        [ -e "$candidate" ] || { printf '%s' "$candidate"; return 0; }
+        [ -e "$candidate" ] || [ -L "$candidate" ] || { printf '%s' "$candidate"; return 0; }
         index=$((index + 1))
     done
     return 1
@@ -800,10 +805,17 @@ disable_account() {
         return 0
     fi
     directory=$(keys_directory)
+    if [ -L "$directory" ]; then
+        expire_account || fail "$directory is a symbolic link and $BACKUP_USER could not be expired;
+  nothing behind it was moved and its authentication is still live."
+        caution "$directory is a symbolic link; nothing behind it was moved, and $BACKUP_USER
+  was expired instead."
+        return 0
+    fi
     keys="$directory/authorized_keys"
     preserved="$keys$DISABLED_SUFFIX"
-    if [ -f "$keys" ]; then
-        if [ -e "$preserved" ]; then
+    if [ -f "$keys" ] || [ -L "$keys" ]; then
+        if [ -e "$preserved" ] || [ -L "$preserved" ]; then
             target=$(free_conflict_path "$preserved") \
                 || fail "$directory holds too many unresolved key files"
         else
@@ -811,24 +823,75 @@ disable_account() {
         fi
         mv -f "$keys" "$target" || fail "cannot move $keys out of sshd's reach"
     fi
-    [ -f "$keys" ] && fail "$keys is still readable by sshd"
+    if [ -e "$keys" ] || [ -L "$keys" ]; then
+        fail "$keys is still where sshd reads keys"
+    fi
 
-    expire_account || note "the backup account could not be expired; its key was removed."
+    expire_account || caution "the backup account could not be expired; nothing is left at $keys for sshd to read."
     return 0
 }
 
 # --- purge ------------------------------------------------------------------
 
+key_material_left() {
+    warn "$1"
+}
+
+# --- BEGIN package key withdrawal (byte-identical in backup-account.sh and postrm)
+link_left_in_place() {
+    link_target=$(readlink "$1" 2>/dev/null | tr '\n' '?')
+    link_target=${link_target%\?}
+    key_material_left "$1 is a symbolic link to ${link_target:-a target that cannot be read}; nothing behind it was read, moved or removed" \
+        "the-link-$1-to-${link_target:-an-unreadable-target}"
+}
+
+key_links_found() {
+    if [ -L "$1" ]; then
+        link_left_in_place "$1"
+        return 0
+    fi
+    [ -d "$1" ] || return 1
+    links_found=1
+    for entry in "$1/authorized_keys" "$1/authorized_keys$DISABLED_SUFFIX" \
+                 "$1/authorized_keys$DISABLED_SUFFIX".conflict*; do
+        if [ -L "$entry" ]; then
+            link_left_in_place "$entry"
+            links_found=0
+        fi
+    done
+    return "$links_found"
+}
+
+home_left_in_place() {
+    if ! account_exists; then
+        if [ "$(record_value home_created_by_package)" = "true" ]; then
+            key_material_left "$1 was left in place because a key path in it is a symbolic link and $BACKUP_USER no longer exists. Remove every link named above, then move aside from $1 what you want to keep, then remove $1, $RECORD and $MANAGED_KEYS by hand" \
+                "the-home-directory-$1"
+        else
+            key_material_left "$1 was left in place because a key path in it is a symbolic link and $BACKUP_USER no longer exists; this package did not create $1, so it stays yours. Remove every link named above, then take the keys $MANAGED_KEYS lists by hash out of $1/.ssh, then remove $RECORD and $MANAGED_KEYS by hand" \
+                "the-ownership-record-$RECORD"
+        fi
+        return 0
+    fi
+    if usermod --expiredate 1 --lock "$BACKUP_USER" >/dev/null 2>&1; then
+        account_left="$BACKUP_USER was locked and expired"
+    else
+        account_left="$BACKUP_USER could not be locked or expired"
+        key_material_left "$BACKUP_USER could not be locked or expired; lock it by hand" \
+            "the-$BACKUP_USER-account"
+    fi
+    key_material_left "$1 was left in place because a key path in it is a symbolic link; $account_left, and its ownership record was kept. Remove every link named above, reinstall the package, then purge it again" \
+        "the-home-directory-$1"
+}
+
 quarantine_keys() {
-    source_file=$1
-    origin=$2
     mkdir -p "$QUARANTINE_DIR" 2>/dev/null || return 1
     chmod 0700 "$QUARANTINE_DIR" 2>/dev/null || true
     stamp=$(date -u +%Y%m%d%H%M%S 2>/dev/null || echo unknown)
-    target="$QUARANTINE_DIR/$(basename "$origin").$BACKUP_USER.$stamp"
-    mv -f "$source_file" "$target" 2>/dev/null || return 1
+    target="$QUARANTINE_DIR/$(basename "$2").$BACKUP_USER.$stamp"
+    mv -f "$1" "$target" 2>/dev/null || return 1
     chmod 0600 "$target" 2>/dev/null || true
-    note "preserved unattributed key material from $origin at $target."
+    echo "ems-appliance: preserved unattributed key material from $2 at $target."
     return 0
 }
 
@@ -856,8 +919,8 @@ filter_key_file() {
             rm -f "$file"
         else
             rm -f "$kept"
-            warn "key material in $file could not be attributed to this package and was left in place"
-            return 0
+            key_material_left "key material in $file could not be attributed to this package and was left in place" \
+                "the-key-material-in-$file"
         fi
     else
         rm -f "$kept" "$file"
@@ -867,14 +930,20 @@ filter_key_file() {
 
 withdraw_managed_keys() {
     directory=$1
+    if key_links_found "$directory"; then
+        return 1
+    fi
     [ -d "$directory" ] || return 0
     filter_key_file "$directory/authorized_keys"
     filter_key_file "$directory/authorized_keys$DISABLED_SUFFIX"
     for conflict in "$directory/authorized_keys$DISABLED_SUFFIX".conflict*; do
-        [ -e "$conflict" ] && filter_key_file "$conflict"
+        if [ -e "$conflict" ]; then
+            filter_key_file "$conflict"
+        fi
     done
     return 0
 }
+# --- END package key withdrawal
 
 purge_account() {
     if ! record_says_created; then
@@ -902,7 +971,10 @@ purge_account() {
 
     recorded_home=$(record_value home)
     created_home=$(record_value home_created_by_package)
-    withdraw_managed_keys "$recorded_home/.ssh"
+    if ! withdraw_managed_keys "$recorded_home/.ssh"; then
+        home_left_in_place "$recorded_home"
+        return 0
+    fi
 
     if account_exists; then
         deluser --quiet "$BACKUP_USER" >/dev/null 2>&1 || true

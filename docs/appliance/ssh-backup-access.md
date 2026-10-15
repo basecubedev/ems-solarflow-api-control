@@ -450,6 +450,59 @@ backup account holds it, `fuser -vm <target>` names the process — because
 once the package is gone nothing on the host names those mounts, and the
 space they pin never comes back.
 
+Purge follows no symbolic link at the account's key paths. When the account's
+`.ssh`, or one of its key files (`authorized_keys`, the preserved copy or a
+`.conflict` file), is a symbolic link of any kind, pointing into the home or out
+of it, dangling or looping, purge reads, moves and removes nothing through it,
+and removes nothing else of the account either. It names each link with its
+target as `readlink` prints it (a line break shown as `?`), leaves the home in
+place and lists it under "purge did not complete for" as
+`the-home-directory-<home>`. The one exception is a home this package did not
+create whose account is already gone: that home is never the package's to
+remove, so postrm lists `the-ownership-record-<record>` instead. The account stays,
+locked and expired; if it cannot be locked, purge says so and lists the account
+too. Its ownership record and the list of keys this package wrote stay as well.
+Without such a link, purge removes the account and the whole home it created, as
+it always has.
+
+dpkg records the package as purged either way, and the helper goes with it, so
+the way out is: remove every link purge named, there can be more than one,
+reinstall the package, then purge it again. The
+reinstall finds the kept account and record and keeps the account as this
+package's own. Its `backup-access activate` then does what it does on every
+install: once the confinement is verified again, it lifts the account's expiry
+and puts back a key the earlier removal had preserved, so backup access can be
+active, confined, until the purge. The removal step of that purge disables it
+again, and the purge then removes the account, its keys and its home.
+
+If the account itself was already removed by hand, a reinstall would refuse the
+home it finds there, so that way is closed, and purge names a way out by hand
+instead. It starts with the links, so that no later step acts through one:
+remove every link purge named, then move aside from the home whatever you want
+to keep, then remove
+the home, the ownership record
+`/var/lib/ems-appliance-manager/agent/package-state/backup-account.json` and the
+list of keys this package wrote,
+`/var/lib/ems-appliance-manager/agent/package-state/managed-keys.list`. The list
+goes too, so a later installation does not take a key it never wrote for its
+own. A home this package did not create, one that was already there and empty
+when it was installed, is never removed by it and stays yours: there, remove
+every link purge named, then take the package's own keys, the ones the list names
+by hash, out of `.ssh`, then remove the record and the list. Both purge scripts
+carry the link rule as one block of identical text, since dpkg has removed the
+helper by the time `postrm` runs.
+
+The fallback of `apt remove` (`backup-account.sh disable`, run when the CLI
+fails) does what `backup-access disable` does. A linked `.ssh` is left alone and
+the account is expired instead; if it cannot be expired, the removal stops. An
+`authorized_keys` that is a regular file or a symbolic link, dangling or not, is
+moved aside as the entry it is, to `authorized_keys.disabled-by-appliance` or,
+when anything already stands there, to a `.conflict` name. If anything is still
+at `authorized_keys` afterwards, a directory for instance, the fallback fails and
+the removal stops. Once nothing is left there, a failed expiry is reported on
+stderr, which `apt remove` passes on, and the removal goes on, since sshd has no
+key file to read for the account.
+
 Purge is ownership-gated. The package records that it created the account:
 
 ```json
@@ -489,7 +542,9 @@ sudo ems-appliance backup-account migrate-ownership
 
 This refuses unless the account identity, the recorded home, the absence of a
 foreign marker, the root-owned confined home, the absence of foreign home
-content and the attribution of every key in it all check out — and it refuses a
+content and the attribution of every key in it all check out. A key file, or
+`.ssh` itself, that is a symbolic link counts as foreign content, whatever its
+target holds, and is never read. It also refuses a
 record with no schema version outright, because nothing in such a record can
 establish ownership. Reinstalling does **not** perform this step. See
 [security-model.md](security-model.md) for the full state table.

@@ -353,6 +353,73 @@ def test_the_explicit_migration_refuses_a_home_holding_an_unknown_key(host):
     assert key_file.read_text(encoding="utf-8") == FOREIGN_KEY
 
 
+@pytest.mark.parametrize("name", ["authorized_keys", "authorized_keys.disabled-by-appliance"])
+def test_the_explicit_migration_refuses_a_key_file_planted_as_a_symlink(host, name):
+    """A linked key file is not key material this package wrote, whatever its target hashes to."""
+
+    package_home(host)
+    target = host.root / "root" / ".ssh" / "authorized_keys"
+    target.parent.mkdir(parents=True)
+    target.write_text("ssh-ed25519 AAAAroot root@host\n", encoding="utf-8")
+    host.register_managed_key("AAAAroot")
+    key_file = host.home / ".ssh" / name
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    key_file.unlink(missing_ok=True)
+    key_file.symlink_to(target)
+
+    result = host.run("migrate-ownership")
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "holds files this package did not put there" in result.stderr, result.stderr
+    assert not host.home_marker().exists()
+    assert host.record()["schema_version"] == backup_ownership.LEGACY_RECORD_SCHEMA_VERSION
+    assert key_file.is_symlink()
+
+
+def _shell_function(name):
+    """One function of the packaged account script, as text a test can run."""
+
+    from tests.helpers.appliance_backup_account import ACCOUNT_SCRIPT
+
+    text = ACCOUNT_SCRIPT.read_text(encoding="utf-8")
+    start = text.index(f"\n{name}() {{\n") + 1
+    return text[start : text.index("\n}\n", start) + 3]
+
+
+@pytest.mark.parametrize("plant", ["linked-ssh", "linked-key-file", "dangling-conflict-link"])
+def test_key_attribution_never_reads_through_a_link(tmp_path, plant):
+    """``keys_are_attributed`` on its own, whatever gate runs before it."""
+
+    import hashlib
+    import subprocess
+
+    foreign = tmp_path / "root-ssh"
+    foreign.mkdir()
+    (foreign / "authorized_keys").write_text("ssh-ed25519 AAAAroot root@host\n", encoding="utf-8")
+    managed = tmp_path / "managed-keys.list"
+    managed.write_text(hashlib.sha256(b"AAAAroot").hexdigest() + "\n", encoding="utf-8")
+    ssh_dir = tmp_path / "home" / ".ssh"
+    if plant == "linked-ssh":
+        ssh_dir.parent.mkdir()
+        ssh_dir.symlink_to(foreign, target_is_directory=True)
+    else:
+        ssh_dir.mkdir(parents=True)
+    if plant == "linked-key-file":
+        (ssh_dir / "authorized_keys").symlink_to(foreign / "authorized_keys")
+    if plant == "dangling-conflict-link":
+        (ssh_dir / "authorized_keys.disabled-by-appliance.conflict").symlink_to(tmp_path / "nowhere")
+    script = (
+        "DISABLED_SUFFIX=.disabled-by-appliance\n"
+        f"MANAGED_KEYS='{managed}'\n"
+        + _shell_function("keys_are_attributed")
+        + f"keys_are_attributed '{ssh_dir}'\n"
+    )
+
+    result = subprocess.run(["sh", "-c", script], capture_output=True, text=True, check=False)
+
+    assert result.returncode == 1, result.stdout + result.stderr
+
+
 def test_the_explicit_migration_refuses_a_home_that_moved(host):
     """Device and inode are a necessary condition for a schema-2 adoption.
 
