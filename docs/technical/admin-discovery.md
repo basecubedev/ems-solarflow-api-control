@@ -562,6 +562,20 @@ same range counts as the same network, whatever timeout or worker count the
 second request asked for. Once the scan has ended, the network can be scanned
 again.
 
+The local MQTT brokers and the Zendure cloud are each refreshed by one caller at
+a time, whichever route asks: Setup's run (`POST /api/discovery/run` with
+`{"refresh": true}`), Maintenance's `POST /api/discovery/mqtt-brokers/refresh`
+and `POST /api/discovery/zendure-cloud-mqtt/refresh`, or
+`POST /api/discovery/source/<source>/refresh`. The cloud listener signs in
+with the account's one MQTT client id, which a second session would drop, and a
+broker refresh's results are discarded once a newer one has started. A refresh
+asked for while one runs with the same inputs (for the cloud the saved Zendure
+key, for the brokers the known broker endpoints and the pooled discovery
+credentials) is answered with that refresh's result. One with other inputs, a
+key or a pooled credential saved in between, waits until the running refresh has
+ended and then reads its inputs again, so no caller is answered from
+credentials replaced before it asked.
+
 ## Network suggestions
 
 The page lists detected local networks (`GET /api/discovery/networks`) so you can

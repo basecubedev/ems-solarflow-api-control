@@ -34,6 +34,7 @@ from admin.mqtt_topic_discovery import (
     parse_report_payload,
 )
 from admin.secret_store import ZendureTokenStore
+from admin.single_flight import SingleFlight
 from ems.config import MQTT_TLS_OBSERVED_MODES
 from admin.zendure_cloud_auth import (
     ZendureCloudError,
@@ -552,6 +553,7 @@ class ZendureCloudDiscovery:
         self._candidates = []
         self._trusted_candidates = []
         self._last_seed_attempt = 0.0
+        self._refreshes = SingleFlight()
 
     # --- token management ------------------------------------------------
 
@@ -788,7 +790,20 @@ class ZendureCloudDiscovery:
         }
 
     def refresh(self):
+        """Read the deviceList and listen on the cloud broker, one refresh at a time.
+
+        The broker session signs in with the account's one ``client_id``, and a
+        second session under it drops the first: a refresh asked for while one
+        with the same saved key runs joins it, one with another key waits.
+        """
+
+        return self._refreshes.run(self._refresh_inputs, self._refresh)
+
+    def _refresh_inputs(self):
         api_key = self.store.load_token()
+        return api_key, api_key
+
+    def _refresh(self, api_key):
         if not api_key:
             return {"ok": False, "error": "not_configured", "message": _ERR_NOT_CONFIGURED}
         try:

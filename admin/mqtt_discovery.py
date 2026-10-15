@@ -17,6 +17,7 @@ from admin.discovery import (
     validate_cidr,
 )
 from admin.models import MqttBrokerCandidate, utc_now_iso
+from admin.single_flight import SingleFlight
 
 MQTT_MDNS_SERVICE_TYPE = "_mqtt._tcp.local."
 MQTT_TLS_PORT = 8883
@@ -29,6 +30,7 @@ MQTT_MAX_WORKERS_DEFAULT = 32
 # observed the broker (even if it saw no topics). Any other status means topic
 # discovery did not succeed for that attempt, so its device view is not trusted.
 _LISTENED_STATUSES = frozenset({"topics_seen", "mqtt_listened_no_topics"})
+_REFRESH_ENDPOINT_FIELDS = ("id", "host", "port", "tls", "tls_mode")
 
 
 def transport_for_port(port):
@@ -281,6 +283,7 @@ class MqttBrokerDiscovery:
         # refs. Read fresh on every refresh so the matrix always reflects the
         # latest saved credentials.
         self._credential_refs_provider = credential_refs_provider
+        self._refreshes = SingleFlight()
 
     def add_mdns_candidate(self, candidate):
         if candidate:
@@ -390,7 +393,32 @@ class MqttBrokerDiscovery:
         }
 
     def refresh(self):
+        """Listen on every known broker, one refresh at a time.
+
+        A refresh opens a generation and a newer one discards its results: a
+        refresh asked for while one runs with the same brokers and credential
+        pool joins it, one with others waits.
+        """
+
+        return self._refreshes.run(self._refresh_inputs, self._refresh)
+
+    def _refresh_inputs(self):
         known = self.candidates()
+        attempts = tuple(self._credential_attempts())
+        key = (
+            tuple(
+                tuple(item.get(field) for field in _REFRESH_ENDPOINT_FIELDS)
+                for item in known
+            ),
+            tuple(
+                (attempt["credential_ref"], attempt["username"], attempt["password"])
+                for attempt in attempts
+            ),
+        )
+        return key, (known, attempts)
+
+    def _refresh(self, inputs):
+        known, attempts = inputs
         if not known:
             return {"checked": 0, "reachable": 0, "devices_found": 0, "candidates": []}
         generation = self.store.begin_refresh()
@@ -417,7 +445,7 @@ class MqttBrokerDiscovery:
                 if item["reachable"]:
                     item["last_seen"] = utc_now_iso()
                     refreshed += 1
-                    devices_found += self._discover_topics(item)
+                    devices_found += self._discover_topics(item, attempts)
                     if not item.get("topic_refresh_success"):
                         # Reachable at TCP but topics never listened: keep the
                         # prior devices only as history, never as selectable.
@@ -437,7 +465,7 @@ class MqttBrokerDiscovery:
             "candidates": self.candidates(),
         }
 
-    def _discover_topics(self, broker):
+    def _discover_topics(self, broker, credential_attempts):
         """Probe a reachable broker with the anonymous + credential-pool matrix.
 
         For the endpoint's inferred transport we always try anonymous first, then
@@ -450,7 +478,7 @@ class MqttBrokerDiscovery:
         broker["transport"] = transport
         attempts = []
         devices_by_id = {}
-        for attempt in self._credential_attempts():
+        for attempt in credential_attempts:
             attempt_broker = {
                 **broker,
                 "tls": transport == "tls",
