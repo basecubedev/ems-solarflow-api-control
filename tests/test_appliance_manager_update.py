@@ -1251,3 +1251,149 @@ def test_an_execution_inside_an_unjudged_window_is_refused(tmp_path):
 
     assert record.state == STATE_FAILED_TERMINAL, record.state
     assert record.error["code"] == "manager_verification_pending", record.error
+
+
+# --- an install systemd never started ----------------------------------------
+
+RUNNING_BODY = b"the package that is running"
+
+
+def digest(body):
+    return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def refuse_install_unit(services, state="failed"):
+    services.host.start_refusals[manager_install.INSTALL_UNIT] = state
+
+
+def test_an_install_unit_systemd_would_not_start_leaves_no_deadline_armed(tmp_path):
+    """The deadline was armed and then the unit refused, and the deadline stayed.
+
+    Nothing was installed, yet for fifteen minutes the console refused Update
+    and Revert as `manager_verification_pending`, and at expiry the reverter
+    installed the running package over itself, restarted both services and
+    reported a revert of an install that never began. The request is taken
+    back, so a start systemd still carries out finds nothing to install.
+    """
+
+    services, service = build(tmp_path)
+    seed_previous(services, body=RUNNING_BODY)
+    refuse_install_unit(services)
+
+    record, _ = plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    assert record.state == STATE_FAILED_TERMINAL, record.state
+    assert record.error["code"] == "install_unit_failed", record.error
+    assert not manager_verify.read(services.paths).armed
+    assert services.host.units[manager_verify.VERIFY_TIMER]["enabled"] == "disabled"
+    assert not manager_install.request_path(services.paths).exists()
+    assert service._verification_pending() is None
+    assert "deadline was retired" in record.error["message"], record.error
+
+
+def test_an_update_systemd_never_started_leaves_the_running_package_kept_as_current(tmp_path):
+    """Retaining rotated the running package into the way-back slot first.
+
+    Left that way, the record named a package that never ran as current, and
+    the next update rotated *it* into the way-back slot: the deadline armed for
+    that install would put back a package this appliance has never run. The
+    reverter's own revert used to correct the record, by reinstalling the
+    running package; with the deadline retired the record is corrected here.
+    """
+
+    services, _ = build(tmp_path)
+    seed_previous(services, body=RUNNING_BODY)
+    refuse_install_unit(services)
+
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    kept = manager_retention.read(services.paths)
+    assert kept.current.version == "0.1.0", kept.to_dict()
+    assert kept.current.sha256 == digest(RUNNING_BODY)
+    assert artifact_trust.file_digest(kept.current.path) == digest(RUNNING_BODY)
+    assert not kept.can_revert, "the package kept before this install was rotated away"
+
+
+def test_a_revert_systemd_never_started_can_be_tried_again(tmp_path):
+    """A revert rotates the package it leaves into the way-back slot, and the
+    package it puts back into current. Folding that record the way a failed
+    install is folded would copy the running package over the one the
+    operator asked for and leave nothing to revert to."""
+
+    services, _ = build(tmp_path)
+    seed_previous(services, body=RUNNING_BODY)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+    refuse_install_unit(services)
+
+    record, _ = plan_and_execute(services, "manager.plan_revert")
+
+    assert record.state == STATE_FAILED_TERMINAL, record.state
+    assert not manager_verify.read(services.paths).armed
+    kept = manager_retention.read(services.paths)
+    assert kept.current.version == "0.2.0", kept.to_dict()
+    assert artifact_trust.file_digest(kept.current.path) == ARCHIVE_DIGEST
+    assert kept.previous.version == "0.1.0"
+    assert artifact_trust.file_digest(kept.previous.path) == digest(RUNNING_BODY)
+    assert kept.can_revert
+
+    services.host.start_refusals.clear()
+    retried, _ = plan_and_execute(services, "manager.plan_revert")
+
+    assert retried.state == STATE_SUCCEEDED, retried.error
+    assert manager_verify.read(services.paths).expected_version == "0.1.0"
+
+
+@pytest.mark.parametrize("evidence", ["unit_running", "result_written"])
+def test_an_install_that_may_have_begun_keeps_its_deadline(tmp_path, monkeypatch, evidence):
+    """A refused start is not proof that nothing runs.
+
+    systemctl can report a failure for a job it did enqueue, and a unit that
+    picked the request up before it was taken back is installing now. While
+    systemd reports the unit running or starting, or the unit has written a
+    result for the request, the deadline may be the only way back.
+    """
+
+    services, _ = build(tmp_path)
+    seed_previous(services, body=RUNNING_BODY)
+    refuse_install_unit(services, "activating" if evidence == "unit_running" else "failed")
+    if evidence == "result_written":
+        refused_start = manager_install.start
+
+        def start_that_ran(runner):
+            manager_install.result_path(services.paths).write_text(
+                '{"outcome": "revert_failed", "detail": "", "finished_at": ""}',
+                encoding="utf-8",
+            )
+            return refused_start(runner)
+
+        monkeypatch.setattr(manager_install, "start", start_that_ran)
+
+    record, _ = plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    assert record.error["code"] == "install_unit_failed", record.error
+    deadline = manager_verify.read(services.paths)
+    assert deadline.armed
+    assert deadline.expected_version == "0.2.0"
+    assert manager_retention.read(services.paths).current.version == "0.2.0"
+    assert "deadline stays armed" in record.error["message"], record.error
+
+
+def test_an_install_whose_deadline_could_not_be_armed_leaves_the_running_package_current(
+    tmp_path,
+):
+    """The same rotation stood when the timer would not start: no deadline, no
+    install, and a record naming a package that never ran as current."""
+
+    services, _ = build(tmp_path)
+    seed_previous(services, body=RUNNING_BODY)
+    services.host.start_refusals[manager_verify.VERIFY_TIMER] = "inactive"
+
+    record, _ = plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    assert record.error["code"] == "verify_timer_failed", record.error
+    assert not manager_verify.read(services.paths).armed
+    assert not manager_install.request_path(services.paths).exists()
+    assert manager_retention.read(services.paths).current.version == "0.1.0"
+    started = [call for call in services.host.calls if call[0] == "systemctl"]
+    assert not any(manager_install.INSTALL_UNIT in " ".join(call[1]) for call in started)

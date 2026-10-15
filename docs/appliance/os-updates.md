@@ -247,6 +247,18 @@ before the next install is planned. Neither can amend it, so the record went on
 naming the package `dpkg` refused as the current one, and the next update
 rotated *that* into the way-back slot.
 
+An install whose unit systemd would not start is taken back before the console
+hears of the failure. The request is removed, so a start systemd still carries
+out finds nothing to install; the retained record names the running package as
+current again, and keeps the package a revert was putting back so the revert
+can be tried again; and the deadline is retired, because there is no install
+for it to judge. It used to stay armed: Install and Revert were refused for the
+whole window, and at its end the running package was installed over itself.
+The deadline stays armed when the agent cannot show that nothing runs -- the
+unit is reported starting or running, or it has written a result for the
+request -- because systemctl can report a failure for a job it did start. An
+install whose deadline could not be armed is taken back the same way.
+
 Execution is bound to the release the plan showed, by digest and by version,
 not merely to its release id: the index is read again at confirmation time, and
 an asset republished under the same id would otherwise install a different

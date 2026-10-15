@@ -203,6 +203,7 @@ class FakeHost:
         self.sshd_shell_match = SSHD_SHELL_DISABLED_MATCH
         self.sshd_config_valid = True
         self.reload_failures = set()
+        self.start_refusals = {}
         self.failing_tools = set()
 
     def write_export_mounts(
@@ -550,6 +551,10 @@ class FakeHost:
             if args[1] not in self.units and args[1] in self.absent_units:
                 return self._result("systemctl", args, 1, "", f"Failed to get unit file state for {args[1]}")
             return self._result("systemctl", args, 0, self.units.get(args[1], {}).get("enabled", "disabled"))
+        if args[:1] in (["enable"], ["start"]) and args[-1] in self.start_refusals:
+            unit = args[-1]
+            self.units.setdefault(unit, {})["active"] = self.start_refusals[unit]
+            return self._result("systemctl", args, 1, "", f"Failed to start {unit}")
         if args[:1] == ["enable"]:
             unit = args[-1]
             self.units.setdefault(unit, {}).update({"active": "active", "enabled": "enabled"})

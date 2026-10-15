@@ -28,6 +28,7 @@ from appliance import (
     artifact_trust,
     persistent_state,
 )
+from appliance.commands import CommandError
 from appliance.version import (
     DIRECTION_DOWNGRADE,
     DIRECTION_REINSTALL,
@@ -652,6 +653,7 @@ class ManagerUpdateService:
             raise ManagerUpdateError("state_schema_behind", verdict.detail)
 
         self._advance(operation, "staging_package")
+        kept_before = manager_retention.read(self.paths)
         retention = manager_install.prepare(
             self.paths,
             release=release,
@@ -669,6 +671,7 @@ class ManagerUpdateService:
             version=release.version,
             build_id=release.build_id,
             previous=retention.previous.path,
+            kept_before=kept_before,
         )
 
     def _execute_revert(self, operation):
@@ -687,6 +690,7 @@ class ManagerUpdateService:
             raise ManagerUpdateError(problems[0]["code"], problems[0]["message"])
 
         self._advance(operation, "staging_package")
+        kept_before = manager_retention.read(self.paths)
         _, retention = manager_install.prepare_revert(
             self.paths,
             retained_at=str(self._now()),
@@ -700,27 +704,40 @@ class ManagerUpdateService:
             version=target.version,
             build_id=target.build_id,
             previous=retention.previous.path,
+            kept_before=kept_before,
         )
 
-    def _arm_and_start(self, operation, *, version, build_id, previous):
+    def _arm_and_start(self, operation, *, version, build_id, previous, kept_before):
         """Arm the deadline, then start the install. Never the other way round.
 
-        Afterwards the process doing the arming is the one being replaced.
+        Afterwards the process doing the arming is the one being replaced. An
+        install whose unit never started is taken back: its request, the
+        rotation of the kept packages, and its deadline once nothing can run.
         """
 
         self._advance(operation, "arming_deadline")
-        deadline, _ = manager_verify.arm(
-            self.paths,
-            self.runner,
-            expected_version=version,
-            build_id=build_id,
-            previous=previous,
-            now=int(self._now()),
-            operation_id=operation.operation_id,
-            reverter=self.reverter,
-        )
+        try:
+            deadline, _ = manager_verify.arm(
+                self.paths,
+                self.runner,
+                expected_version=version,
+                build_id=build_id,
+                previous=previous,
+                now=int(self._now()),
+                operation_id=operation.operation_id,
+                reverter=self.reverter,
+            )
+        except manager_verify.ManagerVerifyError:
+            manager_install.withdraw(self.paths)
+            self._unretain(kept_before)
+            raise
         self._advance(operation, "starting_install")
-        manager_install.start(self.runner)
+        try:
+            manager_install.start(self.runner)
+        except (manager_install.ManagerInstallError, CommandError) as exc:
+            raise manager_install.ManagerInstallError(
+                exc.code, f"{exc.message}; {self._take_back(kept_before)}"
+            ) from exc
         return {
             "stage": "install_started",
             "version": version,
@@ -733,6 +750,41 @@ class ManagerUpdateService:
             + manager_verify.VERIFY_TIMER
             + ", which puts the previous package back if no healthy result appears in time.",
         }
+
+    def _take_back(self, kept_before):
+        """Retire the deadline of an install systemd would not start, if nothing runs.
+
+        systemctl can report a failure for a job it did enqueue, and a unit
+        that read the request before it was withdrawn is installing; the
+        deadline stays for both. Returns what became of it, for the operator.
+        """
+
+        if not (
+            manager_install.withdraw(self.paths)
+            and manager_install.never_started(self.paths, self.runner)
+        ):
+            return "the install may have started or may still start, so its deadline stays armed"
+        outcome = "nothing was installed"
+        unretained = self._unretain(kept_before)
+        if unretained:
+            outcome += f", {unretained}"
+        try:
+            manager_verify.disarm(self.paths, self.runner)
+        except manager_verify.ManagerVerifyError as exc:
+            return f"{outcome}, but its deadline could not be retired ({exc.message})"
+        return f"{outcome}, and its deadline was retired"
+
+    def _unretain(self, kept_before):
+        """Put the kept-package record back as it stood; empty, or why it could not."""
+
+        try:
+            manager_install.unretain(self.paths, kept_before)
+        except (OSError, manager_retention.RetentionError) as exc:
+            return (
+                "but the kept-package record still names the package staged for it "
+                f"({getattr(exc, 'message', exc)})"
+            )
+        return ""
 
     def _advance(self, operation, stage, *, detail=None):
         self.operations.advance(operation.operation_id, stage, detail=detail)

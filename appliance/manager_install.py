@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from appliance import manager_releases, manager_retention, artifact_trust
+from appliance.commands import CommandError
 
 INSTALL_UNIT = "ems-appliance-manager-install.service"
 
@@ -27,6 +28,8 @@ RESULT_NAME = "install-result.json"
 OUTCOME_INSTALLED = "installed"
 OUTCOME_REVERTED = "reverted"
 OUTCOME_PENDING = "pending"
+
+STOPPED_UNIT_STATES = frozenset({"inactive", "failed"})
 
 FILE_MODE = 0o600
 
@@ -296,6 +299,78 @@ def prepare(paths, *, release, archive, state_schemas, verifier=None, manifest_p
         requested_at=retained_at,
     )
     return retention
+
+
+def withdraw(paths):
+    """Take a staged request back, so a start of the unit finds nothing to install.
+
+    False when the request is still there.
+    """
+
+    try:
+        request_path(paths).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    return True
+
+
+def never_started(paths, runner):
+    """Whether the unit provably took up no request since ``stage``.
+
+    Asked after ``withdraw``, so a start systemd carries out later installs
+    nothing. ``stage`` removed the last result, so a result on disk is this
+    request's, and a unit systemd reports in any state but stopped may have
+    read the request before it was withdrawn.
+    """
+
+    if os.path.lexists(result_path(paths)):
+        return False
+    if runner is None or not runner.available("systemctl"):
+        return False
+    try:
+        state = runner.run("systemctl", ["is-active", INSTALL_UNIT], timeout=15)
+    except CommandError:
+        return False
+    return not state.timed_out and state.stdout.strip() in STOPPED_UNIT_STATES
+
+
+def unretain(paths, before):
+    """Put the record back on the running package, after an install that never started.
+
+    ``before`` is the record as ``prepare`` or ``prepare_revert`` found it.
+    Their rotation copied the running package over the one kept in
+    ``previous``, so that one is kept again only when it is the package that
+    was staged, which is what a revert stages. Otherwise nothing is left to go
+    back to, as after an install that failed.
+    """
+
+    after = manager_retention.read(paths)
+    running, staged = before.current, after.current
+    if before.unreadable or after.unreadable or not running.sha256:
+        return after
+    if staged.sha256 == running.sha256 or after.previous.sha256 != running.sha256:
+        return after
+    if before.previous.sha256 != staged.sha256:
+        return manager_retention.adopt_previous_as_current(paths)
+
+    staging = Path(paths.packages_dir) / REVERT_STAGING_NAME
+    shutil.copyfile(after.previous.path, staging)
+    try:
+        return manager_retention.retain(
+            paths,
+            staging,
+            sha256=after.previous.sha256,
+            version=after.previous.version,
+            build_id=after.previous.build_id,
+            retained_at=after.previous.retained_at,
+            architecture=after.previous.architecture,
+            state_implements=after.previous.state_implements,
+            state_reads=after.previous.state_reads,
+        )
+    finally:
+        staging.unlink(missing_ok=True)
 
 
 def start(runner):
