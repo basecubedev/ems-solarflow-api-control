@@ -665,8 +665,9 @@ class SystemAlignmentService:
             # Abandon is the escape out of a wedged transition: offered for
             # recoverable failures and, once expired, from any non-terminal
             # stage — but never while the worker is alive or its state unknown,
-            # and never while a claimed resource import may still write the
-            # shared cache under a stage that still reads ``admin_aligned``.
+            # never while a claimed resource import may still write the
+            # shared cache under a stage that still reads ``admin_aligned``,
+            # and never under a replacement still running, expired or not.
             base_cancellable = (
                 (
                     record.stage in CANCELLABLE_TRANSITION_STAGES
@@ -679,6 +680,7 @@ class SystemAlignmentService:
             )
             transition["cancel_available"] = bool(
                 base_cancellable
+                and replacement_active is not True
                 and worker_status_available
                 and worker_active is not True
             )
@@ -2215,6 +2217,11 @@ class SystemAlignmentService:
         ``transition_worker_status_unavailable``, and either leaves the durable
         record untouched. Without one (no observable workers) the durable
         cancel runs directly.
+
+        An Admin replacement the probe sees running refuses
+        ``mutation_in_progress`` first, past the deadline too: the sidecar
+        claimed before it and reads the record no more, so expiry does not
+        stop it.
         """
 
         record = self._current_record(operation_id)
@@ -2225,7 +2232,14 @@ class SystemAlignmentService:
         # refuses, because the replacement reporting back moves the stage to one
         # that is cancellable anyway, and no second sidecar is launched from
         # here. The store re-reads the stage under its own lock regardless.
-        replacement_inactive = self._replacement_state(record, fresh=True) is False
+        replacement = self._replacement_state(record, fresh=True)
+        if replacement is True:
+            raise SystemAlignmentError(
+                "mutation_in_progress",
+                "The Admin replacement is still running. Wait for it to finish "
+                "before abandoning the transition.",
+            )
+        replacement_inactive = replacement is False
         # The proof names the sidecar claim it was read against; a sidecar that
         # claims in between is the mutation this stage exists to protect, and
         # the store refuses a proof whose claim has moved.

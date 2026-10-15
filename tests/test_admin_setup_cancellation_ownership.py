@@ -12,10 +12,16 @@ See ``docs/technical/admin-workflow-state.md``.
 """
 
 import json
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
+from tests.test_admin_system_alignment import (
+    T0,
+    _build as _alignment_build,
+    _service as _alignment_service,
+)
 from tests.test_admin_server import (
     _FakeSystemAlignment,
     _attach_system_alignment,
@@ -327,6 +333,49 @@ def test_worker_active_supersede_refusal_keeps_the_old_workflow(tmp_path):
         assert payload["error"] == "transition_worker_active"
         assert generated.exists() and marker.exists()
 
+        status, _, payload = _request(f"{base}/api/setup/workflow")
+        assert payload["workflow"]["workflow_id"] == workflow_id
+        assert payload["workflow"]["status"] == "active"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_supersede_past_the_deadline_keeps_a_replacement_still_running(tmp_path):
+    """Interleaving pinned: the operator picks another build while the sidecar
+    this Setup launched before its deadline is still pulling.
+
+    The sidecar claimed the transition and reads it no more; it rewrites
+    Compose and recreates the Admin whatever the record says. Superseding
+    under it would hand a replacement workflow a fresh transition and a
+    second sidecar beside the first.
+    """
+
+    clock = {"now": T0}
+    alignment, transitions, *_ = _alignment_service(
+        tmp_path / "alignment",
+        build=_alignment_build(),
+        replacement_activity=lambda _op: "active",
+        now=lambda: clock["now"],
+    )
+    started = alignment.start(requested_tag="v0.8.0", mode="fresh_install")
+    operation_id = started["operation_id"]
+    assert transitions.claim_admin_update(operation_id, now=T0) is True
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        workflow_id, generated, marker = _seed_owned_artifacts(base, srv)
+        clock["now"] = T0 + timedelta(hours=2)
+        status, _, payload = _request(
+            f"{base}/api/setup/system-build/supersede",
+            method="POST",
+            body={"setup_workflow_id": workflow_id, "tag": "v0.9.0"},
+        )
+
+        assert status == 409, payload
+        assert payload["error"] == "mutation_in_progress"
+        assert generated.exists() and marker.exists()
+        assert transitions.read().stage == "admin_reconnect_pending"
         status, _, payload = _request(f"{base}/api/setup/workflow")
         assert payload["workflow"]["workflow_id"] == workflow_id
         assert payload["workflow"]["status"] == "active"

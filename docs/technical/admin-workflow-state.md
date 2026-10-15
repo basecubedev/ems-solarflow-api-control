@@ -493,6 +493,7 @@ the visible stage hides — also while a **resource verification is claimed**:
 | `failed_recoverable` | present | yes | the attempt is over and a retry clears the claim |
 | any non-terminal stage, **expired** | any | yes *by the durable store* — but see the worker rule below | expiry closes every forward path; without this the record would wedge the store permanently |
 | `admin_reconnect_pending`, replacement **proven gone** | any | yes | the stage refuses because a sidecar may be mid-rewrite, and nothing in this process can see one; a sidecar proven absent whose Admin is proven not to be the target removes that reason without waiting for expiry |
+| `admin_reconnect_pending`, replacement **seen running**, expired or not | any | **no** — `mutation_in_progress` | the sidecar took `claim_admin_update()` before the deadline and reads the record no more: it pulls, rewrites Compose and recreates the Admin whatever the record says, so expiry closes nothing of its. `SystemAlignmentService.cancel()` refuses before the store is asked, and the refusal reaches every caller: the cancel primitive, Discard setup, the build supersede, a lifecycle switch and the safe recovery. A supersede that went through would hand the replacement workflow a fresh transition and a second sidecar beside the first. Once the sidecar is gone, the expired record is cancellable again |
 
 `SystemAlignmentService.status()` reports `cancel_available: false` for that
 window, so the console does not offer an action the store will refuse, and

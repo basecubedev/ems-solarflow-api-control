@@ -792,6 +792,44 @@ def test_a_replacement_that_claims_after_the_probe_is_not_cancelled_under(tmp_pa
     assert transitions.read().stage == STAGE_ADMIN_RECONNECT_PENDING
 
 
+def test_a_replacement_still_running_past_the_deadline_is_not_cancelled_under(
+    tmp_path,
+):
+    """Interleaving pinned: the sidecar claimed the transition before its
+    deadline and is still pulling when the deadline passes and a cancel comes.
+
+    After its claim the sidecar reads the record no more: it rewrites Compose
+    and recreates the Admin whatever the record says. Expiry closes every
+    other forward path, not that one, so the stage stays shut while the probe
+    sees the sidecar, and opens again once it is gone.
+    """
+
+    clock = {"now": T0}
+    sidecar = {"state": "active"}
+    service, transitions, *_ = _service(
+        tmp_path,
+        build=_build(),
+        replacement_activity=lambda _op: sidecar["state"],
+        now=lambda: clock["now"],
+    )
+    started = service.start(requested_tag="v0.8.0", mode="guided_upgrade")
+    operation_id = started["operation_id"]
+    assert transitions.claim_admin_update(operation_id, now=T0) is True
+    clock["now"] = T0 + timedelta(hours=2)
+
+    transition = service.status(operation_active=_no_worker)["transition"]
+    assert transition["expired"] is True
+    assert transition["replacement_active"] is True
+    assert transition["cancel_available"] is False
+    with pytest.raises(SystemAlignmentError) as excinfo:
+        service.cancel(operation_id=operation_id)
+    assert excinfo.value.code == "mutation_in_progress"
+    assert transitions.read().stage == STAGE_ADMIN_RECONNECT_PENDING
+
+    sidecar["state"] = "inactive"
+    assert service.cancel(operation_id=operation_id)["stage"] == "cancelled"
+
+
 @pytest.mark.parametrize("tag,channel", [("v0.8.0", "stable"), ("v0.9.0-rc.1", "rc")])
 def test_non_development_transitions_need_no_risk_acknowledgement(tmp_path, tag, channel):
     build = _build(tag=tag, channel=channel)
