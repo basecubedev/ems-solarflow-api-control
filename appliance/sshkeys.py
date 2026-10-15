@@ -210,6 +210,21 @@ class AuthorizedKeysStore:
         finally:
             os.close(directory)
 
+    def entry_modes(self):
+        """Each name in ``.ssh`` with the mode of the entry it is, a symlink as a symlink.
+
+        Listed through a descriptor like ``entries``; a symlinked ``.ssh`` is refused.
+        """
+
+        directory = self._open_ssh_dir(create=False)
+        if directory is None:
+            return {}
+        try:
+            modes = {name: _entry_mode(directory, name) for name in sorted(os.listdir(directory))}
+        finally:
+            os.close(directory)
+        return {name: mode for name, mode in modes.items() if mode is not None}
+
     def set_aside(self, names):
         """Rename the key file to the first of ``names`` that ``.ssh`` does not hold.
 

@@ -413,6 +413,14 @@ untouched. With a symlinked `.ssh` nothing is listed or moved:
 `backup-access disable` expires the account instead and names
 `ssh_directory_unsafe` under `keys_refused`, as `backup-access status` does,
 activation reports it as its reason, and adding a key is refused with it.
+`backup-access status`, the activation report and `ems-appliance
+verify-install` read the key files through that same descriptor: behind a
+symlinked `.ssh` no key file is present, preserved or in conflict, and a key
+file that is a symlink, a directory or anything else but a regular file counts
+as no key. verify-install's `backup_account` check fails on either and names
+the link or the file, without listing what a link points at. Adding a key is
+refused with `backup_access_withdrawn` while anything stands at the preserved
+name, a dangling link included.
 
 OpenSSH stays optional: without it the feature reports `unavailable` and the
 package still installs.

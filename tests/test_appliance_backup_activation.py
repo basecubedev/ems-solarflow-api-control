@@ -253,6 +253,46 @@ def test_the_status_names_a_symlinked_ssh_directory_instead_of_listing_its_targe
     assert observed["keys_refused"] == "ssh_directory_unsafe"
 
 
+def test_the_status_reads_no_key_file_through_a_symlinked_ssh_directory(tmp_path):
+    services = appliance(tmp_path)
+    plant_ssh_directory_symlink(services, tmp_path, ["authorized_keys", DISABLED_NAME])
+
+    observed = activation(services).observe()
+
+    assert observed["keys_present"] is False, observed
+    assert observed["keys_disabled"] is False, observed
+    assert observed["keys_refused"] == "ssh_directory_unsafe", observed
+
+
+def test_the_activation_report_reads_no_key_file_through_a_symlinked_ssh_directory(
+    tmp_path, production_chroot_chain
+):
+    services = appliance(tmp_path)
+    plant_ssh_directory_symlink(services, tmp_path, ["authorized_keys", DISABLED_NAME])
+
+    report = activation(services).activate()
+
+    assert report["reason"] == "ssh_directory_unsafe", report
+    assert report["keys_present"] is False, report
+    assert report["keys_preserved"] is False, report
+
+
+@pytest.mark.parametrize(
+    ("name", "flag"), [("authorized_keys", "keys_present"), (DISABLED_NAME, "keys_disabled")]
+)
+def test_the_status_takes_a_key_file_planted_as_a_symlink_for_no_key(tmp_path, name, flag):
+    services = appliance(tmp_path)
+    ssh_dir = services.home / ".ssh"
+    elsewhere = tmp_path / "elsewhere-keys"
+    elsewhere.write_text(PUBLIC_KEY, encoding="utf-8")
+    (ssh_dir / "authorized_keys").unlink()
+    (ssh_dir / name).symlink_to(elsewhere)
+
+    observed = activation(services).observe()
+
+    assert observed[flag] is False, observed
+
+
 def test_a_preserved_key_file_planted_as_a_symlink_is_not_restored(tmp_path):
     services = appliance(tmp_path)
     ssh_dir = services.home / ".ssh"

@@ -16,6 +16,8 @@ a surviving key would open an unconfined SFTP session over the whole host, so
 the key file is moved aside before the package is.
 """
 
+import stat
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -43,6 +45,52 @@ DISABLED_SUFFIX = ".disabled-by-appliance"
 CONFLICT_SUFFIX = ".conflict"
 MAX_CONFLICT_FILES = 20
 
+@dataclass(frozen=True)
+class KeyFiles:
+    """The backup account's key files, each as the entry it is.
+
+    ``active`` and ``disabled`` hold only for a regular file; ``unsafe`` names
+    the key file or the preserved one where any other entry stands, a symlink
+    included. ``set_aside`` is whether anything stands at the preserved name or
+    a conflict name. Behind a symlinked ``.ssh`` nothing is read, and
+    ``refusal`` is the store's ``ValidationError``.
+    """
+
+    ssh_dir: Path = None
+    active: bool = False
+    disabled: bool = False
+    set_aside: bool = False
+    conflicted: tuple = ()
+    unsafe: tuple = ()
+    refusal: ValidationError = None
+
+
+def read_key_files(home):
+    """The key files under ``home``, listed through ``AuthorizedKeysStore.entry_modes``."""
+
+    from appliance.sshkeys import AuthorizedKeysStore
+
+    if not home:
+        return KeyFiles()
+    store = AuthorizedKeysStore(home)
+    try:
+        modes = store.entry_modes()
+    except ValidationError as refusal:
+        return KeyFiles(ssh_dir=store.ssh_dir, refusal=refusal)
+    active = store.path.name
+    preserved = active + DISABLED_SUFFIX
+    regular = {name for name, mode in modes.items() if stat.S_ISREG(mode)}
+    conflicted = tuple(name for name in modes if name.startswith(preserved + CONFLICT_SUFFIX))
+    return KeyFiles(
+        ssh_dir=store.ssh_dir,
+        active=active in regular,
+        disabled=preserved in regular,
+        set_aside=preserved in modes or bool(conflicted),
+        conflicted=conflicted,
+        unsafe=tuple(name for name in (active, preserved) if name in modes and name not in regular),
+    )
+
+
 __all__ = [
     "FORCED_COMMAND",
     "OPTION_CHROOT",
@@ -50,8 +98,10 @@ __all__ = [
     "REQUIRED_RESTRICTIONS",
     "VERIFIED_OPTIONS",
     "BackupAccessActivation",
+    "KeyFiles",
     "build_activation",
     "evaluate_policy",
+    "read_key_files",
 ]
 
 
@@ -143,38 +193,33 @@ class BackupAccessActivation:
         keys = self.authorized_keys_path()
         return None if keys is None else keys.with_name(keys.name + DISABLED_SUFFIX)
 
+    def key_files(self):
+        """The account's key files, read by ``read_key_files`` without following a symlink."""
+
+        return read_key_files(self.account_home())
+
     def conflicted_key_files(self):
         """Preserved key files nobody has decided about yet.
 
-        Listed through ``AuthorizedKeysStore``, which never follows a symlinked
-        ``.ssh``; its ``ValidationError`` reaches the caller.
+        Read by ``read_key_files``; a symlinked ``.ssh`` raises its
+        ``ValidationError`` to the caller.
         """
 
-        from appliance.sshkeys import AuthorizedKeysStore
-
-        home = self.account_home()
-        if home is None:
-            return []
-        store = AuthorizedKeysStore(home)
-        prefix = store.path.name + DISABLED_SUFFIX + CONFLICT_SUFFIX
-        return [store.ssh_dir / name for name in store.entries() if name.startswith(prefix)]
+        files = self.key_files()
+        if files.refusal is not None:
+            raise files.refusal
+        return [files.ssh_dir / name for name in files.conflicted]
 
     def observe(self):
-        keys = self.authorized_keys_path()
-        disabled = self.disabled_keys_path()
-        refused = ""
-        try:
-            conflicts = [str(item) for item in self.conflicted_key_files()]
-        except ValidationError as refusal:
-            conflicts = []
-            refused = refusal.code
+        home = self.account_home()
+        files = read_key_files(home)
         return {
             "account": self.config.backup_user,
-            "home": str(keys.parent.parent) if keys else "",
-            "keys_present": bool(keys and keys.is_file()),
-            "keys_disabled": bool(disabled and disabled.is_file()),
-            "keys_conflicted": conflicts,
-            "keys_refused": refused,
+            "home": str(home) if home is not None else "",
+            "keys_present": files.active,
+            "keys_disabled": files.disabled,
+            "keys_conflicted": [str(files.ssh_dir / name) for name in files.conflicted],
+            "keys_refused": files.refusal.code if files.refusal is not None else "",
             "openssh_installed": self.runner.available("sshd"),
         }
 

@@ -277,6 +277,24 @@ def test_a_backup_key_is_refused_while_authentication_is_withdrawn(tmp_path):
     assert not (ssh_dir / "authorized_keys").exists()
 
 
+def test_a_backup_key_is_refused_while_a_link_holds_the_preserved_key_files_place(tmp_path):
+    """Withdrawn access is read from the entry at the preserved name, a dangling link included."""
+
+    services = appliance(tmp_path)
+    ssh_dir = tmp_path / "home" / "ems-backup" / ".ssh"
+    ssh_dir.mkdir()
+    (ssh_dir / "authorized_keys.disabled-by-appliance").symlink_to(tmp_path / "nowhere")
+    handlers = handlers_for(services)
+
+    with pytest.raises(Exception) as excinfo:
+        handlers.dispatch(
+            {"operation": "ssh.plan_key_add", "account": "ems-backup", "public_key": ED25519}
+        )
+
+    assert getattr(excinfo.value, "code", "") == "backup_access_withdrawn"
+    assert not (ssh_dir / "authorized_keys").exists()
+
+
 def test_a_backup_key_is_refused_while_the_daemon_does_not_confine_the_account(tmp_path):
     services = appliance(tmp_path)
     services.host.sshd_backup_match = "forcecommand internal-sftp\npermittty no\n"
