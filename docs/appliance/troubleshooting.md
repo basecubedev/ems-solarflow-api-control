@@ -318,6 +318,20 @@ Expert mode still accepts an exact release tag. Check the appliance's DNS and
 outbound HTTPS; a site that has neither can point `release_index_url` in
 `/etc/ems-appliance-manager/appliance.conf` at a mirror's JSON index instead.
 
+## "release_download_timed_out"
+
+Reading the Manager package index, or planning or installing a Manager update,
+stopped because a download took longer than the appliance allows: 120 seconds
+for the package index, a manifest or its signature, 900 seconds for the package
+itself. The limit is on the whole transfer, not only on silence: it runs from
+the first connection attempt on — to every address the server's name resolves
+to, and a redirect's connection too — through the TLS handshake, the response
+headers and the body, so a server that does not answer, or keeps a trickle
+going anywhere in it, ends the operation at the limit too, and the operation
+lock is free again. Only the name lookups, before the first connection and
+before a redirect's, are bounded by the resolver's own timeout instead. Nothing
+was installed. Check the appliance's connection and plan the update again.
+
 ## "package_lock_held"
 
 Another package manager (`apt`, `unattended-upgrades`) is running. Wait for it
