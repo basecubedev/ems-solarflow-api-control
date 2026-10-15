@@ -1584,7 +1584,19 @@ A healthy, supported transition is never stale, and a state the normal domain
 operations *can* resolve is offered as `safe` instead. Each
 target's parent must resolve to the canonical Admin state directory, which must
 not be a symlink; otherwise the release is refused. The order is fixed: back up
-every file with its hash, write the manifest, then unlink. Never in scope:
+every file with its hash, write the manifest, then unlink.
+
+The release removes only the bytes it decided on. It reads every target, then
+inspects the lifecycle again and refuses with `workflow_lifecycle_changed` if
+the fingerprint moved, and finally, holding the write lock of every store whose
+file it may remove (transition, upgrade context, Setup workflow, in that
+order), compares each file with what it read before it backs anything up or
+unlinks it. A record a writer put there meanwhile, such as a Setup started or a
+Guided Upgrade context saved while the release was proving that no replacement
+runs, is kept and the release is refused with nothing backed up or removed. Each
+store lends its lock through `exclusive()`, which adds no removal path: the
+stores' own removals, such as `clear_for_operation` ending an upgrade context,
+stay as they were. Never in scope:
 `state/.admin-deployment.json`, `state/known-good-system-build.json`,
 `config/config.json`, `docker-compose.yml`, `data/runtime-state.json`,
 dashboard databases, InfluxDB data, backups and credential stores.

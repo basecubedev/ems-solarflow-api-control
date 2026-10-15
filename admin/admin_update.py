@@ -1251,6 +1251,15 @@ class PendingTransitionStore:
                 finally:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
+    def exclusive(self):
+        """Hold the lock every write of this record takes, across processes.
+
+        For the stale-state release, which removes the file itself and must
+        not remove a record a writer replaced after it was read.
+        """
+
+        return self._locked()
+
     def _read_raw(self):
         try:
             raw = self.path.read_bytes()
