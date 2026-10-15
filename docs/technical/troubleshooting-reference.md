@@ -1221,7 +1221,10 @@ the canonical `ems-solarflow-api-control`), and every Admin view reads the EMS
 container by that one rule: the start page, which recommends Maintenance once
 an EMS container exists, the release listing, the `emsctl` runner and the
 System Build's reading of the running EMS (recovery, the known-good record, the
-direction of an upgrade) included.
+direction of an upgrade) included. The Compose file in that rule, and the
+Compose image the release listing falls back to, are the installation's, as
+`detect_install_context` finds it: in the Admin container the install mounted
+at `EMS_INSTALL_DIR`, never the Admin image's own `/app`.
 
 ### Guided upgrade digest pull failed
 

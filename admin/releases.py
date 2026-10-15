@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
 from admin.container_names import resolve_ems_container_name
+from admin.install_context import detect_install_context
 from admin.image_identity import (
     ROLLBACK_AVAILABLE,
     ALREADY_CURRENT,
@@ -379,13 +380,13 @@ class ReleaseManager:
         # An explicitly isolated data directory (tests and offline tooling) must
         # not accidentally treat the developer checkout's compose image as its
         # active deployment. Production construction omits ``data_dir`` and
-        # continues to inspect the real project root.
+        # reads the install's compose file, never the Admin's own code root.
         self.project_dir = (
             Path(project_dir)
             if project_dir is not None
             else self.data_dir.parent
             if explicit_data_dir
-            else Path(__file__).resolve().parent.parent
+            else None
         )
         self._urlopen = urlopen or urllib.request.urlopen
         self._resource_checker = resource_checker or self._check_remote_resources
@@ -955,10 +956,22 @@ class ReleaseManager:
             compose_text=self._compose_text(), env=os.environ
         )
 
+    def _compose_files(self):
+        """The compose file of the install, as every Admin view finds it.
+
+        ``detect_install_context`` names it: in the Admin container that is the
+        install mounted at ``EMS_INSTALL_DIR``, not the image's own ``/app``.
+        An explicit ``project_dir`` names it instead.
+        """
+
+        if self.project_dir is None:
+            return (detect_install_context().compose_path,)
+        return tuple(self.project_dir / name for name in ("docker-compose.yml", "compose.yml"))
+
     def _compose_text(self):
-        for name in ("docker-compose.yml", "compose.yml"):
+        for path in self._compose_files():
             try:
-                return (self.project_dir / name).read_text(encoding="utf-8")
+                return path.read_text(encoding="utf-8")
             except OSError:
                 continue
         return ""
@@ -975,8 +988,7 @@ class ReleaseManager:
             return None
 
     def _compose_image_match(self):
-        for name in ("docker-compose.yml", "compose.yml"):
-            path = self.project_dir / name
+        for path in self._compose_files():
             try:
                 text = path.read_text(encoding="utf-8")
             except OSError:

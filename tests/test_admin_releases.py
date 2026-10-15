@@ -2071,6 +2071,85 @@ def test_running_identity_and_active_release_use_same_immutable_image(tmp_path, 
     assert running.digest == _DIGEST_A
 
 
+# --- the Admin image's code root is not the install ------------------------
+#
+# Review 4 (AL18): in the Admin container the code lives under /app and the EMS
+# install is bind-mounted where EMS_INSTALL_DIR names it. The release listing
+# read the compose file under /app, which the image does not ship, so an EMS
+# named only by the compose file's container_name was no container to it, and
+# the compose image never answered for the installed release.
+
+
+def _admin_image_layout(tmp_path, monkeypatch, compose):
+    import admin.releases as releases_module
+
+    install = tmp_path / "install"
+    install.mkdir()
+    (install / "docker-compose.yml").write_text(compose, encoding="utf-8")
+    app = tmp_path / "app"
+    (app / "admin").mkdir(parents=True)
+    monkeypatch.delenv("EMS_CONTAINER_NAME", raising=False)
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(install))
+    monkeypatch.setenv("EMS_ADMIN_DATA_DIR", str(tmp_path / "admin-data"))
+    monkeypatch.setattr(releases_module, "__file__", str(app / "admin" / "releases.py"))
+
+
+def test_the_release_listing_finds_the_ems_the_install_compose_names(tmp_path, monkeypatch):
+    _admin_image_layout(
+        tmp_path,
+        monkeypatch,
+        f"services:\n  ems:\n    image: {_ref('latest')}\n    container_name: compose-ems\n",
+    )
+    running_ref = _digest_ref(_DIGEST_A)
+    docker = _NameImageDocker(
+        containers={
+            "compose-ems": {
+                "container_name": "compose-ems",
+                "image": running_ref,
+                "status": "running",
+            }
+        },
+        images={running_ref: _labeled(_DIGEST_A, release_tag="v0.8.0", version="v0.8.0")},
+    )
+
+    manager = ReleaseManager(docker=docker)
+
+    assert manager.detect_active_release() == "v0.8.0"
+    assert manager._running_identity().digest == _DIGEST_A
+
+
+def test_the_release_listing_reads_the_install_compose_image(tmp_path, monkeypatch):
+    _admin_image_layout(
+        tmp_path, monkeypatch, f"services:\n  ems:\n    image: {_ref('v0.6.0')}\n"
+    )
+
+    manager = ReleaseManager(docker=_NameImageDocker(containers={}))
+
+    assert manager.detect_active_release() == "v0.6.0"
+
+
+@pytest.mark.parametrize(
+    ("env_name", "compose_name"),
+    ((None, None), (None, "compose-ems"), ("env-ems", None), ("env-ems", "compose-ems")),
+)
+def test_the_release_listing_names_the_ems_as_the_system_build_does(
+    tmp_path, monkeypatch, env_name, compose_name
+):
+    from admin.ems_tool import ems_container_name
+    from admin.install_context import detect_install_context
+
+    compose = f"services:\n  ems:\n    image: {_ref('latest')}\n"
+    if compose_name is not None:
+        compose += f"    container_name: {compose_name}\n"
+    _admin_image_layout(tmp_path, monkeypatch, compose)
+    if env_name is not None:
+        monkeypatch.setenv("EMS_CONTAINER_NAME", env_name)
+
+    manager = ReleaseManager()
+
+    assert manager._ems_container_name() == ems_container_name(detect_install_context())
+
+
 def _versioned_payload(*tags):
     return [
         {
