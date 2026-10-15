@@ -3681,7 +3681,10 @@ class EMSController:
         on its record's window and cap. A restore of ``socSet`` alone claims
         nothing while the device's report does not carry ``socSet``: it cannot
         be written there (K20) and waits in the store for a report that does,
-        so it holds no device out of output control in the meantime.
+        so it holds no device out of output control in the meantime. Nor does
+        any restore while the state write gate is shut (K22): neither
+        ``socSet`` nor ``acMode=2`` nor the exit to idle can go out then, and
+        the restore stays owed in the store until the gate opens.
         """
 
         store = self.battery_full_charge_store
@@ -3717,9 +3720,14 @@ class EMSController:
                 priority=PRIORITY_MAINTENANCE
             )
 
-        if record.get("ac_mode_restore_pending") or (
-            record.get("restore_pending")
-            and getattr(self.last_states.get(dev.name), "max_soc_reported", True)
+        if (
+            record.get("ac_mode_restore_pending")
+            or (
+                record.get("restore_pending")
+                and getattr(self.last_states.get(dev.name), "max_soc_reported", True)
+            )
+        ) and cfg.state_reconciliation_writes_allowed(
+            getattr(dev, "control_gate", "api")
         ):
             return DeviceRuntimeIntent(
                 device=dev.name,

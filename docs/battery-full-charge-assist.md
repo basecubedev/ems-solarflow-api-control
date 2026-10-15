@@ -52,7 +52,8 @@ When a device is due, or due soon and already above `assist_start_soc`, EMS:
 4. optionally applies `inputLimit=<ac_charge_power>` through the existing safe
    AC charge input-limit writer
 5. blocks normal output allocation for the device while assist or restore is
-   pending
+   pending, a restore only while it can be written (see
+   [Behind a shut write gate](#behind-a-shut-write-gate))
 
 When firmware reports `socLimit == 1` while assist is active, EMS marks the
 assist complete, stores `last_full_charge_at`, schedules `next_due_at`, and
@@ -96,6 +97,33 @@ and the device still charges; output control returns in the next cycle.
 The assist's own `acMode=1` and its `inputLimit` go out together or not at all:
 over a report without either it enters no AC input, and holds no charge a stop
 or a switch-off would end.
+
+### Behind a shut write gate
+
+A restore cannot be written while `allow_state_reconciliation_writes` is off,
+or any other gate on the state write path is shut (dry run, simulation, replay,
+the transport's own gate), and it holds no device out of output control while
+that lasts (K22): it stays owed in the state store and output control goes on.
+Nothing of the restore goes out meanwhile -- no `socSet`, no `acMode=2`, and
+over a report without `acMode` not its exit to idle. A device still in the
+assist's AC input is in output control like any other then. With AC charging
+on (`ac_charge_control.enabled`, the default) and a device the EMS can charge,
+the process that finds it in AC input after its start cannot tell the assist's
+charge from one a stopped EMS left running, and sends it the one exit to AC
+input found after a start (see [ac-charging.md](ac-charging.md#safety)):
+`smartMode=1`, `acMode=2`, `inputLimit=0` and the target as `outputLimit`, on
+the power write gate, which `allow_state_reconciliation_writes` does not shut,
+once per resend window and three times at most until the device takes it. The
+device leaves the charge, and the restore itself still waits for the gate. Where
+the EMS cannot charge the device -- AC charging off, the device's
+`ac_charge_enabled` off, a model without an AC charge path -- nothing ends the
+charge: the device keeps charging at the assist's `inputLimit`, up to the
+`socSet` the assist raised, and an output target reaches it only as the bare
+`outputLimit` a device in AC input ignores. Once the gate opens, the restore
+claims the device again and goes out as above: `acMode=2`, or over a report
+without `acMode` the exit to idle, three times at most, and the configured
+`max_soc`. A restore write that fails behind an open gate still holds the
+device.
 
 ### The assist and `minSoc`
 

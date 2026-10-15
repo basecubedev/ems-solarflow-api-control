@@ -266,7 +266,11 @@ carries `socSet` again; over an unknown `acMode`, where nothing writes
 resend window and three times at most, settled once a report shows the device
 left the charge (without `acMode`, only with no grid draw) or the third exit's
 resend window has passed (`full_charge_assist_ac_mode_restore_settled`, with
-`left_to=device` when it charges on).
+`left_to=device` when it charges on). Behind a shut state write gate no restore
+holds the device at all: it stays owed, nothing of it is written -- neither
+`socSet` nor `acMode=2` nor the exit to idle -- and it goes out once the gate
+opens (K22, see
+[battery-full-charge-assist.md](../battery-full-charge-assist.md#behind-a-shut-write-gate)).
 
 These require `allow_state_reconciliation_writes=true`.
 

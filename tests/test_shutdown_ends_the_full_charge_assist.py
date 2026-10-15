@@ -117,8 +117,12 @@ class Assist:
     """The real loop over one local-API device whose hardware follows its commands.
 
     Power and state writes both reach the hardware double through the device's
-    own client, behind the real write gates.
+    own client, behind the real write gates. AC charging (``ac_charge_control``)
+    is off unless ``ac_charge_control`` is set, though the shipped default has
+    it on.
     """
+
+    ac_charge_control = False
 
     def __init__(self, tmp_path, *, item=None, store=None, runtime=None):
         self.store = store or assist_due(tmp_path / "ems_state.sqlite")
@@ -155,7 +159,7 @@ class Assist:
             patch.object(
                 cfg,
                 "AC_CHARGE_CONTROL_CONFIG",
-                {**AC_CHARGE_CONTROL_DEFAULTS, "enabled": False},
+                {**AC_CHARGE_CONTROL_DEFAULTS, "enabled": self.ac_charge_control},
             ),
             patch("time.monotonic", self.clock),
             configure_assist(
