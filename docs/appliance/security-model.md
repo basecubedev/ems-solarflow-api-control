@@ -412,6 +412,20 @@ no free-form action name, no dictionary, no path and no way to pass a password,
 a session cookie, a CSRF token or a public key. The operation does not take the
 host mutation lock, so a login during a running Admin install is still audited.
 
+A sign-in, password change or confirmation refused as `busy` or `rate_limited`
+never read a password, so a client can repeat it as fast as it connects. Written
+one line each, some ten thousand of them rotated the log's one 4 MB generation
+out; more generations would only have multiplied that number. The agent writes
+the first such refusal from a source as it comes and counts the repeats of the
+same event, result and reason for the next five minutes, the login rate
+limiter's window. A source is an IPv4 address or an IPv6 /64, as the rate
+limiter counts them, because an IPv6 host picks its own addresses inside its
+/64. The count is written as one record carrying `detail.repeated` and
+`detail.since` (the first refusal's timestamp), at the first event after the
+window or when more than 1024 windows are open at once. A wrong password, a
+success and a logout are written every time. A count still open when the agent
+stops is lost; the first refusal of its window is in the log.
+
 `sudo ems-appliance password-reset` runs as root and writes its own
 `password.reset` entry directly.
 

@@ -45,7 +45,12 @@ from appliance import (
     timezone_config,
     validation,
 )
-from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS
+from appliance.audit import (
+    RESULT_DENIED,
+    RESULT_FAILURE,
+    RESULT_SUCCESS,
+    RefusalAggregator,
+)
 from appliance.redaction import redact_text
 from appliance.release_fetch import FetchError
 from appliance.operations import (
@@ -206,6 +211,7 @@ class AgentHandlers:
         self.services = services
         self.context = ValidationContext(services.config)
         self._execute = executor or _thread_executor
+        self.web_audit = RefusalAggregator(services.audit)
 
     # --- entry point -----------------------------------------------------
 
@@ -237,14 +243,16 @@ class AgentHandlers:
 
         Every field was validated against a fixed set by the protocol, so
         nothing the browser sent can widen an action name or reach a path.
+        Refusals that read no password are counted per source and window by
+        ``RefusalAggregator``.
         """
 
-        entry = self.services.audit.record(
+        entry = self.web_audit.record(
             args["event"],
             user=actor,
             source_ip=source_ip,
-            target=args["reason"],
             result=args["result"],
+            reason=args["reason"],
         )
         return {
             "recorded": True,
