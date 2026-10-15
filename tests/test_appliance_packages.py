@@ -249,6 +249,29 @@ def test_security_install_upgrades_exactly_the_planned_packages(tmp_path):
     assert "openssl" in install_calls[0]
 
 
+@pytest.mark.parametrize("scope", ["security", "all"])
+def test_an_install_never_removes_a_package(tmp_path, scope):
+    """The plan comes from ``apt-get -s upgrade``, which never removes anything.
+
+    ``install --only-upgrade`` does, under ``-y``, when a new version conflicts
+    with an installed package: a removal the plan never showed, and on a
+    scheduled run nobody saw at all. ``--no-remove`` makes apt refuse it before
+    dpkg runs.
+    """
+
+    services = appliance(tmp_path)
+    operation, _ = plan_and_execute(services, "updates.plan", scope=scope)
+
+    assert operation.state == STATE_SUCCEEDED
+    installs = [
+        args
+        for tool, args, _ in services.host.calls
+        if tool == "apt-get" and "-s" not in args and "update" not in args
+    ]
+    assert installs, services.host.calls
+    assert all("--no-remove" in args for args in installs), installs
+
+
 def test_full_install_uses_upgrade(tmp_path):
     services = appliance(tmp_path)
     operation, _ = plan_and_execute(services, "updates.plan", scope="all")

@@ -2,9 +2,9 @@
 """Operating-system package status, installation and recovery.
 
 Package names never come from the browser: an installation upgrades exactly the
-packages the appliance itself parsed out of a simulated apt run. A real active
-package-manager lock is reported, never removed, and no distribution upgrade is
-offered.
+packages the appliance itself parsed out of a simulated apt run, and never
+removes one. A real active package-manager lock is reported, never removed, and
+no distribution upgrade is offered.
 """
 
 import fcntl
@@ -480,12 +480,13 @@ class PackageService:
 
         self._advance(operation, "installing")
         if scope == UPDATE_SCOPE_ALL:
-            args = ["-y", "-o", "Dpkg::Options::=--force-confold", "upgrade"]
+            args = ["-y", "--no-remove", "-o", "Dpkg::Options::=--force-confold", "upgrade"]
         else:
             if not packages:
                 raise PackageError("no_updates_available", "no security updates are pending")
             args = [
                 "-y",
+                "--no-remove",
                 "-o",
                 "Dpkg::Options::=--force-confold",
                 "install",
