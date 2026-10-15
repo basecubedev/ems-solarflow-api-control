@@ -817,10 +817,14 @@ def test_a_charge_target_inside_the_hold_is_published():
 
 @pytest.mark.parametrize("reduction", ["stop", "cut"])
 def test_a_safety_reduction_inside_the_hold_preempts_the_command_in_flight(reduction):
-    """A stop or a cut by the safety margin does not wait for that command's timeout (R5a)."""
+    """A stop or a cut by the safety margin does not wait for that command's timeout (R5a).
+
+    It is no exit of its own: the last exit's resend window stands (K23).
+    """
 
     rig = _exits_spent_with_a_command_in_flight()
     active = rig.dev._active_command
+    exit_sent_at = rig.dev._charge.exit_sent_at
     target = 0 if reduction == "stop" else active.target_w - DEFAULT_SAFETY_PREEMPT_MARGIN_W
     assert target >= 0
     before = len(rig.hardware.writes)
@@ -834,6 +838,7 @@ def test_a_safety_reduction_inside_the_hold_preempts_the_command_in_flight(reduc
     ]
     assert rig.dev._active_command.target_w == target
     assert not active.is_active
+    assert rig.dev._charge.exit_sent_at == exit_sent_at
 
 
 def test_a_change_short_of_a_safety_reduction_inside_the_hold_is_held():

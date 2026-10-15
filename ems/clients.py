@@ -21,7 +21,7 @@ from ems.charge_record import (
 from ems.health import CommHealth, redact_error, redact_url_credentials
 from ems.logging_utils import log_event
 from ems.models import DeviceState, parse_pack_count
-from ems.power_direction import AC_MODE_INPUT
+from ems.power_direction import AC_MODE_INPUT, DEFAULT_SAFETY_PREEMPT_MARGIN_W
 from ems.zendure_mqtt.snapshot import observable_metrics
 
 
@@ -486,7 +486,11 @@ class ZendureClient:
         input it cannot attribute. One the device answered, accepted or
         refused, is held back the same way until the resend window has passed,
         and for good once it was answered ``FOUND_EXIT_ATTEMPTS`` times;
-        whether the device took it is the next report's to say.
+        whether the device took it is the next report's to say. A stop to 0 W,
+        or a cut by ``DEFAULT_SAFETY_PREEMPT_MARGIN_W`` below the target the
+        last exit carried, is not held behind the exit of the EMS's own charge
+        (K23): it goes out as the device's target, not as an exit, and keeps
+        that exit's resend window and count.
         ``charge_exit=CHARGE_EXIT_FINAL`` is the shutdown release: the atomic
         exit, whatever the window says.
 
@@ -524,12 +528,14 @@ class ZendureClient:
 
         if target >= 0:
             now = time.monotonic()
-            held = (
+            held = not final and (
                 not record.exit_due(now)
                 if record.open
                 else found_exit and not record.found_exit_due(now)
             )
-            if held and not final:
+            if held and not record.reduces_exit(
+                target, margin_w=DEFAULT_SAFETY_PREEMPT_MARGIN_W
+            ):
                 return dispatch.coalesced(target, command_state=CHARGE_EXIT_PENDING)
             field, properties = (
                 ("inputLimit", {"inputLimit": 0})
@@ -543,9 +549,12 @@ class ZendureClient:
                 "write_output_limit_error",
                 target_w=target,
             )
-            record.exit_sent(now)
-            if found_exit:
-                record.found_exit_sent(now)
+            if held:
+                record.reduction_sent(target)
+            else:
+                record.exit_sent(now, target)
+                if found_exit:
+                    record.found_exit_sent(now)
             return (
                 dispatch.published(target)
                 if ok

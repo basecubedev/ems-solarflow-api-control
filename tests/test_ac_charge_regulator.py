@@ -2171,9 +2171,12 @@ def test_switching_control_back_on_does_not_end_a_running_charge(soc):
 
 
 def following_mqtt_device(
-    item, name="WR1", double=FollowingHardware, **hardware_options
+    item, name="WR1", double=FollowingHardware, client_options=None, **hardware_options
 ):
-    """A real MQTT control client whose broker delivers to the hardware double."""
+    """A real MQTT control client whose broker delivers to the hardware double.
+
+    ``client_options`` are further keyword arguments for the client.
+    """
 
     from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
     from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
@@ -2192,6 +2195,7 @@ def following_mqtt_device(
         min_soc=15,
         max_soc=100,
         smart_mode=1,
+        **(client_options or {}),
     )
     return dev, hardware
 

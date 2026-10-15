@@ -744,7 +744,11 @@ device:
   charge — are not held and go out within the same cycle. With no command in
   flight, a target other than the shutdown release or a new charge waits while
   an exit's resend window is open and, once those three exits are spent, until
-  the charge is left to the device after the last one's window;
+  the charge is left to the device after the last one's window -- except a stop
+  to 0 W or a cut by `safety_preempt_margin_w` below the target the last exit
+  carried (K23). A reduction let through either hold is the device's target,
+  not an exit: it keeps the last exit's resend window and count, so the charge
+  is left to the device when it would have been;
 - once the active command reaches a terminal state on a broker reply
   (rejection, supersession, acknowledgement completion) → publish the latest
   pending target **once**. When the slot is freed by a timeout or by telemetry

@@ -19,6 +19,8 @@ AC_MODE_INPUT = 1
 AC_MODE_OUTPUT = 2
 AC_STATUS_CHARGING = 2
 
+DEFAULT_SAFETY_PREEMPT_MARGIN_W = 300
+
 
 def operation_for_target(target_w: int) -> str:
     """Map a signed controller target to a neutral operation.
@@ -111,6 +113,29 @@ def found_in_ac_input(state) -> bool:
     return in_ac_input_direction(state) and not settling_out_of_charge(state)
 
 
+def safety_reduction(previous_w, target_w, *, margin_w, tolerance_w=0) -> bool:
+    """Whether ``target_w`` must not wait behind ``previous_w``, the target a device was last sent.
+
+    A full stop (0 W) always, and so does a change of direction into or out of
+    a charge: the way back from a charge must not queue behind the charge it
+    ends. Otherwise only a reduction of discharge output by at least
+    ``margin_w`` (``DEFAULT_SAFETY_PREEMPT_MARGIN_W`` unless configured) and by
+    strictly more than ``tolerance_w``; a rise, or a power change inside the
+    charge direction, may wait.
+    """
+
+    if target_w == previous_w:
+        return False
+    if target_w == 0:
+        return True
+    if (target_w < 0) != (previous_w < 0):
+        return True
+    if target_w < 0 or target_w >= previous_w:
+        return False
+    reduction = previous_w - target_w
+    return reduction >= margin_w and reduction > tolerance_w
+
+
 def derive_house_load_w(inverter_output_w, grid_power_w, inverter_charge_w=0):
     """Net both directions against the meter to get what the house draws.
 
@@ -132,6 +157,7 @@ __all__ = [
     "AC_MODE_INPUT",
     "AC_MODE_OUTPUT",
     "AC_STATUS_CHARGING",
+    "DEFAULT_SAFETY_PREEMPT_MARGIN_W",
     "OPERATION_DISCHARGE",
     "OPERATION_IDLE",
     "OPERATION_CHARGE",
@@ -140,5 +166,6 @@ __all__ = [
     "in_ac_input_direction",
     "operation_for_target",
     "out_of_charge",
+    "safety_reduction",
     "settling_out_of_charge",
 ]

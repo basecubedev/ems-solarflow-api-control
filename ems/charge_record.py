@@ -29,6 +29,13 @@ caller releases the record and says so. Within that last window the charge is
 still on record, so the shutdown release, which no window holds back, still
 goes to it.
 
+Between exits a transport holds every other output target, except a safety
+reduction below the target the last exit carried (``safety_reduction`` in
+:mod:`ems.power_direction`): a stop to 0 W or a large cut goes out at once.
+It is no exit of its own (:meth:`ChargeRecord.reduction_sent`): the window and
+the count stay the last exit's, so the bound on a charge only grid draw shows
+ends when it would have.
+
 The one exit to AC input found after a start (``CHARGE_EXIT_TO_OUTPUT``) is not
 on record: the controller settles it, on the same kind of evidence. The device
 took it when a report after it shows the device out of the charge, or charging
@@ -45,7 +52,7 @@ writes, so neither the resend window nor a command still in flight holds it
 back -- nothing is left to ask again.
 """
 
-from ems.power_direction import in_ac_input_direction, out_of_charge
+from ems.power_direction import in_ac_input_direction, out_of_charge, safety_reduction
 
 EXIT_RESEND_SECONDS = 30.0
 FOUND_EXIT_ATTEMPTS = 3
@@ -69,6 +76,7 @@ class ChargeRecord:
         self.bounded_by_draw = bounded_by_draw
         self.open = False
         self.exit_sent_at = None
+        self.exit_target_w = None
         self.drawn_exits = 0
         self._exit_drawn = False
         self._drawn = False
@@ -85,13 +93,38 @@ class ChargeRecord:
 
         self.open = True
         self.exit_sent_at = None
+        self.exit_target_w = None
         self._commanded_w = setpoint_w
         self._forget_drawn_exits()
 
-    def exit_sent(self, now):
+    def exit_sent(self, now, target_w=None):
+        """An exit went out with ``target_w`` as its output target; its window starts at ``now``."""
+
         if self.open:
             self.exit_sent_at = now
+            self.exit_target_w = target_w
             self._exit_drawn = False
+
+    def reduction_sent(self, target_w):
+        """A safety reduction went out while the exit was held: the device's target, not an exit.
+
+        It keeps the last exit's resend window and its count, so a stream of
+        reductions cannot keep the charge on record.
+        """
+
+        if self.open:
+            self.exit_target_w = target_w
+
+    def reduces_exit(self, target_w, *, margin_w, tolerance_w=0):
+        """Whether ``target_w`` is a safety reduction below the target the last exit left on the device."""
+
+        return (
+            self.open
+            and self.exit_target_w is not None
+            and safety_reduction(
+                self.exit_target_w, target_w, margin_w=margin_w, tolerance_w=tolerance_w
+            )
+        )
 
     def found_exit_sent(self, now):
         """The device answered the one exit to AC input found after a start.
@@ -216,6 +249,7 @@ class ChargeRecord:
     def release(self):
         self.open = False
         self.exit_sent_at = None
+        self.exit_target_w = None
         self._commanded_w = None
         self._reported_w = None
         self._forget_drawn_exits()

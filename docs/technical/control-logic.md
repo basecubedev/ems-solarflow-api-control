@@ -426,7 +426,14 @@ the EMS's own, and is sent the exit again once per resend window (30 s). The
 exit counts as sent once the device answered it, accepted or rejected with an
 error, and the one exit to AC input found after a start (below) keeps the same
 window whether the device accepted or rejected it; only an exit the transport
-could not deliver is due again at once. Over
+could not deliver is due again at once. Between exits, while the resend
+window is open and, after three exits that only grid draw followed, until the
+charge is left to the device, every other output target waits -- except a
+safety reduction below the target the last exit carried: a stop to 0 W, or a
+cut by the safety margin (300 W on the local API, `safety_preempt_margin_w`
+over MQTT), goes out at once (K23). It is the device's target, not an exit, and
+keeps the last exit's window and count, so the charge is still left to the
+device when it would have been. Over
 MQTT a changed target still replaces an exit in flight at once; every MQTT
 command carries the direction, so that is an exit too. The shutdown release is
 the last command and is sent whatever the window says. The same release after
