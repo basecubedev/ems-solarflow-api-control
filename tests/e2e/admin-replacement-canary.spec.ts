@@ -44,11 +44,35 @@ async function adminInstanceId(page: Page) {
   return (await (await page.request.get("/api/admin/auth/status")).json()).admin_instance_id;
 }
 
+type MarkedWindow = Window & { canaryBeforeReplacement?: boolean };
+
+async function markPageBeforeReplacement(page: Page) {
+  await page.evaluate(() => {
+    (window as MarkedWindow).canaryBeforeReplacement = true;
+  });
+}
+
+async function reloadedSinceMark(page: Page) {
+  return page
+    .evaluate(() => !(window as MarkedWindow).canaryBeforeReplacement)
+    .catch(() => false);
+}
+
+/**
+ * The tab that started the replacement shows the login as soon as its session
+ * is gone, and reloads once its reconnect poll sees the new Admin instance; a
+ * password typed into the old tab is lost in that reload. Only the reloaded
+ * page is read.
+ */
 async function reauthenticateAfterReconnect(page: Page, setup: SetupPage) {
   let outcome = "waiting";
   await expect
     .poll(
       async () => {
+        if (!(await reloadedSinceMark(page))) {
+          outcome = "waiting";
+          return outcome;
+        }
         const loginVisible = await page
           .locator("#auth-login:not([hidden]), #auth-create:not([hidden])")
           .isVisible();
@@ -124,6 +148,7 @@ test("real Admin replacement reconnects and preserves the selected build", async
 
   // Only a validation the replaced Admin served may back the assertions below.
   setup.resetValidationHistory();
+  await markPageBeforeReplacement(page);
   await setup.adminUpdateButton.click();
   await expect(setup.continueButton).toBeDisabled();
   await reauthenticateAfterReconnect(page, setup);
