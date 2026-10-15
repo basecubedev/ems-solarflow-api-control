@@ -646,6 +646,50 @@ def test_arming_starts_a_fresh_tick_count(paths, packaged):
     assert not manager_verify.ticks_path(paths).exists()
 
 
+def refused_reverts(paths, packaged, tools, count):
+    """An expired deadline whose revert dpkg has refused ``count`` times."""
+
+    deadline_at(paths, packaged, epoch=1)
+    fake_tools(tools, installed_version="0.9.9", dpkg_exit=1)
+    for _ in range(count):
+        run_reverter(paths, tools, now=0)
+    assert manager_verify.attempts_path(paths).exists()
+    assert not manager_verify.read_verdict(paths).settled
+
+
+def test_a_deadline_armed_over_refused_reverts_gets_every_attempt_of_its_own(
+    paths, packaged, tmp_path
+):
+    """Once a window has passed the console offers Update again, and a tick
+    still retrying a refused revert is the state it passes in. arm() removed
+    the tick count and kept the attempt count, so the new deadline's first
+    refused revert added to the old one's and settled revert_failed after a
+    single try, spending the one automatic way back on a lock a tick later
+    would have cleared."""
+
+    tools = tmp_path / "tools"
+    refused_reverts(paths, packaged, tools, manager_verify.REVERT_ATTEMPTS - 1)
+
+    deadline_at(paths, packaged, epoch=1)
+    run_reverter(paths, tools, now=0)
+
+    verdict = manager_verify.read_verdict(paths)
+    assert not verdict.settled, verdict.detail
+    assert manager_verify.deadline_path(paths).exists(), "the next tick has to be able to retry"
+
+
+def test_disarming_removes_the_attempt_count_the_reverter_left(paths, packaged, tmp_path):
+    """`ems-appliance rollback-manager` retires the deadline from Python. The
+    shell's disarm takes the count with it; this one left it for the next
+    deadline to start from."""
+
+    refused_reverts(paths, packaged, tmp_path / "tools", 2)
+
+    manager_verify.disarm(paths, FakeRunner())
+
+    assert not manager_verify.attempts_path(paths).exists()
+
+
 def test_the_tick_budget_matches_the_timer_that_produces_the_ticks():
     """One authority for the tick length, checked rather than trusted."""
 

@@ -291,11 +291,12 @@ def arm(
         verdict_path(paths).unlink()
     except FileNotFoundError:
         pass
-    # A tick count a previous deadline left behind would shorten this one.
-    try:
-        ticks_path(paths).unlink()
-    except FileNotFoundError:
-        pass
+    # A tick or attempt count a previous deadline left behind would shorten this one.
+    for count in (ticks_path(paths), attempts_path(paths)):
+        try:
+            count.unlink()
+        except FileNotFoundError:
+            pass
 
     # The deadline is written before the timer is started on purpose: a timer
     # that fired first would find nothing to judge. But a deadline with no timer
@@ -336,7 +337,10 @@ def ticks_path(paths):
 
 
 def attempts_path(paths):
-    """Where the reverter counts its refused reverts. Written only by it."""
+    """Where the reverter counts its refused reverts. Written only by it.
+
+    Arming and disarming remove it, as the reverter's own disarm does.
+    """
 
     return Path(paths.packages_dir) / ATTEMPTS_NAME
 
@@ -350,10 +354,11 @@ def disarm(paths, runner):
         pass
     except OSError as exc:
         raise ManagerVerifyError("deadline_not_writable", f"{deadline_path(paths)}: {exc}")
-    try:
-        ticks_path(paths).unlink()
-    except OSError:
-        pass
+    for count in (ticks_path(paths), attempts_path(paths)):
+        try:
+            count.unlink()
+        except OSError:
+            pass
     if runner is not None and runner.available("systemctl"):
         runner.run("systemctl", ["disable", "--now", VERIFY_TIMER], timeout=60)
     return True
