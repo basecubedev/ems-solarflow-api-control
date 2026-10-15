@@ -93,4 +93,8 @@ setTimeout(function () {
 
 
 def test_planning_records_which_choices_its_operation_takes():
-    assert "state.pendingForget = options.forget || null;" in extract("planOperation")
+    """Whether the plan's answer arrived or the plan was picked up after it was lost."""
+
+    assert "state.pendingForget = options.forget || null;" in extract("showPlan")
+    assert "showPlan(payload, options)" in extract("planOperation")
+    assert "showPlan(payload, lost.options)" in extract("resumeLostPlan")

@@ -845,6 +845,55 @@ test.describe("operating-system updates", () => {
     });
   });
 
+  test("a plan whose response never arrived opens once the appliance has made it", async ({
+    page,
+  }) => {
+    await signIn(page);
+    await openView(page, "updates");
+    await page.route("**/api/updates/plan", async (route) => {
+      await route.fetch();
+      await route.abort("timedout");
+    });
+
+    await Promise.all([
+      page.waitForResponse(
+        (response) => response.url().includes("/api/operations/resume-plan") && response.ok(),
+      ),
+      page.locator('[data-test="updates-install-security"]').click(),
+    ]);
+    await expect(page.locator("#dialog")).toBeVisible();
+    await expect(page.locator('[data-test="package-table"]')).toContainText("openssl");
+
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/operations/confirm")),
+      page.locator("#dialog-confirm").click(),
+    ]);
+    await expect(page.locator('[data-test="operation-stage"]')).toContainText("succeeded", {
+      timeout: 20_000,
+    });
+  });
+
+  test("a plan started with another request id is not opened here", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "updates");
+    await page.route("**/api/updates/plan", async (route) => {
+      const body = route.request().postDataJSON();
+      await route.fetch({
+        postData: JSON.stringify({ ...body, plan_request: "fedcba9876543210fedcba9876543210" }),
+      });
+      await route.abort("timedout");
+    });
+
+    const refused = page.waitForResponse(
+      (response) => response.url().includes("/api/operations/resume-plan"),
+    );
+    await page.locator('[data-test="updates-install-security"]').click();
+    expect((await refused).status()).toBe(403);
+
+    await expect(page.locator("#dialog-backdrop")).toBeHidden();
+    await expect(page.locator('[data-test="cancel-operation"]')).toBeVisible();
+  });
+
   test("the major OS upgrade path is explained, not offered", async ({ page }) => {
     await signIn(page);
     await openView(page, "updates");
@@ -1387,7 +1436,10 @@ test.describe("updates page @smoke", () => {
       page.waitForRequest((candidate) => candidate.url().includes("/api/manager/plan-update")),
       button.click(),
     ]);
-    expect(planned.postDataJSON()).toEqual({ release_id: "ems-appliance-manager-0.2.0-arm64" });
+    expect(planned.postDataJSON()).toEqual({
+      release_id: "ems-appliance-manager-0.2.0-arm64",
+      plan_request: expect.stringMatching(/^[0-9a-f]{32}$/),
+    });
     await refusal;
   });
 

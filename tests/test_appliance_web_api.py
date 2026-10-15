@@ -618,6 +618,53 @@ def test_a_terminal_result_stays_until_acknowledged(signed_in):
     assert client.get("/api/operations")[1]["unacknowledged"] == []
 
 
+def test_a_plan_whose_response_was_lost_is_picked_up_with_its_request_id(signed_in):
+    """Firefox gives up on a response after five minutes and an Admin install
+    plan may take thirty-five; the console picks the plan up again with the id
+    it sent, and nobody else can."""
+
+    services, _, client = signed_in
+    request = "0123456789abcdef0123456789abcdef"
+    planned = client.post("/api/admin/restart", {"plan_request": request})[1]
+    operation_id = planned["operation"]["operation_id"]
+
+    status, refused, _ = client.post(
+        "/api/operations/resume-plan",
+        {"operation_id": operation_id, "plan_request": "fedcba9876543210fedcba9876543210"},
+    )
+    assert status == 403, refused
+    assert refused["error"] == "plan_request_mismatch"
+    assert "confirmation_token" not in refused
+
+    status, picked, _ = client.post(
+        "/api/operations/resume-plan", {"operation_id": operation_id, "plan_request": request}
+    )
+    assert status == 200, picked
+    assert picked["confirmation_token"] == planned["confirmation_token"]
+    assert picked["plan"] == planned["plan"]
+
+    client.post(
+        "/api/operations/confirm",
+        {"operation_id": operation_id, "confirmation_token": picked["confirmation_token"]},
+    )
+    assert services.operations.get(operation_id).state == "succeeded"
+    status, settled, _ = client.post(
+        "/api/operations/resume-plan", {"operation_id": operation_id, "plan_request": request}
+    )
+    assert status == 409, settled
+    assert settled["error"] == "plan_not_awaiting_confirmation"
+
+
+def test_a_plan_cannot_be_picked_up_without_a_session(appliance):
+    services, app, client = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+    status, _, _ = client.post(
+        "/api/operations/resume-plan",
+        {"operation_id": "0" * 32, "plan_request": "0123456789abcdef0123456789abcdef"},
+    )
+    assert status in (401, 403)
+
+
 def test_a_plan_can_be_cancelled(signed_in):
     services, _, client = signed_in
     planned = client.post("/api/admin/restart")[1]

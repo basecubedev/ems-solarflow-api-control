@@ -25,6 +25,7 @@ TIMEZONE_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+){0,2}\Z"
 HOSTNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 CONTAINER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 OPERATION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+PLAN_REQUEST_RE = re.compile(r"[0-9a-f]{32}")
 ACCOUNT_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 PASSWORD_GENERATION_RE = re.compile(r"^[0-9a-f]{32}$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
@@ -426,6 +427,16 @@ def validate_operation_id(value):
     if not OPERATION_ID_RE.match(text):
         raise ValidationError("invalid_operation_id", "operation id must be 32 hex characters")
     return text
+
+
+def validate_plan_request(value):
+    """The id a console sent with a plan, or "" for none."""
+
+    if not isinstance(value, str):
+        raise ValidationError("invalid_plan_request", "plan request id must be a string")
+    if value and not PLAN_REQUEST_RE.fullmatch(value):
+        raise ValidationError("invalid_plan_request", "plan request id must be 32 hex characters")
+    return value
 
 
 def validate_confirmation_token(value):

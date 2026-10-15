@@ -34,7 +34,7 @@ from appliance.auth import (
 )
 from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS, WebLog
 from appliance.config import load_config
-from appliance.protocol import ROOT_ACCESS_PLANS, SESSION_GENERATION_FIELD
+from appliance.protocol import PLAN_REQUEST_FIELD, ROOT_ACCESS_PLANS, SESSION_GENERATION_FIELD
 from appliance.paths import ensure_directories, resolve_paths
 from appliance.version import installed_version
 from appliance.web_audit import WebAuditReporter
@@ -64,6 +64,8 @@ STATUS_FOR_CODE = {
     "login_rate_limited": 429,
     "operation_conflict": 409,
     "confirmation_token_mismatch": 403,
+    "plan_request_mismatch": 403,
+    "plan_not_awaiting_confirmation": 409,
     "peer_not_allowed": 403,
     "unknown_operation_id": 404,
     "unknown_operation": 400,
@@ -1057,6 +1059,8 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         if path in plan_routes:
             operation, builder = plan_routes[path]
             fields = builder(body)
+            if body.get(PLAN_REQUEST_FIELD) is not None:
+                fields[PLAN_REQUEST_FIELD] = body.get(PLAN_REQUEST_FIELD)
             if operation in ROOT_ACCESS_PLANS:
                 fields[SESSION_GENERATION_FIELD] = session.generation
             result = self._agent(operation, session, **fields)
@@ -1074,6 +1078,15 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/operations/cancel":
             result = self._agent(
                 "operations.cancel", session, operation_id=body.get("operation_id")
+            )
+            return None if result is None else self._send(200, result)
+
+        if path == "/api/operations/resume-plan":
+            result = self._agent(
+                "operations.resume_plan",
+                session,
+                operation_id=body.get("operation_id"),
+                **{PLAN_REQUEST_FIELD: body.get(PLAN_REQUEST_FIELD)},
             )
             return None if result is None else self._send(200, result)
 

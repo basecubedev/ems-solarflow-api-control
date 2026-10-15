@@ -453,6 +453,16 @@ Read-only status calls stay available. A stale browser cannot start a second
 operation: execution requires the operation ID plus the confirmation token of
 that plan, and a terminal operation cannot be restarted.
 
+A plan can outlast the browser's patience: an Admin install plan may pull for
+35 minutes, an update plan refresh its index for 22, and Firefox gives up on a
+response after five. The console therefore sends a random request id with every
+plan, and the agent keeps its SHA-256 digest on the operation record. Through
+`operations.resume_plan` it hands the plan and its confirmation token to a
+caller that presents the operation ID and that id again, and to nobody else: not
+for another id, not for a plan made without one, and not for a plan that is not
+waiting for confirmation. The id lives only in the page's memory, so a reloaded
+page cannot pick the plan up; it cancels it from the banner instead.
+
 ## What the package may delete
 
 A package may not adopt a host account and later delete it. The backup account

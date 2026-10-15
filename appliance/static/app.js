@@ -44,6 +44,8 @@
     pollTimer: null,
     pollTicks: 0,
     busy: false,
+    lostPlan: null,
+    resumingPlan: false,
     securityAudit: null,
     lastVerdict: undefined,
     unacknowledgedCount: 0,
@@ -790,8 +792,41 @@
       var unacked = (payload.unacknowledged || [])[0] || null;
       state.operation = active || unacked;
       noteSettledOperations(payload);
+      resumeLostPlan(active);
       return payload;
     }).catch(function () { return null; });
+  }
+
+  /* A plan whose response never reached this page is handed over by the agent
+     only against the request id this page sent with it. */
+  function resumeLostPlan(active) {
+    var lost = state.lostPlan;
+    if (!lost || state.resumingPlan) return;
+    if (!active) {
+      state.lostPlan = null;
+      return;
+    }
+    if (active.state !== "awaiting_confirmation") return;
+    state.resumingPlan = true;
+    api("/api/operations/resume-plan", {
+      method: "POST",
+      body: { operation_id: active.operation_id, plan_request: lost.request }
+    }).then(function (payload) {
+      state.resumingPlan = false;
+      state.lostPlan = null;
+      showPlan(payload, lost.options);
+    }).catch(function (exc) {
+      state.resumingPlan = false;
+      if (exc.status) state.lostPlan = null;
+    });
+  }
+
+  function planRequestId() {
+    var bytes = new Uint8Array(16);
+    window.crypto.getRandomValues(bytes);
+    return Array.prototype.map.call(bytes, function (value) {
+      return ("0" + value.toString(16)).slice(-2);
+    }).join("");
   }
 
   /* Dropped rather than emptied: the lazy guard in each render fires on an
@@ -963,19 +998,34 @@
   function planOperation(options) {
     if (state.busy) return;
     state.busy = true;
+    var request = planRequestId();
+    var body = {};
+    Object.keys(options.body || {}).forEach(function (key) { body[key] = options.body[key]; });
+    body.plan_request = request;
+    state.lostPlan = null;
     api(options.endpoint, {
-      method: "POST", body: options.body || {}, account: options.account
+      method: "POST", body: body, account: options.account
     }).then(function (payload) {
       state.busy = false;
-      state.pending = payload;
-      state.pendingForget = options.forget || null;
-      openDialog(options.title, payload, options.confirmLabel, options.danger);
+      showPlan(payload, options);
     }).catch(function (exc) {
       state.busy = false;
+      if (!exc.status) {
+        state.lostPlan = { request: request, options: options };
+        showToastError(new Error("The appliance did not answer in time. If it is still making the plan, the plan opens here once it is ready."));
+        refresh();
+        return;
+      }
       if (exc.code === "password_unconfirmed") state.passwordConfirmed = false;
       showToastError(exc);
       refresh();
     });
+  }
+
+  function showPlan(payload, options) {
+    state.pending = payload;
+    state.pendingForget = options.forget || null;
+    openDialog(options.title, payload, options.confirmLabel, options.danger);
   }
 
   function openDialog(title, payload, confirmLabel, danger) {

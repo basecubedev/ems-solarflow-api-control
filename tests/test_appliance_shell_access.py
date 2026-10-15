@@ -215,8 +215,9 @@ def test_the_operation_is_allowlisted_and_holds_the_lock():
     """The agent executes names, not requests. An operation that is not in the
     allowlist cannot be reached at all, and one that changes a login policy
     without the lock could interleave with the host-config transaction. The
-    only other field is the generation of the password the session signed in
-    with, which turning the account on is refused without."""
+    other fields are the generation of the password the session signed in
+    with, which turning the account on is refused without, and the request id
+    every plan accepts."""
 
     from appliance.protocol import OPERATIONS, ROOT_ACCESS_PLANS
 
@@ -224,7 +225,9 @@ def test_the_operation_is_allowlisted_and_holds_the_lock():
 
     assert spec.mutating is True
     assert spec.takes_lock is True
-    assert [field.name for field in spec.fields] == ["enabled", "session_generation"]
+    assert [field.name for field in spec.fields] == [
+        "enabled", "session_generation", "plan_request",
+    ]
     assert spec.name in ROOT_ACCESS_PLANS
 
 

@@ -249,10 +249,14 @@ A plan that gave up keeps the reason on its cancelled operation, shown on the
 operation in the console and by `ems-appliance operations`; one you cancelled
 yourself stays as you left it.
 
-Firefox gives up on a request after five minutes. If the browser reports a
-network error while the image is still being pulled, the plan goes on; when the
-operation then waits for confirmation, cancel it and plan again: the image is on
-the card by then, and the new plan takes seconds.
+Firefox gives up on a request after five minutes, and an install plan can take
+longer. The plan goes on regardless, and the page that asked for it keeps
+watching: once the plan waits for confirmation, it opens there as if the answer
+had arrived. The appliance hands a plan over only to the page that sent the
+random request id the plan was made with, so a page reloaded or opened elsewhere
+in the meantime cannot pick it up. There, cancel the operation from its banner
+and plan again: the image is on the card by then, and the new plan takes
+seconds.
 
 ## "image_version_mismatch" / "image_source_mismatch" / "image_labels_missing"
 

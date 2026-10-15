@@ -62,6 +62,7 @@ from appliance.operations import (
 from appliance.paths import AGENT_SOCKET_NAME
 from appliance.protocol import (
     OPERATIONS,
+    PLAN_REQUEST_FIELD,
     ROOT_ACCESS_PLANS,
     SESSION_GENERATION_FIELD,
     ProtocolError,
@@ -232,6 +233,15 @@ class AgentHandlers:
         if spec.name == "operations.acknowledge":
             record = self.services.operations.acknowledge(args["operation_id"])
             return {"operation": record.to_dict()}
+        if spec.name == "operations.resume_plan":
+            record = self.services.operations.resume(
+                args["operation_id"], args[PLAN_REQUEST_FIELD]
+            )
+            return {
+                "operation": record.to_dict(),
+                "plan": (record.result or {}).get("plan") or {},
+                "confirmation_token": record.confirmation_token,
+            }
         if spec.name == "audit.record_web_event":
             return self._record_web_event(args, actor=actor, source_ip=source_ip)
         return self._read_only(spec, args)
@@ -309,7 +319,9 @@ class AgentHandlers:
         if spec.name in ROOT_ACCESS_PLANS and args.get("enabled", True):
             self._require_confirmed_password(args, operation_type, actor, source_ip)
         try:
-            operation = self.services.operations.create(operation_type, actor=actor)
+            operation = self.services.operations.create(
+                operation_type, actor=actor, plan_request=args.get(PLAN_REQUEST_FIELD, "")
+            )
         except OperationConflictError as exc:
             raise AgentError(exc.code, exc.message)
 

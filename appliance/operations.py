@@ -7,6 +7,7 @@ what makes a browser reload or an agent restart harmless: the operation record,
 not a request or a thread, is the authority for what is currently running.
 """
 
+import hashlib
 import json
 import os
 import secrets
@@ -155,6 +156,7 @@ class Operation:
     progress: list = field(default_factory=list)
     acknowledged: bool = False
     actor: str = ""
+    plan_request_digest: str = ""
 
     @property
     def terminal(self):
@@ -172,6 +174,7 @@ class Operation:
 
     def to_dict(self, *, include_token=False):
         data = asdict(self)
+        data.pop("plan_request_digest", None)
         if not include_token:
             data.pop("confirmation_token", None)
         data["terminal"] = self.terminal
@@ -182,6 +185,10 @@ class Operation:
     def from_dict(cls, data):
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{key: value for key, value in data.items() if key in known})
+
+
+def _request_digest(plan_request):
+    return hashlib.sha256(str(plan_request).encode("utf-8")).hexdigest()
 
 
 class OperationStore:
@@ -238,7 +245,9 @@ class OperationStore:
                 return operation
         return None
 
-    def create(self, operation_type, requested_target=None, *, actor=""):
+    def create(self, operation_type, requested_target=None, *, actor="", plan_request=""):
+        """Take the lock with a new plan; ``plan_request`` is kept only as its digest."""
+
         with self._lock:
             active = self.active()
             if active is not None:
@@ -255,6 +264,7 @@ class OperationStore:
                 updated_at=now,
                 confirmation_token=self._new_token(),
                 actor=str(actor or ""),
+                plan_request_digest=_request_digest(plan_request) if plan_request else "",
             )
             self._prune()
             return self._save(operation)
@@ -275,6 +285,27 @@ class OperationStore:
             operation.stage = "awaiting_confirmation"
             operation.result = {"plan": plan}
             return self._save(operation)
+
+    def resume(self, operation_id, plan_request):
+        """The plan and its token, for the caller that sent ``plan_request`` with it.
+
+        Only a plan waiting for confirmation is handed out, and only against the
+        digest kept when it was created: a plan made without a request id is
+        handed to nobody.
+        """
+
+        operation = self._load(operation_id)
+        stored = str(operation.plan_request_digest or "")
+        presented = _request_digest(plan_request) if plan_request else ""
+        if not stored or not secrets.compare_digest(stored, presented):
+            raise OperationError(
+                "plan_request_mismatch", "this plan was not started by this request"
+            )
+        if operation.state != STATE_AWAITING_CONFIRMATION:
+            raise OperationError(
+                "plan_not_awaiting_confirmation", f"the plan is {operation.state}"
+            )
+        return operation
 
     def confirm(self, operation_id, token):
         """Start execution. The token proves the caller saw *this* plan."""
