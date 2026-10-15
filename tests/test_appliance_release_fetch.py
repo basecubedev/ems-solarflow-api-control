@@ -294,6 +294,45 @@ def test_an_unreachable_host_is_reported_as_a_download_failure():
     assert caught.value.code == "release_download_failed"
 
 
+class BreaksOff(FakeResponse):
+    """Headers arrived; the body read fails."""
+
+    def __init__(self, error):
+        super().__init__(b"")
+        self._error = error
+
+    def read(self, size=-1):
+        raise self._error
+
+    read1 = read
+
+
+BODY_FAILURES = {
+    "reset": ConnectionResetError(104, "reset"),
+    "socket timeout": TimeoutError("timed out"),
+    "incomplete": IncompleteRead(b"{"),
+}
+
+
+@pytest.mark.parametrize("failure", sorted(BODY_FAILURES))
+def test_a_body_read_that_fails_is_a_download_failure(failure, tmp_path):
+    """Its callers handle FetchError; a raw error answered the console as agent_error."""
+
+    error = BODY_FAILURES[failure]
+    with pytest.raises(FetchError) as read:
+        fetcher(BreaksOff(error)).read(
+            "https://releases.example.org/index.json", label="the index", max_bytes=1024
+        )
+    with pytest.raises(FetchError) as downloaded:
+        fetcher(BreaksOff(error)).download(
+            "https://releases.example.org/a.deb", tmp_path / "a.deb", label="the package",
+            expected_bytes=10,
+        )
+
+    assert read.value.code == downloaded.value.code == "release_download_failed"
+    assert type(error).__name__ in read.value.message
+
+
 def test_an_http_error_status_names_the_code():
     import urllib.error
 

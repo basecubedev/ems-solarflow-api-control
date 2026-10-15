@@ -318,6 +318,15 @@ Expert mode still accepts an exact release tag. Check the appliance's DNS and
 outbound HTTPS; a site that has neither can point `release_index_url` in
 `/etc/ems-appliance-manager/appliance.conf` at a mirror's JSON index instead.
 
+## "release_index_insecure"
+
+`release_index_url` is not an https URL, or the server it names redirected to
+plain http. The index decides which tag *Latest stable* installs, so it is never
+read over a transport anyone on the path can rewrite. Serve the mirror over
+https with a certificate the appliance trusts, or leave `release_index_url`
+empty to read the registry. As with an unreachable index, the exact-tag and
+recovery channels still work.
+
 ## "release_download_timed_out"
 
 Reading the Manager package index, or planning or installing a Manager update,

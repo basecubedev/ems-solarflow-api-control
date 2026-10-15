@@ -105,7 +105,10 @@ project has tagged. A version the host configuration will not accept is still
 listed, greyed out, with the reason — a candidate that exists and is refused is
 something to see, not something to hide. An operator running a mirror can point
 `release_index_url` in `/etc/ems-appliance-manager/appliance.conf` at a JSON
-index instead; that replaces the registry as the source of the list.
+index instead; that replaces the registry as the source of the list. The index
+decides which tag *Latest stable* installs, so it is read over https only: an
+`http:` or `file:` URL, or a redirect to http, is refused with
+`release_index_insecure` and the list stays empty.
 
 1. Open **Updates → Choose an Admin version**. To go straight to the
    newest stable release, the **Update to …** button on the EMS Admin card at

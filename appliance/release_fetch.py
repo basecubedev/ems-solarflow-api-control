@@ -329,16 +329,23 @@ class HttpsFetcher:
             )
 
     @staticmethod
-    def _blocks(response, deadline):
-        """The body as it arrives, until the server ends it or the deadline passes."""
+    def _blocks(response, deadline, label):
+        """The body as it arrives, until the server ends it or the deadline passes.
+
+        A body that breaks off is a failed download like an unreachable host:
+        every caller handles FetchError, and nothing else.
+        """
 
         while True:
             deadline.remaining()
             try:
                 block = response.read1(CHUNK)
-            except (OSError, http.client.HTTPException):
+            except (OSError, http.client.HTTPException) as exc:
                 deadline.remaining()
-                raise
+                raise FetchError(
+                    "release_download_failed",
+                    f"{label} broke off: {exc.__class__.__name__}",
+                ) from None
             if not block:
                 deadline.remaining()
                 return
@@ -349,7 +356,7 @@ class HttpsFetcher:
         with self._deadline(self.document_deadline, label) as deadline:
             with self._response(url, label, deadline) as response:
                 self._still_https(response, label)
-                for block in self._blocks(response, deadline):
+                for block in self._blocks(response, deadline, label):
                     payload += block
                     if len(payload) > max_bytes:
                         raise FetchError(
@@ -368,7 +375,7 @@ class HttpsFetcher:
             with self._response(url, label, deadline) as response:
                 self._still_https(response, label)
                 with open(destination, "wb") as handle:
-                    for block in self._blocks(response, deadline):
+                    for block in self._blocks(response, deadline, label):
                         written += len(block)
                         if written > expected_bytes:
                             raise FetchError(
