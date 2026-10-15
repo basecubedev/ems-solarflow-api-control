@@ -493,7 +493,6 @@ def _runtime(devices):
             "loop_interval": 5,
             "min_output_limit": 0,
         },
-        "ha": {"enabled": False, "control_enabled": False},
         "winter": {"enabled": False},
         "ac_charge_control": {"enabled": False},
         "devices": runtime_devices,

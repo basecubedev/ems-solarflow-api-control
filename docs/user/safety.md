@@ -65,7 +65,7 @@ Turn either off in the config if you do not want it.
 - Check minimum and maximum battery SOC.
 - Make sure no other controller writes Zendure output limits. Use only one
   active controller: disable Zendure HEMS, Smart Matching, Zendure schedules /
-  energy plans, Home Assistant or ioBroker automations that set inverter power,
+  energy plans, ioBroker or other smart-home automations that set inverter power,
   and any second EMS instance. This matters especially for Zendure Cloud MQTT
   control — the cloud services write the same setpoints. The EMS cannot disable
   them for you; it reports `external_control_suspected` when a foreign writer
@@ -236,12 +236,13 @@ The Admin Console is intended for a trusted local network. Optional HTTPS can
 protect local browser traffic, but the generated self-signed certificate is not
 a replacement for a VPN or a properly secured reverse proxy for remote access.
 
-Like the Dashboard, the Admin Console can write runtime *overrides*, but only for
-a fixed whitelist of keys (system power/loop limits, winter/HA enable, per-device
-enabled/max power/PV priority/off-grid mode) and only through the same validated
-runtime-write limits — never the hardware `outputLimit` or state-reconciliation
-write gates. No other key reaches `runtime-state.json` from the Admin; a fresh
-Setup only asks the EMS to rebuild it from the new config at its next start.
+Like the Dashboard, the Admin Console can write runtime *overrides*, but only
+for a fixed whitelist of keys (system power/loop limits, winter/AC-charging
+enable, per-device enabled/max power/PV priority/off-grid mode) and only through
+the same validated runtime-write limits — never the hardware `outputLimit` or
+state-reconciliation write gates. No other key reaches `runtime-state.json` from
+the Admin; a fresh Setup only asks the EMS to rebuild it from the new config at
+its next start.
 
 ## Technical safety model
 

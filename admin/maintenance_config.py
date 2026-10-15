@@ -964,7 +964,7 @@ def _catalog():
     index = _maintenance_field_index()
     sections = []
     for section in get_config_feature_sections(mode="maintenance"):
-        if section.get("setup_group") == "hardware" or section["id"] == "ha":
+        if section.get("setup_group") == "hardware":
             continue
         fields = [field for field in section["fields"] if field["path"] in index]
         if not fields:

@@ -136,7 +136,7 @@ def merge_runtime_defaults(data, defaults):
         **system
     }
 
-    for section_name in ("ha", "winter", "ac_charge_control"):
+    for section_name in ("winter", "ac_charge_control"):
         section = merged.get(section_name)
         if not isinstance(section, dict):
             section = {}
@@ -557,30 +557,6 @@ class RuntimeState:
 
             return system.get(key, default)
 
-    def get_section(self, section_name, key, default=None):
-        with self.lock:
-            section = self.data.get(section_name, {})
-            if not isinstance(section, dict):
-                return default
-
-            return section.get(key, default)
-
-    def set_system(self, key, value):
-        with self.lock:
-            self._refresh_from_disk()
-            system = self.data.setdefault("system", {})
-            previous = system.get(key)
-            system[key] = value
-            return previous != value
-
-    def set_section(self, section_name, key, value):
-        with self.lock:
-            self._refresh_from_disk()
-            section = self.data.setdefault(section_name, {})
-            previous = section.get(key)
-            section[key] = value
-            return previous != value
-
     def get_device(self, device_name, key, default=None):
         with self.lock:
             devices = self.data.get("devices", {})
@@ -605,7 +581,6 @@ def build_runtime_defaults(devices):
     """Build runtime defaults from current device configuration."""
 
     device_defaults = {}
-    ha_config = cfg.CONFIG.get("ha", {})
 
     for dev in devices:
         entry = {
@@ -636,10 +611,6 @@ def build_runtime_defaults(devices):
             "max_total_power": cfg.MAX_TOTAL_POWER,
             "loop_interval": cfg.LOOP_INTERVAL,
             "min_output_limit": cfg.MIN_OUTPUT_LIMIT
-        },
-        "ha": {
-            "enabled": ha_config.get("enabled", False),
-            "control_enabled": ha_config.get("control_enabled", False)
         },
         "winter": {
             "enabled": cfg.winter_config_bool("enabled", False)

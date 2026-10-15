@@ -31,7 +31,7 @@ still read as a fallback, but new setups should use `config/config.json`. See
 migration states.
 
 `config.json` and `config/config.json` are local and ignored by Git. Do not
-commit real Home Assistant tokens, Zendure serial numbers, or local IP
+commit real tokens or passwords, Zendure serial numbers, or local IP
 addresses.
 
 ## Quick Start
@@ -41,13 +41,12 @@ addresses.
 2. Configure the real grid meter IP.
 3. Configure one or more real Zendure device IPs and serial numbers.
 4. Review power, SOC, battery, and PV limits for the installation.
-5. Keep Home Assistant disabled unless you want HA integration.
-6. Optionally run `docker compose exec ems python3 emsctl.py config init`
+5. Optionally run `docker compose exec ems python3 emsctl.py config init`
    (Docker) or `python3 emsctl.py config init` (native Python) for guided
    setup.
-7. Optionally set `dry_run=true` for a no-write validation run.
-8. Run diagnostics.
-9. Monitor the first live run before unattended operation.
+6. Optionally set `dry_run=true` for a no-write validation run.
+7. Run diagnostics.
+8. Monitor the first live run before unattended operation.
 
 The template profile is intended for normal standalone live control after real
 local values are configured and installation limits are reviewed:
@@ -159,7 +158,6 @@ compatibility, not the application version.
 
 `config.json` contains static installation and safety settings:
 
-- Home Assistant URL and token
 - grid meter type and IP
 - Zendure device IPs and serial numbers
 - static device metadata
@@ -178,41 +176,25 @@ new generated configs:
 - per-device runtime max power
 - per-device offgrid socket mode
 - per-device runtime PV priority factor
-- Home Assistant and winter runtime toggles
+- winter and AC charging runtime toggles
 
 The EMS creates the runtime-state file automatically on first start. Deleting it
 resets runtime values from `config.json` defaults. Do not maintain runtime
 state as a second static config.
 
-## Home Assistant Settings
+## Former Home Assistant Section
 
-`ha.enabled` enables Home Assistant publishing and optional helper reads. The
-template default is `false` for standalone operation.
-
-`ha.control_enabled` allows Home Assistant helpers to update runtime-state
-values. The template default is `false`. It does not grant Zendure
-hardware-write permission by itself.
-
-`ha.url` is the Home Assistant base URL, for example:
-
-```text
-http://homeassistant.local:8123
-```
-
-`ha.token` is a Home Assistant long-lived access token.
-
-Standalone mode:
-
-```json
-{
-  "ha": {
-    "enabled": false,
-    "control_enabled": false,
-    "url": "",
-    "token": ""
-  }
-}
-```
+The Home Assistant integration (status publishing and helper control) is
+removed, and with it the `ha` section and the `--no-ha` start option. An `ha`
+section left in an existing `config.json` is ignored, whatever its content: the
+EMS loads and starts as it would without it, and an enabled section with a
+placeholder token no longer holds the EMS in safe mode. Neither the startup
+config upgrade, `emsctl config upgrade` nor an Admin Maintenance apply adds or
+drops it, so a rollback to a release that still had the integration finds it as
+it was. A token in it stays a secret: diagnose, the support bundle and the
+Admin redact it like any other. Delete the section by hand once no rollback is
+planned. The former grid-meter type `ha`, which had no reader, is an unknown
+type now.
 
 ## System Settings
 
@@ -698,7 +680,7 @@ Each Zendure device entry defines static installation data:
 }
 ```
 
-`name` is the local device name used in logs, Home Assistant entities, and CLI
+`name` is the local device name used in logs, the dashboard and CLI
 commands.
 
 `ip` is the local Zendure device IP address.

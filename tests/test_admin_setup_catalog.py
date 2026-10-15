@@ -103,12 +103,10 @@ def test_sections_carry_title_description_level_and_fields():
         assert isinstance(section["fields"], list) and section["fields"]
 
 
-def test_home_assistant_is_not_a_recommended_setup_section():
+def test_neither_home_assistant_nor_config_upgrade_is_a_setup_section():
     catalog = build_setup_catalog()
     ids = {section["id"] for section in catalog["sections"]}
 
-    # Legacy HA control and the maintenance-only config upgrade must not surface
-    # as normal setup features.
     assert "ha" not in ids
     assert "config_upgrade" not in ids
     assert "ha" not in catalog["grid_meter_variants"]
@@ -289,7 +287,7 @@ def test_apply_setup_features_ignores_hidden_and_device_paths():
     assert config == {}
 
 
-def test_apply_setup_features_ignores_maintenance_only_ha_field():
+def test_apply_setup_features_ignores_a_stale_ha_field():
     config = {"ha": {"enabled": False}}
     applied = apply_setup_features(config, {"ha.enabled": True})
 

@@ -87,27 +87,6 @@ class SimulatedZendureClient:
         return True
 
 
-class SimulatedHAClient:
-    """Minimal HA-compatible state sink for self-tests."""
-
-    def __init__(self):
-        self.states = {}
-
-    def set_state(
-        self,
-        entity_id,
-        state,
-        unit=None,
-        device_class=None,
-        state_class=None,
-        icon=None,
-        extra_attributes=None
-    ):
-        self.states[entity_id] = {
-            "state": state,
-            "attributes": extra_attributes or {}
-        }
-
 # =====================
 # PARALLEL FETCH
 # =====================
@@ -352,7 +331,6 @@ def _run_frames_in(frames, source_name, devices, scratch):
     ems = EMSController(
         devices,
         shelly,
-        ha=None,
         sleep_enabled=False,
         runtime_state=runtime_state,
         battery_full_charge_store=BatteryFullChargeStateStore(
@@ -416,15 +394,14 @@ def _run_frames_in(frames, source_name, devices, scratch):
 # =====================
 
 
-def run_live_preflight(devices, shelly, ha=None):
+def run_live_preflight(devices, shelly):
     """Validate live-test prerequisites without dispatching control writes."""
 
     log_event(
         logging.INFO,
         "preflight_start",
         dry_run=cfg.DRY_RUN,
-        allow_hardware_writes=cfg.ALLOW_HARDWARE_WRITES,
-        ha_enabled=bool(ha)
+        allow_hardware_writes=cfg.ALLOW_HARDWARE_WRITES
     )
 
     if cfg.hardware_writes_allowed():
@@ -434,17 +411,6 @@ def run_live_preflight(devices, shelly, ha=None):
             reason="hardware_writes_enabled"
         )
         return False
-
-    if ha:
-        if not ha.ping():
-            log_event(
-                logging.ERROR,
-                "preflight_abort",
-                reason="ha_unreachable"
-            )
-            return False
-
-        log_event(logging.INFO, "preflight_ha_ok")
 
     load = shelly.get_power()
     log_event(logging.INFO, "preflight_shelly_ok", load=load)
@@ -548,7 +514,6 @@ def self_test_ac_charge_direction(ok):
         ems = EMSController(
             [device, refused],
             meter,
-            ha=None,
             sleep_enabled=False,
             runtime_state=None
         )
@@ -674,7 +639,6 @@ def self_test_ac_charge_without_pv(ok):
             ems = EMSController(
                 devices,
                 meter,
-                ha=None,
                 sleep_enabled=False,
                 runtime_state=None
             )
@@ -701,7 +665,7 @@ def self_test_ac_charge_without_pv(ok):
 
 
 def run_self_tests():
-    """Run local helper checks without hardware or HA access."""
+    """Run local helper checks without hardware access."""
 
     original_output_control = deepcopy(cfg.OUTPUT_CONTROL_CONFIG)
     cases = [
@@ -737,7 +701,6 @@ def run_self_tests():
     sim_ems = EMSController(
         [sim_device],
         SimulatedShellyClient(),
-        ha=None,
         sleep_enabled=False,
         runtime_state=None
     )
@@ -785,7 +748,6 @@ def run_self_tests():
     sim_ems = EMSController(
         sim_devices,
         SimulatedShellyClient(),
-        ha=None,
         sleep_enabled=False,
         runtime_state=None
     )
@@ -1083,42 +1045,6 @@ def run_self_tests():
             test="effective_control_targets_system_disabled",
             expected="[0,0]",
             actual=json.dumps(effective_targets)
-        )
-
-    sim_ha = SimulatedHAClient()
-    sim_ems.ha = sim_ha
-    sim_ems.publish_to_ha(
-        50,
-        idle_states,
-        [10, 100],
-        [30, 0],
-        30,
-        110
-    )
-    target_total = sim_ha.states.get("sensor.ems_solarflow_target_total")
-    wr1_target = sim_ha.states.get("sensor.ems_solarflow_wr1_target")
-    wr2_target = sim_ha.states.get("sensor.ems_solarflow_wr2_target")
-
-    if (
-        not target_total
-        or target_total["state"] != 30
-        or target_total["attributes"].get("controller_target_w") != 110
-        or target_total["attributes"].get("allocated_target_w") != 110
-        or not wr1_target
-        or wr1_target["state"] != 30
-        or wr1_target["attributes"].get("allocated_target_w") != 10
-        or not wr2_target
-        or wr2_target["state"] != 0
-        or wr2_target["attributes"].get("allocated_target_w") != 100
-    ):
-        ok = False
-        log_event(
-            logging.ERROR,
-            "self_test_failed",
-            test="ha_effective_target_publish",
-            target_total=json.dumps(target_total, sort_keys=True),
-            wr1_target=json.dumps(wr1_target, sort_keys=True),
-            wr2_target=json.dumps(wr2_target, sort_keys=True)
         )
 
     if ok:

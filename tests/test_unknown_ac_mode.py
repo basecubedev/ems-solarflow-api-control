@@ -251,7 +251,7 @@ def test_a_config_that_still_carries_the_retired_key_loads_and_starts_unchanged(
         before = path.read_bytes()
         args = SimpleNamespace(
             config=str(path), dry_run=False, simulate=False, replay=None,
-            self_test=False, no_ha=True,
+            self_test=False,
         )
         snapshot = {name: getattr(cfg, name) for name in dir(cfg) if name.isupper()}
         try:

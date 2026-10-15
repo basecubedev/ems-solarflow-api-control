@@ -42,12 +42,10 @@ Common first fixes:
   routing, Zendure Local API availability, and `diagnose --hardware`.
 - Analytics/InfluxDB not reachable: the dashboard still works without
   InfluxDB; see [influxdb.md](influxdb.md).
-- Home Assistant not configured: Home Assistant is optional and not required
-  for standalone EMS control.
 
 At least one supported Zendure connection — Local API, Local MQTT, or Zendure
-cloud MQTT — must be available for EMS control. Do not run Zendure HEMS, Home
-Assistant automations, MQTT writers, or any other controller in parallel if they
+cloud MQTT — must be available for EMS control. Do not run Zendure HEMS,
+smart-home automations, MQTT writers, or any other controller in parallel if they
 write Zendure `outputLimit`. EMS assumes exclusive write control over
 `outputLimit` while active.
 
@@ -176,10 +174,6 @@ Important runtime fields:
     "loop_interval": 2,
     "min_output_limit": 35
   },
-  "ha": {
-    "enabled": false,
-    "control_enabled": false
-  },
   "devices": {
     "WR1": {
       "enabled": true,
@@ -194,7 +188,6 @@ Important runtime fields:
 Runtime-editable values are limited to the fields shown above:
 
 - system `enabled`, `max_total_power`, `loop_interval`, `min_output_limit`
-- HA runtime `enabled` and `control_enabled`
 - winter runtime `enabled`
 - per-device `enabled`, `max_power`, `offgrid_socket_mode`, and
   `pv_priority_factor`
@@ -205,8 +198,7 @@ Other safety and tuning values are config-only and require editing
 `redistribute_clamped_power`, `pv_kwp_weighting`,
 `pv_charge_balance_enabled`, `pv_charge_balance_deadband_percent`,
 `pv_charge_balance_full_bias_percent`, `pv_charge_balance_strength`,
-`battery_kwh_weighting`, `soc_reconcile_interval`, HA URL/token, and device
-IP/SN.
+`battery_kwh_weighting`, `soc_reconcile_interval`, and device IP/SN.
 
 ### Config still contains placeholders
 
@@ -344,11 +336,11 @@ process.
 Symptoms:
 
 - EMS writes a non-zero `outputLimit`
-- `sensor.ems_solarflow_<device>_target` is above zero
+- the device's EMS target is above zero
 - actual output remains zero or much lower
 - battery does not discharge
 
-Important telemetry fields and sensors:
+Important telemetry fields:
 
 ```text
 outputHomePower
@@ -363,26 +355,13 @@ acStatus
 dcStatus
 ```
 
-Home Assistant sensors:
-
-```text
-sensor.ems_solarflow_<device>_target
-sensor.ems_solarflow_<device>_output
-sensor.ems_solarflow_<device>_output_limit
-sensor.ems_solarflow_<device>_soc_limit
-sensor.ems_solarflow_<device>_pack_state
-binary_sensor.<device>_ac_active
-binary_sensor.<device>_dc_active
-binary_sensor.<device>_available
-```
-
 Common causes:
 
 | Cause | Check |
 |---|---|
 | battery is at or below `min_soc` | device SOC and configured `min_soc` |
 | device reports no discharge capacity | `no_discharge_capacity` event |
-| telemetry is stale | `binary_sensor.<device>_available` and `last_seen_age_s` |
+| telemetry is stale | `output_control_stale_telemetry` event, `diagnose --hardware` |
 | AC/DC path inactive | `acStatus`, `dcStatus` |
 | device is runtime-disabled | `runtime-state.json` device `enabled=false` |
 | target is clamped by max power | `max_total_power`, device `max_power` |
@@ -469,10 +448,9 @@ night_min_soc_idle_hold_skip_write
 
 Symptoms:
 
-- device sensors stay visible but do not update
+- device values stay visible but do not update
 - writes are skipped for one device
 - target allocation looks lower than expected
-- HA `binary_sensor.<device>_available` is off
 
 Relevant events:
 
@@ -491,10 +469,8 @@ Check:
 - local network reachability
 - device Wi-Fi quality
 - `telemetry_max_age_seconds`
-- HA `last_seen_age_s` attribute
 
-More detail: [configuration.md](configuration.md) and
-[home-assistant.md](../home-assistant.md).
+More detail: [configuration.md](configuration.md).
 
 ## Control loop diagnostics
 
@@ -608,7 +584,7 @@ Symptoms:
 - house load changes quickly, but EMS target follows too late
 - inverter output lags behind demand
 - target rises or falls only in small steps
-- Home Assistant helper changes take effect late
+- runtime setting changes take effect late
 
 Check these settings:
 
@@ -703,7 +679,7 @@ Tuning hints:
 | noisy load input | `load_deadband_w` | increase |
 | output follows every spike | `ema_alpha` | decrease |
 | target jumps too hard | `ramp_up_w_per_cycle` / `ramp_down_w_per_cycle` | decrease |
-| devices fight each other | disable other controllers | check Zendure app, HEMS, HA automations |
+| devices fight each other | disable other controllers | check Zendure app, HEMS, smart-home automations |
 
 Relevant events (`output_control_deadband_hold` is a `debug` trace; the actual
 write `write_output_limit_published` stays at `info`):
@@ -791,7 +767,7 @@ Symptoms:
 - target calculation looks correct
 - device output does not change
 - logs show dry-run events only
-- Home Assistant target sensors change, but hardware does not
+- the dashboard's EMS targets change, but hardware does not
 
 Check safety flags:
 
@@ -988,8 +964,7 @@ firmware behavior.
 Off-grid socket mode is a mode/state value, not power. Do not add it to the
 home-load, target, output-limit, or actual-output calculation.
 
-More detail: [control-logic.md](control-logic.md),
-[home-assistant.md](../home-assistant.md), and
+More detail: [control-logic.md](control-logic.md) and
 [runtime-state.md](runtime-state.md).
 
 ### Unexpected SOC or mode changes
@@ -1105,90 +1080,6 @@ a target remembered in winter, which is `info`; otherwise it is `info`.
 starts, and `debug` while it lasts. Enable `system.log_level=debug` to see every
 reconcile.
 
-### Home Assistant entities missing
-
-Home Assistant entities are created by REST state writes. They appear after the
-EMS has published at least once.
-
-After an HA restart, entities can temporarily appear as stale, unavailable, or
-restored until the EMS publishes fresh states again.
-
-Check:
-
-- `ha.enabled=true` in `config.json`
-- runtime `ha.enabled=true`
-- valid HA URL and token
-- not running with `--no-ha`
-- not running simulation or replay
-- Home Assistant is reachable from the EMS host
-
-Relevant events:
-
-```text
-ha_publish_no_devices
-ha_write_error
-runtime_state_ha_write
-```
-
-### Home Assistant helpers are ignored
-
-Symptoms:
-
-- changing HA max power has no effect
-- changing HA enable switch has no effect
-- changing HA loop interval has no effect
-- HA sensors exist, but controls do not change EMS behavior
-
-Check static config and runtime state both have:
-
-```json
-{
-  "ha": {
-    "enabled": true,
-    "control_enabled": true
-  }
-}
-```
-
-Expected helpers:
-
-```text
-input_boolean.ems_solarflow_ha_enabled
-input_boolean.ems_solarflow_ha_control_enabled
-input_boolean.ems_solarflow_enable
-input_number.ems_solarflow_max_power
-input_number.ems_solarflow_interval
-input_number.ems_solarflow_min_output_limit
-input_boolean.ems_solarflow_winter_enabled
-```
-
-Per-device helper example:
-
-```text
-input_boolean.ems_solarflow_wr1_enabled
-input_number.ems_solarflow_wr1_max_power
-input_select.ems_solarflow_wr1_offgrid_socket_mode
-```
-
-Relevant events:
-
-```text
-runtime_state_ha_sync
-runtime_state_ha_read_error
-ha_runtime_sync_failed
-runtime_state_changed
-```
-
-If HA helper sync fails, EMS continues with the last valid local
-`runtime-state.json` values.
-
-HA helper values can update `runtime-state.json` only when static
-`ha.enabled=true`, static `ha.control_enabled=true`, runtime `ha.enabled=true`,
-and runtime `ha.control_enabled=true`. `--no-ha`, simulation, and replay disable
-HA reads and writes for that run.
-
-More detail: [home-assistant.md](../home-assistant.md).
-
 ### Preflight fails
 
 Run:
@@ -1201,7 +1092,6 @@ Relevant events:
 
 ```text
 preflight_start
-preflight_ha_ok
 preflight_shelly_ok
 preflight_device_ok
 preflight_device_unreachable
@@ -1415,8 +1305,6 @@ EMS version / commit:
 Number of devices:
 Device model(s):
 Firmware version if known:
-Home Assistant enabled:
-HA control enabled:
 dry_run:
 allow_hardware_writes:
 allow_state_reconciliation_writes:
@@ -1441,7 +1329,7 @@ write_output_limit or dry_run_output_limit
 Remove secrets before posting logs or config snippets:
 
 ```text
-Home Assistant token
+API keys, tokens and passwords
 Zendure serial numbers
 local IP addresses if desired
 ```
@@ -1491,7 +1379,7 @@ python3 -B ems-solarflow-api-control.py --preflight --dry-run
 Run one dry-run control cycle:
 
 ```bash
-python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
+python3 -B ems-solarflow-api-control.py --dry-run --once
 ```
 
 Check required events:

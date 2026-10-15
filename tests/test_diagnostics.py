@@ -619,25 +619,6 @@ def test_emsctl_diagnose_invalid_loop_interval_produces_error(tmp_path):
     )
 
 
-def test_emsctl_diagnose_ha_control_without_ha_is_warning(tmp_path):
-    config_path = tmp_path / "config.json"
-    write_config(config_path)
-    config = json.loads(config_path.read_text())
-    config["ha"]["enabled"] = False
-    config["ha"]["control_enabled"] = True
-    config_path.write_text(json.dumps(config))
-
-    result = run_emsctl(tmp_path, "diagnose", "--json")
-
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["status"] == "warning"
-    assert any(
-        check["code"] == "ha_control_without_ha"
-        for check in payload["checks"]
-    )
-
-
 def test_emsctl_diagnose_reports_invalid_config_without_traceback(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text("{invalid json")

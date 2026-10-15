@@ -87,7 +87,6 @@ def bootstrap_config(config_arg):
         replay=False,
         simulate=False,
         self_test=False,
-        no_ha=True,
         dry_run=False,
         once=False,
         preflight=False,

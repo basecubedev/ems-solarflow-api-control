@@ -314,7 +314,6 @@ def test_quoted_false_gate_closes_the_loaded_runtime(tmp_path):
         simulate=False,
         replay=None,
         self_test=False,
-        no_ha=True,
     )
     snapshot = {name: getattr(cfg, name) for name in dir(cfg) if name.isupper()}
     try:
@@ -395,7 +394,7 @@ def test_an_invalid_simulation_mode_keeps_the_loop_running_dry(tmp_path, value):
     path.write_text(__import__("json").dumps(config))
     args = SimpleNamespace(
         config=str(path), dry_run=False, simulate=False, replay=None,
-        self_test=False, no_ha=True,
+        self_test=False,
     )
     snapshot = {name: getattr(cfg, name) for name in dir(cfg) if name.isupper()}
     try:

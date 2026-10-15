@@ -7149,7 +7149,6 @@ const GRID_METER_TYPE_CHOICES = new Set([
   "tasmota_http",
   "zendure_smartmeter_d0",
   "mqtt",
-  "ha",
 ]);
 
 // Discovery api_family → concrete grid-meter type. A known family resolves

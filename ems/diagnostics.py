@@ -30,7 +30,6 @@ import zoneinfo
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from dashboard import auth as dashboard_auth
@@ -794,13 +793,6 @@ def diagnose_path_is_clean(path):
     return "\x00" not in path and os.path.normpath(path)
 
 
-def diagnose_basic_url(value):
-    if not isinstance(value, str) or not value.strip():
-        return False
-    parsed = urlparse(value)
-    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
-
-
 def diagnose_git_info(checks):
     git_dir = os.path.join(BASE_DIR, ".git")
     if not os.path.exists(git_dir):
@@ -1189,26 +1181,6 @@ def diagnose_config_plausibility(checks, args, config_data):
                 "Dashboard binds to 0.0.0.0 without HTTPS and without configured auth",
                 docs="docs/dashboard.md",
             )
-
-    ha = config_data.get("ha", {})
-    if isinstance(ha, dict):
-        ha_enabled = bool(ha.get("enabled", False))
-        ha_control_enabled = bool(ha.get("control_enabled", False))
-        if ha_enabled:
-            if diagnose_basic_url(ha.get("url", "")):
-                diagnose_add(checks, "config", "ok", "ha_url_valid", "ha.url has a valid basic URL shape")
-            else:
-                diagnose_add(checks, "config", "error", "ha_url_invalid", "ha.url must be configured as http(s) URL when HA is enabled")
-            diagnose_add(
-                checks,
-                "config",
-                "ok" if bool(ha.get("token")) else "warning",
-                "ha_token_configured",
-                "Home Assistant token configured: yes" if bool(ha.get("token")) else "Home Assistant token configured: no",
-                configured=bool(ha.get("token")),
-            )
-        if ha_control_enabled and not ha_enabled:
-            diagnose_add(checks, "config", "warning", "ha_control_without_ha", "ha.control_enabled=true while ha.enabled=false")
 
     diagnose_grid_meter_config(checks, config_data)
     diagnose_zendure_mqtt_runtime(checks, config_data)
@@ -1648,8 +1620,6 @@ def diagnose_grid_meter_config(checks, config_data):
                 f"{label} TLS: {'enabled' if tls_enabled else 'disabled'}",
                 tls=tls_enabled, tls_insecure=False,
             )
-    elif meter_type in ("ha", "homeassistant", "home_assistant"):
-        diagnose_add(checks, "config", "ok", "grid_meter_ha_config", "Home Assistant grid meter type detected; only config completeness is checked by diagnose")
     else:
         diagnose_add(checks, "config", "warning", "grid_meter_type_unknown", f"Unknown grid meter type: {meter_type}", type=meter_type)
 
@@ -2085,7 +2055,6 @@ GRID_METER_PROVIDERS = {
     "tasmota_http": "Tasmota",
     "mqtt": "MQTT",
     "zendure_smartmeter_d0": "Zendure SmartMeter D0",
-    "ha": "Home Assistant",
 }
 
 

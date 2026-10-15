@@ -129,7 +129,7 @@ def run_emsctl(tmp_path, *args):
 
 
 def test_runtime_defaults_include_pv_priority_factor_from_device():
-    with patch("ems.runtime_state.cfg.CONFIG", {"ha": {}}):
+    with patch("ems.runtime_state.cfg.CONFIG", {}):
         defaults = build_runtime_defaults([
             device("WR1", pv_priority_factor=1.4)
         ])

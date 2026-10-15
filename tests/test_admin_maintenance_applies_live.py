@@ -37,8 +37,6 @@ pytestmark = [
         "devices[2].max_power",
         "devices[0].offgrid_socket_mode",
         "devices[0].pv_priority_factor",
-        "ha.enabled",
-        "ha.control_enabled",
         "winter.enabled",
     ],
 )

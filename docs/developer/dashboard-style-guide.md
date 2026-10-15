@@ -96,7 +96,7 @@ pipeline below them.
   - EMS / System: `Global runtime limits and loop control`
   - Device cards: `Device runtime write values`
   - Winter Mode: `Seasonal charging behavior`
-  - Home Assistant: `External publishing and helper control`
+  - AC Charging: `Charge the batteries from grid surplus`
 - Runtime fields keep semantic `label`, `input`, and `select` elements for
   keyboard and screen-reader use, but are visually styled as compact
   `.control-pipeline-fact` rows.

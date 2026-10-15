@@ -282,7 +282,7 @@ first read.
   "local_api": {"enabled": true, "scan_ranges": [], "manual_hosts": []},
   "local_mqtt": {
     "enabled": true,
-    "credential_refs": ["home-assistant", "mosquitto"]
+    "credential_refs": ["home-broker", "mosquitto"]
   },
   "zendure_mqtt": {"enabled": true, "token_ref": "zendure-cloud"}
 }
@@ -993,8 +993,8 @@ or manual broker host/user/password. Requests may optionally carry
 `unsupported_credential_mode` 400. Manual MQTT broker credentials remain a
 separate feature in the Local MQTT broker section.
 
-Credential storage (`admin/credential_store.py`): the Zendure API key or HA
-token is encrypted at rest (`cryptography`/Fernet) under
+Credential storage (`admin/credential_store.py`): the Zendure API key or
+HA token is encrypted at rest (`cryptography`/Fernet) under
 `config/secrets/zendure-cloud.json`, with the Fernet key in
 `config/secrets/.secret-key`, both written `0600` best-effort.
 `config/discovery-connections.json` holds only the `token_ref`, never a raw key.

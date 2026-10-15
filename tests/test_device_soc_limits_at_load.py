@@ -18,10 +18,9 @@ import pytest
 
 from ems.clients import ZendureClient
 from ems.controller import EMSController
-from ems.target_control import calculate_remaining_time_hours
 from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
 from test_unknown_ac_mode import _Device
-from test_write_gates import RuntimeStateStub, ShellyStub, state
+from test_write_gates import RuntimeStateStub, ShellyStub
 
 pytestmark = [
     pytest.mark.unit,
@@ -104,13 +103,6 @@ def test_a_value_left_unmanaged_is_named_at_load(caplog):
     assert "key=max_soc" in said[1]
     assert all(record.levelno == logging.WARNING for record in caplog.records
                if "event=device_soc_limit_invalid" in record.getMessage())
-
-
-def test_the_remaining_time_reads_the_validated_bound():
-    dev = _http("100", "abc")
-
-    assert calculate_remaining_time_hours(state(soc=50), SimpleNamespace(
-        battery_kwh=1.0, min_soc=dev.min_soc, max_soc=dev.max_soc), 500) == 1.0
 
 
 def _winter_cycles(min_soc, max_soc):

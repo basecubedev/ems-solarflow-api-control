@@ -74,9 +74,7 @@ def test_catalog_contains_all_supported_grid_meter_variants():
         "tasmota_http",
         "zendure_smartmeter_d0",
         "mqtt",
-        "ha",
     }
-    assert variants["ha"]["level"] == "deprecated"
     assert variants["zendure_grid_meter_http"]["fields"] == ("grid_meter.ip",)
     assert variants["zendure_smartmeter_3ct_http"]["fields"] == ("grid_meter.ip",)
     assert variants["zendure_smartmeter_d0_http"]["fields"] == ("grid_meter.ip",)
@@ -127,8 +125,8 @@ def test_grid_meter_type_sets_are_derived_from_the_catalog():
         "zendure_smartmeter_d0_http",
         "zendure_grid_meter_http",
     } <= http
-    # MQTT meters and the fieldless deprecated HA meter carry no HTTP endpoint.
-    assert not (http & {"zendure_smartmeter_d0", "mqtt", "ha"})
+    # MQTT meters carry no HTTP endpoint.
+    assert not (http & {"zendure_smartmeter_d0", "mqtt"})
 
 
 def test_grid_meter_variant_field_spec_zendure_d0_http():
@@ -194,10 +192,7 @@ def test_default_template_order_and_legacy_ha_defaults():
         "energy_savings",
         "dashboard",
         "influxdb",
-        "ha",
     ]
-    assert template["ha"]["enabled"] is False
-    assert template["ha"]["control_enabled"] is False
     assert not (ROOT / "config.template.json").exists()
 
 
@@ -251,7 +246,6 @@ def test_control_tuning_is_expert_and_ha_is_deprecated():
     )
     # Every output-control tuning knob keeps its control-stability risk.
     assert all(field["risk"] == "control_stability" for field in tuning.values())
-    assert fields["ha.enabled"]["level"] == "deprecated"
 
 
 @pytest.mark.parametrize(

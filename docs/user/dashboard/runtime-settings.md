@@ -9,8 +9,7 @@ Change a small set of operating values live, from the browser, without editing
 
 - Cap or raise total output for a while.
 - Take one inverter out of regulation temporarily.
-- Turn winter mode, AC charging from surplus or Home Assistant publishing on
-  or off.
+- Turn winter mode or AC charging from surplus on or off.
 - Try a different loop interval or PV priority.
 - Switch an inverter to AC charging from the grid, and set its charge power.
 
@@ -62,10 +61,9 @@ the visual cue that these are decision-affecting controls, not read-outs.
 | 02/03 | **Device cards** (`WR1`, `WR2`, …) | Device runtime write values | `Device enabled`, `AC charging`, `Max power` (W), `PV priority` (×), `Offgrid socket`, `AC role`, `AC charge power` (W) |
 | 04 | **Winter mode** | Seasonal charging behavior | `Winter mode` |
 | 05 | **AC Charging** | Charge the batteries from grid surplus | `AC charging` |
-| 06 | **Home Assistant** | External publishing and helper control | `HA publishing`, `HA helper control` |
 
 Each card has its own apply button: **Save EMS settings**, **Save WR1
-settings**, **Save winter mode**, **Save AC charging**, **Save HA settings**.
+settings**, **Save winter mode**, **Save AC charging**.
 
 **AC charging** on the **AC Charging** card switches charging from surplus on or
 off for the whole installation; the **AC charging** switch on a device card
@@ -90,7 +88,7 @@ output, and a charge from surplus where its model can charge from AC and its
 **What it changes:** only the fields you changed on that card are written to
 `data/runtime-state.json` through the EMS-owned runtime writer, and the control
 loop picks them up on its next cycle. A value someone else changed in the
-meantime (emsctl, Home Assistant, another tab) is left alone. The cards reload
+meantime (emsctl, another tab) is left alone. The cards reload
 the current values every 30 seconds while you are not editing.
 
 Turning the EMS or a device off, switching a device to AC charging, and changing
@@ -125,7 +123,6 @@ Do not take the form's word for it. Scroll down to the pipeline:
 | Offgrid socket | Yes | Yes | No |
 | Winter mode | Yes | Yes | No |
 | AC charging (installation and device) | Yes | Yes | No |
-| HA publishing / helper control | Yes | Yes | No |
 | Adding or removing a device | — | — | **Admin Console + restart** |
 | Grid meter type or address | — | — | **Admin Console + restart** |
 | Write gates, transports | — | — | **Admin Console / config** |
@@ -205,7 +202,7 @@ set them.
 | Grid shows **Meter offline** | The grid meter did not answer; the EMS holds its target. The flow views mark the grid **Offline** and draw no grid flow until it answers again | [Troubleshooting](../troubleshooting.md) |
 | Validation error on save | The value is out of range | Nothing was written; correct it |
 | Saved but nothing changed | Wait one loop interval, then check the pipeline | [Control pipeline](control.md) |
-| Value reverts | Something else is writing runtime state | Check `emsctl.py`, HA helpers, a second controller |
+| Value reverts | Something else is writing runtime state | Check `emsctl.py`, another dashboard tab, a second controller |
 | Device still not regulating | Enabled here, but blocked by config | [Devices](devices.md#read-only-and-write-blocked-devices) |
 
 ## Recovery or next steps

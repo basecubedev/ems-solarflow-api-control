@@ -108,9 +108,8 @@ are read-only:
    `charging=true` in the log. If it never appears, the installation is not
    exporting enough for long enough — check `charge_start_w` against your actual
    surplus before concluding anything about the hardware.
-2. **Does current actually flow?** The device tile's **AC Charge**, or
-   `sensor.ems_solarflow_<device>_ac_charge`. A number above zero while the EMS
-   commands a charge is the proof.
+2. **Does current actually flow?** The device tile's **AC Charge**. A number
+   above zero while the EMS commands a charge is the proof.
 3. **Does the EMS complain?** `event=ac_charge_not_delivered` is the negative
    result: the command was accepted and nothing flowed for six cycles. If it
    fires repeatedly, the catalogue row is wrong for that model — set
@@ -458,14 +457,13 @@ a device actually sends.
 
 A charging device reports `output` as 0, so anything that reads the output
 alone shows it as idle. The measured AC input power (`gridInputPower`) is
-carried alongside the output and surfaces in four places:
+carried alongside the output and surfaces in these places:
 
 | Surface | Name |
 |---|---|
 | Dashboard device tile | `ac_charge_w` |
 | Dashboard flow / snapshot total | `inverter_charge_w` |
 | Analytics | the **AC Charge** series and overlay |
-| Home Assistant | `sensor.ems_solarflow_<device>_ac_charge` |
 | `emsctl diagnose --control` | the configured band, limit, permitted devices and those the configured model refuses |
 | InfluxDB | `zendure_device.grid_input` |
 

@@ -276,27 +276,6 @@ def test_a_battery_missing_for_one_report_is_no_invalid_policy(caplog):
     assert not controller.winter.device("WR1").policy_warned
 
 
-def test_home_assistant_shows_the_step_in_effect_for_an_old_config_of_five():
-    class _Ha:
-        def __init__(self):
-            self.states = {}
-
-        def set_state(self, entity, value, **kwargs):
-            self.states[entity] = value
-
-    ha = _Ha()
-    controller = EMSController(devices=[_device()], shelly=None, ha=ha, sleep_enabled=False)
-    with _configured(entry=BATTERY_ONLY), patch.object(
-        cfg, "WINTER_CONFIG", {**cfg.WINTER_DEFAULTS, "ramp_step_percent": 5}
-    ), patch.object(cfg, "winter_month_active", lambda now: True), patch.object(
-        controller, "device_ha_extra", lambda dev, extra=None: extra
-    ):
-        controller.publish_winter_to_ha([_state(20, soc=20)])
-
-    assert ha.states["sensor.ems_solarflow_winter_ramp_step"] == 3
-    assert ha.states["sensor.ems_solarflow_wr1_winter_estimated_ramp_days"] == 7
-
-
 def test_the_step_hour_is_configurable():
     controller = EMSController(devices=[], shelly=None, sleep_enabled=False)
     with patch.object(cfg, "winter_adjust_hour", lambda: 8):
@@ -396,7 +375,7 @@ def test_a_skipped_day_is_not_reported_as_a_step():
     controller = EMSController(devices=[], shelly=None, sleep_enabled=False)
     _target(controller, _state(20, soc=20), AFTERNOON, entry=BATTERY_ONLY)
 
-    assert controller.winter.last_step_date() is None
+    assert not [item for item in controller.winter.devices.values() if item.step_date]
 
 
 def test_a_device_without_state_writes_plans_no_winter_step(caplog):
@@ -410,7 +389,7 @@ def test_a_device_without_state_writes_plans_no_winter_step(caplog):
             assert controller.winter.reconciliation_target(dev, _state(20, soc=20), True, now) == (None, False)
 
     assert not any("event=winter_step" in r.getMessage() for r in caplog.records)
-    assert controller.winter.last_step_date() is None
+    assert not [item for item in controller.winter.devices.values() if item.step_date]
 
 
 @pytest.mark.parametrize(

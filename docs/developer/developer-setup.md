@@ -36,7 +36,7 @@ Then validate:
 
 ```bash
 python3 emsctl.py diagnose
-python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
+python3 -B ems-solarflow-api-control.py --dry-run --once
 ```
 
 Full detail: [../native-python.md](../native-python.md) and

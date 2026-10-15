@@ -491,31 +491,3 @@ def test_an_out_of_range_soc_bound_is_never_written(min_soc, max_soc, expected):
 def test_safe_number_parsers_never_return_or_raise_on_non_finite_input(value):
     assert cfg.safe_int(value, 7) == 7
     assert cfg.safe_float(value, 7.0) == 7.0
-
-
-def test_home_assistant_shows_the_target_the_controller_holds():
-    class _Ha:
-        def __init__(self):
-            self.states = {}
-
-        def set_state(self, entity, value, **kwargs):
-            self.states[entity] = value
-
-    ha = _Ha()
-    dev = SimpleNamespace(name="WR1", min_soc=15, max_soc=95, enabled=True)
-    controller = EMSController(devices=[dev], shelly=None, ha=ha, sleep_enabled=False)
-    _remember(controller, 23)
-    controller.winter.device("WR1").step_date = DAY.date().isoformat()
-
-    with patch.object(cfg, "WINTER_CONFIG", dict(cfg.WINTER_DEFAULTS)), patch.object(
-        cfg, "winter_feature_enabled", lambda runtime: True
-    ), patch.object(cfg, "winter_month_active", lambda now: True), patch.object(
-        controller, "device_ha_extra", lambda dev, extra=None: extra
-    ):
-        controller.publish_winter_to_ha([_pv_state(20, soc=21)])
-
-    assert ha.states["sensor.ems_solarflow_wr1_winter_min_soc_target"] == 23
-    assert ha.states["sensor.ems_solarflow_wr1_winter_estimated_ramp_days"] == 6
-    assert ha.states["sensor.ems_solarflow_winter_ramp_step"] == 3
-    assert ha.states["sensor.ems_solarflow_winter_last_adjust_date"] == DAY.date().isoformat()
-    assert ha.states["binary_sensor.ems_solarflow_winter_adjust_window"] in ("on", "off")

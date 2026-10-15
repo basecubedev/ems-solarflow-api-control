@@ -214,7 +214,6 @@ Potential EMS behavior in this state:
 
 ```text
 continue telemetry
-continue Home Assistant publishing
 continue runtime-state updates
 skip output writes
 do not force min_output_limit

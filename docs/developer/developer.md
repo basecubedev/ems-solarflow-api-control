@@ -67,7 +67,7 @@ for future API and dashboard use:
 - `run_control_quality_diagnosis(args)`
 
 These functions are read-only and reuse the same data path as the CLI. They do
-not write Zendure devices, Home Assistant, MQTT, or runtime control state.
+not write Zendure devices, MQTT, or runtime control state.
 
 ## Root Causes
 

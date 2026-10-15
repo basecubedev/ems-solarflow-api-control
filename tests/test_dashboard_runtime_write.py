@@ -28,7 +28,6 @@ def test_runtime_write_uses_config_aware_power_limits(tmp_path):
                 "loop_interval": 5,
                 "min_output_limit": 35,
             },
-            "ha": {"enabled": False, "control_enabled": False},
             "winter": {"enabled": False},
             "devices": {
                 "WR1": {
@@ -80,7 +79,6 @@ def test_lowering_system_power_does_not_lower_later_edit_ceiling(tmp_path):
                 "loop_interval": 5,
                 "min_output_limit": 35,
             },
-            "ha": {"enabled": False, "control_enabled": False},
             "winter": {"enabled": False},
             "devices": {},
         },
@@ -108,7 +106,6 @@ def test_lowering_system_power_does_not_lower_min_output_limit_ceiling(tmp_path)
                 "loop_interval": 5,
                 "min_output_limit": 35,
             },
-            "ha": {"enabled": False, "control_enabled": False},
             "winter": {"enabled": False},
             "devices": {},
         },
@@ -138,7 +135,6 @@ def test_lowering_device_power_does_not_lower_device_ceiling(tmp_path):
                 "loop_interval": 5,
                 "min_output_limit": 35,
             },
-            "ha": {"enabled": False, "control_enabled": False},
             "winter": {"enabled": False},
             "devices": {
                 "WR1": {
@@ -176,7 +172,6 @@ def test_runtime_numeric_limits_reject_invalid_high_and_low_values(tmp_path):
                 "loop_interval": 5,
                 "min_output_limit": 35,
             },
-            "ha": {"enabled": False, "control_enabled": False},
             "winter": {"enabled": False},
             "devices": {
                 "WR1": {
@@ -229,7 +224,6 @@ def test_runtime_write_limit_fallback_uses_configured_system_max(tmp_path):
                 "loop_interval": 5,
                 "min_output_limit": 35,
             },
-            "ha": {"enabled": False, "control_enabled": False},
             "winter": {"enabled": False},
             "devices": {},
         },
@@ -260,7 +254,6 @@ def test_explicit_runtime_hard_limit_can_exceed_configured_system_max(tmp_path):
                 "loop_interval": 5,
                 "min_output_limit": 35,
             },
-            "ha": {"enabled": False, "control_enabled": False},
             "winter": {"enabled": False},
             "devices": {},
         },
@@ -294,7 +287,6 @@ def test_runtime_state_dashboard_updates_are_thread_safe(tmp_path):
                 "loop_interval": 5,
                 "min_output_limit": 0,
             },
-            "ha": {"enabled": False, "control_enabled": False},
             "winter": {"enabled": False},
             "devices": {},
         },
@@ -332,7 +324,6 @@ def _ac_runtime(tmp_path):
         str(tmp_path / "runtime-state.json"),
         {
             "system": {"enabled": True, "max_total_power": 800, "loop_interval": 5},
-            "ha": {"enabled": False, "control_enabled": False},
             "winter": {"enabled": False},
             "devices": {
                 "WR1": {"enabled": True, "max_power": 800},

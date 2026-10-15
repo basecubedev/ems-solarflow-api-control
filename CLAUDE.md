@@ -136,7 +136,7 @@ construction, controller startup, main loop. All real implementation lives in `e
 - `config.py` — config loading, safe parsing, runtime mode helpers
 - `logging_utils.py` — structured `event=...` logging setup
 - `models.py` — telemetry/capability dataclasses
-- `clients.py` — HTTP, Zendure, Shelly, Home Assistant clients
+- `clients.py` — HTTP, Zendure and grid-meter clients
 - `runtime_state.py` — mutable runtime-state read/write
 - `runtime_intents.py` — runtime AC mode intent (`ac_output`/`ac_input`) reconciliation
 - `target_control.py` — capability detection and target/output calculation (core control math)
@@ -206,7 +206,7 @@ npx playwright test --config=playwright.appliance.config.ts
 ```
 
 `emsctl.py` is a separate large CLI for safe runtime-state edits and diagnostics
-(`status`, `device ...`, `system ...`, `winter`, `ha`, `diagnose ...`,
+(`status`, `device ...`, `system ...`, `winter`, `diagnose ...`,
 `dashboard set-password`). The `diagnose` service layer
 (`run_install_diagnosis`, `run_deep_diagnosis`, `run_hardware_diagnosis`,
 `run_control_diagnosis`, `run_control_quality_diagnosis` — all read-only, reuse
@@ -218,16 +218,15 @@ import `emsctl` (so the dashboard can import it directly).
 ### Control pipeline (per loop, see `docs/technical/control-logic.md`)
 
 1. Reload `runtime-state.json` if changed
-2. Optionally sync HA helper values
-3. Read Shelly/EcoTracker/Tasmota house load
-4. Read Zendure telemetry
-5. Detect runtime capabilities
-6. Run state reconciliation when due
-7. Detect strict night/minSoc idle
-8. Stabilize total target (`commanded_total_w` + filtered load, deadbands, ramps, filtering)
-9. Allocate target across devices (PV-first, pv_priority_factor)
-10. Apply device ramp/limits, `min_output_limit`, deadband
-11. Write `outputLimit` only behind safety gates
+2. Read Shelly/EcoTracker/Tasmota house load
+3. Read Zendure telemetry
+4. Detect runtime capabilities
+5. Run state reconciliation when due
+6. Detect strict night/minSoc idle
+7. Stabilize total target (`commanded_total_w` + filtered load, deadbands, ramps, filtering)
+8. Allocate target across devices (PV-first, pv_priority_factor)
+9. Apply device ramp/limits, `min_output_limit`, deadband
+10. Write `outputLimit` only behind safety gates
 
 ### Runtime AC mode intent
 

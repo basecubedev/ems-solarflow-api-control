@@ -231,7 +231,6 @@ GRID_METER_MODEL_TRANSPORTS = {
     ),
     ZENDURE_SMARTMETER_D0_GRID_METER_TYPE: ("Zendure Smart Meter D0", _LOCAL_MQTT_TRANSPORT),
     "mqtt": ("Generic MQTT meter", "MQTT"),
-    "ha": ("Home Assistant (legacy)", "Home Assistant"),
 }
 
 
@@ -613,12 +612,6 @@ def default_safe_config():
 
     return {
         "config_schema_version": CURRENT_CONFIG_SCHEMA_VERSION,
-        "ha": {
-            "enabled": False,
-            "control_enabled": False,
-            "url": "",
-            "token": ""
-        },
         "system": {
             "enabled": True,
             "dry_run": True,
@@ -1242,17 +1235,8 @@ def template_placeholder_paths(config):
                 paths.append("grid_meter.ip" if by_ip else "grid_meter.url")
             if _missing_or_placeholder(grid_meter.get("power_path")):
                 paths.append("grid_meter.power_path")
-        elif meter_type != "ha" and _missing_or_placeholder(
-            grid_meter.get("ip"), address=True
-        ):
+        elif _missing_or_placeholder(grid_meter.get("ip"), address=True):
             paths.append("grid_meter.ip")
-
-    ha_config = config.get("ha")
-    if isinstance(ha_config, dict) and safe_bool(ha_config.get("enabled"), False):
-        if _missing_or_placeholder(ha_config.get("url")):
-            paths.append("ha.url")
-        if _missing_or_placeholder(ha_config.get("token")):
-            paths.append("ha.token")
 
     return paths
 
@@ -1705,17 +1689,12 @@ ARGS = None
 BASE_DIR = None
 CONFIG = None
 SYSTEM_ENABLED = True
-HA_URL = ""
-HA_TOKEN = ""
 MAX_TOTAL_POWER = 0
 MAX_DEVICE_POWER = 0
 DEADBAND = 0
 LOOP_INTERVAL = 5
 OUTPUT_CONTROL_CONFIG = OUTPUT_CONTROL_DEFAULTS.copy()
 RUNTIME_STATE_PATH = "runtime-state.json"
-REMAINING_TIME_POWER_SAMPLES = 10
-REMAINING_TIME_MIN_POWER_W = 10
-REMAINING_TIME_MAX_HOURS = 999
 MIN_OUTPUT_LIMIT = 0
 DRY_RUN = True
 SIMULATION_MODE = False
@@ -1742,8 +1721,6 @@ ALLOW_MQTT_LOCAL_CONTROL_WRITES = False
 ALLOW_MQTT_ZENDURE_CONTROL_WRITES = False
 ALLOW_STATE_RECONCILIATION_WRITES = False
 RECONCILE_SMART_MODE = True
-HA_ENABLED = False
-HA_CONTROL_ENABLED = False
 LOG_LEVEL = "info"
 REDISTRIBUTE_CLAMPED_POWER = True
 PV_KWP_WEIGHTING = True
@@ -1806,13 +1783,13 @@ def load_config(args=None, base_dir=None):
 
 
 def initialize(args, base_dir):
-    global ARGS, BASE_DIR, CONFIG, SYSTEM_ENABLED, HA_URL, HA_TOKEN
+    global ARGS, BASE_DIR, CONFIG, SYSTEM_ENABLED
     global MAX_TOTAL_POWER, MAX_DEVICE_POWER, DEADBAND, LOOP_INTERVAL
     global OUTPUT_CONTROL_CONFIG, RUNTIME_STATE_PATH, MIN_OUTPUT_LIMIT
     global DRY_RUN, SIMULATION_MODE, ALLOW_HARDWARE_WRITES
     global ALLOW_MQTT_LOCAL_CONTROL_WRITES, ALLOW_MQTT_ZENDURE_CONTROL_WRITES
     global ALLOW_STATE_RECONCILIATION_WRITES
-    global RECONCILE_SMART_MODE, HA_ENABLED, HA_CONTROL_ENABLED, LOG_LEVEL
+    global RECONCILE_SMART_MODE, LOG_LEVEL
     global REDISTRIBUTE_CLAMPED_POWER, PV_KWP_WEIGHTING
     global PV_CHARGE_BALANCE_ENABLED, PV_CHARGE_BALANCE_DEADBAND_PERCENT
     global PV_CHARGE_BALANCE_FULL_BIAS_PERCENT, PV_CHARGE_BALANCE_STRENGTH
@@ -1826,11 +1803,8 @@ def initialize(args, base_dir):
     ARGS = args
     BASE_DIR = base_dir
     CONFIG = load_config(args, base_dir)
-    ha_config = CONFIG.get("ha", {})
 
     SYSTEM_ENABLED = runtime_control_flag(CONFIG["system"], "enabled")
-    HA_URL = ha_config.get("url", "")
-    HA_TOKEN = ha_config.get("token", "")
     MAX_TOTAL_POWER = CONFIG["system"]["max_total_power"]
     MAX_DEVICE_POWER = CONFIG["system"]["max_device_power"]
     DEADBAND = CONFIG["system"]["deadband"]
@@ -1875,16 +1849,6 @@ def initialize(args, base_dir):
         system_config, "allow_state_reconciliation_writes"
     )
     RECONCILE_SMART_MODE = runtime_control_flag(system_config, "reconcile_smart_mode")
-    HA_ENABLED = (
-        ha_config.get("enabled", False)
-        and not args.no_ha
-        and not SIMULATION_MODE
-        and not args.replay
-    )
-    HA_CONTROL_ENABLED = (
-        HA_ENABLED
-        and ha_config.get("control_enabled", False)
-    )
     LOG_LEVEL = CONFIG["system"].get("log_level", "info").lower()
 
     if args.simulate or args.replay:
@@ -3347,10 +3311,7 @@ def winter_month_active(now):
 
 
 def winter_feature_enabled(runtime_state=None):
-    """Return whether winter mode is enabled.
-
-    HA/runtime toggles can be layered here later. V1 is config-controlled.
-    """
+    """Return whether winter mode is enabled: the runtime toggle, else the config."""
 
     if runtime_state:
         winter = runtime_state.data.get("winter", {})

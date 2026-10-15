@@ -357,8 +357,8 @@ reachable exactly when it is writable — there is no second list to keep in syn
 
 What the Control tab can change: EMS enabled / max total power / min output
 limit / loop interval; per device its enabled flag, **AC charging**, max power,
-PV priority and offgrid socket mode; Winter mode; **AC charging** for the whole
-installation; and Home Assistant publishing and helper control.
+PV priority and offgrid socket mode; Winter mode; and **AC charging** for the
+whole installation.
 
 Both AC-charging switches take effect on the next control cycle. Turning either
 one off stops a running charge in the same cycle, without a restart — stopping a
@@ -838,8 +838,8 @@ POST /api/auth/logout
 POST /api/auth/refresh
 GET  /api/runtime
 PATCH /api/runtime/system
-PATCH /api/runtime/ha
 PATCH /api/runtime/winter
+PATCH /api/runtime/ac_charge_control
 PATCH /api/runtime/device/<name>
 ```
 

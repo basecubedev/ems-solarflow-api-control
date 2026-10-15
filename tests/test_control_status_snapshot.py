@@ -86,7 +86,7 @@ def run_cycle(tmp_path, load=240):
 
     runtime_path = tmp_path / "runtime-state.json"
     dev = device("WR1")
-    with patch("ems.runtime_state.cfg.CONFIG", {"ha": {}, "devices": [{"name": "WR1"}]}):
+    with patch("ems.runtime_state.cfg.CONFIG", {"devices": [{"name": "WR1"}]}):
         runtime_state = RuntimeState(str(runtime_path), build_runtime_defaults([dev]))
         runtime_state.load_or_create()
     controller = EMSController(

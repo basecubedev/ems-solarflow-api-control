@@ -6448,7 +6448,7 @@ def _run_grid_meter_node(setup):
 const GRID_METER_TYPE_CHOICES = new Set([
   "shelly", "shelly_3em_gen1", "ecotracker", "zendure_grid_meter_http",
   "zendure_smartmeter_3ct_http", "tasmota_http", "zendure_smartmeter_d0",
-  "mqtt", "ha",
+  "mqtt",
 ]);
 const GRID_METER_FAMILY_TYPES = {
   shelly_gen2: "shelly",

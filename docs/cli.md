@@ -45,8 +45,8 @@ python3 emsctl.py diagnose
 ## Diagnose
 
 `diagnose` is designed for local support/debug output. Normal diagnose is
-read-only and does not contact Zendure hardware, Home Assistant, MQTT, Shelly,
-or other external services.
+read-only and does not contact Zendure hardware, MQTT, Shelly, or other
+external services.
 
 ```bash
 python3 emsctl.py diagnose
@@ -478,15 +478,13 @@ python3 emsctl.py menu
 ```
 
 The menu works directly with Python standard input/output and does not require
-Bash or Zsh completion setup. It can show status, edit system limits, toggle HA
-publishing/helper control, toggle winter mode, edit configured devices, show
-or manage dashboard authentication, and open the Backup / Restore submenu (see
-[Backup / Restore](#backup--restore)).
+Bash or Zsh completion setup. It can show status, edit system limits, toggle
+winter mode, edit configured devices, show or manage dashboard authentication,
+and open the Backup / Restore submenu (see [Backup / Restore](#backup--restore)).
 
 Interactive mode preserves the same safety rules as direct commands:
 
 - no Zendure hardware access
-- no Home Assistant access
 - no dashboard server access
 - no plaintext password echo
 - same value validation
@@ -566,17 +564,13 @@ python3 emsctl.py system loop-interval 5
 python3 emsctl.py system min-output-limit 30
 ```
 
-## HA Commands
+## Removed HA Commands
 
-```bash
-python3 emsctl.py ha enable
-python3 emsctl.py ha disable
-python3 emsctl.py ha-control enable
-python3 emsctl.py ha-control disable
-```
-
-`ha` controls runtime HA publishing. `ha-control` controls runtime HA helper
-sync. Neither command edits HA URL or token.
+The Home Assistant integration is removed, and with it `ha` and `ha-control`.
+`emsctl.py ha enable` now ends with exit code 2 and `invalid choice: 'ha'`,
+and changes nothing. An `ha` section an older release left in
+`runtime-state.json` stays there unread (see
+[runtime-state.md](technical/runtime-state.md#former-home-assistant-fields)).
 
 ## Winter Commands
 
@@ -1011,8 +1005,8 @@ data/runtime-state.json.<pid>.tmp -> data/runtime-state.json
 ```
 
 The EMS never reads a half-written file, so editing while it runs is safe.
-Every writer (emsctl, the dashboard, the Home Assistant helper sync) re-reads
-the file before it changes a value, so a change made by one of them is kept by
+Every writer (emsctl and the dashboard) re-reads the file before it changes a
+value, so a change made by one of them is kept by
 the next. There is no lock across processes, though: two writers that save
 within the same fraction of a second can still lose one change. Check with
 `python3 emsctl.py status` when you script several writers at once.

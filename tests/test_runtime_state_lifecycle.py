@@ -28,7 +28,6 @@ pytestmark = [
 def _defaults(devices):
     result = {
         "system": {"enabled": True, "max_total_power": 800, "loop_interval": 5},
-        "ha": {"enabled": False, "control_enabled": False},
         "winter": {"enabled": False},
         "devices": {},
     }

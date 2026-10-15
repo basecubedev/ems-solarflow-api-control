@@ -854,8 +854,7 @@
               "zendure_smartmeter_3ct_http",
               "tasmota_http",
               "zendure_smartmeter_d0",
-              "mqtt",
-              "ha"
+              "mqtt"
             ],
             "default": "shelly",
             "template": true,
@@ -1128,14 +1127,6 @@
               "grid_meter.mqtt.value_path",
               "grid_meter.mqtt.max_age_seconds"
             ]
-          },
-          "ha": {
-            "label": "Home Assistant grid meter",
-            "description": "Legacy compatibility only; not recommended for new Admin setups.",
-            "fields": [],
-            "level": "deprecated",
-            "scope": "maintenance",
-            "risk": "deprecated"
           }
         }
       },

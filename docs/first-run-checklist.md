@@ -55,7 +55,7 @@ docker compose exec ems python3 emsctl.py influx status
 ```bash
 python3 emsctl.py diagnose
 python3 emsctl.py diagnose --hardware
-python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
+python3 -B ems-solarflow-api-control.py --dry-run --once
 # writes to the hardware for two minutes:
 python3 -B ems-solarflow-api-control.py --duration 120
 ```

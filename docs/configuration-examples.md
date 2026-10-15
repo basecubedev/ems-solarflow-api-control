@@ -15,19 +15,12 @@ SOC limits, confirm battery and PV metadata, run
 [first-run-checklist.md](first-run-checklist.md), and monitor the first live
 run.
 
-## Example 1: One Zendure Device Without Home Assistant
+## Example 1: One Zendure Device
 
-Use this for standalone EMS operation without Home Assistant.
+Use this for standalone EMS operation with one inverter.
 
 ```json
 {
-  "ha": {
-    "enabled": false,
-    "control_enabled": false,
-    "url": "",
-    "token": ""
-  },
-
   "system": {
     "enabled": true,
     "dry_run": false,
@@ -125,21 +118,13 @@ python3 -B ems-solarflow-api-control.py --simulate --max-cycles 1
 python3 -B ems-solarflow-api-control.py --preflight
 ```
 
-## Example 2: Two Zendure Devices With Home Assistant
+## Example 2: Two Zendure Devices
 
-Use this when Home Assistant should receive EMS sensors and optionally provide
-runtime helper controls. The values below intentionally override some
-single-device template values for a two-inverter installation.
+Use this for an installation with two inverters. The values below intentionally
+override some single-device template values for a two-inverter installation.
 
 ```json
 {
-  "ha": {
-    "enabled": true,
-    "control_enabled": true,
-    "url": "http://homeassistant.local:8123",
-    "token": "YOUR_TOKEN_HERE"
-  },
-
   "system": {
     "enabled": true,
     "dry_run": false,
@@ -190,8 +175,6 @@ single-device template values for a two-inverter installation.
 
 Change:
 
-- `ha.url`
-- `ha.token`
 - both device IPs and serial numbers
 - `grid_meter.type`, `grid_meter.ip`, and Shelly `grid_meter.channels` if needed
 - PV and battery metadata

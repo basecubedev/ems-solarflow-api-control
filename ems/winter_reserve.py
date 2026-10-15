@@ -97,14 +97,6 @@ class WinterReserve:
 
         return self.devices.setdefault(name, WinterDeviceState())
 
-    def last_step_date(self):
-        """The latest day any device took a step, or ``None``."""
-
-        return max(
-            (item.step_date for item in self.devices.values() if item.step_date),
-            default=None,
-        )
-
     def policy(self, dev, state):
         """Return the winter policy that applies to ``dev`` this cycle."""
 
@@ -538,18 +530,6 @@ class WinterReserve:
         """
 
         return self.clamped_target(dev, int(state.min_soc))
-
-    def ha_target(self, dev, state, active):
-        """The minSoc Home Assistant shows as this device's winter target."""
-
-        policy = self.policy(dev, state)
-        own_min_soc = state.min_soc if state.min_soc > 0 else dev.min_soc
-        if battery_presence(state) == BATTERY_ABSENT or policy.step is None:
-            return own_min_soc, policy
-        if not active:
-            return cfg.winter_summer_min_soc(), policy
-        target = self.device(dev.name).target
-        return (self.held_min_soc(dev, state) if target is None else target), policy
 
     def solar_charge_candidate(self, dev, state):
         """Whether ``dev`` is a battery below its minSoc that receives PV.

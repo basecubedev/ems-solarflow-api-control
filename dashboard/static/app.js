@@ -5055,7 +5055,6 @@ function runtimeControlPanel() {
   }
 
   const system = runtime.system || {};
-  const ha = runtime.ha || {};
   const winter = runtime.winter || {};
   const acCharge = runtime.ac_charge_control || {};
   const devices = Object.entries(runtime.devices || {});
@@ -5074,7 +5073,6 @@ function runtimeControlPanel() {
   )).join("");
   const winterStep = devices.length + 2;
   const acChargeStep = devices.length + 3;
-  const haStep = devices.length + 4;
 
   return `
     <section class="runtime-editor-panel control-stage-row" aria-label="Runtime write controls">
@@ -5119,18 +5117,6 @@ function runtimeControlPanel() {
           submitLabel: "Save AC charging",
           fields: `
           ${runtimeToggle("enabled", "AC charging", acCharge.enabled)}
-        `})}
-        ${runtimeStageCard({
-          endpoint: "/api/runtime/ha",
-          title: "Home Assistant",
-          subtitle: "External publishing and helper control",
-          step: haStep,
-          kind: "write",
-          iconName: "live",
-          submitLabel: "Save HA settings",
-          fields: `
-          ${runtimeToggle("enabled", "HA publishing", ha.enabled)}
-          ${runtimeToggle("control_enabled", "HA helper control", ha.control_enabled)}
         `})}
       </div>
     </section>
@@ -6056,10 +6042,6 @@ function demoRuntimeState() {
       max_total_power: 800,
       loop_interval: 5,
       min_output_limit: 0,
-    },
-    ha: {
-      enabled: false,
-      control_enabled: false,
     },
     winter: {
       enabled: false,

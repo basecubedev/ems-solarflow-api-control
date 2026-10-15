@@ -370,17 +370,5 @@
       { "max_range": "30d", "bucket": "5m", "window": "5m" },
       { "max_range": "365d", "bucket": "1h", "window": "1h" }
     ]
-  },
-
-  "ha": {
-    "_comment": [
-      "Legacy Home Assistant integration.",
-      "Disabled by default; not recommended for new Admin-guided setups.",
-      "Future Admin flows should prefer telemetry publishing instead of HA-based control."
-    ],
-    "enabled": false,
-    "control_enabled": false,
-    "url": "http://homeassistant.local:8123",
-    "token": "YOUR_TOKEN_HERE"
   }
 }

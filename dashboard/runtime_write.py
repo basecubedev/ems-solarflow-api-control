@@ -28,10 +28,6 @@ DEVICE_AC_FIELDS = {
 }
 
 SECTION_FIELDS = {
-    "ha": {
-        "enabled": ("bool", None),
-        "control_enabled": ("bool", None),
-    },
     "winter": {
         "enabled": ("bool", None),
     },

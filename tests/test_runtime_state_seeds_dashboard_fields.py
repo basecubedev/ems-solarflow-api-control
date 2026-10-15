@@ -28,7 +28,7 @@ pytestmark = [
 
 @pytest.fixture(autouse=True)
 def _loaded_config(monkeypatch):
-    monkeypatch.setattr(cfg, "CONFIG", {"ha": {}})
+    monkeypatch.setattr(cfg, "CONFIG", {})
 
 
 def _device(name="WR1", **overrides):
@@ -142,7 +142,7 @@ def test_emsctl_seeds_the_same_runtime_keys_and_ac_charge_values_as_the_ems(monk
     ems = build_runtime_defaults([_device("WR1", sn="SN1", ac_charge_enabled=False)])
 
     assert set(cli) == set(ems)
-    for section in ("system", "ha", "winter", "ac_charge_control"):
+    for section in ("system", "winter", "ac_charge_control"):
         assert set(cli[section]) == set(ems[section]), section
     assert set(cli["devices"]["WR1"]) == set(ems["devices"]["WR1"])
     assert cli["ac_charge_control"] == ems["ac_charge_control"] == {"enabled": False}

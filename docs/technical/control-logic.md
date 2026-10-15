@@ -8,19 +8,18 @@ control chain, see [control-flow.md](control-flow.md).
 ## Pipeline
 
 1. Reload `runtime-state.json` if changed.
-2. Optionally sync Home Assistant helper values with runtime state.
-3. Read Shelly house load.
-4. Read Zendure telemetry.
-5. Detect runtime capabilities.
-6. Run state reconciliation when due.
-7. Detect strict night/minSoc idle.
-8. Stabilize total target.
-9. Decide the charge direction.
-10. Allocate target across devices.
-11. Apply device ramp and limits.
-12. Apply `min_output_limit` while enabled (output direction only).
-13. Apply deadband and write gates.
-14. Write the power command only behind safety gates.
+2. Read Shelly house load.
+3. Read Zendure telemetry.
+4. Detect runtime capabilities.
+5. Run state reconciliation when due.
+6. Detect strict night/minSoc idle.
+7. Stabilize total target.
+8. Decide the charge direction.
+9. Allocate target across devices.
+10. Apply device ramp and limits.
+11. Apply `min_output_limit` while enabled (output direction only).
+12. Apply deadband and write gates.
+13. Write the power command only behind safety gates.
 
 ## Reading Device Reports
 
@@ -150,7 +149,7 @@ sent. If it is not, the EMS writes the value once and then suppresses further
 `outputLimit` writes until the state is left.
 
 Night/minSoc idle is a control-idle state, not a system-idle state. The EMS loop
-continues to fetch device state, process runtime state, publish Home Assistant
+continues to fetch device state, process runtime state, publish dashboard
 telemetry, and expose status and safety visibility. Only repeated output-control
 writes are suppressed after the optional parking write.
 

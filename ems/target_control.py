@@ -267,35 +267,6 @@ def get_device_battery_kwh(device_config):
     return max(0.01, device_config.battery_kwh)
 
 
-def calculate_remaining_time_hours(state, device_config, avg_battery_power_w):
-    """Estimate remaining charge/discharge time from smoothed battery power."""
-
-    battery_kwh = getattr(device_config, "battery_kwh", 0) or 0
-
-    if battery_kwh <= 0:
-        return 0
-
-    if abs(avg_battery_power_w) < cfg.REMAINING_TIME_MIN_POWER_W:
-        return 0
-
-    if avg_battery_power_w > 0:
-        max_soc = getattr(device_config, "max_soc", 0) or state.max_soc or 100
-        soc_delta = max(0, max_soc - state.soc)
-        power_kw = avg_battery_power_w / 1000
-    else:
-        min_soc = getattr(device_config, "min_soc", 0) or state.min_soc or 0
-        soc_delta = max(0, state.soc - min_soc)
-        power_kw = abs(avg_battery_power_w) / 1000
-
-    if soc_delta <= 0 or power_kw <= 0:
-        return 0
-
-    energy_kwh = battery_kwh * soc_delta / 100
-    hours = energy_kwh / power_kw
-
-    return round(min(cfg.REMAINING_TIME_MAX_HOURS, hours), 1)
-
-
 def usable_battery_weight(state, device_config, capability):
     """Return usable discharge energy in weighted units.
 

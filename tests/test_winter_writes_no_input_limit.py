@@ -7,8 +7,8 @@ output mode the firmware ignores it: on 2026-10-03 both inverters charged at
 1.2 to 1.4 kW with it in place. In AC input mode the runtime intent reconciler
 is the only owner of ``inputLimit``, and winter's 200 W replaced the charge
 power the operator set until the reconciler wrote it back. The write is gone,
-and with it ``winter.ac_charge_power``, which nothing else read but the Home
-Assistant sensor that echoed it.
+and with it ``winter.ac_charge_power``, which nothing else read but a sensor
+that echoed it.
 """
 
 import json
@@ -171,27 +171,6 @@ def test_the_winter_charge_power_is_retired_everywhere():
     assert not hasattr(EMSController, "apply_winter_ac_charge_limit")
 
 
-def test_home_assistant_no_longer_shows_a_winter_charge_power():
-    class _Ha:
-        def __init__(self):
-            self.states = {}
-
-        def set_state(self, entity, value, **kwargs):
-            self.states[entity] = value
-
-    ha = _Ha()
-    dev = SimpleNamespace(name="WR1", min_soc=15, max_soc=95, enabled=True)
-    controller = EMSController(devices=[dev], shelly=None, ha=ha, sleep_enabled=False)
-
-    with patch.object(cfg, "WINTER_CONFIG", dict(cfg.WINTER_DEFAULTS)), patch.object(
-        controller, "device_ha_extra", lambda dev, extra=None: extra
-    ):
-        controller.publish_winter_to_ha([battery_only(ac_mode=2, input_limit=0)])
-
-    assert "sensor.ems_solarflow_winter_ramp_step" in ha.states
-    assert not [entity for entity in ha.states if "ac_charge_power" in entity]
-
-
 @pytest.mark.parametrize("value", [200, 0, "yes", None])
 def test_a_config_that_still_carries_the_key_loads_and_starts_unchanged(
     tmp_path, capsys, caplog, value
@@ -209,7 +188,7 @@ def test_a_config_that_still_carries_the_key_loads_and_starts_unchanged(
         before = path.read_bytes()
         args = SimpleNamespace(
             config=str(path), dry_run=False, simulate=False, replay=None,
-            self_test=False, no_ha=True,
+            self_test=False,
         )
         snapshot = {name: getattr(cfg, name) for name in dir(cfg) if name.isupper()}
         try:

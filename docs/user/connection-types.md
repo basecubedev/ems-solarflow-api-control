@@ -52,9 +52,8 @@ low latency and no cloud dependency.
   telemetry to stay on your network.
 - **You must redirect the device** to that single local broker yourself. Several
   community projects on GitHub help with re-pointing Zendure hardware to a local
-  broker and decoding its topics — search for *Zendure local MQTT* or the various
-  *Zendure Home Assistant* integrations, and use one that matches your device
-  generation.
+  broker and decoding its topics — search for *Zendure local MQTT*, and use one
+  that matches your device generation.
 - EMS then consumes the local broker as a telemetry source (see the Local MQTT
   discovery in the Admin Console).
 

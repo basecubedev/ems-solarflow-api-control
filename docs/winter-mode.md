@@ -20,8 +20,8 @@ context when winter mode is enabled and active. Review SOC limits and battery
 capacity for the installation before unattended winter operation.
 
 `winter.enabled` can be toggled at runtime through `runtime-state.json`,
-`emsctl.py`, or the optional Home Assistant helper. The technical winter
-settings below remain static config.
+`emsctl.py`, or the dashboard's Control tab. The technical winter settings below
+remain static config.
 
 ## Configuration
 
@@ -311,14 +311,3 @@ that drops a target remembered in winter, which is `info`; otherwise it is
 `info`. `winter_min_soc_unknown` is a `warning` once per device until its report
 carries `minSoc` again. Set `system.log_level=debug` to see every reconcile
 interval.
-
-## Home Assistant
-
-Winter status and calculated targets are published to HA. See
-[home-assistant.md](home-assistant.md).
-
-Runtime toggle:
-
-```text
-input_boolean.ems_solarflow_winter_enabled
-```
