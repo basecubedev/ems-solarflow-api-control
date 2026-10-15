@@ -2643,9 +2643,10 @@ function normalizeControlDeviceEntries(devices) {
 }
 
 function controlDeviceCard(name, device, explain, weightContext) {
-  const safeName = escapeHtml(device.device || name || "Device");
+  const displayName = String(device.device || name || "Device");
+  const safeName = escapeHtml(displayName);
   const writeDecision = controlDeviceWriteDecision(device, explain);
-  const reasonNote = controlDeviceReasonNote(safeName, device, explain, writeDecision);
+  const reasonNote = controlDeviceReasonNote(displayName, device, explain, writeDecision);
   const online = device.online;
   const onlinePill = hasExplainValue(online)
     ? `<span class="pill ${online ? "" : "muted"}">${icon(online ? "live" : "warning")}${online ? "Online" : "Offline"}</span>`

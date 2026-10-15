@@ -15,7 +15,8 @@ does not prove completeness against every Python construct: a code passed in a
 form the walk does not know can still go unseen.
 
 A device card says what the EMS decided about the device in the same terms: a
-stage shows as blocked only where the EMS's explanation blocks it.
+stage shows as blocked only where the EMS's explanation blocks it, and the
+device's name reaches the page escaped once.
 """
 
 import ast
@@ -32,7 +33,7 @@ import pytest
 from ems.runtime_intents import DeviceRuntimeRole
 from ems.target_control import calculate_targets, detect_capabilities
 from ems.winter_reserve import SOLAR_CHARGE_REASON
-from tests.test_write_gates import device, state
+from tests.test_write_gates import RuntimeStateStub, device, state
 
 pytestmark = [
     pytest.mark.contract,
@@ -708,3 +709,28 @@ def test_a_device_the_ems_cannot_export_from_is_shown_blocked_at_its_limits():
 
     assert _limits_result_blocked(cards["WR1"]) is False
     assert _limits_result_blocked(cards["WR2"]) is True
+
+
+def test_a_device_name_is_escaped_once_in_the_sentence_above_its_card():
+    explanation = _ems_cycle_explanation(
+        [device("Garage & <Carport>"), device("Shed & Co")],
+        [state(solar=500), state(solar=500)],
+        runtime_state=RuntimeStateStub(devices={"Shed & Co": {"enabled": False}}),
+        load=300,
+    )
+    devices = explanation["devices"]
+    assert devices["Garage & <Carport>"]["decision_reason"] == "pv_first_allocation"
+    assert (devices["Shed & Co"]["write_decision"], devices["Shed & Co"]["write_reason"]) == (
+        "blocked",
+        "device_disabled",
+    )
+
+    html = _control_html(explanation)
+
+    assert "&amp;amp;" not in html
+    assert "&amp;lt;" not in html
+    assert "<Carport>" not in html
+    assert (
+        "Garage &amp; &lt;Carport&gt; target is shaped by PV-first allocation" in html
+    )
+    assert "Shed &amp; Co is blocked: Device is switched off." in html
