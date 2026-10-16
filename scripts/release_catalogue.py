@@ -172,6 +172,12 @@ def _verify(args):
         time.sleep(min(30, 5 * attempt))
 
 
+def _lists(args):
+    """Exit 0 when the catalogue can list a tag of this name, by the rule ``build`` applies."""
+
+    return 0 if _version(args.tag) else 1
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -184,6 +190,9 @@ def main(argv=None):
     verify.add_argument("--expect-tag", required=True)
     verify.add_argument("--timeout", type=float, default=600.0)
     verify.set_defaults(handler=_verify)
+    lists = subparsers.add_parser("lists", help="exit 0 when the catalogue can list a tag of this name")
+    lists.add_argument("tag")
+    lists.set_defaults(handler=_lists)
     args = parser.parse_args(argv)
     return args.handler(args)
 

@@ -258,8 +258,11 @@ so the Admin's own check and the catalogue can never disagree about what
 The run is reported as done only once `scripts/release_catalogue.py verify`
 reads the release it was started for back through the Admin's own loader from
 the public URL: the tag of a tag run, the Release of a release event, and
-otherwise -- on a branch run, for a deleted Release, or for a draft, which the
-catalogue leaves out on purpose -- the newest entry the run wrote. A tag run
+otherwise -- on a branch run, for a deleted Release, for a draft, which the
+catalogue leaves out on purpose, or for a Release whose tag it never lists,
+such as an Appliance Manager or image release
+(`scripts/release_catalogue.py lists` applies the rule `build` uses) -- the
+newest entry the run wrote. A tag run
 whose Release does not exist yet waits up to ten minutes for it -- publishing
 the Release inside that window rebuilds the file through the release trigger
 and the tag run turns green -- and after that it is red with a hint, instead of

@@ -111,7 +111,8 @@ jobs:
         run: |
           set -euo pipefail
           expect="$EXPECT_TAG"
-          if [[ "$EVENT_NAME" == "release" && "$EVENT_ACTION" != "deleted" && "$EVENT_ACTION" != "unpublished" && "$RELEASE_DRAFT" != "true" ]]; then
+          if [[ "$EVENT_NAME" == "release" && "$EVENT_ACTION" != "deleted" && "$EVENT_ACTION" != "unpublished" && "$RELEASE_DRAFT" != "true" ]] \
+              && python3 scripts/release_catalogue.py lists "$RELEASE_TAG"; then
             expect="$RELEASE_TAG"
           fi
           if [[ -n "$expect" ]]; then

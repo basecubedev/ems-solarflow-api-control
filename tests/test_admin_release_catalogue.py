@@ -291,6 +291,34 @@ def test_the_builder_records_what_the_admin_used_to_ask_for(tmp_path):
     assert [item["tag"] for item in load_release_catalogue(out)["releases"]] == ["v0.9.0-RC1", "v0.8.4", "v0.7.0"]
 
 
+def test_lists_admits_exactly_the_tags_the_builder_writes():
+    """The verify job asks ``lists`` whether a Release's tag can appear in the
+    catalogue at all. A Manager or image Release never does, and expecting its
+    tag turned a correct catalogue red."""
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import release_catalogue as builder
+
+    tags = [
+        "v0.8.15", "v0.9.0-RC1", "appliance-manager-v0.3.13",
+        "appliance-image-v0.3.9", "appliance-image-ci-25", "latest",
+    ]
+    listing = [
+        {"tag_name": tag, "name": tag, "published_at": "2026-10-16T00:00:00Z", "prerelease": False, "draft": False}
+        for tag in tags
+    ]
+
+    def opener(request, timeout=None):
+        if "/releases?" in request.full_url:
+            return _Response(json.dumps(listing if "page=1" in request.full_url else []).encode())
+        return _Response(json.dumps({"tree": []}).encode())
+
+    written = {item["tag"] for item in builder.build_catalogue("token", opener=opener)["releases"]}
+
+    assert "v0.8.15" in written and "appliance-manager-v0.3.13" not in written
+    assert {tag for tag in tags if builder.main(["lists", tag]) == 0} == written
+
+
 def test_the_rolling_channel_needs_no_api_call_either(tmp_path):
     """`latest` used to be the one row still read from `git/trees/main`."""
 
